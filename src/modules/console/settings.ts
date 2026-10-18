@@ -14,7 +14,7 @@ export const fontChoices: { id: string; label: string; value: string }[] = [
 export const adCategories = ['food', 'drink', 'coffee', 'fitness', 'health', 'news', 'retail', 'local-services', 'real-estate', 'auto', 'finance', 'entertainment', 'events', 'travel', 'tech', 'education', 'nonprofit', 'politics', 'alcohol', 'tobacco', 'cannabis', 'gambling', 'weapons', 'dating'];
 
 /** The parts of the settings a PATCH may send. Anything else is refused. */
-export const editableKeys = ['name', 'receiptBaseUrl', 'brand', 'productFacts', 'giving', 'openBooks', 'unitCosts', 'consumerPricing', 'timezone', 'consumer', 'adRules', 'prices', 'modules'] as const;
+export const editableKeys = ['name', 'receiptBaseUrl', 'brand', 'productFacts', 'giving', 'openBooks', 'unitCosts', 'consumerPricing', 'timezone', 'consumer', 'machines', 'adRules', 'prices', 'modules'] as const;
 export type EditableKey = (typeof editableKeys)[number];
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
@@ -66,6 +66,8 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
   if (c.timezone !== undefined) { try { new Intl.DateTimeFormat('en-US', { timeZone: c.timezone }); } catch { return 'That time zone isn’t one we know. Use a name like America/Chicago.'; } }
   if (c.consumer && (!isInt(c.consumer.freeBottlesPerDay, 0, 24) || !isInt(c.consumer.retailValueCents, 0, 1000))) return 'Free bottles per person per day must be 0 to 24, and the store price 0¢ to $10.';
 
+  if (c.machines && (typeof c.machines.offlineWalkUp !== 'boolean' || !isInt(c.machines.offlinePerHour, 0, 120) || !isInt(c.machines.bufferSize, 0, 50))) return 'Offline bottles per hour must be 0 to 120, and labels kept ready 0 to 50.';
+
   const a = c.adRules;
   if (!a) return 'Ad rules are missing.';
   if (!isInt(a.minAdsPerUnit, 0, 6) || !isInt(a.maxAdsPerUnit, 1, 6) || a.minAdsPerUnit > a.maxAdsPerUnit) return 'Ads per bottle: the most must be 1 to 6, and the fewest no more than the most.';
@@ -111,9 +113,9 @@ const labels: Record<string, string> = {
   'adRules.minAdsPerUnit': 'Fewest ads per bottle', 'adRules.maxAdsPerUnit': 'Most ads per bottle', 'adRules.blockedCategories': 'Blocked categories', 'adRules.competitorSeparation': 'Keep competitors apart',
   'adRules.repeatScanWindowSec': 'Repeat-scan window', 'adRules.maxPackShare': 'One advertiser’s share of a pack', 'prices.perPrintBySixths': 'Print prices', 'prices.perScan': 'Price per scan',
   'prices.perArLaunch': 'Price per AR launch', 'prices.commissionPercent': 'Commission on sales', 'prices.customUnit': 'Custom bottle price', 'prices.perBoxFace': 'Box side price',
-  'modules.ads': 'Ad engine', 'modules.renderer': 'Label maker', 'modules.printer': 'Printer',
+  'machines.offlineWalkUp': 'Free bottles while offline', 'machines.offlinePerHour': 'Offline bottles per hour', 'machines.bufferSize': 'Labels kept ready', 'modules.ads': 'Ad engine', 'modules.renderer': 'Label maker', 'modules.printer': 'Printer',
 };
-const deep = new Set(['brand', 'giving', 'consumer', 'adRules', 'prices', 'modules']);
+const deep = new Set(['brand', 'giving', 'consumer', 'machines', 'adRules', 'prices', 'modules']);
 const show = (v: unknown) => (v === undefined ? 'none' : typeof v === 'string' ? (v.length > 30 ? `${v.slice(0, 28)}…` : v || 'blank') : typeof v === 'boolean' ? (v ? 'on' : 'off') : Array.isArray(v) ? (v.length ? v.join(', ').slice(0, 40) : 'none') : typeof v === 'object' && v ? 'changed' : String(v));
 
 /** What changed, as a short list a person can read in the history. */

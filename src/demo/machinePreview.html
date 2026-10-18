@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Model 6 Simulator</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@600;700&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&display=swap">
+<style>
+/*CSS*/
+:root { --bg: #EEF2F5; --card: #FFFFFF; --ink: #0B0B0B; --muted: #5B6670; --chip: #F1F4F7; --line: #E3EAF0; --ok: #1F8A4C; --bad: #B42318; --warn: #A76A00; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #0E1114; --card: #171B20; --ink: #EEF2F5; --muted: #98A4AE; --chip: #232931; --line: #2A3038; --ok: #4CC38A; --bad: #F97066; --warn: #F2C14E; } }
+:root[data-theme="dark"] { --bg: #0E1114; --card: #171B20; --ink: #EEF2F5; --muted: #98A4AE; --chip: #232931; --line: #2A3038; --ok: #4CC38A; --bad: #F97066; --warn: #F2C14E; }
+html, body { height: auto; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 'DM Sans', system-ui, sans-serif; }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 20px 16px 40px; display: grid; grid-template-columns: 405px minmax(0, 1fr); gap: 28px; align-items: start; }
+header.intro { max-width: 1180px; margin: 0 auto; padding: 22px 16px 0; }
+header.intro h1 { margin: 0; font: 700 26px/1.2 Comfortaa, 'DM Sans', sans-serif; }
+header.intro p { margin: 6px 0 0; color: var(--muted); max-width: 760px; }
+.device { position: sticky; top: 16px; }
+.bezel { border-radius: 26px; padding: 12px; background: #1a1a1a; box-shadow: 0 24px 60px rgba(0,0,0,.28); }
+#screen { width: 100%; height: auto; aspect-ratio: 9 / 16; border-radius: 16px; }
+.tray { margin: 10px auto 0; width: 62%; height: 26px; border-radius: 0 0 16px 16px; background: #2a2a2a; box-shadow: inset 0 6px 10px rgba(0,0,0,.5); }
+.cap { text-align: center; color: var(--muted); font-size: 13px; margin-top: 8px; }
+.side { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.group { background: var(--card); border-radius: 16px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.group h2 { margin: 0; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.row { display: flex; gap: 8px; flex-wrap: wrap; }
+.side button { border: 0; border-radius: 999px; padding: 9px 14px; font: inherit; font-weight: 700; background: var(--chip); color: var(--ink); cursor: pointer; }
+.side button.main { background: var(--ink); color: var(--bg); }
+.side button:focus-visible { outline: 3px solid #1E7DB8; outline-offset: 2px; }
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.stats div { background: var(--chip); border-radius: 12px; padding: 10px; font-size: 12px; color: var(--muted); }
+.stats b { display: block; font-size: 20px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.log { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 340px; overflow: auto; }
+.log li { display: grid; grid-template-columns: 62px 74px minmax(0, 1fr); gap: 8px; font-size: 13px; padding: 8px 10px; border-radius: 10px; background: var(--chip); align-items: baseline; }
+.log time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.log .who { font-weight: 700; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
+.log .bad .who, .log li.bad .who { color: var(--bad); }
+.log li.ok .who { color: var(--ok); }
+.log li.warn .who { color: var(--warn); }
+.status { font-size: 13px; color: var(--muted); min-height: 1.3em; }
+@media (max-width: 860px) { .wrap { grid-template-columns: 1fr; } .device { position: static; max-width: 405px; width: 100%; margin: 0 auto; } .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .log li { grid-template-columns: 54px minmax(0, 1fr); } .log .who { grid-column: 2; } .log li span:last-child { grid-column: 1 / -1; } }
+</style>
+</head>
+<body>
+<header class="intro">
+  <h1>Model 6 machine software</h1>
+  <p>The real machine screen, running on a simulated machine. Order from the “app”, jam the printer, run out of bottles, cut the internet, and watch what the screen shows, what ops sees and what gets billed.</p>
+</header>
+<div class="wrap">
+  <div class="device"><div class="bezel"><div class="screen" id="screen"></div></div><div class="tray" aria-hidden="true"></div><div class="cap">ATX-014 · Congress Ave · portrait screen above the tray</div></div>
+  <div class="side">
+    <div class="group"><h2>People</h2><div class="row"><button class="main" id="b-phone" type="button">Maya taps “Get my free water” in the app</button></div><div class="status" id="app-says" role="status"></div></div>
+    <div class="group"><h2>Faults</h2><div class="row"><button type="button" data-a="jam">Jam the next print</button><button type="button" data-a="stuck">Stick the next bottle</button><button type="button" data-a="fix">Fix it</button></div></div>
+    <div class="group"><h2>Stock and cabinet</h2><div class="row"><button type="button" data-a="soldout">Run out of bottles</button><button type="button" data-a="restock">Restock</button><button type="button" data-a="door">Open / close the door</button></div></div>
+    <div class="group"><h2>Internet and ops</h2><div class="row"><button type="button" data-a="net" id="b-net">Cut the internet</button><button type="button" data-a="service" id="b-service">Ops: take out of service</button></div></div>
+    <div class="group"><h2>What the platform sees</h2>
+      <div class="stats"><div><b id="s-bottles">40</b>bottles left</div><div><b id="s-labels">500</b>labels left</div><div><b id="s-kept">12</b>labels kept for offline</div><div><b id="s-billed">$0.00</b>billed so far</div></div>
+      <ul class="log" id="log" aria-live="polite"></ul>
+    </div>
+  </div>
+</div>
+<script>
+(() => {
+  const R = /*REC*/;
+  const PRINT_MS = 9000, DROP_MS = 2000, TAKE_MS = 7000, FAIL_MS = 6000;
+  const st = { online: true, mode: 'in_service', modeReason: null, bottles: 40, cap: 40, labels: 500, jamNext: false, stickNext: false, jammed: false, stuck: false, door: false, kept: 12, offline: [], override: null, busy: false, ad: 0, billed: 0 };
+  const $ = (id) => document.getElementById(id);
+  const money = (c) => `$${(c / 100).toFixed(2)}`;
+  const log = (who, text, tone = '') => {
+    const li = document.createElement('li'); li.className = tone;
+    const t = document.createElement('time'); t.textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+    const w = document.createElement('span'); w.className = 'who'; w.textContent = who;
+    const x = document.createElement('span'); x.textContent = text;
+    li.append(t, w, x); $('log').prepend(li);
+  };
+  const stats = () => { $('s-bottles').textContent = st.bottles; $('s-labels').textContent = st.labels; $('s-kept').textContent = st.kept; $('s-billed').textContent = money(st.billed); $('b-net').textContent = st.online ? 'Cut the internet' : 'Restore the internet'; $('b-service').textContent = st.mode === 'in_service' ? 'Ops: take out of service' : 'Ops: put back in service'; };
+  const problem = () => {
+    if (st.bottles <= 0) return { kind: 'sold_out', message: 'Sold out. We’ll restock soon.' };
+    if (st.door) return { kind: 'maintenance', message: 'Being restocked. Back in a few minutes.' };
+    if (st.jammed || st.stuck) return { kind: 'out_of_service', message: 'Needs a quick fix. Our team has been told.' };
+    return null;
+  };
+  const flash = (kind, message, ms) => { st.override = { kind, message, until: Date.now() + ms }; };
+  const walkUpCheck = () => {
+    if (st.online) return { available: false, reason: 'Use the app' };
+    if (st.busy) return { available: false, reason: 'One moment' };
+    const p = problem(); if (p) return { available: false, reason: p.message };
+    if (st.offline.filter((v) => v.ok && v.at > Date.now() - 3600e3).length >= (R.screen.offlinePerHour ?? 20)) return { available: false, reason: 'That’s all the free bottles for this hour.' };
+    if (st.kept <= 0) return { available: false, reason: 'Back soon' };
+    return { available: true };
+  };
+  function state() {
+    const base = { machine: { id: 'ATX-014', online: st.online, softwareVersion: '1.0.0' }, config: R.screen, now: Date.now() };
+    const o = st.override;
+    if (o && (!o.until || o.until > Date.now())) return o.kind === 'printing' ? { ...base, kind: 'printing', job: o.job } : { ...base, kind: o.kind, message: o.message };
+    const p = problem();
+    if (!st.online) return { ...base, kind: 'offline', walkUp: walkUpCheck(), ...(p ? { message: p.message } : {}) };
+    if (p) return { ...base, kind: p.kind, message: p.message };
+    if (st.mode === 'out_of_service') return { ...base, kind: 'out_of_service', message: `Out of service: ${st.modeReason}` };
+    const c = R.codes[Math.floor(Date.now() / 30000) % R.codes.length];
+    return { ...base, kind: 'idle', presence: { ...c, changesAt: 0 } };
+  }
+  function print(offline) {
+    const ad = R.jobAds[st.ad++ % R.jobAds.length];
+    st.busy = true;
+    const job = { seconds: Math.round((PRINT_MS + DROP_MS) / 1000), startedAt: Date.now(), ad, step: 'printing', walkUp: offline };
+    st.override = { kind: 'printing', job };
+    setTimeout(() => {
+      st.labels--;
+      if (st.jamNext) {
+        st.jamNext = false; st.jammed = true; st.busy = false;
+        flash('failed', offline ? 'Sorry, that one didn’t print.' : 'Sorry, that one didn’t print. Nothing was used up. Tap again in the app.', FAIL_MS);
+        if (offline) st.offline.push({ ok: false, at: Date.now() });
+        log('Ops', 'ATX-014: the printer is jammed. Sam (ops) and Josh (owner) were emailed. The app stops sending people here.', 'bad');
+        log('Books', 'Nothing billed: the bottle never reached the tray.', 'warn');
+        if (!offline) $('app-says').textContent = 'App: “That one didn’t print. Nothing was used up.”';
+        stats(); return;
+      }
+      job.step = 'dropping';
+      setTimeout(() => {
+        st.busy = false; st.bottles--;
+        if (st.stickNext) {
+          st.stickNext = false; st.stuck = true;
+          flash('failed', 'Sorry, your bottle got stuck. Our team has been told, and nothing was used up.', FAIL_MS);
+          if (offline) st.offline.push({ ok: false, at: Date.now() });
+          log('Ops', 'ATX-014: a bottle is stuck in the dispenser. Team emailed. Not tried again (the next one would jam too).', 'bad');
+          log('Books', 'Nothing billed.', 'warn');
+          if (!offline) $('app-says').textContent = 'App: “Your bottle got stuck. Nothing was used up.”';
+          stats(); return;
+        }
+        flash('take', 'Take your bottle', TAKE_MS);
+        if (offline) { st.offline.push({ ok: true, at: Date.now(), cents: ad.earnedCents }); log('Machine', 'Offline bottle given from a kept label. It will be reported, and billed, when the internet is back.', 'warn'); }
+        else { st.billed += ad.earnedCents; log('Books', `In the tray: ads billed ${money(ad.earnedCents)} just now. ${R.screen.giving ?? ''}.`, 'ok'); $('app-says').textContent = 'App: “It’s in the tray.”'; }
+        if (st.bottles === 0) log('Ops', 'ATX-014 is sold out. Team emailed; the app shows it as sold out.', 'bad');
+        else if (st.bottles / st.cap < 0.15) log('Ops', `ATX-014 is running low: ${st.bottles} bottles left.`, 'warn');
+        stats();
+      }, DROP_MS);
+    }, PRINT_MS);
+  }
+  $('b-phone').addEventListener('click', () => {
+    const s = state();
+    if (!st.online) { $('app-says').textContent = 'App: “This machine is offline right now. Try another one nearby.”'; return; }
+    if (st.busy || s.kind === 'printing') { $('app-says').textContent = 'App: “The machine is busy. Try again in a moment.”'; return; }
+    if (s.kind !== 'idle' && s.kind !== 'take' && s.kind !== 'failed') { $('app-says').textContent = `App: “${s.message}”`; return; }
+    $('app-says').textContent = 'App: “Your bottle is printing.” (countdown with the same ad)';
+    log('App', 'Maya scanned the screen’s code and tapped Get my free water. Job sent to ATX-014.');
+    print(false);
+  });
+  const actions = {
+    jam: () => { st.jamNext = true; log('Sim', 'The next print will jam.'); },
+    stuck: () => { st.stickNext = true; log('Sim', 'The next bottle will get stuck.'); },
+    fix: () => { const was = st.jammed || st.stuck; st.jammed = st.stuck = st.jamNext = st.stickNext = false; if (was) log('Ops', 'Fixed. The problem closed by itself on the next heartbeat; ATX-014 is ready.', 'ok'); },
+    soldout: () => { st.bottles = 0; log('Ops', 'ATX-014 is sold out. Team emailed; the app shows it as sold out.', 'bad'); },
+    restock: () => { st.bottles = st.cap; log('Ops', 'Restocked to 40 bottles. Sold-out problem closed.', 'ok'); },
+    door: () => { st.door = !st.door; log('Ops', st.door ? 'Service door opened. Screen says “Restocking”.' : 'Door closed. Ready.', st.door ? 'warn' : 'ok'); },
+    net: () => {
+      st.online = !st.online;
+      if (!st.online) log('Ops', 'ATX-014 stopped calling in. After 45 seconds it’s marked offline and the team is emailed. The screen offers free bottles from 12 kept labels.', 'bad');
+      else {
+        const used = st.offline.filter((v) => v.ok);
+        const cents = used.reduce((n, v) => n + v.cents, 0);
+        st.billed += cents;
+        log('Machine', `Back online. Reported ${st.offline.length} offline bottle${st.offline.length === 1 ? '' : 's'}.`, 'ok');
+        if (used.length) log('Books', `${used.length} offline bottle${used.length === 1 ? '' : 's'} billed now: ${money(cents)}. Spoiled labels let go, never billed.`, 'ok');
+        st.offline = []; st.kept = 12;
+        log('Machine', 'Kept labels topped back up to 12.');
+      }
+    },
+    service: () => {
+      if (st.mode === 'in_service') { st.mode = 'out_of_service'; st.modeReason = 'Moving to the lobby'; log('Ops', 'Sam took ATX-014 out of service: “Moving to the lobby”. The app and the screen say so at once.', 'warn'); }
+      else { st.mode = 'in_service'; st.modeReason = null; log('Ops', 'ATX-014 is back in service.', 'ok'); }
+    },
+  };
+  document.querySelectorAll('button[data-a]').forEach((b) => b.addEventListener('click', () => { actions[b.dataset.a](); stats(); }));
+  window.__FW_MACHINE_FIXTURE__ = {
+    state: async () => state(),
+    tap: async () => { const c = walkUpCheck(); if (!c.available) return { ok: false, message: c.reason }; st.kept--; stats(); print(true); return { ok: true, message: 'Take your bottle' }; },
+  };
+  log('Machine', 'ATX-014 started, called in, and kept 12 labels ready for offline use.', 'ok');
+  stats();
+})();
+</script>
+<script>
+/*APP_JS*/
+</script>
+</body>
+</html>

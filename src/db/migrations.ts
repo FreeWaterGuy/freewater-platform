@@ -465,6 +465,83 @@ create index webhook_deliveries_due on webhook_deliveries(status, next_attempt_a
 create index webhook_deliveries_endpoint on webhook_deliveries(endpoint_id, created_at desc);
 `,
   },
+  {
+    id: '010_fleet',
+    sql: `
+-- A machine key belongs to one machine: it can only print there.
+alter table api_keys add column location_id text;
+
+-- What each Model 6 last told us about itself.
+create table machines (
+  location_id text primary key,
+  company_id text not null,
+  mode text not null default 'in_service' check (mode in ('in_service', 'out_of_service')),
+  mode_reason text,
+  status jsonb,
+  software_version text,
+  last_seen_at timestamptz,
+  first_seen_at timestamptz
+);
+
+-- Every bottle a machine was asked to print, and what happened.
+create table machine_jobs (
+  id text primary key,
+  location_id text not null,
+  company_id text not null,
+  unit_id text not null,
+  attempt integer not null,
+  status text not null check (status in ('queued', 'claimed', 'dispensed', 'failed', 'expired')),
+  reason text,
+  print_ms integer,
+  drop_ms integer,
+  created_at timestamptz not null,
+  claimed_at timestamptz,
+  finished_at timestamptz
+);
+create index machine_jobs_location on machine_jobs(location_id, created_at desc);
+
+-- Things ops asked a machine to do.
+create table machine_commands (
+  id text primary key,
+  location_id text not null,
+  company_id text not null,
+  kind text not null,
+  args jsonb,
+  status text not null check (status in ('pending', 'sent', 'done', 'failed')),
+  result text,
+  created_by text,
+  created_at timestamptz not null,
+  sent_at timestamptz,
+  done_at timestamptz
+);
+create index machine_commands_location on machine_commands(location_id, created_at desc);
+
+-- Problems: opened when they start, resolved when they clear.
+create table machine_incidents (
+  id text primary key,
+  location_id text not null,
+  company_id text not null,
+  kind text not null,
+  severity text not null,
+  message text not null,
+  opened_at timestamptz not null,
+  resolved_at timestamptz
+);
+create index machine_incidents_open on machine_incidents(company_id, resolved_at);
+
+-- Labels prepared for a machine to print while its internet is down.
+create table machine_buffer (
+  unit_id text primary key,
+  location_id text not null,
+  company_id text not null,
+  status text not null check (status in ('held', 'used', 'released')),
+  created_at timestamptz not null,
+  expires_at timestamptz not null,
+  used_at timestamptz
+);
+create index machine_buffer_location on machine_buffer(location_id, status);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

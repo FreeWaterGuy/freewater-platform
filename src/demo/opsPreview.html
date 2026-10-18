@@ -47,6 +47,10 @@
     if (key === 'GET /v1/ops/overview') return { ...S.ov, attention: { ...S.ov.attention, adsToReview: S.queue.length }, delivery: { ...S.ov.delivery, delivered: S.runs.reduce((n, r) => n + r.counts.delivered, 0), notDelivered: S.runs.reduce((n, r) => n + r.counts.notDelivered, 0) } };
     if (key === 'GET /v1/ops/machines') return R.machines;
     if (key === 'GET /v1/ops/plugin-failures') return R.failures;
+    if (key === 'GET /v1/ops/fleet') return R.fleet;
+    const fm = /^\/v1\/ops\/fleet\/([\w-]+)(\/commands)?$/.exec(path);
+    if (fm && fm[2]) return { id: 'cmd_preview', kind: body.kind, status: 'pending' };
+    if (fm) return R.fleetDetail[fm[1]] || fail(404, 'Machine not found.');
     if (key === 'GET /v1/review/campaigns') return S.queue;
     let m = /^\/v1\/review\/campaigns\/([\w-]+)(\/preview)?$/.exec(path);
     if (m && m[2]) return R.previews[m[1]];

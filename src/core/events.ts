@@ -30,6 +30,8 @@ export interface EventPayloads {
   'experience.engaged': { target: string; viewerKey: string; action: 'save' | 'link' | 'call' | 'addon' | 'room' | 'slot' | 'video'; detail?: string; advertiserId?: string; campaignId?: string };
   'charity.transferred': { transferId: string; number: string; charity: string; amountCents: Cents; provider: string; providerRef: string };
   'expense.recorded': { expenseId: string; category: string; amountCents: Cents; memo: string; date: string };
+  'machine.incident_opened': { incidentId: string; locationId: string; kind: string; severity: 'warning' | 'critical'; message: string };
+  'machine.incident_resolved': { incidentId: string; locationId: string; kind: string; minutes: number };
   'unit.failed': { unitId: string; orderId?: string; reason: string };
   'payment.authorized': { paymentId: string; payerType: 'user' | 'advertiser'; payerId: string; amountCents: Cents; purpose: 'custom_order' | 'invoice'; ref: string };
   'payment.captured': { paymentId: string; payerType: 'user' | 'advertiser'; payerId: string; amountCents: Cents; purpose: 'custom_order' | 'invoice'; ref: string; provider: string };

@@ -187,6 +187,7 @@ export interface ApiKey {
   name: string;
   scopes: Scope[];
   advertiserId?: string; // an advertiser's key only ever sees that advertiser's campaigns and sales
+  locationId?: string; // a machine's key only prints at that machine
   userId?: string; // set when the caller is a signed-in person rather than a system
   sessionToken?: string;
 }
@@ -206,20 +207,20 @@ export interface ApiKeyListing {
 const hashKey = (raw: string) => createHash('sha256').update(raw).digest('hex');
 
 /** Creates a key and returns it once. Only its hash is stored, so a stolen database can't be used to call the API. */
-export async function createApiKey(db: SqlClient, input: { companyId: string; name: string; scopes: Scope[]; advertiserId?: string; createdBy?: string }): Promise<{ key: string; record: ApiKey }> {
+export async function createApiKey(db: SqlClient, input: { companyId: string; name: string; scopes: Scope[]; advertiserId?: string; createdBy?: string; locationId?: string }): Promise<{ key: string; record: ApiKey }> {
   const raw = `fwk_${randomBytes(24).toString('base64url')}`;
   const id = newId('key');
   const hint = `${raw.slice(0, 8)}…${raw.slice(-4)}`;
-  await db.query(`insert into api_keys (id, company_id, name, scopes, advertiser_id, key_hash, hint, created_by) values ($1,$2,$3,$4,$5,$6,$7,$8)`, [id, input.companyId, input.name, input.scopes, input.advertiserId ?? null, hashKey(raw), hint, input.createdBy ?? null]);
-  return { key: raw, record: { id, companyId: input.companyId, name: input.name, scopes: input.scopes, advertiserId: input.advertiserId } };
+  await db.query(`insert into api_keys (id, company_id, name, scopes, advertiser_id, key_hash, hint, created_by, location_id) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [id, input.companyId, input.name, input.scopes, input.advertiserId ?? null, hashKey(raw), hint, input.createdBy ?? null, input.locationId ?? null]);
+  return { key: raw, record: { id, companyId: input.companyId, name: input.name, scopes: input.scopes, advertiserId: input.advertiserId, locationId: input.locationId } };
 }
 
 export async function findApiKey(db: SqlClient, raw: string): Promise<ApiKey | null> {
-  const r = (await db.query<any>(`select id, company_id, name, scopes, advertiser_id, last_used_at from api_keys where key_hash = $1 and revoked_at is null`, [hashKey(raw)])).rows[0];
+  const r = (await db.query<any>(`select id, company_id, name, scopes, advertiser_id, location_id, last_used_at from api_keys where key_hash = $1 and revoked_at is null`, [hashKey(raw)])).rows[0];
   if (!r) return null;
   // Remember roughly when each key was last used (at most once a minute, to keep writes down).
   if (!r.last_used_at || Date.now() - new Date(r.last_used_at).getTime() > 60_000) await db.query(`update api_keys set last_used_at = now() where id = $1`, [r.id]);
-  return { id: r.id, companyId: r.company_id, name: r.name, scopes: r.scopes, advertiserId: r.advertiser_id ?? undefined };
+  return { id: r.id, companyId: r.company_id, name: r.name, scopes: r.scopes, advertiserId: r.advertiser_id ?? undefined, locationId: r.location_id ?? undefined };
 }
 
 export async function listApiKeys(db: SqlClient, companyId: string): Promise<ApiKeyListing[]> {

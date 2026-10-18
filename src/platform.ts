@@ -90,7 +90,8 @@ export class Platform {
     return { ok: true, unit, label, attempts: 0 };
   }
 
-  private async run(opts: OrderOptions & { orderId: string }): Promise<OrderOutcome> {
+  /** Steps 1 and 2: fill the slots and draw the label. Nothing is billed yet. */
+  private async fillAndRender(opts: OrderOptions & { orderId: string }) {
     const company = need(this.companies, opts.companyId, 'company');
     const product = need(this.products, opts.productId, 'product');
     const location = need(this.locations, opts.locationId, 'location');
@@ -134,6 +135,28 @@ export class Platform {
     this.persist.label(label, company.id);
     this.persist.unit(unit);
     this.bus.publish('label.rendered', company.id, { unitId: unit.id, widthIn: label.widthIn, heightIn: label.heightIn, renderMs: Math.round(performance.now() - t0) }, unit.id);
+    return { company, location, unit, label, kind };
+  }
+
+  /** A confirmed print: billed now, then the bottle is out. */
+  private confirm(unit: Unit, jobId: string, extra: { customerId?: string; customPriceCents?: number } = {}) {
+    unit.status = 'printed';
+    this.bus.publish('label.printed', unit.companyId, { unitId: unit.id, jobId, locationId: unit.locationId, placements: unit.placements, kind: unit.kind, customerId: extra.customerId, customPriceCents: extra.customPriceCents }, unit.id);
+    unit.status = 'dispensed';
+    this.persist.unit(unit);
+    this.bus.publish('unit.dispensed', unit.companyId, { unitId: unit.id, locationId: unit.locationId }, unit.id);
+  }
+
+  private fail(unit: Unit, reason: string, orderId?: string) {
+    unit.status = 'failed';
+    release(unit.placements, this.campaigns);
+    this.persistCampaigns(unit.placements);
+    this.persist.unit(unit);
+    this.bus.publish('unit.failed', unit.companyId, { unitId: unit.id, orderId, reason }, unit.id);
+  }
+
+  private async run(opts: OrderOptions & { orderId: string }): Promise<OrderOutcome> {
+    const { company, location, unit, label } = await this.fillAndRender(opts);
 
     // 3. Print, retrying once. Only a confirmed print is billed.
     const printer = this.registry.printerFor(company);
@@ -141,22 +164,40 @@ export class Platform {
       const jobId = newId('job');
       const result = await printer.print({ jobId, idempotencyKey: `${unit.id}:attempt:${attempt}`, unitId: unit.id, locationId: location.id, svg: label.svg, widthIn: label.widthIn, heightIn: label.heightIn });
       if (result.status === 'printed') {
-        unit.status = 'printed';
-        this.bus.publish('label.printed', company.id, { unitId: unit.id, jobId, locationId: location.id, placements: unit.placements, kind, customerId: opts.custom?.customerId, customPriceCents: opts.custom?.priceCents }, unit.id);
-        unit.status = 'dispensed';
-        this.persist.unit(unit);
-        this.bus.publish('unit.dispensed', company.id, { unitId: unit.id, locationId: location.id }, unit.id);
+        this.confirm(unit, jobId, { customerId: opts.custom?.customerId, customPriceCents: opts.custom?.priceCents });
         return { ok: true, unit, label, attempts: attempt };
       }
       this.bus.publish('print.failed', company.id, { unitId: unit.id, jobId, reason: result.reason, attempt }, `${unit.id}:${attempt}`);
+      if (result.final) break; // e.g. the machine is offline: trying again won't help
     }
 
-    unit.status = 'failed';
-    release(unit.placements, this.campaigns);
-    this.persistCampaigns(unit.placements);
-    this.persist.unit(unit);
-    this.bus.publish('unit.failed', company.id, { unitId: unit.id, orderId: opts.orderId, reason: 'Printing failed after retrying' }, unit.id);
+    this.fail(unit, 'Printing failed after retrying', opts.orderId);
     return { ok: false, unit, reason: 'Printing failed after retrying', attempts: this.maxAttempts };
+  }
+
+  /**
+   * Fill and draw a label now, to be printed later without asking first (a machine's stock for when its internet
+   * drops). Its ads are held for it but nothing is billed until confirmPrepared; abandonPrepared lets them go.
+   */
+  async prepare(opts: OrderOptions & { orderId: string }): Promise<{ unit: Unit; label: RenderedLabel }> {
+    const done = this.orderUnits.get(`${opts.companyId}:${opts.orderId}`);
+    if (done) return { unit: this.units.get(done)!, label: this.labels.get(done)! };
+    const { unit, label } = await this.fillAndRender(opts);
+    return { unit, label };
+  }
+  /** A prepared label really printed. Returns false if it was already confirmed or let go. */
+  confirmPrepared(unitId: string, jobId: string, consumerId?: string): boolean {
+    const unit = need(this.units, unitId, 'unit');
+    if (unit.status !== 'rendered') return false;
+    if (consumerId) unit.consumerId = consumerId;
+    this.confirm(unit, jobId);
+    return true;
+  }
+  abandonPrepared(unitId: string, reason: string): boolean {
+    const unit = need(this.units, unitId, 'unit');
+    if (unit.status !== 'rendered') return false;
+    this.fail(unit, reason, unit.orderId);
+    return true;
   }
 
   private persistCampaigns(placements: Placement[]) {

@@ -37,6 +37,7 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
       pricing: company.consumerPricing, customPriceCents: company.prices.customUnit,
       giving: givingLine(company, l.id), freeBottlesPerDay: rules(companyId).freeBottlesPerDay,
       sampleLabelUrl: `/v1/public/machines/${l.id}/sample.svg`,
+      model6: app.fleet.isModel6(l.id), availability: app.fleet.availability(l.id),
     };
   };
 
@@ -138,21 +139,39 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     if (!code || !(await presence.check(locationId, code))) throw new ApiError(403, 'not_at_machine', "Scan the code on the machine's screen to get a bottle there. It changes every 30 seconds.");
   };
 
-  route({ method: 'POST', url: '/v1/me/vends', scope: 'me', summary: 'Get my free water: one tap at a machine. Send the code from its screen.', body: obj({ vendId: S.str, locationId: S.str, presenceCode: S.str, productId: S.str }, ['vendId', 'locationId', 'presenceCode']), handler: async (req, key) => {
+  const freeLeft = (userId: string, companyId: string) => Math.max(0, rules(companyId).freeBottlesPerDay - [...platform.units.values()].filter((u) => u.consumerId === userId && u.kind === 'ad_supported' && u.status !== 'failed' && Date.parse(u.createdAt) >= platform.bus.now().getTime() - 864e5).length);
+  const vendState = (u: Unit) => (u.status === 'dispensed' || u.status === 'printed' ? 'ready' : u.status === 'failed' ? 'failed' : 'printing');
+  const vendView = (u: Unit, userId: string) => {
+    const loc = platform.locations.get(u.locationId)!;
+    const state = vendState(u);
+    return { status: state, ...(state === 'failed' ? { message: "The machine couldn't print your bottle. Nothing was used up; try again." } : {}), bottle: bottleView(u), countdown: { seconds: loc.printSeconds ?? 30, ad: countdownAd(u) }, freeLeftToday: freeLeft(userId, u.companyId) };
+  };
+
+  route({ method: 'POST', url: '/v1/me/vends', scope: 'me', summary: 'Get my free water: one tap at a machine. Send the code from its screen. At a Model 6 the answer comes straight away with status "printing"; check GET /v1/me/vends/{vendId} until it is "ready".', body: obj({ vendId: S.str, locationId: S.str, presenceCode: S.str, productId: S.str }, ['vendId', 'locationId', 'presenceCode']), handler: async (req, key) => {
     const userId = h.me(key);
     const b = req.body as any;
     const orderId = `vend:${userId}:${b.vendId}`;
     const existing = [...platform.units.values()].find((u) => u.companyId === key!.companyId && u.orderId === orderId);
-    if (!existing) {
-      await atMachine(b.locationId, b.presenceCode, key!.companyId);
-      limitCheck(userId, key!.companyId);
-    }
+    if (existing) return { status: existing.status === 'failed' ? 422 : 200, body: existing.status === 'failed' ? { error: { code: 'print_failed', message: vendView(existing, userId).message } } : vendView(existing, userId) };
+    await atMachine(b.locationId, b.presenceCode, key!.companyId);
+    limitCheck(userId, key!.companyId);
+    const a = app.fleet.availability(b.locationId);
+    if (a.state !== 'ready') throw new ApiError(409, `machine_${a.state}`, a.message);
     const productId = b.productId ?? [...platform.products.keys()][0];
     if (!platform.products.has(productId)) throw new ApiError(422, 'unknown_product', `Product ${productId} doesn't exist.`);
-    const r = await platform.order({ companyId: key!.companyId, orderId, locationId: b.locationId, productId, consumerId: userId });
-    if (!r.ok) return { status: 422, body: { error: { code: 'print_failed', message: "The machine couldn't print your bottle. Nothing was used up; try again." } } };
-    const loc = platform.locations.get(b.locationId)!;
-    return { status: existing ? 200 : 201, body: { bottle: bottleView(r.unit), countdown: { seconds: loc.printSeconds ?? 30, ad: countdownAd(r.unit) }, freeLeftToday: Math.max(0, rules(key!.companyId).freeBottlesPerDay - [...platform.units.values()].filter((u) => u.consumerId === userId && u.kind === 'ad_supported' && u.status !== 'failed' && Date.parse(u.createdAt) >= platform.bus.now().getTime() - 864e5).length) } };
+    const running = platform.order({ companyId: key!.companyId, orderId, locationId: b.locationId, productId, consumerId: userId });
+    // A Model 6 takes a while to print: answer now and let the app watch the countdown.
+    const r = await Promise.race([running, new Promise<null>((res) => setTimeout(() => res(null), app.fleet.isModel6(b.locationId) ? 1500 : 60_000))]);
+    if (r && !r.ok) return { status: 422, body: { error: { code: 'print_failed', message: "The machine couldn't print your bottle. Nothing was used up; try again." } } };
+    const unit = r?.unit ?? [...platform.units.values()].find((u) => u.companyId === key!.companyId && u.orderId === orderId)!;
+    return { status: r ? 201 : 202, body: vendView(unit, userId) };
+  } });
+
+  route({ method: 'GET', url: '/v1/me/vends/:vendId', scope: 'me', summary: 'How a bottle you asked for is going: printing, ready (in the tray) or failed (nothing was used up).', handler: async (req, key) => {
+    const userId = h.me(key);
+    const u = [...platform.units.values()].find((x) => x.companyId === key!.companyId && x.orderId === `vend:${userId}:${(req.params as any).vendId}`);
+    if (!u) throw notFound('Vend');
+    return { body: vendView(u, userId) };
   } });
 
   route({ method: 'GET', url: '/v1/me/bottles', scope: 'me', summary: 'Your bottles, newest first, with what they gave and what you saved.', handler: async (_req, key) => {

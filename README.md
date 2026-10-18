@@ -142,6 +142,44 @@ npm run demo:ops-preview   # builds out/ops-preview/ and out/driver-preview/, cl
 - **Deliveries:** everyone getting packs.
 - **Books:** the public totals and the latest ledger lines.
 
+## Model 6 machine software
+
+```
+npm run demo:machine           # two simulated Model 6 machines on a real platform
+                               #   http://localhost:7014/sim: the machine's screen plus switches (order from the app, jam, sold out, cut the internet…)
+                               #   http://localhost:8787/ops/machines: the fleet as ops sees it
+npm run demo:machine-preview   # builds out/machine-preview/, the screen and the switches in one page with no server
+FW_MACHINE=ATX-014 FW_API=https://… FW_KEY=fwk_… npm run machine   # run the machine software for real
+```
+
+**What runs inside the machine (`src/machine`).**
+- **Agent** (`agent.ts`): every few seconds it says how the machine is (printer, labels, ink, bottles, door, temperature) and hears back its mode, commands from ops, and the code its screen shows (it changes every 30 seconds).
+- **Printing a bottle:** it takes a bottle someone ordered on their phone, prints it, drops it, and reports exactly what happened.
+- **Screen** (`screen.ts`, `src/web/machine.*`): the machine's browser shows it full screen:
+  - idle: the brand, the code to scan, the rules, and ads running here;
+  - the countdown with the bottle's own ad, then "take your bottle";
+  - sold out, restocking, out of service, offline.
+- **Memory** (`journal.ts`): what it must not forget across a power cut is written to disk.
+- **Hardware contracts** (`hardware.ts`): a `LabelPrinterDriver`, a `DispenserDriver` and cabinet sensors. Until the printer is chosen, `SimulatedModel6` stands in, with switches for every fault. A real printer is a new driver; nothing else changes.
+
+**Billing only what reaches the tray.**
+- Companies with Model 6 machines use the `model6-fleet` printer module. Bottles ordered at a Model 6 become jobs for that machine; anything else (the micro-factory) still uses the other printer.
+- A job is billed only when the machine says the bottle reached the tray.
+- A failed print is tried once more. A bottle stuck after printing isn't tried again. A job nobody picks up times out.
+- None of these are billed, and their ads are freed.
+- In the app, "Get my free water" answers straight away with "printing" and follows the real print (`GET /v1/me/vends/{id}`). If the machine is offline, sold out or out of service, the app says so before anyone walks up.
+
+**When the internet drops.**
+- Each machine keeps a few labels ready (12 by default; set in the console under Company). Their ads are held, never billed unless printed.
+- While offline, the screen offers "Tap for a free bottle", within an hourly limit.
+- When it's back online it reports which were printed (billed then) and which spoiled (let go). Unused labels are let go after a day.
+
+**Ops (`/ops/machines`).**
+- **Fleet:** every machine's status, bottles and labels left, the last day's prints, and open problems.
+- **Problems:** they open and close by themselves: offline, jammed, out of labels, low ink, sold out, low bottles, stuck bottle, door open, too warm, late print. Serious ones email the owners and ops team, and reach webhooks as `machine.problem` and `machine.problem_fixed`.
+- **Each machine:** recent bottles with print and drop times, and buttons for test print, out of service (with a reason shown on the machine and in the app), back in service, restart, refresh screen, top up offline labels, and update software (a stand-in until signed updates are set up).
+- **Machine keys:** each machine's key belongs to that machine. It can only print there and can't read anything else.
+
 ## The console, developer portal and webhooks
 
 ```
@@ -244,6 +282,8 @@ The server keeps working state in memory and writes through to the database, so 
 | `src/modules/ledger` | Billing rules and the open-books receipt |
 | `src/modules/books` | Public books, daily fingerprints, charity transfers and costs |
 | `src/adapters/payouts` | Payout contract (sending money to charities) and the test version |
+| `src/modules/fleet` | Model 6 machines: jobs, heartbeats, problems, commands, labels kept for offline |
+| `src/machine` | The machine software: agent, screen server, memory, hardware contracts and the simulated Model 6 |
 | `src/modules/console` | Company settings, their rules and version history, machines, licensee setup |
 | `src/modules/webhooks`, `src/adapters/webhooks` | Webhook endpoints, signed deliveries, retries, the public event list, and the sender contract |
 | `src/modules/packs` | Packs, box faces, packing check, van loading and delivery |
@@ -264,5 +304,6 @@ All prices in `src/demo/seed.ts` are placeholders.
 
 ## Next
 
-- A real printer adapter for the Model 6 and the micro-factory lines, once the printers are chosen (the virtual printer shows the contract any printer must follow)
-- The Model 6 machine software (step 9), then going live (step 10)
+- Going live (step 10): real providers for payments, payouts, messages, maps and routing; hosting, backups and monitoring
+- Real printer and dispenser drivers for the Model 6 (`src/machine/hardware.ts`) and a printer adapter for the micro-factory lines, once the printers are chosen
+- Signed software updates for machines

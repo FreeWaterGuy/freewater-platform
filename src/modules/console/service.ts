@@ -72,7 +72,7 @@ export class ConsoleService {
   }
 
   private locations(companyId: string) {
-    return [...this.platform.locations.values()].filter((l) => l.companyId === companyId).map((l) => ({ id: l.id, kind: l.kind, name: l.name, city: l.city, address: l.address ?? null, lat: l.lat ?? null, lng: l.lng ?? null, printSeconds: l.printSeconds ?? null }));
+    return [...this.platform.locations.values()].filter((l) => l.companyId === companyId).map((l) => ({ id: l.id, kind: l.kind, name: l.name, city: l.city, address: l.address ?? null, lat: l.lat ?? null, lng: l.lng ?? null, printSeconds: l.printSeconds ?? null, hardware: l.hardware ?? null }));
   }
 
   /** Getting started: what a new company still has to do before its first bottle. */
@@ -177,7 +177,7 @@ export class ConsoleService {
   // ---------- machines ----------
 
   /** Add a machine. Its API key (for printing bottles) is in the answer, once. */
-  async addMachine(companyId: string, input: { id: string; name: string; city: string; address?: string; lat?: number; lng?: number; printSeconds?: number }, by: string) {
+  async addMachine(companyId: string, input: { id: string; name: string; city: string; address?: string; lat?: number; lng?: number; printSeconds?: number; hardware?: 'model6' | 'virtual' }, by: string) {
     this.company(companyId);
     const id = input.id.trim().toUpperCase();
     if (!MACHINE_ID.test(id)) throw new ConsoleError('invalid_machine_id', 'A machine id is 3 to 20 capital letters, numbers and dashes, like ATX-031.');
@@ -185,18 +185,21 @@ export class ConsoleService {
     if (!input.name?.trim() || input.name.length > 60) throw new ConsoleError('invalid_name', 'Give the machine a short name, like the street or building.');
     if (!input.city?.trim() || input.city.length > 60) throw new ConsoleError('invalid_city', 'Which city is it in?');
     if ((input.lat !== undefined && (input.lat < -90 || input.lat > 90)) || (input.lng !== undefined && (input.lng < -180 || input.lng > 180))) throw new ConsoleError('invalid_place', 'That map position isn’t right.');
-    const loc: Location = { id, kind: 'machine', companyId, name: input.name.trim(), city: input.city.trim(), ...(input.address ? { address: input.address.trim() } : {}), ...(input.lat !== undefined ? { lat: input.lat, lng: input.lng } : {}), printSeconds: input.printSeconds ?? 25 };
+    const loc: Location = { id, kind: 'machine', companyId, name: input.name.trim(), city: input.city.trim(), ...(input.address ? { address: input.address.trim() } : {}), ...(input.lat !== undefined ? { lat: input.lat, lng: input.lng } : {}), printSeconds: input.printSeconds ?? 25, ...(input.hardware === 'model6' ? { hardware: 'model6' as const } : {}) };
     await this.db.query(`insert into locations (id, data) values ($1,$2)`, [id, JSON.stringify(loc)]);
     this.platform.locations.set(id, loc);
-    const { key } = await createApiKey(this.db, { companyId, name: `Machine ${id}`, scopes: ['orders'], createdBy: by });
+    const { key } = await createApiKey(this.db, { companyId, name: `Machine ${id}`, scopes: ['orders'], createdBy: by, locationId: id });
     return { machine: this.locations(companyId).find((l) => l.id === id)!, apiKey: key };
   }
 
-  async updateMachine(companyId: string, id: string, input: { name?: string; city?: string; address?: string; lat?: number; lng?: number; printSeconds?: number }) {
+  async updateMachine(companyId: string, id: string, input: { name?: string; city?: string; address?: string; lat?: number; lng?: number; printSeconds?: number; hardware?: 'model6' | 'virtual' }) {
     const loc = this.platform.locations.get(id);
     if (!loc || loc.companyId !== companyId || loc.kind !== 'machine') throw new ConsoleError('not_found', 'Machine not found.', 404);
     if (input.name !== undefined && (!input.name.trim() || input.name.length > 60)) throw new ConsoleError('invalid_name', 'Give the machine a short name.');
-    const next: Location = { ...loc, ...Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined)) };
+    const { hardware, ...rest } = input;
+    const next: Location = { ...loc, ...Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined)) };
+    if (hardware === 'model6') next.hardware = 'model6';
+    if (hardware === 'virtual') delete next.hardware;
     await this.db.query(`update locations set data = $2 where id = $1`, [id, JSON.stringify(next)]);
     this.platform.locations.set(id, next);
     return this.locations(companyId).find((l) => l.id === id)!;

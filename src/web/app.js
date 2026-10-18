@@ -329,8 +329,9 @@
       if (!(await ensureSignedIn('Sign in once so we can keep your free bottles fair: 3 a day.'))) return;
       get.disabled = true; get.replaceChildren(h('span', { class: 'spin' }), 'Sending to the machine');
       try {
-        const r = await api('POST', '/v1/me/vends', { vendId: rid(), locationId: m.id, presenceCode: code });
-        state.printing = { ...r, machine: m };
+        const vendId = rid();
+        const r = await api('POST', '/v1/me/vends', { vendId, locationId: m.id, presenceCode: code });
+        state.printing = { ...r, vendId, machine: m };
         go('/app/printing');
       } catch (x) { err.textContent = x.message; err.hidden = false; get.disabled = false; get.replaceChildren('Get my free water'); }
     } }, 'Get my free water');
@@ -340,8 +341,9 @@
       h('h1', { class: 'display', text: m.pricing === 'free' ? 'Free spring water' : 'Spring water' }),
       h('p', { class: 'muted', style: 'margin:-6px 0 0;font-size:17px', text: `16 oz aluminum bottle, ready in about ${m.printSeconds} seconds. Ads pay for it${m.giving ? `, and ${m.giving.replace(/ goes/, ' goes')}` : ''}.` }),
       !code && h('div', { class: 'notice warn' }, h('b', { text: 'Scan the code on the machine’s screen. ' }), 'It proves you’re here, so nobody can take bottles from far away.'),
+      m.availability && m.availability.state !== 'ready' ? h('div', { class: 'notice warn', text: m.availability.message }) : null,
       err,
-      get,
+      (m.availability && m.availability.state !== 'ready' && (get.disabled = true), get),
       link(`/app/design?m=${m.id}`, { class: 'btn secondary' }, 'Design my own bottle'),
       h('p', { class: 'small muted center', style: 'margin:-6px 0 0', text: `Your own design is paid and ad-free · ${money(m.customPriceCents)}` }));
   }
@@ -377,7 +379,21 @@
         } }, icon(I.saved), `Save this from ${ad.advertiser}`))),
       h('div', {}, h('div', { class: 'progress-row' }, h('span', { text: p.bottles?.length > 1 ? `Printing your ${p.bottles.length} bottles` : p.bottle.kind === 'custom' ? 'Printing your design' : `Printing ${ads} ${ads === 1 ? 'ad' : 'ads'} on your label` }), pct), h('div', { class: 'progress', role: 'progressbar', 'aria-label': 'Printing' }, bar)),
       done);
+    // At a Model 6 the bottle really is printing: follow it until it's in the tray (or say it didn't work).
+    let status = p.status ?? 'ready';
+    const finish = () => { left = 0; num.textContent = '0'; arc.setAttribute('stroke-dashoffset', String(C)); bar.style.width = '100%'; pct.textContent = '100%'; title.textContent = many ? 'They’re in the tray' : 'It’s in the tray'; sub.textContent = many ? 'Take them, and scan one to see the page you made.' : 'Take it, and scan any ad on it to open its AR.'; clearInterval(t); };
+    let watching = null;
+    if (status === 'printing' && p.vendId) {
+      watching = setInterval(async () => {
+        try {
+          const v = await api('GET', `/v1/me/vends/${p.vendId}`);
+          if (v.status === 'ready') { status = 'ready'; clearInterval(watching); finish(); }
+          else if (v.status === 'failed') { status = 'failed'; clearInterval(watching); clearInterval(t); title.textContent = 'That one didn’t print'; sub.textContent = v.message; bar.style.width = '0%'; pct.textContent = ''; done.replaceWith(h('button', { class: 'btn outline-light', type: 'button', onclick: () => go(`/app/m/${p.machine.id}`) }, 'Try again')); }
+        } catch {}
+      }, 2000);
+    }
     const t = setInterval(() => {
+      if (status === 'printing' && left <= 1) { sub.textContent = 'Almost there…'; return; }
       left = Math.max(0, left - 1);
       num.textContent = String(left);
       arc.setAttribute('stroke-dashoffset', String(C * (1 - left / total)));
@@ -386,7 +402,7 @@
       if (left > 0) sub.textContent = `${many ? 'They drop' : 'It drops'} into the tray in ${left} second${left === 1 ? '' : 's'}`;
       else { title.textContent = many ? 'They’re in the tray' : 'It’s in the tray'; sub.textContent = many ? 'Take them, and scan one to see the page you made.' : 'Take it, and scan any ad on it to open its AR.'; clearInterval(t); }
     }, 1000);
-    stopCurrent = () => clearInterval(t);
+    stopCurrent = () => { clearInterval(t); clearInterval(watching); };
   }
 
   // ---------- one bottle: its ads and their AR ----------

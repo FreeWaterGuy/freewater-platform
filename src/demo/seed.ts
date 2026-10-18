@@ -35,6 +35,7 @@ export const freewater: CompanyConfig = {
   consumerPricing: 'free',
   timezone: 'America/Chicago',
   consumer: { freeBottlesPerDay: 3, retailValueCents: 100 },
+  machines: { offlineWalkUp: true, offlinePerHour: 20, bufferSize: 12 },
   openBooks: true,
   unitCosts: { water: 4, bottle: 18, label: 3, machine: 6 }, // placeholders until real costs are known
   adRules: { minAdsPerUnit: 1, maxAdsPerUnit: 6, blockedCategories: ['alcohol', 'tobacco', 'gambling', 'weapons'], competitorSeparation: true, repeatScanWindowSec: 600, maxPackShare: 0.5 },

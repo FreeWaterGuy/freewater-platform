@@ -5,6 +5,8 @@ import { adsRoutes } from './ads';
 import { deliveryRoutes } from './delivery';
 import { booksRoutes } from './books';
 import { consoleRoutes } from './console';
+import { machineRoutes } from './machine';
+import { FleetError } from '../modules/fleet/service';
 import { WebhookError } from '../modules/webhooks/service';
 import { ConsoleError } from '../modules/console/service';
 import { BooksError } from '../modules/books/service';
@@ -207,6 +209,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     if (b.custom) {
       try { custom = { customerId: b.custom.customerId, art: svgCreative(b.custom.svg), priceCents: b.custom.priceCents }; } catch (e: any) { throw new ApiError(422, 'artwork_refused', e.message); }
     }
+    if (key!.locationId && key!.locationId !== b.locationId) throw new ApiError(403, 'wrong_machine', `This key belongs to ${key!.locationId} and can only print there.`);
     const r = await platform.order({ companyId: key!.companyId, orderId: b.orderId, locationId: b.locationId, productId: b.productId, custom });
     if (!r.ok) return { status: 422, body: { error: { code: 'print_failed', message: `${r.reason}. Nothing was billed.` }, unit: unitView(r.unit.id) } };
     return { status: 201, body: unitView(r.unit.id) };
@@ -503,6 +506,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   deliveryRoutes(app, route, { me });
   booksRoutes(app, route);
   consoleRoutes(app, route);
+  machineRoutes(app, route);
 
   // ---------- wiring ----------
 
@@ -619,7 +623,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   server.setErrorHandler((err: any, _req, reply) => {
     if (err instanceof ApiError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
-    if (err instanceof AccountsError || err instanceof PaymentError || err instanceof ExperienceError || err instanceof AssetError || err instanceof AdsError || err instanceof DesignError || err instanceof DeliveryError || err instanceof BooksError || err instanceof WebhookError || err instanceof ConsoleError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
+    if (err instanceof AccountsError || err instanceof PaymentError || err instanceof ExperienceError || err instanceof AssetError || err instanceof AdsError || err instanceof DesignError || err instanceof DeliveryError || err instanceof BooksError || err instanceof WebhookError || err instanceof ConsoleError || err instanceof FleetError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
     if (err.code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE') return reply.code(415).send({ error: { code: 'unsupported_type', message: 'Send JSON, or for uploads a .glb, PNG, JPEG, WebP or MP4 file.' } });
     if (err.code === 'FST_ERR_CTP_BODY_TOO_LARGE') return reply.code(413).send({ error: { code: 'too_large', message: 'That is too big to upload.' } });
     if (err.validation) return reply.code(400).send({ error: { code: 'invalid_request', message: err.message } });

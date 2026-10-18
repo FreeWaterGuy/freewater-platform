@@ -202,7 +202,12 @@
         section('Bottles for people', 'What people pay at your machines and in the app, and how many free bottles one person can get.', h('div', { class: 'form' },
           select(ctx, 'consumerPricing', 'Bottle price', [['free', 'Free (paid for by the ads)'], ['discounted', 'Discounted'], ['full', 'Full price']]),
           num(ctx, 'consumer.freeBottlesPerDay', 'Free bottles per person a day', { min: 0, max: 24, hint: 'So nobody empties a machine.' }),
-          num(ctx, 'consumer.retailValueCents', 'What a bottle costs in a store', { min: 0, max: 1000, suffix: '¢', hint: (v) => `Used for “you saved ${dollars(v ?? 0)}” in the app.` }))))]);
+          num(ctx, 'consumer.retailValueCents', 'What a bottle costs in a store', { min: 0, max: 1000, suffix: '¢', hint: (v) => `Used for “you saved ${dollars(v ?? 0)}” in the app.` }))),
+        section('When a machine’s internet drops', 'Model 6 machines keep a few labels ready so they can still give water. Those bottles are billed when the machine is back online.', h('div', { class: 'form' },
+          ctx.draft.machines ? null : (ctx.draft.machines = { offlineWalkUp: true, offlinePerHour: 20, bufferSize: 12 }, null),
+          toggle(ctx, 'machines.offlineWalkUp', 'Give free bottles at the screen while offline', 'No app needed then: people tap the screen. Without the internet the machine can’t check anyone’s daily limit.', { full: true }),
+          num(ctx, 'machines.offlinePerHour', 'At most this many an hour, per machine', { min: 0, max: 120 }),
+          num(ctx, 'machines.bufferSize', 'Labels each machine keeps ready', { min: 0, max: 50, hint: 'Their ads are held, never billed unless printed. Unused ones are let go after a day.' }))))]);
   }
 
   // ---------- brand ----------
@@ -323,18 +328,19 @@
   async function machinesPage() {
     const list = S.ov.locations;
     const once = h('div');
+    const hw = h('select', { class: 'input' }, h('option', { value: 'model6', text: 'Model 6 (prints its own bottles)' }), h('option', { value: 'virtual', text: 'Other (uses the company printer)' }));
     const f = { id: h('input', { class: 'input', maxlength: 20, placeholder: 'ATX-031', style: 'text-transform:uppercase;font-family:var(--mono)' }), name: h('input', { class: 'input', maxlength: 60, placeholder: 'South Congress' }), city: h('input', { class: 'input', maxlength: 60, placeholder: 'Austin' }), address: h('input', { class: 'input', maxlength: 200, placeholder: '1600 S Congress Ave, Austin, TX' }) };
     const form = h('form', { class: 'form', onsubmit: async (e) => {
       e.preventDefault();
       try {
-        const r = await api('POST', '/v1/console/machines', { id: f.id.value.trim(), name: f.name.value.trim(), city: f.city.value.trim(), ...(f.address.value.trim() ? { address: f.address.value.trim() } : {}) });
+        const r = await api('POST', '/v1/console/machines', { id: f.id.value.trim(), hardware: hw.value, name: f.name.value.trim(), city: f.city.value.trim(), ...(f.address.value.trim() ? { address: f.address.value.trim() } : {}) });
         S.ov.locations.push(r.machine);
         tbody.append(row(r.machine));
-        once.replaceChildren(h('div', { class: 'once' }, h('b', { text: `${r.machine.id} is added. Here’s its API key.` }), h('p', { text: 'Put this key in the machine’s settings. It can only print bottles, and this is the only time it’s shown. If it’s lost, turn it off on the API keys page and add the machine’s key again.' }), h('div', { class: 'secret' }, h('code', { text: r.apiKey }), h('button', { class: 'btn small', type: 'button', onclick: () => copy(r.apiKey) }, 'Copy'))));
+        once.replaceChildren(h('div', { class: 'once' }, h('b', { text: `${r.machine.id} is added. Here’s its API key.` }), h('p', { text: 'Put this key in the machine’s settings (FW_KEY). It can only print bottles at this machine, and this is the only time it’s shown. If it’s lost, turn it off on the API keys page and add the machine’s key again.' }), h('div', { class: 'secret' }, h('code', { text: r.apiKey }), h('button', { class: 'btn small', type: 'button', onclick: () => copy(r.apiKey) }, 'Copy'))));
         for (const i of Object.values(f)) i.value = '';
       } catch (x) { toast(x.message); }
-    } }, field('Machine id', f.id, { hint: 'Printed on the machine. Capital letters, numbers and dashes.' }), field('Name', f.name, { hint: 'Usually the street or building.' }), field('City', f.city), field('Address', f.address), h('div', { class: 'field full' }, h('button', { class: 'btn', type: 'submit' }, 'Add machine')));
-    const row = (l) => h('tr', {}, h('td', {}, h('b', { class: 'mono', text: l.id })), h('td', { text: l.kind === 'route' ? 'Delivery route' : 'Machine' }), h('td', {}, l.name, l.address ? h('div', { class: 'muted', style: 'font-size:13px', text: l.address }) : null), h('td', { text: l.city }), h('td', { text: l.printSeconds ? `${l.printSeconds} s` : '—' }));
+    } }, field('Machine id', f.id, { hint: 'Printed on the machine. Capital letters, numbers and dashes.' }), field('Name', f.name, { hint: 'Usually the street or building.' }), field('City', f.city), field('Address', f.address), field('Hardware', hw, { full: true }), h('div', { class: 'field full' }, h('button', { class: 'btn', type: 'submit' }, 'Add machine')));
+    const row = (l) => h('tr', {}, h('td', {}, h('b', { class: 'mono', text: l.id })), h('td', { text: l.kind === 'route' ? 'Delivery route' : l.hardware === 'model6' ? 'Model 6' : 'Machine' }), h('td', {}, l.name, l.address ? h('div', { class: 'muted', style: 'font-size:13px', text: l.address }) : null), h('td', { text: l.city }), h('td', { text: l.printSeconds ? `${l.printSeconds} s` : '—' }));
     const tbody = h('tbody', {}, list.map(row));
     shell('machines', head('Machines', 'Every machine and delivery route. Each machine prints with its own API key.'),
       h('div', { class: 'stack' },

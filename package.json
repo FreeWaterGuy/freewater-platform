@@ -22,7 +22,10 @@
     "demo:books": "tsx src/demo/booksDemo.ts",
     "demo:books-preview": "tsx src/demo/booksPreview.ts",
     "demo:console": "tsx src/demo/consoleDemo.ts",
-    "demo:console-preview": "tsx src/demo/consolePreview.ts"
+    "demo:console-preview": "tsx src/demo/consolePreview.ts",
+    "demo:machine": "tsx src/demo/machineDemo.ts",
+    "machine": "tsx src/machine/main.ts",
+    "demo:machine-preview": "tsx src/demo/machinePreview.ts"
   },
   "engines": {
     "node": ">=20"

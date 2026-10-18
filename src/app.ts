@@ -31,6 +31,7 @@ import { TestPayoutProvider, type PayoutProvider } from './adapters/payouts/cont
 import { WebhookService } from './modules/webhooks/service';
 import { HttpWebhookSender, type WebhookSender } from './adapters/webhooks/contract';
 import { ConsoleService } from './modules/console/service';
+import { FleetService, MachineFleetPrinter } from './modules/fleet/service';
 import { bottle16oz, boxes, builtinCreatives, freewater, locations, peakSpring, sampleCampaigns } from './demo/seed';
 
 export interface AppOptions {
@@ -52,6 +53,7 @@ export interface AppOptions {
   webhookSender?: WebhookSender; // sends webhooks; defaults to real HTTPS
   allowPrivateWebhooks?: boolean; // let webhooks reach localhost and private networks (development only)
   publicUrl?: string; // where the console lives, for links in emails, e.g. https://console.freewater.io
+  fleet?: { claimTimeoutMs?: number; finishTimeoutMs?: number; offlineAfterMs?: number; bufferHours?: number };
 }
 
 /** Start the platform on a database: migrate, load everything, and keep writing every change back. */
@@ -65,11 +67,11 @@ export async function createApp(opts: AppOptions) {
   if (empty && opts.seedDemo) {
     await saveCatalog(db, { companies: [freewater, peakSpring], products: [bottle16oz], boxes, locations, campaigns: sampleCampaigns() });
     demoKeys = {};
-    const make = async (label: string, companyId: string, scopes: Scope[], advertiserId?: string) => {
-      demoKeys![label] = (await createApiKey(db, { companyId, name: label, scopes, advertiserId })).key;
+    const make = async (label: string, companyId: string, scopes: Scope[], advertiserId?: string, locationId?: string) => {
+      demoKeys![label] = (await createApiKey(db, { companyId, name: label, scopes, advertiserId, locationId })).key;
     };
     await make('freewater-admin', 'freewater', ['orders', 'packs', 'campaigns', 'purchases', 'ledger', 'events', 'admin', 'platform']);
-    await make('machine-ATX-014', 'freewater', ['orders']);
+    await make('machine-ATX-014', 'freewater', ['orders'], undefined, 'ATX-014');
     await make('advertiser-joes', 'freewater', ['campaigns', 'purchases', 'invoices'], 'adv-joes');
     for (const c of sampleCampaigns().filter((x) => !x.isHouse)) {
       await db.query(`insert into advertisers (id, company_id, name, category) values ($1,$2,$3,$4) on conflict do nothing`, [c.advertiserId, c.companyId, c.advertiserName, c.category]);
@@ -132,7 +134,12 @@ export async function createApp(opts: AppOptions) {
   const webhooks = new WebhookService(db, opts.webhookSender ?? new HttpWebhookSender({ allowPrivate }), messenger, opts.clock, flush, { allowPrivate, consoleUrl: publicUrl });
   const consoleSvc = new ConsoleService(db, platform, made.registry, accounts, messenger, flush, { consoleUrl: publicUrl, clock: opts.clock });
 
-  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc };
+  // Model 6 machines: bottles ordered there print at the machine; everything else uses the company's other printer.
+  const fleet = new FleetService(db, platform, messenger, flush, opts.fleet);
+  await fleet.load();
+  made.registry.registerPrinter('model6-fleet', new MachineFleetPrinter(() => fleet, made.printer));
+
+  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

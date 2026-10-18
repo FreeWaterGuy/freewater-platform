@@ -13,7 +13,7 @@ export interface PrintJob {
 
 export type PrintResult =
   | { status: 'printed'; jobId: string; at: Date }
-  | { status: 'failed'; jobId: string; reason: string };
+  | { status: 'failed'; jobId: string; reason: string; /** True when trying again can't help (the machine is offline or sold out). */ final?: boolean };
 
 export interface PrinterAdapter {
   readonly name: string;

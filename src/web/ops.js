@@ -30,7 +30,7 @@
     if (!res.ok) throw new Error(data?.error?.message || 'Something went wrong.');
     return data;
   }
-  const routes = [[/^\/ops\/?$/, today], [/^\/ops\/review$/, reviewPage], [/^\/ops\/machines$/, machinesPage], [/^\/ops\/routes$/, routesPage], [/^\/ops\/subscriptions$/, subsPage], [/^\/ops\/books$/, booksPage]];
+  const routes = [[/^\/ops\/?$/, today], [/^\/ops\/review$/, reviewPage], [/^\/ops\/machines$/, machinesPage], [/^\/ops\/machines\/([\w-]+)$/, machinePage], [/^\/ops\/routes$/, routesPage], [/^\/ops\/subscriptions$/, subsPage], [/^\/ops\/books$/, booksPage]];
   let cleanup = null;
   function go(path, replace) { S.path = path; if (!fixture) history[replace ? 'replaceState' : 'pushState'](null, '', path); render(); }
   window.addEventListener('popstate', () => { S.path = location.pathname + location.search; render(); });
@@ -42,7 +42,7 @@
     if (!S.me) return signIn();
     if (S.me.advertiserId || S.me.role === 'consumer') return shell('', h('div', { class: 'notice err', text: 'This console is for the company’s team. Ask an owner to add you.' }));
     const pathname = S.path.split('?')[0];
-    for (const [re, fn] of routes) if (re.test(pathname)) { try { await fn(); } catch (e) { shell('', h('div', { class: 'notice err', text: e.message })); } window.scrollTo(0, 0); return; }
+    for (const [re, fn] of routes) { const mm = re.exec(pathname); if (mm) { try { await fn(...mm.slice(1)); } catch (e) { shell('', h('div', { class: 'notice err', text: e.message })); } window.scrollTo(0, 0); return; } }
     go('/ops', true);
   }
   function shell(active, ...content) {
@@ -66,9 +66,10 @@
 
   // ---------- today ----------
   async function today() {
-    const [o, machines] = await Promise.all([api('GET', '/v1/ops/overview'), api('GET', '/v1/ops/machines').catch(() => [])]);
+    const [o, machines, fleet] = await Promise.all([api('GET', '/v1/ops/overview'), api('GET', '/v1/ops/machines').catch(() => []), api('GET', '/v1/ops/fleet').catch(() => [])]);
     const a = o.attention;
     const hot = [
+      ...fleet.filter((m) => m.hardware === 'model6' && (m.availability.state !== 'ready' || m.incidents.some((i) => i.severity === 'critical'))).map((m) => link(`/ops/machines/${m.id}`, { class: 'hot' }, h('span', { text: `${m.id}: ${m.incidents.find((i) => i.severity === 'critical')?.message ?? m.availability.message}` }), h('b', { text: 'Look →' }))),
       a.adsToReview && link('/ops/review', { class: 'hot' }, h('span', { text: `${a.adsToReview} ${a.adsToReview === 1 ? 'ad is' : 'ads are'} waiting for review` }), h('b', { text: 'Review →' })),
       a.printFailures && link('/ops/machines', { class: 'hot' }, h('span', { text: `${a.printFailures} failed print${a.printFailures === 1 ? '' : 's'} today (never billed)` }), h('b', { text: 'Machines →' })),
       a.pluginFailures && h('div', { class: 'hot' }, h('span', { text: `${a.pluginFailures} scan page${a.pluginFailures === 1 ? '' : 's'} fell back to the simple card recently` })),
@@ -129,13 +130,67 @@
   }
 
   // ---------- machines ----------
+  // ---------- machines: the Model 6 fleet ----------
+  const avail = (a) => h('span', { class: `pill ${a.state === 'ready' ? 'ok' : a.state === 'offline' || a.state === 'out_of_service' || a.state === 'sold_out' ? 'bad' : 'warn'}`, text: { ready: 'Ready', offline: 'Offline', sold_out: 'Sold out', out_of_service: 'Out of service', maintenance: 'Restocking' }[a.state] ?? a.state });
+  const ago = (iso) => { if (!iso) return 'never'; const sec = Math.max(1, Math.round((Date.now() - Date.parse(iso)) / 1000)); return sec < 60 ? `${sec} s ago` : sec < 3600 ? `${Math.round(sec / 60)} min ago` : sec < 86400 ? `${Math.round(sec / 3600)} h ago` : `${Math.round(sec / 86400)} d ago`; };
+  const meter = (left, cap, low) => { const pc = Math.max(0, Math.min(100, Math.round((left / Math.max(1, cap)) * 100))); return h('div', { class: 'meter', title: `${left} of ${cap}` }, h('i', { style: `width:${pc}%;background:${pc < low ? 'var(--bad)' : 'var(--black)'}` }), h('span', { text: `${left}` })); };
   async function machinesPage() {
-    const [machines, failures] = await Promise.all([api('GET', '/v1/ops/machines'), api('GET', '/v1/ops/plugin-failures').catch(() => [])]);
-    shell('machines', head('Machines', 'Every machine prints with the printer module set for the company. Failed prints are retried once and never billed.'),
-      h('section', { class: 'panel-box' }, machineTable(machines)),
+    const [fleet, failures] = await Promise.all([api('GET', '/v1/ops/fleet'), api('GET', '/v1/ops/plugin-failures').catch(() => [])]);
+    const m6 = fleet.filter((m) => m.hardware === 'model6');
+    const ready = m6.filter((m) => m.availability.state === 'ready').length;
+    shell('machines', head('Machines', 'Every Model 6 calls in every few seconds. A bottle is only billed once it reaches the tray; failed prints are never billed.'),
+      h('div', { class: 'kpis', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' },
+        h('div', { class: 'kpi dark' }, h('span', { text: 'Ready' }), h('b', { text: `${ready}/${m6.length}` }), h('small', { text: 'Model 6 machines' })),
+        h('div', { class: 'kpi' }, h('span', { text: 'Problems open' }), h('b', { text: String(fleet.reduce((n, m) => n + m.incidents.length, 0)) }), h('small', { text: `${fleet.reduce((n, m) => n + m.incidents.filter((i) => i.severity === 'critical').length, 0)} need someone` })),
+        h('div', { class: 'kpi' }, h('span', { text: 'Bottles, last 24 h' }), h('b', { text: String(fleet.reduce((n, m) => n + m.last24h.dispensed, 0)) }), h('small', { text: `${fleet.reduce((n, m) => n + m.last24h.failed + m.last24h.expired, 0)} failed, not billed` })),
+        h('div', { class: 'kpi' }, h('span', { text: 'Bottles left' }), h('b', { text: String(m6.reduce((n, m) => n + (m.status?.dispenser.bottlesLeft ?? 0), 0)) }), h('small', { text: 'across the fleet' }))),
+      h('section', { class: 'panel-box' }, h('div', { class: 'scroll-x' }, h('table', { class: 'list fleet' }, h('thead', {}, h('tr', {}, ['Machine', 'Status', 'Bottles', 'Labels', 'Last 24 h', 'Last heard', 'Problems'].map((x) => h('th', { text: x })))),
+        h('tbody', {}, fleet.map((m) => h('tr', { tabindex: '0', style: 'cursor:pointer', onclick: () => go(`/ops/machines/${m.id}`), onkeydown: (e) => { if (e.key === 'Enter') go(`/ops/machines/${m.id}`); } },
+          h('td', {}, h('b', { text: m.id }), h('div', { style: 'color:var(--muted);font-size:12px', text: `${m.name} · ${m.hardware === 'model6' ? 'Model 6' : 'other printer'}` })),
+          h('td', {}, m.hardware === 'model6' ? avail(m.availability) : h('span', { class: 'pill', text: 'No machine software' })),
+          h('td', {}, m.status ? meter(m.status.dispenser.bottlesLeft, m.status.dispenser.capacity, 15) : '—'),
+          h('td', {}, m.status ? meter(m.status.printer.labelsLeft, m.status.printer.labelsCapacity, 10) : '—'),
+          h('td', { text: m.hardware === 'model6' ? `${m.last24h.dispensed} out${m.last24h.failed + m.last24h.expired ? ` · ${m.last24h.failed + m.last24h.expired} failed` : ''}` : '—' }),
+          h('td', { text: m.hardware === 'model6' ? ago(m.lastSeenAt) : '—' }),
+          h('td', {}, m.incidents.length ? h('div', { style: 'display:flex;flex-direction:column;gap:4px' }, m.incidents.slice(0, 2).map((i) => h('span', { class: `pill ${i.severity === 'critical' ? 'bad' : 'warn'}`, text: i.message }))) : h('span', { style: 'color:var(--muted)', text: 'None' })))))))),
       h('section', { class: 'panel-box', style: 'margin-top:18px' }, h('h2', { text: 'Scan pages that fell back' }),
         failures.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['When', 'Experience', 'Why'].map((x) => h('th', { text: x })))), h('tbody', {}, failures.map((f) => h('tr', {}, h('td', { text: new Date(f.at).toLocaleString() }), h('td', { text: f.pluginId }), h('td', { text: f.reason }))))))
           : h('p', { style: 'margin:0;color:var(--muted)', text: 'None. Every scan page answered in time.' })));
+    const t = setInterval(() => { if (S.path.split('?')[0] === '/ops/machines' && window.scrollY < 40) render(); }, 8000);
+    cleanup = () => clearInterval(t);
+  }
+
+  const commandNames = { test_print: 'Test print', restart: 'Restart', out_of_service: 'Out of service', in_service: 'Back in service', refresh_screen: 'Refresh screen', sync_buffer: 'Top up offline labels', update_software: 'Update software' };
+  async function machinePage(id) {
+    const m = await api('GET', `/v1/ops/fleet/${id}`);
+    const send = async (kind, args) => { try { await api('POST', `/v1/ops/fleet/${id}/commands`, { kind, ...(args ? { args } : {}) }); toast(`${commandNames[kind]} sent. The machine picks it up within a few seconds.`); setTimeout(() => { if (S.path.split('?')[0] === `/ops/machines/${id}`) render(); }, 2500); } catch (x) { toast(x.message); } };
+    const s = m.status;
+    const reason = h('input', { class: 'input', maxlength: 120, placeholder: 'Why? Shown on the machine and in the app', 'aria-label': 'Reason for taking it out of service' });
+    const version = h('input', { class: 'input', maxlength: 20, placeholder: '1.0.1', 'aria-label': 'Software version', style: 'max-width:140px' });
+    const card = (label, value, sub) => h('div', { class: 'kpi' }, h('span', { text: label }), h('b', { text: value }), sub ? h('small', { text: sub }) : null);
+    shell('machines', head(`${m.id} · ${m.name}`, `${m.address ?? m.city}${m.hardware === 'model6' ? ` · Model 6 · software ${m.softwareVersion ?? '—'} · last heard ${ago(m.lastSeenAt)}` : ''}`, link('/ops/machines', { class: 'btn secondary small' }, 'All machines'), m.hardware === 'model6' ? avail(m.availability) : null),
+      m.hardware !== 'model6' ? h('div', { class: 'notice', text: 'This machine prints with the company printer, not the Model 6 machine software. Change its hardware in the console under Machines.' }) : [
+        m.availability.state !== 'ready' ? h('div', { class: 'notice err', style: 'margin-bottom:16px', text: m.availability.message }) : null,
+        h('div', { class: 'kpis', style: 'grid-template-columns:repeat(5,minmax(0,1fr))' },
+          card('Bottles left', s ? `${s.dispenser.bottlesLeft}` : '—', s ? `of ${s.dispenser.capacity}` : ''),
+          card('Labels left', s ? `${s.printer.labelsLeft}` : '—', s ? `ink ${Math.round(s.printer.inkPercent)}%` : ''),
+          card('Inside', s ? `${Math.round(s.temperatureC)}°C` : '—', s ? `door ${s.door}` : ''),
+          card('Last 24 h', `${m.last24h.dispensed}`, `${m.last24h.failed + m.last24h.expired} failed${m.last24h.avgPrintMs ? ` · ${(m.last24h.avgPrintMs / 1000).toFixed(1)} s to print` : ''}`),
+          card('Offline labels', String(m.bufferHeld), 'kept ready')),
+        h('div', { class: 'grid2' },
+          h('section', { class: 'panel-box' }, h('h2', { text: 'Ask the machine to…' }),
+            h('div', { class: 'toolbar' }, h('button', { class: 'btn small', type: 'button', onclick: () => send('test_print') }, 'Test print'), h('button', { class: 'btn secondary small', type: 'button', onclick: () => send('refresh_screen') }, 'Refresh screen'), h('button', { class: 'btn secondary small', type: 'button', onclick: () => send('sync_buffer') }, 'Top up offline labels'), h('button', { class: 'btn secondary small', type: 'button', onclick: () => send('restart') }, 'Restart')),
+            m.mode === 'out_of_service' ? h('div', { class: 'toolbar' }, h('span', { text: `Out of service${m.modeReason ? `: ${m.modeReason}` : ''}` }), h('button', { class: 'btn small', type: 'button', onclick: () => send('in_service') }, 'Put back in service'))
+              : h('div', { class: 'toolbar' }, reason, h('button', { class: 'btn secondary small', type: 'button', onclick: () => send('out_of_service', reason.value.trim() ? { reason: reason.value.trim() } : undefined) }, 'Take out of service')),
+            h('div', { class: 'toolbar' }, version, h('button', { class: 'btn secondary small', type: 'button', onclick: () => { if (!/^\d+\.\d+\.\d+$/.test(version.value.trim())) return toast('Type a version like 1.0.1'); send('update_software', { version: version.value.trim() }); } }, 'Update software')),
+            m.commands.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Asked', 'What', 'By', 'Result'].map((x) => h('th', { text: x })))), h('tbody', {}, m.commands.slice(0, 8).map((c) => h('tr', {}, h('td', { text: ago(c.createdAt) }), h('td', { text: commandNames[c.kind] ?? c.kind }), h('td', { text: c.createdBy ?? '' }), h('td', {}, h('span', { class: `pill ${c.status === 'done' ? 'ok' : c.status === 'failed' ? 'bad' : 'warn'}`, text: c.status === 'pending' || c.status === 'sent' ? 'Waiting' : c.result || c.status }))))))) : null),
+          h('section', { class: 'panel-box' }, h('h2', { text: 'Problems' }),
+            m.incidentHistory.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('tbody', {}, m.incidentHistory.slice(0, 10).map((i) => h('tr', {}, h('td', {}, h('span', { class: `pill ${i.resolvedAt ? '' : i.severity === 'critical' ? 'bad' : 'warn'}`, text: i.resolvedAt ? 'Fixed' : 'Open' })), h('td', { text: i.message }), h('td', { style: 'color:var(--muted);white-space:nowrap', text: i.resolvedAt ? `${ago(i.openedAt)}, fixed in ${Math.max(1, Math.round((Date.parse(i.resolvedAt) - Date.parse(i.openedAt)) / 60000))} min` : ago(i.openedAt) })))))) : h('p', { style: 'margin:0;color:var(--muted)', text: 'None so far.' }))),
+        h('section', { class: 'panel-box', style: 'margin-top:18px' }, h('h2', { text: 'Recent bottles' }),
+          m.jobs.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['When', 'Bottle', 'Try', 'Result', 'Print', 'Drop'].map((x) => h('th', { text: x })))), h('tbody', {}, m.jobs.map((j) => h('tr', {}, h('td', { text: ago(j.createdAt) }), h('td', { style: 'font-family:ui-monospace,monospace;font-size:13px', text: j.unitId }), h('td', { text: String(j.attempt) }), h('td', {}, h('span', { class: `pill ${j.status === 'dispensed' ? 'ok' : j.status === 'failed' || j.status === 'expired' ? 'bad' : 'warn'}`, text: { dispensed: 'In the tray', failed: j.reason ?? 'Failed', expired: j.reason ?? 'Timed out', queued: 'Waiting', claimed: 'Printing' }[j.status] })), h('td', { text: j.printMs ? `${(j.printMs / 1000).toFixed(1)} s` : '—' }), h('td', { text: j.dropMs ? `${(j.dropMs / 1000).toFixed(1)} s` : '—' }))))))
+            : h('p', { style: 'margin:0;color:var(--muted)', text: 'Nothing printed here yet.' }))]);
+    const t = setInterval(() => { if (S.path.split('?')[0] === `/ops/machines/${id}` && window.scrollY < 40 && !document.activeElement?.matches('input')) render(); }, 10000);
+    cleanup = () => clearInterval(t);
   }
 
   // ---------- routes ----------

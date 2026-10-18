@@ -22,6 +22,8 @@ export interface Location {
   area?: { lat: number; lng: number; radiusKm: number };
   depot?: { lat: number; lng: number; name: string };
   deliveryDays?: number[];
+  /** The machine's hardware. A Model 6 runs the machine software and prints its own bottles. */
+  hardware?: 'model6';
 }
 
 export interface Product {
@@ -70,6 +72,12 @@ export interface CompanyConfig {
   consumerPricing: 'free' | 'discounted' | 'full';
   /** Where the company runs, for dates like "tonight" and "Tuesday". */
   timezone?: string;
+  /** How Model 6 machines behave when their internet drops. */
+  machines?: {
+    offlineWalkUp: boolean; // offer a free bottle at the screen while offline, from labels prepared in advance
+    offlinePerHour: number; // the most bottles one machine gives that way in an hour
+    bufferSize: number; // labels each machine keeps prepared for that
+  };
   /** Rules for people getting bottles from the app. */
   consumer?: {
     freeBottlesPerDay: number; // per person, so nobody empties a machine
