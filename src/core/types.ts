@@ -92,6 +92,12 @@ export interface CompanyConfig {
      * scans, AR launches, box sides, custom bottles and sales commissions earn.
      */
     percentOfExtra?: number;
+    /**
+     * Each month, this percent of the profit on the upside (everything earned above the per-bottle gift's coverage,
+     * after its share of the costs of running the company) also goes to charity. The charity gets whichever is larger:
+     * this, or `percentOfExtra` of the upside revenue (which it receives as it's earned).
+     */
+    percentOfProfit?: number;
     /** Print money per bottle up to this amount is covered by the per-bottle gift (FreeWater: $1, where bids start). */
     extraAboveCents?: number;
     defaultCharity?: string; // the charity everything goes to unless a machine or route names another
@@ -110,11 +116,12 @@ export interface CompanyConfig {
   /** How much of the books the world sees, live. Each company chooses. */
   transparency?: Transparency;
   /**
-   * The AI agents' own fund and place in the books. Off unless the company turns it on. When on, the agents' fund gets
-   * this percent of the same upside the charity's extra share comes from (FreeWater: 10%, matching the charity).
-   * The safety governor is not a setting: it always runs.
+   * The AI agents' own fund and place in the books. Off unless the company turns it on. Each month the agents' fund
+   * gets a percent of the profit on the upside (the same profit the charity's share comes from): a smaller share
+   * until the company reaches its milestone (so many factories open, or so many beverages given, whichever first),
+   * the full share after. No back pay. The safety governor is not a setting: it always runs.
    */
-  agents?: { enabled: boolean; percentOfExtra: number };
+  agents?: { enabled: boolean; percentOfProfit: number; percentBeforeMilestone: number; milestone: { factories: number; beverages: number } };
   /**
    * The QR codes it prints. Codes are dynamic (looked up each time they're scanned) unless an advertiser is allowed
    * to choose a static one and does.

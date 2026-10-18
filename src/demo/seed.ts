@@ -70,7 +70,7 @@ export const freewater: CompanyConfig = {
   // 10¢ a bottle (covering the first $1 of ads on it, where bids start), plus 10% of every dollar beyond that:
   // higher bids, more ads, scans, AR launches, box sides, custom bottles and sales commissions. All to Well Aware,
   // the Austin nonprofit that builds water wells in Africa, unless a machine or route names another charity.
-  giving: { mode: 'per_unit', centsPerUnit: 10, percentOfExtra: 10, extraAboveCents: 100, defaultCharity: 'Well Aware', minimumTransferCents: 2500 },
+  giving: { mode: 'per_unit', centsPerUnit: 10, percentOfExtra: 10, percentOfProfit: 30, extraAboveCents: 100, defaultCharity: 'Well Aware', minimumTransferCents: 2500 },
   consumerPricing: 'free',
   timezone: 'America/Chicago',
   consumer: { freeBottlesPerDay: 3, retailValueCents: 100 },
@@ -78,8 +78,9 @@ export const freewater: CompanyConfig = {
   openBooks: true,
   // Everything public, live: the feed, the counters, each day's fingerprint, and advertiser statements.
   transparency: { liveFeed: true, counters: true, publishFingerprints: true, advertiserStatements: true, feedDetail: 'machine', showAmounts: true },
-  // The AI agents get 10% of the same upside the charity gets its extra 10% from, to spend on becoming regenerative.
-  agents: { enabled: true, percentOfExtra: 10 },
+  // Each month: 30% of the profit above the $1 base to charity (never less than 10% of that revenue), and to the AI
+  // agents 5% until 10 micro factories are open or 100 million beverages are given (whichever first), 20% after.
+  agents: { enabled: true, percentOfProfit: 20, percentBeforeMilestone: 5, milestone: { factories: 10, beverages: 100_000_000 } },
   unitCosts: { water: 4, bottle: 18, label: 3, machine: 6 }, // placeholders until real costs are known
   adRules: { minAdsPerUnit: 1, maxAdsPerUnit: 10, blockedCategories: ['alcohol', 'tobacco', 'gambling', 'weapons'], competitorSeparation: true, repeatScanWindowSec: 600, maxPackShare: 0.5 },
   prices: freewaterPrices,
@@ -96,7 +97,7 @@ export const peakSpring: CompanyConfig = {
   name: 'Peak Spring Water Co.',
   // Quiet until it chooses to share: only advertisers' statements.
   transparency: { liveFeed: false, counters: false, publishFingerprints: false, advertiserStatements: true, feedDetail: 'city', showAmounts: false },
-  agents: { enabled: false, percentOfExtra: 10 },
+  agents: { enabled: false, percentOfProfit: 20, percentBeforeMilestone: 5, milestone: { factories: 10, beverages: 100_000_000 } },
   receiptBaseUrl: 'https://water.peakspring.example',
   brand: { logoTop: 'peak', logoBottom: 'spring', panelColor: '#123B2A', accentColor: '#F2C14E', textColor: '#FFFFFF', fontFamily: "'DM Sans', Arial, sans-serif" },
   productFacts: ['MOUNTAIN SPRING WATER', '16 fl oz (473 ml)', 'Bottled for Peak Spring Water Co.'],

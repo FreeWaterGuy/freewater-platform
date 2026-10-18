@@ -21,7 +21,7 @@ const dailyTimer = setInterval(() => { app.data.purge().catch((e) => console.err
 const anchorTimer = setInterval(() => { app.anchors.run().catch((e) => console.error('fingerprints', e)); }, 3600_000);
 // Each hour, the governor measures changes whose week is up, reads every agent's standing, and shares out the AI fund.
 const agentTimer = setInterval(async () => {
-  try { await app.agents.measure(); await app.agents.refresh(); for (const c of app.platform.companies.values()) if (c.agents?.enabled) await app.agents.settle(c.id); await app.persistence.flush(); } catch (e) { console.error('agents', e); }
+  try { for (const c of app.platform.companies.values()) await app.profit.closeDue(c.id); await app.agents.measure(); await app.agents.refresh(); for (const c of app.platform.companies.values()) if (c.agents?.enabled) await app.agents.settle(c.id); await app.persistence.flush(); } catch (e) { console.error('agents', e); }
 }, 3600_000);
 
 console.log(`\nFreeWater API on http://localhost:${port}  (database: ${db.name})`);

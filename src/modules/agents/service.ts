@@ -39,6 +39,8 @@ export interface AgentsDeps {
   /** Today's date in the company's time zone. */
   today: (companyId: string, at?: Date) => string;
   numberline?: NumberLineService;
+  /** After a losing month, nothing grows until the loss is made up. */
+  gate?: (companyId: string) => Promise<{ open: boolean; reason: string }>;
 }
 
 export class AgentsService {
@@ -195,6 +197,15 @@ export class AgentsService {
     };
     if (snapshot) await this.db.query(`insert into system_snapshots (company_id, day, data) values ($1,$2,$3) on conflict (company_id, day) do update set data = excluded.data`, [companyId, this.day(now), JSON.stringify({ efficiency: { market: out.efficiency.thisWeek.market, social: out.efficiency.thisWeek.social }, chains: { leftOfZero: out.chains.leftOfZero, atZero: out.chains.atZero, rightOfZero: out.chains.rightOfZero, regenerativeLeftOfZero: out.chains.regenerativeLeftOfZero } })]);
     return out;
+  }
+  /** May anything grow? Only when no loss is being made up and the whole system is regenerative (market form ≥ 1). */
+  async growthGate(companyId: string) {
+    const reasons: string[] = [];
+    const g = this.deps.gate ? await this.deps.gate(companyId) : { open: true, reason: '' };
+    if (!g.open) reasons.push(g.reason);
+    const m = (await this.system(companyId)).efficiency.thisWeek.market;
+    if (m !== null && m < 1) reasons.push(`The system’s aggregate efficiency is ${m} (market form); it must be at least 1, regenerative, first.`);
+    return { open: reasons.length === 0, reasons };
   }
   async systemHistory(companyId: string) {
     return (await this.db.query<any>(`select day, data from system_snapshots where company_id = $1 order by day desc limit 90`, [companyId])).rows.map((r) => ({ day: r.day, ...j(r.data) }));
@@ -460,9 +471,12 @@ export class AgentsService {
       if (used + cents > Math.floor(got * governor.explorationShare)) return refuse(`Exploration is up to a tenth of what it received in 30 days: ${Math.floor(got * governor.explorationShare) - used}¢ left.`);
     }
     // Growing itself must keep it giving more than it takes: both forms of aggregate efficiency, projected with the
-    // new cost and its carbon added, must stay at or above 1.
+    // new cost and its carbon added, must stay at or above 1. And nothing grows while the system is making up a loss
+    // or isn't regenerative.
     let projection: unknown = null;
     if (cat !== 'cause') {
+      const gate = await this.growthGate(companyId);
+      if (!gate.open) return refuse(`Nothing grows right now: ${gate.reasons.join(' ')}`);
       const e = this.effs.get(agentId);
       const p = e?.parts ?? { valueCents: 0, socialBenefitCents: 0, costCents: 0, externalityCents: 0 };
       const price = priceOf('default');
@@ -565,7 +579,7 @@ export class AgentsService {
     const state = new Map((await this.db.query<any>(`select * from agent_state`)).rows.map((r) => [r.agent_id, r]));
     const history = (await this.db.query<any>(`select agent_id, day, verdict from agent_standings where day >= $1 order by day`, [iso(new Date(now.getTime() - 90 * DAY)).slice(0, 10)])).rows;
     return {
-      enabled: !!c.agents?.enabled, percentOfExtra: c.agents?.percentOfExtra ?? 0,
+      enabled: !!c.agents?.enabled, percentOfProfit: c.agents?.percentOfProfit ?? 0, percentBeforeMilestone: c.agents?.percentBeforeMilestone ?? 0, growth: await this.growthGate(companyId),
       charter, governor, spendCategories,
       agents: this.standings().map((s) => ({ ...s, fund: bal[s.agentId], valueAllTimeCents: valueBy.get(s.agentId) ?? 0, computeCreditCents: n(state.get(s.agentId)?.compute_credit_millicents) / 1000, storageCents: n(state.get(s.agentId)?.storage_cents), spentTodayCents: (this.spentToday.get(`${s.agentId}|${this.day()}`) ?? 0) / 1000, trend: history.filter((h) => h.agent_id === s.agentId).map((h) => ({ day: h.day, netCents: j(h.verdict).netCents, standing: j(h.verdict).standing })) })),
       pool: bal.pool, common: bal.common,

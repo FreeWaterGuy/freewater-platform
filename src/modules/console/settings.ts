@@ -108,7 +108,13 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
 
   const pol = checkPolicy(c.data);
   if (pol) return `Data: ${pol}`;
-  if (c.agents && (typeof c.agents.enabled !== 'boolean' || !(c.agents.percentOfExtra >= 0 && c.agents.percentOfExtra <= 50))) return 'The AI agents’ fund is on or off, with a share of 0 to 50% of the upside.';
+  if (g.percentOfProfit !== undefined && !isNum(g.percentOfProfit, 0, 90)) return 'The share of the upside’s profit given must be 0% to 90%.';
+  if (c.agents) {
+    const a = c.agents;
+    if (typeof a.enabled !== 'boolean' || !isNum(a.percentOfProfit, 0, 50) || !isNum(a.percentBeforeMilestone, 0, 50)) return 'The AI agents’ fund is on or off, with shares of 0 to 50% of the upside’s profit.';
+    if (!a.milestone || !isNum(a.milestone.factories, 0, 1e6) || !isNum(a.milestone.beverages, 0, 1e13)) return 'The milestone is a number of factories and a number of beverages.';
+    if ((c.giving.percentOfProfit ?? 0) + a.percentOfProfit > 90) return 'The charity’s and the agents’ shares of the profit can’t add up to more than 90%.';
+  }
   if (c.transparency) {
     const t = c.transparency;
     if (!['liveFeed', 'counters', 'publishFingerprints', 'advertiserStatements', 'showAmounts'].every((k) => typeof (t as any)[k] === 'boolean') || !['machine', 'city', 'none'].includes(t.feedDetail)) return 'Each transparency setting is on or off, and the feed shows the machine, the city, or no place.';
@@ -142,7 +148,7 @@ export function applyChange(cur: CompanyConfig, change: Partial<Record<EditableK
 const labels: Record<string, string> = {
   name: 'Company name', receiptBaseUrl: 'QR web address', 'brand.logoTop': 'Logo top line', 'brand.logoBottom': 'Logo bottom line', 'brand.tagline': 'Tagline',
   'brand.panelColor': 'Panel color', 'brand.accentColor': 'Accent color', 'brand.textColor': 'Text color', 'brand.fontFamily': 'Lettering', productFacts: 'Product facts',
-  'giving.mode': 'How you give', 'giving.centsPerUnit': 'Giving per bottle', 'giving.percentOfRevenue': 'Share of ad money given', 'giving.percentOfExtra': 'Share of every other dollar given', 'giving.extraAboveCents': 'Extra giving starts above', 'giving.defaultCharity': 'Charity', 'giving.charitySplit': 'Giving split between charities',
+  'giving.mode': 'How you give', 'giving.centsPerUnit': 'Giving per bottle', 'giving.percentOfRevenue': 'Share of ad money given', 'giving.percentOfExtra': 'Share of every other dollar given', 'giving.percentOfProfit': 'Share of the upside’s profit given', 'giving.extraAboveCents': 'Extra giving starts above', 'giving.defaultCharity': 'Charity', 'giving.charitySplit': 'Giving split between charities',
   'giving.charityByLocation': 'Charity by machine or route', 'giving.minimumTransferCents': 'Smallest transfer', openBooks: 'Open books',
   unitCosts: 'Standard costs', consumerPricing: 'Bottle price', timezone: 'Time zone', 'consumer.freeBottlesPerDay': 'Free bottles per person a day', 'consumer.retailValueCents': 'Store price of a bottle',
   'adRules.minAdsPerUnit': 'Fewest ads per bottle', 'adRules.maxAdsPerUnit': 'Most ads per bottle', 'adRules.blockedCategories': 'Blocked categories', 'adRules.competitorSeparation': 'Keep competitors apart',
@@ -151,7 +157,7 @@ const labels: Record<string, string> = {
   scanBaseUrl: 'Short QR address', standardProductId: 'Standard product', 'qr.logo': 'Logo in your codes', 'qr.logoSvg': 'Your code logo', 'qr.color': 'Code color',
   'qr.advertiserLogos': 'Advertisers’ logos in their codes', 'qr.allowStatic': 'Static codes allowed', 'ar.trackingCodes': 'AR tracking strip', 'ar.stripEverywhere': 'Tracking strip along every ad',
   'machines.offlineWalkUp': 'Free bottles while offline', 'machines.offlinePerHour': 'Offline bottles per hour', 'machines.bufferSize': 'Labels kept ready', 'modules.ads': 'Ad engine', 'modules.renderer': 'Label maker', 'modules.printer': 'Printer',
-  'transparency.liveFeed': 'Live public feed', 'transparency.counters': 'Live public counters', 'transparency.publishFingerprints': 'Publishing daily fingerprints', 'transparency.advertiserStatements': 'Advertiser statements', 'transparency.feedDetail': 'Places in the feed', 'transparency.showAmounts': 'Amounts in the feed', data: 'Data collection', 'agents.enabled': 'The AI agents’ fund', 'agents.percentOfExtra': 'The AI agents’ share of the upside',
+  'transparency.liveFeed': 'Live public feed', 'transparency.counters': 'Live public counters', 'transparency.publishFingerprints': 'Publishing daily fingerprints', 'transparency.advertiserStatements': 'Advertiser statements', 'transparency.feedDetail': 'Places in the feed', 'transparency.showAmounts': 'Amounts in the feed', data: 'Data collection', 'agents.enabled': 'The AI agents’ fund', 'agents.percentOfProfit': 'The AI agents’ share of the profit', 'agents.percentBeforeMilestone': 'The AI agents’ share before the milestone', 'agents.milestone': 'The AI agents’ milestone',
   'lottery.enabled': 'Prize game', 'lottery.oddsPercent': 'Chance of winning', 'lottery.chancesPerDay': 'Chances per person a day', 'lottery.winsPerDay': 'Prizes per person a day', 'lottery.watchSeconds': 'Watching before the ball', 'lottery.ballMs': 'Time the ball is on screen', 'lottery.prizes': 'Prizes', 'lottery.minAge': 'Youngest age to play', 'lottery.rulesUrl': 'Official rules link', 'lottery.rulesText': 'Rules note',
 };
 const deep = new Set(['brand', 'giving', 'consumer', 'machines', 'qr', 'ar', 'adRules', 'prices', 'modules', 'lottery', 'transparency', 'agents']);

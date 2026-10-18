@@ -48,6 +48,7 @@ import { AnchorService, GitHubPublisher, OpenTimestampsPublisher, type AnchorPub
 import { NumberLineService } from './modules/numberline/service';
 import { ClaudeNumberLineAgent, rulesAgent, type NumberLineAgent } from './modules/numberline/agent';
 import { AgentsService } from './modules/agents/service';
+import { ProfitService } from './modules/profit/service';
 import { boxes, builtinCreatives, freewater, locations, peakSpring, products, sampleCampaigns } from './demo/seed';
 
 export interface AppOptions {
@@ -204,6 +205,16 @@ export async function createApp(opts: AppOptions) {
   const webhooks = new WebhookService(db, opts.webhookSender ?? new HttpWebhookSender({ allowPrivate }), messenger, opts.clock, flush, { allowPrivate, consoleUrl: publicUrl });
   const consoleSvc = new ConsoleService(db, platform, made.registry, accounts, messenger, flush, { consoleUrl: publicUrl, clock: opts.clock });
 
+  // Monthly profit sharing above the $1 base: charity and AI shares, losses carried forward, the milestone.
+  const profit = new ProfitService(db, platform, {
+    today: (companyId, at) => delivery.today(companyId, at),
+    aiCostsCents: async (companyId, from, to) => {
+      const rows = (await db.query<any>(`select company_id, at, millicents from agent_costs where at >= $1 and at < $2`, [from.toISOString(), to.toISOString()])).rows;
+      // Costs not tied to one company are the platform operator's (FreeWater runs the agents).
+      return rows.filter((r) => r.company_id === companyId || (r.company_id == null && companyId === 'freewater')).reduce((a, r) => a + Number(r.millicents) / 1000, 0);
+    },
+  });
+
   // The AI agents: each on the number line, with its own fund, held by the governor (which always runs).
   const agents = new AgentsService(db, platform, {
     saveConfig: (companyId, change, by) => consoleSvc.save(companyId, change as any, by),
@@ -222,6 +233,7 @@ export async function createApp(opts: AppOptions) {
     charities: async (companyId) => (await books.charities(companyId)).map((c: any) => c.name),
     today: (companyId, at) => delivery.today(companyId, at),
     numberline,
+    gate: (companyId) => profit.gate(companyId),
   });
   await agents.init();
 
@@ -230,7 +242,7 @@ export async function createApp(opts: AppOptions) {
   await fleet.load();
   made.registry.registerPrinter('model6-fleet', new MachineFleetPrinter(() => fleet, made.printer));
 
-  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, transparency, anchors, agents };
+  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, transparency, anchors, agents, profit };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

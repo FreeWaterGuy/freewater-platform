@@ -856,6 +856,16 @@ alter table agent_spends add column projection jsonb;
 create table system_snapshots (company_id text not null, day text not null, data jsonb not null, primary key (company_id, day));
 `,
   },
+  {
+    id: '017_profit_sharing',
+    sql: `
+-- Each closed month: the upside's revenue, its share of costs, the profit, and how it was shared.
+create table profit_periods (company_id text not null, period text not null, data jsonb not null, carried_out bigint not null default 0, closed_at timestamptz not null, primary key (company_id, period));
+-- Micro factories opened, recorded by the team; the milestone counts them.
+create table factories (id text primary key, company_id text not null, name text not null, city text not null, opened_on date not null, recorded_by text not null, at timestamptz not null);
+create table milestones (company_id text primary key, reached_at timestamptz not null, reason text not null);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

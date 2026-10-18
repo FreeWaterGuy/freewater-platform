@@ -5,7 +5,7 @@ import { ApiError, obj, S, type RouteDef } from './http';
 
 /** The AI agents: their places on the number line, their funds, their proposals, and how much they run. */
 export function agentRoutes(app: App, route: (r: RouteDef) => void) {
-  const { agents, platform } = app;
+  const { agents, platform, profit } = app;
   const staff = (key: ApiKey | null) => { if (!key || key.advertiserId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.'); return key; };
   const who = (key: ApiKey) => `${key.name ?? 'team'} (key ${key.id})`;
   const wrap = async <T>(f: () => Promise<T>) => { try { return await f(); } catch (e: any) { if (e?.status && e?.code) throw new ApiError(e.status, e.code, e.message); throw e; } };
@@ -51,6 +51,16 @@ export function agentRoutes(app: App, route: (r: RouteDef) => void) {
     const k = staff(key);
     const b = req.body as any;
     return { body: await wrap(() => agents.setLevel(k.companyId, b.area, b.level, who(k), b.reason)) };
+  } });
+  // ---------- monthly profit sharing and the milestone ----------
+
+  route({ method: 'GET', url: '/v1/profit', scope: 'admin', summary: 'Each closed month: the upside’s revenue, its share of costs, the profit, what the charity and the AI agents got, and losses carried forward. With the milestone’s progress.', handler: async (_req, key) => { const k = staff(key); return { body: { periods: await profit.periods(k.companyId), milestone: await profit.milestone(k.companyId), gate: await agents.growthGate(k.companyId) } }; } });
+  route({ method: 'POST', url: '/v1/profit/close', scope: 'admin', summary: 'Close every finished month not yet closed (it also runs every hour).', handler: async (_req, key) => ({ body: await wrap(() => profit.closeDue(staff(key).companyId)) }) });
+  route({ method: 'POST', url: '/v1/milestones/factories', scope: 'admin', summary: 'Record a micro factory that has opened. Counts toward the milestone.', body: obj({ name: S.str, city: S.str, openedOn: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' } }, ['name', 'city', 'openedOn']), handler: async (req, key) => { const k = staff(key); return { body: await wrap(() => profit.recordFactory(k.companyId, req.body as any, who(k))) }; } });
+  route({ method: 'GET', url: '/v1/public/companies/:companyId/profit-sharing', scope: 'public', summary: 'Each closed month’s profit above the $1 base and how it was shared with the charity and the AI agents, and the milestone’s progress. For companies with open books.', handler: async (req) => {
+    const c = platform.companies.get((req.params as any).companyId);
+    if (!c || c.openBooks === false) throw new ApiError(404, 'not_shared', 'Not shared.');
+    return { body: { company: c.name, periods: await profit.periods(c.id), milestone: await profit.milestone(c.id) } };
   } });
   void agentId;
 }
