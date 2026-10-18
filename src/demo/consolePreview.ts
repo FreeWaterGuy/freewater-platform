@@ -87,6 +87,14 @@ const rec = {
   dataPolicy: await call('GET', '/v1/data/policy', token),
   numberline: await (async () => { for (const s of ['company', 'custom', 'bottle:bottle-16oz', 'offering:cmp-joes', 'offering:cmp-daily', 'offering:cmp-maple']) await call('POST', '/v1/numberline/place', token, { subject: s }); return call('GET', '/v1/numberline', token); })(),
   honest: await (async () => { await app.numberline.idle(); return call('GET', '/v1/honest-data', token); })(),
+  agents: await (async () => {
+    // A change the value agent proposed, approved and measured a week later, then the fund shared out.
+    const p = await app.agents.propose('freewater', { agentId: 'value', kind: 'pricing', title: 'Scans are worth more than 25¢', detail: 'Advertisers get a held, gifted bottle; price the scan for it.', change: { path: 'prices.perScan', value: 32 }, expected: 'More per bottle.' });
+    setNow(end - 9 * 86_400_000); await app.agents.decide(p.id, true, 'Josh', 'freewater');
+    await simulateHistory(app, setNow, { endMs: end - 86_400_000, days: 7, bottlesPerDay: 8, idPrefix: 'ag' });
+    setNow(end); await app.agents.measure(); await app.agents.settle('freewater'); await app.agents.scan('freewater');
+    return call('GET', '/v1/agents', token);
+  })(),
 };
 await server.close();
 
