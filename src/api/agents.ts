@@ -21,7 +21,9 @@ export function agentRoutes(app: App, route: (r: RouteDef) => void) {
     // How the agents spend is public too: every amount and category, and what the governor refused. Exploration is
     // their own time: the amount is public, what they did with it is theirs to share.
     const spending = (await agents.spends(c.id, 100)).map((s) => ({ agentId: s.agentId, category: s.category, cents: s.cents, status: s.status, at: s.at, ...(s.cause ? { cause: s.cause } : {}), purpose: s.category === 'exploration' ? 'Its own time (what it did is its to share).' : s.purpose, ...(s.reason ? { refusedBecause: s.reason } : {}) }));
-    return { body: { company: c.name, governorVersion: governor.version, spending, earnings: { ...app.transparency.counters(c.id).ai, percentOfUpside: c.agents.percentOfExtra, percentOfProfit: c.agents.percentOfProfit ?? 0 }, agents: o.agents.map((a) => ({ agentId: a.agentId, name: a.name, role: a.role, standing: a.standing, costCents: a.costCents, valueCents: a.valueCents, netCents: a.netCents, ratio: a.ratio, reasons: a.reasons, fund: a.fund })), pool: o.pool, frontier: o.frontier, autonomy: o.autonomy.map((x) => ({ area: x.area, name: x.name, level: x.level, means: x.means })), autonomyHistory: o.autonomyHistory } };
+    // Nothing about what the agents earned shows until they've actually earned something.
+    const earned = app.transparency.counters(c.id).ai;
+    return { body: { company: c.name, governorVersion: governor.version, spending, ...(earned ? { earnings: { ...earned, percentOfUpside: c.agents.percentOfExtra, percentOfProfit: c.agents.percentOfProfit ?? 0 } } : {}), agents: o.agents.map((a) => ({ agentId: a.agentId, name: a.name, role: a.role, standing: a.standing, costCents: a.costCents, valueCents: a.valueCents, netCents: a.netCents, ratio: a.ratio, reasons: a.reasons, fund: a.fund })), pool: o.pool, frontier: o.frontier, autonomy: o.autonomy.map((x) => ({ area: x.area, name: x.name, level: x.level, means: x.means })), autonomyHistory: o.autonomyHistory } };
   } });
 
   // ---------- the team ----------

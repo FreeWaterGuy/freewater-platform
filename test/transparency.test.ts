@@ -41,6 +41,7 @@ describe('the world’s live view of the books', () => {
     expect(c.bottles).toBeGreaterThanOrEqual(12);
     expect(c.givenCents).toBeGreaterThanOrEqual(c.bottles * 10);
     expect(c.byCharity[0]).toMatchObject({ name: 'Well Aware' });
+    if (!c.adMoneyCents) expect(c.ai).toBeUndefined(); // nothing about the AI's earnings until it has earned something
     expect(c.owedCents).toBe(c.givenCents - c.sentCents);
     const before = c.bottles;
     await print();
