@@ -49,6 +49,7 @@ const json = JSON.stringify(scenes).replace(/\/models\/builtin\//g, 'models/').r
 const css = readFileSync('src/web/scan.css', 'utf8');
 const js = readFileSync('src/web/scan.js', 'utf8');
 const template = readFileSync('src/demo/scanPreview.html', 'utf8');
-writeFileSync(`${outDir}/index.html`, template.replace('/*SCENES*/', () => json).replace('/*SCAN_CSS*/', () => JSON.stringify(css)).replace('/*SCAN_JS*/', () => JSON.stringify(js).replace(/<\/script/g, '<\\/script')));
+const models = Object.fromEntries(builtinModelIds.map((id) => [id, Buffer.from(builtinModel(id)!).toString('base64')]));
+writeFileSync(`${outDir}/index.html`, template.replace('/*MODELS*/', () => JSON.stringify(models)).replace('/*SCENES*/', () => json).replace('/*SCAN_CSS*/', () => JSON.stringify(css)).replace('/*SCAN_JS*/', () => JSON.stringify(js).replace(/<\/script/g, '<\\/script')));
 console.log(`Wrote ${outDir}/index.html with ${scenes.length} scan pages.`);
 await server.close();

@@ -61,6 +61,14 @@ h1 { font: 700 30px/1.15 var(--display); margin: 0; text-wrap: balance; }
 const scenes = /*SCENES*/;
 const css = /*SCAN_CSS*/;
 const js = /*SCAN_JS*/;
+// The 3D models travel inside this page, so it works with no server.
+const models = /*MODELS*/;
+const modelUrl = {};
+for (const [id, b64] of Object.entries(models)) {
+  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  modelUrl[id] = URL.createObjectURL(new Blob([bytes], { type: 'model/gltf-binary' }));
+}
+const withModels = (data) => JSON.parse(JSON.stringify(data).replace(/models\/([a-z]+)\.glb/g, (m, id) => modelUrl[id] || m));
 const list = document.getElementById('list');
 const frame = document.getElementById('screen');
 const base = location.href.replace(/[#?].*$/, '');
@@ -69,7 +77,7 @@ function open(i) {
   [...list.children].forEach((b, j) => { if (b.classList.contains('scene')) b.setAttribute('aria-current', String(j === i)); });
   document.getElementById('url').textContent = 'go.freewater.io' + s.path;
   document.getElementById('noteM').textContent = s.note;
-  const fixture = `window.__FW_FIXTURE__ = { path: ${JSON.stringify(s.path)}, api: async (m) => (m === 'GET' ? ${JSON.stringify(s.data).replace(/</g, '\\u003c')} : { recorded: true }) };`;
+  const fixture = `window.__FW_FIXTURE__ = { path: ${JSON.stringify(s.path)}, api: async (m) => (m === 'GET' ? ${JSON.stringify(withModels(s.data)).replace(/</g, '\\u003c')} : { recorded: true }) };`;
   frame.srcdoc = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base href="${base}"><meta name="theme-color" content="#000"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@600;700&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&display=swap"><style>${css}</style><script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer@3.5.0/dist/model-viewer.min.js"><\/script></head><body><main id="app"></main><script>${fixture}<\/script><script>${js.replace(/<\/script/g, '<\\/script')}<\/script></body></html>`;
 }
 scenes.forEach((s, i) => {
