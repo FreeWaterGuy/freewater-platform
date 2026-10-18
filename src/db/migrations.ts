@@ -944,6 +944,19 @@ alter table team_files add column blob_key text;
 create table persistence_watermark (id int primary key, epoch text not null, seq bigint not null, at timestamptz not null);
 `,
   },
+  {
+    id: '026_books_exams_participants',
+    sql: `
+-- The passages from the books a proposal relies on.
+alter table agent_proposals add column citations jsonb;
+-- The test an agent's mind must pass before its proposals can be put into effect: per agent, per model, per version.
+create table agent_exams (id text primary key, agent_id text not null, model text not null, exam_version int not null, score numeric not null, passed boolean not null, critical_missed jsonb not null, answers jsonb not null, cost_millicents bigint not null default 0, at timestamptz not null);
+create index agent_exams_agent on agent_exams(agent_id, model, exam_version, at desc);
+-- How good each product is, as a person on the team recorded it (a quality drop counts as a cost to the drinker).
+create table product_quality (id text primary key, company_id text not null, product_id text not null, score int not null check (score between 0 and 100), basis text not null, by text not null, at timestamptz not null);
+create index product_quality_product on product_quality(company_id, product_id, at desc);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

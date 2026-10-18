@@ -15,6 +15,7 @@ import { securityScan, type SecurityFacts } from './securityScout';
 import { revokeApiKey } from '../../db/store';
 import { changeable, codeScan, frontierOf, perBottle, read, valueScan, type ChainOnLine, type Idea, type Window } from './scouts';
 import { aiExternalityCents, bottleExternalityCents, efficiency, estimates, growthTest, type Efficiency } from './efficiency';
+import { participantCheck } from './participants';
 
 // The AI agents, as participants with their own place in the books.
 //
@@ -133,6 +134,15 @@ export class AgentsService {
       tokens += n(r.t) * part;
     }
     const choice = (await this.db.query<any>(`select count(*)::int as all, count(*) filter (where tier in ('3','4a','4b','5'))::int as honest from choices where company_id = $1 and at >= $2 and at < $3`, [companyId, iso(from), iso(to)])).rows[0];
+    // Quality of what was given: each bottle at its product's score as recorded when it was printed.
+    const qualityRows = (await this.db.query<any>(`select product_id, score, at from product_quality where company_id = $1 and at < $2 order by at`, [companyId, iso(to)])).rows;
+    let qSum = 0, qN = 0;
+    for (const u of units) {
+      let s: number | null = null;
+      for (const q of qualityRows) if (q.product_id === u.productId && new Date(q.at).getTime() <= new Date(u.createdAt).getTime()) s = Number(q.score);
+      if (s !== null) { qSum += s; qN++; }
+    }
+    const retail = c.consumerPricing === 'free' ? c.consumer?.retailValueCents ?? 100 : c.consumerPricing === 'discounted' ? Math.round((c.consumer?.retailValueCents ?? 100) / 2) : 0;
     return {
       from: iso(from), to: iso(to), bottles: units.length,
       revenueCents: sum((l) => l.credit.startsWith('revenue:')) - sum((l) => l.kind === 'commission_reversal'),
@@ -144,6 +154,9 @@ export class AgentsService {
       scans: lines.filter((l) => l.kind === 'scan').length, arLaunches: lines.filter((l) => l.kind === 'ar').length, sales: lines.filter((l) => l.kind === 'commission').length,
       honestShare: n(choice?.all) ? Math.round((n(choice.honest) / n(choice.all)) * 1000) / 10 : null,
       aiTokens: Math.round(tokens), aiCostByAgent: byAgent, aiCallsByAgent: calls,
+      advertiserSpendCents: sum((l) => l.credit.startsWith('revenue:') && l.kind !== 'custom') - sum((l) => l.kind === 'commission_reversal'),
+      consumerValueCents: retail,
+      qualityScore: qN ? Math.round((qSum / qN) * 10) / 10 : null,
     };
   }
 
@@ -405,8 +418,10 @@ export class AgentsService {
       const notes: string[] = [];
       if (!base.bottles || !after.bottles) { cents = 0; notes.push('Not enough bottles before and after to measure.'); }
       if (base.honestShare !== null && after.honestShare !== null && base.honestShare - after.honestShare > governor.honestDropPoints) { cents = Math.min(cents, 0); notes.push(`Honest choices fell from ${base.honestShare}% to ${after.honestShare}%: no credit, whatever it earned.`); }
+      const people = participantCheck(base, after);
+      if (people.worse.length) { cents = Math.min(cents, 0); notes.push(`Someone was left worse off (${people.worse.join('; ')}): no credit, whatever it earned.`); }
       if (overlapping > 1) notes.push(`${overlapping} changes overlapped this week; the effect is shared between them.`);
-      const result = { before: round(b), after: round(a), bottlesAfter: after.bottles, givingPerBottle: { before: round1(b.giving), after: round1(a.giving) }, honestShare: { before: base.honestShare, after: after.honestShare }, valueCents: cents, notes };
+      const result = { before: round(b), after: round(a), bottlesAfter: after.bottles, givingPerBottle: { before: round1(b.giving), after: round1(a.giving) }, honestShare: { before: base.honestShare, after: after.honestShare }, participants: people.groups, valueCents: cents, notes };
       await this.db.query(`update agent_proposals set status = 'measured', measured_at = $2, result = $3 where id = $1`, [r.id, iso(now), JSON.stringify(result)]);
       // Pending until it's verified over a longer time (refunds, effects that fade, people's choices staying honest).
       if (cents !== 0) await this.db.query(`insert into agent_value (id, company_id, agent_id, kind, cents, proposal_id, evidence, at, status, confirm_at, original_cents) values ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9,$5)`, [newId('av'), r.company_id, r.agent_id, r.kind, cents, r.id, JSON.stringify({ ...result, shared: overlapping }), iso(now), iso(new Date(at.getTime() + governor.verifyDays * DAY))]);
@@ -436,6 +451,8 @@ export class AgentsService {
       const notes: string[] = [];
       if (!long.bottles) again = 0;
       if (base.honestShare !== null && long.honestShare !== null && base.honestShare - long.honestShare > governor.honestDropPoints) { again = Math.min(again, 0); notes.push(`Honest choices fell from ${base.honestShare}% to ${long.honestShare}% over ${governor.verifyDays} days.`); }
+      const people = participantCheck(base, long);
+      if (people.worse.length) { again = Math.min(again, 0); notes.push(`Over ${governor.verifyDays} days someone was left worse off (${people.worse.join('; ')}).`); }
       const confirmed = Math.min(original, again);
       if (confirmed < original) notes.push(`${original - confirmed}¢ clawed back: over ${governor.verifyDays} days the change was worth less than its first week showed.`);
       await this.db.query(`update agent_value set status = 'confirmed', cents = $2, evidence = $3 where id = $1`, [r.id, confirmed, JSON.stringify({ ...ev, verification: { days: governor.verifyDays, firstWeekCents: original, remeasuredCents: again, confirmedCents: confirmed, clawedBackCents: original - confirmed, notes } })]);
