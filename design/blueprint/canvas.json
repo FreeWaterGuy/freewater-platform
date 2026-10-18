@@ -1,0 +1,553 @@
+{
+  "v": 3,
+  "attachments": {},
+  "boards": {
+    "Layers.dc.html": {
+      "h": 1040,
+      "title": "4 \u00b7 Everything plugs in",
+      "w": 1600,
+      "x": 5040,
+      "y": 0
+    },
+    "Main.dc.html": {
+      "h": 1000,
+      "title": "1 \u00b7 Who uses the platform",
+      "w": 1600,
+      "x": 0,
+      "y": 0
+    },
+    "Modules.dc.html": {
+      "h": 960,
+      "title": "3 \u00b7 Core and modules",
+      "w": 1600,
+      "x": 3360,
+      "y": 0
+    },
+    "Pipeline.dc.html": {
+      "h": 920,
+      "title": "2 \u00b7 The print pipeline",
+      "w": 1600,
+      "x": 1680,
+      "y": 0
+    },
+    "Sitemap.dc.html": {
+      "h": 1180,
+      "title": "Sitemap \u00b7 every screen in every app",
+      "w": 2320,
+      "x": 0,
+      "y": 1440
+    },
+    "WireCountdown.dc.html": {
+      "h": 844,
+      "is_interactive": true,
+      "title": "C6.1 \u00b7 Countdown",
+      "w": 390,
+      "x": 1410,
+      "y": 3000
+    },
+    "WireHome.dc.html": {
+      "h": 844,
+      "is_interactive": true,
+      "title": "C4 \u00b7 Home",
+      "w": 390,
+      "x": 0,
+      "y": 3000
+    },
+    "WireMap.dc.html": {
+      "h": 844,
+      "is_interactive": true,
+      "title": "C5 \u00b7 Find a machine",
+      "w": 390,
+      "x": 470,
+      "y": 3000
+    },
+    "WireOrder.dc.html": {
+      "h": 844,
+      "is_interactive": true,
+      "title": "C6 \u00b7 Order at a machine",
+      "w": 390,
+      "x": 940,
+      "y": 3000
+    },
+    "WireScan.dc.html": {
+      "h": 844,
+      "is_interactive": true,
+      "title": "C1 \u00b7 Scan page",
+      "w": 390,
+      "x": 1880,
+      "y": 3000
+    },
+    "WireDesign.dc.html": {
+      "x": 2350,
+      "y": 3000,
+      "w": 390,
+      "h": 844,
+      "title": "C8 \u00b7 Design my bottle",
+      "is_interactive": true
+    },
+    "WireScanCustom.dc.html": {
+      "x": 2820,
+      "y": 3000,
+      "w": 390,
+      "h": 844,
+      "title": "C1b \u00b7 Scan page, custom bottle",
+      "is_interactive": true
+    },
+    "AdCreative.dc.html": {
+      "x": 0,
+      "y": 4400,
+      "w": 1440,
+      "h": 900,
+      "title": "A4.1 \u00b7 Creative (prompt to design)",
+      "is_interactive": true
+    },
+    "AdWhere.dc.html": {
+      "x": 1520,
+      "y": 4400,
+      "w": 1440,
+      "h": 900,
+      "title": "A4.2 \u00b7 Where and who",
+      "is_interactive": true
+    },
+    "AdScan.dc.html": {
+      "x": 3040,
+      "y": 4400,
+      "w": 1440,
+      "h": 900,
+      "title": "A4.3 \u00b7 Scan experience (prompt to build)",
+      "is_interactive": true
+    },
+    "AdBudget.dc.html": {
+      "x": 4560,
+      "y": 4400,
+      "w": 1440,
+      "h": 900,
+      "title": "A4.4 \u00b7 Budget and price",
+      "is_interactive": true
+    },
+    "AdReview.dc.html": {
+      "x": 6080,
+      "y": 4400,
+      "w": 1440,
+      "h": 900,
+      "title": "A4.5 \u00b7 Review and launch",
+      "is_interactive": true
+    },
+    "AdOverview.dc.html": {
+      "x": 0,
+      "y": 5460,
+      "w": 1440,
+      "h": 900,
+      "title": "A2 \u00b7 Overview (after launch)",
+      "is_interactive": true
+    },
+    "OpsMap.dc.html": {
+      "x": 0,
+      "y": 6900,
+      "w": 1440,
+      "h": 900,
+      "title": "O1 \u00b7 Live map",
+      "is_interactive": true
+    },
+    "OpsMachine.dc.html": {
+      "x": 1520,
+      "y": 6900,
+      "w": 1440,
+      "h": 900,
+      "title": "O2.1 \u00b7 Machine detail",
+      "is_interactive": true
+    },
+    "OpsQueue.dc.html": {
+      "x": 3040,
+      "y": 6900,
+      "w": 1440,
+      "h": 900,
+      "title": "O3 \u00b7 Print queue",
+      "is_interactive": true
+    },
+    "OpsReview.dc.html": {
+      "x": 4560,
+      "y": 6900,
+      "w": 1440,
+      "h": 900,
+      "title": "O7 \u00b7 Content review",
+      "is_interactive": true
+    },
+    "WireProof.dc.html": {
+      "x": 3290,
+      "y": 3000,
+      "w": 390,
+      "h": 844,
+      "title": "C8.1 \u00b7 Review your proof",
+      "is_interactive": true
+    },
+    "OpsLines.dc.html": {
+      "x": 6080,
+      "y": 6900,
+      "w": 1440,
+      "h": 900,
+      "title": "O4 \u00b7 Micro-factory lines",
+      "is_interactive": true
+    },
+    "OpsPacks.dc.html": {
+      "x": 7600,
+      "y": 6900,
+      "w": 1440,
+      "h": 900,
+      "title": "O5 \u00b7 Packs",
+      "is_interactive": true
+    },
+    "OpsRoutes.dc.html": {
+      "x": 9120,
+      "y": 6900,
+      "w": 1440,
+      "h": 900,
+      "title": "O6 \u00b7 Routes",
+      "is_interactive": true
+    },
+    "OpsLedger.dc.html": {
+      "x": 10640,
+      "y": 6900,
+      "w": 1440,
+      "h": 900,
+      "title": "O8 \u00b7 Ledger admin",
+      "is_interactive": true
+    },
+    "OpsSupport.dc.html": {
+      "x": 12160,
+      "y": 6900,
+      "w": 1440,
+      "h": 900,
+      "title": "O9 \u00b7 Support",
+      "is_interactive": true
+    },
+    "DriverLoad.dc.html": {
+      "x": 0,
+      "y": 8400,
+      "w": 390,
+      "h": 844,
+      "title": "D2 \u00b7 Load the van",
+      "is_interactive": true
+    },
+    "DriverNext.dc.html": {
+      "x": 470,
+      "y": 8400,
+      "w": 390,
+      "h": 844,
+      "title": "D3 \u00b7 Next stop",
+      "is_interactive": true
+    },
+    "DriverDoor.dc.html": {
+      "x": 940,
+      "y": 8400,
+      "w": 390,
+      "h": 844,
+      "title": "D3.1 \u00b7 At the door",
+      "is_interactive": true
+    },
+    "DriverWrong.dc.html": {
+      "x": 1410,
+      "y": 8400,
+      "w": 390,
+      "h": 844,
+      "title": "D3.2 \u00b7 Wrong box",
+      "is_interactive": true
+    },
+    "LedgerLive.dc.html": {
+      "x": 0,
+      "y": 9900,
+      "w": 1440,
+      "h": 900,
+      "title": "L1 \u00b7 Live totals (public)",
+      "is_interactive": true
+    },
+    "LedgerBottle.dc.html": {
+      "x": 1520,
+      "y": 9900,
+      "w": 390,
+      "h": 844,
+      "title": "L2 \u00b7 Bottle receipt (also C2)",
+      "is_interactive": true
+    },
+    "LedgerDonations.dc.html": {
+      "x": 1990,
+      "y": 9900,
+      "w": 1440,
+      "h": 900,
+      "title": "L4 \u00b7 Donations",
+      "is_interactive": true
+    },
+    "WlSetup.dc.html": {
+      "x": 0,
+      "y": 11400,
+      "w": 1440,
+      "h": 900,
+      "title": "W1 \u00b7 Company setup",
+      "is_interactive": true
+    },
+    "WlModules.dc.html": {
+      "x": 1520,
+      "y": 11400,
+      "w": 1440,
+      "h": 900,
+      "title": "W2 \u00b7 Modules and adapters",
+      "is_interactive": true
+    },
+    "WlProducts.dc.html": {
+      "x": 3040,
+      "y": 11400,
+      "w": 1440,
+      "h": 900,
+      "title": "W3 \u00b7 Products and layouts",
+      "is_interactive": true
+    },
+    "WlRules.dc.html": {
+      "x": 4560,
+      "y": 11400,
+      "w": 1440,
+      "h": 900,
+      "title": "W4 \u00b7 Rules and prices",
+      "is_interactive": true
+    },
+    "DevDocs.dc.html": {
+      "x": 0,
+      "y": 12900,
+      "w": 1440,
+      "h": 900,
+      "title": "P1 \u00b7 Docs",
+      "is_interactive": true
+    },
+    "DevSandbox.dc.html": {
+      "x": 1520,
+      "y": 12900,
+      "w": 1440,
+      "h": 900,
+      "title": "P3 \u00b7 Sandbox",
+      "is_interactive": true
+    },
+    "DevSubmit.dc.html": {
+      "x": 3040,
+      "y": 12900,
+      "w": 1440,
+      "h": 900,
+      "title": "P4 \u00b7 Submit a plug-in",
+      "is_interactive": true
+    },
+    "DevMarket.dc.html": {
+      "x": 4560,
+      "y": 12900,
+      "w": 1440,
+      "h": 900,
+      "title": "P5 \u00b7 Marketplace",
+      "is_interactive": true
+    },
+    "HfStyle.dc.html": {
+      "x": 0,
+      "y": 14400,
+      "w": 1600,
+      "h": 1000,
+      "title": "Style board"
+    },
+    "HfHome.dc.html": {
+      "x": 1680,
+      "y": 14400,
+      "w": 390,
+      "h": 844,
+      "title": "C4 \u00b7 Home",
+      "is_interactive": true
+    },
+    "HfOrder.dc.html": {
+      "x": 2150,
+      "y": 14400,
+      "w": 390,
+      "h": 844,
+      "title": "C6 \u00b7 Order",
+      "is_interactive": true
+    },
+    "HfCountdown.dc.html": {
+      "x": 2620,
+      "y": 14400,
+      "w": 390,
+      "h": 844,
+      "title": "C6.1 \u00b7 Countdown",
+      "is_interactive": true
+    },
+    "HfScan.dc.html": {
+      "x": 3090,
+      "y": 14400,
+      "w": 390,
+      "h": 844,
+      "title": "C1 \u00b7 Scan page (advertiser's colors)",
+      "is_interactive": true
+    },
+    "HfDesign.dc.html": {
+      "x": 3560,
+      "y": 14400,
+      "w": 390,
+      "h": 844,
+      "title": "C8 \u00b7 Design my bottle",
+      "is_interactive": true
+    },
+    "HfAdOverview.dc.html": {
+      "x": 0,
+      "y": 15700,
+      "w": 1440,
+      "h": 900,
+      "title": "A2 \u00b7 Advertiser overview",
+      "is_interactive": true
+    },
+    "HfAdCreative.dc.html": {
+      "x": 1520,
+      "y": 15700,
+      "w": 1440,
+      "h": 900,
+      "title": "A4.1 \u00b7 Creative, designed by chat",
+      "is_interactive": true
+    }
+  },
+  "createdOnFiles": {
+    "at": "2026-10-17T16:00:00Z",
+    "v": 1
+  },
+  "designSystems": [],
+  "launch": {
+    "view": "canvas"
+  },
+  "notes": {
+    "step1": {
+      "kind": "title1",
+      "maxW": 6640,
+      "text": "Step 1 \u00b7 Platform blueprint",
+      "w": 240,
+      "x": 0,
+      "y": -300
+    },
+    "step2": {
+      "kind": "title1",
+      "maxW": 6640,
+      "text": "Step 2 \u00b7 Sitemap",
+      "w": 240,
+      "x": 0,
+      "y": 1140
+    },
+    "step3": {
+      "kind": "title1",
+      "maxW": 3680,
+      "text": "Step 3 \u00b7 Wireframes: consumer flow",
+      "w": 240,
+      "x": 0,
+      "y": 2700
+    },
+    "step3b": {
+      "x": 0,
+      "y": 4100,
+      "text": "Step 3 \u00b7 Wireframes: advertiser portal",
+      "kind": "title1",
+      "maxW": 7520
+    },
+    "step3c": {
+      "x": 0,
+      "y": 6600,
+      "text": "Step 3 \u00b7 Wireframes: operations",
+      "kind": "title1",
+      "maxW": 13600
+    },
+    "step3d": {
+      "x": 0,
+      "y": 8100,
+      "text": "Step 3 \u00b7 Wireframes: driver app",
+      "kind": "title1",
+      "maxW": 1800
+    },
+    "step3e": {
+      "x": 0,
+      "y": 9600,
+      "text": "Step 3 \u00b7 Wireframes: public ledger (open books)",
+      "kind": "title1",
+      "maxW": 3430
+    },
+    "step3f": {
+      "x": 0,
+      "y": 11100,
+      "text": "Step 3 \u00b7 Wireframes: white-label console",
+      "kind": "title1",
+      "maxW": 5960
+    },
+    "step3g": {
+      "x": 0,
+      "y": 12600,
+      "text": "Step 3 \u00b7 Wireframes: developer portal",
+      "kind": "title1",
+      "maxW": 5960
+    },
+    "step4": {
+      "x": 0,
+      "y": 14100,
+      "text": "Step 4 \u00b7 High-fidelity: consumer app",
+      "kind": "title1",
+      "maxW": 4000
+    },
+    "step4b": {
+      "x": 0,
+      "y": 15400,
+      "text": "Step 4 \u00b7 High-fidelity: advertiser portal",
+      "kind": "title1",
+      "maxW": 2960
+    }
+  },
+  "order": [
+    "Main.dc.html",
+    "Pipeline.dc.html",
+    "Modules.dc.html",
+    "Layers.dc.html",
+    "Sitemap.dc.html",
+    "WireHome.dc.html",
+    "WireMap.dc.html",
+    "WireOrder.dc.html",
+    "WireCountdown.dc.html",
+    "WireScan.dc.html",
+    "WireDesign.dc.html",
+    "WireScanCustom.dc.html",
+    "AdCreative.dc.html",
+    "AdWhere.dc.html",
+    "AdScan.dc.html",
+    "AdBudget.dc.html",
+    "AdReview.dc.html",
+    "AdOverview.dc.html",
+    "OpsMap.dc.html",
+    "OpsMachine.dc.html",
+    "OpsQueue.dc.html",
+    "OpsReview.dc.html",
+    "WireProof.dc.html",
+    "OpsLines.dc.html",
+    "OpsPacks.dc.html",
+    "OpsRoutes.dc.html",
+    "OpsLedger.dc.html",
+    "OpsSupport.dc.html",
+    "DriverLoad.dc.html",
+    "DriverNext.dc.html",
+    "DriverDoor.dc.html",
+    "DriverWrong.dc.html",
+    "LedgerLive.dc.html",
+    "LedgerBottle.dc.html",
+    "LedgerDonations.dc.html",
+    "WlSetup.dc.html",
+    "WlModules.dc.html",
+    "WlProducts.dc.html",
+    "WlRules.dc.html",
+    "DevDocs.dc.html",
+    "DevSandbox.dc.html",
+    "DevSubmit.dc.html",
+    "DevMarket.dc.html",
+    "HfStyle.dc.html",
+    "HfHome.dc.html",
+    "HfOrder.dc.html",
+    "HfCountdown.dc.html",
+    "HfScan.dc.html",
+    "HfDesign.dc.html",
+    "HfAdOverview.dc.html",
+    "HfAdCreative.dc.html"
+  ],
+  "pages": [],
+  "title": "FreeWater Platform Blueprint"
+}

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Core and modules</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&amp;family=IBM+Plex+Sans:wght@400;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#1f6fe5}a:hover{color:#0f1f4b}
+</style>
+</helmet>
+<div style="position: relative; width: 1600px; height: 960px; background: #f6f8fb; font-family: 'IBM Plex Sans', 'Helvetica Neue', sans-serif; color: #0f1f4b">
+<svg width="8" height="60" viewBox="0 0 8 60" preserveAspectRatio="none" style="position: absolute; left: 796px; top: 380px; width: 8px; height: 60px; overflow: visible; fill: none; stroke: #7d8aa3; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round"><path d="M 4 0 L 4 60"></path></svg>
+<svg width="1024" height="8" viewBox="0 0 1024 8" preserveAspectRatio="none" style="position: absolute; left: 288px; top: 376px; width: 1024px; height: 8px; overflow: visible; fill: none; stroke: #7d8aa3; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round"><path d="M 0 4 L 1024 4"></path></svg>
+<svg width="8" height="60" viewBox="0 0 8 60" preserveAspectRatio="none" style="position: absolute; left: 284px; top: 320px; width: 8px; height: 60px; overflow: visible; fill: none; stroke: #7d8aa3; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round"><path d="M 4 0 L 4 60"></path></svg>
+<svg width="8" height="60" viewBox="0 0 8 60" preserveAspectRatio="none" style="position: absolute; left: 796px; top: 320px; width: 8px; height: 60px; overflow: visible; fill: none; stroke: #7d8aa3; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round"><path d="M 4 0 L 4 60"></path></svg>
+<svg width="8" height="60" viewBox="0 0 8 60" preserveAspectRatio="none" style="position: absolute; left: 1308px; top: 320px; width: 8px; height: 60px; overflow: visible; fill: none; stroke: #7d8aa3; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round"><path d="M 4 0 L 4 60"></path></svg>
+<svg width="8" height="50" viewBox="0 0 8 50" preserveAspectRatio="none" style="position: absolute; left: 796px; top: 640px; width: 8px; height: 50px; overflow: visible; fill: none; stroke: #7d8aa3; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round"><path d="M 4 0 L 4 50"></path></svg>
+<svg width="1024" height="8" viewBox="0 0 1024 8" preserveAspectRatio="none" style="position: absolute; left: 288px; top: 686px; width: 1024px; height: 8px; overflow: visible; fill: none; stroke: #7d8aa3; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round"><path d="M 0 4 L 1024 4"></path></svg>
+<svg width="8" height="50" viewBox="0 0 8 50" preserveAspectRatio="none" style="position: absolute; left: 284px; top: 690px; width: 8px; height: 50px; overflow: visible; fill: none; stroke: #7d8aa3; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round"><path d="M 4 0 L 4 50"></path></svg>
+<svg width="8" height="50" viewBox="0 0 8 50" preserveAspectRatio="none" style="position: absolute; left: 796px; top: 690px; width: 8px; height: 50px; overflow: visible; fill: none; stroke: #7d8aa3; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round"><path d="M 4 0 L 4 50"></path></svg>
+<svg width="8" height="50" viewBox="0 0 8 50" preserveAspectRatio="none" style="position: absolute; left: 1308px; top: 690px; width: 8px; height: 50px; overflow: visible; fill: none; stroke: #7d8aa3; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round"><path d="M 4 0 L 4 50"></path></svg>
+<svg width="176" height="8" viewBox="0 0 176 8" preserveAspectRatio="none" style="position: absolute; left: 384px; top: 536px; width: 176px; height: 8px; overflow: visible; fill: none; stroke: #7d8aa3; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round"><path d="M 0 4 L 176 4"></path></svg>
+<svg width="176" height="8" viewBox="0 0 176 8" preserveAspectRatio="none" style="position: absolute; left: 1040px; top: 536px; width: 176px; height: 8px; overflow: visible; fill: none; stroke: #7d8aa3; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round"><path d="M 0 4 L 176 4"></path></svg>
+<div style="position: absolute; left: 64px; top: 52px; font-size: 40px; line-height: 48px; font-weight: 600; letter-spacing: -0.01em">3 · A small core with plug-in modules</div>
+<div style="position: absolute; left: 64px; top: 108px; width: 1180px; font-size: 18px; line-height: 26px; color: #3b4a6b">Modules only talk to each other through the core, so any one can be replaced or added without touching the rest. Built in TypeScript on PostgreSQL.</div>
+<div style="position: absolute; left: 128px; top: 200px; width: 320px; height: 120px; box-sizing: border-box; padding: 14px 20px; display: flex; align-items: center; background: #ffffff; border: 1px solid #c9d3e3; border-radius: 12px; font-size: 15px; line-height: 21px"><span><b>Ads and slots</b><br>Campaigns, targeting, bids and guaranteed buys for every printed slot</span></div>
+<div style="position: absolute; left: 640px; top: 200px; width: 320px; height: 120px; box-sizing: border-box; padding: 14px 20px; display: flex; align-items: center; background: #ffffff; border: 1px solid #c9d3e3; border-radius: 12px; font-size: 15px; line-height: 21px"><span><b>Print engine</b><br>Layouts, rendering, printer adapters and print confirmations</span></div>
+<div style="position: absolute; left: 1152px; top: 200px; width: 320px; height: 120px; box-sizing: border-box; padding: 14px 20px; display: flex; align-items: center; background: #eef4ff; border: 1px solid #b9cdf2; border-radius: 12px; font-size: 15px; line-height: 21px"><span><b>Experience plug-ins</b><br>Offers, AR, menus, home tours, games, AI characters, and any new type</span></div>
+<div style="position: absolute; left: 64px; top: 480px; width: 320px; height: 120px; box-sizing: border-box; padding: 14px 20px; display: flex; align-items: center; background: #ffffff; border: 1px solid #c9d3e3; border-radius: 12px; font-size: 15px; line-height: 21px"><span><b>Custom designs</b><br>Consumers pay to design their own bottle and experience</span></div>
+<div style="position: absolute; left: 560px; top: 440px; width: 480px; height: 200px; box-sizing: border-box; padding: 24px 32px; display: flex; align-items: center; justify-content: center; text-align: center; background: #0f1f4b; border-radius: 16px; color: #ffffff; font-size: 16px; line-height: 24px"><span><b style="font-size: 24px; line-height: 34px">Platform core</b><br>Companies and white-label walls · users and permissions · unit and pack IDs · event log · plug-in and adapter interfaces</span></div>
+<div style="position: absolute; left: 1216px; top: 480px; width: 320px; height: 120px; box-sizing: border-box; padding: 14px 20px; display: flex; align-items: center; background: #ffffff; border: 1px solid #c9d3e3; border-radius: 12px; font-size: 15px; line-height: 21px"><span><b>Machine and factory controllers</b><br>A local computer per machine: print, wrap, dispense, pack, works offline</span></div>
+<div style="position: absolute; left: 128px; top: 740px; width: 320px; height: 120px; box-sizing: border-box; padding: 14px 20px; display: flex; align-items: center; background: #ffffff; border: 1px solid #c9d3e3; border-radius: 12px; font-size: 15px; line-height: 21px"><span><b>Orders and payments</b><br>Checkout, commissions and advertiser billing</span></div>
+<div style="position: absolute; left: 640px; top: 740px; width: 320px; height: 120px; box-sizing: border-box; padding: 14px 20px; display: flex; align-items: center; background: #ffffff; border: 1px solid #c9d3e3; border-radius: 12px; font-size: 15px; line-height: 21px"><span><b>Packs and routes</b><br>6, 12 and 24-packs, scan-to-verify, driver app, consecutive routes</span></div>
+<div style="position: absolute; left: 1152px; top: 740px; width: 320px; height: 120px; box-sizing: border-box; padding: 14px 20px; display: flex; align-items: center; background: #ffffff; border: 1px solid #c9d3e3; border-radius: 12px; font-size: 15px; line-height: 21px"><span><b>Ledger and open books</b><br>Double-entry records, public totals, a receipt for every bottle</span></div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1600,"height":960}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

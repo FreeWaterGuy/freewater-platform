@@ -1,0 +1,482 @@
+<title>FreeWater App Prototype</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@300;700&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&display=swap">
+<style>
+/* Layout: one phone screen at a time; on wide screens the phone sits in a frame beside a short guide. Single brand look, light. */
+:root{
+  --black:#000000; --blue:#7FC6EA; --link:#1E7DB8; --ice:#EEF6FB; --can:#D9E0E7; --sub:#5A6B80; --line:#DCE5EE; --white:#FFFFFF; --stage:#E3EEF6;
+  --joe:#D7262E; --joe2:#FFC93C; --luma:#3A1D10; --cream:#F6E3C8; --good:#1F8A4C;
+  --display:Comfortaa,'Arial Rounded MT Bold',sans-serif; --body:'DM Sans','Helvetica Neue',Arial,sans-serif;
+  color-scheme:light;
+}
+html,body{height:100%}
+body{background:var(--stage);color:var(--black);font-family:var(--body);font-size:15px}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+button:focus-visible,a:focus-visible,input:focus-visible{outline:3px solid var(--link);outline-offset:2px}
+.stage{min-height:100%;display:flex;align-items:center;justify-content:center;gap:56px;padding-block:24px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.guide{max-width:320px;display:flex;flex-direction:column;gap:18px}
+.guide h1{font-family:var(--display);font-weight:700;font-size:34px;line-height:1.05;margin:0;text-wrap:balance}
+.guide p{margin:0;color:var(--sub);line-height:1.5}
+.jump{display:flex;flex-direction:column;gap:4px}
+.jump button{text-align:left;padding:8px 12px;border-radius:10px;font-weight:500;color:var(--sub)}
+.jump button.on{background:var(--white);color:var(--black);font-weight:700}
+.restart{align-self:flex-start;padding:10px 18px;border-radius:22px;background:var(--black);color:var(--white);font-weight:700}
+.phone{width:390px;height:844px;flex:none;border-radius:48px;background:var(--white);box-shadow:0 0 0 10px #000,0 30px 60px rgba(0,0,0,.25);overflow:hidden;position:relative}
+@media (max-width:820px){
+  .guide{display:none}
+  .stage{padding:0;display:block;height:100%}
+  .phone{width:100%;height:100%;border-radius:0;box-shadow:none}
+}
+.screen{position:absolute;inset:0;display:flex;flex-direction:column;overflow:hidden;background:var(--white)}
+.scroll{flex:1 1 auto;overflow-y:auto;display:flex;flex-direction:column;gap:14px;padding:50px 20px 16px}
+.logo{font-family:var(--display);display:flex;flex-direction:column;line-height:.9}
+.logo b{font-weight:700;color:var(--blue)} .logo span{font-weight:300}
+.h1{font-family:var(--display);font-weight:700;font-size:28px;line-height:1.1;margin:0;text-wrap:balance}
+.muted{color:var(--sub);font-size:14px;line-height:1.45}
+.btn{height:54px;border-radius:27px;display:flex;align-items:center;justify-content:center;gap:8px;font-weight:700;font-size:17px;width:100%}
+.btn.dark{background:var(--black);color:var(--white)}
+.btn.blue{background:var(--blue);color:var(--black)}
+.btn.line{border:1.5px solid var(--line);height:46px;font-size:15px}
+.btn.outline-blue{border:2px solid var(--blue);color:var(--white)}
+.iconbtn{width:44px;height:44px;border-radius:22px;background:var(--ice);display:flex;align-items:center;justify-content:center;flex:none}
+.card{border:1px solid var(--line);border-radius:18px;padding:14px 16px;background:var(--white)}
+.row{display:flex;align-items:center;gap:12px}
+.tabbar{border-top:1px solid var(--line);background:var(--white);padding:8px 16px calc(20px + env(safe-area-inset-bottom,0px));display:grid;grid-template-columns:repeat(5,minmax(0,1fr));align-items:end;flex:none}
+.tab{display:flex;flex-direction:column;align-items:center;gap:3px;min-height:44px;font-size:11px;font-weight:500;color:#8A99AB}
+.tab.on{color:var(--black);font-weight:700}
+.tab.scan{margin-top:-30px;color:var(--black);font-weight:700}
+.tab.scan span{width:60px;height:60px;border-radius:30px;background:var(--blue);display:flex;align-items:center;justify-content:center;border:5px solid var(--white);box-shadow:0 6px 16px rgba(0,0,0,.18)}
+.toast{position:absolute;left:20px;right:20px;bottom:110px;background:var(--black);color:var(--white);padding:12px 16px;border-radius:14px;font-size:14px;z-index:20;transition:opacity .25s}
+.chip{padding:7px 13px;border-radius:16px;font-size:13px;font-weight:700;background:var(--ice)}
+.chip.line{background:none;border:1.5px solid var(--line)}
+.tile{flex:0 0 132px;border-radius:16px;overflow:hidden;background:var(--white);border:1px solid var(--line);text-align:left}
+.tile .top{height:70px;display:flex;align-items:flex-end;padding:8px 10px;font-family:var(--display);font-weight:700;font-size:15px}
+.tile .bot{padding:8px 10px 10px;display:flex;flex-direction:column;gap:1px}
+.tile .bot b{font-size:13px} .tile .bot span{font-size:11px;color:var(--sub)}
+@keyframes drop{0%{transform:translateY(-260px) rotate(-8deg);opacity:0}70%{transform:translateY(12px) rotate(2deg);opacity:1}100%{transform:translateY(0) rotate(0)}}
+@keyframes pulse{0%,100%{opacity:.5}50%{opacity:1}}
+@keyframes sweep{0%{top:12%}100%{top:86%}}
+.hot{position:absolute;border:2.5px solid var(--blue);border-radius:10px;background:rgba(127,198,234,.18);display:flex;align-items:flex-start;justify-content:center}
+.hot em{font-style:normal;transform:translateY(-130%);background:var(--black);color:var(--white);font-size:12px;font-weight:700;padding:4px 10px;border-radius:12px;white-space:nowrap}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+.bubble-me{align-self:flex-end;max-width:270px;background:var(--black);color:var(--white);border-radius:18px 18px 4px 18px;padding:10px 13px;font-size:14px;line-height:1.4}
+.bubble-ai{max-width:300px;font-size:14px;line-height:1.45}
+.input{flex:1 1 auto;border:0;font:inherit;font-size:15px;min-width:0;background:none;padding:8px 4px}
+.input:focus{outline:none}
+.compose{border:1.5px solid var(--line);border-radius:24px;padding:6px 6px 6px 8px;display:flex;align-items:center;gap:6px}
+.round{width:36px;height:36px;border-radius:18px;display:flex;align-items:center;justify-content:center;flex:none}
+.machine{display:flex;justify-content:space-between;align-items:center;gap:12px;text-align:left;width:100%}
+.ar-bg{position:absolute;inset:0;background:linear-gradient(180deg,#CFC6BA 0,#BFB3A4 44%,#8B6A4C 44.2%,#7A5B3F 100%)}
+.ar-bg::after{content:"";position:absolute;left:0;right:0;top:44%;bottom:0;background:repeating-linear-gradient(90deg,rgba(0,0,0,.06) 0 2px,transparent 2px 86px)}
+</style>
+
+<div class="stage">
+  <div class="guide">
+    <div class="logo" style="font-size:30px"><span>free</span><b>water</b></div>
+    <h1>Tap through the app</h1>
+    <p>Order a free bottle, watch it print, then scan the ads on it. Everything here is a working mock: nothing is charged and the ads are made-up brands.</p>
+    <div class="jump" id="jump"></div>
+    <button class="restart" id="restart">Start over</button>
+  </div>
+
+  <div class="phone" id="phone">
+
+  <!-- HOME -->
+  <section class="screen" data-s="home" data-name="Home">
+    <div class="scroll" style="background:linear-gradient(180deg,var(--ice) 0,var(--white) 300px)">
+      <div class="row" style="justify-content:space-between"><div class="logo" style="font-size:24px"><span>free</span><b>water</b></div><button class="iconbtn" style="background:var(--can);font-weight:700;font-size:14px" data-toast="Your profile, orders and privacy settings live here.">JS</button></div>
+      <div style="background:var(--black);border-radius:22px;padding:18px 20px;color:var(--white);display:flex;flex-direction:column;gap:14px">
+        <div style="font-family:var(--display);line-height:1.1;font-size:26px"><div style="font-weight:700">Save money.</div><div style="font-weight:300;color:var(--blue)">Drink FreeWater.</div></div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+          <div><div style="font-family:var(--display);font-weight:700;font-size:22px" id="statBottles">125</div><div style="font-size:12px;color:#A7B4BF">bottles</div></div>
+          <div><div style="font-family:var(--display);font-weight:700;font-size:22px" id="statCharity">$12.50</div><div style="font-size:12px;color:#A7B4BF">to charity</div></div>
+          <div><div style="font-family:var(--display);font-weight:700;font-size:22px" id="statSaved">$125</div><div style="font-size:12px;color:#A7B4BF">saved</div></div>
+        </div>
+      </div>
+      <button class="row" data-go="camera" style="padding:14px 18px;border-radius:18px;background:var(--blue);text-align:left"><span class="iconbtn" style="background:var(--white)"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M9 9h6v6H9z"/></svg></span><span style="display:flex;flex-direction:column"><span style="font-size:17px;font-weight:700">Scan a bottle</span><span style="font-size:13px;color:#0E3B57">Open the AR printed on any FreeWater</span></span></button>
+      <div class="card" style="display:flex;flex-direction:column;gap:12px">
+        <div class="row"><span class="iconbtn" style="color:var(--link)"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M2 6h12v10H2zM14 10h4l3 3v3h-7z"/><circle cx="6" cy="18" r="2"/><circle cx="17" cy="18" r="2"/></svg></span><span style="display:flex;flex-direction:column"><b style="font-size:16px">Your 12-pack arrives Tuesday</b><span class="muted" style="font-size:13px">Printed for you Monday night. Leave your empties out.</span></span></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button class="btn dark" style="height:42px;font-size:14px" data-toast="Delivery settings come in the full build.">Manage delivery</button><button class="btn line" style="height:42px;font-size:14px" data-toast="Pick 6, 12 or 24 bottles in the full build.">Change pack size</button></div>
+      </div>
+      <button class="machine" data-go="order" style="padding:12px 16px;border-radius:16px;background:var(--ice)"><span style="display:flex;flex-direction:column"><b>ATX-014 on Congress Ave</b><span class="muted" style="font-size:13px">0.2 miles away, 252 bottles in stock</span></span><b style="color:var(--link);font-size:14px">Get one</b></button>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <div class="row" style="justify-content:space-between"><b>Saved from your scans</b><button style="font-size:13px;font-weight:700;color:var(--link)" data-go="saved">See all</button></div>
+        <div style="display:flex;gap:10px;overflow-x:auto;margin-right:-20px;padding-bottom:4px" id="homeSaved"></div>
+      </div>
+    </div>
+    <nav class="tabbar" data-tabs="home"></nav>
+  </section>
+
+  <!-- MACHINES -->
+  <section class="screen" data-s="map" data-name="Find a machine" hidden>
+    <div class="scroll">
+      <h2 class="h1">Machines near you</h2>
+      <div style="position:relative;height:230px;border-radius:20px;overflow:hidden;background:#E8EEF2;flex:none">
+        <svg viewBox="0 0 350 230" width="100%" height="100%" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><rect width="350" height="230" fill="#E8EEF2"/><path d="M-10 160 L360 120" stroke="#fff" stroke-width="14"/><path d="M120 -10 L160 240" stroke="#fff" stroke-width="18"/><path d="M-10 60 L360 80" stroke="#fff" stroke-width="10"/><path d="M260 -10 L240 240" stroke="#fff" stroke-width="10"/><path d="M0 200 Q120 180 200 230" fill="none" stroke="#BFE1F3" stroke-width="22"/><text x="166" y="100" font-family="DM Sans" font-size="10" fill="#8A99AB">Congress Ave</text></svg>
+        <button data-go="order" aria-label="ATX-014" style="position:absolute;left:44%;top:40%;width:34px;height:34px;border-radius:17px;background:var(--black);border:4px solid #fff;box-shadow:0 4px 10px rgba(0,0,0,.25)"></button>
+        <span style="position:absolute;left:22%;top:20%;width:26px;height:26px;border-radius:13px;background:var(--blue);border:4px solid #fff"></span>
+        <span style="position:absolute;left:74%;top:66%;width:26px;height:26px;border-radius:13px;background:#fff;border:3px dashed #8A99AB"></span>
+        <span style="position:absolute;left:12px;bottom:12px;background:#fff;border-radius:10px;padding:4px 10px;font-size:12px;color:var(--sub)">You are here</span>
+      </div>
+      <button class="card machine" data-go="order" style="border:2px solid var(--black)"><span style="display:flex;flex-direction:column;gap:2px"><b style="font-size:16px">ATX-014, Congress Ave</b><span class="muted" style="font-size:13px">0.2 mi. Open 24/7, outdoor, by the bus stop</span><span class="muted" style="font-size:13px">252 bottles. Gives to Austin Parks Foundation</span></span><b style="color:var(--link)">Order</b></button>
+      <button class="card machine" data-go="order"><span style="display:flex;flex-direction:column;gap:2px"><b>ATX-022, Rainey St</b><span class="muted" style="font-size:13px">0.6 mi. Indoor, until 10 pm. 80 bottles</span></span><b style="color:var(--link)">Order</b></button>
+      <div class="card machine" style="border-style:dashed"><span style="display:flex;flex-direction:column;gap:2px"><b style="color:var(--sub)">ATX-031, East 6th</b><span class="muted" style="font-size:13px">1.1 mi. Restocking, back around 3 pm</span></span><button style="font-weight:700;color:var(--link)" data-toast="We'll notify you when ATX-031 is stocked.">Notify me</button></div>
+    </div>
+    <nav class="tabbar" data-tabs="map"></nav>
+  </section>
+
+  <!-- ORDER -->
+  <section class="screen" data-s="order" data-name="Order at a machine" hidden>
+    <div style="position:relative;height:420px;flex:none;background:radial-gradient(120% 80% at 50% 30%,var(--white) 0,var(--ice) 55%,#D6ECFA 100%);display:flex;flex-direction:column;align-items:center">
+      <div class="row" style="position:absolute;left:20px;right:20px;top:50px"><button class="iconbtn" style="background:#fff" data-back aria-label="Back"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg></button><span style="display:flex;flex-direction:column"><b>ATX-014</b><span class="muted" style="font-size:12px">Congress Ave, 12 ft away</span></span></div>
+      <div style="margin-top:104px;filter:drop-shadow(0 18px 18px rgba(0,0,0,.25))"><svg width="104" height="260" viewBox="0 0 120 300" role="img" aria-label="FreeWater aluminum bottle with a printed label"><defs>
+<linearGradient id="m1" x1="0" x2="1"><stop offset="0" stop-color="#8E99A5"/><stop offset=".28" stop-color="#F4F7FA"/><stop offset=".55" stop-color="#C5CED8"/><stop offset="1" stop-color="#7D8894"/></linearGradient>
+<linearGradient id="s1" x1="0" x2="1"><stop offset="0" stop-color="#000" stop-opacity=".38"/><stop offset=".25" stop-color="#fff" stop-opacity=".28"/><stop offset=".4" stop-color="#fff" stop-opacity="0"/><stop offset=".8" stop-color="#000" stop-opacity=".12"/><stop offset="1" stop-color="#000" stop-opacity=".42"/></linearGradient>
+<clipPath id="c1"><path d="M46 22 L74 22 L74 40 C74 60 110 70 110 95 L110 285 Q110 298 97 298 L23 298 Q10 298 10 285 L10 95 C10 70 46 60 46 40 Z"/></clipPath></defs>
+<rect x="42" y="2" width="36" height="22" rx="4" fill="#000000"/><rect x="42" y="18" width="36" height="5" fill="#1A1A1A"/>
+<path d="M46 22 L74 22 L74 40 C74 60 110 70 110 95 L110 285 Q110 298 97 298 L23 298 Q10 298 10 285 L10 95 C10 70 46 60 46 40 Z" fill="url(#m1)"/>
+<g clip-path="url(#c1)"><g transform="translate(10 0) scale(.8333 1)"><rect x="0" y="105" width="34" height="160" fill="#4A2A1A"/><text x="17" y="150" font-family="Comfortaa" font-weight="900" font-size="9" fill="#F6E3C8" text-anchor="middle">LUMA</text><circle cx="17" cy="200" r="11" fill="#F6E3C8"/><rect x="34" y="105" width="56" height="160" fill="#D7262E"/><text x="62" y="128" font-family="Comfortaa" font-weight="900" font-size="15" fill="#FFC93C" text-anchor="middle">JOE&#39;S</text><text x="62" y="140" font-family="DM Sans" font-weight="700" font-size="7" fill="#fff" text-anchor="middle">BURGERS</text><ellipse cx="62" cy="178" rx="20" ry="7" fill="#F2A33A"/><rect x="42" y="181" width="40" height="7" rx="3" fill="#5B2A12"/><rect x="43" y="188" width="38" height="4" fill="#7DBA4A"/><ellipse cx="62" cy="196" rx="20" ry="6" fill="#F2A33A"/><text x="62" y="226" font-family="Comfortaa" font-weight="900" font-size="16" fill="#fff" text-anchor="middle">$5</text><text x="62" y="237" font-family="DM Sans" font-weight="700" font-size="6.5" fill="#fff" text-anchor="middle">COMBO</text><rect x="52" y="244" width="20" height="14" fill="#fff"/><rect x="54" y="246" width="4" height="4" fill="#111"/><rect x="66" y="246" width="4" height="4" fill="#111"/><rect x="54" y="252" width="4" height="4" fill="#111"/><rect x="60" y="249" width="3" height="3" fill="#111"/><rect x="90" y="105" width="30" height="160" fill="#000"/><text x="105" y="128" font-family="Comfortaa" font-weight="300" font-size="9" fill="#fff" text-anchor="middle">free</text><text x="105" y="138" font-family="Comfortaa" font-weight="700" font-size="8.5" fill="#7FC6EA" text-anchor="middle">water</text><rect x="97" y="200" width="16" height="16" fill="#fff"/><rect x="99" y="202" width="4" height="4" fill="#000"/><rect x="107" y="202" width="4" height="4" fill="#000"/><rect x="99" y="210" width="4" height="4" fill="#000"/><text x="105" y="232" font-family="DM Sans" font-size="4" fill="#ddd" text-anchor="middle">SPRING WATER</text><text x="105" y="238" font-family="DM Sans" font-size="4" fill="#ddd" text-anchor="middle">16 fl oz</text></g><rect x="0" y="0" width="120" height="300" fill="url(#s1)"/></g></svg></div>
+      <span class="muted" style="position:absolute;bottom:12px;font-size:12px">Sample label. Yours prints fresh with different ads.</span>
+    </div>
+    <div style="flex:1 1 auto;padding:20px 20px calc(24px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:10px">
+      <h2 class="h1" style="font-size:30px">Free spring water</h2>
+      <p class="muted" style="margin:0;font-size:15px">16 oz aluminum bottle, ready in about 30 seconds. Ads pay for it, and 10¢ goes to Austin Parks Foundation.</p>
+      <div style="margin-top:auto;display:flex;flex-direction:column;gap:10px">
+        <button class="btn dark" id="getFree">Get my free water</button>
+        <button class="btn line" data-go="design">Design my own bottle</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- COUNTDOWN -->
+  <section class="screen" data-s="countdown" data-name="Countdown with an ad" hidden style="background:var(--black);color:var(--white)">
+    <div style="flex:1 1 auto;padding:54px 20px calc(24px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:16px">
+      <div class="row" style="gap:18px">
+        <svg width="120" height="120" viewBox="0 0 132 132" role="img" aria-label="Seconds left"><circle cx="66" cy="66" r="58" fill="none" stroke="#2A2F33" stroke-width="10"/><circle id="ring" cx="66" cy="66" r="58" fill="none" stroke="#7FC6EA" stroke-width="10" stroke-linecap="round" stroke-dasharray="0 400" transform="rotate(-90 66 66)"/><text id="secs" x="66" y="78" text-anchor="middle" font-family="Comfortaa" font-weight="700" font-size="40" fill="#fff">30</text></svg>
+        <div style="display:flex;flex-direction:column;gap:4px"><span style="font-family:var(--display);font-weight:700;font-size:23px;line-height:1.1" id="cdTitle">Your bottle is printing</span><span style="font-size:14px;color:#A7B4BF" id="cdSub">It drops into the tray in 30 seconds</span></div>
+      </div>
+      <div style="flex:1 1 auto;border-radius:22px;background:linear-gradient(170deg,#6B3A22 0,#3A1D10 70%);display:flex;flex-direction:column;justify-content:space-between;padding:18px;min-height:0">
+        <div class="row" style="justify-content:space-between"><span style="font-family:var(--display);font-weight:700;font-size:22px;color:var(--cream)">luma</span><span style="font-size:11px;color:#E9CFAE;border:1px solid rgba(233,207,174,.5);border-radius:10px;padding:2px 8px">Ad</span></div>
+        <svg style="align-self:center;max-height:150px" viewBox="0 0 190 170" width="170" role="img" aria-label="Oat latte"><defs><radialGradient id="lat" cx=".45" cy=".4" r=".6"><stop offset="0" stop-color="#E9C9A0"/><stop offset=".7" stop-color="#B9814F"/><stop offset="1" stop-color="#8A552E"/></radialGradient></defs><ellipse cx="95" cy="92" rx="88" ry="72" fill="#000" opacity=".25"/><ellipse cx="95" cy="85" rx="86" ry="70" fill="#F4EDE3"/><path d="M168 70 q22 6 18 22 q-4 14 -22 8" fill="none" stroke="#F4EDE3" stroke-width="10"/><circle cx="95" cy="80" r="58" fill="#FBF7F1"/><circle cx="95" cy="80" r="50" fill="url(#lat)"/><path d="M95 112 C70 92 66 70 82 62 C90 58 95 64 95 70 C95 64 100 58 108 62 C124 70 120 92 95 112 Z" fill="#F7E9D5"/></svg>
+        <div style="display:flex;flex-direction:column;gap:6px"><span style="font-family:var(--display);font-weight:700;font-size:26px;color:#FBE9D0;line-height:1.05">Oat latte, on us</span><span style="font-size:14px;color:#E9CFAE">Show this at Luma on Congress Ave before 11 am.</span>
+        <button class="btn" id="saveLatte" style="margin-top:8px;height:46px;font-size:15px;background:var(--cream);color:var(--luma)">Save this offer</button></div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px"><div class="row" style="justify-content:space-between;font-size:13px;color:#A7B4BF"><span id="cdPrinting">Printing 3 ads on your label</span><span id="cdPct">0%</span></div><div style="height:6px;border-radius:3px;background:#2A2F33"><div id="cdBar" style="width:0;height:6px;border-radius:3px;background:var(--blue);transition:width .9s linear"></div></div></div>
+      <button style="font-size:13px;color:#A7B4BF;text-decoration:underline" id="skip">Skip the wait (demo only)</button>
+    </div>
+  </section>
+
+  <!-- DISPENSED -->
+  <section class="screen" data-s="dispensed" data-name="Bottle in the tray" hidden>
+    <div style="flex:1 1 auto;padding:54px 20px calc(24px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:14px;align-items:center;text-align:center;background:radial-gradient(120% 70% at 50% 35%,var(--white) 0,var(--ice) 60%,#D6ECFA 100%)">
+      <h2 class="h1">It&#39;s in the tray</h2>
+      <p class="muted" style="margin:0" id="dispSub">Your label was printed a few seconds ago, with 3 ads chosen for you.</p>
+      <div id="dropBottle" style="margin-top:20px;filter:drop-shadow(0 18px 18px rgba(0,0,0,.25));animation:drop .9s cubic-bezier(.3,1.3,.5,1) both"></div>
+      <div style="margin-top:auto;width:100%;display:flex;flex-direction:column;gap:10px">
+        <button class="btn blue" data-go="camera"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M9 9h6v6H9z"/></svg> Scan your bottle</button>
+        <button class="btn line" data-go="home">Done</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- CAMERA -->
+  <section class="screen" data-s="camera" data-name="Scan a bottle" hidden style="background:#111;color:#fff">
+    <div style="position:absolute;inset:0;background:radial-gradient(90% 60% at 50% 45%,#3B4148 0,#16191C 75%)"></div>
+    <div class="row" style="position:absolute;left:20px;right:20px;top:50px;z-index:3;justify-content:space-between"><button class="iconbtn" style="background:rgba(255,255,255,.14);color:#fff" data-back aria-label="Back"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg></button><span style="font-size:13px;background:rgba(0,0,0,.4);padding:6px 12px;border-radius:14px" id="camHint">Point at any FreeWater bottle</span></div>
+    <div style="position:absolute;left:50%;top:48%;transform:translate(-50%,-50%);" id="camBottleWrap"><div id="camBottle" style="position:relative"><svg width="170" height="425" viewBox="0 0 120 300" role="img" aria-label="FreeWater aluminum bottle with a printed label"><defs>
+<linearGradient id="m2" x1="0" x2="1"><stop offset="0" stop-color="#8E99A5"/><stop offset=".28" stop-color="#F4F7FA"/><stop offset=".55" stop-color="#C5CED8"/><stop offset="1" stop-color="#7D8894"/></linearGradient>
+<linearGradient id="s2" x1="0" x2="1"><stop offset="0" stop-color="#000" stop-opacity=".38"/><stop offset=".25" stop-color="#fff" stop-opacity=".28"/><stop offset=".4" stop-color="#fff" stop-opacity="0"/><stop offset=".8" stop-color="#000" stop-opacity=".12"/><stop offset="1" stop-color="#000" stop-opacity=".42"/></linearGradient>
+<clipPath id="c2"><path d="M46 22 L74 22 L74 40 C74 60 110 70 110 95 L110 285 Q110 298 97 298 L23 298 Q10 298 10 285 L10 95 C10 70 46 60 46 40 Z"/></clipPath></defs>
+<rect x="42" y="2" width="36" height="22" rx="4" fill="#000000"/><rect x="42" y="18" width="36" height="5" fill="#1A1A1A"/>
+<path d="M46 22 L74 22 L74 40 C74 60 110 70 110 95 L110 285 Q110 298 97 298 L23 298 Q10 298 10 285 L10 95 C10 70 46 60 46 40 Z" fill="url(#m2)"/>
+<g clip-path="url(#c2)"><g transform="translate(10 0) scale(.8333 1)"><rect x="0" y="105" width="34" height="160" fill="#4A2A1A"/><text x="17" y="150" font-family="Comfortaa" font-weight="900" font-size="9" fill="#F6E3C8" text-anchor="middle">LUMA</text><circle cx="17" cy="200" r="11" fill="#F6E3C8"/><rect x="34" y="105" width="56" height="160" fill="#D7262E"/><text x="62" y="128" font-family="Comfortaa" font-weight="900" font-size="15" fill="#FFC93C" text-anchor="middle">JOE&#39;S</text><text x="62" y="140" font-family="DM Sans" font-weight="700" font-size="7" fill="#fff" text-anchor="middle">BURGERS</text><ellipse cx="62" cy="178" rx="20" ry="7" fill="#F2A33A"/><rect x="42" y="181" width="40" height="7" rx="3" fill="#5B2A12"/><rect x="43" y="188" width="38" height="4" fill="#7DBA4A"/><ellipse cx="62" cy="196" rx="20" ry="6" fill="#F2A33A"/><text x="62" y="226" font-family="Comfortaa" font-weight="900" font-size="16" fill="#fff" text-anchor="middle">$5</text><text x="62" y="237" font-family="DM Sans" font-weight="700" font-size="6.5" fill="#fff" text-anchor="middle">COMBO</text><rect x="52" y="244" width="20" height="14" fill="#fff"/><rect x="54" y="246" width="4" height="4" fill="#111"/><rect x="66" y="246" width="4" height="4" fill="#111"/><rect x="54" y="252" width="4" height="4" fill="#111"/><rect x="60" y="249" width="3" height="3" fill="#111"/><rect x="90" y="105" width="30" height="160" fill="#000"/><text x="105" y="128" font-family="Comfortaa" font-weight="300" font-size="9" fill="#fff" text-anchor="middle">free</text><text x="105" y="138" font-family="Comfortaa" font-weight="700" font-size="8.5" fill="#7FC6EA" text-anchor="middle">water</text><rect x="97" y="200" width="16" height="16" fill="#fff"/><rect x="99" y="202" width="4" height="4" fill="#000"/><rect x="107" y="202" width="4" height="4" fill="#000"/><rect x="99" y="210" width="4" height="4" fill="#000"/><text x="105" y="232" font-family="DM Sans" font-size="4" fill="#ddd" text-anchor="middle">SPRING WATER</text><text x="105" y="238" font-family="DM Sans" font-size="4" fill="#ddd" text-anchor="middle">16 fl oz</text></g><rect x="0" y="0" width="120" height="300" fill="url(#s2)"/></g></svg></div></div>
+    <div id="sweep" style="position:absolute;left:12%;right:12%;height:3px;background:var(--blue);box-shadow:0 0 18px var(--blue);animation:sweep 1.2s ease-in-out infinite alternate"></div>
+    <div id="camFound" hidden style="position:absolute;left:16px;right:16px;bottom:calc(30px + env(safe-area-inset-bottom,0px));background:#fff;color:#000;border-radius:20px;padding:16px;display:flex;flex-direction:column;gap:10px">
+      <b style="font-size:16px">Found 3 ads on this bottle</b>
+      <span class="muted" style="font-size:13px">Tap one on the bottle, or pick it here. Each ad opens its own experience.</span>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+        <button class="chip" data-toast="Luma's offer was saved to Saved." style="background:#F3E6D6">Luma</button>
+        <button class="chip" data-go="joes" style="background:#FBE0E1;color:var(--joe)">Joe&#39;s</button>
+        <button class="chip" data-go="receipt" style="background:#000;color:#fff">Receipt</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- JOE'S SCAN PAGE -->
+  <section class="screen" data-s="joes" data-name="Joe's scan page" hidden>
+    <div style="background:var(--joe);color:#fff;padding:50px 20px 18px;display:flex;flex-direction:column;gap:12px;flex:none">
+      <div class="row" style="justify-content:space-between"><button class="iconbtn" style="background:rgba(255,255,255,.18);color:#fff" data-back aria-label="Back"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg></button><span style="display:flex;flex-direction:column;align-items:flex-end"><span style="font-family:var(--display);font-weight:700;font-size:24px;color:var(--joe2);line-height:1">JOE&#39;S</span><span style="font-size:11px;font-weight:700;letter-spacing:.08em">BURGERS</span></span></div>
+      <div id="joesStage" style="height:230px;border-radius:20px;background:radial-gradient(90% 70% at 50% 40%,#E8453E 0,#A8141B 100%);position:relative;touch-action:none;cursor:grab"><span style="position:absolute;top:12px;left:12px;font-size:12px;background:rgba(0,0,0,.22);padding:4px 10px;border-radius:12px;z-index:2">Drag to spin</span></div>
+      <button class="btn" style="background:#fff;color:var(--joe);height:50px;font-size:16px" data-go="ar"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg> See it on your table</button>
+    </div>
+    <div style="flex:1 1 auto;padding:18px 20px calc(16px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;flex-direction:column;gap:4px"><h2 class="h1" style="font-size:25px">Free fries on your first order</h2><span class="muted">$5 combo: burger, fries and a drink. Pickup at Congress Ave, ready in 10 minutes.</span></div>
+      <button class="btn" style="background:var(--joe);color:#fff" data-order>Order for pickup</button>
+      <div class="row" style="margin-top:auto;border-top:1px solid var(--line);padding-top:12px;justify-content:space-between;font-size:13px;color:var(--sub)"><span>This bottle has 3 ads and gave 10¢</span><button style="font-weight:700;color:var(--link)" data-go="receipt">See its receipt</button></div>
+      <span style="font-size:12px;color:#8A99AB;text-align:center">Powered by <b style="color:#000">freewater</b>. No app needed.</span>
+    </div>
+  </section>
+
+  <!-- AR -->
+  <section class="screen" data-s="ar" data-name="AR on your table" hidden style="background:#000">
+    <div class="ar-bg"></div>
+    <div id="arStage" style="position:absolute;inset:0;touch-action:none"></div>
+    <div class="row" style="position:absolute;left:20px;right:20px;top:50px;justify-content:space-between;z-index:3"><button class="iconbtn" style="background:rgba(0,0,0,.35);color:#fff" data-back aria-label="Back"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg></button><span style="font-size:13px;background:rgba(0,0,0,.45);color:#fff;padding:6px 12px;border-radius:14px">Joe&#39;s $5 combo, actual size</span></div>
+    <div style="position:absolute;left:16px;right:16px;bottom:calc(26px + env(safe-area-inset-bottom,0px));background:#fff;border-radius:22px;padding:14px;display:flex;flex-direction:column;gap:10px;z-index:3">
+      <div class="row" style="justify-content:space-between"><b>Build your combo</b><span class="muted" style="font-size:13px" id="arTotal">Burger, $5</span></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+        <button class="chip" style="background:#FBE0E1;color:var(--joe)" aria-pressed="true" disabled>Burger</button>
+        <button class="chip line" id="addFries" aria-pressed="false">+ Fries</button>
+        <button class="chip line" id="addDrink" aria-pressed="false">+ Drink</button>
+      </div>
+      <button class="btn" style="background:var(--joe);color:#fff;height:50px;font-size:16px" data-order>Order for pickup</button>
+    </div>
+  </section>
+
+  <!-- RECEIPT -->
+  <section class="screen" data-s="receipt" data-name="Bottle receipt" hidden>
+    <div class="scroll">
+      <div class="row"><button class="iconbtn" data-back aria-label="Back"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg></button><span class="muted" style="font-size:13px">Open books, from the FreeWater QR</span></div>
+      <h2 class="h1">This bottle&#39;s receipt</h2>
+      <span class="muted" style="margin-top:-8px">Bottle u_7f3a, printed today at ATX-014, Congress Ave</span>
+      <div class="card" id="rcEarn"></div>
+      <div class="card" id="rcCost"></div>
+      <div style="background:#000;color:#fff;border-radius:18px;padding:16px;display:flex;flex-direction:column;gap:4px"><span style="font-family:var(--display);font-weight:700;font-size:19px">10¢ to Austin Parks Foundation</span><span style="font-size:13px;color:#A7B4BF">Sent with this week&#39;s transfer, with the bank receipt on the public ledger.</span></div>
+      <span class="muted" style="font-size:12px">Every number traces back to a logged print, scan or sale. Prices are placeholders until set.</span>
+    </div>
+  </section>
+
+  <!-- SAVED -->
+  <section class="screen" data-s="saved" data-name="Saved" hidden>
+    <div class="scroll">
+      <h2 class="h1">Saved from your scans</h2>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px" id="savedGrid"></div>
+    </div>
+    <nav class="tabbar" data-tabs="saved"></nav>
+  </section>
+
+  <!-- DESIGN -->
+  <section class="screen" data-s="design" data-name="Design my bottle" hidden>
+    <div class="row" style="padding:50px 20px 0;flex:none"><button class="iconbtn" data-back aria-label="Back"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg></button><span style="display:flex;flex-direction:column"><b style="font-size:17px">Design my bottle</b><span class="muted" style="font-size:12px">Describe it. Add photos and videos.</span></span></div>
+    <div style="margin:12px 20px 0;height:170px;flex:none;border-radius:20px;background:radial-gradient(100% 90% at 50% 20%,#FFF4F7 0,#FADDE6 100%);display:flex;align-items:center;justify-content:center;gap:22px">
+      <div style="filter:drop-shadow(0 12px 12px rgba(120,40,70,.22))"><svg width="64" height="160" viewBox="0 0 120 300" role="img" aria-label="FreeWater aluminum bottle with a printed label"><defs>
+<linearGradient id="m3" x1="0" x2="1"><stop offset="0" stop-color="#8E99A5"/><stop offset=".28" stop-color="#F4F7FA"/><stop offset=".55" stop-color="#C5CED8"/><stop offset="1" stop-color="#7D8894"/></linearGradient>
+<linearGradient id="s3" x1="0" x2="1"><stop offset="0" stop-color="#000" stop-opacity=".38"/><stop offset=".25" stop-color="#fff" stop-opacity=".28"/><stop offset=".4" stop-color="#fff" stop-opacity="0"/><stop offset=".8" stop-color="#000" stop-opacity=".12"/><stop offset="1" stop-color="#000" stop-opacity=".42"/></linearGradient>
+<clipPath id="c3"><path d="M46 22 L74 22 L74 40 C74 60 110 70 110 95 L110 285 Q110 298 97 298 L23 298 Q10 298 10 285 L10 95 C10 70 46 60 46 40 Z"/></clipPath></defs>
+<rect x="42" y="2" width="36" height="22" rx="4" fill="#000000"/><rect x="42" y="18" width="36" height="5" fill="#1A1A1A"/>
+<path d="M46 22 L74 22 L74 40 C74 60 110 70 110 95 L110 285 Q110 298 97 298 L23 298 Q10 298 10 285 L10 95 C10 70 46 60 46 40 Z" fill="url(#m3)"/>
+<g clip-path="url(#c3)"><g transform="translate(10 0) scale(.8333 1)"><rect x="0" y="105" width="120" height="160" fill="#F7C6D4"/><circle cx="60" cy="170" r="30" fill="#E9A6BA"/><circle cx="60" cy="160" r="11" fill="#C98A73"/><path d="M40 196 Q60 176 80 196 Z" fill="#C98A73"/><text x="60" y="224" font-family="Comfortaa" font-weight="900" font-size="14" fill="#B8862E" text-anchor="middle">Maya</text><text x="60" y="240" font-family="Comfortaa" font-weight="300" font-size="10" fill="#B8862E" text-anchor="middle">turns 30</text><circle cx="22" cy="130" r="3" fill="#D9AE4A"/><circle cx="98" cy="142" r="2.5" fill="#D9AE4A"/><circle cx="92" cy="246" r="3" fill="#D9AE4A"/><circle cx="26" cy="250" r="2" fill="#D9AE4A"/></g><rect x="0" y="0" width="120" height="300" fill="url(#s3)"/></g></svg></div>
+      <div style="display:flex;flex-direction:column;gap:4px"><span style="font-size:12px;color:#9C5A6E">Live preview</span><span style="font-family:var(--display);font-weight:700;font-size:18px;color:#6E2D44">12 bottles</span><span style="font-size:12px;color:#9C5A6E" id="dzNote">A name on each one</span></div>
+    </div>
+    <div id="chat" style="flex:1 1 auto;overflow-y:auto;padding:14px 20px 8px;display:flex;flex-direction:column;gap:12px"></div>
+    <form id="composeForm" style="padding:0 20px calc(20px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:10px;flex:none">
+      <div class="compose"><button type="button" class="round" style="background:var(--ice)" id="attach" aria-label="Add a photo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button><input class="input" id="msg" placeholder="Describe a change" autocomplete="off"><button type="submit" class="round" style="background:#000;color:#fff" aria-label="Send"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button></div>
+      <button type="button" class="btn blue" style="height:50px;font-size:16px" data-go="proof">Review my proof</button>
+    </form>
+  </section>
+
+  <!-- PROOF -->
+  <section class="screen" data-s="proof" data-name="Review your proof" hidden>
+    <div class="scroll">
+      <div class="row"><button class="iconbtn" data-back aria-label="Back"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg></button><span style="display:flex;flex-direction:column"><b style="font-size:17px">Review your proof</b><span class="muted" style="font-size:12px">Nothing prints until you say so.</span></span></div>
+      <div style="height:250px;flex:none;border-radius:20px;background:radial-gradient(100% 90% at 50% 20%,#FFF4F7 0,#FADDE6 100%);display:flex;align-items:center;justify-content:center"><svg width="124" height="310" viewBox="0 0 120 300" role="img" aria-label="FreeWater aluminum bottle with a printed label"><defs>
+<linearGradient id="m4" x1="0" x2="1"><stop offset="0" stop-color="#8E99A5"/><stop offset=".28" stop-color="#F4F7FA"/><stop offset=".55" stop-color="#C5CED8"/><stop offset="1" stop-color="#7D8894"/></linearGradient>
+<linearGradient id="s4" x1="0" x2="1"><stop offset="0" stop-color="#000" stop-opacity=".38"/><stop offset=".25" stop-color="#fff" stop-opacity=".28"/><stop offset=".4" stop-color="#fff" stop-opacity="0"/><stop offset=".8" stop-color="#000" stop-opacity=".12"/><stop offset="1" stop-color="#000" stop-opacity=".42"/></linearGradient>
+<clipPath id="c4"><path d="M46 22 L74 22 L74 40 C74 60 110 70 110 95 L110 285 Q110 298 97 298 L23 298 Q10 298 10 285 L10 95 C10 70 46 60 46 40 Z"/></clipPath></defs>
+<rect x="42" y="2" width="36" height="22" rx="4" fill="#000000"/><rect x="42" y="18" width="36" height="5" fill="#1A1A1A"/>
+<path d="M46 22 L74 22 L74 40 C74 60 110 70 110 95 L110 285 Q110 298 97 298 L23 298 Q10 298 10 285 L10 95 C10 70 46 60 46 40 Z" fill="url(#m4)"/>
+<g clip-path="url(#c4)"><g transform="translate(10 0) scale(.8333 1)"><rect x="0" y="105" width="120" height="160" fill="#F7C6D4"/><circle cx="60" cy="170" r="30" fill="#E9A6BA"/><circle cx="60" cy="160" r="11" fill="#C98A73"/><path d="M40 196 Q60 176 80 196 Z" fill="#C98A73"/><text x="60" y="224" font-family="Comfortaa" font-weight="900" font-size="14" fill="#B8862E" text-anchor="middle">Maya</text><text x="60" y="240" font-family="Comfortaa" font-weight="300" font-size="10" fill="#B8862E" text-anchor="middle">turns 30</text><circle cx="22" cy="130" r="3" fill="#D9AE4A"/><circle cx="98" cy="142" r="2.5" fill="#D9AE4A"/><circle cx="92" cy="246" r="3" fill="#D9AE4A"/><circle cx="26" cy="250" r="2" fill="#D9AE4A"/></g><rect x="0" y="0" width="120" height="300" fill="url(#s4)"/></g></svg></div>
+      <div class="row" style="justify-content:space-between"><button class="iconbtn" id="pPrev" aria-label="Previous bottle">‹</button><span class="muted">Bottle <b style="color:#000" id="pNum">1</b> of 12, name: <b style="color:#000" id="pName">Maya</b></span><button class="iconbtn" id="pNext" aria-label="Next bottle">›</button></div>
+      <label class="row" style="font-size:14px"><input type="checkbox" id="ck1"> Names and spelling are right</label>
+      <label class="row" style="font-size:14px"><input type="checkbox" id="ck2"> Photos look the way I want</label>
+      <div style="margin-top:auto;display:flex;flex-direction:column;gap:10px">
+        <div class="row" style="justify-content:space-between"><span class="muted">12 bottles</span><b>$ price set by operator</b></div>
+        <button class="btn dark" id="payPrint">Looks good. Pay and print</button>
+        <button class="btn line" data-back>Change something</button>
+      </div>
+    </div>
+  </section>
+
+  <div class="toast" id="toast" hidden></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function(){
+const ICON={home:`<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 11l8-6 8 6v8a1 1 0 0 1-1 1h-4v-6h-6v6H5a1 1 0 0 1-1-1z"/></svg>`,pin:`<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>`,saved:`<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M6 4h12v17l-6-4-6 4z"/></svg>`,me:`<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>`,scan:`<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M9 9h6v6H9z"/></svg>`};
+const BOTTLE_ADS=`<svg width="124" height="310" viewBox="0 0 120 300" role="img" aria-label="FreeWater aluminum bottle with a printed label"><defs>
+<linearGradient id="m5" x1="0" x2="1"><stop offset="0" stop-color="#8E99A5"/><stop offset=".28" stop-color="#F4F7FA"/><stop offset=".55" stop-color="#C5CED8"/><stop offset="1" stop-color="#7D8894"/></linearGradient>
+<linearGradient id="s5" x1="0" x2="1"><stop offset="0" stop-color="#000" stop-opacity=".38"/><stop offset=".25" stop-color="#fff" stop-opacity=".28"/><stop offset=".4" stop-color="#fff" stop-opacity="0"/><stop offset=".8" stop-color="#000" stop-opacity=".12"/><stop offset="1" stop-color="#000" stop-opacity=".42"/></linearGradient>
+<clipPath id="c5"><path d="M46 22 L74 22 L74 40 C74 60 110 70 110 95 L110 285 Q110 298 97 298 L23 298 Q10 298 10 285 L10 95 C10 70 46 60 46 40 Z"/></clipPath></defs>
+<rect x="42" y="2" width="36" height="22" rx="4" fill="#000000"/><rect x="42" y="18" width="36" height="5" fill="#1A1A1A"/>
+<path d="M46 22 L74 22 L74 40 C74 60 110 70 110 95 L110 285 Q110 298 97 298 L23 298 Q10 298 10 285 L10 95 C10 70 46 60 46 40 Z" fill="url(#m5)"/>
+<g clip-path="url(#c5)"><g transform="translate(10 0) scale(.8333 1)"><rect x="0" y="105" width="34" height="160" fill="#4A2A1A"/><text x="17" y="150" font-family="Comfortaa" font-weight="900" font-size="9" fill="#F6E3C8" text-anchor="middle">LUMA</text><circle cx="17" cy="200" r="11" fill="#F6E3C8"/><rect x="34" y="105" width="56" height="160" fill="#D7262E"/><text x="62" y="128" font-family="Comfortaa" font-weight="900" font-size="15" fill="#FFC93C" text-anchor="middle">JOE&#39;S</text><text x="62" y="140" font-family="DM Sans" font-weight="700" font-size="7" fill="#fff" text-anchor="middle">BURGERS</text><ellipse cx="62" cy="178" rx="20" ry="7" fill="#F2A33A"/><rect x="42" y="181" width="40" height="7" rx="3" fill="#5B2A12"/><rect x="43" y="188" width="38" height="4" fill="#7DBA4A"/><ellipse cx="62" cy="196" rx="20" ry="6" fill="#F2A33A"/><text x="62" y="226" font-family="Comfortaa" font-weight="900" font-size="16" fill="#fff" text-anchor="middle">$5</text><text x="62" y="237" font-family="DM Sans" font-weight="700" font-size="6.5" fill="#fff" text-anchor="middle">COMBO</text><rect x="52" y="244" width="20" height="14" fill="#fff"/><rect x="54" y="246" width="4" height="4" fill="#111"/><rect x="66" y="246" width="4" height="4" fill="#111"/><rect x="54" y="252" width="4" height="4" fill="#111"/><rect x="60" y="249" width="3" height="3" fill="#111"/><rect x="90" y="105" width="30" height="160" fill="#000"/><text x="105" y="128" font-family="Comfortaa" font-weight="300" font-size="9" fill="#fff" text-anchor="middle">free</text><text x="105" y="138" font-family="Comfortaa" font-weight="700" font-size="8.5" fill="#7FC6EA" text-anchor="middle">water</text><rect x="97" y="200" width="16" height="16" fill="#fff"/><rect x="99" y="202" width="4" height="4" fill="#000"/><rect x="107" y="202" width="4" height="4" fill="#000"/><rect x="99" y="210" width="4" height="4" fill="#000"/><text x="105" y="232" font-family="DM Sans" font-size="4" fill="#ddd" text-anchor="middle">SPRING WATER</text><text x="105" y="238" font-family="DM Sans" font-size="4" fill="#ddd" text-anchor="middle">16 fl oz</text></g><rect x="0" y="0" width="120" height="300" fill="url(#s5)"/></g></svg>`, BOTTLE_MAYA=`<svg width="124" height="310" viewBox="0 0 120 300" role="img" aria-label="FreeWater aluminum bottle with a printed label"><defs>
+<linearGradient id="m4" x1="0" x2="1"><stop offset="0" stop-color="#8E99A5"/><stop offset=".28" stop-color="#F4F7FA"/><stop offset=".55" stop-color="#C5CED8"/><stop offset="1" stop-color="#7D8894"/></linearGradient>
+<linearGradient id="s4" x1="0" x2="1"><stop offset="0" stop-color="#000" stop-opacity=".38"/><stop offset=".25" stop-color="#fff" stop-opacity=".28"/><stop offset=".4" stop-color="#fff" stop-opacity="0"/><stop offset=".8" stop-color="#000" stop-opacity=".12"/><stop offset="1" stop-color="#000" stop-opacity=".42"/></linearGradient>
+<clipPath id="c4"><path d="M46 22 L74 22 L74 40 C74 60 110 70 110 95 L110 285 Q110 298 97 298 L23 298 Q10 298 10 285 L10 95 C10 70 46 60 46 40 Z"/></clipPath></defs>
+<rect x="42" y="2" width="36" height="22" rx="4" fill="#000000"/><rect x="42" y="18" width="36" height="5" fill="#1A1A1A"/>
+<path d="M46 22 L74 22 L74 40 C74 60 110 70 110 95 L110 285 Q110 298 97 298 L23 298 Q10 298 10 285 L10 95 C10 70 46 60 46 40 Z" fill="url(#m4)"/>
+<g clip-path="url(#c4)"><g transform="translate(10 0) scale(.8333 1)"><rect x="0" y="105" width="120" height="160" fill="#F7C6D4"/><circle cx="60" cy="170" r="30" fill="#E9A6BA"/><circle cx="60" cy="160" r="11" fill="#C98A73"/><path d="M40 196 Q60 176 80 196 Z" fill="#C98A73"/><text x="60" y="224" font-family="Comfortaa" font-weight="900" font-size="14" fill="#B8862E" text-anchor="middle">Maya</text><text x="60" y="240" font-family="Comfortaa" font-weight="300" font-size="10" fill="#B8862E" text-anchor="middle">turns 30</text><circle cx="22" cy="130" r="3" fill="#D9AE4A"/><circle cx="98" cy="142" r="2.5" fill="#D9AE4A"/><circle cx="92" cy="246" r="3" fill="#D9AE4A"/><circle cx="26" cy="250" r="2" fill="#D9AE4A"/></g><rect x="0" y="0" width="120" height="300" fill="url(#s4)"/></g></svg>`;
+const screens=[...document.querySelectorAll('.screen')];
+const S=Object.fromEntries(screens.map(s=>[s.dataset.s,s]));
+let current='home', hist=[], paid=false;
+const saved=[
+ {bg:'#D7262E',fg:'#FFC93C',brand:"Joe's",t:'Free fries',k:'Offer, ends Sunday'},
+ {bg:'#F1EEE6',fg:'#1B1B1B',brand:'Austin Daily',t:'Rail line opens',k:'News story'},
+ {bg:'#2F6B4F',fg:'#E8F1EA',brand:'Maple Realty',t:'1406 Maple St',k:'3D home tour'}];
+const tabsHtml=a=>`<button class="tab ${a==='home'?'on':''}" data-go="home">${ICON.home}Home</button><button class="tab ${a==='map'?'on':''}" data-go="map">${ICON.pin}Machines</button><button class="tab scan" data-go="camera" aria-label="Scan a bottle"><span>${ICON.scan}</span>Scan</button><button class="tab ${a==='saved'?'on':''}" data-go="saved">${ICON.saved}Saved</button><button class="tab" data-toast="Orders, purchases, privacy and interests live here.">${ICON.me}Me</button>`;
+document.querySelectorAll('[data-tabs]').forEach(n=>n.innerHTML=tabsHtml(n.dataset.tabs));
+function renderSaved(){
+  const tile=s=>`<button class="tile" data-toast="${s.t}: opens the saved ${s.k.toLowerCase()}."><div class="top" style="background:${s.bg};color:${s.fg}">${s.brand}</div><div class="bot"><b>${s.t}</b><span>${s.k}</span></div></button>`;
+  document.getElementById('homeSaved').innerHTML=saved.map(tile).join('');
+  document.getElementById('savedGrid').innerHTML=saved.map(s=>tile(s).replace('class="tile"','class="tile" style="flex:none"')).join('');
+}
+renderSaved();
+// jump list
+const jump=document.getElementById('jump');
+const order=['home','map','order','countdown','dispensed','camera','joes','ar','receipt','design','proof','saved'];
+jump.innerHTML=order.map(k=>`<button data-jump="${k}">${S[k].dataset.name}</button>`).join('');
+function go(k,push=true){
+  if(!S[k]||k===current)return;
+  if(push)hist.push(current);
+  S[current].hidden=true; S[k].hidden=false; current=k;
+  jump.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.jump===k));
+  onEnter(k);
+}
+function back(){const k=hist.pop()||'home';go(k,false)}
+let toastT;
+function toast(t){const el=document.getElementById('toast');el.textContent=t;el.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>el.hidden=true,2600)}
+document.addEventListener('click',e=>{
+  const g=e.target.closest('[data-go]'); if(g){e.preventDefault();go(g.dataset.go);return}
+  const j=e.target.closest('[data-jump]'); if(j){hist=[];go(j.dataset.jump,false);return}
+  if(e.target.closest('[data-back]')){e.preventDefault();back();return}
+  const t=e.target.closest('[data-toast]'); if(t){toast(t.dataset.toast);return}
+  if(e.target.closest('[data-order]')){toast("Order sent to Joe's on Congress Ave. Ready in 10 minutes.");return}
+});
+document.getElementById('restart').onclick=()=>{hist=[];paid=false;stopTimer();go('home',false)};
+// ---------- countdown ----------
+let timer=null,left=30;
+const CIRC=2*Math.PI*58;
+function stopTimer(){clearInterval(timer);timer=null}
+function paint(){
+  document.getElementById('secs').textContent=left;
+  const p=(30-left)/30;
+  document.getElementById('ring').setAttribute('stroke-dasharray',`${(CIRC*p).toFixed(1)} ${CIRC.toFixed(1)}`);
+  document.getElementById('cdSub').textContent=left>0?`It drops into the tray in ${left} second${left===1?'':'s'}`:'Done';
+  document.getElementById('cdPct').textContent=Math.round(p*100)+'%';
+  document.getElementById('cdBar').style.width=(p*100)+'%';
+}
+function startTimer(){
+  stopTimer();left=30;paint();
+  document.getElementById('cdPrinting').textContent=paid?'Printing your design':'Printing 3 ads on your label';
+  timer=setInterval(()=>{left--;paint();if(left<=0){stopTimer();setTimeout(()=>go('dispensed'),500)}},1000);
+}
+document.getElementById('getFree').onclick=()=>{paid=false;go('countdown')};
+document.getElementById('skip').onclick=()=>{stopTimer();left=0;paint();setTimeout(()=>go('dispensed'),300)};
+document.getElementById('saveLatte').onclick=e=>{
+  if(!saved.find(s=>s.brand==='luma')){saved.unshift({bg:'#3A1D10',fg:'#F6E3C8',brand:'luma',t:'Oat latte, on us',k:'Offer, before 11 am'});renderSaved()}
+  e.currentTarget.textContent='Saved';toast('Saved. Find it under Saved.');
+};
+// ---------- per-screen enter ----------
+function onEnter(k){
+  if(k!=='countdown')stopTimer();
+  if(k==='countdown')startTimer();
+  if(k==='dispensed'){
+    const d=document.getElementById('dropBottle');d.innerHTML=paid?BOTTLE_MAYA:BOTTLE_ADS;d.style.animation='none';void d.offsetWidth;d.style.animation='';
+    document.getElementById('dispSub').textContent=paid?'Your design was printed a few seconds ago. Maya is first in the pack.':'Your label was printed a few seconds ago, with 3 ads chosen for you.';
+    bump();
+  }
+  if(k==='camera')startCamera();
+  if(k==='joes')show3d('joes');
+  if(k==='ar')show3d('ar');
+  if(k==='receipt')renderReceipt();
+}
+let bumped=false;
+function bump(){if(bumped)return;bumped=true;document.getElementById('statBottles').textContent='126';document.getElementById('statCharity').textContent='$12.60';document.getElementById('statSaved').textContent='$126'}
+// ---------- camera ----------
+let camT;
+function startCamera(){
+  const found=document.getElementById('camFound'),sweep=document.getElementById('sweep'),hint=document.getElementById('camHint'),cb=document.getElementById('camBottle');
+  found.hidden=true;sweep.hidden=false;hint.textContent='Point at any FreeWater bottle';
+  cb.querySelectorAll('.hot').forEach(h=>h.remove());
+  clearTimeout(camT);
+  camT=setTimeout(()=>{
+    sweep.hidden=true;hint.textContent='Bottle found';found.hidden=false;
+    const spots=[['Luma',8,32,'toast'],["Joe's",32,71,'joes'],['FreeWater',71,92,'receipt']];
+    spots.forEach(([n,a,b,act])=>{const h=document.createElement('button');h.className='hot';h.style.cssText=`left:${a}%;width:${b-a}%;top:36%;height:52%`;h.innerHTML=`<em${n==="Joe's"?' style="transform:translateY(0);margin-top:auto;margin-bottom:-30px"':''}>${n}</em>`;if(n==="Joe's")h.style.alignItems='flex-end';h.setAttribute('aria-label',n+' ad');
+      if(act==='toast')h.dataset.toast="Luma's offer was saved to Saved."; else h.dataset.go=act; cb.appendChild(h)});
+  },1600);
+}
+// ---------- receipt ----------
+function renderReceipt(){
+  const line=(a,b,bold)=>`<div class="row" style="justify-content:space-between;padding:8px 0;border-top:1px solid var(--line);${bold?'font-weight:700':''}"><span style="color:${bold?'#000':'var(--sub)'}">${a}</span><b>${b}</b></div>`;
+  document.getElementById('rcEarn').innerHTML=`<b>What it earned</b>`+line('3 printed ads','$ —')+line('Scans and AR launches','$ —')+line("Commission on Joe's orders",'$ —')+line('Total earned','$ —',1);
+  document.getElementById('rcCost').innerHTML=`<b>What it cost</b>`+line('Water, bottle and cap','$ —')+line('Label and ink','$ —')+line('Machine and restock','$ —')+line('Total cost','$ —',1);
+}
+// ---------- 3D ----------
+let R=null,scene,cam,group,fries,drink,host=null,spinV=0.008,drag=null;
+function mat(c,r=.7){return new THREE.MeshStandardMaterial({color:c,roughness:r,metalness:0})}
+function build(){
+  if(!window.THREE)return false;
+  R=new THREE.WebGLRenderer({antialias:true,alpha:true});R.setPixelRatio(Math.min(2,window.devicePixelRatio||1));
+  scene=new THREE.Scene();cam=new THREE.PerspectiveCamera(35,1,.1,100);
+  scene.add(new THREE.HemisphereLight(0xffffff,0x553322,.9));const d=new THREE.DirectionalLight(0xffffff,.9);d.position.set(3,5,4);scene.add(d);
+  group=new THREE.Group();scene.add(group);
+  const burger=new THREE.Group();
+  const top=new THREE.Mesh(new THREE.SphereGeometry(1,40,20,0,Math.PI*2,0,Math.PI/2),mat(0xE89A3C,.55));top.scale.set(1,.6,1);top.position.y=.62;burger.add(top);
+  for(let i=0;i<26;i++){const s=new THREE.Mesh(new THREE.SphereGeometry(.035,8,6),mat(0xFFF1C8));const th=Math.random()*Math.PI*2,ph=.25+Math.random()*1.0;s.position.set(Math.cos(th)*Math.sin(ph)*1.0,.62+Math.cos(ph)*.6,Math.sin(th)*Math.sin(ph)*1.0);s.scale.set(1.6,.7,1);burger.add(s)}
+  const lettuce=new THREE.Mesh(new THREE.CylinderGeometry(1.1,1.1,.07,40),mat(0x7DBA4A));lettuce.position.y=.56;burger.add(lettuce);
+  const cheese=new THREE.Mesh(new THREE.BoxGeometry(1.6,.05,1.6),mat(0xFFC93C,.5));cheese.position.y=.5;cheese.rotation.y=Math.PI/4;burger.add(cheese);
+  const patty=new THREE.Mesh(new THREE.CylinderGeometry(1.03,1.03,.3,40),mat(0x5B2A12,.9));patty.position.y=.32;burger.add(patty);
+  const bot=new THREE.Mesh(new THREE.CylinderGeometry(1.0,.94,.32,40),mat(0xE58E2C,.6));bot.position.y=.02;burger.add(bot);
+  group.add(burger);
+  fries=new THREE.Group();const box=new THREE.Mesh(new THREE.CylinderGeometry(.42,.32,.8,4,1,true),new THREE.MeshStandardMaterial({color:0xD7262E,side:THREE.DoubleSide}));box.rotation.y=Math.PI/4;box.position.y=.2;fries.add(box);
+  for(let i=0;i<16;i++){const f=new THREE.Mesh(new THREE.BoxGeometry(.07,.7,.07),mat(0xF4C542,.6));f.position.set((Math.random()-.5)*.45,.55+Math.random()*.15,(Math.random()-.5)*.45);f.rotation.z=(Math.random()-.5)*.4;fries.add(f)}
+  fries.position.set(-1.75,-.12,.5);fries.visible=false;group.add(fries);
+  drink=new THREE.Group();const cup=new THREE.Mesh(new THREE.CylinderGeometry(.42,.34,1.3,32),mat(0xffffff,.4));cup.position.y=.5;drink.add(cup);
+  const band=new THREE.Mesh(new THREE.CylinderGeometry(.405,.385,.4,32),mat(0xD7262E));band.position.y=.55;drink.add(band);
+  const lid=new THREE.Mesh(new THREE.CylinderGeometry(.45,.45,.08,32),mat(0xeeeeee));lid.position.y=1.18;drink.add(lid);
+  const straw=new THREE.Mesh(new THREE.CylinderGeometry(.04,.04,.8,8),mat(0xFFC93C));straw.position.set(.1,1.5,0);straw.rotation.z=-.15;drink.add(straw);
+  drink.position.set(1.75,-.15,.1);drink.visible=false;group.add(drink);
+  const shadow=new THREE.Mesh(new THREE.CircleGeometry(1.2,40),new THREE.MeshBasicMaterial({color:0x000000,transparent:true,opacity:.22}));shadow.rotation.x=-Math.PI/2;shadow.position.y=-.15;shadow.scale.set(2.6,1,1.2);group.add(shadow);
+  const el=R.domElement;el.style.cssText='position:absolute;inset:0;width:100%;height:100%';
+  el.addEventListener('pointerdown',e=>{drag={x:e.clientX,r:group.rotation.y};el.setPointerCapture(e.pointerId)});
+  el.addEventListener('pointermove',e=>{if(drag){group.rotation.y=drag.r+(e.clientX-drag.x)*.012}});
+  el.addEventListener('pointerup',()=>drag=null);el.addEventListener('pointercancel',()=>drag=null);
+  const loop=()=>{requestAnimationFrame(loop);if(!host||host.closest('.screen').hidden)return;if(!drag)group.rotation.y+=spinV;R.render(scene,cam)};loop();
+  return true;
+}
+function show3d(where){
+  if(!R&&!build()){return}
+  host=document.getElementById(where==='joes'?'joesStage':'arStage');host.appendChild(R.domElement);
+  const w=host.clientWidth,h=host.clientHeight;R.setSize(w,h,false);cam.aspect=w/h;cam.updateProjectionMatrix();
+  if(where==='joes'){cam.position.set(0,2.2,5.4);cam.lookAt(0,.35,0);group.position.set(0,0,0);group.scale.setScalar(1);spinV=.008;fries.visible=false;drink.visible=false}
+  else{cam.position.set(0,5.2,11.5);cam.lookAt(0,-.6,0);group.position.set(0,-.8,0);group.scale.setScalar(.8);spinV=.002;fries.visible=fOn;drink.visible=dOn}
+}
+let fOn=false,dOn=false;
+function updTotal(){document.getElementById('arTotal').textContent=fOn&&dOn?'Full combo, $5':(fOn||dOn)?'Burger + '+(fOn?'fries':'drink')+', $5':'Burger, $5'}
+const fb=document.getElementById('addFries'),db=document.getElementById('addDrink');
+fb.onclick=()=>{fOn=!fOn;if(fries)fries.visible=fOn;fb.setAttribute('aria-pressed',fOn);fb.textContent=fOn?'Fries ✓':'+ Fries';fb.classList.toggle('line',!fOn);updTotal()};
+db.onclick=()=>{dOn=!dOn;if(drink)drink.visible=dOn;db.setAttribute('aria-pressed',dOn);db.textContent=dOn?'Drink ✓':'+ Drink';db.classList.toggle('line',!dOn);updTotal()};
+window.addEventListener('resize',()=>{if(host&&!host.closest('.screen').hidden)show3d(host.id==='joesStage'?'joes':'ar')});
+// ---------- design chat ----------
+const chat=document.getElementById('chat');
+const replies=["Done. Her photo is on the front with \"Maya turns 30\" in gold, and scanning plays your video. Want confetti in AR when friends point their camera?","Added. Each of the 12 bottles now has a different friend's name under Maya's photo. Send me the names, or I'll leave them blank for you to fill in.","Changed. The gold is warmer now and the type is bigger, so it reads from across the room.","Got it. When friends scan, they see your video first, then a page to leave Maya a message."];
+let ri=0;
+function addMsg(t,me){const d=document.createElement('div');d.className=me?'bubble-me':'bubble-ai';d.textContent=t;chat.appendChild(d);chat.scrollTop=chat.scrollHeight;return d}
+addMsg("Bottles for Maya's 30th. Pink and gold, her photo on the front. When friends scan, play our video.",true);
+addMsg(replies[ri++],false);
+document.getElementById('composeForm').addEventListener('submit',e=>{e.preventDefault();const i=document.getElementById('msg');const t=i.value.trim();if(!t)return;addMsg(t,true);i.value='';
+  const typing=addMsg('Working on it…',false);setTimeout(()=>{typing.textContent=replies[ri%replies.length];ri++;chat.scrollTop=chat.scrollHeight},900)});
+document.getElementById('attach').onclick=()=>{addMsg('Added a photo.',true);setTimeout(()=>addMsg('Thanks. I put it on the back of the label, next to your message.',false),700)};
+// ---------- proof ----------
+const names=['Maya','Jordan','Sam','Priya','Luis','Dana','Ava','Noah','Kim','Theo','Rosa','Eli'];let pi=0;
+const setP=()=>{document.getElementById('pNum').textContent=pi+1;document.getElementById('pName').textContent=names[pi]};
+document.getElementById('pPrev').onclick=()=>{pi=(pi+11)%12;setP()};document.getElementById('pNext').onclick=()=>{pi=(pi+1)%12;setP()};
+document.getElementById('payPrint').onclick=()=>{if(!document.getElementById('ck1').checked||!document.getElementById('ck2').checked){toast('Tick both boxes first, so nothing prints by mistake.');return}paid=true;go('countdown')};
+jump.querySelector('[data-jump="home"]').classList.add('on');
+})();
+</script>
