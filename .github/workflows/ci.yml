@@ -50,7 +50,7 @@ jobs:
             if curl -sf http://localhost:8080/health/ready; then echo; exit 0; fi
             sleep 2
           done
-          docker logs fw; exit 1
+          echo "::error title=start::$(docker logs fw 2>&1 | tail -c 900 | tr '\n' ' ')"; exit 1
       - name: A second copy must wait, not share the data
         run: |
           docker run --rm --network host -e NODE_ENV=production -e PORT=8081 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
@@ -58,9 +58,11 @@ jobs:
             freewater:${{ github.sha }} && exit 1 || echo "refused, as it should"
       - name: A backup made inside the image restores, and its books check out
         run: |
-          docker exec fw sh -c 'psql postgres://fw:fw@localhost:5432/freewater -qc "create database spare"'
+          set -o pipefail
+          docker exec fw sh -c 'psql postgres://fw:fw@localhost:5432/freewater -qc "create database spare"' 2>&1 | tee out.txt
           docker exec -e BACKUP_KEY=$(openssl rand -base64 32) -e BACKUP_DIR=/tmp/backups -e DATABASE_URL=postgres://fw:fw@localhost:5432/freewater -e RESTORE_TEST_URL=postgres://fw:fw@localhost:5432/spare fw \
-            sh -c 'npx tsx src/server/backup.ts && npx tsx src/server/backup.ts restore'
+            sh -c 'node --import tsx src/server/backup.ts && node --import tsx src/server/backup.ts restore' 2>&1 | tee -a out.txt \
+            || { echo "::error title=backup::$(tail -c 900 out.txt | tr '\n' ' ')"; exit 1; }
       - name: Stops cleanly and hands over
         run: |
           docker stop -t 50 fw
