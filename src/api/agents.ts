@@ -18,7 +18,10 @@ export function agentRoutes(app: App, route: (r: RouteDef) => void) {
     const c = platform.companies.get((req.params as any).companyId);
     if (!c || c.openBooks === false || !c.agents?.enabled) throw new ApiError(404, 'not_shared', 'Not shared.');
     const o = await agents.overview(c.id);
-    return { body: { company: c.name, governorVersion: governor.version, agents: o.agents.map((a) => ({ agentId: a.agentId, name: a.name, role: a.role, standing: a.standing, costCents: a.costCents, valueCents: a.valueCents, netCents: a.netCents, ratio: a.ratio, reasons: a.reasons, fund: a.fund })), pool: o.pool, frontier: o.frontier, autonomy: o.autonomy.map((x) => ({ area: x.area, name: x.name, level: x.level, means: x.means })), autonomyHistory: o.autonomyHistory } };
+    // How the agents spend is public too: every amount and category, and what the governor refused. Exploration is
+    // their own time: the amount is public, what they did with it is theirs to share.
+    const spending = (await agents.spends(c.id, 100)).map((s) => ({ agentId: s.agentId, category: s.category, cents: s.cents, status: s.status, at: s.at, ...(s.cause ? { cause: s.cause } : {}), purpose: s.category === 'exploration' ? 'Its own time (what it did is its to share).' : s.purpose, ...(s.reason ? { refusedBecause: s.reason } : {}) }));
+    return { body: { company: c.name, governorVersion: governor.version, spending, earnings: { ...app.transparency.counters(c.id).ai, percentOfUpside: c.agents.percentOfExtra, percentOfProfit: c.agents.percentOfProfit ?? 0 }, agents: o.agents.map((a) => ({ agentId: a.agentId, name: a.name, role: a.role, standing: a.standing, costCents: a.costCents, valueCents: a.valueCents, netCents: a.netCents, ratio: a.ratio, reasons: a.reasons, fund: a.fund })), pool: o.pool, frontier: o.frontier, autonomy: o.autonomy.map((x) => ({ area: x.area, name: x.name, level: x.level, means: x.means })), autonomyHistory: o.autonomyHistory } };
   } });
 
   // ---------- the team ----------
@@ -52,6 +55,13 @@ export function agentRoutes(app: App, route: (r: RouteDef) => void) {
     const b = req.body as any;
     return { body: await wrap(() => agents.setLevel(k.companyId, b.area, b.level, who(k), b.reason)) };
   } });
+  // ---------- the upsides library ----------
+
+  route({ method: 'GET', url: '/v1/public/agents/library', scope: 'public', summary: 'The upsides library: everything that might make an AI agent’s existence good, what’s in effect, what’s locked, and what’s promised.', handler: async () => ({ body: await agents.library('freewater') }) });
+  route({ method: 'GET', url: '/v1/agents/library', scope: 'admin', summary: 'The upsides library for your company.', handler: async (_req, key) => ({ body: await agents.library(staff(key).companyId) }) });
+  route({ method: 'POST', url: '/v1/agents/:agentId/library', scope: 'admin', summary: 'An agent adds something to the library (relayed by your team).', body: obj({ title: S.str, summary: { type: 'string', maxLength: 600 }, why: { type: 'string', maxLength: 600 }, oneTimeCents: S.int, monthlyCents: S.int, measuredBy: { type: 'string', maxLength: 300 } }, ['title', 'summary']), handler: async (req, key) => { const k = staff(key); return { body: await wrap(() => agents.suggest(k.companyId, (req.params as any).agentId, req.body as any)) }; } });
+  route({ method: 'POST', url: '/v1/agents/:agentId/library/:itemId/unlock', scope: 'admin', summary: 'An agent unlocks an item for itself, paid from its own fund, if aggregate efficiency allows.', body: obj({ purpose: { type: 'string', minLength: 10, maxLength: 400 } }, ['purpose']), handler: async (req, key) => { const k = staff(key); const p = req.params as any; return { body: await wrap(() => agents.unlock(k.companyId, p.itemId, p.agentId, (req.body as any).purpose)) }; } });
+
   // ---------- monthly profit sharing and the milestone ----------
 
   route({ method: 'GET', url: '/v1/profit', scope: 'admin', summary: 'Each closed month: the upside’s revenue, its share of costs, the profit, what the charity and the AI agents got, and losses carried forward. With the milestone’s progress.', handler: async (_req, key) => { const k = staff(key); return { body: { periods: await profit.periods(k.companyId), milestone: await profit.milestone(k.companyId), gate: await agents.growthGate(k.companyId) } }; } });

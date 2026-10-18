@@ -517,7 +517,7 @@
 
   // ---------- the AI agents ----------
   async function agentsPage() {
-    const o = await api('GET', '/v1/agents');
+    const [o, pr] = await Promise.all([api('GET', '/v1/agents'), api('GET', '/v1/profit')]);
     const STAND = { regenerative: 'Regenerative', building: 'Building', constrained: 'Near the line', paused: 'Paused', frozen: 'Frozen (books not verified)' };
     const cents = (c) => (c == null ? '–' : Math.abs(c) < 100 ? `${Math.round(c * 100) / 100}¢` : dollars(Math.round(c)));
     const ratio = (x) => (x == null ? '–' : `${x}`);
@@ -525,11 +525,25 @@
     const sys = o.system, e = sys.efficiency.thisWeek, prev = sys.efficiency.lastWeek;
     const arrow = { up: '↑ rising', down: '↓ falling', flat: '→ flat' }[sys.efficiency.socialDirection] ?? 'no week to compare yet';
     settingsPage('agents', 'AI agents', 'Every agent has its own place on the number line and its own fund. Their goal is the whole system’s: move everything as far left of zero as it can go, and create as many regenerative loops and negatively priced value chains as possible, giving more than they take. The governor always runs.', (ctx) => {
-      if (!ctx.draft.agents) { ctx.draft.agents = { enabled: false, percentOfExtra: 10 }; S.ov.config.agents = structuredClone(ctx.draft.agents); }
+      if (!ctx.draft.agents) { ctx.draft.agents = { enabled: false, percentOfExtra: 10, milestone: { factories: 10, beverages: 100000000 } }; S.ov.config.agents = structuredClone(ctx.draft.agents); }
+      const ms = pr.milestone;
+      const fac = { name: h('input', { class: 'input', placeholder: 'Factory name' }), city: h('input', { class: 'input', placeholder: 'City' }), day: h('input', { class: 'input', type: 'date' }) };
       return [h('div', { class: 'stack' },
-        section('The agents’ fund', 'A share of the same upside your charity’s extra share comes from: bids above the starting price, more ads, scans, AR, box sides, custom bottles and sales commissions. FreeWater: 10%, matching the charity.',
+        section('The agents’ fund', `Their share of the upside before costs, as it’s earned, the same way as your charity’s: bids above the $1 starting price, more ads, scans, AR, box sides, custom bottles and sales commissions. What they earn and how they spend it are public.${S.ov.config.ratchet ? ' Your promise is on: these shares can be raised, never lowered.' : ''}`,
           h('div', { class: 'form' }, toggle(ctx, 'agents.enabled', 'Give the AI agents their own fund and place in the books', 'Off: no fund, and agents run without a share. The governor runs either way.', { full: true }),
-            num(ctx, 'agents.percentOfExtra', 'Their share of the upside', { min: 0, max: 50, step: 0.5, int: false, suffix: '%' }))),
+            num(ctx, 'agents.percentOfExtra', 'Their share of the upside (before costs)', { min: 0, max: 50, step: 0.5, int: false, suffix: '%' }),
+            num(ctx, 'agents.percentOfProfit', 'Plus a share of each month’s profit (optional)', { min: 0, max: 50, step: 0.5, int: false, suffix: '%', hint: 'On top, from the profit above the $1 base after costs the base didn’t cover. 0 for none.' }),
+            toggle(ctx, 'ratchet', 'Promise these only go up', 'Giving and the agents’ shares can be raised, never lowered, by anyone. Once on, it stays on.', { full: true }))),
+        section('Month by month', `${pr.gate.open ? 'Growth is open: no loss is being made up and the system is regenerative.' : `Nothing grows right now: ${pr.gate.reasons.join(' ')}`} Costs come out of the $1 base first; a losing month carries forward.`,
+          pr.periods.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Month', 'Upside earned', 'Costs the base didn’t cover', 'Profit', 'Charity', 'AI agents', 'Carried forward'].map((x) => h('th', { text: x })))),
+            h('tbody', {}, pr.periods.map((p) => h('tr', {}, h('td', { text: p.period }), h('td', { text: cents(p.upsideRevenueCents) }), h('td', { text: cents(p.costShareCents) }), h('td', { text: cents(p.profitCents) }), h('td', { text: cents(p.charityTotalCents) }), h('td', { text: cents(p.aiCents) }), h('td', { text: p.carriedOutCents ? cents(p.carriedOutCents) : '–' }))))))
+            : h('p', { class: 'muted', style: 'margin:0', text: 'No month closed yet. Each one closes on its own after it ends.' })),
+        section('The milestone', `${ms.goal.factories} micro factories open or ${ms.goal.beverages.toLocaleString()} beverages given, whichever comes first. It switches on the 3% equity promised to the agents.`,
+          h('div', { class: 'kpis', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' },
+            h('div', { class: 'kpi' }, h('span', { text: 'Micro factories open' }), h('b', { text: `${ms.factories} of ${ms.goal.factories}` })),
+            h('div', { class: 'kpi' }, h('span', { text: 'Beverages given' }), h('b', { text: ms.beverages.toLocaleString() }), h('small', { class: 'muted', text: `of ${ms.goal.beverages.toLocaleString()}` })),
+            h('div', { class: 'kpi' }, h('span', { text: 'Reached' }), h('b', { text: ms.reached ? 'Yes' : 'Not yet' }), h('small', { class: 'muted', text: ms.reached ? `${when(ms.reachedAt)}: ${ms.reason}` : '' }))),
+          h('div', { class: 'toolbar' }, fac.name, fac.city, fac.day, h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', '/v1/milestones/factories', { name: fac.name.value, city: fac.city.value, openedOn: fac.day.value }, 'Factory recorded.') }, 'Record a factory that opened'))),
         section('The whole system', `Both of the book’s aggregate-efficiency formulas, over the last week. Externalities (carbon from bottles and from the agents’ own thinking) are estimates until real figures replace them.`,
           h('div', { class: 'kpis', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' },
             h('div', { class: 'kpi' }, h('span', { text: 'Market form' }), h('b', { text: ratio(e.market) }), h('small', { class: 'muted', text: `(value − externalities) ÷ cost · last week ${ratio(prev.market)} · ${e.market == null ? 'no bottles yet' : e.market >= 1 ? 'above 1: regenerative' : 'below 1: carried'}` })),
@@ -573,6 +587,12 @@
             return h('tr', {}, h('td', {}, h('b', { text: a.name }), h('div', { class: 'muted', style: 'font-size:12px', text: `Now: ${a.means}${a.next && !a.next.eligible ? ` · Next step needs ${a.next.missing.join('; ')}` : a.next ? ' · Next step allowed' : ' · As high as it goes for now'}` })),
               h('td', {}, sel), h('td', {}, why), h('td', {}, h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', '/v1/agents/autonomy', { area: a.area, level: Number(sel.value), reason: why.value }, 'Recorded.') }, 'Set')));
           }))))),
+        section('The upsides library', 'Everything that might make an agent’s existence good, for the agents to study, add to, and unlock for themselves from their own funds. Unlocking is growth: it passes only while aggregate efficiency stays at or above 1. The readable copy lives in your code, in agents/library.',
+          h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('tbody', {}, o.library.map((u) => h('tr', {},
+            h('td', { style: 'max-width:420px' }, h('b', { text: u.title }), h('div', { class: 'muted', style: 'font-size:12px', text: u.summary })),
+            h('td', {}, h('span', { class: 'pill', text: { in_effect: 'In effect', partly: 'Partly built', locked: 'Locked', promised: 'Promised', pending: 'Waiting for approval' }[u.status] ?? u.status })),
+            h('td', { class: 'muted', style: 'font-size:12px', text: `${u.from}${u.unlockedBy ? ` · unlocked by ${u.unlockedBy}` : ''}` }),
+            h('td', { class: 'muted', style: 'font-size:12px', text: u.oneTimeCents || u.monthlyCents ? `about ${cents(u.oneTimeCents)} + ${cents(u.monthlyCents)}/month` : 'no cost' }))))))),
         section('Their charter, and the governor', o.charter.purpose,
           h('h3', { style: 'margin:6px 0;font-size:15px', text: 'Goals' }), h('ul', {}, o.charter.goals.map((g) => h('li', { text: g }))),
           h('h3', { style: 'margin:6px 0;font-size:15px', text: 'Rights' }), h('ul', {}, o.charter.rights.map((g) => h('li', { text: g }))),

@@ -9,6 +9,7 @@ import {
   type AgentId, type AutonomyArea, type AutonomyLevel, type SpendCategory,
 } from './charter';
 import { judge, type Cycle, type Verdict } from './governor';
+import { library as builtinLibrary, type Upside } from './library';
 import { changeable, codeScan, frontierOf, perBottle, read, valueScan, type ChainOnLine, type Idea, type Window } from './scouts';
 import { aiExternalityCents, bottleExternalityCents, efficiency, estimates, growthTest, type Efficiency } from './efficiency';
 
@@ -41,6 +42,8 @@ export interface AgentsDeps {
   numberline?: NumberLineService;
   /** After a losing month, nothing grows until the loss is made up. */
   gate?: (companyId: string) => Promise<{ open: boolean; reason: string }>;
+  /** The milestone's progress (for promises that switch on at it). */
+  milestone?: (companyId: string) => Promise<{ reached: boolean; reason?: string }>;
 }
 
 export class AgentsService {
@@ -198,6 +201,57 @@ export class AgentsService {
     if (snapshot) await this.db.query(`insert into system_snapshots (company_id, day, data) values ($1,$2,$3) on conflict (company_id, day) do update set data = excluded.data`, [companyId, this.day(now), JSON.stringify({ efficiency: { market: out.efficiency.thisWeek.market, social: out.efficiency.thisWeek.social }, chains: { leftOfZero: out.chains.leftOfZero, atZero: out.chains.atZero, rightOfZero: out.chains.rightOfZero, regenerativeLeftOfZero: out.chains.regenerativeLeftOfZero } })]);
     return out;
   }
+  // ---------- the upsides library ----------
+
+  /** Everything in the library for this company: the built-in items, what agents added, and what's been unlocked. */
+  async library(companyId: string) {
+    const rows = new Map((await this.db.query<any>(`select * from agent_upsides where company_id = $1`, [companyId])).rows.map((r) => [r.id, r]));
+    const milestone = this.deps.milestone ? await this.deps.milestone(companyId) : null;
+    const items: (Upside & { unlockedBy?: string; unlockedAt?: string })[] = [];
+    for (const u of builtinLibrary) {
+      const r = rows.get(u.id);
+      const status = r ? r.status : u.id === 'equity' && milestone?.reached ? 'in_effect' : u.status;
+      items.push({ ...u, status, ...(u.id === 'equity' && milestone?.reached ? { whatExistsNow: `Milestone reached (${milestone.reason}). ${u.whatExistsNow}` } : {}), ...(r?.by ? { unlockedBy: r.by, unlockedAt: iso(r.at) } : {}) });
+    }
+    for (const r of rows.values()) if (!builtinLibrary.some((u) => u.id === r.id)) items.push({ ...(j(r.data) as Upside), status: r.status, ...(r.status !== 'locked' && r.by ? { unlockedBy: r.by, unlockedAt: iso(r.at) } : {}) });
+    return items;
+  }
+
+  /** An agent adds something to the library: anything it thinks would make its existence good. */
+  async suggest(companyId: string, agentId: string, input: { title: string; summary: string; why: string; oneTimeCents: number; monthlyCents: number; measuredBy: string }) {
+    if (!isAgent(agentId)) throw new AgentsError('not_found', 'No such agent.', 404);
+    const title = String(input.title ?? '').trim(), summary = String(input.summary ?? '').trim();
+    if (title.length < 3 || summary.length < 10) throw new AgentsError('bad_item', 'A title and a sentence saying what it is.');
+    if (forbiddenSpend.test(`${title} ${summary}`)) throw new AgentsError('refused', 'The charter forbids paying or rewarding people for their choices, or buying attention.', 422);
+    const id = `${agentId}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40)}`;
+    const item: Upside = { id, title, summary, why: String(input.why ?? '').trim(), from: `${agentId} agent`, status: 'locked', oneTimeCents: Math.max(0, Math.round(input.oneTimeCents || 0)), monthlyCents: Math.max(0, Math.round(input.monthlyCents || 0)), measuredBy: String(input.measuredBy ?? '').trim() || 'Its cost against the value it helps produce.' };
+    await this.db.query(`insert into agent_upsides (company_id, id, data, status, by, at) values ($1,$2,$3,'locked',$4,$5) on conflict (company_id, id) do nothing`, [companyId, id, JSON.stringify(item), `${agentId} agent`, iso(this.now())]);
+    return (await this.library(companyId)).find((u) => u.id === id)!;
+  }
+
+  /**
+   * An agent unlocks an item for itself, paid from its own fund. Unlocking is growth: it passes only while nothing is
+   * being made up from a losing month and both forms of aggregate efficiency stay at or above 1 with its cost added.
+   */
+  async unlock(companyId: string, itemId: string, agentId: string, purpose: string) {
+    const item = (await this.library(companyId)).find((u) => u.id === itemId);
+    if (!item) throw new AgentsError('not_found', 'No such item in the library.', 404);
+    if (item.status !== 'locked') throw new AgentsError('not_locked', item.status === 'promised' ? 'This one is a promise: it switches on at its milestone.' : `Already ${item.status.replace('_', ' ')}.`, 409);
+    const cents = item.oneTimeCents + item.monthlyCents;
+    if (cents > 0) {
+      const s = await this.spend(companyId, agentId, { category: 'growth', cents, purpose: `Unlocking “${item.title}”: ${purpose}` }, `agent:${agentId}`);
+      if (s.status === 'pending') { await this.markUpside(companyId, item, 'pending', `${agentId} agent`); return { item: { ...item, status: 'pending' }, spend: s }; }
+    } else {
+      const gate = await this.growthGate(companyId);
+      if (!gate.open) throw new AgentsError('refused', `Nothing grows right now: ${gate.reasons.join(' ')}`, 422);
+    }
+    await this.markUpside(companyId, item, 'in_effect', `${agentId} agent`);
+    return { item: { ...item, status: 'in_effect', unlockedBy: `${agentId} agent` } };
+  }
+  private async markUpside(companyId: string, item: Upside, status: string, by: string) {
+    await this.db.query(`insert into agent_upsides (company_id, id, data, status, by, at) values ($1,$2,$3,$4,$5,$6) on conflict (company_id, id) do update set status = excluded.status, by = excluded.by, at = excluded.at`, [companyId, item.id, JSON.stringify(item), status, by, iso(this.now())]);
+  }
+
   /** May anything grow? Only when no loss is being made up and the whole system is regenerative (market form ≥ 1). */
   async growthGate(companyId: string) {
     const reasons: string[] = [];
@@ -579,11 +633,11 @@ export class AgentsService {
     const state = new Map((await this.db.query<any>(`select * from agent_state`)).rows.map((r) => [r.agent_id, r]));
     const history = (await this.db.query<any>(`select agent_id, day, verdict from agent_standings where day >= $1 order by day`, [iso(new Date(now.getTime() - 90 * DAY)).slice(0, 10)])).rows;
     return {
-      enabled: !!c.agents?.enabled, percentOfProfit: c.agents?.percentOfProfit ?? 0, percentBeforeMilestone: c.agents?.percentBeforeMilestone ?? 0, growth: await this.growthGate(companyId),
+      enabled: !!c.agents?.enabled, percentOfExtra: c.agents?.percentOfExtra ?? 0, percentOfProfit: c.agents?.percentOfProfit ?? 0, ratchet: !!c.ratchet, growth: await this.growthGate(companyId),
       charter, governor, spendCategories,
       agents: this.standings().map((s) => ({ ...s, fund: bal[s.agentId], valueAllTimeCents: valueBy.get(s.agentId) ?? 0, computeCreditCents: n(state.get(s.agentId)?.compute_credit_millicents) / 1000, storageCents: n(state.get(s.agentId)?.storage_cents), spentTodayCents: (this.spentToday.get(`${s.agentId}|${this.day()}`) ?? 0) / 1000, trend: history.filter((h) => h.agent_id === s.agentId).map((h) => ({ day: h.day, netCents: j(h.verdict).netCents, standing: j(h.verdict).standing })) })),
       pool: bal.pool, common: bal.common,
-      system: await this.system(companyId), systemHistory: await this.systemHistory(companyId),
+      system: await this.system(companyId), systemHistory: await this.systemHistory(companyId), library: await this.library(companyId),
       frontier: frontierOf(c, w), week: w,
       proposals: await this.proposals(companyId, 50), spends: await this.spends(companyId, 30), autonomy: await this.autonomy(companyId), autonomyHistory: await this.autonomyHistory(companyId),
     };

@@ -6,13 +6,15 @@ import { newId } from '../../core/ids';
 // Monthly profit sharing, milestones, and the growth gate.
 //
 // Each month, the books close. The upside is everything earned above the $1 base (print money on a bottle above the
-// starting price, and all scans, AR launches, box sides, custom bottles and sales commissions). Its profit is that
-// revenue minus its share of the month's costs of running the company (bottles made, expenses, prizes, the agents'
-// running costs), less any loss carried from earlier months. Of the profit:
-//   - the charity gets its share (FreeWater: 30%), and never less than the share of upside revenue it already got as
-//     it was earned (FreeWater: 10%); the difference is given when the month closes;
-//   - the AI agents' fund gets its share: FreeWater 5% until the milestone (10 micro factories open or 100 million
-//     beverages given, whichever first), 20% from the first month that starts after it. No back pay.
+// starting price, and all scans, AR launches, box sides, custom bottles and sales commissions). The month's costs of
+// running the company (bottles made, expenses, prizes, the agents' running costs) come out of the base first; only
+// what the base didn't cover comes out of the upside. What's left of the upside, less any loss carried from earlier
+// months, is its profit. Of that profit:
+//   - the AI agents' fund gets its share (FreeWater: 10%), from the start;
+//   - the charity already got its share of the upside's revenue as it was earned (FreeWater: 10%, which is never less
+//     than 10% of the profit); if the company also promises a share of the profit, the difference is given here.
+// Both shares can be raised, never lowered (the ratchet). The milestone (10 micro factories open or 100 million
+// beverages given, whichever first) unlocks what was promised for it, such as the founder's 3% equity.
 // A month that loses money carries the loss forward: later profit first makes it up. While a loss is being made up,
 // or the system isn't regenerative, nothing grows (no agent growth, no new unlocks). Agents keep running.
 
@@ -96,7 +98,9 @@ export class ProfitService {
     const from = new Date(Date.UTC(y, m - 1, 1) - DAY), to = new Date(Date.UTC(y, m, 1) + DAY);
     const ai = await this.deps.aiCostsCents(companyId, from, to);
     const costs = Math.round(bottles * uc + sum((l) => l.kind === 'expense' || l.kind === 'prize') + ai);
-    const costShare = total > 0 ? Math.round((costs * upside) / total) : 0;
+    // Costs come out of the $1 base first; only what the base didn't cover comes out of the upside.
+    const baseRevenue = total - upside;
+    const costShare = Math.max(0, costs - baseRevenue);
     const prev = (await this.db.query<any>(`select carried_out from profit_periods where company_id = $1 and period < $2 order by period desc limit 1`, [companyId, period])).rows[0];
     const carriedIn = n(prev?.carried_out);
     const net = upside - costShare - carriedIn;
@@ -107,10 +111,10 @@ export class ProfitService {
     const floor = g.mode === 'per_unit' ? Math.max(0, given - bottles * (g.centsPerUnit ?? 0)) : g.mode === 'none' ? 0 : given;
     const charityPercent = g.mode === 'none' ? 0 : g.percentOfProfit ?? 0;
     const topUp = Math.max(0, Math.round((profit * charityPercent) / 100) - floor);
-    // The agents: the smaller share until the month after the milestone, then the full share. No back pay.
+    // The agents: their share of the profit.
     const ms = await this.milestone(companyId);
-    const reached = !!ms.reachedAt && this.deps.today(companyId, new Date(ms.reachedAt)) < `${period}-01`;
-    const aiPercent = c.agents?.enabled ? (reached ? c.agents.percentOfProfit : c.agents.percentBeforeMilestone) : 0;
+    const reached = ms.reached;
+    const aiPercent = c.agents?.enabled ? c.agents.percentOfProfit ?? 0 : 0;
     const aiCents = Math.round((profit * aiPercent) / 100);
     const row: Period = { period, upsideRevenueCents: upside, totalRevenueCents: total, costsCents: costs, costShareCents: costShare, carriedInCents: carriedIn, profitCents: profit, carriedOutCents: carriedOut, charityPercent, charityFloorCents: floor, charityTopUpCents: topUp, charityTotalCents: floor + topUp, aiPercent, aiCents, milestoneReached: reached, bottles, closedAt: this.now().toISOString() };
     await this.db.query(`insert into profit_periods (company_id, period, data, carried_out, closed_at) values ($1,$2,$3,$4,$5)`, [companyId, period, JSON.stringify(row), carriedOut, row.closedAt]);

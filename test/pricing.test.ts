@@ -83,7 +83,6 @@ describe('targeting raises the price of each engagement', () => {
     expect(scan!.memo).toMatch(/\+10% for targeting/);
     expect(gift).toMatchObject({ kind: 'donation', amountCents: 3, credit: 'payable:charity:Well Aware' }); // 10% of 28¢
     expect(fund).toMatchObject({ kind: 'ai_fund', amountCents: 3, credit: 'payable:ai_fund' }); // the same 10% to the AI agents’ fund
-    expect(fund).toMatchObject({ kind: 'ai_fund', amountCents: 3, credit: 'payable:ai_fund' }); // the same 10% to the AI agents’ fund
     // Sales commission (3%), and 10% of that 3% for charity; a refund takes both back.
     const n = app.platform.ledger.entries.length;
     app.platform.purchase(unit!.id, slot!, 'sale-1', 10_000);

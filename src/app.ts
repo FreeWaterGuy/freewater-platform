@@ -234,6 +234,7 @@ export async function createApp(opts: AppOptions) {
     today: (companyId, at) => delivery.today(companyId, at),
     numberline,
     gate: (companyId) => profit.gate(companyId),
+    milestone: (companyId) => profit.milestone(companyId),
   });
   await agents.init();
 

@@ -866,6 +866,13 @@ create table factories (id text primary key, company_id text not null, name text
 create table milestones (company_id text primary key, reached_at timestamptz not null, reason text not null);
 `,
   },
+  {
+    id: '018_upsides_library',
+    sql: `
+-- The upsides library, per company: items agents added, and every item unlocked (with who, when and what it cost).
+create table agent_upsides (company_id text not null, id text not null, data jsonb not null, status text not null, by text, at timestamptz not null, primary key (company_id, id));
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

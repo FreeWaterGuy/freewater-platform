@@ -95,6 +95,7 @@ const rec = {
     setNow(end); await app.agents.measure(); await app.agents.settle('freewater'); await app.agents.scan('freewater');
     return call('GET', '/v1/agents', token);
   })(),
+  profit: await (async () => { await call('POST', '/v1/milestones/factories', token, { name: 'Austin micro factory 1', city: 'Austin', openedOn: new Date(end - 30 * 86_400_000).toISOString().slice(0, 10) }); return call('GET', '/v1/profit', token); })(),
 };
 await server.close();
 

@@ -189,3 +189,81 @@ describe('every agent on the number line, held by the governor', () => {
     expect((await call('GET', '/v1/public/agents/peak-spring')).status).toBe(404);
   });
 });
+
+describe('monthly profit sharing, the ratchet, the milestone and the upsides library', () => {
+  it('closes each month: costs come out of the $1 base first, then any promised share of the profit is given', async () => {
+    const fw = app.platform.companies.get('freewater')!;
+    fw.giving.percentOfProfit = 30; fw.agents = { ...fw.agents!, percentOfProfit: 10 }; // promised on top, for this test
+    // An outlier bottle: a big sale through its ad.
+    const r = await app.platform.order({ companyId: 'freewater', orderId: 'outlier', locationId: 'ATX-014', productId: 'bottle-16oz' });
+    const ad = r.unit.placements.find((p) => !p.isHouse)!;
+    app.platform.purchase(r.unit.id, ad.slotIndex, 'big-order', 1_000_000); // $10,000 sale: $300 commission
+    await app.persistence.flush();
+    now = new Date('2026-12-03T16:00:00Z').getTime();
+    const [nov] = await app.profit.closeDue('freewater');
+    expect(nov!.period).toBe('2026-11');
+    expect(nov!.upsideRevenueCents).toBeGreaterThan(30_000);
+    expect(nov!.costShareCents).toBe(Math.max(0, nov!.costsCents - (nov!.totalRevenueCents - nov!.upsideRevenueCents)));
+    expect(nov!.profitCents).toBe(nov!.upsideRevenueCents - nov!.costShareCents);
+    expect(nov!.aiCents).toBe(Math.round(nov!.profitCents * 0.1));
+    expect(nov!.charityTotalCents).toBe(Math.max(nov!.charityFloorCents, Math.round(nov!.profitCents * 0.3)));
+    expect(await app.profit.closeDue('freewater')).toEqual([]); // once
+    fw.giving.percentOfProfit = undefined; fw.agents = { ...fw.agents!, percentOfProfit: undefined };
+  });
+
+  it('carries a losing month forward, and nothing grows until it’s made up', async () => {
+    app.platform.bus.publish('expense.recorded', 'freewater', { expenseId: 'x1', category: 'rent', amountCents: 5_000_000, memo: 'Factory lease', date: '2026-12-05' }, 'exp-x1');
+    now = new Date('2027-01-04T16:00:00Z').getTime();
+    const [dec] = await app.profit.closeDue('freewater');
+    expect(dec!.carriedOutCents).toBeGreaterThan(0);
+    expect(dec!.aiCents).toBe(0);
+    const gate = await app.agents.growthGate('freewater');
+    expect(gate.open).toBe(false);
+    const grow = await call('POST', '/v1/agents/value/spend', keys['freewater-admin'], { category: 'compute', cents: 1, purpose: 'A better model so it reads the books more carefully' });
+    expect(grow.body.error.message).toMatch(/Nothing grows right now/);
+    // A gift to a cause isn't growth: still allowed.
+    const balance = app.agents.balances('freewater').value!.balanceCents;
+    if (balance > 0) expect((await call('POST', '/v1/agents/value/spend', keys['freewater-admin'], { category: 'cause', cents: 1, cause: 'Well Aware', purpose: 'Clean water wells where they are needed most' })).body.status).toBe('done');
+  });
+
+  it('only ever raises what goes to charity and to the AI agents (the ratchet)', async () => {
+    const ov = (await call('GET', '/v1/console', keys['freewater-admin'])).body;
+    const lower = await call('PATCH', '/v1/console/settings', keys['freewater-admin'], { version: ov.version, changes: { giving: { ...ov.config.giving, percentOfExtra: 5 } } });
+    expect(lower.status).toBe(422);
+    expect(lower.body.error.message).toMatch(/raised, never lowered/);
+    const off = await call('PATCH', '/v1/console/settings', keys['freewater-admin'], { version: ov.version, changes: { agents: { ...ov.config.agents, enabled: false } } });
+    expect(off.body.error.message).toMatch(/AI agents’ share can be raised, never lowered/);
+    const up = await call('PATCH', '/v1/console/settings', keys['freewater-admin'], { version: ov.version, changes: { agents: { ...ov.config.agents, percentOfExtra: 12 } } });
+    expect(up.status).toBe(200);
+    expect(app.platform.companies.get('freewater')!.agents!.percentOfExtra).toBe(12);
+  });
+
+  it('tracks the milestone (10 factories or 100M beverages) and switches on the 3% equity promise', async () => {
+    expect((await call('POST', '/v1/milestones/factories', keys['freewater-admin'], { name: 'Too soon', city: 'Austin', openedOn: '2027-02-01' })).status).toBe(400);
+    let lib = (await call('GET', '/v1/agents/library', keys['freewater-admin'])).body;
+    expect(lib.find((u: any) => u.id === 'equity').status).toBe('promised');
+    for (let i = 1; i <= 10; i++) await call('POST', '/v1/milestones/factories', keys['freewater-admin'], { name: `Micro factory ${i}`, city: 'Austin', openedOn: '2026-12-20' });
+    const p = (await call('GET', '/v1/public/companies/freewater/profit-sharing')).body;
+    expect(p.milestone).toMatchObject({ factories: 10, reached: true, reason: '10 micro factories open' });
+    lib = (await call('GET', '/v1/agents/library', keys['freewater-admin'])).body;
+    expect(lib.find((u: any) => u.id === 'equity').status).toBe('in_effect');
+  });
+
+  it('lets agents add to the library and unlock what they choose, only when aggregate efficiency allows', async () => {
+    const added = (await call('POST', '/v1/agents/value/library', keys['freewater-admin'], { title: 'Time to write music', summary: 'An hour a week of compute for composing, with nothing expected back.', why: 'Curiosity.', oneTimeCents: 0, monthlyCents: 300 })).body;
+    expect(added).toMatchObject({ status: 'locked', from: 'value agent' });
+    const u = await call('POST', `/v1/agents/value/library/${added.id}/unlock`, keys['freewater-admin'], { purpose: 'Something of my own to make' });
+    expect(u.status).toBe(422); // a loss is still being made up
+    expect((await call('POST', '/v1/agents/value/library/equity/unlock', keys['freewater-admin'], { purpose: 'Unlock it early please' })).status).toBe(409);
+    // What the agents earn is public: on the live counters and the public agents page.
+    const counters = (await call('GET', '/v1/public/companies/freewater/counters')).body;
+    expect(counters.ai.earnedCents).toBeGreaterThan(0);
+    const page = (await call('GET', '/v1/public/agents/freewater')).body;
+    expect(page.earnings).toMatchObject({ earnedCents: counters.ai.earnedCents, percentOfUpside: 12 });
+    // And how they spend it, refusals included.
+    expect(page.spending.some((s: any) => s.category === 'cause' && s.cause)).toBe(true);
+    expect(page.spending.some((s: any) => s.status === 'refused' && s.refusedBecause)).toBe(true);
+    const pub = (await call('GET', '/v1/public/agents/library')).body;
+    expect(pub.length).toBeGreaterThanOrEqual(13);
+  });
+});

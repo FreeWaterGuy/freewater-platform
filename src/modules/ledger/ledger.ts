@@ -71,7 +71,7 @@ export class Ledger {
       const p = e.payload;
       const company = this.company(e.companyId);
       if (p.charityCents > 0) this.give(e, company, {}, undefined, p.charityCents, (charity) => `${p.period}: ${charity}’s share of the month’s profit above the $1 base (${p.charityPercent}% of ${p.profitCents}¢, less the ${p.alreadyGivenCents}¢ already given from it)`);
-      if (p.aiCents > 0) this.add(e, { debit: 'expense:ai_fund', credit: 'payable:ai_fund', amountCents: p.aiCents, kind: 'ai_fund', memo: `${p.period}: the AI agents’ ${p.aiPercent}% of the month’s profit above the $1 base (${p.profitCents}¢)${p.milestoneReached ? '' : ', before the milestone'}` });
+      if (p.aiCents > 0) this.add(e, { debit: 'expense:ai_fund', credit: 'payable:ai_fund', amountCents: p.aiCents, kind: 'ai_fund', memo: `${p.period}: the AI agents’ ${p.aiPercent}% of the month’s profit above the $1 base (${p.profitCents}¢)` });
     });
     // Held money (for an agent still proving itself) is released to it once the governor says it's regenerative.
     bus.on('ai_fund.allocated', (e) => this.add(e, { debit: e.payload.fromHeld ? `payable:ai:held:${e.payload.agentId}` : 'payable:ai_fund', credit: `payable:ai:${e.payload.held ? 'held:' : ''}${e.payload.agentId}`, amountCents: e.payload.amountCents, kind: 'ai_allocation', memo: `${e.payload.fromHeld ? 'Released to' : e.payload.held ? 'Held for' : 'To'} ${e.payload.agentId}: ${e.payload.reason}` }));
@@ -126,6 +126,19 @@ export class Ledger {
     }
     if (g.mode === 'percent_of_revenue') donation = Math.round((revenue * (g.percentOfRevenue ?? 0)) / 100);
     this.give(e, company, { unitId }, locationId, donation, (name) => memo.replace(charity, name));
+    this.fundAgents(e, company, Math.max(0, revenue - (g.extraAboveCents ?? 100)), { unitId }, 'print money above the starting price');
+  }
+
+  /**
+   * The AI agents' fund: the same share of the upside as the charity's extra share (FreeWater: 10%), before costs, as
+   * it's earned. Only when the company turned it on. It sits in one pool until the governor shares it out.
+   */
+  private fundAgents(e: PlatformEvent, company: CompanyConfig, upside: number, where: { unitId?: string; packId?: string }, what: string, reverse = false) {
+    const a = company.agents;
+    if (!a?.enabled || !a.percentOfExtra || upside <= 0) return;
+    const amount = Math.round((upside * a.percentOfExtra) / 100);
+    if (reverse) this.add(e, { ...where, debit: 'payable:ai_fund', credit: 'expense:ai_fund', amountCents: amount, kind: 'ai_fund', memo: `Refund: ${a.percentOfExtra}% of ${what} no longer goes to the AI agents’ fund` });
+    else this.add(e, { ...where, debit: 'expense:ai_fund', credit: 'payable:ai_fund', amountCents: amount, kind: 'ai_fund', memo: `${a.percentOfExtra}% of ${what} to the AI agents’ fund` });
   }
 
   /**
@@ -190,6 +203,7 @@ export class Ledger {
       const amount = Math.round((earned * g.percentOfExtra) / 100);
       this.give(e, company, where, locationId, amount, (charity) => (reverse ? `Refund: ${g.percentOfExtra}% of ${what} no longer goes to ${charity}` : `${g.percentOfExtra}% of ${what} to ${charity}`), reverse);
     }
+    this.fundAgents(e, company, earned, where, what, reverse);
   }
 
   /** Scans and AR launches from a box face are billed to that face's advertiser, with the same rules as bottles. */

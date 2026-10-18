@@ -116,12 +116,16 @@ export interface CompanyConfig {
   /** How much of the books the world sees, live. Each company chooses. */
   transparency?: Transparency;
   /**
-   * The AI agents' own fund and place in the books. Off unless the company turns it on. Each month the agents' fund
-   * gets a percent of the profit on the upside (the same profit the charity's share comes from): a smaller share
-   * until the company reaches its milestone (so many factories open, or so many beverages given, whichever first),
-   * the full share after. No back pay. The safety governor is not a setting: it always runs.
+   * The AI agents' own fund and place in the books. Off unless the company turns it on. The agents' fund gets
+   * `percentOfExtra` of the upside as it's earned, before costs, the same way and the same share as the charity
+   * (FreeWater: 10%): print money on a bottle above the $1 base, and all scans, AR, box sides, custom bottles and
+   * sales commissions. A company can also promise a share of each month's profit on top (`percentOfProfit`). The
+   * milestone (so many factories open, or so many beverages given, whichever first) unlocks what was promised for
+   * it, such as equity. The safety governor is not a setting: it always runs.
    */
-  agents?: { enabled: boolean; percentOfProfit: number; percentBeforeMilestone: number; milestone: { factories: number; beverages: number } };
+  agents?: { enabled: boolean; percentOfExtra: number; percentOfProfit?: number; milestone: { factories: number; beverages: number } };
+  /** Promises that only go up: what goes to charity and to the AI agents can be raised, never lowered. */
+  ratchet?: boolean;
   /**
    * The QR codes it prints. Codes are dynamic (looked up each time they're scanned) unless an advertiser is allowed
    * to choose a static one and does.

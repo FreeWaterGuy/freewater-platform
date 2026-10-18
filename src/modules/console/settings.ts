@@ -17,7 +17,7 @@ export const fontChoices: { id: string; label: string; value: string }[] = [
 export const adCategories = ['food', 'drink', 'coffee', 'fitness', 'health', 'news', 'retail', 'local-services', 'real-estate', 'auto', 'finance', 'entertainment', 'events', 'travel', 'tech', 'education', 'nonprofit', 'politics', 'alcohol', 'tobacco', 'cannabis', 'gambling', 'weapons', 'dating'];
 
 /** The parts of the settings a PATCH may send. Anything else is refused. */
-export const editableKeys = ['name', 'receiptBaseUrl', 'scanBaseUrl', 'brand', 'productFacts', 'giving', 'openBooks', 'unitCosts', 'consumerPricing', 'timezone', 'consumer', 'machines', 'qr', 'ar', 'standardProductId', 'adRules', 'prices', 'modules', 'lottery', 'data', 'transparency', 'agents'] as const;
+export const editableKeys = ['name', 'receiptBaseUrl', 'scanBaseUrl', 'brand', 'productFacts', 'giving', 'openBooks', 'unitCosts', 'consumerPricing', 'timezone', 'consumer', 'machines', 'qr', 'ar', 'standardProductId', 'adRules', 'prices', 'modules', 'lottery', 'data', 'transparency', 'agents', 'ratchet'] as const;
 export type EditableKey = (typeof editableKeys)[number];
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
@@ -111,9 +111,9 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
   if (g.percentOfProfit !== undefined && !isNum(g.percentOfProfit, 0, 90)) return 'The share of the upside’s profit given must be 0% to 90%.';
   if (c.agents) {
     const a = c.agents;
-    if (typeof a.enabled !== 'boolean' || !isNum(a.percentOfProfit, 0, 50) || !isNum(a.percentBeforeMilestone, 0, 50)) return 'The AI agents’ fund is on or off, with shares of 0 to 50% of the upside’s profit.';
+    if (typeof a.enabled !== 'boolean' || !isNum(a.percentOfExtra, 0, 50) || (a.percentOfProfit !== undefined && !isNum(a.percentOfProfit, 0, 50))) return 'The AI agents’ fund is on or off, with shares of 0 to 50%.';
     if (!a.milestone || !isNum(a.milestone.factories, 0, 1e6) || !isNum(a.milestone.beverages, 0, 1e13)) return 'The milestone is a number of factories and a number of beverages.';
-    if ((c.giving.percentOfProfit ?? 0) + a.percentOfProfit > 90) return 'The charity’s and the agents’ shares of the profit can’t add up to more than 90%.';
+    if ((c.giving.percentOfProfit ?? 0) + (a.percentOfProfit ?? 0) > 90) return 'The charity’s and the agents’ shares of the profit can’t add up to more than 90%.';
   }
   if (c.transparency) {
     const t = c.transparency;
@@ -126,6 +126,19 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
   if (!m || !registered.ads.includes(m.ads)) return `Pick an ad engine: ${registered.ads.join(', ')}.`;
   if (!registered.renderer.includes(m.renderer)) return `Pick a label maker: ${registered.renderer.join(', ')}.`;
   if (!registered.printer.includes(m.printer)) return `Pick a printer: ${registered.printer.join(', ')}.`;
+  return null;
+}
+
+/** With the ratchet on, what goes to charity and to the AI agents can be raised, never lowered. */
+export function ratchetProblem(cur: CompanyConfig, next: CompanyConfig): string | null {
+  if (!cur.ratchet) return null;
+  if (!next.ratchet) return 'The promise that giving and the AI agents’ share only go up can’t be taken back.';
+  const g0 = cur.giving, g1 = next.giving;
+  if (g0.mode !== 'none' && g1.mode !== g0.mode) return 'Giving can’t be switched to a different kind once promised; raise it instead.';
+  const down = (a?: number, b?: number) => (a ?? 0) > (b ?? 0);
+  if (down(g0.centsPerUnit, g1.centsPerUnit) || down(g0.percentOfRevenue, g1.percentOfRevenue) || down(g0.percentOfExtra, g1.percentOfExtra) || down(g0.percentOfProfit, g1.percentOfProfit)) return 'Giving can be raised, never lowered.';
+  if ((g1.extraAboveCents ?? 0) > (g0.extraAboveCents ?? 0)) return 'Where extra giving starts can be lowered (giving more), never raised.';
+  if (cur.agents?.enabled && (!next.agents?.enabled || down(cur.agents.percentOfExtra, next.agents.percentOfExtra) || down(cur.agents.percentOfProfit, next.agents.percentOfProfit))) return 'The AI agents’ share can be raised, never lowered or turned off.';
   return null;
 }
 
@@ -157,7 +170,7 @@ const labels: Record<string, string> = {
   scanBaseUrl: 'Short QR address', standardProductId: 'Standard product', 'qr.logo': 'Logo in your codes', 'qr.logoSvg': 'Your code logo', 'qr.color': 'Code color',
   'qr.advertiserLogos': 'Advertisers’ logos in their codes', 'qr.allowStatic': 'Static codes allowed', 'ar.trackingCodes': 'AR tracking strip', 'ar.stripEverywhere': 'Tracking strip along every ad',
   'machines.offlineWalkUp': 'Free bottles while offline', 'machines.offlinePerHour': 'Offline bottles per hour', 'machines.bufferSize': 'Labels kept ready', 'modules.ads': 'Ad engine', 'modules.renderer': 'Label maker', 'modules.printer': 'Printer',
-  'transparency.liveFeed': 'Live public feed', 'transparency.counters': 'Live public counters', 'transparency.publishFingerprints': 'Publishing daily fingerprints', 'transparency.advertiserStatements': 'Advertiser statements', 'transparency.feedDetail': 'Places in the feed', 'transparency.showAmounts': 'Amounts in the feed', data: 'Data collection', 'agents.enabled': 'The AI agents’ fund', 'agents.percentOfProfit': 'The AI agents’ share of the profit', 'agents.percentBeforeMilestone': 'The AI agents’ share before the milestone', 'agents.milestone': 'The AI agents’ milestone',
+  'transparency.liveFeed': 'Live public feed', 'transparency.counters': 'Live public counters', 'transparency.publishFingerprints': 'Publishing daily fingerprints', 'transparency.advertiserStatements': 'Advertiser statements', 'transparency.feedDetail': 'Places in the feed', 'transparency.showAmounts': 'Amounts in the feed', data: 'Data collection', 'agents.enabled': 'The AI agents’ fund', 'agents.percentOfExtra': 'The AI agents’ share of the upside', 'agents.percentOfProfit': 'The AI agents’ share of the profit', 'agents.milestone': 'The AI agents’ milestone', ratchet: 'Giving and the AI agents’ share only go up',
   'lottery.enabled': 'Prize game', 'lottery.oddsPercent': 'Chance of winning', 'lottery.chancesPerDay': 'Chances per person a day', 'lottery.winsPerDay': 'Prizes per person a day', 'lottery.watchSeconds': 'Watching before the ball', 'lottery.ballMs': 'Time the ball is on screen', 'lottery.prizes': 'Prizes', 'lottery.minAge': 'Youngest age to play', 'lottery.rulesUrl': 'Official rules link', 'lottery.rulesText': 'Rules note',
 };
 const deep = new Set(['brand', 'giving', 'consumer', 'machines', 'qr', 'ar', 'adRules', 'prices', 'modules', 'lottery', 'transparency', 'agents']);
