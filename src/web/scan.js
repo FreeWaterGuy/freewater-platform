@@ -1,0 +1,287 @@
+// FreeWater scan pages. Draws the blocks an experience plug-in returned. Plain data in, DOM out:
+// nothing from an advertiser is ever inserted as HTML.
+(() => {
+  'use strict';
+  const app = document.getElementById('app');
+  const fixture = window.__FW_FIXTURE__; // set only by the offline preview
+  const path = fixture ? fixture.path : location.pathname;
+
+  // ---------- small helpers ----------
+  const h = (tag, attrs, ...kids) => {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (v === undefined || v === null || v === false) continue;
+      if (k === 'class') el.className = v;
+      else if (k === 'text') el.textContent = v;
+      else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+      else el.setAttribute(k, v === true ? '' : String(v));
+    }
+    for (const kid of kids.flat()) if (kid != null && kid !== false) el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+    return el;
+  };
+  const store = {
+    get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+  };
+  const randomKey = () => { const a = new Uint8Array(16); crypto.getRandomValues(a); return btoa(String.fromCharCode(...a)).replace(/[+/=]/g, (c) => ({ '+': '-', '/': '_', '=': '' })[c]); };
+  let viewerKey = store.get('fw_viewer');
+  if (!viewerKey || !/^[A-Za-z0-9_-]{8,64}$/.test(viewerKey)) { viewerKey = randomKey(); store.set('fw_viewer', viewerKey); }
+  const token = store.get('fw_token'); // set by the FreeWater app when someone signs in
+  const auth = token ? { authorization: `Bearer ${token}` } : {};
+  const api = async (method, url, body) => {
+    if (fixture) return fixture.api(method, url, body);
+    const res = await fetch(url, { method, headers: { ...(body ? { 'content-type': 'application/json' } : {}), ...auth }, body: body ? JSON.stringify(body) : undefined, keepalive: method === 'POST' });
+    const data = res.status === 204 ? null : await res.json().catch(() => null);
+    if (!res.ok) throw Object.assign(new Error(data?.error?.message || 'Something went wrong'), { status: res.status });
+    return data;
+  };
+  const toastEl = h('div', { class: 'toast', role: 'status' });
+  document.body.append(toastEl);
+  let toastTimer;
+  const toast = (msg) => { toastEl.textContent = msg; toastEl.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2200); };
+  const money = (c) => (c < 100 ? `${c}¢` : `$${(c / 100).toFixed(2)}`);
+  const icon = (d) => { const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('fill', 'none'); s.setAttribute('stroke', 'currentColor'); s.setAttribute('stroke-width', '2'); s.setAttribute('stroke-linecap', 'round'); s.setAttribute('stroke-linejoin', 'round'); s.setAttribute('aria-hidden', 'true'); const p = document.createElementNS('http://www.w3.org/2000/svg', 'path'); p.setAttribute('d', d); s.append(p); return s; };
+  const ICON = {
+    ar: 'M12 2 3 7v10l9 5 9-5V7l-9-5Zm0 0v20M3 7l9 5 9-5',
+    save: 'M6 3h12v18l-6-4-6 4V3Z',
+    check: 'M5 12l5 5L20 7',
+    link: 'M7 17 17 7M9 7h8v8',
+    call: 'M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2',
+  };
+  // Pick readable ink for text on a colored background.
+  const lum = (hex) => { const n = parseInt(hex.slice(1), 16); const c = [n >> 16, (n >> 8) & 255, n & 255].map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+  const ink = (bg) => (lum(bg) > 0.4 ? '#0B0B0B' : '#FFFFFF');
+
+  const applyTheme = (t, brand) => {
+    const r = document.documentElement.style;
+    r.setProperty('--bg', t.background); r.setProperty('--text', t.text); r.setProperty('--accent', t.accent);
+    r.setProperty('--button', t.button); r.setProperty('--button-text', t.buttonText);
+    r.setProperty('--accent-ink', ink(t.accent));
+    if (brand) { r.setProperty('--panel', brand.panelColor); r.setProperty('--panel-text', brand.textColor); r.setProperty('--panel-accent', brand.accentColor); }
+    document.querySelector('meta[name=theme-color]')?.setAttribute('content', t.background);
+  };
+
+  // ---------- routes ----------
+  const m = {
+    slot: /^\/s\/([A-Za-z0-9_-]+)\/(\d)$/.exec(path),
+    box: /^\/b\/([A-Za-z0-9_-]+)\/(top|front|back|right|left)$/.exec(path),
+    receipt: /^\/r\/([A-Za-z0-9_-]+)$/.exec(path),
+    pack: /^\/p\/([A-Za-z0-9_-]+)$/.exec(path),
+  };
+  const fail = (title, text) => { app.replaceChildren(h('div', { class: 'error' }, h('h1', { text: title }), h('p', { text }))); };
+
+  async function experiencePage(target) {
+    const url = target.kind === 'slot' ? `/v1/public/experience/${target.unitId}/${target.slot}` : `/v1/public/experience/box/${target.packId}/${target.face}`;
+    let opened;
+    try { opened = await api('GET', `${url}?viewer=${encodeURIComponent(viewerKey)}`); }
+    catch (e) { return fail(e.status === 404 ? 'We couldn’t find that' : 'That didn’t open', e.status === 404 ? 'This code may be from a bottle that was never printed.' : 'Check your connection and scan again.'); }
+    viewerKey = opened.viewerKey; // a signed-in person uses their own key
+    const { doc, footer } = opened;
+    applyTheme(doc.owner.theme, footer.brand);
+    document.title = `${doc.owner.name} · ${footer.company}`;
+    const ctx = { target, targetKey: opened.targetKey, owner: doc.owner.name };
+    const custom = footer.ads === null;
+
+    const top = h('header', { class: 'topbar' },
+      h('div', { class: 'who' }, custom ? h('b', { text: 'Made just for you' }) : [h('span', { class: 'chip-ad', text: 'Ad' }), h('b', { text: doc.owner.name })]),
+      h('span', { text: target.kind === 'box-face' ? `${target.face} of your box` : '' }));
+    const body = h('section', { class: 'blocks' }, doc.blocks.map((b) => block(b, ctx)).filter(Boolean));
+    app.replaceChildren(top, body, panel(footer, target));
+
+    // The scan counts once the page has actually shown. If the experience failed, it isn't billed.
+    requestAnimationFrame(() => setTimeout(() => {
+      const loaded = !doc.fallback;
+      const rec = target.kind === 'slot'
+        ? api('POST', '/v1/public/scans', { unitId: target.unitId, slot: target.slot, viewerKey, experienceLoaded: loaded })
+        : api('POST', '/v1/public/box-scans', { packId: target.packId, face: target.face, viewerKey, experienceLoaded: loaded });
+      rec.catch(() => {});
+    }, 0));
+  }
+
+  const engage = (ctx, action, detail) => api('POST', '/v1/public/engagements', { target: ctx.targetKey, viewerKey, action, ...(detail ? { detail: String(detail).slice(0, 120) } : {}) }).catch(() => {});
+  const withAttribution = (url, ctx) => {
+    try {
+      const u = new URL(url, location.href);
+      if (ctx.target.kind === 'slot') { u.searchParams.set('fw_unit', ctx.target.unitId); u.searchParams.set('fw_slot', String(ctx.target.slot)); }
+      else { u.searchParams.set('fw_pack', ctx.target.packId); u.searchParams.set('fw_face', ctx.target.face); }
+      return u.toString();
+    } catch { return url; }
+  };
+
+  function savedSet() { try { return new Set(JSON.parse(store.get('fw_saved') || '[]')); } catch { return new Set(); } }
+  async function save(ctx, btn) {
+    const set = savedSet(); set.add(ctx.targetKey); store.set('fw_saved', JSON.stringify([...set]));
+    markSaved(btn);
+    if (token) api('POST', '/v1/me/saved', { target: ctx.targetKey }).catch(() => {});
+    else engage(ctx, 'save');
+    toast(token ? 'Saved to your FreeWater app' : 'Saved on this phone');
+  }
+  function markSaved(btn) { btn.classList.add('saved'); btn.replaceChildren(icon(ICON.check), 'Saved'); btn.disabled = true; }
+
+  function action(a, ctx, label) {
+    if (a.kind === 'link') return { href: withAttribution(a.url, ctx), onclick: () => engage(ctx, 'link', label) };
+    if (a.kind === 'call') return { href: `tel:${a.phone.replace(/[^\d+]/g, '')}`, onclick: () => engage(ctx, 'call') };
+    return {};
+  }
+
+  // ---------- blocks ----------
+  function block(b, ctx) {
+    switch (b.type) {
+      case 'hero': return h('div', { class: 'hero' }, h('h1', { text: b.title }), b.subtitle && h('p', { text: b.subtitle }), b.imageUrl && h('img', { src: b.imageUrl, alt: '' }), b.model && modelStage(b.model, [], ctx, 'See it in your space'));
+      case 'text': return h('p', { class: 'text', text: b.text });
+      case 'offer': {
+        const el = h('div', { class: 'offer', style: `color:var(--accent-ink)` }, h('h2', { text: b.headline }), b.details && h('p', { text: b.details }), b.expires && h('div', { class: 'expires', text: b.expires }));
+        if (b.code) {
+          const copy = h('button', { type: 'button', text: 'Copy', onclick: async () => { try { await navigator.clipboard.writeText(b.code); copy.textContent = 'Copied'; } catch { copy.textContent = b.code; } engage(ctx, 'save', 'copied code'); } });
+          el.append(h('div', { class: 'code', style: 'border-color:currentColor' }, h('span', { text: b.code }), copy));
+        }
+        return el;
+      }
+      case 'button': {
+        const cls = `btn${b.style === 'secondary' ? ' secondary' : ''}`;
+        if (b.action.kind === 'save') {
+          const btn = h('button', { type: 'button', class: cls, onclick: () => save(ctx, btn) }, icon(ICON.save), b.label);
+          if (savedSet().has(ctx.targetKey)) markSaved(btn);
+          return btn;
+        }
+        if (b.action.kind === 'ar') {
+          return h('button', { type: 'button', class: cls, onclick: () => document.querySelector('model-viewer')?.dispatchEvent(new Event('fw-ar')) }, icon(ICON.ar), b.label);
+        }
+        return h('a', { class: `button ${cls}`, rel: 'noopener', target: b.action.kind === 'link' ? '_blank' : undefined, ...action(b.action, ctx, b.label) }, b.label, b.action.kind === 'link' ? icon(ICON.link) : icon(ICON.call));
+      }
+      case 'model': return modelStage(b.model, b.addOns || [], ctx, b.arLabel || 'See it in your space');
+      case 'tour': {
+        const wrap = h('div', { class: 'tour' }, h('h2', { class: 'section-title', text: b.title }));
+        if (b.model) wrap.append(modelStage(b.model, [], ctx, 'Put the house on your table'));
+        wrap.append(h('div', { class: 'rooms', style: 'margin-top:12px' }, b.rooms.map((r) => h('button', { type: 'button', class: 'room', style: r.imageUrl ? `background-image:url("${encodeURI(r.imageUrl)}")` : `background:${r.color || '#DDE5DD'}`, onclick: () => engage(ctx, 'room', r.name) }, h('b', { text: r.name }), r.note && h('span', { text: r.note })))));
+        return wrap;
+      }
+      case 'video': {
+        const v = h('video', { src: b.url, poster: b.posterUrl, controls: true, playsinline: true, preload: 'metadata' });
+        v.addEventListener('play', () => engage(ctx, 'video'), { once: true });
+        return h('figure', { style: 'margin:0' }, v, b.caption && h('figcaption', { class: 'text', style: 'margin-top:6px;color:var(--muted)', text: b.caption }));
+      }
+      case 'article': return h('article', { class: 'article' }, h('h2', { text: b.headline }), b.byline && h('p', { class: 'byline', text: b.byline }), b.paragraphs.map((p) => h('p', { text: p })));
+      case 'booking': {
+        let picked = null;
+        const go = h('a', { class: 'button btn', rel: 'noopener', target: '_blank', 'aria-disabled': 'true', style: 'opacity:.45;pointer-events:none' }, 'Pick a time');
+        const pills = b.slots.map((s) => h('button', { type: 'button', class: 'pill', 'aria-pressed': 'false', onclick: (e) => {
+          pills.forEach((p) => p.setAttribute('aria-pressed', 'false')); e.currentTarget.setAttribute('aria-pressed', 'true'); picked = s;
+          const u = new URL(withAttribution(b.action.url, ctx)); u.searchParams.set('slot', s);
+          go.href = u.toString(); go.textContent = `Book ${s}`; go.style.cssText = ''; go.removeAttribute('aria-disabled');
+          engage(ctx, 'slot', s);
+        } }, s));
+        go.addEventListener('click', () => picked && engage(ctx, 'link', `book ${picked}`));
+        return h('div', { class: 'booking' }, h('h2', { class: 'section-title', text: b.title }), h('div', { class: 'pills', style: 'margin:12px 0 14px;flex-wrap:wrap' }, pills), go);
+      }
+      case 'gallery': return h('div', { class: 'gallery' }, b.imageUrls.map((u) => h('img', { src: u, alt: '', loading: 'lazy' })));
+      case 'message': return h('div', { class: 'message', style: 'color:var(--accent-ink)' }, h('div', { class: 'from', text: `From ${b.from}` }), h('p', { text: b.text }));
+      case 'confetti': { setTimeout(confetti, 250); return null; }
+      default: return null;
+    }
+  }
+
+  function modelStage(model, addOns, ctx, arLabel) {
+    const items = [{ id: 'main', label: model.alt, model }, ...addOns];
+    const mv = h('model-viewer', { src: model.glbUrl, alt: model.alt, 'camera-controls': true, 'auto-rotate': true, 'auto-rotate-delay': '0', 'rotation-per-second': '24deg', 'shadow-intensity': '1', 'shadow-softness': '0.9', exposure: '1.05', 'environment-image': 'neutral', 'camera-orbit': '30deg 70deg auto', ar: true, 'ar-modes': 'webxr scene-viewer quick-look', 'ar-scale': 'fixed', 'interaction-prompt': 'none', 'touch-action': 'pan-y' });
+    const stage = h('div', { class: 'stage' }, mv, h('div', { class: 'hint', text: 'Drag to spin' }));
+    let launched = false;
+    const launch = async () => {
+      if (!mv.canActivateAR) {
+        stage.querySelector('.ar-note')?.remove();
+        stage.append(h('div', { class: 'ar-note', text: 'AR opens on a phone. Spin it here, or scan the bottle with your phone’s camera.' }));
+        return;
+      }
+      mv.activateAR();
+      if (launched) return;
+      launched = true;
+      // Billed only once the model actually loaded on this phone.
+      const loaded = !!mv.loaded;
+      const body = ctx.target.kind === 'slot'
+        ? ['/v1/public/ar-launches', { unitId: ctx.target.unitId, slot: ctx.target.slot, viewerKey, loaded }]
+        : ['/v1/public/box-ar-launches', { packId: ctx.target.packId, face: ctx.target.face, viewerKey, loaded }];
+      api('POST', ...body).catch(() => {});
+      setTimeout(() => (launched = false), 1500);
+    };
+    mv.addEventListener('fw-ar', launch);
+    const arBtn = h('button', { type: 'button', class: 'btn', onclick: launch }, icon(ICON.ar), arLabel);
+    const parts = [stage];
+    if (items.length > 1) {
+      const pills = items.map((it, i) => h('button', { type: 'button', class: 'pill', 'aria-pressed': i === 0 ? 'true' : 'false', onclick: (e) => {
+        pills.forEach((p) => p.setAttribute('aria-pressed', 'false')); e.currentTarget.setAttribute('aria-pressed', 'true');
+        mv.src = it.model.glbUrl; mv.alt = it.model.alt;
+        if (it.id !== 'main') engage(ctx, 'addon', it.id);
+      } }, i === 0 ? 'The main event' : it.label));
+      parts.push(h('div', { class: 'pills' }, pills));
+    }
+    parts.push(arBtn);
+    return h('div', { class: 'model', style: 'display:flex;flex-direction:column;gap:12px' }, parts);
+  }
+
+  function confetti() {
+    const box = h('div', { class: 'confetti', 'aria-hidden': 'true' });
+    const colors = ['#7FC6EA', '#F2C14E', '#F7C6D4', '#FFFFFF', '#1E7DB8', '#D9AE4A'];
+    for (let i = 0; i < 80; i++) box.append(h('i', { style: `left:${Math.random() * 100}%;background:${colors[i % colors.length]};animation-duration:${2.2 + Math.random() * 2}s;animation-delay:${Math.random() * .6}s;transform:rotate(${Math.random() * 360}deg)` }));
+    document.body.append(box);
+    setTimeout(() => box.remove(), 5200);
+  }
+
+  // The bottle's black panel, carried onto the page: who made it, what it gave, and its receipt.
+  function panel(f, target) {
+    const facts = [];
+    if (f.ads !== null) facts.push(h('div', { text: f.ads === 0 ? (target.kind === 'box-face' ? 'This box carries our own message.' : 'This bottle carries our own message.') : `This ${target.kind === 'box-face' ? 'box' : 'bottle'} has ${f.ads} ${f.ads === 1 ? 'ad' : 'ads'}. They paid for your water.` }));
+    else facts.push(h('div', { text: 'A custom bottle, designed and paid for by the sender.' }));
+    if (f.giving) facts.push(h('div', { class: 'giving', text: f.giving }));
+    const links = [];
+    if (f.receiptUrl) links.push(h('a', { href: fixture ? '#' : f.receiptUrl, text: 'See this bottle’s receipt' }));
+    if (f.packUrl && target.kind !== 'slot') links.push(h('a', { href: fixture ? '#' : f.packUrl, text: 'Everything in this pack' }));
+    const [top, bottom] = [f.brand.logoTop, f.brand.logoBottom];
+    return h('footer', { class: 'panel' },
+      h('div', { class: 'logo', 'aria-label': `${top}${bottom}` }, h('span', { text: top }), h('span', { text: bottom })),
+      h('div', { class: 'facts' }, facts),
+      links.length && h('nav', {}, links),
+      f.brand.tagline && h('div', { class: 'tagline', text: f.brand.tagline }));
+  }
+
+  // ---------- receipt ----------
+  async function receiptPage(unitId) {
+    let r;
+    try { r = await api('GET', `/v1/public/receipts/${unitId}`); } catch { return fail('No receipt here', 'This bottle may never have been printed.'); }
+    const e = r.earnedCents;
+    const rows = [['Ads printed on it', e.print], ['Scans', e.scans], ['AR launches', e.ar], ['Sales it led to (commission)', e.commission], ['Custom design', e.custom]].filter(([, v]) => v > 0);
+    document.title = `Receipt · ${r.company}`;
+    app.replaceChildren(
+      h('header', { class: 'topbar' }, h('div', { class: 'who' }, h('b', { text: `${r.company} · open books` }))),
+      h('section', { class: 'sheet' },
+        h('p', { style: 'margin:8px 0 0;color:var(--muted)', text: 'This bottle earned' }),
+        h('div', { class: 'big', text: money(e.total) }),
+        r.givingOn ? h('p', { style: 'margin:0;font-weight:700', text: `and gave ${money(r.donatedCents)} to charity.` }) : null,
+        h('div', { class: 'rows' }, rows.map(([k, v]) => h('div', {}, h('span', { text: k }), h('span', { text: money(v) }))), h('div', {}, h('span', { text: 'Printed' }), h('span', { text: new Date(r.printedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) })), h('div', {}, h('span', { text: 'Where' }), h('span', { text: r.place })), h('div', {}, h('span', { text: 'Ads on it' }), h('span', { text: String(r.ads) }))),
+        h('p', { style: 'color:var(--muted);font-size:14px', text: 'Every cent comes from the books and can’t be edited after the fact. Scans that didn’t load, and repeat scans, are never billed.' })),
+    );
+  }
+
+  // ---------- pack ----------
+  async function packPage(packId) {
+    let p;
+    try { p = await api('GET', `/v1/public/packs/${packId}`); } catch { return fail('Pack not found', 'Check the code on the box and try again.'); }
+    document.title = `Your ${p.size} pack · ${p.company}`;
+    app.replaceChildren(
+      h('header', { class: 'topbar' }, h('div', { class: 'who' }, h('b', { text: p.company }))),
+      h('section', { class: 'sheet' },
+        h('h1', { class: 'big', style: 'font-size:32px', text: `Your ${p.size} pack` }),
+        p.givingOn ? h('p', { style: 'margin:0;font-weight:700', text: `It gave ${money(p.donatedCents)} to charity.` }) : null,
+        h('p', { style: 'color:var(--muted)', text: `Paid for by ${p.advertisers.join(', ') || p.company}. Every bottle is different.` }),
+        h('h2', { class: 'section-title', text: 'On the box' }),
+        h('div', { class: 'list' }, p.faces.map((f) => h('a', { href: f.url }, h('span', { text: f.advertiser }), h('span', { style: 'color:var(--muted)', text: f.face })))),
+        h('h2', { class: 'section-title', style: 'margin-top:20px', text: 'The bottles' }),
+        h('div', { class: 'list' }, p.bottles.map((b, i) => h('a', { href: b.receiptUrl }, h('span', { text: `Bottle ${i + 1}` }), h('span', { style: 'color:var(--muted)', text: `${b.ads} ${b.ads === 1 ? 'ad' : 'ads'} · receipt` }))))),
+    );
+  }
+
+  if (m.slot) experiencePage({ kind: 'slot', unitId: m.slot[1], slot: Number(m.slot[2]) });
+  else if (m.box) experiencePage({ kind: 'box-face', packId: m.box[1], face: m.box[2] });
+  else if (m.receipt) receiptPage(m.receipt[1]);
+  else if (m.pack) packPage(m.pack[1]);
+  else fail('Nothing here', 'Scan a code on a bottle or box.');
+})();

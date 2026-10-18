@@ -12,7 +12,7 @@ export interface OrderOptions {
   locationId: string;
   productId: string;
   orderId?: string; // pass the same id again and nothing is printed twice
-  custom?: { customerId: string; art: Creative; priceCents?: number };
+  custom?: { customerId: string; art: Creative; priceCents?: number; experienceConfig?: Record<string, unknown> };
   packId?: string;
   frequency?: { counts: Map<string, number>; max: number };
   avoidSignatures?: Set<string>;
@@ -117,6 +117,7 @@ export class Platform {
       orderId: opts.orderId,
       packId: opts.packId,
       createdAt: this.bus.now().toISOString(),
+      ...(opts.custom?.experienceConfig ? { experienceConfig: opts.custom.experienceConfig } : {}),
     };
     this.units.set(unit.id, unit);
     this.orderUnits.set(`${company.id}:${opts.orderId}`, unit.id);
@@ -172,6 +173,19 @@ export class Platform {
     const unit = need(this.units, unitId, 'unit');
     return this.bus.publish('ar.launched', unit.companyId, { unitId, slotIndex, viewerKey, loaded }, launchId);
   }
+  scanBox(packId: string, face: string, viewerKey: string, experienceLoaded = true, scanId = newId('scan')) {
+    const companyId = this.packCompany(packId);
+    return this.bus.publish('box.scanned', companyId, { packId, face, viewerKey, experienceLoaded }, scanId);
+  }
+  launchBoxAr(packId: string, face: string, viewerKey: string, loaded = true, launchId = newId('ar')) {
+    const companyId = this.packCompany(packId);
+    return this.bus.publish('box.ar_launched', companyId, { packId, face, viewerKey, loaded }, launchId);
+  }
+  engaged(companyId: string, payload: import('./core/events').EventPayloads['experience.engaged'], id = newId('eng')) {
+    return this.bus.publish('experience.engaged', companyId, payload, id);
+  }
+  /** Packs live in the pack service; it tells the core which company each belongs to. */
+  packCompany: (packId: string) => string = (id) => { throw new Error(`Unknown pack "${id}"`); };
   purchase(unitId: string, slotIndex: number, orderId: string, amountCents: number) {
     const unit = need(this.units, unitId, 'unit');
     return this.bus.publish('purchase.completed', unit.companyId, { unitId, slotIndex, orderId, amountCents }, orderId);

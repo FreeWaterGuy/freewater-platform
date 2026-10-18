@@ -1,0 +1,88 @@
+<meta charset="utf-8">
+<title>FreeWater Scan Pages</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@600;700&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&display=swap">
+<style>
+/* Layout: a list of real scan pages on the left, the phone showing the chosen one on the right. One deliberate look: FreeWater ice and black. */
+:root {
+  --ice: #EEF6FB; --ink: #0B0B0B; --muted: #4D5B66; --blue: #7FC6EA; --link: #1E7DB8; --line: #D3E3EE; --white: #FFFFFF;
+  --display: Comfortaa, 'DM Sans', system-ui, sans-serif; --body: 'DM Sans', system-ui, -apple-system, sans-serif;
+  color-scheme: light;
+}
+body { background: var(--ice); color: var(--ink); font: 16px/1.5 var(--body); }
+.wrap { max-width: 1060px; margin: 0 auto; padding-block: 32px 48px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 40px; align-items: start; }
+header { grid-column: 1 / -1; display: flex; align-items: center; gap: 16px; }
+.logo { background: var(--ink); color: var(--white); font: 700 20px/.9 var(--display); padding: 10px 12px; border-radius: 10px; }
+.logo span { display: block; }
+h1 { font: 700 30px/1.15 var(--display); margin: 0; text-wrap: balance; }
+.sub { margin: 4px 0 0; color: var(--muted); max-width: 60ch; }
+.list { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.scene { display: grid; gap: 2px; text-align: left; border: 0; background: transparent; padding: 12px 14px; border-radius: 14px; cursor: pointer; font: inherit; color: var(--ink); }
+.scene b { font-size: 16px; }
+.scene span { color: var(--muted); font-size: 14px; }
+.scene:hover { background: color-mix(in srgb, var(--white) 60%, transparent); }
+.scene[aria-current="true"] { background: var(--white); box-shadow: 0 0 0 1.5px var(--line); }
+.scene:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+.how { margin-top: 14px; padding: 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; }
+.how b { color: var(--ink); }
+.phone { width: 390px; max-width: 100%; height: 800px; border-radius: 44px; background: var(--ink); padding: 12px; box-shadow: 0 30px 60px -30px rgb(11 30 45 / .45); position: sticky; top: calc(16px + env(safe-area-inset-top, 0px)); }
+.phone iframe { width: 100%; height: 100%; border: 0; border-radius: 34px; background: var(--white); display: block; }
+.url { text-align: center; font: 12px/1 ui-monospace, Menlo, monospace; color: var(--muted); margin-top: 10px; overflow-wrap: anywhere; }
+@media (max-width: 820px) {
+  .wrap { grid-template-columns: 1fr; gap: 20px; }
+  .list { flex-direction: row; overflow-x: auto; scrollbar-width: none; margin: 0 -16px; padding: 0 16px; }
+  .scene { flex: none; padding: 8px 14px; border-radius: 999px; background: var(--white); box-shadow: 0 0 0 1.5px var(--line); }
+  .scene span { display: none; }
+  .scene[aria-current="true"] { background: var(--ink); color: var(--white); box-shadow: none; }
+  .how { display: none; }
+  .phone { position: static; width: 100%; height: 760px; border-radius: 0; padding: 0; background: transparent; box-shadow: none; }
+  .phone iframe { border-radius: 20px; box-shadow: 0 0 0 1.5px var(--line); }
+  .note-m { display: block !important; }
+  header { align-items: flex-start; } h1 { font-size: 24px; }
+}
+.note-m { display: none; color: var(--muted); font-size: 14px; margin: -8px 0 0; }
+</style>
+<div class="wrap">
+  <header>
+    <div class="logo" aria-label="freewater"><span>free</span><span>water</span></div>
+    <div>
+      <h1>What opens when you scan a bottle</h1>
+      <p class="sub">These are the real scan pages from the platform code, with the server’s real answers saved in. Pick one to open it on the phone.</p>
+    </div>
+  </header>
+  <nav class="list" id="list" aria-label="Scan pages"></nav>
+  <div>
+    <p class="note-m" id="noteM"></p>
+    <div class="phone"><iframe id="screen" title="Scan page preview"></iframe></div>
+    <div class="url" id="url"></div>
+  </div>
+</div>
+<script>
+const scenes = /*SCENES*/;
+const css = /*SCAN_CSS*/;
+const js = /*SCAN_JS*/;
+const list = document.getElementById('list');
+const frame = document.getElementById('screen');
+const base = location.href.replace(/[#?].*$/, '');
+function open(i) {
+  const s = scenes[i];
+  [...list.children].forEach((b, j) => { if (b.classList.contains('scene')) b.setAttribute('aria-current', String(j === i)); });
+  document.getElementById('url').textContent = 'go.freewater.io' + s.path;
+  document.getElementById('noteM').textContent = s.note;
+  const fixture = `window.__FW_FIXTURE__ = { path: ${JSON.stringify(s.path)}, api: async (m) => (m === 'GET' ? ${JSON.stringify(s.data).replace(/</g, '\\u003c')} : { recorded: true }) };`;
+  frame.srcdoc = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base href="${base}"><meta name="theme-color" content="#000"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@600;700&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&display=swap"><style>${css}</style><script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer@3.5.0/dist/model-viewer.min.js"><\/script></head><body><main id="app"></main><script>${fixture}<\/script><script>${js.replace(/<\/script/g, '<\\/script')}<\/script></body></html>`;
+}
+scenes.forEach((s, i) => {
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'scene';
+  b.innerHTML = '<b></b><span></span>';
+  b.firstChild.textContent = s.label; b.lastChild.textContent = s.note;
+  b.addEventListener('click', () => open(i));
+  list.append(b);
+});
+const how = document.createElement('div');
+how.className = 'how';
+how.innerHTML = '<b>Billing on these pages.</b> A scan is billed only after the page has shown, and an AR launch only after the model loaded. Repeat scans within 10 minutes are free. Saves and link taps are counted for the advertiser and never billed.';
+list.append(how);
+open(0);
+</script>

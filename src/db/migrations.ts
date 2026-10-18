@@ -200,6 +200,46 @@ create table invoice_lines (
 );
 `,
   },
+  {
+    id: '003_experiences',
+    sql: `
+-- Files advertisers upload for their experiences: 3D models, pictures, videos.
+create table assets (
+  id text primary key,
+  company_id text not null,
+  advertiser_id text,
+  content_type text not null,
+  bytes bytea not null,
+  size_bytes integer not null,
+  sha256 text not null,
+  name text,
+  created_at timestamptz not null default now()
+);
+create index assets_owner on assets(company_id, advertiser_id);
+
+-- Which advertisers a viewer has scanned before, so an experience can greet first-timers differently.
+-- The viewer key is a random id from the phone, not a person.
+create table viewer_advertisers (
+  company_id text not null,
+  viewer_key text not null,
+  advertiser_id text not null,
+  first_at timestamptz not null default now(),
+  primary key (company_id, viewer_key, advertiser_id)
+);
+
+-- Offers, homes and stories people saved from a scan.
+create table saved_items (
+  id text primary key,
+  user_id text not null references users(id),
+  company_id text not null,
+  target text not null,
+  title text not null,
+  data jsonb not null,
+  created_at timestamptz not null default now(),
+  unique (user_id, target)
+);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

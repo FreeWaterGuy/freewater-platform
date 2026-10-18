@@ -1,8 +1,9 @@
 import type { EventBus, EventPayloads, PlatformEvent } from '../../core/events';
 
 type EventPayloadsEngagement = EventPayloads['unit.scanned'] | EventPayloads['ar.launched'];
+type BoxEngagement = EventPayloads['box.scanned'] | EventPayloads['box.ar_launched'];
 import { newId } from '../../core/ids';
-import type { Cents, CompanyConfig, Placement } from '../../core/types';
+import type { BoxFacePlacement, Cents, CompanyConfig, Placement } from '../../core/types';
 
 /** One balanced line: money moves from `debit` to `credit`. Lines are only ever added, never edited or deleted. */
 export interface LedgerEntry {
@@ -34,6 +35,7 @@ export class Ledger {
   readonly entries: LedgerEntry[] = [];
   private printedUnits = new Map<string, { placements: Placement[]; locationId: string }>();
   private lastEngagement = new Map<string, number>();
+  private printedBoxes = new Map<string, BoxFacePlacement[]>();
 
   private onEntry: (entry: LedgerEntry) => void;
 
@@ -45,6 +47,8 @@ export class Ledger {
     bus.on('purchase.completed', (e) => this.onPurchase(e, false));
     bus.on('purchase.refunded', (e) => this.onPurchase(e, true));
     bus.on('box.printed', (e) => this.onBoxPrinted(e));
+    bus.on('box.scanned', (e) => this.onBoxEngagement(e, 'scan'));
+    bus.on('box.ar_launched', (e) => this.onBoxEngagement(e, 'ar'));
     bus.on('payment.captured', (e) => {
       const p = e.payload;
       this.add(e, { debit: `cash:${p.provider}`, credit: `receivable:${p.payerType === 'user' ? 'customer' : 'advertiser'}:${p.payerId}`, amountCents: p.amountCents, kind: 'payment', memo: p.purpose === 'invoice' ? `Invoice ${p.ref} paid` : `Custom bottle order ${p.ref} paid` });
@@ -91,6 +95,7 @@ export class Ledger {
   }
 
   private onBoxPrinted(e: PlatformEvent<'box.printed'>) {
+    this.printedBoxes.set(e.payload.packId, e.payload.faces);
     for (const f of e.payload.faces) {
       if (f.isHouse) continue;
       this.add(e, { packId: e.payload.packId, debit: `receivable:advertiser:${f.advertiserId}`, credit: 'revenue:box', amountCents: f.priceCents, kind: 'box_face', memo: `${f.advertiserName}, ${f.face} of the box, printed` });
@@ -117,6 +122,25 @@ export class Ledger {
     this.add(e, { unitId: p.unitId, debit: `receivable:advertiser:${placement.advertiserId}`, credit: `revenue:${kind}`, amountCents: amount, kind, memo: `${placement.advertiserName}, ${kind === 'scan' ? 'scan' : 'AR launch'}` });
   }
 
+  /** Scans and AR launches from a box face are billed to that face's advertiser, with the same rules as bottles. */
+  private onBoxEngagement(e: PlatformEvent<'box.scanned'> | PlatformEvent<'box.ar_launched'>, kind: 'scan' | 'ar') {
+    const company = this.company(e.companyId);
+    const p = e.payload;
+    const loaded = 'experienceLoaded' in p ? p.experienceLoaded : p.loaded;
+    if (!loaded) return;
+    const face = this.printedBoxes.get(p.packId)?.find((f) => f.face === p.face);
+    if (!face || face.isHouse) return;
+    if (this.isRepeat(`box-${kind}:${p.packId}:${p.face}:${p.viewerKey}`, e.at.getTime(), company)) return;
+    const amount = kind === 'scan' ? company.prices.perScan : company.prices.perArLaunch;
+    this.add(e, { packId: p.packId, debit: `receivable:advertiser:${face.advertiserId}`, credit: `revenue:${kind}`, amountCents: amount, kind, memo: `${face.advertiserName}, ${kind === 'scan' ? 'scan' : 'AR launch'} from the ${p.face} of a box` });
+  }
+
+  private isRepeat(key: string, t: number, company: CompanyConfig) {
+    const last = this.lastEngagement.get(key);
+    this.lastEngagement.set(key, t);
+    return last !== undefined && t - last < company.adRules.repeatScanWindowSec * 1000;
+  }
+
   private onPurchase(e: PlatformEvent<'purchase.completed'> | PlatformEvent<'purchase.refunded'>, refund: boolean) {
     const company = this.company(e.companyId);
     const unit = this.printedUnits.get(e.payload.unitId);
@@ -129,10 +153,17 @@ export class Ledger {
   }
 
   /** After a restart: reload past lines and what the billing rules need to remember. Nothing is billed again. */
-  restore(input: { entries: LedgerEntry[]; printed: { unitId: string; placements: Placement[]; locationId: string }[]; engagementEvents: PlatformEvent[] }) {
+  restore(input: { entries: LedgerEntry[]; printed: { unitId: string; placements: Placement[]; locationId: string }[]; boxes?: { packId: string; faces: BoxFacePlacement[] }[]; engagementEvents: PlatformEvent[] }) {
     this.entries.push(...input.entries);
     for (const p of input.printed) this.printedUnits.set(p.unitId, { placements: p.placements, locationId: p.locationId });
+    for (const b of input.boxes ?? []) this.printedBoxes.set(b.packId, b.faces);
     for (const e of input.engagementEvents) {
+      if (e.type === 'box.scanned' || e.type === 'box.ar_launched') {
+        const p = e.payload as BoxEngagement;
+        if (!('experienceLoaded' in p ? p.experienceLoaded : p.loaded)) continue;
+        this.lastEngagement.set(`box-${e.type === 'box.scanned' ? 'scan' : 'ar'}:${p.packId}:${p.face}:${p.viewerKey}`, e.at.getTime());
+        continue;
+      }
       const p = e.payload as EventPayloadsEngagement;
       const loaded = 'experienceLoaded' in p ? p.experienceLoaded : p.loaded;
       if (!loaded) continue;

@@ -1,0 +1,111 @@
+// What a scan page can show. Plug-ins return these blocks as plain data; the scan page draws them.
+// Because blocks are data and never code, no plug-in (ours or a partner's) can run anything on a viewer's phone.
+
+export interface ModelRef {
+  glbUrl: string; // a FreeWater asset or built-in model
+  alt: string;
+}
+
+export type Action =
+  | { kind: 'link'; url: string } // opens the advertiser's site; FreeWater adds fw_unit and fw_slot so sales can be credited
+  | { kind: 'save' } // saves this to the viewer's Saved list
+  | { kind: 'ar' } // opens the 3D model in the viewer's space
+  | { kind: 'call'; phone: string };
+
+export type Block =
+  | { type: 'hero'; title: string; subtitle?: string; imageUrl?: string; model?: ModelRef }
+  | { type: 'text'; text: string }
+  | { type: 'offer'; headline: string; details?: string; code?: string; expires?: string }
+  | { type: 'button'; label: string; action: Action; style?: 'primary' | 'secondary' }
+  | { type: 'model'; model: ModelRef; arLabel?: string; addOns?: { id: string; label: string; model: ModelRef }[] }
+  | { type: 'tour'; title: string; rooms: { name: string; imageUrl?: string; color?: string; note?: string }[]; model?: ModelRef }
+  | { type: 'video'; url: string; posterUrl?: string; caption?: string }
+  | { type: 'article'; headline: string; byline?: string; paragraphs: string[] }
+  | { type: 'booking'; title: string; slots: string[]; action: Action }
+  | { type: 'gallery'; imageUrls: string[] }
+  | { type: 'message'; from: string; text: string }
+  | { type: 'confetti' };
+
+export interface Theme {
+  background: string;
+  text: string;
+  accent: string;
+  button: string;
+  buttonText: string;
+}
+
+export interface ExperienceDoc {
+  pluginId: string;
+  owner: { name: string; theme: Theme };
+  blocks: Block[];
+  fallback: boolean; // true when the plug-in failed or was too slow and the owner's simple card is shown
+}
+
+const HEX = /^#[0-9a-fA-F]{6}$/;
+const str = (v: unknown, max: number) => typeof v === 'string' && v.length > 0 && v.length <= max;
+/** Links may point to the web (https), to FreeWater assets, or to built-in models. Nothing else. */
+export const safeUrl = (v: unknown) => typeof v === 'string' && v.length <= 2000 && (/^https:\/\/[^\s"'<>]+$/.test(v) || /^\/(assets|models)\/[A-Za-z0-9_.\-/]+$/.test(v));
+
+function checkModel(m: any, path: string): string | null {
+  if (!m || typeof m !== 'object') return `${path} must be a model`;
+  if (!safeUrl(m.glbUrl)) return `${path}.glbUrl must be https or a FreeWater asset`;
+  if (!str(m.alt, 200)) return `${path}.alt is required (it describes the model for people who can't see it)`;
+  return null;
+}
+function checkAction(a: any, path: string): string | null {
+  if (!a || typeof a !== 'object') return `${path} must be an action`;
+  if (a.kind === 'link') return safeUrl(a.url) ? null : `${path}.url must be https`;
+  if (a.kind === 'call') return /^\+?[\d\s()-]{7,20}$/.test(a.phone ?? '') ? null : `${path}.phone is not a phone number`;
+  if (a.kind === 'save' || a.kind === 'ar') return null;
+  return `${path}.kind is not a known action`;
+}
+
+/** Returns the first problem, or null if every block is safe to show. Used on our plug-ins and partners' alike. */
+export function checkBlocks(blocks: unknown): string | null {
+  if (!Array.isArray(blocks) || blocks.length === 0) return 'blocks must be a non-empty list';
+  if (blocks.length > 40) return 'at most 40 blocks';
+  for (let i = 0; i < blocks.length; i++) {
+    const b: any = blocks[i];
+    const p = `blocks[${i}]`;
+    if (!b || typeof b !== 'object') return `${p} is not a block`;
+    switch (b.type) {
+      case 'hero':
+        if (!str(b.title, 120)) return `${p}.title is required`;
+        if (b.subtitle !== undefined && !str(b.subtitle, 300)) return `${p}.subtitle is too long`;
+        if (b.imageUrl !== undefined && !safeUrl(b.imageUrl)) return `${p}.imageUrl must be https or a FreeWater asset`;
+        if (b.model !== undefined) { const e = checkModel(b.model, `${p}.model`); if (e) return e; }
+        break;
+      case 'text': if (!str(b.text, 2000)) return `${p}.text is required`; break;
+      case 'offer': if (!str(b.headline, 120)) return `${p}.headline is required`; if (b.code !== undefined && !str(b.code, 40)) return `${p}.code is too long`; break;
+      case 'button': { if (!str(b.label, 60)) return `${p}.label is required`; const e = checkAction(b.action, `${p}.action`); if (e) return e; break; }
+      case 'model': {
+        const e = checkModel(b.model, `${p}.model`); if (e) return e;
+        if (b.addOns !== undefined) {
+          if (!Array.isArray(b.addOns) || b.addOns.length > 8) return `${p}.addOns must be a list of up to 8`;
+          for (let j = 0; j < b.addOns.length; j++) { const a = b.addOns[j]; if (!str(a?.id, 40) || !str(a?.label, 40)) return `${p}.addOns[${j}] needs id and label`; const e2 = checkModel(a.model, `${p}.addOns[${j}].model`); if (e2) return e2; }
+        }
+        break;
+      }
+      case 'tour':
+        if (!str(b.title, 120)) return `${p}.title is required`;
+        if (!Array.isArray(b.rooms) || b.rooms.length === 0 || b.rooms.length > 20) return `${p}.rooms must list 1 to 20 rooms`;
+        for (const r of b.rooms) { if (!str(r?.name, 60)) return `${p}.rooms need names`; if (r.imageUrl !== undefined && !safeUrl(r.imageUrl)) return `${p}.rooms imageUrl must be https`; if (r.color !== undefined && !HEX.test(r.color)) return `${p}.rooms color must be #rrggbb`; }
+        if (b.model !== undefined) { const e = checkModel(b.model, `${p}.model`); if (e) return e; }
+        break;
+      case 'video': if (!safeUrl(b.url)) return `${p}.url must be https or a FreeWater asset`; break;
+      case 'article': if (!str(b.headline, 200) || !Array.isArray(b.paragraphs) || !b.paragraphs.every((x: unknown) => str(x, 4000))) return `${p} needs a headline and paragraphs`; break;
+      case 'booking': { if (!str(b.title, 120) || !Array.isArray(b.slots) || !b.slots.every((x: unknown) => str(x, 40))) return `${p} needs a title and time slots`; const e = checkAction(b.action, `${p}.action`); if (e) return e; break; }
+      case 'gallery': if (!Array.isArray(b.imageUrls) || b.imageUrls.length > 20 || !b.imageUrls.every(safeUrl)) return `${p}.imageUrls must be up to 20 https images`; break;
+      case 'message': if (!str(b.from, 80) || !str(b.text, 1000)) return `${p} needs from and text`; break;
+      case 'confetti': break;
+      default: return `${p}.type "${String(b.type)}" is not a known block`;
+    }
+  }
+  return null;
+}
+
+export function checkTheme(t: any): string | null {
+  if (!t) return null;
+  for (const k of ['background', 'text', 'accent', 'button', 'buttonText']) if (t[k] !== undefined && !HEX.test(t[k])) return `theme.${k} must be a color like #D7262E`;
+  return null;
+}

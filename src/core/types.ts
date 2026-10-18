@@ -99,6 +99,10 @@ export interface Campaign {
   creative: Creative;
   creativeRef?: CreativeRef;
   experienceId: string; // which plug-in opens when its QR is scanned
+  /** The settings for that plug-in (checked against its schema before saving). */
+  experienceConfig?: Record<string, unknown>;
+  /** The advertiser's colors for their scan page. */
+  theme?: Partial<{ background: string; text: string; accent: string; button: string; buttonText: string }>;
   /** Where this campaign has artwork. Labels by default; 'box-face' lets it run on pack boxes. */
   formats?: ('label' | 'box-face')[];
   targeting: { locations?: string[] };
@@ -155,4 +159,6 @@ export interface Unit {
   orderId?: string;
   packId?: string;
   createdAt: string;
+  /** For custom bottles: what scanning it opens (the sender's message, video, photos). */
+  experienceConfig?: Record<string, unknown>;
 }

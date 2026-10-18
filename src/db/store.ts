@@ -145,7 +145,7 @@ export async function loadState(db: SqlClient, builtins: Record<string, Creative
   // Only engagements recent enough to matter for the repeat window.
   const maxWindowSec = Math.max(0, ...companies.map((c) => c.adRules.repeatScanWindowSec));
   const since = new Date(now.getTime() - maxWindowSec * 1000).toISOString();
-  const engagementEvents = (await rows<any>(`select * from events where type in ('unit.scanned','ar.launched') and at >= $1 order by seq`, [since])).map(
+  const engagementEvents = (await rows<any>(`select * from events where type in ('unit.scanned','ar.launched','box.scanned','box.ar_launched') and at >= $1 order by seq`, [since])).map(
     (r): PlatformEvent => ({ id: r.id, type: r.type, companyId: r.company_id, at: new Date(r.at), idempotencyKey: r.idempotency_key, payload: json(r.payload) }),
   );
   return { companies, products, boxes, locations, campaigns, units, labels, packs, ledger, seen, engagementEvents };

@@ -8,6 +8,12 @@ import type { PaymentProvider } from './adapters/payments/contract';
 import { TestPaymentProvider } from './adapters/payments/test';
 import { AccountsService } from './modules/accounts/service';
 import { PaymentsService } from './modules/payments/service';
+import { ExperienceHost } from './modules/experiences/host';
+import { builtinPlugins } from './modules/experiences/builtins';
+import { ExperienceService } from './modules/experiences/service';
+import type { ExperiencePlugin } from './modules/experiences/contract';
+import { SqlAssetStore, type AssetStore } from './modules/assets/store';
+import { builtinModelIds } from './modules/models/builtin';
 import { bottle16oz, boxes, builtinCreatives, freewater, locations, peakSpring, sampleCampaigns } from './demo/seed';
 
 export interface AppOptions {
@@ -18,6 +24,9 @@ export interface AppOptions {
   seed?: number;
   messenger?: Messenger; // defaults to the test outbox (sends nothing)
   payments?: PaymentProvider; // defaults to the test provider (no real money)
+  plugins?: ExperiencePlugin<any>[]; // extra experience plug-ins (partners'); FreeWater's built-ins are always installed
+  assets?: AssetStore; // defaults to storing files in the database
+  pluginTimeoutMs?: number;
 }
 
 /** Start the platform on a database: migrate, load everything, and keep writing every change back. */
@@ -59,13 +68,19 @@ export async function createApp(opts: AppOptions) {
   packs.restore(state.packs);
   platform.bus.restoreSeen(state.seen);
   const printedUnits = state.units.filter((u) => u.status === 'dispensed' || u.status === 'printed').map((u) => ({ unitId: u.id, placements: u.placements, locationId: u.locationId }));
-  platform.ledger.restore({ entries: state.ledger, printed: printedUnits, engagementEvents: state.engagementEvents });
+  const printedBoxes = state.packs.filter((p) => p.faces.length > 0).map((p) => ({ packId: p.id, faces: p.faces }));
+  platform.ledger.restore({ entries: state.ledger, printed: printedUnits, boxes: printedBoxes, engagementEvents: state.engagementEvents });
 
   const messenger = opts.messenger ?? new TestOutbox(process.env.ECHO_CODES === '1');
   const accounts = new AccountsService(db, messenger, opts.clock, (id) => platform.companies.get(id)?.name ?? 'FreeWater');
   const payments = new PaymentsService(db, opts.payments ?? new TestPaymentProvider(), platform.bus, () => persistence.flush());
 
-  return { ...made, db, persistence, demoKeys, accounts, payments, messenger };
+  const host = new ExperienceHost({ builtinModel: (id) => (builtinModelIds.includes(id) ? `/models/builtin/${id}.glb` : `/models/builtin/missing.glb`) }, { timeoutMs: opts.pluginTimeoutMs });
+  for (const plugin of [...builtinPlugins, ...(opts.plugins ?? [])]) host.register(plugin);
+  const experiences = new ExperienceService(platform, packs, host, db, accounts);
+  const assets = opts.assets ?? new SqlAssetStore(db);
+
+  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

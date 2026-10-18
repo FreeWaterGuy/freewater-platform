@@ -75,6 +75,26 @@ One API for every app, machine, micro-factory, driver, advertiser and partner. T
 
 **Swappable.** Sign-in messages go through a messenger contract (`src/adapters/messaging`) and money through a payment contract (`src/adapters/payments`). The built-in test outbox sends nothing, and the test payment provider moves no real money; its test cards are `tok_visa`, `tok_mastercard`, `tok_amex`, `tok_declined`, `tok_insufficient_funds` and `tok_expired`. A real email or SMS service and a real provider such as Stripe plug in behind the same contracts.
 
+## Scan pages, AR and experience plug-ins
+
+Every QR on a bottle or box opens a page on the phone. Nothing to install.
+
+```
+npm run demo:scan            # prints bottles and a pack, then serves their scan pages at http://localhost:8787
+npm run demo:scan-preview    # builds out/scan-preview/, an offline page showing them all
+```
+
+- **Addresses.** `/s/<bottle>/<slot>` (an ad), `/b/<pack>/<side>` (a side of a box), `/p/<pack>` (what's in a pack, never the address), `/r/<bottle>` (the bottle's open-books receipt).
+- **Experiences are plug-ins.** Each campaign names a plug-in and fills in its settings. FreeWater ships nine: `offer`, `coupon`, `ar-3d-menu` (spin the food, add sides, see it on your table in AR, order), `ar-home-tour` (a 3D model of the home, rooms, showing times), `news-card`, `booking`, `video`, `house-promo` (the company's own message) and `custom-experience` (a paid custom bottle: the sender's message, video, photos, confetti).
+- **Plug-ins return data, never code.** A plug-in answers with blocks (hero, offer, button, 3D model, tour, video, article, booking, gallery, message, confetti). The page draws them. No plug-in, ours or a partner's, can run anything on a viewer's phone, and every link must be https.
+- **Plug-ins can't break a scan.** Settings are checked against the plug-in's schema before they are saved. At scan time it has 300 ms to answer; if it is slow, crashes, or returns anything unsafe, the viewer sees the advertiser's simple card instead and the failure is logged.
+- **Partners can host their own.** `remotePlugin()` calls a partner's https endpoint with a signed request (`X-FreeWater-Signature`, HMAC-SHA256; `verifySignature()` checks it). The viewer is never identified to the partner.
+- **Personal, with permission.** A plug-in knows whether this phone has scanned the advertiser before (first-timers get free fries; regulars get "your usual"). Interests are passed only when the person turned on personalized offers.
+- **Billing is honest.** Opening the page bills nothing. The page reports the scan once it has shown; a scan whose experience failed is not billed. An AR launch is billed only when the model had loaded on the phone. Repeat scans in the window are free. Box sides bill their own advertiser the same way. Saves, link taps and picking a side are counted (`experience.engaged`) and never billed. Links get `fw_unit` and `fw_slot` added so sales can be credited.
+- **3D models.** Advertisers upload `.glb` files (and PNG, JPEG, WebP, MP4) with `POST /v1/assets`. Files are checked by their contents, not their names, stored once, and served back as exactly what they are. Built-in demo models (burger, fries, drink, latte, house) are built from code at real-world size and pass the Khronos glTF validator. AR uses Google's model-viewer, served from this server: WebXR and Scene Viewer on Android, Quick Look on iPhone.
+- **Advertisers change what their QR opens** with `PATCH /v1/campaigns/:id` (experience, settings, colors). `GET /v1/experiences` lists every plug-in with its settings and an example; `POST /v1/experiences/preview` shows the page before saving. A change by an advertiser goes back to content review.
+- **Saved.** Anyone can save on their phone; signed-in people's saves go to `GET /v1/me/saved` for the app.
+
 ## The database
 
 `src/db` holds the database contract (`SqlClient`) and two adapters:
@@ -114,4 +134,4 @@ All prices in `src/demo/seed.ts` are placeholders.
 
 - A real printer adapter for the Model 6 and the micro-factory lines, once the printers are chosen (the virtual printer shows the contract any printer must follow)
 - Webhooks, so partners hear about events without polling
-- The consumer app and advertiser portal, built on this API
+- The consumer app (step 3) and the advertiser portal with its AI chat (step 4), built on this API

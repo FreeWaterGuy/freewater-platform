@@ -23,6 +23,10 @@ export interface EventPayloads {
   'pack.loaded': { packId: string; routeId: string; loadPosition: number };
   'pack.delivered': { packId: string; routeId: string; stop: number; emptiesCollected: number; photoProof: boolean };
   'delivery.rejected': { packId: string; scannedPackId: string; stop: number; reason: string };
+  'box.scanned': { packId: string; face: string; viewerKey: string; experienceLoaded: boolean };
+  'box.ar_launched': { packId: string; face: string; viewerKey: string; loaded: boolean };
+  /** Something a viewer did inside an experience (saved it, opened a link, picked a side). Counted, never billed. */
+  'experience.engaged': { target: string; viewerKey: string; action: 'save' | 'link' | 'call' | 'addon' | 'room' | 'slot' | 'video'; detail?: string; advertiserId?: string };
   'unit.failed': { unitId: string; orderId?: string; reason: string };
   'payment.authorized': { paymentId: string; payerType: 'user' | 'advertiser'; payerId: string; amountCents: Cents; purpose: 'custom_order' | 'invoice'; ref: string };
   'payment.captured': { paymentId: string; payerType: 'user' | 'advertiser'; payerId: string; amountCents: Cents; purpose: 'custom_order' | 'invoice'; ref: string; provider: string };

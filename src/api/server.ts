@@ -6,6 +6,13 @@ import { svgCreative } from '../modules/print/svgCreative';
 import { newId } from '../core/ids';
 import { AccountsError, roleScopes, type Role } from '../modules/accounts/service';
 import { PaymentError } from '../modules/payments/service';
+import { ExperienceError, targetKey, type Target } from '../modules/experiences/service';
+import { AssetError, allowedTypes } from '../modules/assets/store';
+import { builtinModel } from '../modules/models/builtin';
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
 // ---------- small helpers ----------
 
@@ -23,6 +30,8 @@ interface RouteDef {
   scope: Scope | Scope[] | 'public';
   summary: string;
   body?: Record<string, unknown>; // JSON schema
+  /** For file uploads: the body is the file itself, up to this many bytes. */
+  rawBodyLimit?: number;
   handler: Handler;
 }
 
@@ -39,7 +48,8 @@ const obj = (props: Record<string, unknown>, required: string[] = []) => ({ type
  */
 export async function buildServer(app: App, opts: { logger?: boolean } = {}): Promise<FastifyInstance> {
   const server = Fastify({ logger: opts.logger ?? false, bodyLimit: 3 * 1024 * 1024 });
-  const { platform, packs, persistence, db } = app;
+  const { platform, packs, persistence, db, experiences } = app;
+  for (const type of Object.keys(allowedTypes)) server.addContentTypeParser(type, { parseAs: 'buffer', bodyLimit: 16 * 1024 * 1024 }, (_req, body, done) => done(null, body));
   const routes: RouteDef[] = [];
   const route = (r: RouteDef) => routes.push(r);
 
@@ -88,7 +98,25 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const loc = platform.locations.get(u.locationId);
     return { unitId, company: company.name, printedAt: u.createdAt, place: loc ? `${loc.id}, ${loc.name}` : u.locationId, ads: u.placements.filter((p) => !p.isHouse).length, earnedCents: r.earned, donatedCents: r.donatedCents, givingOn: company.giving.mode !== 'none' };
   };
-  const campaignView = (c: Campaign) => ({ id: c.id, advertiserId: c.advertiserId, advertiserName: c.advertiserName, category: c.category, competitorGroup: c.competitorGroup ?? null, sizes: c.sizes, formats: c.formats ?? ['label'], experienceId: c.experienceId, targeting: c.targeting, buy: c.buy, active: c.active, isHouse: !!c.isHouse });
+  const campaignView = (c: Campaign) => ({ id: c.id, advertiserId: c.advertiserId, advertiserName: c.advertiserName, category: c.category, competitorGroup: c.competitorGroup ?? null, sizes: c.sizes, formats: c.formats ?? ['label'], experienceId: c.experienceId, experienceConfig: c.experienceConfig ?? null, theme: c.theme ?? null, targeting: c.targeting, buy: c.buy, active: c.active, isHouse: !!c.isHouse });
+  const checkExperience = (experienceId: string, config: unknown, theme: unknown) => {
+    const bad = experiences.host.checkConfig(experienceId, config) ?? experiences.host.checkTheme(theme);
+    if (bad) throw new ApiError(422, 'experience_invalid', bad);
+  };
+  const viewerKeyProp = { type: 'string', pattern: '^[A-Za-z0-9_-]{8,64}$' };
+  const themeProp = { type: 'object', additionalProperties: false, properties: Object.fromEntries(['background', 'text', 'accent', 'button', 'buttonText'].map((k) => [k, { type: 'string', pattern: '^#[0-9a-fA-F]{6}$' }])) };
+  /** A person may be signed in on a scan page; if so, their own viewer key is used. Never required. */
+  const optionalUser = async (req: FastifyRequest) => {
+    const h = req.headers.authorization ?? '';
+    return h.startsWith('Bearer fws_') ? app.accounts.userFromToken(h.slice(7).trim()) : null;
+  };
+  const parseTarget = (t: string): Target => {
+    const m = /^s:([A-Za-z0-9_-]+):(\d)$/.exec(t) ?? null;
+    if (m) return { kind: 'slot', unitId: m[1]!, slot: Number(m[2]) };
+    const b = /^b:([A-Za-z0-9_-]+):(top|front|back|right|left)$/.exec(t);
+    if (b) return { kind: 'box-face', packId: b[1]!, face: b[2]! };
+    throw new ApiError(400, 'invalid_target', 'target must look like s:<bottle>:<slot> or b:<pack>:<side>');
+  };
 
   // ---------- public: no key, used by scan pages, the receipt page and the open-books site ----------
 
@@ -106,6 +134,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     placementFor(null, b.unitId, b.slot);
     const before = platform.ledger.entries.length;
     const e = platform.scan(b.unitId, b.slot, b.viewerKey, b.experienceLoaded, b.scanId ?? newId('scan'));
+    if (b.experienceLoaded) await experiences.rememberViewer({ kind: 'slot', unitId: b.unitId, slot: b.slot }, b.viewerKey);
     return { status: 202, body: { recorded: !!e, billed: platform.ledger.entries.length > before } };
   } });
 
@@ -115,6 +144,56 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const before = platform.ledger.entries.length;
     const e = platform.launchAr(b.unitId, b.slot, b.viewerKey, b.loaded, b.launchId ?? newId('ar'));
     return { status: 202, body: { recorded: !!e, billed: platform.ledger.entries.length > before } };
+  } });
+
+  // ---------- public: scan pages and AR ----------
+
+  const openExperience = async (req: FastifyRequest, target: Target) => {
+    const viewer = String((req.query as any).viewer ?? '');
+    if (!/^[A-Za-z0-9_-]{8,64}$/.test(viewer)) throw new ApiError(400, 'viewer_required', 'Send ?viewer=<the random id this phone keeps>.');
+    return { body: await experiences.open(target, { key: viewer, user: await optionalUser(req) }) };
+  };
+  route({ method: 'GET', url: '/v1/public/experience/:unitId/:slot', scope: 'public', summary: 'The page a bottle slot opens, as blocks. Opening it is free; the page then reports the scan once it has shown.', handler: async (req) => {
+    const { unitId, slot } = req.params as any;
+    return openExperience(req, { kind: 'slot', unitId, slot: Number(slot) });
+  } });
+  route({ method: 'GET', url: '/v1/public/experience/box/:packId/:face', scope: 'public', summary: 'The page one side of a box opens.', handler: async (req) => {
+    const { packId, face } = req.params as any;
+    return openExperience(req, { kind: 'box-face', packId, face });
+  } });
+
+  route({ method: 'POST', url: '/v1/public/box-scans', scope: 'public', summary: 'Record a scan of a box side. Billed to that side’s advertiser only if it loaded and is not a repeat.', body: obj({ packId: S.str, face: { type: 'string', enum: ['top', 'front', 'back', 'right', 'left'] }, viewerKey: viewerKeyProp, experienceLoaded: S.bool, scanId: S.str }, ['packId', 'face', 'viewerKey', 'experienceLoaded']), handler: async (req) => {
+    const b = req.body as any;
+    const target: Target = { kind: 'box-face', packId: b.packId, face: b.face };
+    experiences.ownerOf(target);
+    const before = platform.ledger.entries.length;
+    const e = platform.scanBox(b.packId, b.face, b.viewerKey, b.experienceLoaded, b.scanId ?? newId('scan'));
+    if (b.experienceLoaded) await experiences.rememberViewer(target, b.viewerKey);
+    return { status: 202, body: { recorded: !!e, billed: platform.ledger.entries.length > before } };
+  } });
+  route({ method: 'POST', url: '/v1/public/box-ar-launches', scope: 'public', summary: 'Record an AR launch from a box side.', body: obj({ packId: S.str, face: { type: 'string', enum: ['top', 'front', 'back', 'right', 'left'] }, viewerKey: viewerKeyProp, loaded: S.bool, launchId: S.str }, ['packId', 'face', 'viewerKey', 'loaded']), handler: async (req) => {
+    const b = req.body as any;
+    experiences.ownerOf({ kind: 'box-face', packId: b.packId, face: b.face });
+    const before = platform.ledger.entries.length;
+    const e = platform.launchBoxAr(b.packId, b.face, b.viewerKey, b.loaded, b.launchId ?? newId('ar'));
+    return { status: 202, body: { recorded: !!e, billed: platform.ledger.entries.length > before } };
+  } });
+
+  route({ method: 'POST', url: '/v1/public/engagements', scope: 'public', summary: 'Something a viewer did on the page (saved it, opened a link, picked a side). Counted for the advertiser; never billed.', body: obj({ target: { type: 'string', maxLength: 120 }, viewerKey: viewerKeyProp, action: { type: 'string', enum: ['save', 'link', 'call', 'addon', 'room', 'slot', 'video'] }, detail: { type: 'string', maxLength: 120 }, engagementId: S.str }, ['target', 'viewerKey', 'action']), handler: async (req) => {
+    const b = req.body as any;
+    const owner = experiences.ownerOf(parseTarget(b.target));
+    const e = platform.engaged(owner.companyId, { target: b.target, viewerKey: b.viewerKey, action: b.action, detail: b.detail, advertiserId: owner.advertiserId }, b.engagementId ?? newId('eng'));
+    return { status: 202, body: { recorded: !!e } };
+  } });
+
+  route({ method: 'GET', url: '/v1/public/packs/:packId', scope: 'public', summary: "What's in a pack: how many bottles, whose ads, what it gave. Never the address.", handler: async (req) => {
+    const p = packs.packs.get((req.params as any).packId);
+    if (!p || !p.rendered) throw notFound('Pack');
+    const company = platform.companies.get(p.companyId)!;
+    const bottles = p.unitIds.map((id) => platform.units.get(id)).filter((u) => !!u);
+    const donated = bottles.reduce((sum, u) => sum + platform.ledger.receipt(u!.id).donatedCents, 0);
+    const advertisers = [...new Set([...p.faces.filter((f) => !f.isHouse).map((f) => f.advertiserName), ...bottles.flatMap((u) => u!.placements.filter((x) => !x.isHouse).map((x) => x.advertiserName))])];
+    return { body: { packId: p.id, company: company.name, size: p.box.bottles, bottles: bottles.map((u) => ({ unitId: u!.id, receiptUrl: `/r/${u!.id}`, ads: u!.placements.filter((x) => !x.isHouse).length })), faces: p.faces.map((f) => ({ face: f.face, advertiser: f.advertiserName, url: `/b/${p.id}/${f.face}`, isHouse: f.isHouse })), advertisers, donatedCents: donated, givingOn: company.giving.mode !== 'none' } };
   } });
 
   route({ method: 'GET', url: '/v1/public/companies/:companyId/totals', scope: 'public', summary: "A company's open-books totals.", handler: async (req) => {
@@ -184,6 +263,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     sizes: { type: 'array', minItems: 1, items: { type: 'integer', enum: [1, 2, 3, 4, 5, 6] } },
     formats: { type: 'array', items: { type: 'string', enum: ['label', 'box-face'] } },
     experienceId: S.str,
+    experienceConfig: { type: 'object' },
+    theme: themeProp,
     targeting: obj({ locations: { type: 'array', items: S.str } }),
     buy: { oneOf: [obj({ type: { const: 'guaranteed' }, remainingPrints: S.int }, ['type', 'remainingPrints']), obj({ type: { const: 'bid' }, maxCentsPerSixth: S.int, dailyCapCents: S.int }, ['type', 'maxCentsPerSixth', 'dailyCapCents'])] },
     svg: { type: 'string', minLength: 1, maxLength: 2_000_000 },
@@ -195,9 +276,10 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     try { creative = svgCreative(b.svg); } catch (e: any) { throw new ApiError(422, 'artwork_refused', e.message); }
     const company = platform.companies.get(key!.companyId)!;
     if (company.adRules.blockedCategories.includes(b.category)) throw new ApiError(422, 'category_blocked', `${company.name} doesn't print ${b.category} ads.`);
+    checkExperience(b.experienceId, b.experienceConfig ?? {}, b.theme);
     const c: Campaign = {
       id: newId('cmp'), companyId: key!.companyId, advertiserId, advertiserName: b.advertiserName, category: b.category, competitorGroup: b.competitorGroup,
-      sizes: b.sizes as Sixths[], formats: b.formats, experienceId: b.experienceId, targeting: b.targeting ?? {},
+      sizes: b.sizes as Sixths[], formats: b.formats, experienceId: b.experienceId, experienceConfig: b.experienceConfig ?? {}, theme: b.theme, targeting: b.targeting ?? {},
       buy: b.buy.type === 'bid' ? { ...b.buy, spentTodayCents: 0 } : b.buy,
       creative, creativeRef: { kind: 'svg', markup: b.svg }, active: false,
     };
@@ -206,14 +288,51 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     return { status: 201, body: campaignView(c) };
   } });
 
-  route({ method: 'PATCH', url: '/v1/campaigns/:id', scope: 'campaigns', summary: 'Pause or resume a campaign. Only a company key (content review) can turn a new campaign on.', body: obj({ active: S.bool }, ['active']), handler: async (req, key) => {
+  route({ method: 'PATCH', url: '/v1/campaigns/:id', scope: 'campaigns', summary: 'Pause or resume a campaign, or change what its QR opens. Only a company key (content review) turns a campaign on; an advertiser changing what people see sends it back to review.', body: { ...obj({ active: S.bool, experienceId: S.str, experienceConfig: { type: 'object' }, theme: themeProp }), minProperties: 1 }, handler: async (req, key) => {
     const c = campaignFor(key!, (req.params as any).id);
-    const want = (req.body as any).active as boolean;
-    if (want && key!.advertiserId && !key!.scopes.includes('admin')) throw new ApiError(403, 'review_required', 'Content review turns campaigns on. You can pause yours any time.');
-    c.active = want;
+    const b = req.body as any;
+    const reviewer = !key!.advertiserId || key!.scopes.includes('admin');
+    if (b.active === true && !reviewer) throw new ApiError(403, 'review_required', 'Content review turns campaigns on. You can pause yours any time.');
+    const changesPage = b.experienceId !== undefined || b.experienceConfig !== undefined || b.theme !== undefined;
+    if (changesPage) {
+      const id = b.experienceId ?? c.experienceId;
+      const config = b.experienceConfig ?? (b.experienceId && b.experienceId !== c.experienceId ? undefined : c.experienceConfig);
+      if (config === undefined) throw new ApiError(422, 'experience_invalid', `Send experienceConfig for "${id}" too.`);
+      checkExperience(id, config, b.theme ?? c.theme);
+      c.experienceId = id;
+      c.experienceConfig = config;
+      if (b.theme !== undefined) c.theme = b.theme;
+      if (!reviewer) c.active = false;
+    }
+    if (b.active !== undefined && (reviewer || b.active === false)) c.active = b.active;
     platform.persist.campaign(c);
     return { body: campaignView(c) };
   } });
+
+  route({ method: 'GET', url: '/v1/experiences', scope: 'campaigns', summary: 'Every kind of experience a QR can open, with the settings each one takes and an example.', handler: async () => ({ body: experiences.host.list() }) });
+  route({ method: 'POST', url: '/v1/experiences/preview', scope: 'campaigns', summary: 'See what an experience will look like with these settings, before saving.', body: obj({ experienceId: S.str, experienceConfig: { type: 'object' }, theme: themeProp, ownerName: S.str, firstTime: S.bool }, ['experienceId', 'experienceConfig']), handler: async (req, key) => {
+    const b = req.body as any;
+    checkExperience(b.experienceId, b.experienceConfig, b.theme);
+    const company = platform.companies.get(key!.companyId)!;
+    const { themeFor } = await import('../modules/experiences/host');
+    const doc = await experiences.host.open({ pluginId: b.experienceId, config: b.experienceConfig, theme: themeFor(company.brand, b.theme), scan: {
+      target: { kind: 'slot', unitId: 'preview', slot: 0 }, companyId: company.id, locationId: 'preview',
+      owner: { name: b.ownerName ?? 'Your business', advertiserId: key!.advertiserId ?? 'preview', campaignId: 'preview' },
+      viewer: { key: 'preview', signedIn: false, interests: [], firstTimeWithAdvertiser: b.firstTime ?? true }, now: platform.bus.now(),
+    } });
+    return { body: doc };
+  } });
+
+  // ---------- files for experiences: 3D models, pictures, videos ----------
+
+  route({ method: 'POST', url: '/v1/assets', scope: 'campaigns', summary: 'Upload a 3D model (.glb), picture (PNG, JPEG, WebP) or video (MP4). Send the file itself as the body with its Content-Type. Returns the URL to use in experience settings.', rawBodyLimit: 16 * 1024 * 1024, handler: async (req, key) => {
+    const type = String(req.headers['content-type'] ?? '').split(';')[0]!.trim();
+    if (!Buffer.isBuffer(req.body)) throw new ApiError(415, 'unsupported_type', 'Upload a 3D model (.glb), a picture (PNG, JPEG, WebP) or a video (MP4).');
+    const name = typeof (req.query as any).name === 'string' ? (req.query as any).name : undefined;
+    const asset = await app.assets.put({ companyId: key!.companyId, advertiserId: key!.advertiserId, contentType: type, bytes: new Uint8Array(req.body), name });
+    return { status: 201, body: asset };
+  } });
+  route({ method: 'GET', url: '/v1/assets', scope: 'campaigns', summary: 'Files you have uploaded.', handler: async (_req, key) => ({ body: await app.assets.list(key!.companyId, key!.advertiserId) }) });
 
   // ---------- packs, routes and deliveries: micro-factories and drivers ----------
 
@@ -322,6 +441,29 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     return { status: 204 };
   } });
 
+  route({ method: 'GET', url: '/v1/me/saved', scope: 'me', summary: 'Offers, homes and stories you saved from a scan.', handler: async (_req, key) => {
+    const rows = (await db.query<any>(`select id, target, title, data, created_at from saved_items where user_id = $1 order by created_at desc`, [me(key)])).rows;
+    return { body: rows.map((r) => ({ id: r.id, target: r.target, title: r.title, ...(typeof r.data === 'string' ? JSON.parse(r.data) : r.data), savedAt: r.created_at })) };
+  } });
+  route({ method: 'POST', url: '/v1/me/saved', scope: 'me', summary: 'Save something from a scan. Saving the same thing twice keeps one.', body: obj({ target: { type: 'string', maxLength: 120 } }, ['target']), handler: async (req, key) => {
+    const userId = me(key);
+    const target = parseTarget((req.body as any).target);
+    const user = (await app.accounts.get(userId))!;
+    const opened = await experiences.open(target, { key: user.viewerKey, user });
+    const offer = opened.doc.blocks.find((b) => b.type === 'offer') as any;
+    const hero = opened.doc.blocks.find((b) => b.type === 'hero' || b.type === 'article') as any;
+    const title = offer?.headline ?? hero?.title ?? hero?.headline ?? opened.doc.owner.name;
+    const data = { owner: opened.doc.owner.name, pluginId: opened.doc.pluginId, url: target.kind === 'slot' ? `/s/${target.unitId}/${target.slot}` : `/b/${target.packId}/${target.face}`, code: offer?.code ?? null };
+    const id = newId('sv');
+    const r = (await db.query<any>(`insert into saved_items (id, user_id, company_id, target, title, data) values ($1,$2,$3,$4,$5,$6) on conflict (user_id, target) do update set title = excluded.title, data = excluded.data returning id`, [id, userId, key!.companyId, targetKey(target), title, JSON.stringify(data)])).rows[0];
+    platform.engaged(user.companyId, { target: targetKey(target), viewerKey: user.viewerKey, action: 'save', advertiserId: experiences.ownerOf(target).advertiserId }, `save:${userId}:${targetKey(target)}`);
+    return { status: 201, body: { id: r.id, target: targetKey(target), title, ...data } };
+  } });
+  route({ method: 'DELETE', url: '/v1/me/saved/:id', scope: 'me', summary: 'Remove something you saved.', handler: async (req, key) => {
+    await db.query(`delete from saved_items where id = $1 and user_id = $2`, [(req.params as any).id, me(key)]);
+    return { status: 204 };
+  } });
+
   route({ method: 'POST', url: '/v1/team', scope: 'admin', summary: 'Add a team member or advertiser staff. They sign in with a code sent to their email.', body: obj({ email: S.str, role: { type: 'string', enum: ['owner', 'ops', 'finance', 'reviewer', 'driver', 'advertiser'] }, advertiserId: S.str, displayName: S.str }, ['email', 'role']), handler: async (req, key) => {
     if (key!.advertiserId) throw new ApiError(403, 'missing_scope', 'Advertisers cannot add team members.');
     return { status: 201, body: await app.accounts.invite({ companyId: key!.companyId, ...(req.body as any) }) };
@@ -332,9 +474,10 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   route({ method: 'GET', url: '/v1/me/cards', scope: 'me', summary: 'Your saved cards (brand and last 4 digits only).', handler: async (_req, key) => ({ body: await app.payments.methods(key!.companyId, 'user', me(key)) }) });
   route({ method: 'POST', url: '/v1/me/cards', scope: 'me', summary: "Save a card using the token from the payment provider's form. Card numbers never reach FreeWater.", body: obj({ token: S.str }, ['token']), handler: async (req, key) => ({ status: 201, body: await app.payments.addMethod(key!.companyId, 'user', me(key), (req.body as any).token) }) });
 
-  route({ method: 'POST', url: '/v1/me/custom-orders', scope: 'me', summary: 'Print your own design. Money is held first, taken only once it prints, and released if it does not.', body: obj({ orderId: S.str, locationId: S.str, productId: S.str, svg: { type: 'string', minLength: 1, maxLength: 2_000_000 } }, ['orderId', 'locationId', 'productId', 'svg']), handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/me/custom-orders', scope: 'me', summary: 'Print your own design. Money is held first, taken only once it prints, and released if it does not.', body: obj({ orderId: S.str, locationId: S.str, productId: S.str, svg: { type: 'string', minLength: 1, maxLength: 2_000_000 }, experience: { type: 'object' } }, ['orderId', 'locationId', 'productId', 'svg']), handler: async (req, key) => {
     const userId = me(key);
     const b = req.body as any;
+    if (b.experience) checkExperience('custom-experience', b.experience, undefined);
     const company = platform.companies.get(key!.companyId)!;
     if (!platform.locations.has(b.locationId)) throw new ApiError(422, 'unknown_location', `Location ${b.locationId} doesn't exist.`);
     if (!platform.products.has(b.productId)) throw new ApiError(422, 'unknown_product', `Product ${b.productId} doesn't exist.`);
@@ -343,7 +486,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const price = company.prices.customUnit; // the server sets the price, never the app
     const hold = await app.payments.authorize({ companyId: company.id, ownerType: 'user', ownerId: userId, amountCents: price, purpose: 'custom_order', ref: b.orderId, idempotencyKey: `custom:${company.id}:${userId}:${b.orderId}`, description: `Custom ${b.productId}` });
     if (hold.status === 'declined') return { status: 402, body: { error: { code: 'card_declined', message: `${hold.failure} Nothing was printed or charged.` } } };
-    const r = await platform.order({ companyId: company.id, orderId: `${userId}:${b.orderId}`, locationId: b.locationId, productId: b.productId, custom: { customerId: userId, art, priceCents: price } });
+    const r = await platform.order({ companyId: company.id, orderId: `${userId}:${b.orderId}`, locationId: b.locationId, productId: b.productId, custom: { customerId: userId, art, priceCents: price, experienceConfig: b.experience } });
     if (!r.ok) {
       const voided = await app.payments.void(hold.id);
       return { status: 422, body: { error: { code: 'print_failed', message: 'It did not print, so the hold on your card was released. Nothing was charged.' }, payment: voided } };
@@ -396,8 +539,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       method: r.method,
       url: r.url,
       schema: r.body ? { body: r.body } : undefined,
-      // Check the key before looking at the request body, so a caller without access learns nothing.
-      preValidation: async (req: FastifyRequest) => {
+      ...(r.rawBodyLimit ? { bodyLimit: r.rawBodyLimit } : {}),
+      // Check the key before the body is even read, so a caller without access learns nothing and uploads nothing.
+      onRequest: async (req: FastifyRequest) => {
         (req as any).apiKey = r.scope === 'public' ? null : await authenticate(req, r.scope);
       },
       handler: async (req: FastifyRequest, reply: FastifyReply) => {
@@ -412,9 +556,43 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   server.get('/v1/openapi.json', async () => openapi(routes));
 
+  // ---------- the scan web app: what opens on a phone ----------
+
+  const webDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
+  const modelViewerPath = createRequire(import.meta.url).resolve('@google/model-viewer/dist/model-viewer.min.js');
+  const staticFiles: Record<string, { type: string; path: string }> = {
+    'scan.js': { type: 'text/javascript', path: join(webDir, 'scan.js') },
+    'scan.css': { type: 'text/css', path: join(webDir, 'scan.css') },
+    'model-viewer.min.js': { type: 'text/javascript', path: modelViewerPath },
+  };
+  const cache = new Map<string, Buffer>();
+  const file = (p: string) => { let b = cache.get(p); if (!b || process.env.NODE_ENV !== 'production') cache.set(p, (b = readFileSync(p))); return b; };
+  const page = async (_req: FastifyRequest, reply: FastifyReply) => reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', "default-src 'self'; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' blob: data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; frame-ancestors 'none'").send(file(join(webDir, 'scan.html')));
+  for (const u of ['/s/:unitId/:slot', '/r/:unitId', '/p/:packId', '/b/:packId/:face']) server.get(u, page);
+  server.get('/static/:name', async (req, reply) => {
+    const f = staticFiles[(req.params as any).name];
+    if (!f) return reply.code(404).send({ error: { code: 'not_found', message: 'File not found.' } });
+    return reply.type(f.type).header('cache-control', 'public, max-age=300').send(file(f.path));
+  });
+  server.get('/models/builtin/:file', async (req, reply) => {
+    const m = /^([a-z]+)\.glb$/.exec((req.params as any).file);
+    const bytes = m ? builtinModel(m[1]!) : null;
+    if (!bytes) return reply.code(404).send({ error: { code: 'not_found', message: 'Model not found.' } });
+    return reply.type('model/gltf-binary').header('cache-control', 'public, max-age=86400').header('access-control-allow-origin', '*').send(Buffer.from(bytes));
+  });
+  server.get('/assets/:file', async (req, reply) => {
+    const m = /^([A-Za-z0-9_-]+)\.[a-z0-9]+$/.exec((req.params as any).file);
+    const found = m ? await app.assets.get(m[1]!) : null;
+    if (!found) return reply.code(404).send({ error: { code: 'not_found', message: 'File not found.' } });
+    // Uploaded files are served as exactly what they were checked to be, never as a page.
+    return reply.type(found.asset.contentType).header('cache-control', 'public, max-age=31536000, immutable').header('x-content-type-options', 'nosniff').header('content-disposition', 'inline').header('access-control-allow-origin', '*').send(Buffer.from(found.bytes));
+  });
+
   server.setErrorHandler((err: any, _req, reply) => {
     if (err instanceof ApiError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
-    if (err instanceof AccountsError || err instanceof PaymentError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
+    if (err instanceof AccountsError || err instanceof PaymentError || err instanceof ExperienceError || err instanceof AssetError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
+    if (err.code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE') return reply.code(415).send({ error: { code: 'unsupported_type', message: 'Send JSON, or for uploads a .glb, PNG, JPEG, WebP or MP4 file.' } });
+    if (err.code === 'FST_ERR_CTP_BODY_TOO_LARGE') return reply.code(413).send({ error: { code: 'too_large', message: 'That is too big to upload.' } });
     if (err.validation) return reply.code(400).send({ error: { code: 'invalid_request', message: err.message } });
     if (/^Unknown (bottle|unit|pack)/i.test(err.message)) return reply.code(404).send({ error: { code: 'not_found', message: err.message } });
     server.log.error(err);

@@ -29,5 +29,10 @@ export function createPlatform(input: {
   const byId = <T extends { id: string }>(xs: T[]) => new Map(xs.map((x) => [x.id, x]));
   const platform = new Platform(registry, byId(input.companies), byId(input.products), byId(input.locations), byId(input.campaigns), { seed: input.seed, clock: input.clock, persistence: input.persistence, keepEventLog: input.keepEventLog });
   const packs = new PackService(platform, byId(input.boxes ?? []));
+  platform.packCompany = (id) => {
+    const p = packs.packs.get(id);
+    if (!p) throw new Error(`Unknown pack "${id}"`);
+    return p.companyId;
+  };
   return { platform, printer, registry, packs };
 }
