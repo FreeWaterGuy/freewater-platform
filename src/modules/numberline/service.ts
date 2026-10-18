@@ -88,6 +88,23 @@ export class NumberLineService {
     this.cache.set(key, placed);
     return placed;
   }
+  /**
+   * Record a placement worked out elsewhere (an AI agent's place, read by the governor from the books). Kept as a new
+   * version only when it changed.
+   */
+  async recordOwn(companyId: string, subject: string, facts: OfferingFacts, placement: Placement, by: string) {
+    const key = `${companyId}|${subject}`;
+    const placementJson = JSON.stringify(placement);
+    const hit = this.cache.get(key) as any;
+    if (hit && JSON.stringify(hit.placement) === placementJson) return hit as Placed;
+    const row = (await this.db.query<any>(`select * from numberline where company_id = $1 and subject = $2 order by version desc limit 1`, [companyId, subject])).rows[0];
+    if (row && JSON.stringify(j(row.placement)) === placementJson) { const p = { id: row.id, placement, by: row.by, status: row.status }; this.cache.set(key, p); return p; }
+    const id = newId('nl');
+    await this.db.query(`insert into numberline (id, company_id, subject, version, placement, by, status, facts, at) values ($1,$2,$3,$4,$5,$6,'auto',$7,$8)`, [id, companyId, subject, (row?.version ?? 0) + 1, placementJson, by, JSON.stringify(facts), this.clock().toISOString()]);
+    const p = { id, placement, by, status: 'auto' };
+    this.cache.set(key, p);
+    return p;
+  }
   place(companyId: string, subject: string) {
     const c = this.platform.companies.get(companyId);
     if (!c) throw new NumberLineError('not_found', 'Company not found.', 404);

@@ -78,16 +78,17 @@ describe('targeting raises the price of each engagement', () => {
     expect(slot).toBeDefined();
     const before = app.platform.ledger.entries.length;
     app.platform.scan(unit!.id, slot!, 'pricing-viewer-1');
-    const [scan, gift] = app.platform.ledger.entries.slice(before);
+    const [scan, gift, fund] = app.platform.ledger.entries.slice(before);
     expect(scan).toMatchObject({ kind: 'scan', amountCents: 28 }); // 25¢ + 10% for targeting places
     expect(scan!.memo).toMatch(/\+10% for targeting/);
     expect(gift).toMatchObject({ kind: 'donation', amountCents: 3, credit: 'payable:charity:Well Aware' }); // 10% of 28¢
+    expect(fund).toMatchObject({ kind: 'ai_fund', amountCents: 3, credit: 'payable:ai_fund' }); // the same 10% to the AI agents’ fund
     // Sales commission (3%), and 10% of that 3% for charity; a refund takes both back.
     const n = app.platform.ledger.entries.length;
     app.platform.purchase(unit!.id, slot!, 'sale-1', 10_000);
-    expect(app.platform.ledger.entries.slice(n).map((l) => [l.kind, l.amountCents])).toEqual([['commission', 300], ['donation', 30]]);
+    expect(app.platform.ledger.entries.slice(n).map((l) => [l.kind, l.amountCents])).toEqual([['commission', 300], ['donation', 30], ['ai_fund', 30]]);
     app.platform.refund(unit!.id, slot!, 'sale-1', 10_000);
-    expect(app.platform.ledger.entries.slice(-2).map((l) => [l.kind, l.debit])).toEqual([['commission_reversal', 'revenue:commission'], ['donation', 'payable:charity:Well Aware']]);
+    expect(app.platform.ledger.entries.slice(-3).map((l) => [l.kind, l.debit])).toEqual([['commission_reversal', 'revenue:commission'], ['donation', 'payable:charity:Well Aware'], ['ai_fund', 'payable:ai_fund']]);
   });
 
   it('lets a company change the share it gives, or give none of it', async () => {
@@ -97,7 +98,8 @@ describe('targeting raises the price of each engagement', () => {
     const p = u.placements.find((x) => !x.isHouse)!;
     const before = app.platform.ledger.entries.length;
     app.platform.scan(u.id, p.slotIndex, 'pricing-viewer-2');
-    expect(app.platform.ledger.entries.slice(before).map((l) => l.kind)).toEqual(['scan']);
+    // The charity's share is the company's choice; the AI agents' fund is its own setting.
+    expect(app.platform.ledger.entries.slice(before).map((l) => l.kind)).toEqual(['scan', 'ai_fund']);
     fw.giving.percentOfExtra = 10;
   });
 });

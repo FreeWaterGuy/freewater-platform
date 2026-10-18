@@ -47,6 +47,7 @@ import { TransparencyService } from './modules/transparency/service';
 import { AnchorService, GitHubPublisher, OpenTimestampsPublisher, type AnchorPublisher } from './modules/transparency/anchors';
 import { NumberLineService } from './modules/numberline/service';
 import { ClaudeNumberLineAgent, rulesAgent, type NumberLineAgent } from './modules/numberline/agent';
+import { AgentsService } from './modules/agents/service';
 import { boxes, builtinCreatives, freewater, locations, peakSpring, products, sampleCampaigns } from './demo/seed';
 
 export interface AppOptions {
@@ -203,12 +204,33 @@ export async function createApp(opts: AppOptions) {
   const webhooks = new WebhookService(db, opts.webhookSender ?? new HttpWebhookSender({ allowPrivate }), messenger, opts.clock, flush, { allowPrivate, consoleUrl: publicUrl });
   const consoleSvc = new ConsoleService(db, platform, made.registry, accounts, messenger, flush, { consoleUrl: publicUrl, clock: opts.clock });
 
+  // The AI agents: each on the number line, with its own fund, held by the governor (which always runs).
+  const agents = new AgentsService(db, platform, {
+    saveConfig: (companyId, change, by) => consoleSvc.save(companyId, change as any, by),
+    verifyBooks: async () => {
+      // Every line balances, and every fingerprint ever published still matches the books.
+      let total = 0;
+      for (const v of platform.ledger.balances().values()) total += v;
+      if (total !== 0) return { ok: false, problem: 'the books don’t balance' };
+      for (const c of platform.companies.values()) {
+        if (c.openBooks === false) continue;
+        const bad = (await anchors.list(c.id)).find((a) => a.status === 'published' && !a.matchesBooks);
+        if (bad) return { ok: false, problem: `the fingerprint published for ${bad.day} no longer matches` };
+      }
+      return { ok: true };
+    },
+    charities: async (companyId) => (await books.charities(companyId)).map((c: any) => c.name),
+    today: (companyId, at) => delivery.today(companyId, at),
+    numberline,
+  });
+  await agents.init();
+
   // Model 6 machines: bottles ordered there print at the machine; everything else uses the company's other printer.
   const fleet = new FleetService(db, platform, messenger, flush, opts.fleet);
   await fleet.load();
   made.registry.registerPrinter('model6-fleet', new MachineFleetPrinter(() => fleet, made.printer));
 
-  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, transparency, anchors };
+  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, transparency, anchors, agents };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

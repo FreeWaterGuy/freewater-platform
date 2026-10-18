@@ -188,7 +188,7 @@ describe('seeing the sale ourselves', () => {
     expect(arClick.searchParams.get('from')).toBeNull(); // our own note stays with us
     const before = app.platform.ledger.entries.length;
     expect((await call('POST', '/v1/conversions', keys['advertiser-joes'], { fwclid: arClick.searchParams.get('fwclid'), orderId: 'AR-1', valueCents: 10_000 })).status).toBe(201);
-    expect(app.platform.ledger.entries.slice(before).map((l) => [l.kind, l.amountCents])).toEqual([['commission', 300], ['donation', 30]]);
+    expect(app.platform.ledger.entries.slice(before).map((l) => [l.kind, l.amountCents])).toEqual([['commission', 300], ['donation', 30], ['ai_fund', 30]]);
     expect((await call('GET', '/v1/ads/tracking', keys['advertiser-joes'])).body.summary.sales.fromAr).toEqual({ count: 1, valueCents: 10_000 });
   });
 

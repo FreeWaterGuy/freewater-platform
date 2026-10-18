@@ -32,7 +32,7 @@ export class ClaudeDesigner implements DesignAssistant {
       } },
     };
     try {
-      const r = await claudeWithTool({ apiKey: this.opts.apiKey, model: this.opts.model, fetch: this.opts.fetch, system, tool, history: input.history, message: input.message + input.attachments.map((a, i) => `\n[file ${i}: ${a.kind}${a.name ? ` "${a.name}"` : ''}]`).join(''), images: input.attachments.filter((a) => a.kind === 'image' && a.dataUrl).map((a) => a.dataUrl!) });
+      const r = await claudeWithTool({ agent: 'designer', apiKey: this.opts.apiKey, model: this.opts.model, fetch: this.opts.fetch, system, tool, history: input.history, message: input.message + input.attachments.map((a, i) => `\n[file ${i}: ${a.kind}${a.name ? ` "${a.name}"` : ''}]`).join(''), images: input.attachments.filter((a) => a.kind === 'image' && a.dataUrl).map((a) => a.dataUrl!) });
       const { suggestions, ...patch } = r.input;
       return { reply: r.text || 'Done. Take a look.', patch, suggestions: Array.isArray(suggestions) ? suggestions.slice(0, 3).map(String) : [] };
     } catch {

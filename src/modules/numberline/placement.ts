@@ -42,7 +42,7 @@ export interface ValueBack {
 
 /** The facts about an offering: what the person pays, what comes back, who's selling, what it takes to get it. */
 export interface OfferingFacts {
-  kind: 'bottle' | 'custom_bottle' | 'ad_offering' | 'catalog_good' | 'company_model' | 'service';
+  kind: 'bottle' | 'custom_bottle' | 'ad_offering' | 'catalog_good' | 'company_model' | 'service' | 'agent';
   name: string;
   description?: string;
   /** What the person pays, in cents. 0 for free. */

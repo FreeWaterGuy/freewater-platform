@@ -60,7 +60,7 @@ export class ClaudePersonalizer implements Personalizer {
     try {
       const f = i.facts;
       const r = await claudeWithTool({
-        apiKey: this.opts.apiKey, model: this.opts.model ?? 'claude-haiku-5-5', fetch: this.opts.fetch, timeoutMs: this.opts.timeoutMs ?? 1500, history: [], images: [],
+        agent: 'personalizer', apiKey: this.opts.apiKey, model: this.opts.model ?? 'claude-haiku-5-5', fetch: this.opts.fetch, timeoutMs: this.opts.timeoutMs ?? 1500, history: [], images: [],
         system: [
           `You personalize what someone sees after scanning the QR code on a free bottle of water, in an ad for ${i.advertiser} (${i.category}).`,
           'Choose the one version that fits this moment best. Only choose from the list. If none is clearly better, choose "default".',

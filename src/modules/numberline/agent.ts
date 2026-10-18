@@ -28,7 +28,7 @@ export class ClaudeNumberLineAgent implements NumberLineAgent {
     const rules = placeByRules(f);
     try {
       const r = await claudeWithTool({
-        apiKey: this.opts.apiKey, model: this.opts.model, fetch: this.opts.fetch, timeoutMs: this.opts.timeoutMs ?? 20_000, history: [], images: [],
+        agent: 'numberline', apiKey: this.opts.apiKey, model: this.opts.model, fetch: this.opts.fetch, timeoutMs: this.opts.timeoutMs ?? 20_000, history: [], images: [],
         system: [
           'You place offerings on the number line of Abundance Engineering. Right of zero: for sale (the person pays). Zero: free, either paid for from outside the business (government, charity, volunteers) or paid for by advertising. Left of zero: negatively priced (free plus value going out: a donation on the person’s behalf, a payment to them, or both).',
           'You also say which economic systems it runs on, with shares that add up to 1: market (a business sells), sharing (people rent idle capacity to each other through a platform: seats, rooms, tools, hours), free_outside, free_ad, giving (negatively priced), public (taxes). Many offerings blend several.',

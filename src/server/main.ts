@@ -19,6 +19,10 @@ const videoTimer = setInterval(() => { app.videos.tick().catch((e) => console.er
 const dailyTimer = setInterval(() => { app.data.purge().catch((e) => console.error('purge', e)); }, 24 * 3600_000);
 // Each hour, publish any finished day's books fingerprint not yet published.
 const anchorTimer = setInterval(() => { app.anchors.run().catch((e) => console.error('fingerprints', e)); }, 3600_000);
+// Each hour, the governor measures changes whose week is up, reads every agent's standing, and shares out the AI fund.
+const agentTimer = setInterval(async () => {
+  try { await app.agents.measure(); await app.agents.refresh(); for (const c of app.platform.companies.values()) if (c.agents?.enabled) await app.agents.settle(c.id); await app.persistence.flush(); } catch (e) { console.error('agents', e); }
+}, 3600_000);
 
 console.log(`\nFreeWater API on http://localhost:${port}  (database: ${db.name})`);
 console.log(`API description: http://localhost:${port}/v1/openapi.json  ·  Console: http://localhost:${port}/console  ·  Developer docs: http://localhost:${port}/developers`);
@@ -29,7 +33,7 @@ if (app.demoKeys) {
 
 const stop = async () => {
   app.webhooks.stop();
-  clearInterval(videoTimer); clearInterval(dailyTimer); clearInterval(anchorTimer);
+  clearInterval(videoTimer); clearInterval(dailyTimer); clearInterval(anchorTimer); clearInterval(agentTimer);
   await server.close();
   await app.persistence.flush();
   await db.close();

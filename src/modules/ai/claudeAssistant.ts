@@ -1,3 +1,4 @@
+import { askGovernor, reportUsage } from './anthropic';
 import { missingLabels } from '../ads/draft';
 import type { AdAssistant, AdAssistantInput, AdAssistantOutput } from './contract';
 
@@ -70,6 +71,7 @@ export class ClaudeAdAssistant implements AdAssistant {
       },
     };
 
+    askGovernor('ad-assistant');
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), this.opts.timeoutMs ?? 30_000);
     try {
@@ -81,6 +83,7 @@ export class ClaudeAdAssistant implements AdAssistant {
       });
       if (!res.ok) throw new Error(`Claude answered ${res.status}`);
       const data: any = await res.json();
+      reportUsage('ad-assistant', this.opts.model ?? 'claude-sonnet-5-5', data);
       const text = (data.content ?? []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n').trim();
       const call = (data.content ?? []).find((b: any) => b.type === 'tool_use' && b.name === 'update_ad');
       const { suggestions, ...patch } = call?.input ?? {};

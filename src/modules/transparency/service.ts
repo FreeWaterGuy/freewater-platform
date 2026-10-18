@@ -13,7 +13,7 @@ export const fullTransparency: Transparency = { liveFeed: true, counters: true, 
 export const quietTransparency: Transparency = { liveFeed: false, counters: false, publishFingerprints: false, advertiserStatements: true, feedDetail: 'city', showAmounts: false };
 export const transparencyOf = (c: CompanyConfig): Transparency => c.transparency ?? (c.id === 'freewater' ? fullTransparency : quietTransparency);
 
-export interface FeedItem { id: string; at: string; kind: 'bottle' | 'scan' | 'ar' | 'sale' | 'refund' | 'transfer' | 'prize' | 'box'; text: string; place?: string; cents?: { given?: number; earned?: number; paid?: number } }
+export interface FeedItem { id: string; at: string; kind: 'bottle' | 'scan' | 'ar' | 'sale' | 'refund' | 'transfer' | 'prize' | 'box' | 'gift'; text: string; place?: string; cents?: { given?: number; earned?: number; paid?: number } }
 export interface Counters { bottles: number; givenCents: number; sentCents: number; owedCents: number; prizesCents: number; adMoneyCents: number; sales: number; byCharity: { name: string; givenCents: number; sentCents: number }[]; updatedAt: string }
 
 const money = (c: number) => (c < 100 ? `${c}¢` : `$${(c / 100).toFixed(2)}`);
@@ -51,6 +51,7 @@ export class TransparencyService {
     });
     bus.on('purchase.refunded', (e) => this.add(e.companyId, e.at, 'refund', 'A sale was refunded; its commission and gift were taken back', undefined));
     bus.on('charity.transferred', (e) => this.add(e.companyId, e.at, 'transfer', `${money(e.payload.amountCents)} sent to ${e.payload.charity} (transfer ${e.payload.number})`, undefined, { paid: e.payload.amountCents }, '', true));
+    bus.on('ai_fund.spent', (e) => { if (e.payload.cause) this.add(e.companyId, e.at, 'gift', `The ${e.payload.agentId} agent gave from its own fund to ${e.payload.cause}`, undefined, { given: e.payload.amountCents }, ` · ${money(e.payload.amountCents)}`); });
     bus.on('lottery.won', (e) => this.add(e.companyId, e.at, 'prize', `Someone caught the red ball and won ${e.payload.prizeName}`, undefined, { paid: e.payload.valueCents }));
   }
 

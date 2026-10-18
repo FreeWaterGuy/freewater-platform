@@ -55,7 +55,7 @@ export class ClaudeWriter implements StoryWriter {
     const base = await builtinWriter.write(b);
     try {
       const r = await claudeWithTool({
-        apiKey: this.opts.apiKey, model: this.opts.model, fetch: this.opts.fetch, timeoutMs: this.opts.timeoutMs ?? 20_000, history: [], images: [],
+        agent: 'video-writer', apiKey: this.opts.apiKey, model: this.opts.model, fetch: this.opts.fetch, timeoutMs: this.opts.timeoutMs ?? 20_000, history: [], images: [],
         system: [
           `You are the editor of a 10 to 14 second vertical motion-graphics video ad for ${b.advertiser} (${b.category}). It plays after someone scanned the QR code on a free bottle of water and asked to see more.`,
           'Write 4 to 6 scenes. Each line is at most 8 words. Use only facts from the advertiser’s words below; never invent prices, claims, discounts or promises. No links, phone numbers or emojis.',

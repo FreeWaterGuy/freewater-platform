@@ -18,7 +18,7 @@ export interface LedgerEntry {
   debit: string;
   credit: string;
   amountCents: Cents;
-  kind: 'print' | 'scan' | 'ar' | 'commission' | 'commission_reversal' | 'custom' | 'donation' | 'box_face' | 'payment' | 'charity_transfer' | 'expense' | 'prize';
+  kind: 'print' | 'scan' | 'ar' | 'commission' | 'commission_reversal' | 'custom' | 'donation' | 'box_face' | 'payment' | 'charity_transfer' | 'expense' | 'prize' | 'ai_fund' | 'ai_allocation' | 'ai_spend';
   memo: string;
 }
 
@@ -65,6 +65,13 @@ export class Ledger {
     bus.on('charity.transferred', (e) => this.add(e, { debit: `payable:charity:${e.payload.charity}`, credit: `cash:${e.payload.provider}`, amountCents: e.payload.amountCents, kind: 'charity_transfer', memo: `Transfer ${e.payload.number} to ${e.payload.charity}` }));
     // A prize won: owed to the winner until it's handed over.
     bus.on('lottery.won', (e) => this.add(e, { debit: 'expense:prizes', credit: 'payable:prizes', amountCents: e.payload.valueCents, kind: 'prize', memo: `Prize won: ${e.payload.prizeName} (${e.payload.claimCode})${e.payload.sponsor ? `, given by ${e.payload.sponsor}` : ''}` }));
+    // The AI agents' fund: shared out daily by the governor, then spent by each agent on what it chose.
+    // Held money (for an agent still proving itself) is released to it once the governor says it's regenerative.
+    bus.on('ai_fund.allocated', (e) => this.add(e, { debit: e.payload.fromHeld ? `payable:ai:held:${e.payload.agentId}` : 'payable:ai_fund', credit: `payable:ai:${e.payload.held ? 'held:' : ''}${e.payload.agentId}`, amountCents: e.payload.amountCents, kind: 'ai_allocation', memo: `${e.payload.fromHeld ? 'Released to' : e.payload.held ? 'Held for' : 'To'} ${e.payload.agentId}: ${e.payload.reason}` }));
+    // A gift an agent chose is a donation like any other: it shows in the open books and goes out in the next transfer.
+    bus.on('ai_fund.spent', (e) => this.add(e, e.payload.cause
+      ? { debit: `payable:ai:${e.payload.agentId}`, credit: `payable:charity:${e.payload.cause}`, amountCents: e.payload.amountCents, kind: 'donation', memo: `Given by the ${e.payload.agentId} agent from its own fund: ${e.payload.memo}` }
+      : { debit: `payable:ai:${e.payload.agentId}`, credit: 'cash:bank', amountCents: e.payload.amountCents, kind: 'ai_spend', memo: `${e.payload.agentId} spent on ${e.payload.category}: ${e.payload.memo}` }));
     bus.on('expense.recorded', (e) => this.add(e, { debit: `expense:${e.payload.category}`, credit: 'cash:bank', amountCents: e.payload.amountCents, kind: 'expense', memo: e.payload.memo }));
     // 'print.failed' is deliberately not subscribed: nothing to bill.
   }
@@ -112,6 +119,19 @@ export class Ledger {
     }
     if (g.mode === 'percent_of_revenue') donation = Math.round((revenue * (g.percentOfRevenue ?? 0)) / 100);
     this.give(e, company, { unitId }, locationId, donation, (name) => memo.replace(charity, name));
+    this.fundAgents(e, company, Math.max(0, revenue - (g.extraAboveCents ?? 100)), { unitId }, 'print money above the starting price');
+  }
+
+  /**
+   * The AI agents' fund: the same share of the upside the charity gets its extra from (FreeWater: 10%, matching the
+   * charity). Only when the company turned it on. It sits in one pool until the governor shares it out.
+   */
+  private fundAgents(e: PlatformEvent, company: CompanyConfig, upside: number, where: { unitId?: string; packId?: string }, what: string, reverse = false) {
+    const a = company.agents;
+    if (!a?.enabled || !a.percentOfExtra || upside <= 0) return;
+    const amount = Math.round((upside * a.percentOfExtra) / 100);
+    if (reverse) this.add(e, { ...where, debit: 'payable:ai_fund', credit: 'expense:ai_fund', amountCents: amount, kind: 'ai_fund', memo: `Refund: ${a.percentOfExtra}% of ${what} no longer goes to the AI agents’ fund` });
+    else this.add(e, { ...where, debit: 'expense:ai_fund', credit: 'payable:ai_fund', amountCents: amount, kind: 'ai_fund', memo: `${a.percentOfExtra}% of ${what} to the AI agents’ fund` });
   }
 
   /**
@@ -172,9 +192,11 @@ export class Ledger {
   /** The company's share of engagement and sales money for charity, on top of what each bottle gives. */
   private giveShare(e: PlatformEvent, company: CompanyConfig, earned: number, where: { unitId?: string; packId?: string }, locationId: string | undefined, what: string, reverse = false) {
     const g = company.giving;
-    if (g.mode === 'none' || !g.percentOfExtra) return;
-    const amount = Math.round((earned * g.percentOfExtra) / 100);
-    this.give(e, company, where, locationId, amount, (charity) => (reverse ? `Refund: ${g.percentOfExtra}% of ${what} no longer goes to ${charity}` : `${g.percentOfExtra}% of ${what} to ${charity}`), reverse);
+    if (g.mode !== 'none' && g.percentOfExtra) {
+      const amount = Math.round((earned * g.percentOfExtra) / 100);
+      this.give(e, company, where, locationId, amount, (charity) => (reverse ? `Refund: ${g.percentOfExtra}% of ${what} no longer goes to ${charity}` : `${g.percentOfExtra}% of ${what} to ${charity}`), reverse);
+    }
+    this.fundAgents(e, company, earned, where, what, reverse);
   }
 
   /** Scans and AR launches from a box face are billed to that face's advertiser, with the same rules as bottles. */

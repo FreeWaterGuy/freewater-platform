@@ -823,6 +823,30 @@ create table anchors (
 );
 `,
   },
+  {
+    id: '015_agents',
+    sql: `
+-- Every AI call and other running cost, per agent, in thousandths of a cent (AI calls are tiny).
+create table agent_costs (id text primary key, agent_id text not null, company_id text, kind text not null, millicents bigint not null, model text, input_tokens int, output_tokens int, memo text, at timestamptz not null);
+create index agent_costs_at on agent_costs(agent_id, at);
+-- Each agent's own record: when it started, compute and storage it bought.
+create table agent_state (agent_id text primary key, created_at timestamptz not null, compute_credit_millicents bigint not null default 0, storage_cents bigint not null default 0);
+-- What an agent proposed, what a person decided, what it changed, and what the books say it did.
+create table agent_proposals (id text primary key, company_id text not null, agent_id text not null, kind text not null, title text not null, detail text not null, change jsonb, expected text, status text not null, decided_by text, ref text, before_value jsonb, baseline jsonb, result jsonb, created_at timestamptz not null, decided_at timestamptz, applied_at timestamptz, undo_until timestamptz, measured_at timestamptz);
+create index agent_proposals_company on agent_proposals(company_id, status);
+-- Value the books credit to an agent: only from measured changes, never from what it says about itself.
+create table agent_value (id text primary key, company_id text not null, agent_id text not null, kind text not null, cents bigint not null, proposal_id text, evidence jsonb, at timestamptz not null);
+create index agent_value_at on agent_value(agent_id, at);
+-- What each agent asked to spend from its own fund, and what happened.
+create table agent_spends (id text primary key, company_id text not null, agent_id text not null, category text not null, cents bigint not null, purpose text not null, cause text, status text not null, reason text, decided_by text, at timestamptz not null);
+-- The governor's reading of each agent, each day.
+create table agent_standings (agent_id text not null, day text not null, verdict jsonb not null, primary key (agent_id, day));
+create table agent_settlements (company_id text not null, day text not null, at timestamptz not null, primary key (company_id, day));
+-- How much of each area of the business the AI runs, and every change to that, in the open.
+create table autonomy (company_id text not null, area text not null, level int not null, primary key (company_id, area));
+create table autonomy_changes (id text primary key, company_id text not null, area text not null, from_level int not null, to_level int not null, by text not null, reason text not null, at timestamptz not null);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

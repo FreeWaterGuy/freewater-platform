@@ -110,6 +110,12 @@ export interface CompanyConfig {
   /** How much of the books the world sees, live. Each company chooses. */
   transparency?: Transparency;
   /**
+   * The AI agents' own fund and place in the books. Off unless the company turns it on. When on, the agents' fund gets
+   * this percent of the same upside the charity's extra share comes from (FreeWater: 10%, matching the charity).
+   * The safety governor is not a setting: it always runs.
+   */
+  agents?: { enabled: boolean; percentOfExtra: number };
+  /**
    * The QR codes it prints. Codes are dynamic (looked up each time they're scanned) unless an advertiser is allowed
    * to choose a static one and does.
    */

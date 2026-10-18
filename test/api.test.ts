@@ -121,7 +121,7 @@ describe('advertisers', () => {
     expect(slot).toBeTruthy();
     const sale = await call('POST', '/v1/purchases', keys['advertiser-joes'], { unitId: unit.id, slot: slot.slot, orderId: 'pos-9', amountCents: 1000 });
     expect(sale.statusCode).toBe(202);
-    expect(sale.json().ledgerLines).toBe(2); // the commission, and 10% of it for charity
+    expect(sale.json().ledgerLines).toBe(3); // the commission, 10% of it for charity, and 10% for the AI agents’ fund
     const again = await call('POST', '/v1/purchases', keys['advertiser-joes'], { unitId: unit.id, slot: slot.slot, orderId: 'pos-9', amountCents: 1000 });
     expect(again.json().recorded).toBe(false);
 

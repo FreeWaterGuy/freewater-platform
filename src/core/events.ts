@@ -33,6 +33,10 @@ export interface EventPayloads {
   'charity.transferred': { transferId: string; number: string; charity: string; amountCents: Cents; provider: string; providerRef: string };
   /** Someone tapped the ball in time and won a prize. */
   'lottery.won': { chanceId: string; prizeId: string; prizeName: string; valueCents: Cents; claimCode: string; target: string; sponsor?: string };
+  /** The AI fund's daily share-out: to each agent the governor allows, held for agents still proving themselves. */
+  'ai_fund.allocated': { day: string; agentId: string; amountCents: Cents; held: boolean; reason: string; fromHeld?: boolean };
+  /** An agent spent from its own fund (on compute, storage, knowledge, growth, exploration, or a cause it chose). */
+  'ai_fund.spent': { spendId: string; agentId: string; category: string; amountCents: Cents; memo: string; cause?: string };
   'expense.recorded': { expenseId: string; category: string; amountCents: Cents; memo: string; date: string };
   'machine.incident_opened': { incidentId: string; locationId: string; kind: string; severity: 'warning' | 'critical'; message: string };
   'machine.incident_resolved': { incidentId: string; locationId: string; kind: string; minutes: number };

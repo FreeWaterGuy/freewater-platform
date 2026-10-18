@@ -78,6 +78,8 @@ export const freewater: CompanyConfig = {
   openBooks: true,
   // Everything public, live: the feed, the counters, each day's fingerprint, and advertiser statements.
   transparency: { liveFeed: true, counters: true, publishFingerprints: true, advertiserStatements: true, feedDetail: 'machine', showAmounts: true },
+  // The AI agents get 10% of the same upside the charity gets its extra 10% from, to spend on becoming regenerative.
+  agents: { enabled: true, percentOfExtra: 10 },
   unitCosts: { water: 4, bottle: 18, label: 3, machine: 6 }, // placeholders until real costs are known
   adRules: { minAdsPerUnit: 1, maxAdsPerUnit: 10, blockedCategories: ['alcohol', 'tobacco', 'gambling', 'weapons'], competitorSeparation: true, repeatScanWindowSec: 600, maxPackShare: 0.5 },
   prices: freewaterPrices,
@@ -94,6 +96,7 @@ export const peakSpring: CompanyConfig = {
   name: 'Peak Spring Water Co.',
   // Quiet until it chooses to share: only advertisers' statements.
   transparency: { liveFeed: false, counters: false, publishFingerprints: false, advertiserStatements: true, feedDetail: 'city', showAmounts: false },
+  agents: { enabled: false, percentOfExtra: 10 },
   receiptBaseUrl: 'https://water.peakspring.example',
   brand: { logoTop: 'peak', logoBottom: 'spring', panelColor: '#123B2A', accentColor: '#F2C14E', textColor: '#FFFFFF', fontFamily: "'DM Sans', Arial, sans-serif" },
   productFacts: ['MOUNTAIN SPRING WATER', '16 fl oz (473 ml)', 'Bottled for Peak Spring Water Co.'],
