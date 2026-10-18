@@ -153,7 +153,8 @@
           h('form', { style: 'display:flex;flex-direction:column;gap:12px', onsubmit: async (e) => {
             e.preventDefault(); ok.disabled = true; err.hidden = true;
             try {
-              const r = await api('POST', '/v1/auth/verify', { companyId: state.config.companyId, channel, to, code: input.value.trim() });
+              let vk = {}; try { vk = { ...(/^[A-Za-z0-9_-]{8,64}$/.test(localStorage.getItem('fw_viewer') || '') ? { viewerKey: localStorage.getItem('fw_viewer') } : {}) }; } catch {}
+              const r = await api('POST', '/v1/auth/verify', { companyId: state.config.companyId, channel, to, code: input.value.trim(), ...vk });
               state.token = r.token; store.set('fw_token', r.token); state.me = null; await loadMe();
               toast(r.isNew ? 'Welcome to FreeWater' : 'Signed in'); close(true);
             } catch (x) { err.textContent = x.message; err.hidden = false; ok.disabled = false; }
@@ -519,6 +520,12 @@
         mine.has(i) ? mine.delete(i) : mine.add(i); e.currentTarget.setAttribute('aria-pressed', String(mine.has(i)));
         state.me = await api('PATCH', '/v1/me', { interests: [...mine] });
       } }, i)))),
+      h('h2', { class: 'section' }, 'What you really get'),
+      h('p', { class: 'small muted', style: 'margin:0', text: 'Optional. Tells us honestly whether a free bottle is better than free for you, so we count what you really get.' }),
+      (() => {
+        const pick = (key, label, opts) => { const sel = h('select', { class: 'input', 'aria-label': label }, h('option', { value: '', text: 'Rather not say' }), opts.map(([v, l]) => h('option', { value: v, text: l }))); sel.value = me.consents?.[key === 'cause' ? 'causeStance' : 'adsStance'] ?? ''; sel.addEventListener('change', async () => { if (!sel.value) return; try { await api('POST', '/v1/me/stance', { [key]: sel.value }); toast('Saved'); } catch (x) { toast(x.message); } }); return h('div', { class: 'field' }, h('label', { text: label }), sel); };
+        return h('div', {}, pick('cause', `The cause your bottles support${state.config?.giving?.charity ? ` (${state.config.giving.charity})` : ''}`, [['supports', 'I support it'], ['indifferent', 'I don’t mind either way'], ['opposes', 'I’d rather not support it']]), pick('ads', 'Ads on my bottles', [['welcome', 'Fine by me'], ['unwelcome', 'I’d rather not have them']]));
+      })(),
       h('h2', { class: 'section' }, 'Payment'),
       cards.length ? h('div', {}, cards.map((c) => h('div', { class: 'list-row' }, h('span', { class: 'grow' }, h('b', { text: `${c.brand[0].toUpperCase()}${c.brand.slice(1)} •••• ${c.last4}` }), h('span', { class: 'small muted', text: `Expires ${c.expMonth}/${c.expYear}` })))))
         : h('div', { class: 'empty', text: 'No card saved. You only need one to design your own bottles. Free water never needs a card.' }),
@@ -528,6 +535,12 @@
         const a = h('a', { href: URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })), download: 'my-freewater-data.json' });
         document.body.append(a); a.click(); a.remove(); toast('Downloaded');
       } }, 'Download my data'),
+      h('button', { class: 'btn secondary', type: 'button', onclick: async () => {
+        const data = await api('GET', '/v1/me/data');
+        const a = h('a', { href: URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })), download: 'everything-kept-about-me.json' });
+        document.body.append(a); a.click(); a.remove(); toast('Downloaded');
+      } }, 'Everything kept about me'),
+      h('button', { class: 'btn secondary', type: 'button', onclick: async () => { if (!confirm('Erase what we kept about how you used pages and what you chose? Your account stays.')) return; await api('DELETE', '/v1/me/data'); toast('Erased'); } }, 'Erase my activity'),
       h('button', { class: 'btn secondary', type: 'button', onclick: async () => { try { await api('POST', '/v1/auth/sign-out'); } catch {} signOutLocal(); toast('Signed out'); go('/app'); } }, 'Sign out'),
       h('button', { class: 'btn danger', type: 'button', onclick: () => { confirmBox.hidden = false; confirmBox.scrollIntoView({ behavior: 'smooth', block: 'center' }); } }, 'Delete my account'),
       confirmBox);

@@ -245,6 +245,50 @@ It is off for every company until turned on in the console (Prize game).
 - **Books:** prizes go into the books as `expense:prizes`.
 - **Legal:** have a lawyer check the rules ("no purchase necessary", eligibility, state registration) before turning it on.
 
+
+## The page belongs to the advertiser, and "Show me more" (`src/modules/video`)
+
+After a scan, people see the advertiser's own uploaded ad first (video or picture). It works the same on every size of piece, down to a tenth of the label. The page then shows, in order:
+- the advertiser's AR, offer and buttons
+- how many people bought from this very bottle
+- "Pass it on"
+- "Show me more", at the very end
+
+Only when someone taps "Show me more" do they get a personalized video:
+- **Motion graphics:** made instantly from the advertiser's own words, colors and pictures, and cut for the moment (time of day, passed on by a friend, new or returning, interests). Claude writes the storyboard but can never invent a price or claim.
+- **Live action or animated footage:** made by Google's Veo (`GEMINI_API_KEY`) ahead of time for each kind of moment, and shown only after the advertiser approves.
+
+Every view, completion and tap teaches it which cut works best (Thompson sampling). The written greeting is gone.
+
+## The number line and honest data (`src/modules/numberline`)
+
+A dedicated number-line agent (Claude, checked by rules it can't contradict) places every offering on the number line:
+- **Where it sits:** for sale; free (paid from outside, or by ads); or negatively priced (free plus value going out, with who chose the cause).
+- **Which economic systems it runs on**, with shares for blends: market, sharing economy, free from outside, free by ads, giving economy, public.
+- **Where its money comes from.**
+
+This covers bottles, custom bottles, each company's business model, and each ad's offering, which advertisers declare: a $5 burger is for sale, a free download is free, and a spare room rented by a neighbor is sharing economy. Every version is kept.
+
+Every choice people make is recorded with what else was on offer and any conditions, then sorted into the five tiers of Abundance Engineering chapter 10 (1, 2, 3, 4a, 4b, 5). The User Test is applied per person: a cause someone opposes or doesn't care about doesn't count as value to them. Choices covered include taking a bottle, engaging with an ad, watching its video or AR, buying, and buying a custom bottle.
+
+## Collecting everything the law allows (`src/modules/data`)
+
+- **Activity log:** every action by every kind of user (consumers, advertisers, the team, machines, drivers). Secrets are never kept.
+- **Page interactions:** ad watch time, AR time, scrolling, "Show me more", shares, video watching.
+- **One person across phones, accounts and roles:** a consumer who is also an advertiser is one profile, joined by account, phone and email fingerprints.
+
+Each company has a switchboard with presets for the US, California-style states, the EU, UK, Canada and Brazil. Each kind of data can be turned on or off, set to collect always, unless the person says no, or only if they say yes, and kept for a chosen number of days. Global Privacy Control is honored.
+
+People can download everything kept about them or erase it. Money records stay in the books without their name. A lawyer should confirm each country's settings.
+
+## Transparency (`src/modules/transparency`)
+
+Each company chooses how open to be. FreeWater shares everything; new white-label companies start quiet.
+- A live public feed (`/v1/public/companies/:id/feed`, streamed at `/live`) that never names a person. It shows the machine, just the city, or no place, as the company chooses.
+- Live counters.
+- Each finished day's books fingerprint, published to GitHub (`FW_ANCHOR_GITHUB_REPO`, `FW_ANCHOR_GITHUB_TOKEN`) and as a Bitcoin timestamp (OpenTimestamps), so nobody can quietly rewrite the past.
+- Advertiser statements: every bottle, bid, auction price and reason, as a table or spreadsheet.
+
 ## Model 6 machine software
 
 ```

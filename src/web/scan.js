@@ -206,7 +206,7 @@
       case 'proof': {
         const parts = [];
         if (b.bottle > 0) parts.push(`${b.bottle} ${b.bottle === 1 ? 'person' : 'people'} bought from this very bottle`);
-        if (b.ad > 0) parts.push(`${b.ad} from ${b.advertiser}’s bottles`);
+        if (b.ad > b.bottle) parts.push(`${b.ad} from all ${b.advertiser} bottles`);
         return h('div', { class: 'proof' }, h('span', { class: 'proof-dot', 'aria-hidden': 'true' }), h('span', { text: `${parts.join(' · ')}.` }));
       }
       case 'share': {
@@ -517,9 +517,11 @@
       i = n;
       [...bars.children].forEach((bar, k) => { bar.className = k < n ? 'done' : k === n ? 'on' : ''; if (k === n) bar.firstChild.style.animationDuration = `${s.scenes[n].ms}ms`; });
       const sc = s.scenes[n];
-      const kids = [];
-      if (sc.imageUrl) kids.push(h('div', { class: `m-img m-${sc.motion}`, style: `background-image:url("${encodeURI(sc.imageUrl)}")` }));
-      kids.push(h('div', { class: `m-words m-${sc.layout} m-${sc.motion}` }, h('h3', { text: sc.title }), sc.sub ? h('p', { text: sc.sub }) : null));
+      const kids = [h('i', { class: 'm-shape s1', 'aria-hidden': 'true' }), h('i', { class: 'm-shape s2', 'aria-hidden': 'true' })];
+      if (sc.imageUrl) kids.push(h('div', { class: `m-img m-${sc.motion}`, style: `background-image:url("${sc.imageUrl.startsWith('data:') ? sc.imageUrl : encodeURI(sc.imageUrl)}")` }));
+      const kicker = { hook: s.brand, point: null, offer: 'Just for you', end: null, picture: null }[sc.layout];
+      kids.push(h('div', { class: `m-words m-${sc.layout} m-${sc.motion}` }, kicker && sc.layout !== 'hook' ? h('span', { class: 'kicker', text: kicker }) : null, h('h3', { text: sc.title }), sc.sub ? h('p', { text: sc.sub }) : null));
+      sceneBox.className = `m-scene${(sc.layout === 'hook' || sc.layout === 'offer') && !sc.imageUrl ? ' alt' : ''}`;
       sceneBox.replaceChildren(...kids);
       cta.hidden = sc.layout !== 'end';
       clearTimeout(timer);

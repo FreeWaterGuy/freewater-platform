@@ -47,6 +47,7 @@
 
   async function render() {
     clearInterval(timer);
+    if (stream) { stream.close(); stream = null; }
     const p = params();
     if (p.get('company')) state.company = p.get('company');
     if (!state.company) state.company = (await api('/v1/public/app-config')).companyId;
@@ -66,9 +67,23 @@
   async function summary() { state.summary = await api(`/v1/public/books/${state.company}`); return state.summary; }
 
   // ---------- live totals ----------
+  let stream = null;
   async function livePage() {
     const s = await summary();
     const t = s.totals;
+    // Happening now: each bottle, sale, transfer and prize as it happens (for companies that share it).
+    const nowList = h('ol', { class: 'now-list', 'aria-live': 'polite' });
+    const nowCard = h('section', { class: 'card now', hidden: true }, h('div', { class: 'card-head' }, h('span', { class: 'eyebrow' }, h('i', { class: 'live-dot', 'aria-hidden': 'true' }), 'Happening now'), h('span', { class: 'num', style: 'font-size:13px;color:var(--muted)', text: 'never a name, just what happened' })), nowList);
+    const nowItem = (i) => h('li', {}, h('span', { text: i.text }), h('time', { datetime: i.at, text: ago(i.at) }));
+    const addNow = (i) => { nowList.prepend(nowItem(i)); while (nowList.children.length > 12) nowList.lastChild.remove(); nowCard.hidden = false; };
+    if (stream) { stream.close(); stream = null; }
+    if (fixture?.feed) { for (const i of [...fixture.feed].reverse()) addNow(i); }
+    else if (!fixture && 'EventSource' in window) {
+      stream = new EventSource(`/v1/public/companies/${encodeURIComponent(state.company)}/live`);
+      stream.addEventListener('hello', (e) => { const d = JSON.parse(e.data); for (const i of [...d.items].reverse()) addNow(i); });
+      stream.addEventListener('item', (e) => addNow(JSON.parse(e.data)));
+      stream.onerror = () => { if (!nowList.children.length) { stream.close(); stream = null; } };
+    }
     const draw = () => page('live',
       h('h1', { class: 'lead', text: 'Every bottle, every dollar. Live.' }),
       h('p', { class: 'sub', text: `What came in, what went out${s.givingOn ? ', and what went to charity' : ''}. Updated every few seconds.` }),
@@ -78,6 +93,7 @@
         figure('Money in', money(t.revenueCents), 'ads, scans, AR, commission, custom'),
         figure('Money out', money(t.moneyOutCents), s.givingOn ? `costs, plus ${money(t.sentCents)} sent to charity` : 'every cost, line by line'),
         figure('Corrections', t.corrections.toLocaleString(), 'all public, none deleted')),
+      nowCard,
       h('div', { class: 'cards' }, perBottleCard(s), monthsCard(s.monthly), feedCard(s.activity)),
       s.givingOn && s.charities.length ? h('div', { class: 'split' }, h('section', { class: 'card' }, h('div', { class: 'card-head' }, h('span', { class: 'eyebrow', text: 'Latest transfers' }), link(`/books/donations${q()}`, {}, 'Every transfer →')), transfersTable(s.transfers.slice(0, 5))), charitiesCard(s)) : null,
       lookupBox());
@@ -177,6 +193,10 @@
   // ---------- daily proof ----------
   async function proofPage() {
     const days = await api(`/v1/public/books/${state.company}/days`);
+    // Where each day's fingerprint was also published, out of our hands (if this company publishes them).
+    let published = [];
+    try { published = await api(`/v1/public/books/${state.company}/fingerprints`); } catch {}
+    const pubFor = (date) => published.filter((a) => a.day === date && a.status === 'published');
     const out = h('div', {});
     const check = async (d) => {
       out.replaceChildren(h('p', { class: 'sub', text: `Checking ${d.date}…` }));
@@ -189,7 +209,7 @@
     };
     page('proof', h('h1', { class: 'lead', text: 'Proof that nothing changes' }), h('p', { class: 'sub', text: 'Each day of the books gets a fingerprint, built from every line that day and the day before’s fingerprint. If anyone changed a single past line, every fingerprint after it would change too. Write one down, check it again any time, or tap “Check” and your own browser recomputes it.' }),
       h('section', { class: 'card', style: 'margin-top:24px' }, out, h('div', { class: 'scroll' }, h('table', { class: 't' }, h('thead', {}, h('tr', {}, ['Day', 'Lines', 'In', 'Out', 'Fingerprint', ''].map((x, i) => h('th', { class: i === 1 || i === 2 || i === 3 ? 'r' : null, text: x })))),
-        h('tbody', {}, days.slice(0, 60).map((d) => h('tr', {}, h('td', { text: day(d.date) }), h('td', { class: 'r', text: String(d.lines) }), h('td', { class: 'r', text: usd(d.inCents) }), h('td', { class: 'r', text: usd(d.outCents) }), h('td', {}, h('span', { class: 'hash', text: `${d.hash.slice(0, 16)}…` })), h('td', {}, h('button', { class: 'btn light', style: 'min-height:34px;padding:4px 14px', type: 'button', onclick: () => check(d) }, 'Check')))))))));
+        h('tbody', {}, days.slice(0, 60).map((d) => h('tr', {}, h('td', { text: day(d.date) }), h('td', { class: 'r', text: String(d.lines) }), h('td', { class: 'r', text: usd(d.inCents) }), h('td', { class: 'r', text: usd(d.outCents) }), h('td', {}, h('span', { class: 'hash', text: `${d.hash.slice(0, 16)}…` }), pubFor(d.date).map((a) => a.target === 'github' && a.ref ? h('a', { class: 'pub', href: a.ref, target: '_blank', rel: 'noopener', text: 'on GitHub' }) : h('span', { class: 'pub', title: 'A Bitcoin timestamp proves this fingerprint existed by this day', text: 'Bitcoin-stamped' }))), h('td', {}, h('button', { class: 'btn light', style: 'min-height:34px;padding:4px 14px', type: 'button', onclick: () => check(d) }, 'Check')))))))));
   }
 
   // ---------- companies, how we count, confirmations ----------

@@ -114,7 +114,7 @@ export class NumberLineService {
     return (await this.db.query<any>(`select * from numberline where company_id = $1 and subject = $2 order by version desc`, [companyId, subject])).rows.map((r) => ({ id: r.id, version: r.version, by: r.by, status: r.status, at: new Date(r.at).toISOString(), placement: typeof r.placement === 'string' ? JSON.parse(r.placement) : r.placement }));
   }
   async all(companyId: string) {
-    return (await this.db.query<any>(`select distinct on (subject) * from numberline where company_id = $1 order by subject, version desc`, [companyId])).rows.map((r) => ({ subject: r.subject, id: r.id, version: r.version, by: r.by, status: r.status, placement: typeof r.placement === 'string' ? JSON.parse(r.placement) : r.placement }));
+    return (await this.db.query<any>(`select distinct on (subject) * from numberline where company_id = $1 order by subject, version desc`, [companyId])).rows.map((r) => ({ subject: r.subject, name: (typeof r.facts === 'string' ? JSON.parse(r.facts) : r.facts)?.name ?? r.subject, id: r.id, version: r.version, by: r.by, status: r.status, placement: typeof r.placement === 'string' ? JSON.parse(r.placement) : r.placement }));
   }
 
   // ---------- choices ----------

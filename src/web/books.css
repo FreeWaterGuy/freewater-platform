@@ -70,3 +70,15 @@ footer.foot { border-top: 1px solid var(--rule); padding-block: 22px 40px; color
 @media (max-width: 980px) { .figures { grid-template-columns: repeat(2, minmax(0, 1fr)); } .cards, .split { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 @media (max-width: 720px) { nav.tabs { flex-wrap: nowrap; overflow-x: auto; max-width: 100%; scrollbar-width: none; } nav.tabs a { white-space: nowrap; flex: none; } }
+
+/* Happening now */
+.card.now{margin-top:24px}
+.live-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#22A55B;margin-right:8px;vertical-align:1px;animation:live 1.6s ease-in-out infinite}
+@keyframes live{50%{opacity:.35}}
+.now-list{list-style:none;margin:0;padding:0}
+.now-list li{display:flex;justify-content:space-between;gap:16px;padding:10px 0;border-bottom:1px solid var(--line,#e6e8eb);font-size:15px;animation:in .4s ease-out}
+.now-list li:last-child{border-bottom:0}
+.now-list time{flex:none;color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}
+@keyframes in{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+.pub{display:inline-block;margin-left:8px;padding:2px 8px;border-radius:999px;background:#EEF6FB;color:#1E5D85;font-size:12px;text-decoration:none}
+@media (prefers-reduced-motion: reduce){.live-dot,.now-list li{animation:none}}

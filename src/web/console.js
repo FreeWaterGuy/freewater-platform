@@ -18,7 +18,7 @@
   const icon = (d) => { const s = document.createElementNS(NS, 'svg'); for (const [k, v] of Object.entries({ viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' })) s.setAttribute(k, v); for (const p of d.split('|')) { const e = document.createElementNS(NS, 'path'); e.setAttribute('d', p); s.append(e); } return s; };
   const I = {
     start: 'M5 12l5 5L20 7', company: 'M3 21h18|M5 21V7l7-4 7 4v14|M9 9h1|M14 9h1|M9 13h1|M14 13h1|M10 21v-4h4v4', brand: 'M12 3a9 9 0 1 0 0 18c1 0 1.5-.7 1.5-1.5 0-.4-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1 0-.8.7-1.5 1.5-1.5H16a5 5 0 0 0 5-5c0-4.4-4-7.8-9-7.8Z|M7.5 11.5h.01|M10.5 7.5h.01|M15.5 7.5h.01',
-    game: 'M12 21a7 7 0 1 0 0-14 7 7 0 0 0 0 14Z|M4 4l3 3|M20 4l-3 3|M12 2v3', ads: 'M4 5h16v14H4z|M4 10h16|M10 10v9', giving: 'M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L12 21l7.8-7.5 1-1.1a5.5 5.5 0 0 0 0-7.8Z', modules: 'M4 4h7v7H4z|M13 4h7v7h-7z|M4 13h7v7H4z|M13 13h7v7h-7z',
+    game: 'M12 21a7 7 0 1 0 0-14 7 7 0 0 0 0 14Z|M4 4l3 3|M20 4l-3 3|M12 2v3', eye: 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z|M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z', shield: 'M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6l-8-3Z', line: 'M3 12h18|M7 9v6|M12 8v8|M17 9v6', ads: 'M4 5h16v14H4z|M4 10h16|M10 10v9', giving: 'M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L12 21l7.8-7.5 1-1.1a5.5 5.5 0 0 0 0-7.8Z', modules: 'M4 4h7v7H4z|M13 4h7v7h-7z|M4 13h7v7H4z|M13 13h7v7h-7z',
     machine: 'M6 3h12v18H6z|M9 7h6|M10 17h4', team: 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z|M2 21a7 7 0 0 1 14 0|M17 3a4 4 0 0 1 0 8|M22 21a7 7 0 0 0-5-6.7', history: 'M3 12a9 9 0 1 0 3-6.7L3 8|M3 3v5h5|M12 7v5l3 3',
     key: 'M15 7a4 4 0 1 1-3.5 6H8v3H5v-3H3v-3h8.5A4 4 0 0 1 15 7Z', hook: 'M18 16.1A5 5 0 0 0 15 7a5 5 0 0 0-4.5 7.2|M6 16.1A5 5 0 1 0 12 21h5|M12 3a5 5 0 0 0-3 9l-3 5', docs: 'M4 4h12a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4z|M8 8h8|M8 12h8|M8 16h5', licensees: 'M3 7h18v13H3z|M8 7V4h8v3|M3 12h18',
     qr: 'M4 4h6v6H4z|M14 4h6v6h-6z|M4 14h6v6H4z|M14 14h2v2h-2z|M18 18h2v2h-2z|M14 18h2|M18 14h2', product: 'M9 2h6v3l2 3v13a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V8l2-3z|M7 11h10|M7 17h10',
@@ -44,7 +44,7 @@
   }
 
   const routes = [
-    [/^\/console\/?$/, startPage], [/^\/console\/company$/, companyPage], [/^\/console\/brand$/, brandPage], [/^\/console\/ads$/, adsPage], [/^\/console\/giving$/, givingPage], [/^\/console\/game$/, gamePage],
+    [/^\/console\/?$/, startPage], [/^\/console\/company$/, companyPage], [/^\/console\/brand$/, brandPage], [/^\/console\/ads$/, adsPage], [/^\/console\/giving$/, givingPage], [/^\/console\/game$/, gamePage], [/^\/console\/transparency$/, transparencyPage], [/^\/console\/data$/, dataPage], [/^\/console\/numberline$/, numberLinePage],
     [/^\/console\/modules$/, modulesPage], [/^\/console\/codes$/, codesPage], [/^\/console\/products$/, productsPage], [/^\/console\/machines$/, machinesPage], [/^\/console\/team$/, teamPage], [/^\/console\/history$/, historyPage],
     [/^\/console\/keys$/, keysPage], [/^\/console\/webhooks$/, webhooksPage], [/^\/console\/webhooks\/([\w-]+)$/, webhookPage], [/^\/console\/licensees$/, licenseesPage],
   ];
@@ -78,7 +78,7 @@
   function shell(active, ...content) {
     const nav = [
       ['start', '/console', 'Get started', I.start], ['company', '/console/company', 'Company', I.company], ['brand', '/console/brand', 'Brand', I.brand], ['ads', '/console/ads', 'Ads and prices', I.ads], ['codes', '/console/codes', 'QR codes and AR', I.qr], ['products', '/console/products', 'Products', I.product],
-      ['giving', '/console/giving', 'Giving', I.giving], ['game', '/console/game', 'Prize game', I.game], ['modules', '/console/modules', 'Modules', I.modules], ['machines', '/console/machines', 'Machines', I.machine], ['team', '/console/team', 'Team', I.team], ['history', '/console/history', 'History', I.history],
+      ['giving', '/console/giving', 'Giving', I.giving], ['game', '/console/game', 'Prize game', I.game], ['transparency', '/console/transparency', 'Transparency', I.eye], ['data', '/console/data', 'Data and privacy', I.shield], ['numberline', '/console/numberline', 'Number line', I.line], ['modules', '/console/modules', 'Modules', I.modules], ['machines', '/console/machines', 'Machines', I.machine], ['team', '/console/team', 'Team', I.team], ['history', '/console/history', 'History', I.history],
       'Developers', ['keys', '/console/keys', 'API keys', I.key], ['webhooks', '/console/webhooks', 'Webhooks', I.hook], ['docs', '/developers', 'Docs', I.docs],
       ...(S.ov?.you?.platform ? ['Platform', ['licensees', '/console/licensees', 'Licensees', I.licensees]] : []),
     ];
@@ -439,6 +439,79 @@
         section('Turn it on', null, h('label', { class: 'switch full' }, on, h('div', {}, h('b', { text: 'Run the prize game' }), h('span', { text: 'Off by default. Turn it on and every ad page gets a chance to show the red ball.' })))),
         body, results)];
     });
+  }
+
+  // ---------- transparency ----------
+  function transparencyPage() {
+    settingsPage('transparency', 'Transparency', 'How much of your books the world sees, live. Choose what fits your business; every number shown comes straight from the books, and no person is ever named.', (ctx) => {
+      const T = () => (ctx.draft.transparency ??= { liveFeed: false, counters: false, publishFingerprints: false, advertiserStatements: true, feedDetail: 'city', showAmounts: false });
+      if (!ctx.draft.transparency) { T(); S.ov.config.transparency = structuredClone(ctx.draft.transparency); }
+      const t = ctx.draft.transparency;
+      const presetBtns = [['Everything public', { liveFeed: true, counters: true, publishFingerprints: true, advertiserStatements: true, feedDetail: 'machine', showAmounts: true }], ['Totals only', { liveFeed: false, counters: true, publishFingerprints: true, advertiserStatements: true, feedDetail: 'city', showAmounts: false }], ['Private', { liveFeed: false, counters: false, publishFingerprints: false, advertiserStatements: true, feedDetail: 'none', showAmounts: false }]].map(([l, v]) => h('button', { type: 'button', class: 'btn secondary small', onclick: () => { Object.assign(T(), v); ctx.changed(); render(); } }, l));
+      const base = (location.origin || 'https://go.freewater.io');
+      return [h('div', { class: 'stack' },
+        section('Quick choices', null, h('div', { class: 'toolbar' }, presetBtns)),
+        section('What the world sees', S.ov.config.openBooks === false ? 'Your open-books pages are off, so nothing below is public until you turn them on (Giving).' : null,
+          toggle(ctx, 'transparency.liveFeed', 'A live public feed', 'Each bottle, sale, transfer and prize as it happens, on your open-books page.', { full: true }),
+          toggle(ctx, 'transparency.counters', 'Live public counters', 'Bottles, given, sent to charities, still owed, prizes.', { full: true }),
+          toggle(ctx, 'transparency.publishFingerprints', 'Publish each day’s fingerprint where you can’t change it', 'On GitHub and as a Bitcoin timestamp, so nobody (you included) can quietly rewrite the past.', { full: true }),
+          toggle(ctx, 'transparency.advertiserStatements', 'Statements for advertisers', 'Every bottle they paid for, their bid and what the auction charged, with the day’s fingerprint.', { full: true }),
+          h('div', { class: 'form' },
+            select(ctx, 'transparency.feedDetail', 'Where things happened, in the feed', [['machine', 'The machine or route'], ['city', 'Just the city'], ['none', 'Nowhere']]),
+            select(ctx, 'transparency.showAmounts', 'Money amounts in the feed', [[true, 'Shown'], [false, 'Hidden']]))),
+        section('Links', null, h('p', { style: 'margin:0;font-size:14px;line-height:1.7', text: `Counters: ${base}/v1/public/companies/${S.ov.config.id}/counters · Feed: ${base}/v1/public/companies/${S.ov.config.id}/feed · Live stream: ${base}/v1/public/companies/${S.ov.config.id}/live · Fingerprints: ${base}/v1/public/books/${S.ov.config.id}/fingerprints` })))];
+    });
+  }
+
+  // ---------- data ----------
+  async function dataPage() {
+    const info = await api('GET', '/v1/data/policy');
+    settingsPage('data', 'Data and privacy', 'Collect everything the law allows, from every direction: what people do on pages, every action in the platform, what people design and what advertisers make, every choice sorted on the number line, and one person across phones and roles. Pick where you operate, then change any line. A lawyer should confirm these for each country before launch.', (ctx) => {
+      if (!ctx.draft.data) { ctx.draft.data = structuredClone(info.policy); S.ov.config.data = structuredClone(info.policy); }
+      const d = ctx.draft.data;
+      const table = h('div', { class: 'scroll-x' });
+      const draw = () => table.replaceChildren(h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Kind of data', 'Collect', 'How people agree', 'Keep for (days)'].map((x) => h('th', { text: x })))),
+        h('tbody', {}, Object.entries(info.kinds).map(([k, kind]) => {
+          const r = d.rules[k];
+          const on = h('input', { type: 'checkbox', 'aria-label': `Collect ${kind.label}` }); on.checked = r.collect;
+          on.addEventListener('change', () => { r.collect = on.checked; d.region = 'custom'; ctx.changed(); });
+          const how = h('select', { class: 'input', 'aria-label': `How people agree to ${kind.label}` }, [['none', 'Always'], ['opt_out', 'Unless they say no'], ['opt_in', 'Only if they say yes']].map(([v, l]) => h('option', { value: v, text: l }))); how.value = r.consent;
+          how.addEventListener('change', () => { r.consent = how.value; d.region = 'custom'; ctx.changed(); });
+          const days = h('input', { class: 'input', type: 'number', min: 1, max: 3650, value: r.keepDays, style: 'max-width:110px', 'aria-label': `Days to keep ${kind.label}` });
+          days.addEventListener('input', () => { const n = Math.round(Number(days.value)); if (n >= 1 && n <= 3650) { r.keepDays = n; d.region = 'custom'; ctx.changed(); } });
+          return h('tr', {}, h('td', {}, h('b', { text: kind.label }), h('div', { class: 'muted', style: 'font-size:13px', text: kind.what })), h('td', {}, on), h('td', { style: 'min-width:190px' }, how), h('td', {}, days));
+        }))));
+      draw();
+      const regions = Object.entries(info.presets).map(([r, p]) => {
+        const b = h('input', { type: 'radio', name: 'region', value: r }); b.checked = d.region === r;
+        b.addEventListener('change', () => { Object.assign(d, structuredClone(p.policy), { shareWithPlatform: d.shareWithPlatform }); ctx.changed(); draw(); });
+        return h('label', {}, b, h('b', { text: { us: 'United States', us_ca: 'California and similar states', eu: 'European Union', uk: 'United Kingdom', ca: 'Canada', br: 'Brazil' }[r] ?? r }), h('span', { text: p.about }));
+      });
+      return [h('div', { class: 'stack' },
+        section('Where you operate', d.region === 'custom' ? 'Custom: you changed some lines below.' : null, h('div', { class: 'radio-cards', role: 'radiogroup', 'aria-label': 'Where you operate' }, regions)),
+        section('Each kind of data', 'Secrets (sign-in codes, tokens, card details) are never kept, whatever is chosen. Browsers that ask not to be tracked are honored.', table,
+          toggle(ctx, 'data.truncateIp', 'Shorten IP addresses before keeping them', 'The last part is removed, so an address points to a neighborhood, not a home.', { full: true }),
+          ...(S.ov.you?.platform ? [] : [toggle(ctx, 'data.shareWithPlatform', 'Share with the platform (FreeWater)', 'As your license agreement allows.', { full: true })])),
+        section('People’s rights', null, h('p', { style: 'margin:0', text: 'Anyone can download everything kept about them, or erase it, from their account. Money records stay in the books, as the law requires, with their name taken out. Your team can look up one person (consumer and advertiser together) through the API: GET /v1/data/people?email=…' })))];
+    });
+  }
+
+  // ---------- the number line and honest data ----------
+  async function numberLinePage() {
+    for (const s of ['company', 'custom', `bottle:${S.ov.config.standardProductId ?? 'bottle-16oz'}`]) { try { await api('POST', '/v1/numberline/place', { subject: s }); } catch {} }
+    const [rows, hd] = await Promise.all([api('GET', '/v1/numberline'), api('GET', '/v1/honest-data')]);
+    const SYS = { market: 'For sale (market)', sharing: 'Sharing economy', free_outside: 'Free, paid from outside', free_ad: 'Free, paid by ads', giving: 'Giving economy', public: 'Public' };
+    const POS = { for_sale: 'For sale', free: 'Free', negatively_priced: 'Negatively priced' };
+    const name = (s) => s === 'company' ? 'Your business model' : s === 'custom' ? 'Custom bottles' : s.startsWith('bottle:') ? `Bottle: ${s.slice(7)}` : s.startsWith('offering:') ? `Ad offering: ${s.slice(9)}` : s;
+    const pct = (n) => (hd.total ? `${Math.round((n / hd.total) * 100)}%` : '–');
+    shell('numberline', head('Number line and honest data', 'Where everything sits (for sale, free or better than free, on which economic systems), placed by the number-line agent, and every choice people make sorted into the honest-data tiers from the start.'),
+      h('div', { class: 'stack' },
+        section('Everything placed', 'Ads that haven’t said what they offer are assumed for sale until they do.', h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['What', 'Where on the line', 'Economic systems', 'Why', 'Placed by'].map((x) => h('th', { text: x })))),
+          h('tbody', {}, rows.map((r) => h('tr', {}, h('td', {}, h('b', { text: r.subject.startsWith('offering:') ? `Ad: ${r.name}` : name(r.subject) })), h('td', { text: `${POS[r.placement.position]}${r.placement.netCents ? ` (${r.placement.netCents > 0 ? '' : '−'}${Math.abs(r.placement.netCents)}¢)` : ''}` }), h('td', { text: r.placement.systems.map((s) => `${SYS[s.system] ?? s.system}${r.placement.systems.length > 1 ? ` ${Math.round(s.share * 100)}%` : ''}`).join(', ') }), h('td', { style: 'font-size:13px;max-width:340px', text: r.placement.reasons.join(' ') }), h('td', { class: 'muted', style: 'font-size:13px', text: `${r.by}${r.status === 'needs_declaration' ? ' · not declared yet' : r.status === 'overridden' ? ' · corrected' : ''}` }))))))),
+        section('Honest data, last 30 days', `${hd.total.toLocaleString()} choices recorded · ${hd.honestShare ?? 0}% honest (tiers 3, 4 and 5)`,
+          h('div', { class: 'kpis', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, ['1', '2', '3', '4a', '4b', '5'].map((k) => [k, hd.tiers[k]]).map(([k, label]) => h('div', { class: 'kpi' }, h('span', { text: `Tier ${k}: ${label}` }), h('b', { text: `${(hd.byTier[k] ?? 0).toLocaleString()}` }), h('small', { class: 'muted', text: pct(hd.byTier[k] ?? 0) })))),
+          h('h3', { style: 'margin:18px 0 8px;font-size:15px', text: 'By economic system' }),
+          h('div', { class: 'kpis', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, Object.entries(SYS).map(([k, label]) => h('div', { class: 'kpi' }, h('span', { text: label }), h('b', { text: `${(hd.bySystem[k] ?? 0).toLocaleString()}` }), h('small', { class: 'muted', text: pct(hd.bySystem[k] ?? 0) })))))));
   }
 
   // ---------- giving ----------

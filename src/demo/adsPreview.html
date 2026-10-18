@@ -128,9 +128,15 @@
       }
       if (/^\/v1\/campaigns\/[\w-]+\/codes$/.test(path)) {
         S.codes ??= structuredClone(R.joeCodes);
-        if (method === 'PATCH') { for (const k of ['variants', 'personalize', 'afterEnd']) if (body[k] !== undefined) S.codes[k] = body[k]; if (body.qr) S.codes.qr = { ...S.codes.qr, mode: body.qr.mode, staticUrl: body.qr.staticUrl ?? null, hasLogo: S.codes.qr.hasLogo || !!body.qr.logo }; if (body.targeting) S.codes.targeting = { ...S.codes.targeting, ...body.targeting }; if (body.bidding) { const { adjustments, frequencyCap, ...rest } = body.bidding; S.codes.buy = { ...S.codes.buy, ...rest, ...(frequencyCap ? { frequencyCap } : {}), ...(adjustments ? { adjustments } : {}) }; } }
+        if (method === 'PATCH') { for (const k of ['variants', 'personalize', 'afterEnd']) if (body[k] !== undefined) S.codes[k] = body[k]; if (body.qr) S.codes.qr = { ...S.codes.qr, mode: body.qr.mode, staticUrl: body.qr.staticUrl ?? null, hasLogo: S.codes.qr.hasLogo || !!body.qr.logo }; if (body.targeting) S.codes.targeting = { ...S.codes.targeting, ...body.targeting }; for (const k of ['firstSeen', 'socialProof', 'offering']) if (body[k] !== undefined) S.codes[k] = body[k]; if (body.more) S.codes.more = { ...S.codes.more, ...body.more }; if (body.bidding) { const { adjustments, frequencyCap, ...rest } = body.bidding; S.codes.buy = { ...S.codes.buy, ...rest, ...(frequencyCap ? { frequencyCap } : {}), ...(adjustments ? { adjustments } : {}) }; } }
         return structuredClone(S.codes);
       }
+      if (/^\/v1\/campaigns\/[\w-]+\/videos$/.test(path)) return structuredClone(R.joeVideos);
+      if (/^\/v1\/campaigns\/[\w-]+\/videos\/[\w-]+\/review$/.test(path)) return {};
+      if (/^\/v1\/campaigns\/[\w-]+\/learning$/.test(path)) return structuredClone(R.joeLearning);
+      if (key === 'POST /v1/numberline/place') { const p = structuredClone(R.joePlace); const o = S.codes?.offering; if (o) { const back = (o.donationCents || 0) + (o.paymentCents || 0); p.placement.position = o.priceCents > 0 ? 'for_sale' : back > 0 ? 'negatively_priced' : 'free'; p.placement.systems = [{ system: o.peerToPeer ? 'sharing' : p.placement.position === 'for_sale' ? 'market' : p.placement.position === 'free' ? 'free_ad' : 'giving', share: 1 }]; p.placement.reasons = [o.priceCents > 0 ? `The person pays ${o.priceCents}¢.` : back > 0 ? `Free, and ${back}¢ goes out on the person's behalf.` : 'Free to the person, paid for by advertising.']; p.status = 'auto'; } return p; }
+      if (path === '/v1/ads/statement') return structuredClone(R.joeStatement);
+      if (key === 'POST /v1/assets') return { id: 'preview', url: R.joePoster };
       if (key === 'POST /v1/qr/preview') return body.logo ? R.joeQrLogo : R.joeQr; // the preview shows a sample logo for any upload
       if (/^\/v1\/campaigns\/[\w-]+\/preview-moment$/.test(path)) return R.moments[`${body.daypart}:${body.passedOn ? 'passed' : body.newToAdvertiser ? 'first' : 'returning'}`];
       if (key === 'GET /v1/ads/reach') return { printedForPeople: 0 };

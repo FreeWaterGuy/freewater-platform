@@ -12,6 +12,7 @@ import { codesArRoutes } from './codesAr';
 import { lotteryRoutes } from './lottery';
 import { moreRoutes } from './more';
 import { dataRoutes } from './data';
+import { transparencyRoutes } from './transparency';
 import { VideoError } from '../modules/video/service';
 import { DataError, DataService } from '../modules/data/service';
 import { NumberLineError } from '../modules/numberline/service';
@@ -540,6 +541,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   lotteryRoutes(app, route, parseTarget);
   moreRoutes(app, route, parseTarget, optionalUser);
   dataRoutes(app, route);
+  transparencyRoutes(app, server, route);
 
   // ---------- wiring ----------
 

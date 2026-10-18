@@ -186,3 +186,16 @@ video { width: 100%; border-radius: var(--radius); background: #000; display: bl
 .consent p{margin:0 0 10px;font-size:14px;line-height:1.4}
 .consent .row{display:flex;gap:8px}
 .consent .row .btn{flex:1}
+
+/* Motion video: richer look. Bold scenes switch to the brand's accent; shapes drift behind the words. */
+.motion .m-scene{transition:background-color .35s ease}
+.motion .m-scene.alt{background:var(--m-accent);color:var(--m-bg)}
+.motion .m-scene.alt .m-offer h3{background:var(--m-bg);color:var(--m-accent)}
+.m-shape{position:absolute;border-radius:50%;background:color-mix(in srgb,var(--m-accent) 22%,transparent);filter:blur(.5px);animation:m-drift 6s ease-in-out infinite alternate}
+.m-scene.alt .m-shape{background:color-mix(in srgb,var(--m-bg) 20%,transparent)}
+.m-shape.s1{width:62%;aspect-ratio:1;right:-18%;top:8%}
+.m-shape.s2{width:38%;aspect-ratio:1;left:-12%;bottom:18%;animation-duration:8s}
+@keyframes m-drift{from{transform:translate(0,0) scale(1)}to{transform:translate(-6%,4%) scale(1.08)}}
+.m-words .kicker{display:block;margin:0 0 10px;font:700 12px/1 var(--display);letter-spacing:.14em;text-transform:uppercase;opacity:.8}
+.m-words h3{text-wrap:balance}
+@media (prefers-reduced-motion: reduce){.m-shape{animation:none}}

@@ -43,6 +43,8 @@ import { VeoProvider } from './modules/video/veo';
 import type { FootageProvider, StoryWriter } from './modules/video/contract';
 import { InteractionService } from './modules/interactions/service';
 import { DataService } from './modules/data/service';
+import { TransparencyService } from './modules/transparency/service';
+import { AnchorService, GitHubPublisher, OpenTimestampsPublisher, type AnchorPublisher } from './modules/transparency/anchors';
 import { NumberLineService } from './modules/numberline/service';
 import { ClaudeNumberLineAgent, rulesAgent, type NumberLineAgent } from './modules/numberline/agent';
 import { boxes, builtinCreatives, freewater, locations, peakSpring, products, sampleCampaigns } from './demo/seed';
@@ -66,6 +68,8 @@ export interface AppOptions {
   footage?: FootageProvider | null;
   /** Places things on the number line (defaults to Claude with a key, else the rules). */
   numberLineAgent?: NumberLineAgent;
+  /** Where daily books fingerprints are published (defaults: GitHub when configured, and a Bitcoin timestamp in production). */
+  anchorPublishers?: AnchorPublisher[];
   designer?: DesignAssistant;
   geocoder?: Geocoder; // defaults to the test geocoder
   planner?: RoutePlanner; // defaults to the simple route planner
@@ -185,6 +189,14 @@ export async function createApp(opts: AppOptions) {
   const handoff = new HandoffService(db, platform, packs);
   const books = new BooksService(db, platform, packs, messenger, opts.payouts ?? new TestPayoutProvider(), (c, at) => delivery.today(c, at), () => persistence.flush());
 
+  // Transparency: the live feed and counters, published daily fingerprints, advertiser statements.
+  const transparency = new TransparencyService(platform);
+  const publishers = opts.anchorPublishers ?? [
+    ...(process.env.FW_ANCHOR_GITHUB_REPO && process.env.FW_ANCHOR_GITHUB_TOKEN ? [new GitHubPublisher({ repo: process.env.FW_ANCHOR_GITHUB_REPO, token: process.env.FW_ANCHOR_GITHUB_TOKEN, branch: process.env.FW_ANCHOR_GITHUB_BRANCH })] : []),
+    ...(process.env.FW_ANCHOR_BITCOIN === '1' || (process.env.NODE_ENV === 'production' && process.env.FW_ANCHOR_BITCOIN !== '0') ? [new OpenTimestampsPublisher()] : []),
+  ];
+  const anchors = new AnchorService(db, platform, (id) => books.days(id), publishers, (id) => delivery.today(id), opts.clock);
+
   const flush = () => persistence.flush();
   const publicUrl = opts.publicUrl ?? process.env.PUBLIC_URL;
   const allowPrivate = opts.allowPrivateWebhooks ?? process.env.ALLOW_PRIVATE_WEBHOOKS === '1';
@@ -196,7 +208,7 @@ export async function createApp(opts: AppOptions) {
   await fleet.load();
   made.registry.registerPrinter('model6-fleet', new MachineFleetPrinter(() => fleet, made.printer));
 
-  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline };
+  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, transparency, anchors };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

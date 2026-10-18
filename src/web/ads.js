@@ -50,7 +50,7 @@
   // ---------- routing ----------
   const routes = [
     [/^\/ads\/?$/, overview], [/^\/ads\/new$/, newAd], [/^\/ads\/drafts\/([\w-]+)$/, builder], [/^\/ads\/drafts\/([\w-]+)\/review$/, review],
-    [/^\/ads\/campaigns\/([\w-]+)\/change$/, changeAd], [/^\/ads\/campaigns\/([\w-]+)\/code$/, codePage], [/^\/ads\/billing$/, billing], [/^\/ads\/tracking$/, tracking], [/^\/ads\/redeem(?:\/([\w-]+))?$/, redeem],
+    [/^\/ads\/campaigns\/([\w-]+)\/change$/, changeAd], [/^\/ads\/campaigns\/([\w-]+)\/code$/, codePage], [/^\/ads\/billing$/, billing], [/^\/ads\/tracking$/, tracking], [/^\/ads\/redeem(?:\/([\w-]+))?$/, redeem], [/^\/ads\/statement$/, statementPage],
   ];
   let cleanup = null;
   function go(path, replace) { state.path = path; if (!fixture) history[replace ? 'replaceState' : 'pushState'](null, '', path); render(); }
@@ -72,9 +72,39 @@
           link('/ads/new', { 'aria-current': active === 'new' ? 'page' : null }, icon(I.plus), 'New ad'),
           link('/ads/tracking', { 'aria-current': active === 'tracking' ? 'page' : null }, icon(I.target), 'Sales tracking'),
           link('/ads/redeem', { 'aria-current': active === 'redeem' ? 'page' : null }, icon(I.ticket), 'Check a coupon'),
+          link('/ads/statement', { 'aria-current': active === 'statement' ? 'page' : null }, icon(I.chart), 'Statement'),
           link('/ads/billing', { 'aria-current': active === 'billing' ? 'page' : null }, icon(I.card), 'Billing')),
         h('div', { class: 'who' }, h('b', { text: state.business?.name ?? '' }), me?.email || me?.phone || '', h('br'), h('button', { type: 'button', onclick: async () => { try { await api('POST', '/v1/auth/sign-out'); } catch {} state.token = null; state.me = null; state.business = null; store.set('fw_ads_token', null); render(); } }, 'Sign out'))),
       h('main', { class: 'main' }, ...content)));
+  }
+
+  // ---------- statement: every bottle, what you bid and what the auction charged ----------
+  async function statementPage() {
+    const to = new Date(), from = new Date(to.getTime() - 30 * 86_400_000);
+    const iso = (d) => d.toISOString().slice(0, 10);
+    const fromI = h('input', { class: 'input', type: 'date', value: iso(from) }), toI = h('input', { class: 'input', type: 'date', value: iso(to) });
+    const out = h('div', { class: 'stack' });
+    const load = async () => {
+      try {
+        const s = await api('GET', `/v1/ads/statement?from=${fromI.value}&to=${toI.value}`);
+        const t = s.totals;
+        out.replaceChildren(
+          h('div', { class: 'kpis', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' }, [['Bottles', String(t.bottles)], ['Printing', cents(t.paidCents)], ['Scans and AR', cents(t.engagementCents)], ['Sales commission', cents(t.commissionCents)]].map(([k, v]) => h('div', { class: 'kpi' }, h('span', { text: k }), h('b', { text: v })))),
+          h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['When', 'Where', 'Piece', 'Your bid', 'Auction price', 'You paid', 'Why', 'Scans', 'AR', 'Sales'].map((x) => h('th', { text: x })))),
+            h('tbody', {}, s.lines.slice(-300).reverse().map((l) => h('tr', {}, h('td', { text: new Date(l.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) }), h('td', { text: l.place }), h('td', { text: l.piece }), h('td', { text: l.bidCents == null ? 'set price' : cents(l.bidCents) }), h('td', { text: l.paidLabelCents == null ? '–' : cents(l.paidLabelCents) }), h('td', {}, h('b', { text: cents(l.paidCents) })), h('td', { style: 'font-size:13px', text: l.adjustments.join(', ') || '–' }), h('td', { text: String(l.scans) }), h('td', { text: String(l.arLaunches) }), h('td', { text: String(l.sales) })))))),
+          s.fingerprints.length ? h('p', { style: 'margin:0;font-size:13px;color:var(--muted)', text: `Each day’s books fingerprint, to check against the public open books: ${s.fingerprints.map((f) => `${f.date} ${f.fingerprint.slice(0, 12)}…`).join(' · ')}` }) : null);
+      } catch (x) { out.replaceChildren(h('div', { class: 'notice err', text: x.message })); }
+    };
+    const csv = async () => {
+      try {
+        const res = await fetch(`/v1/ads/statement?from=${fromI.value}&to=${toI.value}&format=csv`, { headers: { authorization: `Bearer ${state.token}` } });
+        const blob = await res.blob(); const a = h('a', { href: URL.createObjectURL(blob), download: `statement-${fromI.value}-to-${toI.value}.csv` }); document.body.append(a); a.click(); a.remove();
+      } catch (x) { toast(x.message); }
+    };
+    shell('statement', h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Statement' }), h('p', { text: 'Every bottle you paid for: your bid, what the auction charged and why, and what each one earned you. You pay just enough to beat the next ad, never your whole bid.' })), h('button', { class: 'btn secondary', type: 'button', onclick: csv }, 'Download spreadsheet')),
+      h('div', { class: 'form', style: 'max-width:520px;margin-bottom:16px' }, h('div', { class: 'field' }, h('label', { text: 'From' }), fromI), h('div', { class: 'field' }, h('label', { text: 'To' }), toI)),
+      h('div', {}, h('button', { class: 'btn', type: 'button', onclick: load }, 'Show')), out);
+    load();
   }
 
   // ---------- sign in and sign up ----------
@@ -107,7 +137,7 @@
       const input = h('input', { class: 'input code-input', id: 'a-code', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: '6', 'aria-label': '6-digit code' });
       const err = h('div', { class: 'notice err', hidden: true });
       right.replaceChildren(h('h2', { style: 'font:700 26px/1.2 var(--display);margin:0', text: 'Check your email' }), h('p', { style: 'margin:0;color:var(--muted)', text: `We sent a code to ${to}.` }),
-        h('form', { style: 'display:flex;flex-direction:column;gap:12px', onsubmit: async (e) => { e.preventDefault(); err.hidden = true; try { const r = await api('POST', '/v1/auth/verify', { companyId: state.config.companyId, channel: 'email', to, code: input.value.trim() }); state.token = r.token; store.set('fw_ads_token', r.token); state.me = null; render(); } catch (x) { err.textContent = x.message; err.hidden = false; } } },
+        h('form', { style: 'display:flex;flex-direction:column;gap:12px', onsubmit: async (e) => { e.preventDefault(); err.hidden = true; try { let vk = {}; try { vk = { ...(/^[A-Za-z0-9_-]{8,64}$/.test(localStorage.getItem('fw_viewer') || '') ? { viewerKey: localStorage.getItem('fw_viewer') } : {}) }; } catch {} const r = await api('POST', '/v1/auth/verify', { companyId: state.config.companyId, channel: 'email', to, code: input.value.trim(), ...vk }); state.token = r.token; store.set('fw_ads_token', r.token); state.me = null; render(); } catch (x) { err.textContent = x.message; err.hidden = false; } } },
           input, err, h('button', { class: 'btn wide', type: 'submit' }, 'Sign in')),
         h('button', { class: 'btn secondary', type: 'button', onclick: step1 }, 'Use a different email'));
       input.focus();

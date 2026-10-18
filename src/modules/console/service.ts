@@ -7,6 +7,8 @@ import type { AccountsService } from '../accounts/service';
 import { createApiKey, listApiKeys } from '../../db/store';
 import { posterCreative, type PosterSpec } from '../creative/poster';
 import { lotteryDefaults } from '../lottery/rules';
+import { quietTransparency } from '../transparency/service';
+import { preset } from '../data/policy';
 import { adCategories, applyChange, checkSettings, describeChange, editableKeys, fontChoices, type EditableKey } from './settings';
 
 export class ConsoleError extends Error {
@@ -237,7 +239,11 @@ export class ConsoleService {
       productFacts: ['SPRING WATER', '16 fl oz (473 ml)', `Bottled for ${name}`.slice(0, 60)],
       giving: input.giving === 'per_unit' ? { mode: 'per_unit', centsPerUnit: 10, percentOfExtra: 10, extraAboveCents: base.prices.perPrintByShare[1], defaultCharity: 'Charity to be chosen', minimumTransferCents: 2500 } : { mode: 'none' },
       openBooks: true,
+      // A new white-label company starts quiet and chooses how open to be; its data follows US rules until it picks.
+      transparency: { ...quietTransparency },
+      data: preset('us'),
     };
+    delete config.lottery;
     if (!config.brand.tagline) delete config.brand.tagline;
     const problem = checkSettings(config, this.registry.names());
     if (problem) throw new ConsoleError('invalid_settings', problem, 422);

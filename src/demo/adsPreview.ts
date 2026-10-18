@@ -5,6 +5,7 @@ import { buildServer } from '../api/server';
 import { createPgliteClient } from '../db/pglite';
 import type { TestOutbox } from '../adapters/messaging/contract';
 import { simulateHistory } from './history';
+import { builtinCreatives } from './seed';
 
 // Builds out/ads-preview/index.html: FreeWater Ads with Joe's real two weeks of results, and the real ad assistant
 // running in the page, so anyone can click through it with no server. npm run demo:ads-preview
@@ -37,6 +38,22 @@ const moments: Record<string, unknown> = {};
 for (const daypart of ['morning', 'afternoon', 'evening', 'night']) for (const who of ['first', 'passed', 'returning']) {
   moments[`${daypart}:${who}`] = await call('POST', '/v1/campaigns/cmp-joes/preview-moment', token, { daypart, passedOn: who === 'passed', firstScanner: who !== 'passed', newToAdvertiser: who !== 'returning' });
 }
+// Joe's own ad (his poster), what his ad offers, and a few people who asked to see more.
+const poster = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 900" width="720" height="900">${builtinCreatives['cmp-joes']!.svg(720, 900)}</svg>`)}`;
+const joeCamp = app.platform.campaigns.get('cmp-joes')!;
+joeCamp.firstSeen = { kind: 'image', url: poster, alt: "Joe's $5 combo poster" };
+joeCamp.offering = { description: 'A $5 burger combo: burger, fries and a drink', priceCents: 500 };
+const joeUnit = [...app.platform.units.values()].reverse().find((u) => u.status === 'dispensed' && u.placements.some((p) => p.campaignId === 'cmp-joes'));
+if (joeUnit) {
+  const slot = joeUnit.placements.find((p) => p.campaignId === 'cmp-joes')!.slotIndex;
+  for (let i = 0; i < 6; i++) {
+    const v = `ads-preview-viewer-${i}`;
+    const more = await call('GET', `/v1/public/experience/${joeUnit.id}/${slot}/more?viewer=${v}`);
+    const vid = more.videos?.[0]?.id;
+    const t = `s:${joeUnit.id}:${slot}`;
+    await call('POST', '/v1/public/interactions', undefined, { viewerKey: v, items: [{ target: t, kind: 'page_view' }, { target: t, kind: 'ad_complete' }, { target: t, kind: 'more_open' }, ...(vid ? [{ target: t, kind: 'video_view', videoId: vid }, ...(i % 2 ? [{ target: t, kind: 'video_complete', videoId: vid }] : [])] : []), ...(i % 3 === 0 ? [{ target: t, kind: 'share' }] : [])] });
+  }
+}
 // For the code page, Joe bids (instead of his guaranteed buy) so the "Your bid" section shows.
 const joeCodes = await call('GET', '/v1/campaigns/cmp-joes/codes', token);
 joeCodes.buy = { type: 'bid', maxCentsPerLabel: 140, dailyCapCents: 5000, spentTodayCents: 1240, pacing: 'even', frequencyCap: 2, adjustments: { dayparts: { morning: -20, afternoon: 25 }, interests: { food: 15 }, newCustomers: 30 } };
@@ -51,6 +68,11 @@ const rec = {
   joeOverview: await call('GET', '/v1/ads/overview?days=14', token),
   joeInvoices: await call('GET', '/v1/invoices', token),
   joeCards: await call('GET', '/v1/advertisers/adv-joes/cards', token),
+  joePoster: poster,
+  joePlace: await call('POST', '/v1/numberline/place', token, { subject: 'offering:cmp-joes' }),
+  joeVideos: await call('GET', '/v1/campaigns/cmp-joes/videos', token),
+  joeLearning: await call('GET', '/v1/campaigns/cmp-joes/learning', token),
+  joeStatement: await call('GET', '/v1/ads/statement', token),
 };
 await server.close();
 

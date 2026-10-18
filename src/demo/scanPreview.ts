@@ -3,7 +3,7 @@ import { createApp } from '../app';
 import { buildServer } from '../api/server';
 import { createPgliteClient } from '../db/pglite';
 import { builtinModel, builtinModelIds } from '../modules/models/builtin';
-import { mayaDesign } from './seed';
+import { builtinCreatives, mayaDesign } from './seed';
 import { arBundle } from '../web/ar/bundle';
 import { lotteryDefaults } from '../modules/lottery/service';
 
@@ -52,7 +52,7 @@ for (const [id, a] of active) app.platform.campaigns.get(id)!.active = a;
 await app.persistence.flush();
 const labelSvg = async (unitId: string) => (await server.inject({ method: 'GET', url: `/v1/public/labels/${unitId}.svg` })).body;
 
-const scenes: { id: string; label: string; note: string; path: string; data: unknown; ar?: unknown; labelSvg?: string; game?: unknown }[] = [];
+const scenes: { id: string; label: string; note: string; path: string; data: unknown; ar?: unknown; labelSvg?: string; game?: unknown; more?: unknown }[] = [];
 const arScene = async (id: string, label: string, note: string, b: { unitId: string; slot: number }, viewer: string) => {
   scenes.push({ id, label, note, path: `/s/${b.unitId}/${b.slot}`, data: await get(`/v1/public/experience/${b.unitId}/${b.slot}?viewer=${viewer}`), ar: await get(`/v1/public/ar/${b.unitId}`), labelSvg: await labelSvg(b.unitId) });
 };
@@ -65,6 +65,17 @@ const slotScene = async (id: string, label: string, note: string, campaignId: st
   if (!s) return;
   scenes.push({ id, label, note, path: `/s/${s.unitId}/${s.slot}`, data: await get(`/v1/public/experience/${s.unitId}/${s.slot}?viewer=preview-viewer`) });
 };
+// Joe's own uploaded ad comes first (here, his poster), and a few sales so the page shows others bought.
+{
+  const joe = app.platform.campaigns.get('cmp-joes')!;
+  const poster = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 900" width="720" height="900">${builtinCreatives['cmp-joes']!.svg(720, 900)}</svg>`;
+  joe.firstSeen = { kind: 'image', url: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(poster)}`, alt: "Joe's $5 combo poster" };
+  const s = slots.get('cmp-joes')!;
+  for (let i = 0; i < 3; i++) app.platform.purchase(s.unitId, s.slot, `pv-sale-${i}`, 1200);
+  await app.persistence.flush();
+  const viewer = 'preview-more-01';
+  scenes.push({ id: 'first', label: 'The advertiser’s ad, first', note: 'What everyone sees first after scanning, on any size of piece (even a tenth of the label): the ad the advertiser uploaded. Then their AR and offer, how many people bought from this very bottle, “Pass it on”, and “Show me more” at the very end. Tap it: a short video made for this moment, only because you asked.', path: `/s/${s.unitId}/${s.slot}`, data: await get(`/v1/public/experience/${s.unitId}/${s.slot}?viewer=${viewer}`), more: await get(`/v1/public/experience/${s.unitId}/${s.slot}/more?viewer=${viewer}`) });
+}
 await slotScene('burger', "Joe's 3D menu", 'Spin the burger, add fries or a drink, then put it on your table in AR. In AR there’s an Order button, so a sale from inside AR is credited to this bottle.', 'cmp-joes');
 await slotScene('home', 'Home tour', 'A doll’s-house model of the home you can place in AR, then a room-by-room tour and showing times.', 'cmp-maple');
 await slotScene('coffee', 'Coffee offer', 'A first-time offer people can save. The colors are Luma’s own.', 'cmp-luma');

@@ -58,6 +58,16 @@ for (const w of hooks) {
   for (const d of deliveries[w.id]!.slice(0, 40)) deliveryDetail[d.id] = await call('GET', `/v1/webhook-deliveries/${d.id}`, token);
 }
 const sample = [...app.platform.units.values()].filter((u) => u.companyId === 'freewater' && u.kind === 'ad_supported' && u.status === 'dispensed').at(-1)!;
+// Some offerings declared, and a day of bottles, scans and sales, so the number line and honest data have something to show.
+app.platform.campaigns.get('cmp-daily')!.offering = { description: 'The Austin Daily app, free to download', priceCents: 0 };
+app.platform.campaigns.get('cmp-maple')!.offering = { description: 'A spare room for the weekend, from a neighbor', priceCents: 9000, peerToPeer: true };
+for (let i = 0; i < 60; i++) {
+  const r = await app.platform.order({ companyId: 'freewater', orderId: `nl-${i}`, locationId: 'ATX-014', productId: 'bottle-16oz' });
+  const p = r.ok ? r.unit.placements.find((x) => !x.isHouse) : undefined;
+  if (p && i % 2 === 0) app.platform.scan(r.unit.id, p.slotIndex, `nl-viewer-${i}`);
+  if (p && i % 9 === 0) app.platform.purchase(r.unit.id, p.slotIndex, `nl-sale-${i}`, 1500);
+}
+await app.persistence.flush();
 const rec = {
   config: await call('GET', '/v1/public/app-config'),
   me: await call('GET', '/v1/me', token),
@@ -74,6 +84,9 @@ const rec = {
   ids: { warehouse: warehouse.id, crm: crm.id },
   products: await call('GET', '/v1/console/products', token),
   lottery: await call('GET', '/v1/lottery', token),
+  dataPolicy: await call('GET', '/v1/data/policy', token),
+  numberline: await (async () => { for (const s of ['company', 'custom', 'bottle:bottle-16oz', 'offering:cmp-joes', 'offering:cmp-daily', 'offering:cmp-maple']) await call('POST', '/v1/numberline/place', token, { subject: s }); return call('GET', '/v1/numberline', token); })(),
+  honest: await (async () => { await app.numberline.idle(); return call('GET', '/v1/honest-data', token); })(),
 };
 await server.close();
 
