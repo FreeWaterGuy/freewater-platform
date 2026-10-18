@@ -10,7 +10,7 @@ export interface EventPayloads {
   'label.printed': { unitId: string; jobId: string; locationId: string; placements: Placement[]; kind: 'ad_supported' | 'custom'; customerId?: string; customPriceCents?: Cents };
   'print.failed': { unitId: string; jobId: string; reason: string; attempt: number };
   'unit.dispensed': { unitId: string; locationId: string };
-  'unit.scanned': { unitId: string; slotIndex: number; viewerKey: string; experienceLoaded: boolean };
+  'unit.scanned': { unitId: string; slotIndex: number; viewerKey: string; experienceLoaded: boolean; variant?: string };
   'ar.launched': { unitId: string; slotIndex: number; viewerKey: string; loaded: boolean };
   'purchase.completed': { unitId?: string; slotIndex?: number; packId?: string; face?: string; orderId: string; amountCents: Cents };
   'purchase.refunded': { unitId?: string; slotIndex?: number; packId?: string; face?: string; orderId: string; amountCents: Cents };

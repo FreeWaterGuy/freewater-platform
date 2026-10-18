@@ -8,7 +8,7 @@ import { ApiError, obj, S, type RouteDef } from './http';
 const tagScript = `/* FreeWater tag: remembers the FreeWater click id (fwclid) and reports purchases from FreeWater bottles. */
 (function () {
   var s = document.currentScript, tag = s && s.getAttribute('data-tag'), base = s ? new URL(s.src).origin : '';
-  var K = '_fwclid', DAYS = ${CLICK_WINDOW_DAYS};
+  var K = '_fwclid', B = '_fwb', DAYS = ${CLICK_WINDOW_DAYS};
   function clickId() {
     try { var v = JSON.parse(localStorage.getItem(K) || 'null'); if (v && Date.now() - v.t < DAYS * 864e5) return v.id; } catch (e) {}
     var m = document.cookie.match(/(?:^|; )_fwclid=([0-9A-Z]{20})/); return m ? m[1] : null;
@@ -18,12 +18,19 @@ const tagScript = `/* FreeWater tag: remembers the FreeWater click id (fwclid) a
     try { localStorage.setItem(K, JSON.stringify({ id: fromLink, t: Date.now() })); } catch (e) {}
     document.cookie = K + '=' + fromLink + '; max-age=' + DAYS * 86400 + '; path=/; SameSite=Lax';
   }
+  // A static code on a bottle opens this site with the bottle's own reference (fwb). Keep it too.
+  function bottle() {
+    try { var v = JSON.parse(localStorage.getItem(B) || 'null'); if (v && Date.now() - v.t < DAYS * 864e5) return v.id; } catch (e) {}
+    return null;
+  }
+  var fromCode = new URLSearchParams(location.search).get('fwb');
+  if (fromCode && /^[0-9A-Z]{14}$/.test(fromCode)) { try { localStorage.setItem(B, JSON.stringify({ id: fromCode, t: Date.now() })); } catch (e) {} }
   function send(event, d) {
     if (event !== 'purchase') return;
     d = d || {};
-    var id = clickId();
-    if (!id && !d.coupon) return; // this sale didn't come from a FreeWater bottle
-    var body = JSON.stringify({ tag: tag, fwclid: id, coupon: d.coupon || null, orderId: String(d.orderId || ''), valueCents: d.valueCents != null ? Math.round(d.valueCents) : Math.round(Number(d.value || 0) * 100) });
+    var id = clickId(), fwb = id ? null : bottle();
+    if (!id && !fwb && !d.coupon) return; // this sale didn't come from a FreeWater bottle
+    var body = JSON.stringify({ tag: tag, fwclid: id, fwb: fwb, coupon: d.coupon || null, orderId: String(d.orderId || ''), valueCents: d.valueCents != null ? Math.round(d.valueCents) : Math.round(Number(d.value || 0) * 100) });
     try { if (navigator.sendBeacon && navigator.sendBeacon(base + '/v1/public/conversions', new Blob([body], { type: 'text/plain' }))) return; } catch (e) {}
     try { fetch(base + '/v1/public/conversions', { method: 'POST', body: body, keepalive: true, mode: 'cors', headers: { 'content-type': 'text/plain' } }); } catch (e) {}
   }
@@ -85,7 +92,7 @@ export function attributionRoutes(app: App, server: FastifyInstance, route: (r: 
     try {
       const b = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body as any);
       const origin = (req.headers.origin as string | undefined) ?? (req.headers.referer as string | undefined) ?? null;
-      const r = await attribution.conversion({ source: 'tag', tagId: String(b?.tag ?? ''), origin, clickId: b?.fwclid ?? undefined, couponCode: b?.coupon ?? undefined, orderId: String(b?.orderId ?? ''), valueCents: Number(b?.valueCents) });
+      const r = await attribution.conversion({ source: 'tag', tagId: String(b?.tag ?? ''), origin, clickId: b?.fwclid ?? undefined, couponCode: b?.coupon ?? undefined, bottleCode: b?.fwb ?? undefined, orderId: String(b?.orderId ?? ''), valueCents: Number(b?.valueCents) });
       await app.persistence.flush();
       return reply.code(r.duplicate ? 200 : 201).send({ ok: true, duplicate: r.duplicate });
     } catch (e) {
@@ -110,9 +117,9 @@ export function attributionRoutes(app: App, server: FastifyInstance, route: (r: 
     }, summary: await attribution.summary(key!.companyId, adv) } };
   } });
   route({ method: 'POST', url: '/v1/ads/tracking/domains', scope: ['campaigns', 'purchases'], summary: 'The websites your tag may report sales from (like shop.joesburgers.com). Reports from anywhere else are refused.', body: obj({ domains: { type: 'array', maxItems: 10, items: { type: 'string', maxLength: 120 } } }, ['domains']), handler: async (req, key) => ({ body: await attribution.setTagDomains(key!.companyId, advertiser(key), (req.body as any).domains) }) });
-  route({ method: 'POST', url: '/v1/conversions', scope: 'purchases', summary: 'Your server reports a sale: the fwclid from the link (or the coupon code), your order number and the amount in cents. Matched to the exact bottle; commission is billed once per order.', body: obj({ fwclid: { type: 'string', maxLength: 40 }, couponCode: { type: 'string', maxLength: 40 }, orderId: S.str, valueCents: S.int }, ['orderId', 'valueCents']), handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/conversions', scope: 'purchases', summary: 'Your server reports a sale: the fwclid from the link (or the bottle reference fwb from a static code, or the coupon code), your order number and the amount in cents. Matched to the exact bottle; commission is billed once per order.', body: obj({ fwclid: { type: 'string', maxLength: 40 }, fwb: { type: 'string', maxLength: 20 }, couponCode: { type: 'string', maxLength: 40 }, orderId: S.str, valueCents: S.int }, ['orderId', 'valueCents']), handler: async (req, key) => {
     const b = req.body as any;
-    const r = await attribution.conversion({ source: 'server', advertiserId: advertiser(key), clickId: b.fwclid, couponCode: b.couponCode, orderId: b.orderId, valueCents: b.valueCents });
+    const r = await attribution.conversion({ source: 'server', advertiserId: advertiser(key), clickId: b.fwclid, couponCode: b.couponCode, bottleCode: b.fwb, orderId: b.orderId, valueCents: b.valueCents });
     return { status: r.duplicate ? 200 : 201, body: r };
   } });
   route({ method: 'POST', url: '/v1/conversions/:orderId/refund', scope: 'purchases', summary: 'A sale was refunded. Its commission is given back.', handler: async (req, key) => ({ body: await attribution.refund(advertiser(key), decodeURIComponent((req.params as any).orderId)) }) });

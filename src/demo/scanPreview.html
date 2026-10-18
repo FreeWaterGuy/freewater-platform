@@ -61,6 +61,7 @@ h1 { font: 700 30px/1.15 var(--display); margin: 0; text-wrap: balance; }
 const scenes = /*SCENES*/;
 const css = /*SCAN_CSS*/;
 const js = /*SCAN_JS*/;
+const arJs = /*AR_JS*/; // the AR viewer (three.js and our tracker), only added to the pages that use it
 // The 3D models travel inside this page, so it works with no server.
 const models = /*MODELS*/;
 const modelUrl = {};
@@ -77,8 +78,11 @@ function open(i) {
   [...list.children].forEach((b, j) => { if (b.classList.contains('scene')) b.setAttribute('aria-current', String(j === i)); });
   document.getElementById('url').textContent = 'go.freewater.io' + s.path;
   document.getElementById('noteM').textContent = s.note;
-  const fixture = `window.__FW_FIXTURE__ = { path: ${JSON.stringify(s.path)}, api: async (m) => (m === 'GET' ? ${JSON.stringify(withModels(s.data)).replace(/</g, '\\u003c')} : { recorded: true }) };`;
-  frame.srcdoc = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base href="${base}"><meta name="theme-color" content="#000"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@600;700&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&display=swap"><style>${css}</style><script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer@3.5.0/dist/model-viewer.min.js"><\/script></head><body><main id="app"></main><script>${fixture}<\/script><script>${js.replace(/<\/script/g, '<\\/script')}<\/script></body></html>`;
+  const data = JSON.stringify(withModels(s.data)).replace(/</g, '\\u003c');
+  const ar = s.ar ? JSON.stringify(s.ar).replace(/</g, '\\u003c') : 'null';
+  const label = s.labelSvg ? JSON.stringify(s.labelSvg).replace(/</g, '\\u003c') : '""';
+  const fixture = `window.__FW_FIXTURE__ = { path: ${JSON.stringify(s.path)}, api: async (m, url) => (m === 'GET' ? (String(url).startsWith('/v1/public/ar/') ? ${ar} : ${data}) : { recorded: true }), text: async () => ${label} };`;
+  frame.srcdoc = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base href="${base}"><meta name="theme-color" content="#000"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@600;700&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&display=swap"><style>${css}</style><script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer@3.5.0/dist/model-viewer.min.js"><\/script></head><body><main id="app"></main><script>${fixture}<\/script><script>${js.replace(/<\/script/g, '<\\/script')}<\/script>${s.ar ? `<script>${arJs.replace(/<\/script/g, '<\\/script')}<\/script>` : ''}</body></html>`;
 }
 scenes.forEach((s, i) => {
   const b = document.createElement('button');
@@ -90,7 +94,7 @@ scenes.forEach((s, i) => {
 });
 const how = document.createElement('div');
 how.className = 'how';
-how.innerHTML = '<b>Billing on these pages.</b> A scan is billed only after the page has shown, and an AR launch only after the model loaded. Repeat scans within 10 minutes are free. Saves and link taps are counted for the advertiser and never billed.';
+how.innerHTML = '<b>AR on the bottle.</b> Tap “Try it without the camera” on the AR pages: a simulated bottle is drawn and the real tracker follows it. Drag to turn the bottle. On a phone, the camera follows a real printed label.<br><br><b>Billing on these pages.</b> A scan is billed only after the page has shown, and an AR launch only after the model loaded. Repeat scans within 10 minutes are free. Saves and link taps are counted for the advertiser and never billed.';
 list.append(how);
 open(0);
 </script>

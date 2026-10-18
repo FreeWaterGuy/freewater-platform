@@ -1,5 +1,5 @@
-import type { Campaign, CompanyConfig, Placement, Sixths } from '../../core/types';
-import type { AdEngine, FillRequest, FillResult } from './contract';
+import type { Campaign, CompanyConfig, Placement, Product, Sixths } from '../../core/types';
+import type { AdEngine, FillRequest, FillResult, PrintAudience } from './contract';
 import { canAfford, priceFor } from './budget';
 
 /**
@@ -13,12 +13,14 @@ export const freewaterAdEngine: AdEngine = {
   name: 'freewater-ads',
   fill(req: FillRequest): FillResult {
     const { company, product, location, random } = req;
+    const factor = product.priceFactor ?? 1;
     const house = req.campaigns.find((c) => c.isHouse && c.companyId === company.id);
     const capped = (c: Campaign) => !!req.frequency && (req.frequency.counts.get(c.id) ?? 0) >= req.frequency.max;
-    const eligible = req.campaigns.filter((c) => isEligible(c, company, location.id) && !capped(c));
+    const eligible = req.campaigns.filter((c) => isEligible(c, company, location.id, { product, audience: req.audience ?? null }) && !capped(c));
+    const why = new Map(eligible.filter((c) => c.targeting.audience).map((c) => [c.id, audienceMatch(c, req.audience ?? null) ?? []]));
 
     // Shuffle first so equal offers rotate fairly, then rank.
-    const ranked = shuffle(eligible, random).sort((a, b) => rank(b, company) - rank(a, company));
+    const ranked = shuffle(eligible, random).sort((a, b) => rank(b, company, factor) - rank(a, company, factor));
 
     const chosen: Campaign[] = [];
     const groups = new Set<string>();
@@ -40,7 +42,7 @@ export const freewaterAdEngine: AdEngine = {
     for (const pool of lineups) {
       for (const layout of shuffle(product.layouts, random)) {
         if (layout.length < company.adRules.minAdsPerUnit || layout.length > company.adRules.maxAdsPerUnit) continue;
-        const placements = assign(layout, pool, house, company);
+        const placements = assign(layout, pool, house, company, factor, why);
         if (!placements) continue;
         const option = { layout, placements, revenue: placements.reduce((s, p) => s + p.priceCents, 0) };
         if (!best || option.revenue > best.revenue) best = option;
@@ -72,27 +74,51 @@ export function labelSignature(placements: Placement[]): string {
   return placements.map((p) => `${p.slotIndex}:${p.campaignId}:${p.sixths}`).join('|');
 }
 
-export function isEligible(c: Campaign, company: CompanyConfig, locationId: string): boolean {
+export function isEligible(c: Campaign, company: CompanyConfig, locationId: string, ctx: { product?: Product; audience?: PrintAudience | null } = {}): boolean {
   if (!c.active || c.isHouse || c.companyId !== company.id) return false;
   if (company.adRules.blockedCategories.includes(c.category)) return false;
   if (c.targeting.locations && !c.targeting.locations.includes(locationId)) return false;
+  const p = ctx.product;
+  if (p?.blockedAdCategories?.includes(c.category)) return false;
+  if (c.targeting.products?.length && (!p || !c.targeting.products.includes(p.id))) return false;
+  if (c.targeting.productCategories?.length && (!p?.category || !c.targeting.productCategories.includes(p.category))) return false;
+  if (c.targeting.audience && !audienceMatch(c, ctx.audience ?? null)) return false;
   const smallest = Math.min(...c.sizes) as Sixths;
-  return canAfford(c, company, smallest);
+  return canAfford(c, company, smallest, p?.priceFactor ?? 1);
 }
 
-function rank(c: Campaign, company: CompanyConfig): number {
+/**
+ * Does this person fit the campaign's audience? Returns why (for the advertiser's report), or null if they don't.
+ * A bottle for nobody in particular never fits: a targeted ad only prints for the person it was meant for.
+ */
+export function audienceMatch(c: Campaign, a: PrintAudience | null): string[] | null {
+  const want = c.targeting.audience;
+  if (!want) return [];
+  if (!a) return null;
+  const why: string[] = [];
+  if (want.interestsAny?.length) {
+    const hit = want.interestsAny.map((i) => i.toLowerCase()).filter((i) => a.interests.includes(i));
+    if (!hit.length) return null;
+    why.push(...hit.map((i) => `likes ${i}`));
+  }
+  if (want.customers === 'new') { if (a.advertisersSeen.has(c.advertiserId)) return null; why.push('new customer'); }
+  if (want.customers === 'returning') { if (!a.advertisersSeen.has(c.advertiserId)) return null; why.push('returning customer'); }
+  return why;
+}
+
+function rank(c: Campaign, company: CompanyConfig, factor = 1): number {
   const guaranteedBonus = c.buy.type === 'guaranteed' ? 1_000_000 : 0;
   const best = Math.max(...c.sizes) as Sixths;
-  return guaranteedBonus + priceFor(c, company, best) / best;
+  return guaranteedBonus + priceFor(c, company, best, factor) / best;
 }
 
 /** Fill the biggest slots first with the best-paying campaign that has artwork that size. */
-function assign(layout: Sixths[], chosen: Campaign[], house: Campaign | undefined, company: CompanyConfig): Placement[] | null {
+function assign(layout: Sixths[], chosen: Campaign[], house: Campaign | undefined, company: CompanyConfig, factor = 1, why = new Map<string, string[]>()): Placement[] | null {
   const order = layout.map((size, slotIndex) => ({ size, slotIndex })).sort((a, b) => b.size - a.size);
   const pool = [...chosen];
   const out: Placement[] = [];
   for (const { size, slotIndex } of order) {
-    const i = pool.findIndex((c) => c.sizes.includes(size) && canAfford(c, company, size));
+    const i = pool.findIndex((c) => c.sizes.includes(size) && canAfford(c, company, size, factor));
     if (i >= 0) {
       const c = pool.splice(i, 1)[0]!;
       out.push({
@@ -102,8 +128,9 @@ function assign(layout: Sixths[], chosen: Campaign[], house: Campaign | undefine
         advertiserId: c.advertiserId,
         advertiserName: c.advertiserName,
         experienceId: c.experienceId,
-        priceCents: priceFor(c, company, size),
+        priceCents: priceFor(c, company, size, factor),
         isHouse: false,
+        ...(why.has(c.id) ? { audienceMatch: why.get(c.id) } : {}),
       });
     } else if (house) {
       out.push(housePlacement(slotIndex, size, house));

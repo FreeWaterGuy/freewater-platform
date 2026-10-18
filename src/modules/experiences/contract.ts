@@ -19,6 +19,8 @@ export interface ScanContext {
   now: Date;
   /** This bottle's own story, from its unique codes: where and when it was printed, and how it has been scanned. */
   bottle?: BottleStory;
+  /** The moment of this scan: time of day, and whether this person is the bottle's first scanner or was passed it. */
+  moment?: { daypart: 'morning' | 'afternoon' | 'evening' | 'night'; firstScanner: boolean; passedOn: boolean };
 }
 
 export interface BottleStory { printedAt: string; place: string; minutesSincePrint: number; scans: number; people: number; passedOn: boolean }
@@ -35,6 +37,8 @@ export interface ExperiencePlugin<C = Record<string, unknown>> {
   version: string;
   /** True when the page shows a 3D model people can open in AR. */
   ar?: boolean;
+  /** Which kind of AR it uses. Bottle and label AR follow the bottle in the camera, so its label gets the tracking strip. */
+  arMode?: 'world' | 'bottle' | 'label';
   /** JSON Schema for the settings an advertiser fills in. Checked before anything is saved. */
   configSchema: Record<string, unknown>;
   example: C;

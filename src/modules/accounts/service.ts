@@ -148,6 +148,19 @@ export class AccountsService {
     return { interests: consents.personalizedOffers ? parse<string[]>(r.interests) : [] };
   }
 
+  /**
+   * Who a bottle is being printed for, as the ad engine may see them: an anonymous key, their interests (only if they
+   * turned on personalized offers), and which advertisers they've already met. Never a name or contact details.
+   */
+  async audienceFor(userId: string, companyId: string): Promise<import('../ads/contract').PrintAudience | null> {
+    const r = (await this.db.query<any>(`select viewer_key, consents, interests from users where id = $1 and deleted_at is null`, [userId])).rows[0];
+    if (!r) return null;
+    const consents = parse<Consents>(r.consents);
+    // Without their yes to personalized offers, nothing about them is used to pick ads.
+    const seen = consents.personalizedOffers ? (await this.db.query<any>(`select advertiser_id from viewer_advertisers where company_id = $1 and viewer_key = $2`, [companyId, r.viewer_key])).rows.map((x) => x.advertiser_id as string) : [];
+    return { personKey: r.viewer_key, interests: consents.personalizedOffers ? parse<string[]>(r.interests) : [], advertisersSeen: new Set(seen) };
+  }
+
   /** Everything stored about a person, in one file they can keep. */
   async exportData(userId: string) {
     const u = await this.get(userId);

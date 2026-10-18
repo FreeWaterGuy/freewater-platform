@@ -13,6 +13,17 @@ export interface FillRequest {
   frequency?: { counts: Map<string, number>; max: number };
   /** Label signatures already used in this pack; the engine picks a different label when it can. */
   avoidSignatures?: Set<string>;
+  /**
+   * The person this bottle is printed for, when known (an app order, a delivery customer). Ads that target people
+   * can only go on bottles for someone who fits; bottles for nobody in particular never carry them.
+   */
+  audience?: PrintAudience | null;
+}
+
+export interface PrintAudience {
+  personKey: string; // their anonymous viewer key
+  interests: string[]; // only if they turned on personalized offers
+  advertisersSeen: Set<string>;
 }
 
 export interface FillResult {

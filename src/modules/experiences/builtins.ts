@@ -47,7 +47,7 @@ export const couponPlugin: ExperiencePlugin<CouponConfig> = {
 // ---------- 3D menu in AR ----------
 interface MenuConfig { title: string; subtitle?: string; model: ModelSetting; addOns?: { id: string; label: string; model: ModelSetting }[]; firstTimeOffer?: string; regularOffer?: string; orderUrl: string; orderLabel?: string }
 export const menuPlugin: ExperiencePlugin<MenuConfig> = {
-  id: 'ar-3d-menu', name: '3D menu in AR', version: '1.0.0', ar: true,
+  id: 'ar-3d-menu', name: '3D menu in AR', version: '1.0.0', ar: true, arMode: 'world',
   description: 'Spin the food in 3D, see it on your table in AR, add sides, and order.',
   configSchema: obj({ title: s(120), subtitle: s(300), model: modelSchema, addOns: { type: 'array', maxItems: 8, items: obj({ id: s(40), label: s(40), model: modelSchema }, ['id', 'label', 'model']) }, firstTimeOffer: s(120), regularOffer: s(120), orderUrl: url, orderLabel: s(40) }, ['title', 'model', 'orderUrl']),
   example: { title: '$5 combo', subtitle: 'Burger, fries and a drink. Pickup in 10 minutes.', model: { builtin: 'burger' }, addOns: [{ id: 'fries', label: 'Fries', model: { builtin: 'fries' } }, { id: 'drink', label: 'Drink', model: { builtin: 'drink' } }], firstTimeOffer: 'Free fries on your first order', regularOffer: 'Your usual is ready in 10 minutes', orderUrl: 'https://example.com/order' },
@@ -67,7 +67,7 @@ export const menuPlugin: ExperiencePlugin<MenuConfig> = {
 // ---------- home tour ----------
 interface TourConfig { address: string; price?: string; details?: string; rooms: { name: string; color?: string; imageUrl?: string; note?: string }[]; model?: ModelSetting; slots?: string[]; bookUrl: string }
 export const tourPlugin: ExperiencePlugin<TourConfig> = {
-  id: 'ar-home-tour', name: 'Home tour', version: '1.0.0', ar: true,
+  id: 'ar-home-tour', name: 'Home tour', version: '1.0.0', ar: true, arMode: 'world',
   description: 'Walk through a home room by room, see a 3D model, and book a showing.',
   configSchema: obj({ address: s(120), price: s(40), details: s(500), rooms: { type: 'array', minItems: 1, maxItems: 20, items: obj({ name: s(60), color: { type: 'string', pattern: '^#[0-9a-fA-F]{6}$' }, imageUrl: { type: 'string', maxLength: 2000 }, note: s(200) }, ['name']) }, model: modelSchema, slots: { type: 'array', maxItems: 12, items: s(40) }, bookUrl: url }, ['address', 'rooms', 'bookUrl']),
   example: { address: '1406 Maple St', price: '$685,000', details: '3 bed, 2 bath, big back yard.', rooms: [{ name: 'Living room', color: '#C9D8C5', note: 'South light all afternoon' }, { name: 'Kitchen', color: '#E8DCC8' }, { name: 'Back yard', color: '#9DBF8F' }], model: { builtin: 'house' }, slots: ['Sat 10:00', 'Sat 11:30', 'Sun 1:00'], bookUrl: 'https://example.com/book' },
@@ -150,4 +150,51 @@ export const customPlugin: ExperiencePlugin<CustomConfig> = {
   ],
 };
 
-export const builtinPlugins: ExperiencePlugin<any>[] = [offerPlugin, couponPlugin, menuPlugin, tourPlugin, newsPlugin, bookingPlugin, videoPlugin, housePlugin, customPlugin];
+// ---------- the three kinds of AR ----------
+const linkSchema = obj({ label: s(40), url }, ['label', 'url']);
+const arCommon = { title: s(120), subtitle: s(300), caption: s(120), link: linkSchema };
+const arButtons = (config: { link?: { label: string; url: string } }): Block[] => [
+  ...(config.link ? [{ type: 'button' as const, label: config.link.label, action: { kind: 'link' as const, url: config.link.url }, style: 'primary' as const }] : []),
+  { type: 'button', label: 'Save for later', action: { kind: 'save' }, style: 'secondary' },
+];
+
+interface ArPlaceConfig { title: string; subtitle?: string; caption?: string; link?: { label: string; url: string }; model: ModelSetting; sizeIn?: number }
+export const arPlacePlugin: ExperiencePlugin<ArPlaceConfig> = {
+  id: 'ar-place', name: 'AR: in your space', version: '1.0.0', ar: true, arMode: 'world',
+  description: 'Put a 3D model in the room: on a table, on the floor, life size. Not attached to the bottle.',
+  configSchema: obj({ ...arCommon, model: modelSchema, sizeIn: { type: 'number', minimum: 0.5, maximum: 24 } }, ['title', 'model']),
+  example: { title: 'Our new burger, life size', caption: 'See it on your table', model: { builtin: 'burger' }, link: { label: 'Order now', url: 'https://example.com/order' } },
+  resolve: ({ config, tools }) => [
+    { type: 'hero', title: config.title, ...(config.subtitle ? { subtitle: config.subtitle } : {}) },
+    { type: 'ar', mode: 'world', title: config.title, model: model(config.model, tools, config.title), ...(config.sizeIn ? { sizeIn: config.sizeIn } : {}), ...(config.caption ? { caption: config.caption } : {}), ...(config.link ? { cta: config.link } : {}) },
+    ...arButtons(config),
+  ],
+};
+
+interface ArBottleConfig { title: string; subtitle?: string; caption?: string; link?: { label: string; url: string }; model: ModelSetting; placement?: 'top' | 'front' | 'orbit' | 'beside'; motion?: 'none' | 'spin' | 'float'; sizeIn?: number }
+export const arBottlePlugin: ExperiencePlugin<ArBottleConfig> = {
+  id: 'ar-on-bottle', name: 'AR: on the bottle', version: '1.0.0', ar: true, arMode: 'bottle',
+  description: 'A 3D model attached to the bottle in the camera: sitting on top of it, floating in front, or circling it. It moves when the bottle moves.',
+  configSchema: obj({ ...arCommon, model: modelSchema, placement: { type: 'string', enum: ['top', 'front', 'orbit', 'beside'] }, motion: { type: 'string', enum: ['none', 'spin', 'float'] }, sizeIn: { type: 'number', minimum: 0.5, maximum: 12 } }, ['title', 'model']),
+  example: { title: 'Fresh from the grill', caption: 'Turn the bottle', model: { builtin: 'burger' }, placement: 'top', motion: 'spin', sizeIn: 3, link: { label: 'Order for pickup', url: 'https://example.com/order' } },
+  resolve: ({ config, tools }) => [
+    { type: 'hero', title: config.title, ...(config.subtitle ? { subtitle: config.subtitle } : {}) },
+    { type: 'ar', mode: 'bottle', title: config.title, model: model(config.model, tools, config.title), placement: config.placement ?? 'top', motion: config.motion ?? 'spin', sizeIn: config.sizeIn ?? 3, ...(config.caption ? { caption: config.caption } : {}), ...(config.link ? { cta: config.link } : {}) },
+    ...arButtons(config),
+  ],
+};
+
+interface ArLabelConfig { title: string; subtitle?: string; caption?: string; link?: { label: string; url: string }; imageUrl?: string; videoUrl?: string; effect?: 'none' | 'shimmer' | 'ripple' | 'sparkle'; color?: string }
+export const arLabelPlugin: ExperiencePlugin<ArLabelConfig> = {
+  id: 'ar-living-label', name: 'AR: living label', version: '1.0.0', ar: true, arMode: 'label',
+  description: 'Through the camera, the label comes alive: your part of the label is replaced with moving artwork or video that wraps around the bottle and turns with it.',
+  configSchema: obj({ ...arCommon, imageUrl: { type: 'string', maxLength: 2000 }, videoUrl: { type: 'string', maxLength: 2000 }, effect: { type: 'string', enum: ['none', 'shimmer', 'ripple', 'sparkle'] }, color: { type: 'string', pattern: '^#[0-9a-fA-F]{6}$' } }, ['title']),
+  example: { title: 'Watch the label come alive', caption: 'Turn the bottle slowly', effect: 'ripple', color: '#7FC6EA', link: { label: 'See the collection', url: 'https://example.com' } },
+  resolve: ({ config }) => [
+    { type: 'hero', title: config.title, ...(config.subtitle ? { subtitle: config.subtitle } : {}) },
+    { type: 'ar', mode: 'label', title: config.title, wrap: { ...(config.imageUrl ? { imageUrl: config.imageUrl } : {}), ...(config.videoUrl ? { videoUrl: config.videoUrl } : {}), effect: config.effect ?? 'shimmer', ...(config.color ? { color: config.color } : {}) }, ...(config.caption ? { caption: config.caption } : {}), ...(config.link ? { cta: config.link } : {}) },
+    ...arButtons(config),
+  ],
+};
+
+export const builtinPlugins: ExperiencePlugin<any>[] = [offerPlugin, couponPlugin, menuPlugin, tourPlugin, newsPlugin, bookingPlugin, videoPlugin, housePlugin, customPlugin, arPlacePlugin, arBottlePlugin, arLabelPlugin];

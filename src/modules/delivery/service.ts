@@ -173,7 +173,7 @@ export class DeliveryService {
       const run: Run = { id, companyId, routeId, date, status: 'printing', driverId: null, distanceKm: plan.distanceKm, minutes: plan.minutes,
         stops: ordered.map((s, i) => ({ stop: i + 1, subscriptionId: s.id, userId: s.userId, packId: null, address: s.address, point: s.point, packSize: s.packSize, notes: s.notes, status: 'planned' })) };
       await this.db.query(`insert into route_runs (id, company_id, route_id, run_date, status, distance_km, minutes, stops) values ($1,$2,$3,$4,'printing',$5,$6,$7)`, [id, companyId, routeId, date, run.distanceKm, run.minutes, JSON.stringify(run.stops)]);
-      const product = [...this.platform.products.values()][0]!;
+      const product = this.platform.standardProduct(companyId);
       for (const stop of run.stops) {
         const pack = await this.packs.compose({ companyId, customerId: stop.userId, address: stop.address, routeId, stop: stop.stop, boxId: `box-${stop.packSize}`, productId: product.id, runId: id });
         stop.packId = pack.id;

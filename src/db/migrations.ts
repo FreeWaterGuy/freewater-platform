@@ -634,6 +634,14 @@ create table coupon_codes (
 create index coupon_codes_advertiser on coupon_codes(advertiser_id, created_at);
 `,
   },
+  {
+    // Static codes carry the bottle's own reference (fwb), so a sale can be matched to the bottle without a click.
+    id: '012_static_codes',
+    sql: `
+alter table conversions add column bottle_code text;
+create index conversions_bottle on conversions(bottle_code);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

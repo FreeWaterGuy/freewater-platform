@@ -172,3 +172,17 @@ pre.snippet { margin: 0; background: #0B0B0B; color: #E8EEF2; border-radius: 14p
 .verdict b { font: 700 30px/1.1 var(--display); }
 .verdict.ok { background: #E7F5EC; color: #145C33; }
 .verdict.bad { background: #FDECEC; color: #7A1C1C; }
+
+/* Code, versions and AI */
+.chip-check{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--line,#DDE5EC);border-radius:999px;font-size:14px;cursor:pointer}
+.version{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;padding:10px 12px;border:1px solid var(--line,#DDE5EC);border-radius:12px}
+.version .meta,.moment .meta{color:var(--muted);font-size:13px}
+.moment{display:flex;flex-direction:column;gap:6px;padding:12px;border-radius:12px;background:#F4F8FB}
+.moment .greet{font-weight:600}
+.switch{display:flex;gap:10px;align-items:flex-start;cursor:pointer}
+.switch span{display:block;color:var(--muted);font-size:14px}
+.radio-cards{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+.radio-cards label{display:flex;flex-direction:column;gap:4px;padding:12px;border:1px solid var(--line,#DDE5EC);border-radius:12px;cursor:pointer}
+.radio-cards label span{color:var(--muted);font-size:14px}
+.stack{display:flex;flex-direction:column;gap:10px}
+details summary{cursor:pointer;font-weight:600}

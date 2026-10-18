@@ -4,6 +4,7 @@ import type { Platform } from '../../platform';
 import type { CompanyConfig } from '../../core/types';
 import { newId } from '../../core/ids';
 import { randomCode, scanBase } from '../codes/service';
+import { campaignQrStyle } from '../codes/style';
 import { qrSvg } from '../print/qr';
 
 export class AttributionError extends Error {
@@ -86,7 +87,14 @@ export class AttributionService {
    * Record a sale. It must be matched to one of our clicks (fwclid) or one of our coupons; anything else isn't ours
    * and isn't counted. The same order twice is counted once.
    */
-  async conversion(input: { source: 'tag' | 'server' | 'coupon'; advertiserId?: string; tagId?: string; origin?: string | null; clickId?: string; couponCode?: string; orderId: string; valueCents: number }) {
+  /** Set at start-up: looks up the bottle reference that static codes carry. */
+  codes?: import('../codes/service').CodeService;
+  /** Which advertiser owns a side of a delivery box. Set at start-up. */
+  packFace?: (packId: string, face: string) => string | undefined;
+  /** Whether a box side was printed with a static code carrying this reference. Set at start-up. */
+  boxStatic?: (packId: string, face: string, code: string) => boolean;
+
+  async conversion(input: { source: 'tag' | 'server' | 'coupon'; advertiserId?: string; tagId?: string; origin?: string | null; clickId?: string; couponCode?: string; bottleCode?: string; orderId: string; valueCents: number }) {
     if (!Number.isInteger(input.valueCents) || input.valueCents < 0 || input.valueCents > MAX_SALE_CENTS) throw new AttributionError('bad_value', 'The sale amount must be a whole number of cents, up to $5,000.');
     if (!/^[\w.:#\/-]{1,80}$/.test(input.orderId)) throw new AttributionError('bad_order', 'Send your order number (letters, numbers, - _ . : # /), up to 80 characters.');
     let advertiserId = input.advertiserId;
@@ -102,7 +110,7 @@ export class AttributionService {
     const done = (await this.db.query<any>(`select * from conversions where advertiser_id = $1 and order_id = $2`, [advertiserId, input.orderId])).rows[0];
     if (done) return { conversion: this.view(done), duplicate: true };
 
-    let spot: AdSpot | null = null, companyId: string | null = null, clickId: string | null = null, coupon: string | null = null;
+    let spot: AdSpot | null = null, companyId: string | null = null, clickId: string | null = null, coupon: string | null = null, bottle: string | null = null;
     if (input.clickId) {
       const c = (await this.db.query<any>(`select * from clicks where id = $1`, [input.clickId.toUpperCase()])).rows[0];
       if (!c || c.advertiser_id !== advertiserId) throw new AttributionError('unknown_click', 'That click id isn’t one of this advertiser’s clicks.', 404);
@@ -116,14 +124,26 @@ export class AttributionService {
       if (c.redeemed_at && c.order_id !== input.orderId) throw new AttributionError('coupon_used', `That coupon was already used${c.order_id ? ` on order ${c.order_id}` : ''}.`, 409);
       spot = spotOf(c); companyId = c.company_id; coupon = c.code;
       await this.db.query(`update coupon_codes set redeemed_at = coalesce(redeemed_at, $2), redeemed_by = coalesce(redeemed_by, $3), order_id = $4, value_cents = $5 where code = $1`, [c.code, this.now().toISOString(), input.source, input.orderId, input.valueCents]);
-    } else throw new AttributionError('no_match', 'Send the fwclid from the link, or the coupon code. Sales we can’t match to a bottle aren’t counted.', 422);
+    } else if (input.bottleCode && this.codes) {
+      // A static code opened the advertiser's site directly, carrying the bottle's own signed reference (fwb).
+      const row = await this.codes.find(input.bottleCode);
+      const owner = !row ? null : row.kind === 'slot' ? this.platform.units.get(row.unitId!)?.placements.find((p) => p.slotIndex === row.slot)?.advertiserId : row.kind === 'box' ? this.packFace?.(row.packId!, row.face!) : null;
+      // Only a code printed as a static code carries a reference people saw on the advertiser's own site; dynamic codes don't count here.
+      const printedStatic = !row ? false : row.kind === 'slot' ? this.platform.labels.get(row.unitId!)?.slots.find((s) => s.slotIndex === row.slot)?.qrMode === 'static' : row.kind === 'box' ? !!this.boxStatic?.(row.packId!, row.face!, row.code) : false;
+      if (!row || owner !== advertiserId || !printedStatic) throw new AttributionError('unknown_bottle', 'That bottle reference isn’t from one of this advertiser’s ads.', 404);
+      if (this.now().getTime() - new Date(row.createdAt).getTime() > CLICK_WINDOW_DAYS * 86_400_000) throw new AttributionError('bottle_too_old', `Sales count for ${CLICK_WINDOW_DAYS} days after the bottle was printed.`, 422);
+      const used = Number((await this.db.query<{ n: number }>(`select count(*)::int as n from conversions where bottle_code = $1`, [row.code])).rows[0]!.n);
+      if (used >= MAX_SALES_PER_CLICK) throw new AttributionError('bottle_used_up', `One bottle can lead to at most ${MAX_SALES_PER_CLICK} sales.`, 422);
+      spot = row.kind === 'slot' ? { unitId: row.unitId!, slot: row.slot! } : { packId: row.packId!, face: row.face! };
+      companyId = row.companyId; bottle = row.code;
+    } else throw new AttributionError('no_match', 'Send the fwclid from the link, the bottle reference (fwb) or the coupon code. Sales we can’t match to a bottle aren’t counted.', 422);
     if (!spot || !companyId) throw new AttributionError('no_match', 'That sale can’t be matched to a bottle.', 422);
 
     const commission = this.commission(companyId, input.valueCents);
     const id = newId('cv');
     const cols = spotCols(spot);
-    await this.db.query(`insert into conversions (id, company_id, advertiser_id, order_id, source, click_id, coupon_code, unit_id, slot, pack_id, face, value_cents, commission_cents, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-      [id, companyId, advertiserId, input.orderId, input.source, clickId, coupon, cols.unit_id, cols.slot, cols.pack_id, cols.face, input.valueCents, commission, this.now().toISOString()]);
+    await this.db.query(`insert into conversions (id, company_id, advertiser_id, order_id, source, click_id, coupon_code, unit_id, slot, pack_id, face, value_cents, commission_cents, created_at, bottle_code) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+      [id, companyId, advertiserId, input.orderId, input.source, clickId, coupon, cols.unit_id, cols.slot, cols.pack_id, cols.face, input.valueCents, commission, this.now().toISOString(), bottle]);
     // The sale goes into the books like any other: commission billed to the advertiser, once per order.
     if (input.valueCents > 0) {
       const key = `${advertiserId}:${input.orderId}`;
@@ -168,7 +188,7 @@ export class AttributionService {
     }
     const row = (await this.db.query<any>(`select * from coupon_codes where code = $1`, [code])).rows[0];
     const verifyUrl = `${scanBase(company)}/V/${code}`;
-    return { code: code!, redeemed: !!row.redeemed_at, verifyUrl, qrSvg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">${qrSvg(verifyUrl, 0, 0, 200)}</svg>` };
+    return { code: code!, redeemed: !!row.redeemed_at, verifyUrl, qrSvg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">${qrSvg(verifyUrl, 0, 0, 200, 'H', campaignQrStyle(company, ad.campaignId ? this.platform.campaigns.get(ad.campaignId) : undefined))}</svg>` };
   }
 
   /** What the cashier sees when they scan someone's coupon. */

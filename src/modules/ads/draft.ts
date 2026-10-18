@@ -161,7 +161,7 @@ export function maxPerSixth(company: CompanyConfig, sizes: Sixths[]) {
 }
 
 /** What it will cost, in plain numbers. */
-export function estimate(d: AdDraft, company: CompanyConfig) {
+export function estimate(d: AdDraft, company: CompanyConfig, maxFactor = 1) {
   const pr = company.prices;
   const sizes = d.sizes?.length ? d.sizes : allowedSizes;
   const perPrint = Object.fromEntries(sizes.map((s) => [s, pr.perPrintBySixths[s]]));
@@ -170,7 +170,9 @@ export function estimate(d: AdDraft, company: CompanyConfig) {
   const out: { perPrintCents: Record<string, number>; perScanCents: number; perArLaunchCents: number; commissionPercent: number; perBoxFaceCents: number; printsCostCents?: [number, number]; bottlesPerDay?: [number, number] } = {
     perPrintCents: perPrint, perScanCents: pr.perScan, perArLaunchCents: pr.perArLaunch, commissionPercent: pr.commissionPercent, perBoxFaceCents: pr.perBoxFace,
   };
-  if (d.buy?.type === 'guaranteed') out.printsCostCents = [d.buy.prints * pr.perPrintBySixths[smallest], d.buy.prints * pr.perPrintBySixths[biggest]];
-  if (d.buy?.type === 'bid') out.bottlesPerDay = [Math.floor(d.buy.dailyCapCents / pr.perPrintBySixths[biggest]), Math.floor(d.buy.dailyCapCents / pr.perPrintBySixths[smallest])];
+  // Bigger products (a price factor above 1) cost more per print: the top of each range allows for the dearest one.
+  const top = (s: Sixths) => Math.round(pr.perPrintBySixths[s] * Math.max(1, maxFactor));
+  if (d.buy?.type === 'guaranteed') out.printsCostCents = [d.buy.prints * pr.perPrintBySixths[smallest], d.buy.prints * top(biggest)];
+  if (d.buy?.type === 'bid') out.bottlesPerDay = [Math.floor(d.buy.dailyCapCents / top(biggest)), Math.floor(d.buy.dailyCapCents / pr.perPrintBySixths[smallest])];
   return out;
 }

@@ -139,7 +139,7 @@ const json = <T>(v: unknown): T => (typeof v === 'string' ? JSON.parse(v) : v) a
 export async function loadState(db: SqlClient, builtins: Record<string, Creative>, now = new Date()): Promise<LoadedState> {
   const rows = async <T>(sql: string, params: unknown[] = []) => (await db.query<T>(sql, params)).rows;
   const companies = (await rows<{ config: unknown }>(`select config from companies order by id`)).map((r) => json<CompanyConfig>(r.config));
-  const products = (await rows<{ data: unknown }>(`select data from products`)).map((r) => json<Product>(r.data));
+  const products = (await rows<{ data: unknown }>(`select data from products order by id`)).map((r) => json<Product>(r.data));
   const boxes = (await rows<{ data: unknown }>(`select data from boxes`)).map((r) => json<BoxProduct>(r.data));
   const locations = (await rows<{ data: unknown }>(`select data from locations`)).map((r) => json<Location>(r.data));
   const campaigns = (await rows<{ data: unknown }>(`select data from campaigns`)).map((r) => hydrateCampaign(json<CampaignRecord>(r.data), builtins));

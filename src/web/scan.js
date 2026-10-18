@@ -96,7 +96,7 @@
     if (record) requestAnimationFrame(() => setTimeout(() => {
       const loaded = !doc.fallback;
       const rec = target.kind === 'slot'
-        ? api('POST', '/v1/public/scans', { unitId: target.unitId, slot: target.slot, viewerKey, experienceLoaded: loaded })
+        ? api('POST', '/v1/public/scans', { unitId: target.unitId, slot: target.slot, viewerKey, experienceLoaded: loaded, ...(opened.variant ? { variant: opened.variant.id } : {}) })
         : api('POST', '/v1/public/box-scans', { packId: target.packId, face: target.face, viewerKey, experienceLoaded: loaded });
       rec.catch(() => {});
     }, 0));
@@ -193,6 +193,8 @@
       case 'gallery': return h('div', { class: 'gallery' }, b.imageUrls.map((u) => h('img', { src: u, alt: '', loading: 'lazy' })));
       case 'message': return h('div', { class: 'message', style: 'color:var(--accent-ink)' }, h('div', { class: 'from', text: `From ${b.from}` }), h('p', { text: b.text }));
       case 'confetti': { setTimeout(confetti, 250); return null; }
+      case 'greeting': return h('div', { class: 'greeting' }, h('span', { class: 'spark', 'aria-hidden': 'true', text: '✦' }), h('span', { text: b.text }));
+      case 'ar': return arBlock(b, ctx);
       default: return null;
     }
   }
@@ -254,6 +256,52 @@
     }
     parts.push(arBtn);
     return h('div', { class: 'model', style: 'display:flex;flex-direction:column;gap:12px' }, parts);
+  }
+
+  // ---------- AR: in your space, on the bottle, or a living label ----------
+  function arBlock(b, ctx) {
+    const buy = b.cta ? { label: b.cta.label, url: b.cta.url, title: ctx.owner } : undefined;
+    if (b.mode === 'world' || ctx.target.kind !== 'slot') {
+      // In the room: the phone's own AR (Apple's on iPhone, Google's on Android), with the buy button.
+      if (!b.model) return null;
+      return h('div', { class: 'ar-card' }, h('h2', { class: 'section-title', text: b.title }), modelStage(b.model, [], ctx, b.caption || 'See it in your space', buy));
+    }
+    const what = b.mode === 'label'
+      ? 'Point your camera at the label, then turn the bottle in your hand. The label comes alive all the way around.'
+      : `Point your camera at the bottle. ${b.model?.alt || 'It'} appears on it and moves with it as you turn it.`;
+    let reported = false;
+    const go = (simulate) => openAr({
+      block: b, slotIndex: ctx.target.slot, simulate, accent: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || undefined,
+      getMap: () => api('GET', `/v1/public/ar/${ctx.target.unitId}`),
+      getLabelSvg: (url) => (fixture ? fixture.text(url) : fetch(url).then((r) => { if (!r.ok) throw new Error('label'); return r.text(); })),
+      // An AR launch is billed only once it has actually loaded on this phone.
+      onReady: (loaded) => { if (reported || previewMode) return; reported = true; api('POST', '/v1/public/ar-launches', { unitId: ctx.target.unitId, slot: ctx.target.slot, viewerKey, loaded }).catch(() => {}); },
+      onLink: (url) => { engage(ctx, 'link', 'from AR'); location.href = withAttribution(url); },
+    });
+    return h('div', { class: `ar-card ar-${b.mode}` },
+      h('div', { class: 'ar-art', 'aria-hidden': 'true' }, arArt(b.mode)),
+      h('h2', { class: 'section-title', text: b.title }),
+      h('p', { class: 'text', text: b.caption ? `${b.caption.replace(/[.!?]+$/, '')}. ${what}` : what }),
+      h('button', { type: 'button', class: 'btn', onclick: () => go(false) }, icon(ICON.ar), b.mode === 'label' ? 'Bring the label to life' : 'Open AR on the bottle'),
+      h('button', { type: 'button', class: 'btn secondary', onclick: () => go(true) }, 'Try it without the camera'));
+  }
+  // A little drawing of what will happen: a bottle with a model on top, or a bottle with a glowing label.
+  function arArt(mode) {
+    const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    s.setAttribute('viewBox', '0 0 120 90');
+    const shape = (tag, attrs) => { const e = document.createElementNS('http://www.w3.org/2000/svg', tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, String(v)); s.append(e); return e; };
+    shape('rect', { x: 44, y: 30, width: 32, height: 52, rx: 8, fill: '#c9ced3' });
+    shape('rect', { x: 52, y: 20, width: 16, height: 12, rx: 3, fill: '#9aa2aa' });
+    shape('rect', { x: 44, y: 44, width: 32, height: 26, fill: mode === 'label' ? 'var(--accent)' : '#ffffff', opacity: mode === 'label' ? 0.9 : 1 });
+    if (mode === 'label') { shape('path', { d: 'M30 57 q-8 0 -8 -6 M90 57 q8 0 8 -6', stroke: 'var(--accent)', 'stroke-width': 3, fill: 'none', 'stroke-linecap': 'round' }); shape('path', { d: 'M22 51 l-3 4 m3 -4 l4 2 M98 51 l3 4 m-3 -4 l-4 2', stroke: 'var(--accent)', 'stroke-width': 3, fill: 'none', 'stroke-linecap': 'round' }); }
+    else { shape('ellipse', { cx: 60, cy: 12, rx: 16, ry: 9, fill: 'var(--accent)' }); shape('path', { d: 'M38 16 q-10 -6 -4 -14 M82 16 q10 -6 4 -14', stroke: 'var(--accent)', 'stroke-width': 2.5, fill: 'none', 'stroke-dasharray': '3 4' }); }
+    return s;
+  }
+  let arScript = null;
+  function openAr(opts) {
+    if (window.FWAR) return window.FWAR.open(opts);
+    arScript ??= new Promise((res, rej) => { const sc = document.createElement('script'); sc.src = '/static/ar.js'; sc.onload = res; sc.onerror = () => { arScript = null; rej(new Error('ar')); }; document.head.append(sc); });
+    arScript.then(() => window.FWAR.open(opts)).catch(() => toast('AR couldn’t load. Check your connection.'));
   }
 
   function confetti() {

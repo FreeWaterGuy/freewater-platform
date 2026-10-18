@@ -72,7 +72,7 @@ export class ConsoleService {
   }
 
   private locations(companyId: string) {
-    return [...this.platform.locations.values()].filter((l) => l.companyId === companyId).map((l) => ({ id: l.id, kind: l.kind, name: l.name, city: l.city, address: l.address ?? null, lat: l.lat ?? null, lng: l.lng ?? null, printSeconds: l.printSeconds ?? null, hardware: l.hardware ?? null }));
+    return [...this.platform.locations.values()].filter((l) => l.companyId === companyId).map((l) => ({ id: l.id, kind: l.kind, name: l.name, city: l.city, address: l.address ?? null, lat: l.lat ?? null, lng: l.lng ?? null, printSeconds: l.printSeconds ?? null, hardware: l.hardware ?? null, products: l.products ?? null }));
   }
 
   /** Getting started: what a new company still has to do before its first bottle. */
@@ -156,7 +156,7 @@ export class ConsoleService {
     try { draft = applyChange(cur, change ?? {}); } catch (e: any) { return { svg: null, problem: e.message }; }
     const problem = checkSettings(draft, this.registry.names());
     const shown = problem ? cur : draft;
-    const product = [...this.platform.products.values()][0]!;
+    const product = this.platform.standardProduct(companyId);
     const unit = this.sampleUnit(companyId);
     const location = unit.locationId;
     const label = await this.registry.rendererFor(shown).render({ unit: { ...unit, locationId: location }, product, company: shown, campaigns: this.platform.campaigns });
@@ -192,9 +192,10 @@ export class ConsoleService {
     return { machine: this.locations(companyId).find((l) => l.id === id)!, apiKey: key };
   }
 
-  async updateMachine(companyId: string, id: string, input: { name?: string; city?: string; address?: string; lat?: number; lng?: number; printSeconds?: number; hardware?: 'model6' | 'virtual' }) {
+  async updateMachine(companyId: string, id: string, input: { name?: string; city?: string; address?: string; lat?: number; lng?: number; printSeconds?: number; hardware?: 'model6' | 'virtual'; products?: string[] }) {
     const loc = this.platform.locations.get(id);
     if (!loc || loc.companyId !== companyId || loc.kind !== 'machine') throw new ConsoleError('not_found', 'Machine not found.', 404);
+    for (const pid of input.products ?? []) { const p = this.platform.products.get(pid); if (!p || (p.companyId && p.companyId !== companyId)) throw new ConsoleError('unknown_product', `There's no product called "${pid}".`); }
     if (input.name !== undefined && (!input.name.trim() || input.name.length > 60)) throw new ConsoleError('invalid_name', 'Give the machine a short name.');
     const { hardware, ...rest } = input;
     const next: Location = { ...loc, ...Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined)) };

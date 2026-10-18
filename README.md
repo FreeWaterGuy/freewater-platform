@@ -175,6 +175,44 @@ npm run demo:ops-preview   # builds out/ops-preview/ and out/driver-preview/, cl
 
 **Still to check on real phones:** the iPhone AR banner and the Android AR link.
 
+## Logos, dynamic codes, three kinds of AR, right hands, any product
+
+**Logos in codes (`src/modules/print/qr.ts`).**
+- A company's own codes (receipt panel, house ads, boxes) can carry no logo, its initials, or its uploaded logo (SVG or PNG). Advertisers can put their logo in their codes if the company allows it. Codes can be colored if dark enough (4.5 to 1 against white).
+- **Always scans:** the encoder knows which error-correction block every square belongs to. The logo is made as big as asked, then smaller (or the code one or two sizes larger) until every block keeps at least half its repair capacity, counting every square under the logo as lost whatever the logo looks like. Tested with white, black and random squares under the logo. FreeWater's codes still read with about 15 to 20% damaged on top of the logo (31% with no logo). The console and FreeWater Ads show the exact figure for each logo.
+
+**Dynamic and static codes.** Dynamic is the default everywhere: every scan reaches us, is counted, and what it opens is decided at that moment.
+- **Versions of the call to action** (`variants` on a campaign): each version says who it's for: the bottle's first scanner, someone the bottle was passed to, new or returning customers, morning/afternoon/evening/night, days, interests, bottles kept a while. The first version that fits is shown. The same bottle can show its owner one thing and the friend it's handed to another.
+- **Old bottles stay useful:** when a campaign ends, its bottles open the advertiser's current campaign (or keep the old one, if they choose).
+- **Static codes**, if the company allows them, go straight to the advertiser's site. They still carry the bottle's own signed reference (`fwb=`), so our tag and `POST /v1/conversions` can still match a sale to the exact bottle.
+- `PATCH /v1/campaigns/{id}/codes`, and `POST /v1/campaigns/{id}/preview-moment` to see what one person at one moment would get.
+
+**AI personalization (`src/modules/ai/personalizer.ts`).** With it on, AI picks which of the advertiser's versions each person sees, and writes a one-line greeting (shown on the page and over the camera in AR).
+- It only chooses among the advertiser's approved versions whose conditions fit. It sees the moment (time of day, passed-on bottle, interests people chose to share, city), never who someone is.
+- Greetings are checked: short, no links, numbers or shouting.
+- Answers are kept for an hour per campaign and kind of moment. A scan never waits more than 0.7 s: if the AI is slower, the built-in rules answer and the AI's answer is kept for the next person.
+- Claude when `ANTHROPIC_API_KEY` is set (`ANTHROPIC_PERSONALIZE_MODEL` to choose the model); built-in rules otherwise.
+
+**Three kinds of AR.**
+- **In your space** (`ar-place`, plus the 3D menu and home tour): the phone's own AR on a table or the floor, with the buy button.
+- **On the bottle** (`ar-on-bottle`): a 3D model attached to the bottle in the camera: on top, in front, beside or circling it, spinning or floating. It moves and turns with the bottle and goes behind it when it should.
+- **Living label** (`ar-living-label`): a new label laid over the real one all the way round, moving artwork, video or effects (shimmer, ripple, sparkle) over the advertiser's part. Turn the bottle and it turns with it.
+- **How the phone follows the bottle (`src/modules/ar`):** we printed the label, so we know where every code sits on it. Bottles carrying on-bottle or living-label AR also get a thin **tracking strip**: small numbered squares (our own design) along the bottom of the label, about every 20°. Seeing any one, even far round the curve, tells the phone exactly how the bottle is turned (QR codes alone stop reading about 20° off-center). The phone's browser does it all; no app. `GET /v1/public/ar/{unit}` gives the label map.
+- **Tested** on simulated camera pictures of a curved bottle all the way round. Without a camera (a laptop), a simulated bottle is drawn and the same tracker follows it.
+- Each kind can be personalized: versions can swap the model, the artwork or the effect, and the AI's greeting becomes the caption.
+
+**Right ads, right hands (`src/modules/handoff`).**
+- A campaign can target people (`targeting.audience`: interests, new or returning customers). Such ads only print on bottles for a known person who fits (an app order at a machine, a home delivery), never on walk-up or spare labels. Why each ad was chosen is recorded.
+- Each such bottle is followed: chosen for them, handed over (the machine confirms the drop for their order, or the driver's door scan), then opened. If the first scan comes from that same person's phone, it's confirmed in their hands. Advertisers see it under Sales tracking (`GET /v1/ads/reach`); the company sees every bottle's trail (`GET /v1/ops/units/{id}/handoff`).
+
+**Any drink, any size (`src/modules/products`).**
+- A product is its label size, its container's shape and size, the ad layouts it allows, an optional price factor and its own panel lines. Samples: the 16 oz bottle, a 25 oz bottle (ads cost 1.25×) and a 12 oz can.
+- Every product is checked before it can print: the wrap must close around the container, and every ad must fit a readable QR code. Labels scale to the product.
+- Campaigns can target products or kinds of product; products can block ad categories. Each machine has its own list of products.
+- Companies add their own products in the console (Products); shared ones belong to the platform team.
+
+**Still to check on real phones:** the tracking strip and living label with a real printed label, on several phones and in different light; then tune the strip size.
+
 ## Model 6 machine software
 
 ```
@@ -317,6 +355,11 @@ The server keeps working state in memory and writes through to the database, so 
 | `src/adapters/payouts` | Payout contract (sending money to charities) and the test version |
 | `src/modules/codes`, `src/modules/print/qrEncoder.ts` | Our own QR encoder and the smart codes printed on everything |
 | `src/modules/attribution` | Click ids, the tracking tag, sales matched to bottles, one-time coupons |
+| `src/modules/ar`, `src/web/ar` | Finding the bottle from its printed codes and tracking strip, and the AR viewer (three.js) |
+| `src/modules/experiences/dynamic.ts`, `extras.ts` | Versions of the call to action, chosen at each scan, and campaign code settings |
+| `src/modules/ai/personalizer.ts` | AI personalization: choosing versions and writing greetings |
+| `src/modules/handoff` | Proof that targeted bottles reached the person they were printed for |
+| `src/modules/products` | Product checks: any drink, any size |
 | `src/modules/models/usdz.ts` | Our own GLB to USDZ converter, for iPhone AR with a buy button |
 | `src/modules/fleet` | Model 6 machines: jobs, heartbeats, problems, commands, labels kept for offline |
 | `src/machine` | The machine software: agent, screen server, memory, hardware contracts and the simulated Model 6 |

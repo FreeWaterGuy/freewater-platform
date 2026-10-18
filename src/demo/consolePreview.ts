@@ -72,6 +72,7 @@ const rec = {
   openapi: await call('GET', '/v1/openapi.json'),
   sample,
   ids: { warehouse: warehouse.id, crm: crm.id },
+  products: await call('GET', '/v1/console/products', token),
 };
 await server.close();
 

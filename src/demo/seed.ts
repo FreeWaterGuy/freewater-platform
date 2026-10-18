@@ -4,9 +4,33 @@ import type { BoxProduct, Campaign, CompanyConfig, Creative, Location, Product, 
 export const bottle16oz: Product = {
   id: 'bottle-16oz',
   name: '16 oz aluminum bottle',
+  category: 'water',
+  container: { shape: 'bottle', diameterIn: 2.66, heightIn: 7.5 },
   label: { widthIn: 8.6, heightIn: 4.5, seamIn: 0.25, panelWidthIn: 0.95 },
   layouts: [[6], [3, 3], [2, 2, 2], [4, 2], [2, 1, 1, 2], [3, 2, 1], [1, 1, 1, 1, 1, 1], [2, 2, 1, 1]],
 };
+
+/** Other sizes and drinks, to show the platform isn't tied to one bottle. Sample dimensions. */
+export const bottle25oz: Product = {
+  id: 'bottle-25oz',
+  name: '25 oz aluminum bottle (750 ml)',
+  category: 'water',
+  container: { shape: 'bottle', diameterIn: 3.0, heightIn: 9.6 },
+  label: { widthIn: 9.67, heightIn: 5.5, seamIn: 0.25, panelWidthIn: 1.1 },
+  layouts: [[6], [3, 3], [2, 2, 2], [4, 2], [2, 1, 1, 2], [3, 2, 1], [1, 1, 1, 1, 1, 1], [2, 2, 1, 1]],
+  priceFactor: 1.25,
+  facts: ['SPRING WATER', '25 fl oz (750 ml)', 'Source: Natural Spring Water, Tiger, GA', 'Bottled for FreeWater Inc, Austin, TX'],
+};
+export const can12oz: Product = {
+  id: 'can-12oz',
+  name: '12 oz sparkling water can',
+  category: 'sparkling water',
+  container: { shape: 'can', diameterIn: 2.6, heightIn: 4.83 },
+  label: { widthIn: 8.37, heightIn: 3.9, seamIn: 0.2, panelWidthIn: 0.9 },
+  layouts: [[6], [3, 3], [2, 2, 2], [4, 2], [3, 2, 1], [2, 2, 1, 1]],
+  facts: ['SPARKLING SPRING WATER', '12 fl oz (355 ml)', 'Canned for FreeWater Inc, Austin, TX'],
+};
+export const products: Product[] = [bottle16oz, bottle25oz, can12oz];
 
 const sides = { adFaces: ['top', 'front', 'back', 'right'] as BoxProduct['adFaces'], panelFace: 'left' as const, blankFaces: ['bottom'] as BoxProduct['blankFaces'] };
 export const boxes: BoxProduct[] = [
@@ -41,6 +65,9 @@ export const freewater: CompanyConfig = {
   adRules: { minAdsPerUnit: 1, maxAdsPerUnit: 6, blockedCategories: ['alcohol', 'tobacco', 'gambling', 'weapons'], competitorSeparation: true, repeatScanWindowSec: 600, maxPackShare: 0.5 },
   prices: placeholderPrices,
   modules: { ads: 'freewater-ads', renderer: 'svg-label', printer: 'virtual-printer' },
+  standardProductId: 'bottle-16oz',
+  qr: { logo: 'brand', advertiserLogos: true, allowStatic: true },
+  ar: { trackingCodes: true, stripEverywhere: true },
 };
 
 /** A made-up white-label licensee that gives nothing and allows every category. Shows that every rule is a setting. */
@@ -52,13 +79,14 @@ export const peakSpring: CompanyConfig = {
   brand: { logoTop: 'peak', logoBottom: 'spring', panelColor: '#123B2A', accentColor: '#F2C14E', textColor: '#FFFFFF', fontFamily: "'DM Sans', Arial, sans-serif" },
   productFacts: ['MOUNTAIN SPRING WATER', '16 fl oz (473 ml)', 'Bottled for Peak Spring Water Co.'],
   giving: { mode: 'none' },
+  qr: { logo: 'none', advertiserLogos: false, allowStatic: false },
   consumerPricing: 'discounted',
   adRules: { ...freewater.adRules, blockedCategories: [] },
   modules: { ads: 'house-only', renderer: 'svg-label', printer: 'virtual-printer' },
 };
 
 export const locations: Location[] = [
-  { id: 'ATX-014', kind: 'machine', companyId: 'freewater', city: 'Austin', name: 'Congress Ave', address: '600 Congress Ave, Austin, TX', lat: 30.2687, lng: -97.7428, printSeconds: 24 },
+  { id: 'ATX-014', kind: 'machine', companyId: 'freewater', city: 'Austin', name: 'Congress Ave', address: '600 Congress Ave, Austin, TX', lat: 30.2687, lng: -97.7428, printSeconds: 24, products: ['bottle-16oz', 'can-12oz'] },
   { id: 'ATX-022', kind: 'machine', companyId: 'freewater', city: 'Austin', name: 'Rainey St', address: '70 Rainey St, Austin, TX', lat: 30.2589, lng: -97.7387, printSeconds: 24 },
   { id: 'route-3', kind: 'route', companyId: 'freewater', city: 'Austin', name: 'Travis Heights', area: { lat: 30.2468, lng: -97.7445, radiusKm: 2.2 }, depot: { lat: 30.2597, lng: -97.7146, name: 'East Austin micro-factory' }, deliveryDays: [2, 5] },
   { id: 'route-5', kind: 'route', companyId: 'freewater', city: 'Austin', name: 'Mueller', area: { lat: 30.2985, lng: -97.7040, radiusKm: 2 }, depot: { lat: 30.2597, lng: -97.7146, name: 'East Austin micro-factory' }, deliveryDays: [2, 5] },
@@ -122,7 +150,7 @@ const drop = (w: number, h: number) => `<path d="M${w / 2} ${h * 0.12} C${w * 0.
 const peak = (w: number, h: number) => `<path d="M0 ${h * 0.55} L${w * 0.35} ${h * 0.15} L${w * 0.55} ${h * 0.38} L${w * 0.7} ${h * 0.25} L${w} ${h * 0.55} Z" fill="#F2C14E" opacity=".9"/>`;
 
 const all: Sixths[] = [1, 2, 3, 4, 6];
-type CampaignInput = Omit<Campaign, 'companyId' | 'active' | 'targeting'> & Partial<Pick<Campaign, 'targeting'>>;
+type CampaignInput = Omit<Campaign, 'companyId' | 'active' | 'targeting'> & Partial<Pick<Campaign, 'targeting' | 'active'>>;
 const fw = (c: CampaignInput): Campaign => ({ companyId: 'freewater', active: true, targeting: {}, ...c, creativeRef: { kind: 'builtin', id: c.id } });
 
 export function sampleCampaigns(): Campaign[] {
@@ -144,6 +172,23 @@ export function sampleCampaigns(): Campaign[] {
     // Blocked by FreeWater's rules (alcohol), allowed by a licensee that chooses to.
     fw({ id: 'cmp-lager', advertiserId: 'adv-lager', advertiserName: 'Lone Peak Lager', category: 'alcohol', sizes: [1, 2, 3], experienceId: 'offer', experienceConfig: { headline: 'Cold and local', details: 'Find Lone Peak at your local store. 21+ only.' }, buy: { type: 'bid', maxCentsPerSixth: 9, dailyCapCents: 9000, spentTodayCents: 0 },
       creative: art({ bg: '#0F3D5E', fg: '#FFFFFF', accent: '#F2C14E', brand: 'Lone Peak', line: 'Cold and local', sub: '21+', mark: peak }) }),
+    // AR that follows the bottle. Paused in the sample data (so the other samples behave as before); the AR demos
+    // turn them on.
+    fw({ id: 'cmp-fizz', active: false, advertiserId: 'adv-fizz', advertiserName: 'Fizz Lab', category: 'drinks', sizes: [6], experienceId: 'ar-living-label',
+      experienceConfig: { title: 'Fizz Lab: the label that pops', subtitle: 'New Yuzu Spark. Turn the bottle.', caption: 'Turn the bottle slowly', effect: 'sparkle', color: '#E8458B', link: { label: 'Get Yuzu Spark', url: 'https://example.com/fizz/shop' } },
+      variants: [
+        { id: 'morning', name: 'Morning', when: { dayparts: ['morning'] }, experienceConfig: { title: 'Fizz Lab: wake up bright', subtitle: 'Yuzu Spark beats a second coffee.', caption: 'Turn the bottle to wake it up', effect: 'shimmer', color: '#F2C14E', link: { label: 'Get Yuzu Spark', url: 'https://example.com/fizz/shop' } } },
+        { id: 'passed-on', name: 'Passed-on bottles', when: { scanner: 'passed_on' }, experienceConfig: { title: 'Someone shared this with you', subtitle: 'Fizz Lab makes Yuzu Spark. Your first can is on us.', caption: 'Turn the bottle', effect: 'ripple', color: '#7FC6EA', link: { label: 'Claim your free can', url: 'https://example.com/fizz/free' } } },
+      ],
+      personalize: { ai: true, greeting: true },
+      theme: { background: '#FFF0F6', text: '#2A0A1A', accent: '#E8458B', button: '#2A0A1A', buttonText: '#FFFFFF' }, buy: { type: 'guaranteed', remainingPrints: 3000 },
+      creative: art({ bg: '#E8458B', fg: '#FFFFFF', accent: '#FFE45C', brand: 'FIZZ LAB', line: 'Yuzu Spark', sub: 'Point your camera at me', mark: drop }) }),
+    fw({ id: 'cmp-roast', active: false, advertiserId: 'adv-roast', advertiserName: 'Roastery 9', category: 'coffee', sizes: [2, 3], experienceId: 'ar-on-bottle',
+      experienceConfig: { title: 'A latte, right on your bottle', subtitle: 'Roastery 9, 2 blocks away. Ready in 4 minutes.', caption: 'Turn the bottle', model: { builtin: 'latte', alt: 'Roastery 9 oat latte' }, placement: 'top', motion: 'spin', sizeIn: 2.6, link: { label: 'Order ahead', url: 'https://example.com/roast/order' } },
+      personalize: { ai: false, greeting: true },
+      qr: { mode: 'dynamic', logo: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="48" fill="#2B1A10"/><text x="50" y="66" text-anchor="middle" font-family="Arial, sans-serif" font-size="46" font-weight="700" fill="#F3D9B1">R9</text></svg>' },
+      theme: { background: '#F7EFE6', text: '#2B1A10', accent: '#B5651D', button: '#2B1A10', buttonText: '#F7EFE6' }, buy: { type: 'guaranteed', remainingPrints: 3000 },
+      creative: art({ bg: '#2B1A10', fg: '#F3D9B1', accent: '#B5651D', brand: 'ROASTERY 9', line: 'Latte in AR', sub: 'Scan, then point at the bottle', mark: cup }) }),
     { companyId: 'peak-spring', active: true, targeting: {}, creativeRef: { kind: 'builtin', id: 'cmp-peak-house' }, id: 'cmp-peak-house', advertiserId: 'peak-spring', advertiserName: 'Peak Spring', category: 'house', sizes: all, isHouse: true, experienceId: 'house-promo', experienceConfig: { headline: 'Cold mountain water', text: 'Peak Spring, bottled in the Rockies.' }, buy: { type: 'guaranteed', remainingPrints: 1e9 },
       creative: art({ bg: '#123B2A', fg: '#FFFFFF', accent: '#F2C14E', brand: 'peak spring', line: 'Cold mountain water', sub: 'From the Rockies', mark: peak }) },
   ];

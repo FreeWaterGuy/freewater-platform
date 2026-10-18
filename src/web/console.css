@@ -137,3 +137,5 @@ pre.code .c { color: #8A96A0; }
 
 .field .events-pick label, .field .scope-list label { font-weight: 400; font-size: 14px; }
 .field .events-pick label code, .field .scope-list label b { font-weight: 700; }
+
+.chip-check{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--line,#DDE5EC);border-radius:999px;font-size:14px;cursor:pointer;margin:0 6px 6px 0}

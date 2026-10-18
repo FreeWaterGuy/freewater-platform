@@ -381,7 +381,7 @@ export class FleetService {
     if (!s.offlineWalkUp) return { labels: [], target: 0 };
     const held = Number((await this.db.query<{ n: number }>(`select count(*)::int as n from machine_buffer where location_id = $1 and status = 'held' and expires_at > $2`, [locationId, this.now().toISOString()])).rows[0]!.n);
     const n = Math.max(0, Math.min(want, s.bufferSize - held));
-    const product = [...this.platform.products.keys()][0]!;
+    const product = (l.products?.[0] ? l.products[0] : this.platform.standardProduct(l.companyId).id);
     const labels = [];
     const expires = new Date(this.now().getTime() + (this.opts.bufferHours ?? 24) * 3600_000);
     for (let i = 0; i < n; i++) {

@@ -30,6 +30,11 @@ export class AdsService {
     private flush: () => Promise<void>,
   ) {}
 
+  /** The highest price factor among the products this company's ads can go on. */
+  private maxFactor(companyId: string) {
+    return Math.max(1, ...[...this.platform.products.values()].filter((p) => !p.companyId || p.companyId === companyId).map((p) => p.priceFactor ?? 1));
+  }
+
   // ---------- advertisers ----------
 
   async signup(input: { companyId: string; userId: string; businessName: string; category: string; website?: string }) {
@@ -76,7 +81,7 @@ export class AdsService {
       id: r.id, status: r.status, campaignId: r.campaignId, updatedAt: r.updatedAt,
       draft: { ...rest, poster: poster ? { ...poster, image: poster.image ? { role: poster.image.role, attached: true } : undefined } : undefined },
       messages: r.messages, missing: left.map((m) => ({ id: m, label: missingLabels[m] })), ready: left.length === 0,
-      estimate: estimate(r.draft, company), assistant: this.assistant.name,
+      estimate: estimate(r.draft, company, this.maxFactor(company.id)), assistant: this.assistant.name,
     };
   }
 
@@ -163,7 +168,7 @@ export class AdsService {
 
   private async render(o: { companyId: string; advertiserId: string; advertiserName: string; category: string; draw: (w: number, h: number) => string; sizes: Sixths[]; formats: string[]; experience: { id: string; config: unknown } | null; theme: Partial<import('../experiences/blocks').Theme> }) {
     const company = this.platform.companies.get(o.companyId)!;
-    const product = [...this.platform.products.values()][0]!;
+    const product = this.platform.standardProduct(o.companyId);
     const sixthPx = ((product.label.widthIn - product.label.seamIn - product.label.panelWidthIn) * 100) / 6;
     const wrap = (w: number, h: number) => `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(w)}" height="${h}" viewBox="0 0 ${w.toFixed(1)} ${h}">${o.draw(w, h)}</svg>`;
     const sizes = o.sizes.map((s) => ({ sixths: s, svg: wrap(s * sixthPx, 450) }));
@@ -276,7 +281,7 @@ export class AdsService {
       if (e.action === 'save') { t.saves += Number(e.n); total.saves += Number(e.n); }
       if (e.action === 'link' || e.action === 'call') { t.linkTaps += Number(e.n); total.linkTaps += Number(e.n); }
     }
-    const product = [...this.platform.products.values()][0]!;
+    const product = this.platform.standardProduct(input.companyId);
     const thumbW = ((product.label.widthIn - product.label.seamIn - product.label.panelWidthIn) * 100) / 6 * 2;
     const campaigns = [...this.platform.campaigns.values()].filter((c) => c.companyId === input.companyId && c.advertiserId === input.advertiserId && !c.isHouse)
       .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '') || a.id.localeCompare(b.id))
@@ -289,7 +294,7 @@ export class AdsService {
         results: byCampaign.get(c.id) ?? blank(),
       }));
     const adv = await this.advertiser(input.companyId, input.advertiserId);
-    return { advertiser: adv, days: input.days, total, period, daily: [...days.entries()].map(([day, t]) => ({ day, ...t })), campaigns, drafts: await this.listDrafts(input.companyId, input.advertiserId), prices: estimate({}, company) };
+    return { advertiser: adv, days: input.days, total, period, daily: [...days.entries()].map(([day, t]) => ({ day, ...t })), campaigns, drafts: await this.listDrafts(input.companyId, input.advertiserId), prices: estimate({}, company, this.maxFactor(company.id)) };
   }
 
   // ---------- content review (the company) ----------

@@ -21,6 +21,7 @@
     ads: 'M4 5h16v14H4z|M4 10h16|M10 10v9', giving: 'M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L12 21l7.8-7.5 1-1.1a5.5 5.5 0 0 0 0-7.8Z', modules: 'M4 4h7v7H4z|M13 4h7v7h-7z|M4 13h7v7H4z|M13 13h7v7h-7z',
     machine: 'M6 3h12v18H6z|M9 7h6|M10 17h4', team: 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z|M2 21a7 7 0 0 1 14 0|M17 3a4 4 0 0 1 0 8|M22 21a7 7 0 0 0-5-6.7', history: 'M3 12a9 9 0 1 0 3-6.7L3 8|M3 3v5h5|M12 7v5l3 3',
     key: 'M15 7a4 4 0 1 1-3.5 6H8v3H5v-3H3v-3h8.5A4 4 0 0 1 15 7Z', hook: 'M18 16.1A5 5 0 0 0 15 7a5 5 0 0 0-4.5 7.2|M6 16.1A5 5 0 1 0 12 21h5|M12 3a5 5 0 0 0-3 9l-3 5', docs: 'M4 4h12a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4z|M8 8h8|M8 12h8|M8 16h5', licensees: 'M3 7h18v13H3z|M8 7V4h8v3|M3 12h18',
+    qr: 'M4 4h6v6H4z|M14 4h6v6h-6z|M4 14h6v6H4z|M14 14h2v2h-2z|M18 18h2v2h-2z|M14 18h2|M18 14h2', product: 'M9 2h6v3l2 3v13a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V8l2-3z|M7 11h10|M7 17h10',
   };
   const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} } };
   const dollars = (c) => `$${(c / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -44,7 +45,7 @@
 
   const routes = [
     [/^\/console\/?$/, startPage], [/^\/console\/company$/, companyPage], [/^\/console\/brand$/, brandPage], [/^\/console\/ads$/, adsPage], [/^\/console\/giving$/, givingPage],
-    [/^\/console\/modules$/, modulesPage], [/^\/console\/machines$/, machinesPage], [/^\/console\/team$/, teamPage], [/^\/console\/history$/, historyPage],
+    [/^\/console\/modules$/, modulesPage], [/^\/console\/codes$/, codesPage], [/^\/console\/products$/, productsPage], [/^\/console\/machines$/, machinesPage], [/^\/console\/team$/, teamPage], [/^\/console\/history$/, historyPage],
     [/^\/console\/keys$/, keysPage], [/^\/console\/webhooks$/, webhooksPage], [/^\/console\/webhooks\/([\w-]+)$/, webhookPage], [/^\/console\/licensees$/, licenseesPage],
   ];
   let cleanup = null;
@@ -76,7 +77,7 @@
 
   function shell(active, ...content) {
     const nav = [
-      ['start', '/console', 'Get started', I.start], ['company', '/console/company', 'Company', I.company], ['brand', '/console/brand', 'Brand', I.brand], ['ads', '/console/ads', 'Ads and prices', I.ads],
+      ['start', '/console', 'Get started', I.start], ['company', '/console/company', 'Company', I.company], ['brand', '/console/brand', 'Brand', I.brand], ['ads', '/console/ads', 'Ads and prices', I.ads], ['codes', '/console/codes', 'QR codes and AR', I.qr], ['products', '/console/products', 'Products', I.product],
       ['giving', '/console/giving', 'Giving', I.giving], ['modules', '/console/modules', 'Modules', I.modules], ['machines', '/console/machines', 'Machines', I.machine], ['team', '/console/team', 'Team', I.team], ['history', '/console/history', 'History', I.history],
       'Developers', ['keys', '/console/keys', 'API keys', I.key], ['webhooks', '/console/webhooks', 'Webhooks', I.hook], ['docs', '/developers', 'Docs', I.docs],
       ...(S.ov?.you?.platform ? ['Platform', ['licensees', '/console/licensees', 'Licensees', I.licensees]] : []),
@@ -264,6 +265,115 @@
     });
   }
 
+  // ---------- QR codes and AR ----------
+  const readFile = (file) => new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onerror = () => rej(new Error('That file couldn’t be read.'));
+    if (file.type === 'image/svg+xml' || /\.svg$/i.test(file.name)) { r.onload = () => res(String(r.result)); r.readAsText(file); }
+    else if (/^image\/(png|jpeg|webp)$/.test(file.type)) { r.onload = () => res(String(r.result)); r.readAsDataURL(file); }
+    else rej(new Error('Use an SVG, PNG, JPEG or WebP file.'));
+  });
+  async function codesPage() {
+    const products = await api('GET', '/v1/console/products');
+    const qrImg = h('img', { alt: 'Your QR code', style: 'width:200px;height:200px;display:block' });
+    const qrNote = h('p', { class: 'hint', style: 'margin:0' });
+    const label = h('img', { alt: 'Sample label with these code settings' });
+    let timer = null;
+    const refresh = (d, ch) => {
+      clearTimeout(timer);
+      timer = setTimeout(async () => {
+        const q = d.qr;
+        try {
+          const r = await api('POST', '/v1/qr/preview', { ...(q.logo === 'custom' && q.logoSvg ? { logo: q.logoSvg } : {}), ...(q.logo === 'brand' ? { brandInitials: true } : {}), ...(q.color ? { color: q.color } : {}) });
+          qrImg.src = svgSrc(r.svg);
+          qrNote.textContent = r.note ?? `No logo. The code still reads with ${r.damageTolerance.plain}% of it damaged.`;
+        } catch (x) { qrNote.textContent = x.message; }
+        try { const l = await api('POST', '/v1/console/preview-label', { changes: ch }); if (l.svg) label.src = svgSrc(l.svg); } catch {}
+      }, 220);
+    };
+    cleanup = () => clearTimeout(timer);
+    settingsPage('codes', 'QR codes and AR', 'Every code is made by the platform itself: no outside QR company sees your scans. Codes are dynamic, so what they open can change after printing.', (ctx) => {
+      ctx.draft.qr ??= { logo: 'brand', advertiserLogos: true, allowStatic: false };
+      ctx.draft.ar ??= { trackingCodes: true, stripEverywhere: true };
+      const q = ctx.draft.qr;
+      const upload = h('input', { type: 'file', accept: '.svg,image/svg+xml,image/png,image/jpeg,image/webp', 'aria-label': 'Upload your logo', hidden: true });
+      upload.addEventListener('change', async () => { const f = upload.files?.[0]; if (!f) return; try { q.logoSvg = await readFile(f); q.logo = 'custom'; ctx.changed(); render2(); } catch (x) { toast(x.message); } });
+      const choices = [['none', 'No logo', 'Plain black and white. The strongest a code can be.'], ['brand', 'Your initials', `“${(ctx.draft.brand.logoTop[0] ?? '') + (ctx.draft.brand.logoBottom[0] ?? '')}” in your colors, until you upload a logo.`], ['custom', 'Your logo', 'Upload an SVG or PNG. Square logos work best.']];
+      const cards = h('div', { class: 'radio-cards', role: 'radiogroup', 'aria-label': 'Logo in your codes' });
+      const render2 = () => cards.replaceChildren(...choices.map(([v, t, d]) => {
+        const r = h('input', { type: 'radio', name: 'qr-logo', value: v }); r.checked = q.logo === v;
+        r.addEventListener('change', () => { if (v === 'custom' && !q.logoSvg) { upload.click(); return; } q.logo = v; ctx.changed(); });
+        return h('label', {}, r, h('b', { text: t }), h('span', { text: d }));
+      }));
+      render2();
+      if (!q.color) { q.color = '#000000'; }
+      const colorRow = h('div', { class: 'form' }, color(ctx, 'qr.color', 'Color of the squares', { hint: 'Black reads best. Any color must be dark enough to stand out from white.' }));
+      const productSel = select(ctx, 'standardProductId', 'The product you hand out unless asked for another', products.map((p) => [p.id, p.name]), { hint: 'Each machine can also have its own list on the Machines page.' });
+      return [h('div', { class: 'stack' },
+        h('div', { class: 'preview' }, h('div', { class: 'cap' }, h('b', { text: 'Preview' }), h('span', { text: 'Your code, and a sample bottle with these settings.' })), h('div', { style: 'display:flex;gap:18px;align-items:center;flex-wrap:wrap' }, qrImg, h('div', { style: 'flex:1;min-width:220px' }, qrNote)), h('div', { class: 'label', style: 'margin-top:12px' }, label)),
+        section('The logo in your codes', 'On your receipt code, your house ads and your boxes. The logo is sized automatically so every code still scans, even scratched or wet.', cards, h('div', { class: 'toolbar' }, h('button', { class: 'btn secondary small', type: 'button', onclick: () => upload.click() }, q.logoSvg ? 'Upload a different logo' : 'Upload your logo')), upload),
+        section('Color', null, colorRow),
+        section('Advertisers’ codes', 'What advertisers can choose for the codes on their ads.', h('div', { class: 'form' },
+          toggle(ctx, 'qr.advertiserLogos', 'Advertisers can put their logo in their codes', 'Sized the same safe way as yours.', { full: true }),
+          toggle(ctx, 'qr.allowStatic', 'Advertisers can choose a static code', 'Dynamic codes are the default: every scan reaches you first, gets counted, can show each person a different call to action, and can be changed after printing. A static code goes straight to the advertiser’s website: no scan count, no changing it later. It still carries the bottle’s own reference so sales can be matched.', { full: true }))),
+        section('AR on the bottle', 'For ads whose AR follows the bottle (a 3D model on it, or a living label), a thin strip of small tracking squares is printed along the bottom of the label so the phone can follow the bottle all the way round.', h('div', { class: 'form' },
+          toggle(ctx, 'ar.trackingCodes', 'Print the tracking strip on bottles that need it', 'Without it, AR on the bottle only works when one of the QR codes faces the camera.', { full: true }),
+          toggle(ctx, 'ar.stripEverywhere', 'Run the strip along every ad on those bottles', 'So tracking holds all the way round. Turn off to keep it to the AR advertiser’s own part of the label.', { full: true }))),
+        section('Standard product', null, h('div', { class: 'form' }, productSel)))];
+    }, { onChange: (d, ch) => refresh(d, ch) });
+  }
+
+  // ---------- products: any drink, any size ----------
+  async function productsPage() {
+    const list = await api('GET', '/v1/console/products');
+    const layoutsAll = [[6], [3, 3], [2, 2, 2], [4, 2], [3, 2, 1], [2, 2, 1, 1], [2, 1, 1, 2], [1, 1, 1, 1, 1, 1]];
+    const f = {
+      id: h('input', { class: 'input', placeholder: 'can-12oz', style: 'font-family:var(--mono)' }), name: h('input', { class: 'input', placeholder: '12 oz sparkling water can', maxlength: 80 }),
+      category: h('input', { class: 'input', placeholder: 'water, soda, coffee…', maxlength: 30 }),
+      shape: h('select', { class: 'input' }, ['bottle', 'can', 'cup', 'jar', 'pouch', 'box'].map((x) => h('option', { value: x, text: x }))),
+      diameter: h('input', { class: 'input', type: 'number', step: '0.01', placeholder: '2.6' }), height: h('input', { class: 'input', type: 'number', step: '0.01', placeholder: '4.83' }),
+      width: h('input', { class: 'input', type: 'number', step: '0.01', placeholder: '8.37' }), labelH: h('input', { class: 'input', type: 'number', step: '0.01', placeholder: '3.9' }),
+      seam: h('input', { class: 'input', type: 'number', step: '0.01', value: '0.2' }), panel: h('input', { class: 'input', type: 'number', step: '0.01', value: '0.9' }),
+      price: h('input', { class: 'input', type: 'number', step: '0.05', value: '1' }), facts: h('textarea', { class: 'input', rows: 3, placeholder: 'SPARKLING SPRING WATER\n12 fl oz (355 ml)' }),
+    };
+    const picks = layoutsAll.map((l) => { const b = h('input', { type: 'checkbox' }); b.checked = l.length <= 3; return [l, b]; });
+    const result = h('div', { class: 'stack' });
+    const fromForm = () => {
+      const n = (i) => (i.value === '' ? undefined : Number(i.value));
+      return { id: f.id.value.trim(), name: f.name.value.trim(), ...(f.category.value.trim() ? { category: f.category.value.trim().toLowerCase() } : {}),
+        container: { shape: f.shape.value, ...(n(f.diameter) ? { diameterIn: n(f.diameter) } : {}), ...(n(f.height) ? { heightIn: n(f.height) } : {}) },
+        label: { widthIn: n(f.width), heightIn: n(f.labelH), seamIn: n(f.seam) ?? 0, panelWidthIn: n(f.panel) },
+        layouts: picks.filter(([, b]) => b.checked).map(([l]) => l), ...(n(f.price) && n(f.price) !== 1 ? { priceFactor: n(f.price) } : {}),
+        ...(f.facts.value.trim() ? { facts: f.facts.value.split('\n').map((x) => x.trim()).filter(Boolean) } : {}) };
+    };
+    f.diameter.addEventListener('input', () => { const d = Number(f.diameter.value); if (d > 0 && !f.width.value) f.width.placeholder = (Math.PI * d + Number(f.seam.value || 0)).toFixed(2); });
+    const check = async () => {
+      try {
+        const r = await api('POST', '/v1/console/products/check', { product: fromForm() });
+        result.replaceChildren(
+          r.check.problems.length ? h('div', { class: 'notice err' }, h('b', { text: 'Fix these first: ' }), r.check.problems.join(' ')) : h('div', { class: 'notice' }, h('b', { text: 'Ready. ' }), [...r.check.notes, r.check.ar.why].join(' ')),
+          r.svg ? h('div', { class: 'label' }, h('img', { alt: 'Sample label at this size', src: svgSrc(r.svg) })) : null);
+        return !r.check.problems.length;
+      } catch (x) { toast(x.message); return false; }
+    };
+    const form = h('form', { class: 'form', onsubmit: async (e) => { e.preventDefault(); if (!(await check())) return; try { await api('POST', '/v1/console/products', { product: fromForm() }); toast('Saved. Machines can hand it out once you add it to them.'); render(); } catch (x) { toast(x.message); } } },
+      field('Id', f.id, { hint: 'Lowercase letters, numbers and dashes.' }), field('Name', f.name), field('What’s inside', f.category), field('Shape', f.shape),
+      field('Diameter (inches)', f.diameter, { hint: 'For round containers. The label must wrap exactly once.' }), field('Container height (inches)', f.height),
+      field('Label width (inches)', f.width, { hint: 'The whole printed width, including the seam overlap.' }), field('Label height (inches)', f.labelH),
+      field('Seam overlap (inches)', f.seam), field('Your panel width (inches)', f.panel, { hint: 'At least 0.6 inches.' }),
+      field('Ad prices compared with your standard bottle', f.price, { hint: '1 is the same; 1.25 is a quarter more for a bigger label.' }),
+      field('Panel lines for this product', f.facts, { full: true, hint: 'What’s inside, the size, who made it. Leave empty to use your company’s lines.' }),
+      h('div', { class: 'field full' }, h('label', { text: 'Ad layouts allowed (sixths of the ad area)' }), h('div', { class: 'chips' }, picks.map(([l, b]) => h('label', { class: 'chip-check' }, b, ` ${l.join(' + ')}`)))),
+      h('div', { class: 'field full toolbar' }, h('button', { class: 'btn secondary', type: 'button', onclick: check }, 'Check and preview'), h('button', { class: 'btn', type: 'submit' }, 'Save product')));
+    const row = (p) => h('tr', {}, h('td', {}, h('b', { class: 'mono', text: p.id }), p.shared ? h('div', { class: 'muted', style: 'font-size:12px', text: 'shared' }) : null), h('td', { text: p.name }), h('td', { text: p.category ?? '—' }),
+      h('td', { text: `${p.label.widthIn}" × ${p.label.heightIn}"${p.container?.diameterIn ? ` · ⌀ ${p.container.diameterIn}"` : ''}` }), h('td', { text: `${p.layouts.length}` }), h('td', { text: p.priceFactor ? `× ${p.priceFactor}` : '× 1' }),
+      h('td', { text: p.check.problems.length ? p.check.problems[0] : p.check.ar.followsBottle ? 'AR on the bottle: yes' : 'AR in the room only' }));
+    shell('products', head('Products', 'Any drink, any size: bottles, cans, cups and jars. Each product is its label size, its shape and the ad layouts it allows.'),
+      h('div', { class: 'stack' },
+        h('section', { class: 'section' }, h('h2', { text: `${list.length} products` }), h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Id', 'Name', 'Inside', 'Label', 'Layouts', 'Ad prices', 'Check'].map((x) => h('th', { text: x })))), h('tbody', {}, list.map(row))))),
+        h('section', { class: 'section' }, h('h2', { text: 'Add a product' }), h('p', { class: 'lead', text: 'Every product is checked before it’s saved: the wrap has to close, and every ad has to fit a readable QR code.' }), form, result)));
+  }
+
   // ---------- giving ----------
   function givingPage() {
     settingsPage('giving', 'Giving', 'What your bottles give, and to whom. It’s printed on every bottle and shown in the open books. Giving can be off.', (ctx) => {
@@ -340,12 +450,27 @@
         for (const i of Object.values(f)) i.value = '';
       } catch (x) { toast(x.message); }
     } }, field('Machine id', f.id, { hint: 'Printed on the machine. Capital letters, numbers and dashes.' }), field('Name', f.name, { hint: 'Usually the street or building.' }), field('City', f.city), field('Address', f.address), field('Hardware', hw, { full: true }), h('div', { class: 'field full' }, h('button', { class: 'btn', type: 'submit' }, 'Add machine')));
-    const row = (l) => h('tr', {}, h('td', {}, h('b', { class: 'mono', text: l.id })), h('td', { text: l.kind === 'route' ? 'Delivery route' : l.hardware === 'model6' ? 'Model 6' : 'Machine' }), h('td', {}, l.name, l.address ? h('div', { class: 'muted', style: 'font-size:13px', text: l.address }) : null), h('td', { text: l.city }), h('td', { text: l.printSeconds ? `${l.printSeconds} s` : '—' }));
+    const products = await api('GET', '/v1/console/products');
+    const stock = (l) => {
+      const cell = h('td');
+      const show = () => cell.replaceChildren(h('span', { text: (l.products ?? []).map((id) => products.find((p) => p.id === id)?.name ?? id).join(', ') || 'Standard bottle' }), l.kind === 'machine' ? h('button', { class: 'btn secondary small', type: 'button', style: 'margin-left:8px', onclick: edit }, 'Change') : null);
+      const edit = () => {
+        const boxes = products.map((p) => { const b = h('input', { type: 'checkbox', value: p.id }); b.checked = (l.products ?? []).includes(p.id); return h('label', { class: 'chip-check' }, b, ` ${p.name}`); });
+        cell.replaceChildren(h('div', { class: 'chips' }, boxes), h('button', { class: 'btn small', type: 'button', onclick: async () => {
+          const ids = boxes.map((x) => x.querySelector('input')).filter((b) => b.checked).map((b) => b.value);
+          if (!ids.length) return toast('Pick at least one.');
+          try { const r = await api('PATCH', `/v1/console/machines/${l.id}`, { products: ids }); l.products = r.products ?? ids; toast('Saved.'); show(); } catch (x) { toast(x.message); }
+        } }, 'Save'));
+      };
+      show();
+      return cell;
+    };
+    const row = (l) => h('tr', {}, h('td', {}, h('b', { class: 'mono', text: l.id })), h('td', { text: l.kind === 'route' ? 'Delivery route' : l.hardware === 'model6' ? 'Model 6' : 'Machine' }), h('td', {}, l.name, l.address ? h('div', { class: 'muted', style: 'font-size:13px', text: l.address }) : null), h('td', { text: l.city }), h('td', { text: l.printSeconds ? `${l.printSeconds} s` : '—' }), stock(l));
     const tbody = h('tbody', {}, list.map(row));
     shell('machines', head('Machines', 'Every machine and delivery route. Each machine prints with its own API key.'),
       h('div', { class: 'stack' },
         h('section', { class: 'section' }, h('h2', { text: 'Add a machine' }), form, once),
-        h('section', { class: 'section' }, h('h2', { text: `${list.length} place${list.length === 1 ? '' : 's'}` }), list.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Id', 'Kind', 'Name', 'City', 'Print time'].map((x) => h('th', { text: x })))), tbody)) : h('div', { class: 'empty', text: 'No machines yet. Add your first one above.' }))));
+        h('section', { class: 'section' }, h('h2', { text: `${list.length} place${list.length === 1 ? '' : 's'}` }), list.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Id', 'Kind', 'Name', 'City', 'Print time', 'Hands out'].map((x) => h('th', { text: x })))), tbody)) : h('div', { class: 'empty', text: 'No machines yet. Add your first one above.' }))));
   }
 
   // ---------- team ----------

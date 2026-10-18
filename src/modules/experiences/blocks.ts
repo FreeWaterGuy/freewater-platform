@@ -26,7 +26,22 @@ export type Block =
   | { type: 'booking'; title: string; slots: string[]; action: Action }
   | { type: 'gallery'; imageUrls: string[] }
   | { type: 'message'; from: string; text: string }
-  | { type: 'confetti' };
+  | { type: 'confetti' }
+  /**
+   * AR in one of three kinds:
+   * - world: put the 3D model in the room (on a table, the floor).
+   * - bottle: the 3D model stays attached to the bottle in the camera (sitting on top, floating in front, circling it).
+   * - label: a new label is laid over the real one, all the way round; turn the bottle and it turns with it.
+   */
+  | { type: 'ar'; mode: ArMode; title: string; model?: ModelRef; placement?: ArPlacement; motion?: ArMotion; sizeIn?: number; wrap?: ArWrap; caption?: string; cta?: { label: string; url: string } }
+  /** A short line written for this person (by the AI or the built-in rules); added by the platform, never by a plug-in. */
+  | { type: 'greeting'; text: string; by: string };
+
+export type ArMode = 'world' | 'bottle' | 'label';
+export type ArPlacement = 'top' | 'front' | 'orbit' | 'beside';
+export type ArMotion = 'none' | 'spin' | 'float';
+/** What the living label shows over the advertiser's part of the label. */
+export interface ArWrap { imageUrl?: string; videoUrl?: string; effect?: 'none' | 'shimmer' | 'ripple' | 'sparkle'; color?: string }
 
 export interface Theme {
   background: string;
@@ -100,6 +115,26 @@ export function checkBlocks(blocks: unknown): string | null {
       case 'gallery': if (!Array.isArray(b.imageUrls) || b.imageUrls.length > 20 || !b.imageUrls.every(safeUrl)) return `${p}.imageUrls must be up to 20 https images`; break;
       case 'message': if (!str(b.from, 80) || !str(b.text, 1000)) return `${p} needs from and text`; break;
       case 'confetti': break;
+      case 'ar': {
+        if (!['world', 'bottle', 'label'].includes(b.mode)) return `${p}.mode must be world, bottle or label`;
+        if (!str(b.title, 120)) return `${p}.title is required`;
+        if (b.model !== undefined) { const e = checkModel(b.model, `${p}.model`); if (e) return e; }
+        if ((b.mode === 'world' || b.mode === 'bottle') && !b.model) return `${p} needs a 3D model`;
+        if (b.placement !== undefined && !['top', 'front', 'orbit', 'beside'].includes(b.placement)) return `${p}.placement must be top, front, orbit or beside`;
+        if (b.motion !== undefined && !['none', 'spin', 'float'].includes(b.motion)) return `${p}.motion must be none, spin or float`;
+        if (b.sizeIn !== undefined && !(typeof b.sizeIn === 'number' && b.sizeIn >= 0.5 && b.sizeIn <= 24)) return `${p}.sizeIn must be between 0.5 and 24 inches`;
+        if (b.wrap !== undefined) {
+          const w = b.wrap;
+          if (!w || typeof w !== 'object') return `${p}.wrap must be an object`;
+          if (w.imageUrl !== undefined && !safeUrl(w.imageUrl)) return `${p}.wrap.imageUrl must be https or a FreeWater asset`;
+          if (w.videoUrl !== undefined && !safeUrl(w.videoUrl)) return `${p}.wrap.videoUrl must be https or a FreeWater asset`;
+          if (w.effect !== undefined && !['none', 'shimmer', 'ripple', 'sparkle'].includes(w.effect)) return `${p}.wrap.effect must be none, shimmer, ripple or sparkle`;
+          if (w.color !== undefined && !HEX.test(w.color)) return `${p}.wrap.color must be #rrggbb`;
+        }
+        if (b.caption !== undefined && !str(b.caption, 120)) return `${p}.caption is too long`;
+        if (b.cta !== undefined && (!str(b.cta?.label, 40) || !safeUrl(b.cta?.url))) return `${p}.cta needs a label and an https url`;
+        break;
+      }
       default: return `${p}.type "${String(b.type)}" is not a known block`;
     }
   }

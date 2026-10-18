@@ -43,7 +43,7 @@ export class ExperienceHost {
 
   info(id: string) {
     const p = this.plugins.get(id);
-    return p ? { name: p.name, ar: !!p.ar } : null;
+    return p ? { name: p.name, ar: !!p.ar, arMode: p.arMode ?? (p.ar ? 'world' : undefined) } : null;
   }
 
   has(id: string) {
@@ -51,7 +51,7 @@ export class ExperienceHost {
   }
 
   list() {
-    return [...this.plugins.values()].map((p) => ({ id: p.id, name: p.name, description: p.description, version: p.version, ar: !!p.ar, configSchema: p.configSchema, example: p.example }));
+    return [...this.plugins.values()].map((p) => ({ id: p.id, name: p.name, description: p.description, version: p.version, ar: !!p.ar, arMode: p.arMode ?? (p.ar ? 'world' : null), configSchema: p.configSchema, example: p.example }));
   }
 
   /** Null when the settings are fine for this plug-in, otherwise a sentence saying what's wrong. */

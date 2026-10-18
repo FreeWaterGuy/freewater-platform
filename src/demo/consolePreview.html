@@ -21,7 +21,7 @@
   const S = {
     me: R.me, config: clone(R.ov.config), version: R.ov.version, history: clone(R.history), versions: clone(R.versions),
     locations: clone(R.ov.locations), charities: clone(R.ov.charities), team: clone(R.team), keys: clone(R.keys.keys),
-    hooks: clone(R.hooks), hookDetail: clone(R.hookDetail), deliveries: clone(R.deliveries), deliveryDetail: clone(R.deliveryDetail), companies: clone(R.companies),
+    hooks: clone(R.hooks), hookDetail: clone(R.hookDetail), deliveries: clone(R.deliveries), deliveryDetail: clone(R.deliveryDetail), companies: clone(R.companies), products: clone(R.products),
   };
   const checklist = () => R.ov.checklist.map((c) => ({ ...c, done: c.done || (c.id === 'brand' && S.version > R.ov.version) }));
   const commit = (next, changes) => {
@@ -66,6 +66,33 @@
       const problem = L.checkSettings(draft, registered);
       const label = await L.renderer.render({ unit: R.sample, product: L.product, company: problem ? S.config : draft, campaigns });
       return { svg: label.svg, problem };
+    }
+    if (key === 'POST /v1/qr/preview') {
+      if (body.logo) { const bad = L.checkQrLogo(body.logo); if (bad) fail(422, `The logo: ${bad}.`); }
+      if (body.color) { const bad = L.checkQrColor(body.color); if (bad) fail(422, bad); }
+      const text = body.text ?? 'HTTPS://GO.FREEWATER.IO/Q/7KX2M9QPA4ZR1C';
+      const style = { ...(body.brandInitials ? { logo: L.monogramLogo(S.config.brand) } : {}), ...(body.logo ? { logo: body.logo } : {}), ...(body.color ? { color: body.color } : {}) };
+      const plan = L.qrPlan(text, style), pct = (x) => Math.round(x * 100);
+      return { svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240">${L.qrSvg(text, 0, 0, 240, 'H', style)}</svg>`, version: plan.matrix.version, logoShare: plan.logo?.share ?? null, damageTolerance: { plain: pct(plan.damageTolerance.plain), withLogo: pct(plan.damageTolerance.withLogo) },
+        note: style.logo ? (plan.logo ? `Your logo fits at ${pct(plan.logo.share)}% of the code’s width. The code still reads with ${pct(plan.damageTolerance.withLogo)}% of it damaged (${pct(plan.damageTolerance.plain)}% without the logo).` : 'There wasn’t room for a logo in this code without making it unreliable, so it prints without one.') : null };
+    }
+    if (key === 'GET /v1/console/products') return clone(S.products);
+    if (key === 'POST /v1/console/products/check' || key === 'POST /v1/console/products') {
+      const check = L.checkProduct(body.product);
+      if (key === 'POST /v1/console/products') {
+        if (check.problems.length) fail(422, check.problems.join(' '));
+        const shared = S.products.find((x) => x.id === body.product.id && x.shared); if (shared) fail(403, 'That’s a shared product; only the platform team can change it. Save yours under a new id.');
+        S.products = S.products.filter((x) => x.id !== body.product.id); S.products.push({ ...clone(body.product), companyId: 'freewater', shared: false, check });
+        return clone(S.products.at(-1));
+      }
+      let svg = null;
+      if (!check.problems.length) svg = (await L.renderer.render({ unit: { ...R.sample, productId: body.product.id }, product: body.product, company: S.config, campaigns })).svg;
+      return { check, svg };
+    }
+    if ((m = /^\/v1\/console\/machines\/([\w-]+)$/.exec(path)) && method === 'PATCH') {
+      const l = S.locations.find((x) => x.id === m[1]) || fail(404, 'Machine not found.');
+      if (body.products) { for (const id of body.products) if (!S.products.some((p) => p.id === id)) fail(400, `There's no product called "${id}".`); l.products = body.products; }
+      return clone(l);
     }
     if (key === 'GET /v1/console/history') return clone(S.history);
     if ((m = /^\/v1\/console\/history\/(\d+)\/restore$/.exec(path))) {

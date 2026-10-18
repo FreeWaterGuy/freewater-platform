@@ -46,6 +46,9 @@ export class PackService {
 
   constructor(private platform: Platform, private boxes: Map<string, BoxProduct>) {}
 
+  /** Who a pack is for, so ads that target people can go in it. Set at start-up. */
+  audienceFor?: (customerId: string, companyId: string) => Promise<import('../ads/contract').PrintAudience | null>;
+
   async compose(order: PackOrder): Promise<Pack> {
     const p = this.platform;
     const company = p.companies.get(order.companyId);
@@ -87,7 +90,8 @@ export class PackService {
   private async printBottle(pack: Pack, productId: string, counts: Map<string, number>, max: number): Promise<string> {
     for (let tries = 0; tries < 3; tries++) {
       const avoidSignatures = new Set(pack.unitIds.map((id) => labelSignature(this.platform.units.get(id)?.placements ?? [])));
-      const r = await this.platform.order({ companyId: pack.companyId, locationId: pack.routeId, productId, packId: pack.id, consumerId: pack.customerId, frequency: { counts, max }, avoidSignatures });
+      const audience = this.audienceFor ? await this.audienceFor(pack.customerId, pack.companyId) : null;
+      const r = await this.platform.order({ companyId: pack.companyId, locationId: pack.routeId, productId, packId: pack.id, consumerId: pack.customerId, frequency: { counts, max }, avoidSignatures, audience });
       if (r.ok) {
         for (const pl of r.unit.placements) if (!pl.isHouse) counts.set(pl.campaignId, (counts.get(pl.campaignId) ?? 0) + 1);
         return r.unit.id;

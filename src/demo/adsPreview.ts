@@ -25,7 +25,23 @@ await call('POST', '/v1/auth/start', undefined, { companyId: 'freewater', channe
 const code = /(\d{6})/.exec((app.messenger as TestOutbox).lastTo('joe@joesburgers.example')!.text)![1];
 const { token } = await call('POST', '/v1/auth/verify', undefined, { companyId: 'freewater', channel: 'email', to: 'joe@joesburgers.example', code });
 
+// Joe's ad gets two versions of its call to action and AI personalization, to show the code page.
+await call('PATCH', '/v1/campaigns/cmp-joes/codes', app.demoKeys!['freewater-admin'], {
+  variants: [
+    { id: 'late-night', name: 'Late night', when: { dayparts: ['night'] }, experienceId: 'coupon', experienceConfig: { headline: 'Late-night double stack, $6', code: 'NIGHTOWL', details: 'Open till 3 am on Congress Ave.' } },
+    { id: 'passed-on', name: 'Passed-on bottles', when: { scanner: 'passed_on' }, experienceConfig: { ...app.platform.campaigns.get('cmp-joes')!.experienceConfig, title: 'A friend passed you a $5 combo', firstTimeOffer: 'Your first fries are on us.' } },
+  ],
+  personalize: { ai: true, greeting: true },
+});
+const moments: Record<string, unknown> = {};
+for (const daypart of ['morning', 'afternoon', 'evening', 'night']) for (const who of ['first', 'passed', 'returning']) {
+  moments[`${daypart}:${who}`] = await call('POST', '/v1/campaigns/cmp-joes/preview-moment', token, { daypart, passedOn: who === 'passed', firstScanner: who !== 'passed', newToAdvertiser: who !== 'returning' });
+}
 const rec = {
+  joeCodes: await call('GET', '/v1/campaigns/cmp-joes/codes', token),
+  joeQr: await call('POST', '/v1/qr/preview', token, {}),
+  joeQrLogo: await call('POST', '/v1/qr/preview', token, { logo: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="20" fill="#D7262E"/><text x="50" y="66" text-anchor="middle" font-family="Arial" font-weight="700" font-size="44" fill="#FFC93C">J</text></svg>' }),
+  moments,
   config: await call('GET', '/v1/public/app-config'),
   joeMe: await call('GET', '/v1/me', token),
   joe: await call('GET', '/v1/ads/advertiser', token),

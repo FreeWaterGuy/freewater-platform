@@ -108,7 +108,7 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     const hit = samples.get(location.id);
     if (hit && platform.bus.now().getTime() - hit.at < 5 * 60_000) return { type: 'image/svg+xml', raw: hit.svg };
     const company = platform.companies.get(companyId)!;
-    const product = [...platform.products.values()][0]!;
+    const product = platform.standardProduct(companyId);
     const fill = registry.adsFor(company).fill({ company, product, location, campaigns: [...platform.campaigns.values()], random: platform.random });
     const unit: Unit = { id: 'sample', companyId, productId: product.id, locationId: location.id, kind: 'ad_supported', placements: fill.placements, layout: fill.layout, status: 'rendered', createdAt: platform.bus.now().toISOString() };
     const label = await registry.rendererFor(company).render({ unit, product, company, campaigns: platform.campaigns });
@@ -157,9 +157,13 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     limitCheck(userId, key!.companyId);
     const a = app.fleet.availability(b.locationId);
     if (a.state !== 'ready') throw new ApiError(409, `machine_${a.state}`, a.message);
-    const productId = b.productId ?? [...platform.products.keys()][0];
+    const stocked = platform.locations.get(b.locationId)?.products;
+    const productId = b.productId ?? stocked?.[0] ?? platform.standardProduct(key!.companyId).id;
     if (!platform.products.has(productId)) throw new ApiError(422, 'unknown_product', `Product ${productId} doesn't exist.`);
-    const running = platform.order({ companyId: key!.companyId, orderId, locationId: b.locationId, productId, consumerId: userId });
+    if (stocked && !stocked.includes(productId)) throw new ApiError(422, 'not_stocked', `This machine doesn't have that. It has: ${stocked.map((id) => platform.products.get(id)?.name ?? id).join(', ')}.`);
+    // The bottle is printed for this person: ads that target people can be chosen, and their first scan confirms it reached them.
+    const audience = await app.accounts.audienceFor(userId, key!.companyId);
+    const running = platform.order({ companyId: key!.companyId, orderId, locationId: b.locationId, productId, consumerId: userId, audience });
     // A Model 6 takes a while to print: answer now and let the app watch the countdown.
     const r = await Promise.race([running, new Promise<null>((res) => setTimeout(() => res(null), app.fleet.isModel6(b.locationId) ? 1500 : 60_000))]);
     if (r && !r.ok) return { status: 422, body: { error: { code: 'print_failed', message: "The machine couldn't print your bottle. Nothing was used up; try again." } } };

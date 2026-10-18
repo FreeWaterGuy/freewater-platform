@@ -7,6 +7,8 @@ import { booksRoutes } from './books';
 import { consoleRoutes } from './console';
 import { machineRoutes } from './machine';
 import { attributionRoutes } from './attribution';
+import { applyExtras, extrasSchema } from '../modules/experiences/extras';
+import { codesArRoutes } from './codesAr';
 import { AttributionError } from '../modules/attribution/service';
 import { FleetError } from '../modules/fleet/service';
 import { WebhookError } from '../modules/webhooks/service';
@@ -26,6 +28,7 @@ import { ExperienceError, targetKey, type Target } from '../modules/experiences/
 import { AssetError, allowedTypes } from '../modules/assets/store';
 import { builtinModel } from '../modules/models/builtin';
 import { glbToUsdz } from '../modules/models/usdz';
+import { arBundle } from '../web/ar/bundle';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -90,7 +93,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const loc = platform.locations.get(u.locationId);
     return { unitId, company: company.name, printedAt: u.createdAt, place: loc ? `${loc.id}, ${loc.name}` : u.locationId, ads: u.placements.filter((p) => !p.isHouse).length, earnedCents: r.earned, donatedCents: r.donatedCents, givingOn: company.giving.mode !== 'none' };
   };
-  const campaignView = (c: Campaign) => ({ id: c.id, advertiserId: c.advertiserId, advertiserName: c.advertiserName, category: c.category, competitorGroup: c.competitorGroup ?? null, sizes: c.sizes, formats: c.formats ?? ['label'], experienceId: c.experienceId, experienceConfig: c.experienceConfig ?? null, theme: c.theme ?? null, targeting: c.targeting, buy: c.buy, active: c.active, isHouse: !!c.isHouse });
+  const campaignView = (c: Campaign) => ({ id: c.id, advertiserId: c.advertiserId, advertiserName: c.advertiserName, category: c.category, competitorGroup: c.competitorGroup ?? null, sizes: c.sizes, formats: c.formats ?? ['label'], experienceId: c.experienceId, experienceConfig: c.experienceConfig ?? null, theme: c.theme ?? null, targeting: c.targeting, buy: c.buy, active: c.active, isHouse: !!c.isHouse,
+    qr: { mode: c.qr?.mode ?? 'dynamic', ...(c.qr?.staticUrl ? { staticUrl: c.qr.staticUrl } : {}), hasLogo: !!c.qr?.logo }, variants: c.variants?.length ?? 0, personalize: c.personalize ?? null, afterEnd: c.afterEnd ?? 'current' });
   const checkExperience = (experienceId: string, config: unknown, theme: unknown) => {
     const bad = experiences.host.checkConfig(experienceId, config) ?? experiences.host.checkTheme(theme);
     if (bad) throw new ApiError(422, 'experience_invalid', bad);
@@ -121,11 +125,13 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     return { body: { unitId, slot: placement!.slotIndex, kind: 'ad', owner: placement!.advertiserName, campaignId: placement!.campaignId, experienceId: placement!.experienceId, isHouse: placement!.isHouse } };
   } });
 
-  route({ method: 'POST', url: '/v1/public/scans', scope: 'public', summary: 'Record a scan. Billed only if the experience loaded and it is not a repeat.', body: obj({ unitId: S.str, slot: S.int, viewerKey: S.str, experienceLoaded: S.bool, scanId: S.str }, ['unitId', 'slot', 'viewerKey', 'experienceLoaded']), handler: async (req) => {
+  route({ method: 'POST', url: '/v1/public/scans', scope: 'public', summary: 'Record a scan. Billed only if the experience loaded and it is not a repeat.', body: obj({ unitId: S.str, slot: S.int, viewerKey: S.str, experienceLoaded: S.bool, scanId: S.str, variant: { type: 'string', maxLength: 40 } }, ['unitId', 'slot', 'viewerKey', 'experienceLoaded']), handler: async (req) => {
     const b = req.body as any;
     placementFor(null, b.unitId, b.slot);
     const before = platform.ledger.entries.length;
-    const e = platform.scan(b.unitId, b.slot, b.viewerKey, b.experienceLoaded, b.scanId ?? newId('scan'));
+    const pl = platform.units.get(b.unitId)?.placements.find((x) => x.slotIndex === b.slot);
+    const variant = b.variant && pl && platform.campaigns.get(pl.campaignId)?.variants?.some((v) => v.id === b.variant) ? b.variant : undefined;
+    const e = platform.scan(b.unitId, b.slot, b.viewerKey, b.experienceLoaded, b.scanId ?? newId('scan'), variant);
     if (b.experienceLoaded) await experiences.rememberViewer({ kind: 'slot', unitId: b.unitId, slot: b.slot }, b.viewerKey);
     return { status: 202, body: { recorded: !!e, billed: platform.ledger.entries.length > before } };
   } });
@@ -258,9 +264,10 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     experienceId: S.str,
     experienceConfig: { type: 'object' },
     theme: themeProp,
-    targeting: obj({ locations: { type: 'array', items: S.str } }),
+    targeting: extrasSchema.targeting,
     buy: { oneOf: [obj({ type: { const: 'guaranteed' }, remainingPrints: S.int }, ['type', 'remainingPrints']), obj({ type: { const: 'bid' }, maxCentsPerSixth: S.int, dailyCapCents: S.int }, ['type', 'maxCentsPerSixth', 'dailyCapCents'])] },
     svg: { type: 'string', minLength: 1, maxLength: 2_000_000 },
+    qr: extrasSchema.qr, variants: extrasSchema.variants, personalize: extrasSchema.personalize, afterEnd: extrasSchema.afterEnd,
   }, ['advertiserName', 'category', 'sizes', 'experienceId', 'buy', 'svg']), handler: async (req, key) => {
     const b = req.body as any;
     const advertiserId = key!.advertiserId ?? b.advertiserId;
@@ -274,8 +281,10 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       id: newId('cmp'), companyId: key!.companyId, advertiserId, advertiserName: b.advertiserName, category: b.category, competitorGroup: b.competitorGroup,
       sizes: b.sizes as Sixths[], formats: b.formats, experienceId: b.experienceId, experienceConfig: b.experienceConfig ?? {}, theme: b.theme, targeting: b.targeting ?? {},
       buy: b.buy.type === 'bid' ? { ...b.buy, spentTodayCents: 0 } : b.buy,
-      creative, creativeRef: { kind: 'svg', markup: b.svg }, active: false,
+      creative, creativeRef: { kind: 'svg', markup: b.svg }, active: false, createdAt: platform.bus.now().toISOString(),
     };
+    const extra = applyExtras(company, c, { qr: b.qr, variants: b.variants, personalize: b.personalize, afterEnd: b.afterEnd, targeting: b.targeting }, experiences.host);
+    if (extra) throw new ApiError(422, 'campaign_invalid', extra);
     platform.campaigns.set(c.id, c);
     platform.persist.campaign(c);
     return { status: 201, body: campaignView(c) };
@@ -511,6 +520,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   consoleRoutes(app, route);
   machineRoutes(app, route);
   attributionRoutes(app, server, route);
+  codesArRoutes(app, server, route);
 
   // ---------- wiring ----------
 
@@ -606,6 +616,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     }
     return appPage(req, reply);
   });
+  // The AR viewer for AR on the bottle (three.js and our tracker), built once and kept.
+  server.get('/static/ar.js', async (_req, reply) => reply.type('text/javascript; charset=utf-8').header('cache-control', 'public, max-age=300').send(await arBundle()));
   server.get('/static/:name', async (req, reply) => {
     const f = staticFiles[(req.params as any).name];
     if (!f) return reply.code(404).send({ error: { code: 'not_found', message: 'File not found.' } });

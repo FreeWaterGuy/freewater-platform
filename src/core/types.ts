@@ -24,19 +24,35 @@ export interface Location {
   deliveryDays?: number[];
   /** The machine's hardware. A Model 6 runs the machine software and prints its own bottles. */
   hardware?: 'model6';
+  /** What this machine or route hands out. Missing means the company's standard bottle only. */
+  products?: string[];
 }
 
 export interface Product {
   id: string; // "bottle-16oz"
   name: string;
+  /** A licensee's own product. Products without a company are shared by every company on the platform. */
+  companyId?: string;
+  /** What's inside: water, soda, coffee, tea, juice, beer, snack... Ad rules can depend on it. */
+  category?: string;
+  /** The container's shape and size. Round containers (bottles, cans, cups) can have AR that follows the label. */
+  container?: { shape: 'bottle' | 'can' | 'cup' | 'jar' | 'pouch' | 'box'; diameterIn?: number; heightIn?: number };
   label: {
     widthIn: number; // full printed width, including the panel and seam
     heightIn: number;
     seamIn: number; // overlap at the end of the wrap where nothing is printed
     panelWidthIn: number; // locked company panel
+    /** The smallest QR this label may carry (inches). 0.6 by default. */
+    minQrIn?: number;
   };
   /** Layouts the ad engine may use, each a list of slot widths in sixths that sum to 6. */
   layouts: Sixths[][];
+  /** Ad prices on this product compared with the standard bottle (a bigger label can cost more). 1 by default. */
+  priceFactor?: number;
+  /** Ad categories never printed on this product (no energy drinks on a kids' juice box, say). */
+  blockedAdCategories?: string[];
+  /** The lines on the company panel for this product (what's inside, size, maker). The company's own lines if missing. */
+  facts?: string[];
 }
 
 export type GivingMode = 'per_unit' | 'percent_of_revenue' | 'none';
@@ -67,6 +83,24 @@ export interface CompanyConfig {
     /** Donations are sent to charities in transfers once they reach this amount. */
     minimumTransferCents?: number;
   };
+  /**
+   * The QR codes it prints. Codes are dynamic (looked up each time they're scanned) unless an advertiser is allowed
+   * to choose a static one and does.
+   */
+  qr?: {
+    /** The company's own codes (receipt panel, house ads, boxes): none, its initials, or its uploaded logo. */
+    logo: 'none' | 'brand' | 'custom';
+    logoSvg?: string; // SVG markup or a PNG/JPEG/WebP data URL
+    color?: string; // dark squares; must contrast with white
+    /** May advertisers put their own logo in their codes? */
+    advertiserLogos: boolean;
+    /** May advertisers choose a static code (straight to their website, nothing in between)? */
+    allowStatic: boolean;
+  };
+  /** The product handed out unless something else is asked for (its id). */
+  standardProductId?: string;
+  /** AR settings. Tracking codes are small extra codes printed around the wrap so AR can follow the bottle as it turns. */
+  ar?: { trackingCodes: boolean; stripEverywhere?: boolean };
   /** Publish the books on the open-books site. A company can choose not to. */
   openBooks?: boolean;
   /** Standard cost of one bottle, by part, for the bottle receipt and "where the money goes". */
@@ -139,7 +173,26 @@ export interface Campaign {
   theme?: Partial<{ background: string; text: string; accent: string; button: string; buttonText: string }>;
   /** Where this campaign has artwork. Labels by default; 'box-face' lets it run on pack boxes. */
   formats?: ('label' | 'box-face')[];
-  targeting: { locations?: string[] };
+  targeting: {
+    locations?: string[];
+    /** Only on these products (ids). */
+    products?: string[];
+    /** Only on these kinds of product (water, soda, coffee...). */
+    productCategories?: string[];
+    /** Only printed for a known person who fits. Bottles for nobody in particular (walk-ups, spare labels) never carry it. */
+    audience?: Audience;
+  };
+  /** What the QR is. Dynamic (the default): our code, looked up at every scan. Static: straight to a website. */
+  qr?: { mode: 'dynamic' | 'static'; staticUrl?: string; bottleRef?: boolean; logo?: string; color?: string };
+  /**
+   * Other versions of what the code opens. At each scan the first one whose conditions fit is used (or, with AI
+   * personalization on, the AI chooses among the ones that fit). The campaign's own settings are the default.
+   */
+  variants?: CtaVariant[];
+  /** AI personalization: choose the version that fits each person, and write a short greeting for them. */
+  personalize?: { ai: boolean; greeting: boolean };
+  /** When this campaign is over, old bottles open the advertiser's current campaign instead (the default) or keep this one. */
+  afterEnd?: 'current' | 'keep';
   buy: Buy;
   isHouse?: boolean; // the company's own filler, used when nothing else fits; never billed
   active: boolean;
@@ -148,6 +201,33 @@ export interface Campaign {
   /** A short name the advertiser knows it by. */
   name?: string;
   createdAt?: string;
+}
+
+/** Who an ad is for. Interests only count for people who turned on personalized offers. */
+export interface Audience {
+  interestsAny?: string[];
+  /** Only people who have never scanned this advertiser's ads, or only those who have. */
+  customers?: 'new' | 'returning';
+}
+
+/** Conditions checked at the moment of each scan. */
+export interface ScanConditions {
+  /** first: the bottle's first scanner. passed_on: someone else scanning a bottle another person already scanned. */
+  scanner?: 'first' | 'passed_on' | 'new_to_advertiser' | 'returning';
+  dayparts?: ('morning' | 'afternoon' | 'evening' | 'night')[];
+  days?: number[]; // 0 = Sunday
+  interestsAny?: string[];
+  /** Minutes since the bottle was printed, at least this many (a bottle someone kept). */
+  keptMinutes?: number;
+}
+
+export interface CtaVariant {
+  id: string;
+  name: string; // "Morning commuters", "Passed-on bottles"
+  when?: ScanConditions;
+  /** Another experience plug-in, or the same one with different settings. */
+  experienceId?: string;
+  experienceConfig: Record<string, unknown>;
 }
 
 export interface Placement {
@@ -159,6 +239,8 @@ export interface Placement {
   experienceId: string;
   priceCents: Cents; // what the advertiser pays if, and only if, the print is confirmed
   isHouse: boolean;
+  /** Why this ad was chosen for this person ("likes coffee", "new customer"), when it targets people. */
+  audienceMatch?: string[];
 }
 
 export type BoxFace = 'top' | 'front' | 'back' | 'right' | 'left' | 'bottom';
@@ -200,6 +282,8 @@ export interface Unit {
   createdAt: string;
   /** The person who got this bottle from the app, if they were signed in. */
   consumerId?: string;
+  /** Their anonymous viewer key, so their first scan can confirm the bottle reached the person it was printed for. */
+  intendedFor?: string;
   /** For custom bottles: what scanning it opens (the sender's message, video, photos). */
   experienceConfig?: Record<string, unknown>;
 }

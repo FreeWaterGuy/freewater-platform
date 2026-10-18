@@ -11,7 +11,17 @@ const ECC_FORMAT_BITS: Record<EccLevel, number> = { L: 1, M: 0, Q: 3, H: 2 };
 const ECC_PER_BLOCK = [[7, 10, 15, 20, 26, 18, 20, 24, 30, 18, 20, 24, 26, 30, 22, 24, 28, 30, 28, 28, 28, 28, 30, 30, 26, 28, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30], [10, 16, 26, 18, 24, 16, 18, 22, 22, 26, 30, 22, 22, 24, 24, 28, 28, 26, 26, 26, 26, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28], [13, 22, 18, 26, 18, 24, 18, 22, 20, 24, 28, 26, 24, 20, 30, 24, 28, 28, 26, 30, 28, 30, 30, 30, 30, 28, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30], [17, 28, 22, 16, 22, 28, 26, 26, 24, 28, 24, 28, 22, 24, 24, 30, 28, 28, 26, 28, 30, 24, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30]];
 const NUM_BLOCKS = [[1, 1, 1, 1, 1, 2, 2, 2, 2, 4, 4, 4, 4, 4, 6, 6, 6, 6, 7, 8, 8, 9, 9, 10, 12, 12, 12, 13, 14, 15, 16, 17, 18, 19, 19, 20, 21, 22, 24, 25], [1, 1, 1, 2, 2, 4, 4, 4, 5, 5, 5, 8, 9, 9, 10, 10, 11, 13, 14, 16, 17, 17, 18, 20, 21, 23, 25, 26, 28, 29, 31, 33, 35, 37, 38, 40, 43, 45, 47, 49], [1, 1, 2, 2, 4, 4, 6, 6, 8, 8, 8, 10, 12, 16, 12, 17, 16, 18, 21, 20, 23, 23, 25, 27, 29, 34, 34, 35, 38, 40, 43, 45, 48, 51, 53, 56, 59, 62, 65, 68], [1, 1, 2, 4, 4, 4, 5, 6, 8, 8, 11, 11, 16, 16, 18, 16, 19, 21, 25, 25, 25, 34, 30, 32, 35, 37, 40, 42, 45, 48, 51, 54, 57, 60, 63, 66, 70, 74, 77, 81]];
 
-export interface QrMatrix { size: number; version: number; ecc: EccLevel; mask: number; mode: 'alphanumeric' | 'byte'; get(row: number, col: number): boolean }
+export interface QrMatrix {
+  size: number; version: number; ecc: EccLevel; mask: number; mode: 'alphanumeric' | 'byte';
+  get(row: number, col: number): boolean;
+  /** True for the fixed patterns (finders, timing, alignment, format and version areas) that hold no data. */
+  isFunction(row: number, col: number): boolean;
+  /** Which error-correction block the data module at (row, col) belongs to, and which codeword in it; null for fixed patterns. */
+  owner(row: number, col: number): { block: number; codeword: number } | null;
+  blocks: number;
+  /** Error-correction codewords in each block. A block can repair up to half this many damaged codewords. */
+  eccPerBlock: number;
+}
 
 /** The characters the compact mode can carry. Our scan addresses are written with only these, in capitals. */
 export const ALPHANUMERIC = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:';
@@ -53,13 +63,13 @@ function rsRemainder(data: number[], divisor: number[]): number[] {
 }
 
 /** Make a QR code for text (UTF-8). Picks the smallest version that fits at the chosen level, and the best mask. */
-export function encodeQr(text: string, ecc: EccLevel = 'Q'): QrMatrix {
+export function encodeQr(text: string, ecc: EccLevel = 'Q', opts: { minVersion?: number } = {}): QrMatrix {
   const alnum = isAlphanumeric(text);
   const bytes = alnum ? [] : [...new TextEncoder().encode(text)];
   const count = alnum ? text.length : bytes.length;
   const countBits = (ver: number) => (alnum ? (ver <= 9 ? 9 : ver <= 26 ? 11 : 13) : ver <= 9 ? 8 : 16);
   const payloadBits = alnum ? Math.floor(count / 2) * 11 + (count % 2) * 6 : count * 8;
-  let version = 1;
+  let version = Math.max(1, Math.min(40, opts.minVersion ?? 1));
   for (; version <= 40; version++) if (4 + countBits(version) + payloadBits <= dataCodewords(version, ecc) * 8) break;
   if (version > 40) throw new Error('Too much text for a QR code.');
 
@@ -95,7 +105,8 @@ export function encodeQr(text: string, ecc: EccLevel = 'Q'): QrMatrix {
     blocks.push([...dat, ...ec]);
   }
   const codewords: number[] = [];
-  for (let i = 0; i < blocks[0]!.length; i++) blocks.forEach((blk, j) => { if (i !== shortLen - eccLen || j >= numShort) codewords.push(blk[i]!); });
+  const cwOwner: { block: number; codeword: number }[] = [];
+  for (let i = 0; i < blocks[0]!.length; i++) blocks.forEach((blk, j) => { if (i !== shortLen - eccLen || j >= numShort) { codewords.push(blk[i]!); cwOwner.push({ block: j, codeword: i }); } });
 
   // 3. Draw the fixed patterns, then the data, then pick the mask that reads best.
   const size = version * 4 + 17;
@@ -120,12 +131,13 @@ export function encodeQr(text: string, ecc: EccLevel = 'Q'): QrMatrix {
   drawVersion(set, size, version);
 
   // Data in the zigzag order, two columns at a time from the bottom right.
+  const owner: ({ block: number; codeword: number } | null)[][] = Array.from({ length: size }, () => new Array(size).fill(null));
   let i = 0;
   for (let right = size - 1; right >= 1; right -= 2) {
     if (right === 6) right = 5;
     for (let vert = 0; vert < size; vert++) for (let j = 0; j < 2; j++) {
       const x = right - j, upward = ((right + 1) & 2) === 0, y = upward ? size - 1 - vert : vert;
-      if (!fixed[y]![x] && i < codewords.length * 8) { mods[y]![x] = ((codewords[i >>> 3]! >>> (7 - (i & 7))) & 1) === 1; i++; }
+      if (!fixed[y]![x] && i < codewords.length * 8) { mods[y]![x] = ((codewords[i >>> 3]! >>> (7 - (i & 7))) & 1) === 1; owner[y]![x] = cwOwner[i >>> 3]!; i++; }
     }
   }
 
@@ -139,7 +151,7 @@ export function encodeQr(text: string, ecc: EccLevel = 'Q'): QrMatrix {
   }
   applyMask(mods, fixed, best);
   drawFormat(set, size, ecc, best);
-  return { size, version, ecc, mask: best, mode: alnum ? 'alphanumeric' : 'byte', get: (r, c) => mods[r]![c]! };
+  return { size, version, ecc, mask: best, mode: alnum ? 'alphanumeric' : 'byte', get: (r, c) => mods[r]![c]!, isFunction: (r, c) => fixed[r]![c]!, owner: (r, c) => owner[r]![c]!, blocks: numBlocks, eccPerBlock: eccLen };
 }
 
 function alignmentPositions(ver: number): number[] {

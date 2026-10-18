@@ -3,6 +3,8 @@
 import { svgLabelRenderer } from '../modules/print/renderer';
 import { applyChange, checkSettings, describeChange } from '../modules/console/settings';
 import { bottle16oz, sampleCampaigns } from './seed';
+export { qrPlan, qrSvg, monogramLogo, checkQrLogo, checkQrColor } from '../modules/print/qr';
+export { checkProduct } from '../modules/products/check';
 
 export const renderer = svgLabelRenderer;
 export const product = bottle16oz;

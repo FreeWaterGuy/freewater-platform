@@ -40,7 +40,7 @@
   // ---------- routing ----------
   const routes = [
     [/^\/ads\/?$/, overview], [/^\/ads\/new$/, newAd], [/^\/ads\/drafts\/([\w-]+)$/, builder], [/^\/ads\/drafts\/([\w-]+)\/review$/, review],
-    [/^\/ads\/campaigns\/([\w-]+)\/change$/, changeAd], [/^\/ads\/billing$/, billing], [/^\/ads\/tracking$/, tracking], [/^\/ads\/redeem(?:\/([\w-]+))?$/, redeem],
+    [/^\/ads\/campaigns\/([\w-]+)\/change$/, changeAd], [/^\/ads\/campaigns\/([\w-]+)\/code$/, codePage], [/^\/ads\/billing$/, billing], [/^\/ads\/tracking$/, tracking], [/^\/ads\/redeem(?:\/([\w-]+))?$/, redeem],
   ];
   let cleanup = null;
   function go(path, replace) { state.path = path; if (!fixture) history[replace ? 'replaceState' : 'pushState'](null, '', path); render(); }
@@ -122,6 +122,7 @@
   // ---------- sales tracking: the tag, server reporting, and what it found ----------
   async function tracking() {
     const t = await api('GET', '/v1/ads/tracking');
+    const reach = await api('GET', '/v1/ads/reach').catch(() => null);
     const s = t.summary;
     const copyBtn = (text) => h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { try { await navigator.clipboard.writeText(text); toast('Copied'); } catch { toast('Select it and copy it'); } } }, 'Copy');
     const codeBox = (text) => h('div', { style: 'display:flex;flex-direction:column;gap:8px' }, h('pre', { class: 'snippet', text }), h('div', {}, copyBtn(text)));
@@ -150,6 +151,9 @@
         h('section', { class: 'panel', style: 'gap:10px' }, h('h2', { class: 'section', text: '3. At the counter' }),
           h('p', { style: 'margin:0', text: 'Each customer gets their own one-time coupon with a code to scan. Scan it with your phone’s camera, or type it in. You’ll see at once if it’s real and unused, and screenshots can’t be used twice.' }),
           h('div', {}, link('/ads/redeem', { class: 'btn' }, 'Check a coupon'))),
+        reach && reach.printedForPeople ? h('section', { class: 'panel', style: 'gap:10px' }, h('h2', { class: 'section', text: 'Right ads, right hands' }),
+          h('p', { style: 'margin:0', text: `Your ads that target people were printed on ${num(reach.printedForPeople)} bottles for someone who fits. ${num(reach.handedOver)} were handed to that person at a machine or their door, and ${num(reach.confirmed)} were then first opened by that same person${reach.confirmedShare !== null ? ` (${Math.round(reach.confirmedShare * 100)}% of those scanned)` : ''}. ${num(reach.passedOn)} were passed to someone else first.` }),
+          reach.chosenBecause.length ? h('p', { style: 'margin:0;color:var(--muted);font-size:14px', text: `Chosen because: ${reach.chosenBecause.map((r) => `${r.reason} (${num(r.bottles)})`).join(', ')}.` }) : null) : null,
         s.recent.length ? h('section', { class: 'panel', style: 'gap:10px' }, h('h2', { class: 'section', text: 'Recent sales from bottles' }),
           h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['When', 'Order', 'How', 'Amount', 'Commission'].map((x) => h('th', { text: x })))),
             h('tbody', {}, s.recent.map((c) => h('tr', {}, h('td', { text: new Date(c.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) }), h('td', { text: c.orderId }), h('td', { text: { tag: 'Website', server: 'Your server', coupon: 'Coupon' }[c.source] }), h('td', { text: dollars(c.valueCents) }), h('td', { text: c.refunded ? 'Refunded' : dollars(c.commissionCents) }))))))) : null));
@@ -184,6 +188,126 @@
     shell('redeem', h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Check a coupon' }))), box);
   }
 
+  // ---------- the code, its versions, AI, and who it's for ----------
+  const readFile = (file) => new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onerror = () => rej(new Error('That file couldn’t be read.'));
+    if (file.type === 'image/svg+xml' || /\.svg$/i.test(file.name)) { r.onload = () => res(String(r.result)); r.readAsText(file); }
+    else if (/^image\/(png|jpeg|webp)$/.test(file.type)) { r.onload = () => res(String(r.result)); r.readAsDataURL(file); }
+    else rej(new Error('Use an SVG, PNG, JPEG or WebP file.'));
+  });
+  const SCANNERS = [['', 'Anyone'], ['first', 'The first person to scan the bottle'], ['passed_on', 'Someone the bottle was passed to'], ['new_to_advertiser', 'People new to you'], ['returning', 'People who’ve scanned you before']];
+  const DAYPARTS = [['morning', 'Morning'], ['afternoon', 'Afternoon'], ['evening', 'Evening'], ['night', 'Night']];
+  async function codePage(id) {
+    const c = await api('GET', `/v1/campaigns/${id}/codes`);
+    const d = { qr: { mode: c.qr.mode, staticUrl: c.qr.staticUrl ?? '', bottleRef: c.qr.bottleRef, color: c.qr.color ?? '' }, logo: undefined, variants: c.variants.map(({ forWhom, ...v }) => v), personalize: { ...c.personalize }, afterEnd: c.afterEnd, targeting: structuredClone(c.targeting) };
+    const field = (label, control, hint) => { const fid = `c${Math.random().toString(36).slice(2, 8)}`; control.id ||= fid; return h('div', { class: 'field' }, h('label', { for: control.id, text: label }), control, hint ? h('div', { class: 'hint', text: hint }) : null); };
+    const check = (label, on, set, hint) => { const b = h('input', { type: 'checkbox' }); b.checked = !!on; b.addEventListener('change', () => set(b.checked)); return h('label', { class: 'switch' }, b, h('div', {}, h('b', { text: label }), hint ? h('span', { text: hint }) : null)); };
+
+    // 1. The code.
+    const qrImg = h('img', { alt: 'Your code', style: 'width:180px;height:180px' });
+    const qrNote = h('p', { style: 'margin:0;color:var(--muted);font-size:14px' });
+    const refreshQr = async () => { try { const r = await api('POST', '/v1/qr/preview', { ...(d.logo ? { logo: d.logo } : {}), ...(d.qr.color ? { color: d.qr.color } : {}) }); qrImg.src = svgSrc(r.svg); qrNote.textContent = r.note ?? (c.qr.hasLogo && d.logo === undefined ? 'Your logo is saved. Upload another to change it.' : `The code still reads with ${r.damageTolerance.plain}% of it damaged.`); } catch (x) { qrNote.textContent = x.message; } };
+    const staticUrl = h('input', { class: 'input', type: 'url', placeholder: 'https://yourbusiness.com/menu', value: d.qr.staticUrl });
+    staticUrl.addEventListener('input', () => { d.qr.staticUrl = staticUrl.value.trim(); });
+    const staticBox = h('div', { class: 'stack', hidden: d.qr.mode !== 'static' }, field('Where the code goes', staticUrl), check('Add the bottle’s reference to the address', d.qr.bottleRef, (v) => { d.qr.bottleRef = v; }, 'So our tag on your site can still match a sale to the exact bottle.'));
+    const modes = h('div', { class: 'radio-cards', role: 'radiogroup', 'aria-label': 'Kind of code' }, [['dynamic', 'Dynamic (recommended)', 'Every scan reaches us first: counted, matched to the bottle, and decided at that moment, so each person can get a different call to action and you can change it after printing.'], ['static', 'Static', c.allowed.static ? 'Straight to your website, nothing in between. No scan counts and no changing it once printed.' : 'Not offered by this company.']].map(([v, t, desc]) => {
+      const r = h('input', { type: 'radio', name: 'qr-mode', value: v, disabled: v === 'static' && !c.allowed.static }); r.checked = d.qr.mode === v;
+      r.addEventListener('change', () => { d.qr.mode = v; staticBox.hidden = v !== 'static'; });
+      return h('label', {}, r, h('b', { text: t }), h('span', { text: desc }));
+    }));
+    const upload = h('input', { type: 'file', accept: '.svg,image/svg+xml,image/png,image/jpeg,image/webp', 'aria-label': 'Upload your logo', hidden: true });
+    upload.addEventListener('change', async () => { const f = upload.files?.[0]; if (!f) return; try { d.logo = await readFile(f); refreshQr(); } catch (x) { toast(x.message); } });
+    const color = h('input', { class: 'input', placeholder: '#000000', maxlength: 7, value: d.qr.color, style: 'max-width:140px' });
+    color.addEventListener('change', () => { d.qr.color = color.value.trim(); refreshQr(); });
+
+    // 2. Versions of the call to action.
+    const textFields = Object.entries(c.experienceConfig).filter(([k, v]) => typeof v === 'string' && !/url$/i.test(k) && !/^#/.test(v));
+    const linkLabel = c.experienceConfig.link?.label;
+    const vlist = h('div', { class: 'stack' });
+    const drawVersions = () => vlist.replaceChildren(...(d.variants.length ? d.variants.map((v, i) => h('div', { class: 'version' },
+      h('div', {}, h('b', { text: v.name }), h('div', { class: 'meta', text: `For ${describe(v.when)} · ${Object.values(v.experienceConfig).filter((x) => typeof x === 'string' && !/^https?:/.test(x)).slice(0, 2).join(' · ')}` })),
+      h('div', { class: 'toolbar' }, i > 0 ? h('button', { class: 'btn small secondary', type: 'button', onclick: () => { [d.variants[i - 1], d.variants[i]] = [d.variants[i], d.variants[i - 1]]; drawVersions(); } }, 'Move up') : null,
+        h('button', { class: 'btn small secondary', type: 'button', onclick: () => { d.variants.splice(i, 1); drawVersions(); } }, 'Remove')))) : [h('div', { class: 'empty', text: 'Just one version so far: everyone sees the same thing.' })]));
+    const describe = (w) => { if (!w) return 'anyone'; const out = []; if (w.scanner) out.push(SCANNERS.find(([k]) => k === w.scanner)[1].toLowerCase()); if (w.dayparts?.length) out.push(`in the ${w.dayparts.join(' or ')}`); if (w.interestsAny?.length) out.push(`who like ${w.interestsAny.join(' or ')}`); if (w.keptMinutes) out.push(`bottles kept ${w.keptMinutes}+ min`); return out.join(', ') || 'anyone'; };
+    drawVersions();
+    const vName = h('input', { class: 'input', placeholder: 'Passed-on bottles', maxlength: 60 });
+    const vWho = h('select', { class: 'input' }, SCANNERS.map(([v, l]) => h('option', { value: v, text: l })));
+    const vParts = DAYPARTS.map(([v, l]) => { const b = h('input', { type: 'checkbox', value: v }); return [b, h('label', { class: 'chip-check' }, b, ` ${l}`)]; });
+    const vInterests = h('input', { class: 'input', placeholder: 'coffee, running' });
+    const vTexts = textFields.map(([k, v]) => [k, h('input', { class: 'input', value: v, maxlength: 300 })]);
+    const vLink = linkLabel ? h('input', { class: 'input', value: linkLabel, maxlength: 40 }) : null;
+    const addVersion = () => {
+      const name = vName.value.trim();
+      if (!name) return toast('Give the version a name.');
+      const when = {};
+      if (vWho.value) when.scanner = vWho.value;
+      const parts = vParts.filter(([b]) => b.checked).map(([b]) => b.value); if (parts.length) when.dayparts = parts;
+      const ints = vInterests.value.split(/[,\n]/).map((x) => x.trim().toLowerCase()).filter(Boolean); if (ints.length) when.interestsAny = ints;
+      const cfg = structuredClone(c.experienceConfig);
+      for (const [k, input] of vTexts) cfg[k] = input.value.trim() || c.experienceConfig[k];
+      if (vLink && cfg.link) cfg.link.label = vLink.value.trim() || linkLabel;
+      const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30) || 'version';
+      let vid = base, k = 2; while (d.variants.some((v) => v.id === vid)) vid = `${base}-${k++}`;
+      d.variants.push({ id: vid, name, ...(Object.keys(when).length ? { when } : {}), experienceConfig: cfg });
+      vName.value = ''; drawVersions(); toast('Added. Save to keep it.');
+    };
+
+    // 3. Who it's for.
+    const aud = d.targeting.audience ?? {};
+    const tInterests = h('input', { class: 'input', placeholder: 'Anyone', value: (aud.interestsAny ?? []).join(', ') });
+    const tCustomers = h('select', { class: 'input' }, [['', 'Everyone'], ['new', 'Only people new to you'], ['returning', 'Only people who’ve scanned you before']].map(([v, l]) => h('option', { value: v, text: l })));
+    tCustomers.value = aud.customers ?? '';
+    const prodBoxes = c.products.map((p) => { const b = h('input', { type: 'checkbox', value: p.id }); b.checked = (d.targeting.products ?? []).includes(p.id); return [b, h('label', { class: 'chip-check' }, b, ` ${p.name}`)]; });
+
+    // 4. Try a moment.
+    const mDay = h('select', { class: 'input' }, DAYPARTS.map(([v, l]) => h('option', { value: v, text: l })));
+    const mWho = h('select', { class: 'input' }, [['first', 'First to scan, new to you'], ['passed', 'Passed the bottle by someone'], ['returning', 'Has scanned you before']].map(([v, l]) => h('option', { value: v, text: l })));
+    const mInt = h('input', { class: 'input', placeholder: 'coffee' });
+    const mOut = h('div', { class: 'moment' });
+    const tryMoment = async () => {
+      try {
+        const r = await api('POST', `/v1/campaigns/${id}/preview-moment`, { daypart: mDay.value, passedOn: mWho.value === 'passed', firstScanner: mWho.value !== 'passed', newToAdvertiser: mWho.value !== 'returning', interests: mInt.value.split(',').map((x) => x.trim()).filter(Boolean) });
+        const hero = r.doc.blocks.find((b) => b.type === 'hero'), greet = r.doc.blocks.find((b) => b.type === 'greeting'), ar = r.doc.blocks.find((b) => b.type === 'ar');
+        mOut.replaceChildren(...[h('div', { class: 'meta', text: r.variant ? `Version: ${r.variant.name}${r.personalizedBy ? ` · picked by ${r.personalizedBy}` : ''}` : 'Your standard version' }),
+          hero ? h('b', { text: hero.title }) : null, greet ? h('div', { class: 'greet', text: `✦ ${greet.text}` }) : null, ar ? h('div', { class: 'meta', text: `AR ${ar.mode === 'label' ? 'living label' : ar.mode === 'bottle' ? 'on the bottle' : 'in the room'}${ar.caption ? `: “${ar.caption}”` : ''}` }) : null].filter(Boolean));
+      } catch (x) { toast(x.message); }
+    };
+
+    const save = async () => {
+      const body = {
+        qr: d.qr.mode === 'static' ? { mode: 'static', staticUrl: d.qr.staticUrl, bottleRef: d.qr.bottleRef, ...(d.logo ? { logo: d.logo } : {}), ...(d.qr.color ? { color: d.qr.color } : {}) } : { mode: 'dynamic', ...(d.logo ? { logo: d.logo } : {}), ...(d.qr.color ? { color: d.qr.color } : {}) },
+        variants: d.variants, personalize: d.personalize, afterEnd: d.afterEnd,
+        targeting: { products: prodBoxes.filter(([b]) => b.checked).map(([b]) => b.value), audience: { interestsAny: tInterests.value.split(',').map((x) => x.trim()).filter(Boolean), ...(tCustomers.value ? { customers: tCustomers.value } : {}) } },
+      };
+      try { await api('PATCH', `/v1/campaigns/${id}/codes`, body); toast('Saved. Changes to what people see go to review first.'); go('/ads'); } catch (x) { toast(x.message); }
+    };
+
+    shell('overview',
+      h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Code, versions and AI' }), h('p', { text: 'What your code is, what each person sees when they scan it, and who your ad is printed for.' })), h('button', { class: 'btn', type: 'button', onclick: save }, 'Save')),
+      h('div', { class: 'review', style: 'max-width:900px' },
+        h('section', { class: 'panel', style: 'gap:12px' }, h('h2', { class: 'section', text: 'Your code' }), modes, staticBox,
+          h('div', { style: 'display:flex;gap:18px;align-items:center;flex-wrap:wrap' }, qrImg, h('div', { class: 'stack', style: 'flex:1;min-width:220px' }, qrNote,
+            c.allowed.logos ? h('div', { class: 'toolbar' }, h('button', { class: 'btn small secondary', type: 'button', onclick: () => upload.click() }, c.qr.hasLogo ? 'Change your logo' : 'Put your logo in it'), upload) : h('p', { style: 'margin:0;font-size:14px', text: 'This company doesn’t put advertisers’ logos in codes.' }),
+            field('Color of the squares', color, 'Optional. Dark colors only, so it always scans.')))),
+        h('section', { class: 'panel', style: 'gap:12px' }, h('h2', { class: 'section', text: 'Who sees what' }),
+          h('p', { style: 'margin:0', text: 'Make other versions for different moments. At each scan the first version that fits is shown; your standard settings are for everyone else.' }), vlist,
+          h('details', {}, h('summary', { text: 'Add a version' }), h('div', { class: 'stack', style: 'margin-top:10px' }, field('Name', vName), field('For', vWho), h('div', { class: 'field' }, h('label', { text: 'Only at these times (optional)' }), h('div', { class: 'chips' }, vParts.map(([, l]) => l))), field('Who like (optional)', vInterests, 'Only counts for people who turned on personalized offers.'),
+            ...vTexts.map(([k, input]) => field(`Says: ${k}`, input)), vLink ? field('Button', vLink) : null, h('div', {}, h('button', { class: 'btn secondary', type: 'button', onclick: addVersion }, 'Add this version'))))),
+        h('section', { class: 'panel', style: 'gap:12px' }, h('h2', { class: 'section', text: 'AI personalization' }),
+          check('Let AI pick the version for each person', d.personalize.ai, (v) => { d.personalize.ai = v; }, 'It only ever chooses among your versions, and only ones whose conditions fit. It sees the moment (time of day, passed-on bottle, interests people shared), never who someone is.'),
+          check('Write a short greeting for each person', d.personalize.greeting, (v) => { d.personalize.greeting = v; }, 'One line at the top of the page and over the camera in AR. Checked before it’s shown: no links, numbers or claims.')),
+        h('section', { class: 'panel', style: 'gap:12px' }, h('h2', { class: 'section', text: 'Who your ad is printed for' }),
+          h('div', { class: 'form' }, field('People who like', tInterests, 'Your ad then only prints on bottles for someone who fits, and we show you each bottle reached them.'), field('Customers', tCustomers)),
+          c.products.length > 1 ? h('div', { class: 'field' }, h('label', { text: 'Only on these products (none ticked: all)' }), h('div', { class: 'chips' }, prodBoxes.map(([, l]) => l))) : null),
+        h('section', { class: 'panel', style: 'gap:12px' }, h('h2', { class: 'section', text: 'When this ad ends' }),
+          h('div', { class: 'radio-cards', role: 'radiogroup', 'aria-label': 'When this ad ends' }, [['current', 'Old bottles open your current ad', 'Bottles still out there keep working for you.'], ['keep', 'Old bottles keep this ad', 'For offers that should stay as printed.']].map(([v, t, desc]) => { const r = h('input', { type: 'radio', name: 'after', value: v }); r.checked = d.afterEnd === v; r.addEventListener('change', () => { d.afterEnd = v; }); return h('label', {}, r, h('b', { text: t }), h('span', { text: desc })); }))),
+        h('section', { class: 'panel', style: 'gap:12px' }, h('h2', { class: 'section', text: 'Try a moment' }),
+          h('div', { class: 'form' }, field('Time', mDay), field('Person', mWho), field('Likes', mInt)), h('div', {}, h('button', { class: 'btn secondary', type: 'button', onclick: tryMoment }, 'Show what they’d see')), mOut),
+        h('div', {}, h('button', { class: 'btn wide', type: 'button', onclick: save }, 'Save'))));
+    refreshQr();
+  }
+
   // ---------- overview ----------
   const statusText = { running: 'Running', in_review: 'In review', paused: 'Paused', finished: 'Finished', not_approved: 'Needs changes' };
   async function overview() {
@@ -210,6 +334,7 @@
     if (c.status === 'running') actions.push(h('button', { class: 'btn small secondary', type: 'button', onclick: async () => { await api('PATCH', `/v1/campaigns/${c.id}`, { active: false }); toast('Paused'); render(); } }, 'Pause'));
     if (c.status === 'paused') actions.push(h('button', { class: 'btn small', type: 'button', onclick: async () => { try { await api('PATCH', `/v1/campaigns/${c.id}`, { active: true }); toast('Running again'); render(); } catch (x) { toast(x.message); } } }, 'Resume'));
     if (c.editable && c.status !== 'in_review') actions.push(link(`/ads/campaigns/${c.id}/change`, { class: 'btn small secondary' }, 'Change it'));
+    actions.push(link(`/ads/campaigns/${c.id}/code`, { class: 'btn small secondary' }, 'Code, versions and AI'));
     const budget = c.budget.type === 'guaranteed' ? `${num(c.budget.bottlesLeft)} bottles left` : `${dollars(c.budget.dailyCapCents)} a day`;
     return h('article', { class: 'camp' },
       h('div', { class: 'thumb' }, h('img', { src: svgSrc(c.thumbSvg), alt: `Your ad: ${c.name}` })),

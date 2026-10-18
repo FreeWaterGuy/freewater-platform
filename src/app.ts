@@ -17,6 +17,8 @@ import { builtinModelIds } from './modules/models/builtin';
 import { AdsService } from './modules/ads/service';
 import { BuiltinAdAssistant } from './modules/ai/builtinAssistant';
 import { ClaudeAdAssistant } from './modules/ai/claudeAssistant';
+import { HandoffService } from './modules/handoff/service';
+import { builtinPersonalizer, CachedPersonalizer, ClaudePersonalizer, type Personalizer } from './modules/ai/personalizer';
 import type { AdAssistant } from './modules/ai/contract';
 import { DesignService } from './modules/custom/service';
 import { BuiltinDesigner } from './modules/ai/builtinDesigner';
@@ -34,7 +36,7 @@ import { ConsoleService } from './modules/console/service';
 import { FleetService, MachineFleetPrinter } from './modules/fleet/service';
 import { CodeService, loadSecret } from './modules/codes/service';
 import { AttributionService } from './modules/attribution/service';
-import { bottle16oz, boxes, builtinCreatives, freewater, locations, peakSpring, sampleCampaigns } from './demo/seed';
+import { boxes, builtinCreatives, freewater, locations, peakSpring, products, sampleCampaigns } from './demo/seed';
 
 export interface AppOptions {
   db: SqlClient;
@@ -48,6 +50,7 @@ export interface AppOptions {
   assets?: AssetStore; // defaults to storing files in the database
   pluginTimeoutMs?: number;
   assistant?: AdAssistant;
+  personalizer?: Personalizer;
   designer?: DesignAssistant;
   geocoder?: Geocoder; // defaults to the test geocoder
   planner?: RoutePlanner; // defaults to the simple route planner
@@ -67,7 +70,7 @@ export async function createApp(opts: AppOptions) {
   let demoKeys: Record<string, string> | undefined;
   const empty = Number((await db.query<{ n: string }>(`select count(*)::int as n from companies`)).rows[0]?.n ?? 0) === 0;
   if (empty && opts.seedDemo) {
-    await saveCatalog(db, { companies: [freewater, peakSpring], products: [bottle16oz], boxes, locations, campaigns: sampleCampaigns() });
+    await saveCatalog(db, { companies: [freewater, peakSpring], products, boxes, locations, campaigns: sampleCampaigns() });
     demoKeys = {};
     const make = async (label: string, companyId: string, scopes: Scope[], advertiserId?: string, locationId?: string) => {
       demoKeys![label] = (await createApiKey(db, { companyId, name: label, scopes, advertiserId, locationId })).key;
@@ -112,6 +115,7 @@ export async function createApp(opts: AppOptions) {
 
   const messenger = opts.messenger ?? new TestOutbox(process.env.ECHO_CODES === '1');
   const accounts = new AccountsService(db, messenger, opts.clock, (id) => platform.companies.get(id)?.name ?? 'FreeWater');
+  packs.audienceFor = (customerId, companyId) => accounts.audienceFor(customerId, companyId);
   const payments = new PaymentsService(db, opts.payments ?? new TestPaymentProvider(), platform.bus, () => persistence.flush());
 
   const host = new ExperienceHost({ builtinModel: (id) => (builtinModelIds.includes(id) ? `/models/builtin/${id}.glb` : `/models/builtin/missing.glb`) }, { timeoutMs: opts.pluginTimeoutMs });
@@ -119,6 +123,14 @@ export async function createApp(opts: AppOptions) {
   const experiences = new ExperienceService(platform, packs, host, db, accounts);
   const attribution = new AttributionService(db, platform, await loadSecret(db, 'links'), opts.clock);
   experiences.attribution = attribution;
+  attribution.codes = codes;
+  attribution.packFace = (packId, face) => packs.packs.get(packId)?.faces.find((f) => f.face === face)?.advertiserId;
+  attribution.boxStatic = (packId, face, code) => !!packs.packs.get(packId)?.rendered?.faceUrls[face as 'top']?.includes(`fwb=${code}`);
+  // AI personalization: Claude when a key is set, otherwise the built-in rules. Answers are kept per kind of moment.
+  const personalizer = opts.personalizer ?? (process.env.ANTHROPIC_API_KEY ? new CachedPersonalizer(new ClaudePersonalizer({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_PERSONALIZE_MODEL, fallback: builtinPersonalizer })) : builtinPersonalizer);
+  experiences.personalizer = personalizer;
+  // Bottles carrying AR that follows the bottle get the tracking strip on those slots.
+  platform.arTracking = (unit) => experiences.trackSlots(unit);
   const assets = opts.assets ?? new SqlAssetStore(db);
 
   const builtinAssistant = new BuiltinAdAssistant();
@@ -133,6 +145,7 @@ export async function createApp(opts: AppOptions) {
   const delivery = new DeliveryService(db, platform, packs, accounts, messenger, geocoder, opts.planner ?? new SimpleRoutePlanner(), () => persistence.flush());
   const ops = new OpsService(db, platform, delivery, host);
 
+  const handoff = new HandoffService(db, platform, packs);
   const books = new BooksService(db, platform, packs, messenger, opts.payouts ?? new TestPayoutProvider(), (c, at) => delivery.today(c, at), () => persistence.flush());
 
   const flush = () => persistence.flush();
@@ -146,7 +159,7 @@ export async function createApp(opts: AppOptions) {
   await fleet.load();
   made.registry.registerPrinter('model6-fleet', new MachineFleetPrinter(() => fleet, made.printer));
 
-  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution };
+  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

@@ -1,6 +1,7 @@
 import type { BoxFace, BoxFacePlacement, BoxProduct, Campaign, CompanyConfig } from '../../core/types';
 import { givingLine } from '../print/renderer';
 import { qrSvg } from '../print/qr';
+import { campaignQrStyle, companyQrStyle, qrMode, staticTarget } from '../codes/style';
 
 const PX = 40; // drawing units per inch; the SVG's width and height are in real inches
 
@@ -52,10 +53,11 @@ export function renderBox(input: {
     const c = campaigns.get(f.campaignId);
     if (!c) throw new Error(`Box face ${f.face} points at unknown campaign ${f.campaignId}`);
     parts.push(`<svg x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" viewBox="0 0 ${r.w} ${r.h}" overflow="hidden">${c.creative.svg(r.w, r.h)}</svg>`);
-    const url = input.codes ? input.codes.box(company, packId, f.face) : `${base}/b/${packId}/${f.face}`;
+    const smart = input.codes ? input.codes.box(company, packId, f.face) : `${base}/b/${packId}/${f.face}`;
+    const url = qrMode(company, c) === 'static' ? staticTarget(c, input.codes ? smart : null) : smart;
     faceUrls[f.face] = url;
     const q = Math.min(64, r.h * 0.35);
-    parts.push(qrSvg(url, r.x + r.w - q - 8, r.y + r.h - q - 8, q));
+    parts.push(qrSvg(url, r.x + r.w - q - 8, r.y + r.h - q - 8, q, 'H', campaignQrStyle(company, c)));
   }
 
   // Locked company panel.
@@ -112,7 +114,7 @@ function boxPanel(company: CompanyConfig, x: number, y: number, w: number, h: nu
   const facts = [`${box.bottles} bottles`, ...company.productFacts].flatMap((l) => wrap(l, fit(9)));
   const factsTop = y + h - 10 - facts.length * 11;
   const q = Math.max(56, Math.min(90, factsTop - ty - 30));
-  out.push(qrSvg(packUrl, cx - q / 2, ty + 2, q));
+  out.push(qrSvg(packUrl, cx - q / 2, ty + 2, q, 'H', companyQrStyle(company)));
   out.push(`<text x="${cx}" y="${ty + q + 14}" text-anchor="middle" ${font} font-size="9" fill="${b.textColor}">Scan for this pack&#39;s receipt</text>`);
   facts.forEach((l, i) => out.push(`<text x="${x + 10}" y="${factsTop + (i + 1) * 11}" ${font} font-size="9" ${i === 0 ? 'font-weight="700"' : ''} fill="${b.textColor}">${esc(l)}</text>`));
   return out.join('');

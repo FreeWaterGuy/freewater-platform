@@ -123,6 +123,14 @@
           return { campaignId: c.id, status: 'in_review' };
         }
       }
+      if (/^\/v1\/campaigns\/[\w-]+\/codes$/.test(path)) {
+        S.codes ??= structuredClone(R.joeCodes);
+        if (method === 'PATCH') { for (const k of ['variants', 'personalize', 'afterEnd']) if (body[k] !== undefined) S.codes[k] = body[k]; if (body.qr) S.codes.qr = { ...S.codes.qr, mode: body.qr.mode, staticUrl: body.qr.staticUrl ?? null, hasLogo: S.codes.qr.hasLogo || !!body.qr.logo }; if (body.targeting) S.codes.targeting = { ...S.codes.targeting, ...body.targeting }; }
+        return structuredClone(S.codes);
+      }
+      if (key === 'POST /v1/qr/preview') return body.logo ? R.joeQrLogo : R.joeQr; // the preview shows a sample logo for any upload
+      if (/^\/v1\/campaigns\/[\w-]+\/preview-moment$/.test(path)) return R.moments[`${body.daypart}:${body.passedOn ? 'passed' : body.newToAdvertiser ? 'first' : 'returning'}`];
+      if (key === 'GET /v1/ads/reach') return { printedForPeople: 0 };
       m = /^\/v1\/campaigns\/([\w-]+)$/.exec(path);
       if (m && method === 'PATCH') {
         const c = S.campaigns.find((x) => x.id === m[1]);

@@ -105,3 +105,14 @@ video { width: 100%; border-radius: var(--radius); background: #000; display: bl
 .offer.coupon.used { opacity: .6; }
 .offer.coupon.used .coupon-qr { filter: grayscale(1); }
 .panel .story { opacity: .85; }
+
+/* A line written for this person */
+.greeting{display:flex;gap:10px;align-items:flex-start;padding:12px 14px;border-radius:14px;background:color-mix(in srgb,var(--accent) 16%,var(--bg));font-weight:600;line-height:1.35}
+.greeting .spark{color:var(--accent);font-size:18px;line-height:1.1;filter:saturate(1.4)}
+
+/* AR on the bottle */
+.ar-card{display:flex;flex-direction:column;gap:10px;padding:16px;border-radius:18px;border:1px solid color-mix(in srgb,var(--text) 12%,transparent)}
+.ar-card .ar-art{display:flex;justify-content:center}
+.ar-card .ar-art svg{width:150px;height:auto}
+.ar-card .section-title{margin:0}
+.ar-card .text{margin:0}

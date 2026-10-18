@@ -17,6 +17,8 @@ export interface OrderOptions {
   consumerId?: string;
   frequency?: { counts: Map<string, number>; max: number };
   avoidSignatures?: Set<string>;
+  /** The person this bottle is for, so ads that target people can be chosen (and checked later when they scan it). */
+  audience?: import('./modules/ads/contract').PrintAudience | null;
 }
 
 export type OrderOutcome =
@@ -48,6 +50,8 @@ export class Platform {
   private maxAttempts: number;
   /** Makes the smart code in every QR printed. Set when the platform runs with a database. */
   codes?: import('./modules/codes/service').CodeMinter;
+  /** Which slots on a bottle use AR that follows the bottle, so its label gets the tracking strip there. Set at start-up. */
+  arTracking?: (unit: Unit) => number[];
 
   constructor(
     readonly registry: Registry,
@@ -63,6 +67,14 @@ export class Platform {
     this.ledger = new Ledger(this.bus, companies, { onEntry: (entry) => this.persist.ledgerEntry(entry) });
     this.random = seededRandom(opts.seed ?? 42);
     this.maxAttempts = opts.maxPrintAttempts ?? 2;
+  }
+
+  /** The product a company hands out unless something else is asked for. */
+  standardProduct(companyId?: string): Product {
+    const c = companyId ? this.companies.get(companyId) : undefined;
+    const pick = c?.standardProductId ? this.products.get(c.standardProductId) : undefined;
+    const own = pick && (!pick.companyId || pick.companyId === companyId) ? pick : undefined;
+    return own ?? [...this.products.values()].find((p) => !p.companyId || p.companyId === companyId) ?? [...this.products.values()][0]!;
   }
 
   /** Put a unit loaded from storage back in place. */
@@ -104,7 +116,7 @@ export class Platform {
     // 1. Fill slots (custom units have no ads).
     const fill = opts.custom
       ? { layout: [6 as const], placements: [] }
-      : this.registry.adsFor(company).fill({ company, product, location, campaigns: [...this.campaigns.values()], random: this.random, frequency: opts.frequency, avoidSignatures: opts.avoidSignatures });
+      : this.registry.adsFor(company).fill({ company, product, location, campaigns: [...this.campaigns.values()], random: this.random, frequency: opts.frequency, avoidSignatures: opts.avoidSignatures, audience: opts.audience ?? null });
     reserve(fill.placements, this.campaigns);
     this.persistCampaigns(fill.placements);
 
@@ -122,6 +134,7 @@ export class Platform {
       packId: opts.packId,
       createdAt: this.bus.now().toISOString(),
       ...(opts.consumerId ? { consumerId: opts.consumerId } : {}),
+      ...(opts.audience ? { intendedFor: opts.audience.personKey } : {}),
       ...(opts.custom?.experienceConfig ? { experienceConfig: opts.custom.experienceConfig } : {}),
     };
     this.units.set(unit.id, unit);
@@ -131,7 +144,8 @@ export class Platform {
 
     // 2. Render.
     const t0 = performance.now();
-    const label = await this.registry.rendererFor(company).render({ unit, product, company, campaigns: this.campaigns, customArt: opts.custom?.art, codes: this.codes });
+    const trackSlots = this.arTracking?.(unit) ?? [];
+    const label = await this.registry.rendererFor(company).render({ unit, product, company, campaigns: this.campaigns, customArt: opts.custom?.art, codes: this.codes, ...(trackSlots.length ? { tracking: true, trackSlots } : {}) });
     unit.status = 'rendered';
     this.labels.set(unit.id, label);
     this.persist.label(label, company.id);
@@ -210,9 +224,9 @@ export class Platform {
   }
 
   // Things that happen after a unit is out in the world.
-  scan(unitId: string, slotIndex: number, viewerKey: string, experienceLoaded = true, scanId = newId('scan')) {
+  scan(unitId: string, slotIndex: number, viewerKey: string, experienceLoaded = true, scanId = newId('scan'), variant?: string) {
     const unit = need(this.units, unitId, 'unit');
-    return this.bus.publish('unit.scanned', unit.companyId, { unitId, slotIndex, viewerKey, experienceLoaded }, scanId);
+    return this.bus.publish('unit.scanned', unit.companyId, { unitId, slotIndex, viewerKey, experienceLoaded, ...(variant ? { variant } : {}) }, scanId);
   }
   launchAr(unitId: string, slotIndex: number, viewerKey: string, loaded = true, launchId = newId('ar')) {
     const unit = need(this.units, unitId, 'unit');
