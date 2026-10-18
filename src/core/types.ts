@@ -57,6 +57,8 @@ export interface CompanyConfig {
     blockedCategories: string[];
     competitorSeparation: boolean;
     repeatScanWindowSec: number;
+    /** In a 6, 12 or 24 pack, the most bottles one campaign may appear on, as a share of the pack (0–1). */
+    maxPackShare: number;
   };
   prices: {
     perPrintBySixths: Record<Sixths, Cents>;
@@ -64,6 +66,7 @@ export interface CompanyConfig {
     perArLaunch: Cents;
     commissionPercent: number;
     customUnit: Cents;
+    perBoxFace: Cents;
   };
   /** Which registered implementation each module slot uses. Swapping one never touches the others. */
   modules: {
@@ -92,6 +95,8 @@ export interface Campaign {
   sizes: Sixths[]; // slot sizes this campaign has artwork for
   creative: Creative;
   experienceId: string; // which plug-in opens when its QR is scanned
+  /** Where this campaign has artwork. Labels by default; 'box-face' lets it run on pack boxes. */
+  formats?: ('label' | 'box-face')[];
   targeting: { locations?: string[] };
   buy: Buy;
   isHouse?: boolean; // the company's own filler, used when nothing else fits; never billed
@@ -107,6 +112,30 @@ export interface Placement {
   experienceId: string;
   priceCents: Cents; // what the advertiser pays if, and only if, the print is confirmed
   isHouse: boolean;
+}
+
+export type BoxFace = 'top' | 'front' | 'back' | 'right' | 'left' | 'bottom';
+
+export interface BoxFacePlacement {
+  face: BoxFace;
+  campaignId: string;
+  advertiserId: string;
+  advertiserName: string;
+  experienceId: string;
+  priceCents: Cents; // billed only when the box print is confirmed
+  isHouse: boolean;
+}
+
+export interface BoxProduct {
+  id: string; // "box-12"
+  bottles: 6 | 12 | 24;
+  lengthIn: number;
+  widthIn: number;
+  heightIn: number;
+  /** Faces sold to advertisers. The left face is the locked company panel; the bottom stays blank. */
+  adFaces: BoxFace[];
+  panelFace: BoxFace;
+  blankFaces: BoxFace[];
 }
 
 export interface Unit {

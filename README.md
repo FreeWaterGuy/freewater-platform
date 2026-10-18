@@ -8,8 +8,9 @@ You need Node.js 20 or newer.
 
 ```bash
 npm install
-npm run demo     # prints a morning of bottles in Austin; open out/index.html
-npm test         # checks every business rule
+npm run demo         # prints a morning of bottles in Austin; open out/index.html
+npm run demo:packs   # prints a night of 6, 12 and 24 packs and delivers them; open out/packs.html
+npm test             # checks every business rule
 ```
 
 ## What runs
@@ -31,6 +32,16 @@ The **ledger** listens to events and bills:
 
 Failed prints, failed AR and duplicate orders are never billed. Ledger lines are only ever added, and debits always equal credits.
 
+## Packs and home delivery
+
+`src/modules/packs` prints 6, 12 and 24 packs for a delivery route:
+
+- **Every bottle is different.** The ad engine is told which labels are already in the pack and picks a different one, and no campaign can take more than its share of a pack (`maxPackShare`, 50% by default).
+- **The box is ad space.** Top, front, back and right are sold to four different advertisers (never two competitors), each with its own QR. The left face is the locked company panel with the pack's QR. The bottom stays blank. A small stop code (`R3 · 14`) sits in the corner of the front and top. Box faces are billed only when the box print is confirmed.
+- **Checked before sealing.** The packing line scans every bottle. A missing bottle or one from another pack stops the line; the missing bottle is reprinted and the pack is checked again before it can be sealed.
+- **Loaded in reverse.** The last stop goes in the van first, so the next box is always by the door.
+- **Right box, right door.** A stop is marked delivered only when the driver scans the box planned for that address while at that address. Anything else is rejected with what to grab instead.
+
 ## How it's built to be swapped
 
 | Folder | What it is |
@@ -39,6 +50,7 @@ Failed prints, failed AR and duplicate orders are never billed. Ledger lines are
 | `src/modules/ads` | Ads and slots: `freewater-ads` (default) and `house-only` |
 | `src/modules/print` | Label renderer (`svg-label`) and QR drawing |
 | `src/modules/ledger` | Billing rules and the open-books receipt |
+| `src/modules/packs` | Packs, box faces, packing check, van loading and delivery |
 | `src/adapters/printers` | Printer contract and the virtual printer |
 | `src/platform.ts` | The thin core that runs the pipeline |
 | `src/demo` | Sample companies, made-up advertisers and the demo run |
@@ -51,6 +63,5 @@ All prices in `src/demo/seed.ts` are placeholders.
 ## Next
 
 - A real printer adapter for the Model 6 and the micro-factory lines
-- Packs (6, 12, 24) with box faces and pack verification
 - A database (PostgreSQL) behind the in-memory stores
 - The public API, so the apps and the advertiser portal can call this

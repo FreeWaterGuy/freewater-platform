@@ -1,5 +1,5 @@
 // Sample data for the demo and tests. All advertisers here are made-up brands; prices are placeholders.
-import type { Campaign, CompanyConfig, Creative, Location, Product, Sixths } from '../core/types';
+import type { BoxProduct, Campaign, CompanyConfig, Creative, Location, Product, Sixths } from '../core/types';
 
 export const bottle16oz: Product = {
   id: 'bottle-16oz',
@@ -8,6 +8,13 @@ export const bottle16oz: Product = {
   layouts: [[6], [3, 3], [2, 2, 2], [4, 2], [2, 1, 1, 2], [3, 2, 1], [1, 1, 1, 1, 1, 1], [2, 2, 1, 1]],
 };
 
+const sides = { adFaces: ['top', 'front', 'back', 'right'] as BoxProduct['adFaces'], panelFace: 'left' as const, blankFaces: ['bottom'] as BoxProduct['blankFaces'] };
+export const boxes: BoxProduct[] = [
+  { id: 'box-6', bottles: 6, lengthIn: 8, widthIn: 5.4, heightIn: 7.8, ...sides },
+  { id: 'box-12', bottles: 12, lengthIn: 10.6, widthIn: 8, heightIn: 7.8, ...sides },
+  { id: 'box-24', bottles: 24, lengthIn: 15.8, widthIn: 10.6, heightIn: 7.8, ...sides },
+];
+
 const placeholderPrices: CompanyConfig['prices'] = {
   // Sample numbers so the demo can add things up. Each company sets its own.
   perPrintBySixths: { 1: 3, 2: 5, 3: 7, 4: 9, 5: 11, 6: 12 },
@@ -15,6 +22,7 @@ const placeholderPrices: CompanyConfig['prices'] = {
   perArLaunch: 40,
   commissionPercent: 8,
   customUnit: 300,
+  perBoxFace: 40,
 };
 
 export const freewater: CompanyConfig = {
@@ -25,7 +33,7 @@ export const freewater: CompanyConfig = {
   productFacts: ['SPRING WATER', '16 fl oz (473 ml)', 'Source: Natural Spring Water, Tiger, GA', 'Manufactured by RAIN Bottling Co for FreeWater Inc, Austin, TX', 'Processed by ozonation'],
   giving: { mode: 'per_unit', centsPerUnit: 10, defaultCharity: 'Austin Parks Foundation', charityByLocation: { 'route-3': 'Central Texas Food Bank' } },
   consumerPricing: 'free',
-  adRules: { minAdsPerUnit: 1, maxAdsPerUnit: 6, blockedCategories: ['alcohol', 'tobacco', 'gambling', 'weapons'], competitorSeparation: true, repeatScanWindowSec: 600 },
+  adRules: { minAdsPerUnit: 1, maxAdsPerUnit: 6, blockedCategories: ['alcohol', 'tobacco', 'gambling', 'weapons'], competitorSeparation: true, repeatScanWindowSec: 600, maxPackShare: 0.5 },
   prices: placeholderPrices,
   modules: { ads: 'freewater-ads', renderer: 'svg-label', printer: 'virtual-printer' },
 };
@@ -60,14 +68,16 @@ function art(look: Look): Creative {
   return {
     svg(w, h) {
       const narrow = w < 160;
+      const wide = w > h * 0.95; // box faces: text on the left, picture on the right
+      const textW = wide ? w * 0.52 : w;
       const pad = narrow ? 10 : 18;
-      const brandSize = Math.min(look.brandSize ?? 34, w / (look.brand.length * 0.62));
-      const lineSize = Math.min(narrow ? 17 : 30, (w - pad * 2) / Math.max(6, longestWord(look.line) * 0.58));
-      const lines = wrapWords(look.line, narrow ? 9 : Math.max(10, Math.floor(w / (lineSize * 0.56))));
+      const brandSize = Math.min(look.brandSize ?? 34, textW / (look.brand.length * 0.62));
+      const lineSize = Math.min(narrow ? 17 : 30, (textW - pad * 2) / Math.max(6, longestWord(look.line) * 0.58));
+      const lines = wrapWords(look.line, narrow ? 9 : Math.max(10, Math.floor((textW - pad) / (lineSize * 0.56))));
       let s = `<rect width="${w}" height="${h}" fill="${look.bg}"/>`;
-      s += look.mark(w, h);
+      s += wide ? `<g transform="translate(${(w * 0.24).toFixed(1)} 0)">${look.mark(w, h)}</g>` : look.mark(w, h);
       s += `<text x="${pad}" y="${pad + brandSize}" font-family="Comfortaa, 'DM Sans', Arial, sans-serif" font-weight="700" font-size="${brandSize.toFixed(1)}" fill="${look.accent}">${look.brand}</text>`;
-      let y = h * 0.6;
+      let y = wide ? Math.max(pad + brandSize + lineSize * 1.6, h * 0.5) : h * 0.6;
       for (const l of lines) {
         s += `<text x="${pad}" y="${y.toFixed(1)}" font-family="'DM Sans', Arial, sans-serif" font-weight="700" font-size="${lineSize.toFixed(1)}" fill="${look.fg}">${l}</text>`;
         y += lineSize * 1.12;
@@ -111,19 +121,19 @@ const fw = (c: CampaignInput): Campaign => ({ companyId: 'freewater', active: tr
 
 export function sampleCampaigns(): Campaign[] {
   return [
-    fw({ id: 'cmp-house', advertiserId: 'freewater', advertiserName: 'FreeWater', category: 'house', sizes: all, isHouse: true, experienceId: 'freewater-app', buy: { type: 'guaranteed', remainingPrints: 1e9 },
+    fw({ id: 'cmp-house', formats: ['label', 'box-face'], advertiserId: 'freewater', advertiserName: 'FreeWater', category: 'house', sizes: all, isHouse: true, experienceId: 'freewater-app', buy: { type: 'guaranteed', remainingPrints: 1e9 },
       creative: art({ bg: '#000000', fg: '#FFFFFF', accent: '#7FC6EA', brand: 'freewater', line: 'Save money. Drink FreeWater.', sub: 'Your ad here: freewater.io', mark: drop }) }),
-    fw({ id: 'cmp-joes', advertiserId: 'adv-joes', advertiserName: "Joe's Burgers", category: 'food', competitorGroup: 'burgers', sizes: [1, 2, 3], experienceId: 'ar-3d-menu', buy: { type: 'guaranteed', remainingPrints: 20000 },
+    fw({ id: 'cmp-joes', formats: ['label', 'box-face'], advertiserId: 'adv-joes', advertiserName: "Joe's Burgers", category: 'food', competitorGroup: 'burgers', sizes: [1, 2, 3], experienceId: 'ar-3d-menu', buy: { type: 'guaranteed', remainingPrints: 20000 },
       creative: art({ bg: '#D7262E', fg: '#FFFFFF', accent: '#FFC93C', brand: "JOE'S", line: '$5 combo', sub: 'Scan to see it on your table', mark: burger }) }),
     fw({ id: 'cmp-patty', advertiserId: 'adv-patty', advertiserName: 'Patty Shack', category: 'food', competitorGroup: 'burgers', sizes: [1, 2], experienceId: 'coupon', buy: { type: 'bid', maxCentsPerSixth: 4, dailyCapCents: 5000, spentTodayCents: 0 },
       creative: art({ bg: '#FFF3D6', fg: '#3B2410', accent: '#C2410C', brand: 'Patty Shack', brandSize: 26, line: 'Double stack Tuesdays', sub: 'Scan for a coupon', mark: burger }) }),
-    fw({ id: 'cmp-luma', advertiserId: 'adv-luma', advertiserName: 'Luma Coffee', category: 'coffee', sizes: [1, 2, 3], experienceId: 'offer', buy: { type: 'bid', maxCentsPerSixth: 3, dailyCapCents: 4000, spentTodayCents: 0 },
+    fw({ id: 'cmp-luma', formats: ['label', 'box-face'], advertiserId: 'adv-luma', advertiserName: 'Luma Coffee', category: 'coffee', sizes: [1, 2, 3], experienceId: 'offer', buy: { type: 'bid', maxCentsPerSixth: 3, dailyCapCents: 4000, spentTodayCents: 0 },
       creative: art({ bg: '#3A1D10', fg: '#FBE9D0', accent: '#F6E3C8', brand: 'luma', line: 'Oat latte, on us', sub: 'Before 11 am on Congress Ave', mark: cup }) }),
-    fw({ id: 'cmp-maple', advertiserId: 'adv-maple', advertiserName: 'Maple Realty', category: 'real-estate', sizes: [2, 3, 4], experienceId: 'ar-home-tour', buy: { type: 'guaranteed', remainingPrints: 5000 }, targeting: { locations: ['ATX-014', 'route-3'] },
+    fw({ id: 'cmp-maple', formats: ['label', 'box-face'], advertiserId: 'adv-maple', advertiserName: 'Maple Realty', category: 'real-estate', sizes: [2, 3, 4], experienceId: 'ar-home-tour', buy: { type: 'guaranteed', remainingPrints: 5000 }, targeting: { locations: ['ATX-014', 'route-3'] },
       creative: art({ bg: '#2F6B4F', fg: '#E8F1EA', accent: '#E8F1EA', brand: 'Maple Realty', brandSize: 26, line: '1406 Maple St. Tour it in 3D', sub: 'Scan the bottle to walk through', mark: house }) }),
-    fw({ id: 'cmp-daily', advertiserId: 'adv-daily', advertiserName: 'Austin Daily', category: 'news', sizes: [1, 2], experienceId: 'news-card', buy: { type: 'bid', maxCentsPerSixth: 3, dailyCapCents: 3000, spentTodayCents: 0 },
+    fw({ id: 'cmp-daily', formats: ['label', 'box-face'], advertiserId: 'adv-daily', advertiserName: 'Austin Daily', category: 'news', sizes: [1, 2], experienceId: 'news-card', buy: { type: 'bid', maxCentsPerSixth: 3, dailyCapCents: 3000, spentTodayCents: 0 },
       creative: art({ bg: '#F1EEE6', fg: '#1B1B1B', accent: '#1B1B1B', brand: 'Austin Daily', brandSize: 24, line: 'Rail line opens Monday', sub: 'Scan for the full story', mark: paper }) }),
-    fw({ id: 'cmp-orbit', advertiserId: 'adv-orbit', advertiserName: 'Orbit Fitness', category: 'fitness', sizes: [1, 2, 3], experienceId: 'booking', buy: { type: 'bid', maxCentsPerSixth: 3, dailyCapCents: 2500, spentTodayCents: 0 },
+    fw({ id: 'cmp-orbit', formats: ['label', 'box-face'], advertiserId: 'adv-orbit', advertiserName: 'Orbit Fitness', category: 'fitness', sizes: [1, 2, 3], experienceId: 'booking', buy: { type: 'bid', maxCentsPerSixth: 3, dailyCapCents: 2500, spentTodayCents: 0 },
       creative: art({ bg: '#1E1E24', fg: '#FFFFFF', accent: '#FF6A13', brand: 'ORBIT', line: 'First class free', sub: 'Scan and book', mark: bolt }) }),
     // Blocked by FreeWater's rules (alcohol), allowed by a licensee that chooses to.
     fw({ id: 'cmp-lager', advertiserId: 'adv-lager', advertiserName: 'Lone Peak Lager', category: 'alcohol', sizes: [1, 2, 3], experienceId: 'offer', buy: { type: 'bid', maxCentsPerSixth: 9, dailyCapCents: 9000, spentTodayCents: 0 },

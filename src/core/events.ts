@@ -1,10 +1,10 @@
 import { newId } from './ids';
-import type { Cents, Placement } from './types';
+import type { BoxFacePlacement, Cents, Placement } from './types';
 
 // The event catalog. Modules never call each other's internals; they publish and listen.
 
 export interface EventPayloads {
-  'order.created': { orderId: string; locationId: string; productId: string; kind: 'ad_supported' | 'custom'; customerId?: string };
+  'order.created': { orderId: string; locationId: string; productId: string; kind: 'ad_supported' | 'custom'; customerId?: string; packId?: string };
   'slots.filled': { unitId: string; layout: number[]; placements: Placement[] };
   'label.rendered': { unitId: string; widthIn: number; heightIn: number; renderMs: number };
   'label.printed': { unitId: string; jobId: string; locationId: string; placements: Placement[]; kind: 'ad_supported' | 'custom'; customerId?: string; customPriceCents?: Cents };
@@ -14,6 +14,15 @@ export interface EventPayloads {
   'ar.launched': { unitId: string; slotIndex: number; viewerKey: string; loaded: boolean };
   'purchase.completed': { unitId: string; slotIndex: number; orderId: string; amountCents: Cents };
   'purchase.refunded': { unitId: string; slotIndex: number; orderId: string; amountCents: Cents };
+  'pack.composed': { packId: string; size: number; routeId: string; stop: number; unitIds: string[] };
+  'box.printed': { packId: string; jobId: string; faces: BoxFacePlacement[] };
+  'pack.verified': { packId: string; scanned: number };
+  'pack.mismatch': { packId: string; missing: string[]; unexpected: string[] };
+  'unit.replaced': { packId: string; oldUnitId: string; newUnitId: string };
+  'pack.sealed': { packId: string };
+  'pack.loaded': { packId: string; routeId: string; loadPosition: number };
+  'pack.delivered': { packId: string; routeId: string; stop: number; emptiesCollected: number; photoProof: boolean };
+  'delivery.rejected': { packId: string; scannedPackId: string; stop: number; reason: string };
 }
 
 export type EventType = keyof EventPayloads;

@@ -1,5 +1,6 @@
 import { Registry } from './core/registry';
-import type { Campaign, CompanyConfig, Location, Product } from './core/types';
+import type { BoxProduct, Campaign, CompanyConfig, Location, Product } from './core/types';
+import { PackService } from './modules/packs/service';
 import { freewaterAdEngine, houseOnlyAdEngine } from './modules/ads/engine';
 import { svgLabelRenderer } from './modules/print/renderer';
 import { VirtualPrinter, type VirtualPrinterOptions } from './adapters/printers/virtual';
@@ -11,6 +12,7 @@ export function createPlatform(input: {
   products: Product[];
   locations: Location[];
   campaigns: Campaign[];
+  boxes?: BoxProduct[];
   printer?: VirtualPrinterOptions;
   seed?: number;
   clock?: () => Date;
@@ -23,5 +25,6 @@ export function createPlatform(input: {
     .registerPrinter(printer.name, printer);
   const byId = <T extends { id: string }>(xs: T[]) => new Map(xs.map((x) => [x.id, x]));
   const platform = new Platform(registry, byId(input.companies), byId(input.products), byId(input.locations), byId(input.campaigns), { seed: input.seed, clock: input.clock });
-  return { platform, printer, registry };
+  const packs = new PackService(platform, byId(input.boxes ?? []));
+  return { platform, printer, registry, packs };
 }

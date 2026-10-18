@@ -14,7 +14,8 @@ export const freewaterAdEngine: AdEngine = {
   fill(req: FillRequest): FillResult {
     const { company, product, location, random } = req;
     const house = req.campaigns.find((c) => c.isHouse && c.companyId === company.id);
-    const eligible = req.campaigns.filter((c) => isEligible(c, company, location.id));
+    const capped = (c: Campaign) => !!req.frequency && (req.frequency.counts.get(c.id) ?? 0) >= req.frequency.max;
+    const eligible = req.campaigns.filter((c) => isEligible(c, company, location.id) && !capped(c));
 
     // Shuffle first so equal offers rotate fairly, then rank.
     const ranked = shuffle(eligible, random).sort((a, b) => rank(b, company) - rank(a, company));
@@ -30,14 +31,23 @@ export const freewaterAdEngine: AdEngine = {
       chosen.push(c);
     }
 
-    let best: { layout: Sixths[]; placements: Placement[]; revenue: number } | null = null;
-    for (const layout of shuffle(product.layouts, random)) {
-      if (layout.length < company.adRules.minAdsPerUnit || layout.length > company.adRules.maxAdsPerUnit) continue;
-      const placements = assign(layout, chosen, house, company);
-      if (!placements) continue;
-      const revenue = placements.reduce((s, p) => s + p.priceCents, 0);
-      if (!best || revenue > best.revenue) best = { layout, placements, revenue };
+    // Try each layout, and when a pack asks for variety, a few different line-ups of the same campaigns.
+    // Keep the best-earning label that doesn't repeat one already in this pack.
+    type Option = { layout: Sixths[]; placements: Placement[]; revenue: number };
+    let best: Option | null = null;
+    let bestNew: Option | null = null;
+    const lineups = req.avoidSignatures ? [chosen, ...Array.from({ length: 6 }, () => shuffle(chosen, random))] : [chosen];
+    for (const pool of lineups) {
+      for (const layout of shuffle(product.layouts, random)) {
+        if (layout.length < company.adRules.minAdsPerUnit || layout.length > company.adRules.maxAdsPerUnit) continue;
+        const placements = assign(layout, pool, house, company);
+        if (!placements) continue;
+        const option = { layout, placements, revenue: placements.reduce((s, p) => s + p.priceCents, 0) };
+        if (!best || option.revenue > best.revenue) best = option;
+        if (req.avoidSignatures && !req.avoidSignatures.has(labelSignature(placements)) && (!bestNew || option.revenue > bestNew.revenue)) bestNew = option;
+      }
     }
+    if (bestNew) best = bestNew;
 
     if (!best) {
       if (!house) throw new Error(`Company ${company.id} has no house ad to fill an empty label.`);
@@ -57,7 +67,12 @@ export const houseOnlyAdEngine: AdEngine = {
   },
 };
 
-function isEligible(c: Campaign, company: CompanyConfig, locationId: string): boolean {
+/** Two labels with the same signature look the same: same campaigns, same sizes, same order. */
+export function labelSignature(placements: Placement[]): string {
+  return placements.map((p) => `${p.slotIndex}:${p.campaignId}:${p.sixths}`).join('|');
+}
+
+export function isEligible(c: Campaign, company: CompanyConfig, locationId: string): boolean {
   if (!c.active || c.isHouse || c.companyId !== company.id) return false;
   if (company.adRules.blockedCategories.includes(c.category)) return false;
   if (c.targeting.locations && !c.targeting.locations.includes(locationId)) return false;

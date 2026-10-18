@@ -9,6 +9,10 @@ export interface FillRequest {
   location: Location;
   campaigns: Campaign[]; // every campaign this company sells; the engine filters
   random: () => number;
+  /** Spread ads across a pack: campaigns already used `max` times in this pack are skipped. */
+  frequency?: { counts: Map<string, number>; max: number };
+  /** Label signatures already used in this pack; the engine picks a different label when it can. */
+  avoidSignatures?: Set<string>;
 }
 
 export interface FillResult {

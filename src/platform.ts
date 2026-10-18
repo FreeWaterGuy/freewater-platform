@@ -12,6 +12,9 @@ export interface OrderOptions {
   productId: string;
   orderId?: string; // pass the same id again and nothing is printed twice
   custom?: { customerId: string; art: Creative; priceCents?: number };
+  packId?: string;
+  frequency?: { counts: Map<string, number>; max: number };
+  avoidSignatures?: Set<string>;
 }
 
 export type OrderOutcome =
@@ -29,7 +32,7 @@ export class Platform {
   readonly units = new Map<string, Unit>();
   readonly labels = new Map<string, RenderedLabel>();
   private orders = new Map<string, Promise<OrderOutcome>>();
-  private random: () => number;
+  readonly random: () => number;
 
   constructor(
     readonly registry: Registry,
@@ -61,12 +64,12 @@ export class Platform {
     const location = need(this.locations, opts.locationId, 'location');
     const kind = opts.custom ? 'custom' : 'ad_supported';
 
-    this.bus.publish('order.created', company.id, { orderId: opts.orderId, locationId: location.id, productId: product.id, kind, customerId: opts.custom?.customerId }, opts.orderId);
+    this.bus.publish('order.created', company.id, { orderId: opts.orderId, locationId: location.id, productId: product.id, kind, customerId: opts.custom?.customerId, packId: opts.packId }, opts.orderId);
 
     // 1. Fill slots (custom units have no ads).
     const fill = opts.custom
       ? { layout: [6 as const], placements: [] }
-      : this.registry.adsFor(company).fill({ company, product, location, campaigns: [...this.campaigns.values()], random: this.random });
+      : this.registry.adsFor(company).fill({ company, product, location, campaigns: [...this.campaigns.values()], random: this.random, frequency: opts.frequency, avoidSignatures: opts.avoidSignatures });
     reserve(fill.placements, this.campaigns);
 
     const unit: Unit = {

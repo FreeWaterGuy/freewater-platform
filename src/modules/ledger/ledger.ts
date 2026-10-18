@@ -9,10 +9,11 @@ export interface LedgerEntry {
   at: Date;
   companyId: string;
   unitId?: string;
+  packId?: string;
   debit: string;
   credit: string;
   amountCents: Cents;
-  kind: 'print' | 'scan' | 'ar' | 'commission' | 'commission_reversal' | 'custom' | 'donation';
+  kind: 'print' | 'scan' | 'ar' | 'commission' | 'commission_reversal' | 'custom' | 'donation' | 'box_face';
   memo: string;
 }
 
@@ -38,6 +39,7 @@ export class Ledger {
     bus.on('ar.launched', (e) => this.onEngagement(e, 'ar'));
     bus.on('purchase.completed', (e) => this.onPurchase(e, false));
     bus.on('purchase.refunded', (e) => this.onPurchase(e, true));
+    bus.on('box.printed', (e) => this.onBoxPrinted(e));
     // 'print.failed' is deliberately not subscribed: nothing to bill.
   }
 
@@ -75,6 +77,13 @@ export class Ledger {
     if (g.mode === 'per_unit') donation = g.centsPerUnit ?? 0;
     if (g.mode === 'percent_of_revenue') donation = Math.round((revenue * (g.percentOfRevenue ?? 0)) / 100);
     this.add(e, { unitId, debit: 'expense:giving', credit: `payable:charity:${charity}`, amountCents: donation, kind: 'donation', memo: `Donation to ${charity}` });
+  }
+
+  private onBoxPrinted(e: PlatformEvent<'box.printed'>) {
+    for (const f of e.payload.faces) {
+      if (f.isHouse) continue;
+      this.add(e, { packId: e.payload.packId, debit: `receivable:advertiser:${f.advertiserId}`, credit: 'revenue:box', amountCents: f.priceCents, kind: 'box_face', memo: `${f.advertiserName}, ${f.face} of the box, printed` });
+    }
   }
 
   private onEngagement(e: PlatformEvent<'unit.scanned'> | PlatformEvent<'ar.launched'>, kind: 'scan' | 'ar') {
