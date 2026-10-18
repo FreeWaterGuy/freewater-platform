@@ -4,7 +4,7 @@
  */
 export interface SqlClient {
   readonly name: string;
-  query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>;
+  query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<{ rows: T[]; rowCount?: number }>;
   exec(sql: string): Promise<void>;
   transaction<T>(fn: (tx: SqlClient) => Promise<T>): Promise<T>;
   close(): Promise<void>;

@@ -927,7 +927,7 @@ create table agent_predictions (id text primary key, company_id text not null, a
 -- Changes that couldn't be written, kept word for word until a person has looked and tried them again.
 create table persistence_failures (id bigserial primary key, kind text not null, sql text not null, params jsonb not null, error text not null, at timestamptz not null default now(), retried_at timestamptz);
 -- Only one server owns the data at a time. It renews this every few seconds; another waits until it's released or lapses.
-create table instance_lease (name text primary key, holder text not null, expires_at timestamptz not null, started_at timestamptz not null default now());
+create table if not exists instance_lease (name text primary key, holder text not null, expires_at timestamptz not null, started_at timestamptz not null default now());
 -- Background jobs: when each last ran and how it went, so a restart neither skips nor repeats one.
 create table job_runs (name text primary key, last_started_at timestamptz, last_finished_at timestamptz, last_ok boolean, last_error text, runs bigint not null default 0, failures bigint not null default 0);
 -- Uploaded files can live in file storage instead of the database: then only their key is kept here.

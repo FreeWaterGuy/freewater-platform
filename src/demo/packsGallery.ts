@@ -19,7 +19,7 @@ export function packsHtml(input: { platform: Platform; packs: PackService; loadO
     const boxLines = p.ledger.entries.filter((l) => l.packId === pack.id);
     const bottleRevenue = units.reduce((s, u) => s + p.ledger.receipt(u.id).earned.print, 0);
     const donated = units.reduce((s, u) => s + p.ledger.receipt(u.id).donatedCents, 0);
-    const thumbs = units.map((u, i) => `<figure><div class="thumb">${p.labels.get(u.id)!.svg}</div><figcaption>Bottle ${i + 1}: ${u.placements.map((x) => esc(x.advertiserName)).join(', ')}${mismatch.replaced.includes(u.id) ? ' <b>(reprinted)</b>' : ''}</figcaption></figure>`).join('');
+    const thumbs = units.map((u, i) => `<figure><div class="thumb">${p.labelSvgNow(u.id) ?? ''}</div><figcaption>Bottle ${i + 1}: ${u.placements.map((x) => esc(x.advertiserName)).join(', ')}${mismatch.replaced.includes(u.id) ? ' <b>(reprinted)</b>' : ''}</figcaption></figure>`).join('');
     const faces = pack.faces.map((f) => `<li><b>${f.face}</b>: ${esc(f.advertiserName)}${f.isHouse ? ' (house ad)' : ` · ${money(f.priceCents)}`}</li>`).join('');
     return `<section>
 <header><h2>Stop ${pack.stop}: ${pack.box.bottles}-pack for ${esc(pack.address)}</h2><span class="code">${stopCode(pack.routeId, pack.stop)}</span></header>

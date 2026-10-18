@@ -28,6 +28,9 @@ export class InstanceLease {
 
   /** Take the lease if it's free (or lapsed). */
   async tryTake(): Promise<boolean> {
+    // The lease comes before migrations (so a new version never changes the tables under a running old one), so its
+    // table may not exist yet on a brand-new database.
+    await this.db.query(`create table if not exists instance_lease (name text primary key, holder text not null, expires_at timestamptz not null, started_at timestamptz not null default now())`);
     const r = await this.db.query(
       `insert into instance_lease (name, holder, expires_at, started_at) values ($1, $2, now() + $3::double precision * interval '1 millisecond', now())
        on conflict (name) do update set holder = excluded.holder, expires_at = excluded.expires_at, started_at = excluded.started_at
@@ -63,12 +66,17 @@ export class InstanceLease {
 
   async renew() {
     try {
-      const r = await this.db.query(`update instance_lease set expires_at = now() + $3::double precision * interval '1 millisecond' where name = $1 and holder = $2 returning 1`, [this.name, this.holder, this.ttl]);
+      // A connection that hangs (rather than failing) must still count as a failure, or the lease would lapse while
+      // this server carried on.
+      const r = await Promise.race([
+        this.db.query(`update instance_lease set expires_at = now() + $3::double precision * interval '1 millisecond' where name = $1 and holder = $2 returning 1`, [this.name, this.holder, this.ttl]),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('the database didn’t answer in time')), this.ttl * 0.3).unref?.()),
+      ]);
       if (!r.rows.length) return this.lose('another server took the lease');
       this.lastRenewed = Date.now();
     } catch (e) {
       // Can't reach the database. Keep trying until the lease would have lapsed, then stop: someone else may own it.
-      if (Date.now() - this.lastRenewed > this.ttl * 0.8) this.lose(`couldn't renew the lease: ${(e as Error).message}`);
+      if (Date.now() - this.lastRenewed > this.ttl * 0.6) this.lose(`couldn't renew the lease: ${(e as Error).message}`);
     }
   }
 

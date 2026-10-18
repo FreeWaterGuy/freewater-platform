@@ -461,7 +461,7 @@
       if (!armed) { armed = true; btn.textContent = 'Tap again to erase it'; return; }
       btn.disabled = true;
       api('POST', `/v1/public/data/${encodeURIComponent(opened.companyId)}/forget`, { viewerKey })
-        .then(() => { store.set('fw_no_tracking', '1'); btn.textContent = 'Erased. From now on only scans are counted, with nothing about you.'; })
+        .then(() => { store.set('fw_no_tracking', '1'); viewerKey = randomKey(); store.set('fw_viewer', viewerKey); btn.textContent = 'Erased. This phone has a new random code, and only scans are counted from now on.'; })
         .catch(() => { btn.disabled = false; armed = false; btn.textContent = 'Couldn’t erase just now. Try again'; });
     });
     return h('p', { class: 'your-data' }, btn);

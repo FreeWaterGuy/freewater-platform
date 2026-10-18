@@ -118,9 +118,13 @@ export class Platform {
     if (label.svg) {
       this.svgRecent.delete(label.unitId);
       this.svgRecent.set(label.unitId, label.svg);
-      if (this.svgRecent.size > 200) this.svgRecent.delete(this.svgRecent.keys().next().value!);
+      // With a database, only the latest few stay; without one (demos), memory is the only place they live.
+      if (this.labelSvgLoader && this.svgRecent.size > 200) this.svgRecent.delete(this.svgRecent.keys().next().value!);
     }
   }
+
+  /** A label drawing if it's at hand right now (always, without a database). */
+  labelSvgNow(unitId: string): string | undefined { return this.svgRecent.get(unitId); }
 
   /** A bottle's label drawing: from the few kept close at hand, or from storage. */
   async labelSvg(unitId: string): Promise<string | undefined> {
@@ -250,7 +254,11 @@ export class Platform {
    */
   async prepare(opts: OrderOptions & { orderId: string }): Promise<{ unit: Unit; label: RenderedLabel }> {
     const done = this.orderUnits.get(`${opts.companyId}:${opts.orderId}`);
-    if (done) return { unit: this.units.get(done)!, label: { ...this.labels.get(done)!, svg: (await this.labelSvg(done)) ?? '' } };
+    if (done) {
+      const svg = await this.labelSvg(done);
+      if (!svg) throw new Error(`The label for ${done} can't be read right now; try again shortly.`); // never hand a machine a blank label
+      return { unit: this.units.get(done)!, label: { ...this.labels.get(done)!, svg } };
+    }
     const { unit, label } = await this.fillAndRender(opts);
     return { unit, label };
   }

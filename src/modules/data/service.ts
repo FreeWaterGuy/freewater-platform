@@ -132,7 +132,8 @@ export class DataService {
     const links = person ? (await this.db.query<any>(`select kind, value, how, linked_at from person_links where person_id = $1 and company_id = $2`, [person, companyId])).rows : [];
     const viewers = links.filter((l) => l.kind === 'viewer').map((l) => l.value as string);
     if (!person && !personOrSubject.startsWith('per_')) viewers.push(personOrSubject);
-    const userIds = links.filter((l) => l.kind === 'user').map((l) => l.value as string);
+    // An account always counts as itself, even when it isn't linked to a person (linking can be turned off).
+    const userIds = [...new Set([...links.filter((l) => l.kind === 'user').map((l) => l.value as string), ...(personOrSubject.startsWith('user:') ? [personOrSubject.slice(5)] : [])])];
     const users = userIds.length ? (await this.db.query<any>(`select id, email, phone, role, advertiser_id, display_name, viewer_key, consents, interests, created_at from users where id = any($1)`, [userIds])).rows : [];
     for (const u of users) viewers.push(u.viewer_key);
     const advertiserIds = users.map((u) => u.advertiser_id).filter(Boolean);
@@ -157,13 +158,18 @@ export class DataService {
 
   /** Removes a person's own uploads (and their files in file storage). Set by the app. */
   removeUploads?: (companyId: string, userIds: string[]) => Promise<number>;
+  /** Takes a person's address off their delivery boxes. Set by the app. */
+  eraseAddresses?: (companyId: string, userIds: string[]) => Promise<number>;
 
   /**
    * Erase a person's data: everything kept about them, everything they uploaded or saved, their address, their cards,
    * their designs. What has to stay for the books (a sale, a prize, a click an advertiser paid for) stays with the
    * person replaced by a random code that leads back to no one. Printed bottles stay as printed.
    */
-  async erase(companyId: string, subject: string) {
+  async erase(companyId: string, subject: string, opts: { followLinks?: boolean } = {}) {
+    // A phone erasing itself without signing in (followLinks: false) erases only what's kept under that phone's own
+    // key. It never reaches an account linked to it: that takes signing in to the account.
+    if (opts.followLinks === false) return this.eraseViewerOnly(companyId, subject);
     const prof = await this.profile(companyId, subject);
     const viewers = new Set<string>([subject, ...prof.links.filter((l: any) => l.kind === 'viewer').map((l: any) => l.value)]);
     for (const a of prof.accounts) viewers.add((await this.db.query<any>(`select viewer_key from users where id = $1`, [a.id])).rows[0]?.viewer_key);
@@ -187,6 +193,9 @@ export class DataService {
       await run('holdout records', `update agent_arms set viewer_key = $3 where company_id = $1 and viewer_key = $2`, [companyId, key, code]);
     }
     if (users.length) {
+      const contacts = (await this.db.query<any>(`select email, phone from users where id = any($1)`, [users])).rows.flatMap((r) => [r.email, r.phone]).filter(Boolean);
+      if (contacts.length) await run('sign-in codes', `delete from login_codes where company_id = $1 and destination = any($2)`, [companyId, contacts]);
+      if (this.eraseAddresses) counts['delivery boxes'] = await this.eraseAddresses(companyId, users);
       await run('saved', `delete from saved_items where company_id = $1 and user_id = any($2)`, [companyId, users]);
       await run('designs', `delete from custom_designs where company_id = $1 and user_id = any($2)`, [companyId, users]);
       // A custom order's proof stays (it's what was paid for), without the names and pictures on it.
@@ -196,6 +205,23 @@ export class DataService {
       if (this.removeUploads) counts.uploads = await this.removeUploads(companyId, users);
     }
     return { erased: true, counts, kept: 'Money records in the books stay, as the law requires, with no name attached. Printed bottles stay as printed.' };
+  }
+
+  private async eraseViewerOnly(companyId: string, viewerKey: string) {
+    const counts: Record<string, number> = {};
+    const run = async (name: string, sql: string, params: unknown[]) => { const r = await this.db.query(sql, params); counts[name] = (counts[name] ?? 0) + Number(r.rowCount ?? 0); };
+    const code = `erased_${randomBytes(9).toString('base64url')}`;
+    await run('interactions', `delete from interactions where company_id = $1 and viewer_key = $2`, [companyId, viewerKey]);
+    await run('choices', `delete from choices where company_id = $1 and person = $2`, [companyId, viewerKey]);
+    await run('activity', `delete from activity where company_id = $1 and actor_id = $2`, [companyId, viewerKey]);
+    await run('consents', `delete from data_consents where company_id = $1 and subject = $2`, [companyId, viewerKey]);
+    await run('advertisers seen', `delete from viewer_advertisers where company_id = $1 and viewer_key = $2`, [companyId, viewerKey]);
+    await run('links', `delete from person_links where company_id = $1 and kind = 'viewer' and value = $2`, [companyId, viewerKey]);
+    await run('clicks', `update clicks set viewer_key = $3 where company_id = $1 and viewer_key = $2`, [companyId, viewerKey, code]);
+    await run('coupons', `update coupon_codes set viewer_key = $3 || '_' || code where company_id = $1 and viewer_key = $2`, [companyId, viewerKey, code]);
+    await run('prize draws', `update lottery_chances set viewer_key = $3 where company_id = $1 and viewer_key = $2`, [companyId, viewerKey, code]);
+    await run('holdout records', `update agent_arms set viewer_key = $3 where company_id = $1 and viewer_key = $2`, [companyId, viewerKey, code]);
+    return { erased: true, counts, kept: 'Scans stay in the books as counts under this phone’s old random code, which now leads to nothing about you. Your phone gets a new one.' };
   }
 
   /** Delete what's older than each company keeps, for each kind. Run daily. */
@@ -211,6 +237,8 @@ export class DataService {
       await this.db.query(`update activity set ip = null where company_id = $1 and at < $2`, [c.id, before(p.rules.ipAddress.keepDays)]);
       await this.db.query(`update activity set device = null where company_id = $1 and at < $2`, [c.id, before(p.rules.device.keepDays)]);
     }
+    // Changes a person moved aside hold raw data; once dealt with (or after 90 days), they go.
+    await this.db.query(`delete from persistence_failures where at < now() - interval '90 days'`).catch(() => {});
     return n;
   }
 }

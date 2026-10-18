@@ -19,14 +19,14 @@ export function operationsRoutes(app: App, server: FastifyInstance, route: (r: R
     try {
       await Promise.race([db.query('select 1'), new Promise((_, r) => setTimeout(() => r(new Error('timed out')), 2000).unref?.())]);
       return { ok: true, ms: Date.now() - t };
-    } catch (e) { return { ok: false, ms: Date.now() - t, error: (e as Error).message }; }
+    } catch { return { ok: false, ms: Date.now() - t }; } // the reason goes to the log and the status page, not to the public
   };
 
   const readiness = async () => {
     const database = await ping();
     const problems: string[] = [];
     if (!database.ok) problems.push('database not answering');
-    if (persistence.problem) problems.push('a change couldn’t be saved; changes are paused');
+    if (persistence.problem) problems.push('the database is refusing changes; changes are paused');
     if (runtime.lease && !runtime.lease.held) problems.push('doesn’t own the data');
     const stuck = (runtime.jobs?.status() ?? []).filter((j) => j.consecutiveFailures >= 3 || j.overdue).map((j) => j.name);
     if (stuck.length) problems.push(`background jobs failing: ${stuck.join(', ')}`);
@@ -48,7 +48,7 @@ export function operationsRoutes(app: App, server: FastifyInstance, route: (r: R
     const heap = getHeapStatistics();
     return { body: {
       ...(await readiness()),
-      saving: { ...persistence.stats, problem: persistence.problem, failures: await persistence.failures().catch(() => []) },
+      saving: { ...persistence.stats, problem: persistence.problem, movedAside: await persistence.failures().catch(() => []) },
       lease: runtime.lease ? { held: runtime.lease.held, holder: runtime.lease.holder, current: await runtime.lease.current().catch(() => null) } : null,
       jobs: runtime.jobs?.status() ?? [],
       alerts: runtime.alerts.recent,
@@ -57,9 +57,9 @@ export function operationsRoutes(app: App, server: FastifyInstance, route: (r: R
     } };
   } });
 
-  route({ method: 'POST', url: '/v1/platform/persistence/replay', scope: 'platform', summary: 'After fixing why changes couldn’t be saved: try the kept changes again. If all go in, changes are taken again. Restart the server afterwards so its memory matches the database exactly.', handler: async () => {
-    const r = await persistence.replay();
-    if (!persistence.problem) void runtime.alerts.alert('persistence', 'resolved', 'Saving works again; changes are taken again', `${r.written} kept change(s) written. Restart the server so its memory matches the database.`);
+  route({ method: 'POST', url: '/v1/platform/persistence/skip-stuck', scope: 'platform', summary: 'A person’s decision, only when one change keeps being refused while the database itself answers (a bug): move it aside, kept word for word, so the rest can be saved. Fix the bug, then put it back by hand.', handler: async () => {
+    const r = await persistence.skipStuck();
+    if (r.skipped) void runtime.alerts.alert('persistence-skip', 'warning', `A stuck change (${r.skipped}) was moved aside by a person`, 'It is kept word for word in persistence_failures. Restart the server once everything else is saved, so memory matches the database.');
     return { body: { ...r, paused: !!persistence.problem } };
   } });
 
@@ -74,10 +74,13 @@ export function operationsRoutes(app: App, server: FastifyInstance, route: (r: R
   // While a change couldn't be saved, take no more: memory and database may disagree, and money is never counted
   // from a guess. Reading still works, and so do signing in and the platform's own repair routes.
   server.addHook('onRequest', async (req) => {
+    if (runtime.lost && !req.url.startsWith('/health/live')) throw new ApiError(503, 'restarting', 'FreeWater is restarting. Please try again in a moment.');
     if (!persistence.problem) return;
-    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return;
     const url = req.url.split('?')[0]!;
+    // Reading still works. (A QR opened or an ad's link clicked is still recorded: those changes queue up behind the
+    // waiting ones, in order, and go in with them, so the person scanning never sees an error.)
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return;
     if (url.startsWith('/v1/platform/persistence') || url.startsWith('/v1/auth/') || url.startsWith('/health')) return;
-    throw new ApiError(503, 'paused_for_safety', 'FreeWater has paused changes for a moment to keep the books exact. Nothing you did was lost on our side; please try again shortly.');
+    throw new ApiError(503, 'paused_for_safety', 'FreeWater has paused changes for a moment to keep the books exact. Please try again shortly.');
   });
 }

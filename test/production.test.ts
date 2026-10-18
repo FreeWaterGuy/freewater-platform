@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -59,22 +59,56 @@ describe('saving changes', () => {
     expect((await db.query(`select 1 from ledger_entries where id = 'le_retry'`)).rows).toHaveLength(1);
   });
 
-  it('keeps a change it can’t write, keeps the good ones, pauses, and replays once fixed', async () => {
-    let broken = true;
-    const alerts: string[] = [];
-    const p = new SqlPersistence(flaky(db, (sql) => broken && sql.includes('le_bad') === false && sql.startsWith('insert into units')), { retryDelayMs: 1, onProblem: (x) => alerts.push(x.kind) });
-    p.ledgerEntry(entry('le_good_1'));
-    p.unit({ id: 'u_bad', companyId: 'c1', status: 'printed', createdAt: '2026-10-18T00:00:00Z' } as any);
-    p.ledgerEntry(entry('le_good_2'));
-    await expect(p.flush()).rejects.toThrow('database unavailable');
-    expect((await db.query(`select id from ledger_entries where id in ('le_good_1','le_good_2')`)).rows).toHaveLength(2);
-    expect(p.problem).toMatchObject({ kind: 'unit', saved: 'database' });
-    expect(alerts).toEqual(['unit']);
-    expect(await p.failures()).toHaveLength(1);
-    broken = false;
-    expect(await p.replay()).toEqual({ written: 1, stillFailing: 0 });
+  it('during an outage keeps every change, in order, pauses, and writes them all once the database is back', async () => {
+    let down = true;
+    const dir = mkdtempSync(join(tmpdir(), 'fw-spool-'));
+    const spoolFile = join(dir, 'waiting.jsonl');
+    const events: string[] = [];
+    const p = new SqlPersistence(flaky(db, () => down), { retryDelayMs: 5, maxRetryDelayMs: 20, pauseAfterMs: 30, flushTimeoutMs: 100, spoolFile, onProblem: () => events.push('paused'), onRecovered: () => events.push('recovered') });
+    p.unit({ id: 'u_order', companyId: 'c1', status: 'rendered', createdAt: '2026-10-18T00:00:00Z' } as any);
+    p.ledgerEntry(entry('le_outage_1'));
+    p.unit({ id: 'u_order', companyId: 'c1', status: 'dispensed', createdAt: '2026-10-18T00:00:00Z' } as any); // newer, same row
+    await expect(p.flush()).rejects.toThrow(/paused/);
+    expect(p.problem).toMatchObject({ waiting: 3 });
+    expect(existsSync(spoolFile)).toBe(true); // also on disk, in case this server stops
+    down = false;
+    await p.flush(5000);
     expect(p.problem).toBeNull();
-    expect((await db.query(`select 1 from units where id = 'u_bad'`)).rows).toHaveLength(1);
+    expect((await db.query<any>(`select status from units where id = 'u_order'`)).rows[0].status).toBe('dispensed'); // the newest won
+    expect((await db.query(`select 1 from ledger_entries where id = 'le_outage_1'`)).rows).toHaveLength(1);
+    expect(existsSync(spoolFile)).toBe(false);
+    expect(events[0]).toBe('paused');
+    expect(events.at(-1)).toBe('recovered');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('a server starting up writes the changes a stopped one left waiting, before reading anything', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'fw-spool-'));
+    const spoolFile = join(dir, 'waiting.jsonl');
+    const p = new SqlPersistence(flaky(db, () => true), { retryDelayMs: 5, maxRetryDelayMs: 20, spoolFile });
+    p.ledgerEntry(entry('le_spooled'));
+    await new Promise((r) => setTimeout(r, 50));
+    p.fence(); // the old server is gone
+    expect(await SqlPersistence.recoverSpool(db, spoolFile, () => {})).toBe(1);
+    expect((await db.query(`select 1 from ledger_entries where id = 'le_spooled'`)).rows).toHaveLength(1);
+    expect(existsSync(spoolFile)).toBe(false);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('a change the database will never take holds the line until a person moves it aside', async () => {
+    const p = new SqlPersistence(flaky(db, (sql) => sql.startsWith('insert into units')), { retryDelayMs: 5, maxRetryDelayMs: 20, pauseAfterMs: 10, flushTimeoutMs: 80 });
+    p.unit({ id: 'u_never', companyId: 'c1', status: 'printed', createdAt: '2026-10-18T00:00:00Z' } as any);
+    p.ledgerEntry(entry('le_after_stuck'));
+    await expect(p.flush()).rejects.toThrow(/paused/);
+    expect((await db.query(`select 1 from ledger_entries where id = 'le_after_stuck'`)).rows).toHaveLength(0); // nothing jumps ahead
+    expect(await p.skipStuck()).toEqual({ skipped: 'unit' });
+    await p.flush(5000);
+    expect((await db.query(`select 1 from ledger_entries where id = 'le_after_stuck'`)).rows).toHaveLength(1);
+    expect((await p.failures())[0]).toMatchObject({ kind: 'unit' });
+    p.fence();
+    p.ledgerEntry(entry('le_fenced'));
+    await new Promise((r) => setTimeout(r, 20));
+    expect((await db.query(`select 1 from ledger_entries where id = 'le_fenced'`)).rows).toHaveLength(0); // a server that lost the data writes nothing
   });
 });
 
@@ -107,38 +141,60 @@ describe('one server owns the data', () => {
 });
 
 describe('background jobs', () => {
-  it('runs each job when it’s due, never twice at once, remembers runs across restarts, and reports failures', async () => {
+  it('runs each job when it’s due, never twice at once, retries a failure soon, and remembers across restarts', async () => {
     let t = 1_000_000, runs = 0, fail = true;
     const failures: [string, number][] = [], recovered: string[] = [];
     const job = { name: 'hourly-test', everyMs: 3600_000, run: async () => { runs++; await new Promise((r) => setTimeout(r, 20)); if (fail) throw new Error('boom'); } };
+    const settle = () => new Promise((r) => setTimeout(r, 80));
     const r1 = new JobRunner(db, [job], { now: () => t, onFailure: (n, _e, c) => failures.push([n, c]), onRecovered: (n) => recovered.push(n) });
     await r1.start();
-    r1.tick(); r1.tick(); // second tick while it's still running: not started again
-    await r1.runNow('hourly-test');
+    r1.tick(); r1.tick(); // the second tick, while it's running, doesn't start another
+    await settle();
     expect(runs).toBe(1);
     expect(failures).toEqual([['hourly-test', 1]]);
-    expect(r1.status()[0]).toMatchObject({ lastOk: false, failures: 1, consecutiveFailures: 1 });
-    await r1.stop();
-    // A restart ten minutes later: the job isn't due yet.
-    t += 600_000;
+    t += 30_000; r1.tick(); await settle();
+    expect(runs).toBe(1); // a failure is retried after a minute, not at once
+    t += 31_000; r1.tick(); await settle();
+    expect(runs).toBe(2); // …and not an hour later
+    expect(failures.at(-1)).toEqual(['hourly-test', 2]);
     fail = false;
-    const r2 = new JobRunner(db, [job], { now: () => t, onRecovered: (n) => recovered.push(n) });
+    t += 125_000; r1.tick(); await settle(); // the next try waits 2 minutes
+    expect(runs).toBe(3);
+    expect(recovered).toEqual(['hourly-test']);
+    await r1.stop();
+    // A restart ten minutes after it worked: not due for another fifty.
+    t += 600_000;
+    const r2 = new JobRunner(db, [job], { now: () => t });
     await r2.start();
-    r2.tick();
-    expect(runs).toBe(1);
-    t += 3000_000; // now it's due
-    r2.tick();
-    await r2.runNow('hourly-test');
-    expect(runs).toBe(2);
-    expect(r2.status()[0]).toMatchObject({ lastOk: true, runs: 2, failures: 1 });
+    r2.tick(); await settle();
+    expect(runs).toBe(3);
+    t += 3000_000; r2.tick(); await settle();
+    expect(runs).toBe(4);
     await r2.stop();
   });
-  it('reports a job that takes too long', async () => {
+  it('a job past its time limit is reported stuck, and never started a second time while it’s still going', async () => {
+    let starts = 0, release!: () => void;
     const errors: string[] = [];
-    const r = new JobRunner(db, [{ name: 'slow', everyMs: 1000, timeoutMs: 30, run: () => new Promise((res) => setTimeout(res, 200)) }], { onFailure: (_n, e) => errors.push(String(e)) });
-    await r.runNow('slow');
+    const r = new JobRunner(db, [{ name: 'slow', everyMs: 1000, timeoutMs: 30, remember: false, run: () => { starts++; return new Promise<void>((res) => { release = res; }); } }], { onFailure: (_n, e) => errors.push(String(e)) });
+    const first = r.runNow('slow');
+    await new Promise((res) => setTimeout(res, 60));
     expect(errors[0]).toMatch(/still running after/);
+    expect(r.status()[0]).toMatchObject({ running: true, stuck: true });
+    r.tick(); void r.runNow('slow');
+    expect(starts).toBe(1);
+    release(); await first;
+    expect(r.status()[0]).toMatchObject({ running: false, stuck: false });
   });
+  it('waits while the platform is paused, except jobs marked to keep going', async () => {
+    let paused = true;
+    const ran: string[] = [];
+    const r = new JobRunner(db, [{ name: 'books', everyMs: 1000, remember: false, run: async () => { ran.push('books'); } }, { name: 'memory-watch', everyMs: 1000, remember: false, whilePaused: true, run: async () => { ran.push('memory'); } }], { paused: () => paused });
+    r.tick(); await new Promise((res) => setTimeout(res, 20));
+    expect(ran).toEqual(['memory']);
+    paused = false; r.tick(); await new Promise((res) => setTimeout(res, 20));
+    expect(ran).toContain('books');
+  });
+
 });
 
 describe('alerts and settings', () => {
@@ -230,15 +286,14 @@ describe('health checks and pausing for safety', () => {
     expect((await call('GET', '/v1/platform/status', app.demoKeys!['peak-spring-admin'])).status).toBe(403);
   });
 
-  it('pauses changes (reading still works) when one couldn’t be saved, and resumes after a replay', async () => {
-    (app.persistence as any).problem = { at: 'now', kind: 'ledgerEntry', message: 'disk full', saved: 'database' };
+  it('pauses changes (reading still works) while the database refuses them, and resumes after', async () => {
+    (app.persistence as any).failingSince = Date.now() - 60_000; // as if the database had been refusing for a minute
     expect((await call('GET', '/health/ready')).body.problems[0]).toMatch(/paused/);
     const w = await call('POST', '/v1/orders', key, { orderId: 'paused-1', locationId: 'ATX-014', productId: 'bottle-16oz' });
     expect(w.status).toBe(503);
     expect(w.body.error.code).toBe('paused_for_safety');
     expect((await call('GET', '/v1/public/companies/freewater/counters')).status).toBe(200);
-    const r = await call('POST', '/v1/platform/persistence/replay', key);
-    expect(r.body).toMatchObject({ stillFailing: 0, paused: false });
+    (app.persistence as any).failingSince = null; // the database is back
     expect((await call('POST', '/v1/orders', key, { orderId: 'paused-2', locationId: 'ATX-014', productId: 'bottle-16oz' })).status).toBeLessThan(300);
   });
 });
@@ -291,5 +346,24 @@ describe('staying small and quick as the books grow', () => {
     expect(kept).toEqual(full);
     expect(kept.find((d) => d.date === '2026-10-10')).toEqual(first.find((d) => d.date === '2026-10-10')); // untouched days are unchanged
     await ddb.close();
+  });
+});
+
+describe('big files', () => {
+  it('streams a big file to S3-compatible storage and back, never holding it whole', async () => {
+    const objects = new Map<string, Buffer>();
+    const fetcher = (async (url: URL, init: any) => {
+      if (init.method === 'PUT') { const b = Buffer.from(await new Response(init.body).arrayBuffer()); expect(init.headers['content-length']).toBe(String(b.length)); objects.set(url.pathname, b); return new Response(null, { status: 200 }); }
+      const b = objects.get(url.pathname); return b ? new Response(b as any) : new Response('NoSuchKey', { status: 404 });
+    }) as any;
+    const s3 = new S3BlobStore({ bucket: 'fw-backups', region: 'us-east-1', accessKeyId: 'k', secretAccessKey: 's', fetcher });
+    const dir = mkdtempSync(join(tmpdir(), 'fw-big-'));
+    const data = randomBytes(3_000_000);
+    writeFileSync(join(dir, 'in'), data);
+    await s3.putFile('backups/x.enc', join(dir, 'in'), 'application/octet-stream');
+    expect(await s3.getToFile('backups/x.enc', join(dir, 'out'))).toBe(true);
+    expect(readFileSync(join(dir, 'out')).equals(data)).toBe(true);
+    expect(await s3.getToFile('backups/missing', join(dir, 'none'))).toBe(false);
+    rmSync(dir, { recursive: true, force: true });
   });
 });

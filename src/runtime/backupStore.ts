@@ -8,7 +8,7 @@ import { DiskBlobStore, S3BlobStore, type BlobStore } from '../modules/assets/bl
  * with the server's keys can't erase them.
  */
 export function backupStoreFromEnv(env: NodeJS.ProcessEnv = process.env): BlobStore {
-  if (env.BACKUP_S3_BUCKET) return new S3BlobStore({ bucket: env.BACKUP_S3_BUCKET, region: env.BACKUP_S3_REGION ?? 'auto', endpoint: env.BACKUP_S3_ENDPOINT, accessKeyId: env.BACKUP_S3_ACCESS_KEY_ID ?? '', secretAccessKey: env.BACKUP_S3_SECRET_ACCESS_KEY ?? '' });
+  if (env.BACKUP_S3_BUCKET) return new S3BlobStore({ bucket: env.BACKUP_S3_BUCKET, region: env.BACKUP_S3_REGION ?? (env.BACKUP_S3_ENDPOINT ? 'auto' : 'us-east-1'), endpoint: env.BACKUP_S3_ENDPOINT, accessKeyId: env.BACKUP_S3_ACCESS_KEY_ID ?? '', secretAccessKey: env.BACKUP_S3_SECRET_ACCESS_KEY ?? '' });
   if (env.BACKUP_DIR) return new DiskBlobStore(env.BACKUP_DIR);
   throw new Error('Set BACKUP_S3_BUCKET (and its keys) or BACKUP_DIR so backups have somewhere to go.');
 }

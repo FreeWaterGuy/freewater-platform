@@ -8,8 +8,9 @@ be signed up for and connected first.
 - **One server** runs the whole platform: the API, the scan pages, the consoles and the background jobs. It keeps its
   working state in memory and writes every change to **Postgres** before it answers.
 - **Only one server may own the data at a time.** A second copy waits (up to `LEASE_WAIT_MS`, 2 minutes by default)
-  and starts the moment the first lets go. So a deploy means: start the new one, stop the old one. The hand-over
-  takes about a second. A server that can't renew its claim for 30 seconds stops itself.
+  and starts the moment the first lets go; only then does it change any tables. So a deploy means: start the new
+  one, stop the old one. The hand-over takes about a second. A server that can't renew its claim within about 18
+  seconds stops writing and answering at once, and exits.
 - **Files** (pictures, 3D models, videos, receipts) go to S3-compatible storage, or stay in the database for a pilot.
 - **Backups**: the database host's own, plus our own encrypted copy each day, plus a weekly proof that the latest
   copy restores and its books check out.
@@ -34,7 +35,9 @@ with a plain explanation.
 | `ALERT_WEBHOOK_URL` | A chat channel's incoming webhook (Slack, Discord, Google Chat). Alerts go there. |
 | `ALERT_EMAIL` | Also email alerts (once email is connected). |
 | `FILE_STORAGE` | `database` (default), `s3`, or `disk` (single server, backed-up disk only). |
-| `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_ENDPOINT`, `S3_REGION`, `S3_PREFIX` | For `FILE_STORAGE=s3`. `S3_ENDPOINT` for R2, B2 or MinIO (e.g. `https://<account>.r2.cloudflarestorage.com`); leave it out for Amazon S3 and set `S3_REGION`. |
+| `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_ENDPOINT`, `S3_REGION`, `S3_PREFIX` | For `FILE_STORAGE=s3`. `S3_ENDPOINT` for R2, B2 or MinIO (e.g. `https://<account>.r2.cloudflarestorage.com`); leave it out for Amazon S3 and set `S3_REGION`. Give the key read, write, delete **and list** on the bucket (without list, a missing file looks like "access denied"). |
+| `FW_SPOOL_DIR` | Where changes waiting for the database are also kept. Default in the image: `/var/lib/freewater/spool`. Mount a volume. |
+| `DATABASE_POOL_SIZE` | Database connections (default 10). Each statement may take at most 60 seconds. |
 | `BACKUP_KEY` | 32 random bytes, base64. Make with `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`. **Keep a copy away from the server; without it no backup can be read.** |
 | `BACKUP_S3_BUCKET`, `BACKUP_S3_ACCESS_KEY_ID`, `BACKUP_S3_SECRET_ACCESS_KEY`, `BACKUP_S3_ENDPOINT`, `BACKUP_S3_REGION` | Where backups go: a different bucket (ideally a different account) from the files. Turn on object lock / a 30-day retention rule so they can't be deleted early. |
 | `RESTORE_TEST_URL` | A spare, empty database the weekly restore check may wipe and fill. **Never the real one.** |
@@ -72,16 +75,25 @@ with the owner's email, turn on the second sign-in step, and add team, machines 
   memory at 70% and 85%, the server losing its claim to the data, a crash. The same alert repeats at most every
   30 minutes.
 
-## If a change couldn't be saved
+## If changes are waiting (the database refusing them)
 
-The platform tries again for a few seconds. If the database still refuses, it keeps the change word for word (in the
-`persistence_failures` table, or a file if the database is unreachable), raises a critical alert, and **pauses
-changes**: pages, scans already shown and the books still read; new orders and settings get a polite "paused".
-Money is never counted from a guess.
+Nothing is dropped. Changes stay queued in order and are tried again and again, waiting a little longer each time (up
+to 30 seconds), until the database takes them. Nothing newer jumps ahead, so once it's back the database matches
+memory exactly. While changes wait:
 
-To recover: fix the cause (database full, down, a bad migration), then `POST /v1/platform/persistence/replay` with
-the platform key. If every kept change goes in, changes are taken again. Then restart the server, so its memory is
-reloaded from the database exactly.
+- a critical alert goes out, and another when everything is saved;
+- the platform is **paused**: pages, scans and the books still read, and scans are still counted (queued behind the
+  waiting changes); new orders, settings and sign-ups get a polite "paused, try again shortly";
+- background jobs wait (no month closed and no fingerprint published from books that are behind), except the memory
+  watch and backups;
+- the waiting changes are also written to the spool file in `FW_SPOOL_DIR` (in the image, `/var/lib/freewater/spool`;
+  **mount a volume there**). If the server stops before the database is back, the next server writes them first,
+  before it reads anything.
+
+Usually that's all: a database restart or failover fixes itself. If the database answers but one change keeps being
+refused (a bug), it holds the line. Then, as a person's decision, `POST /v1/platform/persistence/skip-stuck` moves
+that one change aside (kept word for word in `persistence_failures`) so the rest go in. Fix the bug, put the change
+back by hand, and restart the server so its memory is reloaded from the database.
 
 ## Background jobs
 
@@ -96,16 +108,21 @@ reloaded from the database exactly.
 | `backup` | daily | Our own encrypted copy of the database (when `BACKUP_KEY` and a backup bucket are set). |
 | `restore-check` | weekly | Restores the latest backup into `RESTORE_TEST_URL` and checks its books. |
 
-Each job remembers when it last ran (so a restart neither skips nor repeats one), never overlaps itself, has a
-time limit, and alerts on failure. Run one now with `POST /v1/platform/jobs/<name>/run`.
+Each job remembers when it last ran and whether it worked. After a restart, one that worked waits out its interval;
+one that failed or was interrupted is tried again soon (after 1 minute, then 2, 4, 8… up to its interval). A job
+never runs twice at once: one past its time limit is reported as stuck and still counts as running until it ends.
+Failures alert, and so does recovery. Run one now with `POST /v1/platform/jobs/<name>/run`.
 
 ## Backups by hand
 
 ```
 npm run backup                 # make one now
 npm run backup -- restore      # restore the latest into RESTORE_TEST_URL and check its books
-npm run books:check            # check the books of the database in DATABASE_URL
+npm run books:check            # check the books of the database in DATABASE_URL (refuses while a server runs on it)
 ```
+
+The restore only ever wipes a spare: it refuses the database in `DATABASE_URL`, any database a server is running
+on, and any that holds companies without the mark a previous restore left.
 
 To recover the real database from our own copy (only if the host's own backups can't be used): restore into a new
 empty database with `RESTORE_TEST_URL` pointing at it, run `books:check` against it, then point `DATABASE_URL` at it

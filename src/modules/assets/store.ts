@@ -68,9 +68,9 @@ export class SqlAssetStore implements AssetStore {
     return { asset: this.view(r), bytes: new Uint8Array(r.bytes) };
   }
 
-  /** A person's own uploads, removed (from file storage too). */
+  /** A person's own uploads, removed (from file storage too). Photos a driver took of deliveries are the company's records, and stay. */
   async removeForUsers(companyId: string, userIds: string[]) {
-    const rows = (await this.db.query<any>(`delete from assets where company_id = $1 and user_id = any($2) returning blob_key`, [companyId, userIds])).rows;
+    const rows = (await this.db.query<any>(`delete from assets where company_id = $1 and user_id = any($2) and coalesce(name, '') <> 'delivery-photo' returning blob_key`, [companyId, userIds])).rows;
     for (const r of rows) if (r.blob_key && this.blobs) await this.blobs.delete(r.blob_key).catch(() => {});
     return rows.length;
   }

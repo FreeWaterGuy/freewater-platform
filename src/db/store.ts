@@ -1,5 +1,6 @@
 import { shareFromSixths } from '../modules/ads/layouts';
 import { createHash, randomBytes } from 'node:crypto';
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import type { PlatformEvent, EventType } from '../core/events';
 import { newId } from '../core/ids';
 import type { Persistence } from '../core/persistence';
@@ -12,31 +13,52 @@ import { posterCreative } from '../modules/creative/poster';
 import type { SqlClient } from './client';
 
 /**
- * Writes every change to the database, in the order it happened.
- * The core keeps working state in memory and calls these; `flush()` waits until everything is stored.
- * An API request answers only after its changes are flushed.
+ * Writes every change to the database, in the order it happened, and never drops one.
  *
- * Changes made together are written together, in one transaction: all of a bottle's ledger lines land, or none do.
- * A failed write is tried again (the database may be restarting). If it still fails, each change is tried on its own,
- * so the good ones are kept, and any that can't be written are kept word for word in `persistence_failures` (or, if
- * the database can't be reached at all, in a file) so nothing is lost. Then the platform stops taking changes until a
- * person has looked: its memory and its database may now disagree, and money must never be counted from a guess.
+ * The core keeps working state in memory and calls these; `flush()` waits until everything so far is stored, and an
+ * API request answers only after its own changes are. Changes made together are written together, in one
+ * transaction: all of a bottle's ledger lines land, or none do.
+ *
+ * If the database refuses (restarting, failing over, full), the changes stay queued, in order, and are tried again
+ * and again (waiting a little longer each time, up to 30 seconds) until they go in. Nothing is skipped and nothing
+ * newer jumps ahead, so when the database is back, it ends up exactly matching memory. While changes are waiting:
+ *  - the platform is "paused": new changes are refused politely and background jobs wait (money is never counted,
+ *    and no fingerprint published, from books that are behind);
+ *  - the waiting changes are also written to a spool file (FW_SPOOL_DIR, on a disk that survives a restart), and a
+ *    server starting up writes any spooled changes first, before it reads the database.
+ * A change the database will never accept (a bug) holds the line until a person looks: `skipStuck()` moves it to
+ * `persistence_failures`, word for word, and the rest carry on.
  */
-type Op = { kind: string; sql: string; params: unknown[] };
-export interface PersistenceProblem { at: string; kind: string; message: string; saved: 'database' | 'file' | 'lost' }
+type Op = { seq: number; kind: string; sql: string; params: unknown[] };
+export interface PersistenceProblem { since: string; waiting: number; tries: number; message: string; kind: string }
+export class PersistencePaused extends Error {
+  status = 503; code = 'paused_for_safety';
+  constructor() { super('FreeWater has paused changes for a moment to keep the books exact. Please try again shortly.'); }
+}
 
 export class SqlPersistence implements Persistence {
   private pending: Op[] = [];
   private running: Promise<void> | null = null;
-  private failure: unknown = null;
-  /** Set when a change couldn't be written. Changes are refused until it's cleared by a person (see `replay`). */
-  problem: PersistenceProblem | null = null;
-  stats = { written: 0, batches: 0, retries: 0, failed: 0 };
+  private nextSeq = 1;
+  private written = 0; // every change with seq <= this is in the database
+  private waiters: { seq: number; resolve: () => void }[] = [];
+  private failingSince: number | null = null;
+  private tries = 0;
+  private lastError = '';
+  private fenced = false;
+  stats = { written: 0, batches: 0, retries: 0, skipped: 0 };
 
-  constructor(private db: SqlClient, private opts: { retries?: number; retryDelayMs?: number; maxBatch?: number; fallbackFile?: string; onProblem?: (p: PersistenceProblem) => void } = {}) {}
+  constructor(private db: SqlClient, private opts: { maxBatch?: number; retryDelayMs?: number; maxRetryDelayMs?: number; pauseAfterMs?: number; flushTimeoutMs?: number; spoolFile?: string; onProblem?: (p: PersistenceProblem) => void; onRecovered?: () => void } = {}) {}
+
+  /** Paused: changes have been waiting for the database longer than a moment. */
+  get problem(): PersistenceProblem | null {
+    if (this.failingSince === null || Date.now() - this.failingSince < (this.opts.pauseAfterMs ?? 1500)) return null;
+    return { since: new Date(this.failingSince).toISOString(), waiting: this.pending.length, tries: this.tries, message: this.lastError, kind: this.pending[0]?.kind ?? '' };
+  }
 
   private enqueue(kind: string, sql: string, params: unknown[]) {
-    this.pending.push({ kind, sql, params });
+    if (this.fenced) return; // this server no longer owns the data: it must not write
+    this.pending.push({ seq: this.nextSeq++, kind, sql, params });
     this.schedule();
   }
 
@@ -45,86 +67,117 @@ export class SqlPersistence implements Persistence {
     this.running = (async () => {
       await null; // let changes made in the same moment gather into one batch
       try {
-        while (this.pending.length) await this.write(this.pending.splice(0, this.opts.maxBatch ?? 500));
+        while (this.pending.length && !this.fenced) {
+          const batch = this.pending.slice(0, this.opts.maxBatch ?? 500);
+          try {
+            if (batch.length === 1) await this.db.query(batch[0]!.sql, batch[0]!.params);
+            else await this.db.transaction(async (tx) => { for (const op of batch) await tx.query(op.sql, op.params); });
+          } catch (e) {
+            await this.failed(e);
+            continue;
+          }
+          this.pending.splice(0, batch.length);
+          this.written = batch[batch.length - 1]!.seq;
+          this.stats.written += batch.length; this.stats.batches++;
+          this.wake();
+          if (this.failingSince !== null && !this.pending.length) this.recovered();
+        }
       } finally {
         this.running = null;
       }
     })();
   }
 
-  private async write(batch: Op[]) {
-    const tries = this.opts.retries ?? 3;
-    for (let attempt = 0; ; attempt++) {
-      try {
-        if (batch.length === 1) await this.db.query(batch[0]!.sql, batch[0]!.params);
-        else await this.db.transaction(async (tx) => { for (const op of batch) await tx.query(op.sql, op.params); });
-        this.stats.written += batch.length; this.stats.batches++;
-        return;
-      } catch (e) {
-        if (attempt >= tries) { if (batch.length === 1) return this.giveUp(batch[0]!, e); break; }
-        this.stats.retries++;
-        await new Promise((r) => setTimeout(r, (this.opts.retryDelayMs ?? 100) * 4 ** attempt));
-      }
-    }
-    // The batch as a whole won't go in: write each change on its own, so one bad change doesn't cost the rest.
-    for (const op of batch) {
-      try { await this.db.query(op.sql, op.params); this.stats.written++; } catch (e) { await this.giveUp(op, e); }
-    }
+  private async failed(e: unknown) {
+    const first = this.failingSince === null;
+    this.failingSince ??= Date.now();
+    this.tries++; this.stats.retries++;
+    this.lastError = String((e as any)?.message ?? e).slice(0, 500);
+    this.spool();
+    if (first || this.tries === 5) setTimeout(() => { const p = this.problem; if (p) this.opts.onProblem?.(p); }, (this.opts.pauseAfterMs ?? 1500) + 10).unref?.();
+    const delay = Math.min(this.opts.maxRetryDelayMs ?? 30_000, (this.opts.retryDelayMs ?? 100) * 2 ** Math.min(this.tries - 1, 12));
+    await new Promise((r) => setTimeout(r, delay));
   }
 
-  private async giveUp(op: Op, e: unknown) {
-    this.stats.failed++;
-    this.failure ??= e;
-    const message = String((e as any)?.message ?? e).slice(0, 500);
-    let saved: PersistenceProblem['saved'] = 'lost';
-    try {
-      await this.db.query(`insert into persistence_failures (kind, sql, params, error) values ($1,$2,$3,$4)`, [op.kind, op.sql, JSON.stringify(op.params), message]);
-      saved = 'database';
-    } catch {
-      try {
-        const { appendFileSync } = await import('node:fs');
-        appendFileSync(this.opts.fallbackFile ?? 'persistence-failures.jsonl', JSON.stringify({ at: new Date().toISOString(), ...op, error: message }) + '\n');
-        saved = 'file';
-      } catch {}
-    }
-    this.problem ??= { at: new Date().toISOString(), kind: op.kind, message, saved };
-    this.opts.onProblem?.(this.problem);
+  private recovered() {
+    const was = this.failingSince !== null && Date.now() - this.failingSince >= (this.opts.pauseAfterMs ?? 1500);
+    this.failingSince = null; this.tries = 0; this.lastError = '';
+    this.unspool();
+    if (was) this.opts.onRecovered?.();
   }
 
-  async flush(): Promise<void> {
-    while (this.running || this.pending.length) {
-      if (!this.running) this.schedule();
-      await this.running;
-    }
-    if (this.failure) {
-      const f = this.failure;
-      this.failure = null;
-      throw f;
-    }
-  }
-
-  /** Changes that couldn't be written, waiting for a person. */
-  async failures() {
-    return (await this.db.query<any>(`select id, kind, error, at, retried_at from persistence_failures order by id`)).rows;
+  private wake() {
+    const still: typeof this.waiters = [];
+    for (const w of this.waiters) (w.seq <= this.written ? w.resolve() : still.push(w));
+    this.waiters = still;
   }
 
   /**
-   * Try the kept changes again (after the cause is fixed). If every one goes in, changes are taken again. A change
-   * that still fails stays kept, and the platform stays paused. A restart reloads memory from the database.
+   * Wait until every change made so far is in the database. If the database is refusing, give up waiting after a
+   * while (the changes stay queued and will still be written) and say the platform is paused.
    */
-  async replay(): Promise<{ written: number; stillFailing: number }> {
-    await this.flush().catch(() => {});
-    const rows = (await this.db.query<any>(`select id, sql, params from persistence_failures where retried_at is null order by id`)).rows;
-    let written = 0, stillFailing = 0;
-    for (const r of rows) {
-      try {
-        await this.db.query(r.sql, typeof r.params === 'string' ? JSON.parse(r.params) : r.params);
-        await this.db.query(`update persistence_failures set retried_at = now() where id = $1`, [r.id]);
-        written++;
-      } catch { stillFailing++; }
+  async flush(timeoutMs = this.opts.flushTimeoutMs ?? 15_000): Promise<void> {
+    const target = this.nextSeq - 1;
+    if (target <= this.written) return;
+    this.schedule();
+    await new Promise<void>((resolve, reject) => {
+      const t = setTimeout(() => { this.waiters = this.waiters.filter((w) => w.resolve !== done); reject(new PersistencePaused()); }, timeoutMs);
+      t.unref?.();
+      const done = () => { clearTimeout(t); resolve(); };
+      this.waiters.push({ seq: target, resolve: done });
+    });
+  }
+
+  // ---------- the spool: waiting changes, on disk, so a restart doesn't lose them ----------
+
+  private spool() {
+    if (!this.opts.spoolFile || !this.pending.length) return;
+    try {
+      const tmp = `${this.opts.spoolFile}.tmp`;
+      writeFileSync(tmp, this.pending.map((o) => JSON.stringify({ kind: o.kind, sql: o.sql, params: o.params })).join('\n') + '\n');
+      renameSync(tmp, this.opts.spoolFile);
+    } catch (e) { this.lastError += ` (and the spool file couldn't be written: ${(e as Error).message})`; }
+  }
+  private unspool() {
+    if (!this.opts.spoolFile) return;
+    try { rmSync(this.opts.spoolFile, { force: true }); } catch {}
+  }
+
+  /** At start-up, before reading the database: write any changes a stopped server left waiting. */
+  static async recoverSpool(db: SqlClient, spoolFile: string | undefined, log: (s: string) => void = console.log) {
+    if (!spoolFile || !existsSync(spoolFile)) return 0;
+    const ops = readFileSync(spoolFile, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l) as Omit<Op, 'seq'>);
+    if (ops.length) {
+      await db.transaction(async (tx) => { for (const op of ops) await tx.query(op.sql, op.params); });
+      log(`Wrote ${ops.length} change(s) a previous server had waiting.`);
     }
-    if (!stillFailing) this.problem = null;
-    return { written, stillFailing };
+    renameSync(spoolFile, `${spoolFile}.done-${Date.now()}`);
+    return ops.length;
+  }
+
+  /** This server no longer owns the data: drop what's waiting and write nothing more. */
+  fence() { this.fenced = true; this.pending = []; }
+
+  /** Changes a person moved aside. */
+  async failures() {
+    return (await this.db.query<any>(`select id, kind, error, at, retried_at from persistence_failures order by id desc limit 100`)).rows;
+  }
+
+  /**
+   * A person's decision, for a change the database will never accept: move the first waiting change aside (kept word
+   * for word in persistence_failures) so the rest can go in. Only while paused, and only once the database itself
+   * answers, so it's clear it's this change, not the database, that's the problem.
+   */
+  async skipStuck(): Promise<{ skipped: string | null; reason?: string }> {
+    const head = this.pending[0];
+    if (!head || this.failingSince === null) return { skipped: null, reason: 'Nothing is stuck.' };
+    try { await this.db.query('select 1'); } catch { return { skipped: null, reason: 'The database isn’t answering at all; fix that first, and the waiting changes will go in by themselves.' }; }
+    await this.db.query(`insert into persistence_failures (kind, sql, params, error) values ($1,$2,$3,$4)`, [head.kind, head.sql, JSON.stringify(head.params), this.lastError]);
+    if (this.pending[0] === head) this.pending.shift();
+    this.stats.skipped++;
+    this.spool();
+    this.schedule();
+    return { skipped: head.kind };
   }
 
   code(c: import('../modules/codes/service').CodeRow) {

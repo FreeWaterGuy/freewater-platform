@@ -65,14 +65,14 @@ export async function backup(o: { databaseUrl: string; store: BlobStore; key: Bu
     const dump = join(dir, 'db.dump'), enc = join(dir, 'db.dump.enc');
     await run('pg_dump', ['--format=custom', '--no-owner', '--no-privileges', `--file=${dump}`, o.databaseUrl]);
     await encryptFile(dump, enc, o.key);
-    const bytes = await readFile(enc);
+    const size = (await stat(enc)).size;
     const at = (o.now ?? new Date()).toISOString();
     const name = `backups/${at.slice(0, 10).replace(/-/g, '/')}/${at.slice(11, 19).replace(/:/g, '')}.dump.enc`;
-    await o.store.put(name, bytes, 'application/octet-stream');
-    const sha256 = createHash('sha256').update(bytes).digest('hex');
-    await o.store.put('backups/latest.json', Buffer.from(JSON.stringify({ name, at, bytes: bytes.length, sha256 })), 'application/json');
-    log(`Backup stored: ${name} (${(bytes.length / 1048576).toFixed(1)} MB)`);
-    return { name, at, bytes: bytes.length, sha256 };
+    await o.store.putFile(name, enc, 'application/octet-stream'); // streamed: a big database never sits in memory
+    const sha256 = await fileSha(enc);
+    await o.store.put('backups/latest.json', Buffer.from(JSON.stringify({ name, at, bytes: size, sha256 })), 'application/json');
+    log(`Backup stored: ${name} (${(size / 1048576).toFixed(1)} MB)`);
+    return { name, at, bytes: size, sha256 };
   } finally { await rm(dir, { recursive: true, force: true }); }
 }
 
@@ -84,23 +84,51 @@ export async function restore(o: { store: BlobStore; key: Buffer; targetUrl: str
   const log = o.log ?? console.log;
   const latest = o.name ? { name: o.name } : JSON.parse(Buffer.from((await o.store.get('backups/latest.json')) ?? Buffer.from('null')).toString() || 'null');
   if (!latest?.name) throw new Error('No backup found.');
-  const bytes = await o.store.get(latest.name);
-  if (!bytes) throw new Error(`Backup ${latest.name} is missing.`);
-  if (latest.sha256 && createHash('sha256').update(bytes).digest('hex') !== latest.sha256) throw new Error(`Backup ${latest.name} doesn't match its fingerprint.`);
   const dir = await mkdtemp(join(tmpdir(), 'fw-restore-'));
   try {
     const enc = join(dir, 'db.dump.enc'), dump = join(dir, 'db.dump');
-    await writeFile(enc, bytes);
+    if (!(await o.store.getToFile(latest.name, enc))) throw new Error(`Backup ${latest.name} is missing.`);
+    if (latest.sha256 && (await fileSha(enc)) !== latest.sha256) throw new Error(`Backup ${latest.name} doesn't match its fingerprint.`);
     await decryptFile(enc, dump, o.key);
+    await assertSpare(o.targetUrl);
     await run('psql', [o.targetUrl, '-v', 'ON_ERROR_STOP=1', '-q', '-c', 'drop schema public cascade; create schema public;']);
     // Through plain SQL, so a newer pg_restore can load into an older server: it adds settings only it knows
     // (transaction_timeout, PostgreSQL 17), which are dropped here. Any other error stops the restore.
     const sqlFile = join(dir, 'db.sql');
     await run('pg_restore', ['--no-owner', '--no-privileges', `--file=${sqlFile}`, dump]);
-    const sql = (await readFile(sqlFile, 'utf8')).replace(/^SET transaction_timeout = .*;$/gm, '');
-    await writeFile(sqlFile, sql);
+    await run('sed', ['-i', '/^SET transaction_timeout = /d', sqlFile]);
     await run('psql', [o.targetUrl, '-v', 'ON_ERROR_STOP=1', '-q', '-f', sqlFile]);
+    // Mark it as a spare, so it can be wiped again next time (and the real database, never marked, never can).
+    await run('psql', [o.targetUrl, '-v', 'ON_ERROR_STOP=1', '-q', '-c', `delete from instance_lease; create table restore_target (restored_at timestamptz not null default now(), backup text); insert into restore_target (backup) values ('${String(latest.name).replace(/'/g, "''")}');`]);
     log(`Restored ${latest.name} into the spare database.`);
     return { name: latest.name as string };
   } finally { await rm(dir, { recursive: true, force: true }); }
+}
+
+/**
+ * Never wipe a database that isn't a spare. Refused when the target is the database the platform runs on, when a
+ * server is running on it, or when it holds companies without the "spare" mark a restore leaves.
+ */
+export async function assertSpare(targetUrl: string, liveUrl = process.env.DATABASE_URL) {
+  const norm = (u: string) => { try { const x = new URL(u); return `${x.hostname.toLowerCase()}:${x.port || '5432'}/${x.pathname.replace(/^\//, '')}`; } catch { return u; } };
+  if (liveUrl && norm(liveUrl) === norm(targetUrl)) throw new Error('RESTORE_TEST_URL is the same database as DATABASE_URL. Refusing to wipe it.');
+  const { createPostgresClient } = await import('../db/postgres');
+  const db = createPostgresClient(targetUrl);
+  try {
+    const has = async (t: string) => (await db.query<{ n: number }>(`select count(*)::int as n from information_schema.tables where table_schema = 'public' and table_name = $1`, [t])).rows[0]!.n > 0;
+    if (await has('instance_lease')) {
+      const live = (await db.query<{ n: number }>(`select count(*)::int as n from instance_lease where expires_at > now()`)).rows[0]!.n;
+      if (live) throw new Error('A FreeWater server is running on the RESTORE_TEST_URL database. Refusing to wipe it.');
+    }
+    if ((await has('companies')) && !(await has('restore_target'))) {
+      const n = (await db.query<{ n: number }>(`select count(*)::int as n from companies`)).rows[0]!.n;
+      if (n) throw new Error('The RESTORE_TEST_URL database holds real data and isn’t marked as a spare. Refusing to wipe it. Point RESTORE_TEST_URL at an empty database.');
+    }
+  } finally { await db.close(); }
+}
+
+async function fileSha(path: string) {
+  const h = createHash('sha256');
+  for await (const chunk of createReadStream(path)) h.update(chunk as Buffer);
+  return h.digest('hex');
 }

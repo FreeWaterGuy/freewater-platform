@@ -36,7 +36,7 @@ export function dataRoutes(app: App, route: (r: RouteDef) => void) {
   route({ method: 'POST', url: '/v1/public/data/:companyId/forget', scope: 'public', summary: 'Without an account: erase everything kept about this phone (its scans, what it did, its choices). Only this phone holds its key.', body: obj({ viewerKey: viewerKeyProp }, ['viewerKey']), handler: async (req) => {
     const companyId = (req.params as any).companyId as string;
     if (!app.platform.companies.has(companyId)) throw new ApiError(404, 'not_found', 'No such company.');
-    return { body: await data.erase(companyId, (req.body as any).viewerKey) };
+    return { body: await data.erase(companyId, (req.body as any).viewerKey, { followLinks: false }) };
   } });
   route({ method: 'DELETE', url: '/v1/me/data', scope: 'me', summary: 'Erase what’s kept about you. Money records stay in the books, as the law requires, with your name taken out.', handler: async (_req, key) => ({ body: await data.erase(key!.companyId, `user:${key!.userId}`) }) });
   route({ method: 'POST', url: '/v1/me/link-device', scope: 'me', summary: 'This phone’s scans belong to you: join what it did before you signed in to your account (as your data choices allow).', body: obj({ viewerKey: viewerKeyProp }, ['viewerKey']), handler: async (req, key) => ({ body: { person: await data.link(key!.companyId, [`user:${key!.userId}`, (req.body as any).viewerKey], 'signed in on this phone') } }) });

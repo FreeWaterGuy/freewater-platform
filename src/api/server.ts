@@ -30,7 +30,7 @@ import { DeliveryError } from '../modules/delivery/service';
 import { AdsError } from '../modules/ads/service';
 import { DesignError } from '../modules/custom/service';
 import type { App } from '../app';
-import { findApiKey, type ApiKey, type Scope } from '../db/store';
+import { findApiKey, type ApiKey, type Scope , PersistencePaused } from '../db/store';
 import type { Campaign, Share } from '../core/types';
 import { svgCreative } from '../modules/print/svgCreative';
 import { newId } from '../core/ids';
@@ -805,12 +805,16 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       const b: any = req.body ?? {};
       securityLog.record({ kind: 'sign_in_failed', companyId: typeof b.companyId === 'string' && platform.companies.has(b.companyId) ? b.companyId : null, actor: mask(b.to), ip: req.ip, detail: { reason: err.code ?? 'invalid' } }, `sif:${req.ip}:${b.to}`);
     }
-    if (err instanceof ApiError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
+    if (err instanceof ApiError || err instanceof PersistencePaused) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
     if (err instanceof AccountsError || err instanceof PaymentError || err instanceof ExperienceError || err instanceof AssetError || err instanceof AdsError || err instanceof DesignError || err instanceof DeliveryError || err instanceof BooksError || err instanceof WebhookError || err instanceof ConsoleError || err instanceof FleetError || err instanceof AttributionError || err instanceof LotteryError || err instanceof VideoError || err instanceof DataError || err instanceof NumberLineError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
     if (err.code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE') return reply.code(415).send({ error: { code: 'unsupported_type', message: 'Send JSON, or for uploads a .glb, PNG, JPEG, WebP or MP4 file.' } });
     if (err.code === 'FST_ERR_CTP_BODY_TOO_LARGE') return reply.code(413).send({ error: { code: 'too_large', message: 'That is too big to upload.' } });
     if (err.validation) return reply.code(400).send({ error: { code: 'invalid_request', message: err.message } });
     if (/^Unknown (bottle|unit|pack)/i.test(err.message)) return reply.code(404).send({ error: { code: 'not_found', message: err.message } });
+    // The database unreachable (restarting, failing over): say so plainly, and leave the alerting to the saving check.
+    if (/ECONNREFUSED|ECONNRESET|ETIMEDOUT|Connection terminated|terminating connection|the database system is (starting up|shutting down)|timeout exceeded when trying to connect|Client has encountered a connection error/i.test(String(err?.message ?? '') + String(err?.code ?? ''))) {
+      return reply.code(503).header('retry-after', '5').send({ error: { code: 'database_unavailable', message: 'FreeWater can’t reach its database for a moment. Please try again shortly.' } });
+    }
     server.log.error(err);
     void app.runtime.alerts.alert(`500:${req.method} ${req.routeOptions?.url ?? '?'}`, 'warning', `Server error on ${req.method} ${req.routeOptions?.url ?? req.url.split('?')[0]}`, String(err?.stack ?? err?.message ?? err));
     return reply.code(500).send({ error: { code: 'server_error', message: 'Something went wrong on our side. It has been logged.' } });

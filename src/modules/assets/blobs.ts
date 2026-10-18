@@ -1,5 +1,8 @@
 import { createHash, createHmac } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { dirname, join, resolve } from 'node:path';
 
 /**
@@ -15,6 +18,9 @@ export interface BlobStore {
   put(key: string, bytes: Uint8Array, contentType: string): Promise<void>;
   get(key: string): Promise<Uint8Array | null>;
   delete(key: string): Promise<void>;
+  /** Big files (backups), streamed rather than held in memory. */
+  putFile(key: string, path: string, contentType: string): Promise<void>;
+  getToFile(key: string, path: string): Promise<boolean>;
 }
 
 const safeKey = (key: string) => {
@@ -38,6 +44,15 @@ export class DiskBlobStore implements BlobStore {
     try { return new Uint8Array(await readFile(this.path(key))); } catch (e: any) { if (e?.code === 'ENOENT') return null; throw e; }
   }
   async delete(key: string) { await rm(this.path(key), { force: true }); }
+  async putFile(key: string, path: string) {
+    const p = this.path(key);
+    await mkdir(dirname(p), { recursive: true });
+    await copyFile(path, `${p}.${process.pid}.tmp`);
+    await rename(`${p}.${process.pid}.tmp`, p);
+  }
+  async getToFile(key: string, path: string) {
+    try { await copyFile(this.path(key), path); return true; } catch (e: any) { if (e?.code === 'ENOENT') return false; throw e; }
+  }
 }
 
 // ---------- S3-compatible storage, signed with AWS Signature Version 4 (no SDK needed) ----------
@@ -75,15 +90,17 @@ export class S3BlobStore implements BlobStore {
     return this.o.endpoint ? new URL(`${this.o.endpoint.replace(/\/$/, '')}/${enc(this.o.bucket)}/${k}`) : new URL(`https://${this.o.bucket}.s3.${this.o.region}.amazonaws.com/${k}`);
   }
 
-  private async send(method: string, key: string, body?: Uint8Array, contentType?: string) {
+  private async send(method: string, key: string, body?: Uint8Array, contentType?: string, file?: { path: string; size: number; sha256: string }) {
     const url = this.url(key);
-    const payloadHash = sha256hex(body ?? '');
-    const { headers } = signV4({ method, url, headers: contentType ? { 'content-type': contentType } : {}, payloadHash, accessKeyId: this.o.accessKeyId, secretAccessKey: this.o.secretAccessKey, region: this.o.region, now: this.o.now?.() ?? new Date() });
+    const payloadHash = file ? file.sha256 : sha256hex(body ?? '');
+    const extra: Record<string, string> = { ...(contentType ? { 'content-type': contentType } : {}), ...(file ? { 'content-length': String(file.size) } : {}) };
+    const { headers } = signV4({ method, url, headers: extra, payloadHash, accessKeyId: this.o.accessKeyId, secretAccessKey: this.o.secretAccessKey, region: this.o.region, now: this.o.now?.() ?? new Date() });
     const sendHeaders: Record<string, string> = { ...headers };
     delete sendHeaders.host; // fetch sets it
     for (let attempt = 0; ; attempt++) {
       try {
-        const r = await (this.o.fetcher ?? fetch)(url, { method, headers: sendHeaders, body: body as any, signal: AbortSignal.timeout(60_000) });
+        const streamBody = file ? (Readable.toWeb(createReadStream(file.path)) as any) : (body as any);
+        const r = await (this.o.fetcher ?? fetch)(url, { method, headers: sendHeaders, body: streamBody, ...(file ? { duplex: 'half' } : {}), signal: AbortSignal.timeout(file ? 3600_000 : 60_000) } as any);
         if (r.status >= 500 && attempt < 2) { await new Promise((res) => setTimeout(res, 300 * 3 ** attempt)); continue; }
         return r;
       } catch (e) {
@@ -103,6 +120,20 @@ export class S3BlobStore implements BlobStore {
     if (!r.ok) throw new Error(`File storage didn't return the file (${r.status}): ${(await r.text()).slice(0, 300)}`);
     return new Uint8Array(await r.arrayBuffer());
   }
+  async putFile(key: string, path: string, contentType: string) {
+    const size = (await stat(path)).size;
+    const h = createHash('sha256');
+    for await (const chunk of createReadStream(path)) h.update(chunk as Buffer);
+    const r = await this.send('PUT', key, undefined, contentType, { path, size, sha256: h.digest('hex') });
+    if (!r.ok) throw new Error(`File storage refused the upload (${r.status}): ${(await r.text()).slice(0, 300)}`);
+  }
+  async getToFile(key: string, path: string) {
+    const r = await this.send('GET', key);
+    if (r.status === 404) return false;
+    if (!r.ok || !r.body) throw new Error(`File storage didn't return the file (${r.status})`);
+    await pipeline(Readable.fromWeb(r.body as any), createWriteStream(path));
+    return true;
+  }
   async delete(key: string) {
     const r = await this.send('DELETE', key);
     if (!r.ok && r.status !== 404) throw new Error(`File storage didn't delete the file (${r.status})`);
@@ -113,7 +144,7 @@ export class S3BlobStore implements BlobStore {
 export function blobStoreFromEnv(env: NodeJS.ProcessEnv = process.env): BlobStore | undefined {
   const kind = env.FILE_STORAGE ?? 'database';
   if (kind === 'disk') return new DiskBlobStore(env.FILE_DIR ?? './files');
-  if (kind === 's3') return new S3BlobStore({ bucket: env.S3_BUCKET!, region: env.S3_REGION ?? 'auto', accessKeyId: env.S3_ACCESS_KEY_ID!, secretAccessKey: env.S3_SECRET_ACCESS_KEY!, endpoint: env.S3_ENDPOINT, prefix: env.S3_PREFIX });
+  if (kind === 's3') return new S3BlobStore({ bucket: env.S3_BUCKET!, region: env.S3_REGION ?? (env.S3_ENDPOINT ? 'auto' : 'us-east-1'), accessKeyId: env.S3_ACCESS_KEY_ID!, secretAccessKey: env.S3_SECRET_ACCESS_KEY!, endpoint: env.S3_ENDPOINT, prefix: env.S3_PREFIX });
   return undefined;
 }
 

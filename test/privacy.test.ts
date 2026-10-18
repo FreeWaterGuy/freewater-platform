@@ -77,4 +77,30 @@ describe('people can see and erase what’s kept about them', () => {
     expect(await count(`select count(*) as n from events where type = 'unit.scanned'`, [])).toBe(scansBefore);
     expect((await call('POST', '/v1/public/data/nobody/forget', undefined, { viewerKey })).status).toBe(404);
   });
+
+  it('erases an account’s things even when it was never linked to a person (linking turned off)', async () => {
+    const t = await signIn('unlinked@example.com');
+    const userId = (await call('GET', '/v1/me', t)).body.id ?? (await call('GET', '/v1/me', t)).body.user?.id;
+    const u = await app.platform.order({ companyId: 'freewater', orderId: 'priv-3', locationId: 'ATX-014', productId: 'bottle-16oz' });
+    await call('POST', '/v1/me/saved', t, { target: `s:${u.unit.id}:0` });
+    await db.query(`delete from person_links where kind = 'user' and value = $1`, [userId]); // as if linking were off
+    expect((await call('GET', '/v1/me/data', t)).status).toBe(200);
+    expect((await call('DELETE', '/v1/me', t)).status).toBe(204);
+    expect(await count(`select count(*) as n from saved_items where user_id = $1`, [userId])).toBe(0);
+  });
+
+  it('a phone erasing itself without signing in never reaches the account it’s linked to', async () => {
+    const viewerKey = 'phone-linked-0001';
+    const to = 'linked@example.com';
+    await call('POST', '/v1/auth/start', undefined, { companyId: 'freewater', channel: 'email', to });
+    const code = /(\d{6})/.exec((app.messenger as TestOutbox).lastTo(to)!.text)![1];
+    const t = (await call('POST', '/v1/auth/verify', undefined, { companyId: 'freewater', channel: 'email', to, code, viewerKey })).body.token as string;
+    const u = await app.platform.order({ companyId: 'freewater', orderId: 'priv-4', locationId: 'ATX-014', productId: 'bottle-16oz' });
+    await call('POST', '/v1/me/saved', t, { target: `s:${u.unit.id}:0` });
+    const f = await call('POST', '/v1/public/data/freewater/forget', undefined, { viewerKey });
+    expect(f.body.erased).toBe(true);
+    expect((await call('GET', '/v1/me', t)).status).toBe(200); // still signed in
+    expect((await call('GET', '/v1/me/saved', t)).body.items?.length ?? (await call('GET', '/v1/me/saved', t)).body.length).toBe(1);
+  });
 });
+

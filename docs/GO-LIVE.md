@@ -2,9 +2,9 @@
 
 ## Ready (built and tested)
 
-- **Nothing is lost in a crash.** Every change is saved before the platform answers. Changes made together are saved
-  together. If the database refuses, the change is kept word for word and the platform pauses changes until someone
-  replays them.
+- **Nothing is lost in a crash or a database outage.** Every change is saved before the platform answers, and
+  changes made together are saved together. If the database refuses, changes wait in order (also on disk) and go in
+  by themselves when it's back. Meanwhile the platform pauses new changes and background work, and scans still work.
 - **No double payments.** Only one server can own the data at a time; a new version takes over in about a second.
 - **Background work in one place.** It remembers what it did across restarts, and alerts when something fails.
 - **File storage**, with every file checked when it's read back.

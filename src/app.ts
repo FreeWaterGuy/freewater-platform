@@ -60,11 +60,13 @@ import type { JobRunner } from './runtime/jobs';
 import { boxes, builtinCreatives, freewater, locations, peakSpring, products, sampleCampaigns } from './demo/seed';
 
 /** What the running server adds around the app: alerts, and (in production) the lease and the job runner. */
-export interface Runtime { alerts: Alerter; startedAt: Date; lease?: InstanceLease; jobs?: JobRunner }
+export interface Runtime { alerts: Alerter; startedAt: Date; lease?: InstanceLease; jobs?: JobRunner; /** Lost its claim to the data: answers nothing more. */ lost?: boolean }
 
 export interface AppOptions {
   db: SqlClient;
   alerts?: Alerter;
+  /** Where changes waiting for the database are kept on disk, so a restart doesn't lose them (FW_SPOOL_DIR). */
+  spoolFile?: string;
   builtins?: Record<string, Creative>;
   seedDemo?: boolean; // load FreeWater's sample catalog and print demo API keys when the database is empty
   clock?: () => Date;
@@ -102,6 +104,8 @@ export interface AppOptions {
 export async function createApp(opts: AppOptions) {
   const { db } = opts;
   await migrate(db);
+  // Changes a stopped server had waiting go in first, so what's read below is complete.
+  await SqlPersistence.recoverSpool(db, opts.spoolFile);
   const builtins = opts.builtins ?? builtinCreatives;
 
   let demoKeys: Record<string, string> | undefined;
@@ -129,7 +133,11 @@ export async function createApp(opts: AppOptions) {
   const now = opts.clock?.() ?? new Date();
   const state = await loadState(db, builtins, now);
   const runtime: Runtime = { alerts: opts.alerts ?? new Alerter(), startedAt: new Date() };
-  const persistence = new SqlPersistence(db, { onProblem: (p) => void runtime.alerts.alert('persistence', 'critical', 'A change couldn’t be saved; the platform has paused changes', `${p.kind}: ${p.message} (kept in ${p.saved}). Fix the cause, then replay from the platform status page.`) });
+  const persistence = new SqlPersistence(db, {
+    spoolFile: opts.spoolFile,
+    onProblem: (p) => void runtime.alerts.alert('persistence', 'critical', 'The database is refusing changes; the platform has paused them', `${p.waiting} change(s) waiting since ${p.since}, tried ${p.tries} times. Last answer: ${p.message}. They'll go in by themselves once the database is back. If the database answers but one change keeps failing, see docs/RUNNING.md ("If changes are waiting").`),
+    onRecovered: () => void runtime.alerts.alert('persistence', 'resolved', 'The database is taking changes again; everything waiting has been saved'),
+  });
   const made = createPlatform({
     companies: state.companies,
     products: state.products,
@@ -142,7 +150,7 @@ export async function createApp(opts: AppOptions) {
     seed: opts.seed ?? Date.now() % 2147483647,
   });
   const { platform, packs } = made;
-  platform.labelSvgLoader = async (unitId) => { await persistence.flush().catch(() => {}); return (await db.query<{ svg: string }>(`select svg from labels where unit_id = $1`, [unitId])).rows[0]?.svg; };
+  platform.labelSvgLoader = async (unitId) => { await persistence.flush(2000).catch(() => {}); return (await db.query<{ svg: string }>(`select svg from labels where unit_id = $1`, [unitId])).rows[0]?.svg; };
   // Every QR printed carries our own signed smart code.
   const codes = new CodeService(db, () => persistence, await loadSecret(db, 'codes'), opts.clock);
   platform.codes = codes;
@@ -188,6 +196,12 @@ export async function createApp(opts: AppOptions) {
   experiences.videos = videos;
   const interactions = new InteractionService(db, platform, opts.clock);
   const data = new DataService(db, platform, interactions, opts.clock);
+  data.eraseAddresses = async (companyId, userIds) => {
+    let n = 0;
+    for (const p of packs.packs.values()) if (p.companyId === companyId && p.customerId && userIds.includes(p.customerId) && p.address !== 'erased') { p.address = 'erased'; platform.persist.pack(p); n++; }
+    await persistence.flush();
+    return n;
+  };
   data.removeUploads = async (companyId, userIds) => ('removeForUsers' in assets ? (assets as SqlAssetStore).removeForUsers(companyId, userIds) : 0);
   // The number line and honest data: everything placed, every choice sorted, from the first bottle on.
   const numberline = new NumberLineService(db, platform, opts.numberLineAgent ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeNumberLineAgent({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL }) : rulesAgent), opts.clock);

@@ -17,7 +17,7 @@ export function galleryHtml(p: Platform): string {
     }).join('');
     return `<article class="unit ${u.status}">
 <header><div><h2>${esc(company.name)} · ${esc(u.locationId)}</h2><p>${u.kind === 'custom' ? 'Custom design, paid by the customer' : `${u.placements.filter((x) => !x.isHouse).length} paid ads, layout ${u.layout.join('-')}`}. ${status}</p></div><code>${u.id}</code></header>
-${label ? `<div class="label">${label.svg}</div>` : ''}
+${label ? `<div class="label">${p.labelSvgNow(u.id) ?? ''}</div>` : ''}
 <div class="cols"><table><thead><tr><th>Slot</th><th>Owner</th><th>Size</th><th>Print price</th><th>Its own QR link</th></tr></thead><tbody>${slots}</tbody></table>
 <dl><dt>Earned</dt><dd>${money(r.earned.total)}</dd><dt>Prints</dt><dd>${money(r.earned.print + r.earned.custom)}</dd><dt>Scans and AR</dt><dd>${money(r.earned.scans + r.earned.ar)}</dd><dt>Commission</dt><dd>${money(r.earned.commission)}</dd><dt>Donated</dt><dd>${r.donatedCents ? money(r.donatedCents) : 'none (giving is off)'}</dd></dl></div>
 </article>`;
