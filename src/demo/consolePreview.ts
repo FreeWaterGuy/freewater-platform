@@ -95,7 +95,7 @@ const rec = {
     setNow(end); await app.agents.measure(); await app.agents.settle('freewater'); await app.agents.scan('freewater');
     return call('GET', '/v1/agents', token);
   })(),
-  team: await (async () => {
+  given: await (async () => {
     const day = new Date(end - 2 * 86_400_000).toISOString().slice(0, 10);
     await call('POST', '/v1/team/batches', token, { date: day, bottles: 2400, city: 'Austin', place: 'WeFunder launch party', campaign: 'WeFunder campaign', revenueCents: 0 });
     await call('POST', '/v1/team/batches', token, { date: day, bottles: 300, city: 'Austin', place: 'Zilker Park run', campaign: 'Sponsor run', advertiser: 'Austin Daily', revenueCents: 60_000 });

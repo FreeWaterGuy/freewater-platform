@@ -60,13 +60,13 @@ export function attributionRoutes(app: App, server: FastifyInstance, route: (r: 
     platform.bus.publish('code.opened', row.companyId, { code: row.code, kind: row.kind, ...(row.unitId ? { unitId: row.unitId } : {}), ...(row.slot !== undefined ? { slot: row.slot } : {}), ...(row.packId ? { packId: row.packId } : {}), ...(row.face ? { face: row.face } : {}), opens }, `${row.code}:${opens}`);
     await app.persistence.flush();
     const to = row.kind === 'slot' ? `/s/${row.unitId}/${row.slot}` : row.kind === 'receipt' ? `/r/${row.unitId}` : row.kind === 'box' ? `/b/${row.packId}/${row.face}` : `/p/${row.packId}`;
-    return reply.header('cache-control', 'no-store').redirect(302, `${to}?c=${row.code}`);
+    return reply.header('cache-control', 'no-store').redirect(`${to}?c=${row.code}`, 302);
   };
   server.get('/q/:code', openCode);
   server.get('/Q/:code', openCode);
 
   // A coupon's code, scanned by the cashier: opens the advertiser portal's check-and-redeem screen.
-  const openCoupon = async (req: FastifyRequest, reply: FastifyReply) => reply.header('cache-control', 'no-store').redirect(302, `/ads/redeem/${encodeURIComponent(String((req.params as any).code).toUpperCase())}`);
+  const openCoupon = async (req: FastifyRequest, reply: FastifyReply) => reply.header('cache-control', 'no-store').redirect(`/ads/redeem/${encodeURIComponent(String((req.params as any).code).toUpperCase())}`, 302);
   server.get('/v/:code', openCoupon);
   server.get('/V/:code', openCoupon);
 
@@ -79,7 +79,7 @@ export function attributionRoutes(app: App, server: FastifyInstance, route: (r: 
       const out = new URL(url);
       for (const [k, v] of Object.entries(q)) if (k !== 'v' && k !== 'from' && k !== 'fwclid' && typeof v === 'string') out.searchParams.set(k, v);
       await app.persistence.flush();
-      return reply.header('cache-control', 'no-store').header('referrer-policy', 'no-referrer').redirect(302, out.toString());
+      return reply.header('cache-control', 'no-store').header('referrer-policy', 'no-referrer').redirect(out.toString(), 302);
     } catch (e) { return fail(reply, e); }
   });
 

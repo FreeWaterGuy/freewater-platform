@@ -84,7 +84,7 @@
     if (key === 'GET /v1/honest-data') return clone(R.honest);
     if (key === 'GET /v1/agents') return clone(R.agents);
     if (key === 'GET /v1/profit') return clone(R.profit);
-    if (key === 'GET /v1/team/batches') return clone(R.team);
+    if (key === 'GET /v1/team/batches') return clone(R.given);
     if (key === 'POST /v1/team/intake') return clone(R.intake);
     if (key.startsWith('POST /v1/team/')) return fail(400, 'This preview doesn’t record anything. In the real console this works.');
     if (key.startsWith('POST /v1/agents/')) return fail(400, 'This preview doesn’t change anything. In the real console this works.');
