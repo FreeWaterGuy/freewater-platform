@@ -1,9 +1,9 @@
 {
-  "about": "The two books the agents work from. The engineering book is the authority on the frameworks and their definitions (the number line, aggregate efficiency, honest data, regeneration, the governor, the end game); the operating manual is the authority on business models and how to run them. Where they define the same thing differently, the engineering book wins, because it is the newer and deeper of the two. Every price, cost, volume and timeline in either book is an example that shows an idea, never a fact about FreeWater: decisions use numbers from the platform's own books or from real quotes.",
+  "about": "The books the agents work from. The engineering book is the authority on the frameworks and their definitions (the number line, aggregate efficiency, honest data, regeneration, the governor, the end game); the operating manual is the authority on business models and how to run them. Where they define the same thing differently, the engineering book wins, because it is the newer and deeper of the two. Every price, cost, volume and timeline in either book is an example that shows an idea, never a fact about FreeWater: decisions use numbers from the platform's own books or from real quotes. The Honest Data Labs deck is the authority on measurement design: how to set up an environment so people's choices in it measure what they want.",
   "rules": [
     "Take the ideas and the reasoning from the books. Take every number from the platform's own books (the ledger) or a real quote.",
     "Cite the passages a decision relied on, by their ids.",
-    "Where the two books differ on a framework or definition, the engineering book wins; on how to run a business model, the operating manual leads.",
+    "Where the two books differ on a framework or definition, the engineering book wins; on how to run a business model, the operating manual leads; on how to design a measurement (choice sets, price regimes, repeated observation, crossing points), the Honest Data Labs deck leads.",
     "Mark every claim as one of two kinds, as the books do: a buildable plan (costed, checkable now) or a stress test (an idea run past its limits to find where the real constraints sit)."
   ],
   "books": [
@@ -14,7 +14,21 @@
       "author": "Josh Cliffords",
       "edition": "Manuscript of 8 October 2026",
       "date": "2026-10-08",
-      "authorityOn": ["frameworks", "definitions", "number line", "aggregate efficiency", "honest data", "consecutive delivery", "transparency", "regeneration", "energy", "intelligence", "governor", "vertical engines", "transition"],
+      "authorityOn": [
+        "frameworks",
+        "definitions",
+        "number line",
+        "aggregate efficiency",
+        "honest data",
+        "consecutive delivery",
+        "transparency",
+        "regeneration",
+        "energy",
+        "intelligence",
+        "governor",
+        "vertical engines",
+        "transition"
+      ],
       "current": true
     },
     {
@@ -24,7 +38,35 @@
       "author": "Josh Cliffords",
       "edition": "Second edition, 2026",
       "date": "2026-01-01",
-      "authorityOn": ["business models", "starting", "products as ad media", "manufacturing", "distribution", "vending machines", "selling ad space", "brands and agencies", "mission", "app store layer"],
+      "authorityOn": [
+        "business models",
+        "starting",
+        "products as ad media",
+        "manufacturing",
+        "distribution",
+        "vending machines",
+        "selling ad space",
+        "brands and agencies",
+        "mission",
+        "app store layer"
+      ],
+      "current": true
+    },
+    {
+      "id": "HDL",
+      "file": "honest-data-labs-deck-2026-09-02.md",
+      "title": "Honest Data Labs (deck)",
+      "author": "Josh Cliffords",
+      "edition": "Deck of 2 September 2026, transcribed",
+      "date": "2026-09-02",
+      "authorityOn": [
+        "measurement design",
+        "choice sets",
+        "price regimes",
+        "crossing points",
+        "repeated observation",
+        "demand measurement as a product"
+      ],
       "current": true
     }
   ],

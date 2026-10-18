@@ -22,6 +22,7 @@ WORKDIR /app
 COPY --from=deps /app/node_modules node_modules
 COPY package.json tsconfig.json .npmrc ./
 COPY src src
+COPY books books
 # Changes waiting for the database are kept here too (FW_SPOOL_DIR). Mount a volume on it so a restart keeps them.
 RUN mkdir -p /var/lib/freewater/spool && chown -R node:node /var/lib/freewater
 VOLUME /var/lib/freewater

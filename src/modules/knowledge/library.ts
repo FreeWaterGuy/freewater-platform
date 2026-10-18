@@ -76,7 +76,8 @@ export class BookLibrary {
         if (level === 2) {
           chapter = cm ? `Chapter ${cm[1]}: ${cm[2]}` : title;
           chapterNo = cm ? Number(cm[1]) : null;
-          chapterKey = cm ? String(cm[1]) : `x${++unnumbered}`;
+          const sm = /^Slide (\d+)\s*:/i.exec(title);
+          chapterKey = cm ? String(cm[1]) : sm ? `s${sm[1]}` : `x${++unnumbered}`;
           section = undefined; sectionNo = 0; paraNo = 0;
           continue;
         }

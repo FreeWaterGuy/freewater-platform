@@ -78,6 +78,8 @@ const jobs: Job[] = [
     await app!.agents.refresh();
     for (const c of companies()) { if (c.agents?.enabled) await app!.agents.settle(c.id); await app!.agents.securityReview(c.id); }
   }) },
+  // Each day: any agent whose model hasn't passed the current test takes it (a new model or a new test version).
+  { name: 'agent-exams', everyMs: 24 * 3600_000, timeoutMs: 30 * 60_000, run: async () => { if (app!.agents.examinee) await app!.agents.runExams(); } },
   // Each hour, publish any finished day's books fingerprint not yet published.
   { name: 'fingerprints', everyMs: 3600_000, timeoutMs: 10 * 60_000, run: saved(() => app!.anchors.run()) },
   // Once a day, delete data older than each company keeps.

@@ -54,6 +54,8 @@ import { DistributionService } from './modules/distributions/service';
 import { TeamService } from './modules/team/service';
 import { builtinIntake, ClaudeIntake, type IntakeAssistant } from './modules/team/intake';
 import { Alerter } from './runtime/alerts';
+import { charter as agentCharter, winCondition } from './modules/agents/charter';
+import { claudeExaminee } from './modules/agents/exam';
 import type { BlobStore } from './modules/assets/blobs';
 import type { InstanceLease } from './runtime/lease';
 import type { JobRunner } from './runtime/jobs';
@@ -65,6 +67,9 @@ export interface Runtime { alerts: Alerter; startedAt: Date; lease?: InstanceLea
 export interface AppOptions {
   db: SqlClient;
   alerts?: Alerter;
+  /** Which agents run on which model, and how a model answers the test (tests pass their own). */
+  examModels?: Partial<Record<import('./modules/agents/charter').AgentId, string>>;
+  examinee?: (agentId: import('./modules/agents/charter').AgentId, model: string) => import('./modules/agents/exam').Examinee;
   /** Where changes waiting for the database are kept on disk, so a restart doesn't lose them (FW_SPOOL_DIR). */
   spoolFile?: string;
   /** This server's own id (its lease holder), written with every batch so recovery knows who wrote last. */
@@ -280,7 +285,19 @@ export async function createApp(opts: AppOptions) {
     numberline,
     gate: (companyId) => profit.gate(companyId),
     milestone: (companyId) => profit.milestone(companyId),
-  });
+  })
+  // The agents whose decisions come from a model take the test before their changes take effect.
+  if (opts.examModels) agents.examModels = opts.examModels;
+  else if (process.env.ANTHROPIC_API_KEY) {
+    const m = process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-5-5';
+    agents.examModels = { numberline: m, 'ad-assistant': m, designer: m, 'video-writer': m, 'team-assistant': m, personalizer: process.env.ANTHROPIC_PERSONALIZE_MODEL ?? 'claude-haiku-5-5' };
+  }
+  if (opts.examinee) agents.examinee = opts.examinee;
+  else if (process.env.ANTHROPIC_API_KEY) {
+    const key = process.env.ANTHROPIC_API_KEY;
+    const system = [`Purpose: ${agentCharter.purpose}`, `Win condition: ${winCondition.goal} ${winCondition.definition}`, `Not a win: ${winCondition.notAWin.join(' ')}`, `Duties: ${agentCharter.duties.join(' ')}`].join('\n');
+    agents.examinee = (agentId, model) => claudeExaminee({ apiKey: key, agentId, model, system });
+  };
   await agents.init();
   // Holdout tests: for a small share of scans the personalizer is skipped, so its real value shows in the books.
   experiences.holdout = (agent, key) => agents.holdout(agent, key);

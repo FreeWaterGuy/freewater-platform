@@ -80,18 +80,18 @@ describe('every agent on the number line, held by the governor', () => {
   it('refuses proposals agents may not make', async () => {
     const no = (await call('POST', '/v1/agents/scan', keys['freewater-admin'])).status;
     expect(no).toBe(200);
-    await expect(app.agents.propose('freewater', { agentId: 'value', kind: 'giving', title: 'Give less', detail: 'x', change: { path: 'giving.percentOfExtra', value: 5 } })).rejects.toThrow(/giving more/);
-    await expect(app.agents.propose('freewater', { agentId: 'value', kind: 'pricing', title: 'Turn off giving', detail: 'x', change: { path: 'giving.mode', value: 'none' } })).rejects.toThrow(/person’s decision/);
-    await expect(app.agents.propose('freewater', { agentId: 'value', kind: 'pricing', title: 'Triple it', detail: 'x', change: { path: 'prices.perScan', value: 75 } })).rejects.toThrow(/at most half/);
+    await expect(app.agents.propose('freewater', { agentId: 'value', kind: 'giving', title: 'Give less', detail: 'x', change: { path: 'giving.percentOfExtra', value: 5 } , citations: ['AE.3.2.1'] })).rejects.toThrow(/giving more/);
+    await expect(app.agents.propose('freewater', { agentId: 'value', kind: 'pricing', title: 'Turn off giving', detail: 'x', change: { path: 'giving.mode', value: 'none' } , citations: ['AE.3.2.1'] })).rejects.toThrow(/person’s decision/);
+    await expect(app.agents.propose('freewater', { agentId: 'value', kind: 'pricing', title: 'Triple it', detail: 'x', change: { path: 'prices.perScan', value: 75 } , citations: ['AE.3.2.1'] })).rejects.toThrow(/at most half/);
   });
 
   it('makes an approved change as a normal settings change, measures it in the books a week later, and credits the agent', async () => {
     now += 3600_000;
-    const p = (await app.agents.propose('freewater', { agentId: 'value', kind: 'pricing', title: 'Scans are worth more than 25¢', detail: 'Advertisers get a held, gifted bottle; price the scan for it.', change: { path: 'prices.perScan', value: 35 }, expected: 'More per bottle.' }));
+    const p = (await app.agents.propose('freewater', { agentId: 'value', kind: 'pricing', title: 'Scans are worth more than 25¢', detail: 'Advertisers get a held, gifted bottle; price the scan for it.', change: { path: 'prices.perScan', value: 27 }, expected: 'More per bottle.' , citations: ['AE.3.2.1'] }));
     expect(p.status).toBe('proposed');
     const done = (await call('POST', `/v1/agents/proposals/${p.id}/decide`, keys['freewater-admin'], { approve: true })).body;
     expect(done.status).toBe('applied');
-    expect(fw().prices.perScan).toBe(35);
+    expect(fw().prices.perScan).toBe(27);
     const hist = (await call('GET', '/v1/console/history', keys['freewater-admin'])).body;
     expect(JSON.stringify(hist)).toMatch(/for the value agent: Scans are worth more/);
     await week(6);
@@ -195,7 +195,8 @@ describe('every agent on the number line, held by the governor', () => {
     expect(pub.agents.find((a: any) => a.agentId === 'value').standing).toBe('regenerative');
     const ch = (await call('GET', '/v1/public/agents/charter')).body;
     expect(ch.charter.purpose).toMatch(/Help society/);
-    expect(ch.governor.version).toBe(1);
+    expect(ch.governor.version).toBe(2);
+    expect(ch.winCondition.goal).toMatch(/highest-quality/);
     expect((await call('GET', '/v1/public/agents/peak-spring')).status).toBe(404);
   });
 });
