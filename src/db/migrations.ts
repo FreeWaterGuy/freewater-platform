@@ -327,6 +327,47 @@ alter table proofs add column spec jsonb; -- the design itself, so each bottle c
 alter table proofs add column design_id text;
 `,
   },
+  {
+    id: '007_delivery',
+    sql: `
+-- Packs delivered to homes on a schedule.
+create table subscriptions (
+  id text primary key,
+  company_id text not null,
+  user_id text not null references users(id),
+  address text not null,
+  lat double precision not null,
+  lng double precision not null,
+  route_id text not null,
+  pack_size integer not null check (pack_size in (6, 12, 24)),
+  frequency text not null check (frequency in ('weekly', 'biweekly', 'every4weeks')),
+  day integer not null check (day between 0 and 6),
+  status text not null check (status in ('active', 'paused', 'cancelled')),
+  next_date date,
+  notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index subscriptions_due on subscriptions(company_id, status, next_date);
+create index subscriptions_user on subscriptions(user_id);
+
+-- One night's run of one route: the stops in driving order and what happened at each.
+create table route_runs (
+  id text primary key,
+  company_id text not null,
+  route_id text not null,
+  run_date date not null,
+  status text not null check (status in ('printing', 'packing', 'ready', 'out', 'done')),
+  driver_id text,
+  distance_km double precision,
+  minutes integer,
+  stops jsonb not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index route_runs_date on route_runs(company_id, run_date);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

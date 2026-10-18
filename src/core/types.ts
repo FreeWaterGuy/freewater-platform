@@ -18,6 +18,10 @@ export interface Location {
   lng?: number;
   /** About how long a bottle takes to print and drop, shown as the countdown. */
   printSeconds?: number;
+  /** For delivery routes: the area it covers, where vans start, and which days it runs (0 = Sunday). */
+  area?: { lat: number; lng: number; radiusKm: number };
+  depot?: { lat: number; lng: number; name: string };
+  deliveryDays?: number[];
 }
 
 export interface Product {
@@ -58,6 +62,8 @@ export interface CompanyConfig {
     charityByLocation?: Record<string, string>;
   };
   consumerPricing: 'free' | 'discounted' | 'full';
+  /** Where the company runs, for dates like "tonight" and "Tuesday". */
+  timezone?: string;
   /** Rules for people getting bottles from the app. */
   consumer?: {
     freeBottlesPerDay: number; // per person, so nobody empties a machine

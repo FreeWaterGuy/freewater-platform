@@ -16,7 +16,9 @@
     "demo:app": "tsx src/demo/appDemo.ts",
     "demo:app-preview": "tsx src/demo/appPreview.ts",
     "demo:ads": "tsx src/demo/adsDemo.ts",
-    "demo:ads-preview": "tsx src/demo/adsPreview.ts"
+    "demo:ads-preview": "tsx src/demo/adsPreview.ts",
+    "demo:ops": "tsx src/demo/opsDemo.ts",
+    "demo:ops-preview": "tsx src/demo/opsPreview.ts"
   },
   "engines": {
     "node": ">=20"

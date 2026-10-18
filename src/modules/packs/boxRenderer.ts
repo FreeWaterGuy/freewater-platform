@@ -72,7 +72,7 @@ export function renderBox(input: {
   for (const face of ['front', 'top'] as BoxFace[]) {
     const r = rects[face];
     const cx0 = r.x + r.w - 64, cy0 = r.y + 6; // top-right corner, clear of the brand name and the QR
-    parts.push(`<rect x="${cx0}" y="${cy0}" width="58" height="20" rx="5" fill="#ffffff" stroke="#000000" stroke-width="1"/><text x="${cx0 + 29}" y="${cy0 + 14}" text-anchor="middle" font-family="Arial, sans-serif" font-weight="700" font-size="11" fill="#000000">${code}</text>`);
+    parts.push(`<rect x="${cx0}" y="${cy0}" width="58" height="32" rx="5" fill="#ffffff" stroke="#000000" stroke-width="1"/><text x="${cx0 + 29}" y="${cy0 + 14}" text-anchor="middle" font-family="Arial, sans-serif" font-weight="700" font-size="11" fill="#000000">${code}</text><text x="${cx0 + 29}" y="${cy0 + 26}" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#000000">#${boxNumber(packId)}</text>`);
   }
 
   // Fold lines.
@@ -81,6 +81,11 @@ export function renderBox(input: {
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${(totalW / PX).toFixed(2)}in" height="${(totalH / PX).toFixed(2)}in" viewBox="0 0 ${totalW} ${totalH}">${parts.join('')}${folds.join('')}</svg>`;
   return { packId, svg, widthIn: totalW / PX, heightIn: totalH / PX, faceUrls, packUrl };
+}
+
+/** The box's own number, printed under the stop code, for typing in when a QR won't scan. */
+export function boxNumber(packId: string): string {
+  return packId.replace(/[^a-z0-9]/gi, '').slice(-5).toUpperCase();
 }
 
 /** "R3 · 14": route 3, stop 14. Short enough to read at a glance in a dark van. */

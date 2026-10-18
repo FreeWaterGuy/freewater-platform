@@ -13,6 +13,7 @@ export interface PackOrder {
   stop: number;
   boxId: string; // "box-6", "box-12", "box-24"
   productId: string; // the bottle
+  runId?: string; // one night's run of a route, like "route-3@2026-11-03"
 }
 
 export interface Pack {
@@ -26,8 +27,9 @@ export interface Pack {
   unitIds: string[];
   faces: BoxFacePlacement[];
   rendered?: RenderedBox;
-  status: 'composed' | 'box_printed' | 'mismatch' | 'verified' | 'sealed' | 'loaded' | 'delivered';
+  status: 'composed' | 'box_printed' | 'mismatch' | 'verified' | 'sealed' | 'loaded' | 'delivered' | 'returned';
   loadPosition?: number;
+  runId?: string;
 }
 
 export type DeliveryResult =
@@ -51,7 +53,7 @@ export class PackService {
     if (!company) throw new Error(`Unknown company ${order.companyId}`);
     if (!box) throw new Error(`Unknown box ${order.boxId}`);
 
-    const pack: Pack = { id: newId('pk'), companyId: company.id, customerId: order.customerId, address: order.address, routeId: order.routeId, stop: order.stop, box, unitIds: [], faces: [], status: 'composed' };
+    const pack: Pack = { id: newId('pk'), companyId: company.id, customerId: order.customerId, address: order.address, routeId: order.routeId, stop: order.stop, box, unitIds: [], faces: [], status: 'composed', ...(order.runId ? { runId: order.runId } : {}) };
     this.packs.set(pack.id, pack);
     this.save(pack);
 
@@ -85,7 +87,7 @@ export class PackService {
   private async printBottle(pack: Pack, productId: string, counts: Map<string, number>, max: number): Promise<string> {
     for (let tries = 0; tries < 3; tries++) {
       const avoidSignatures = new Set(pack.unitIds.map((id) => labelSignature(this.platform.units.get(id)?.placements ?? [])));
-      const r = await this.platform.order({ companyId: pack.companyId, locationId: pack.routeId, productId, packId: pack.id, frequency: { counts, max }, avoidSignatures });
+      const r = await this.platform.order({ companyId: pack.companyId, locationId: pack.routeId, productId, packId: pack.id, consumerId: pack.customerId, frequency: { counts, max }, avoidSignatures });
       if (r.ok) {
         for (const pl of r.unit.placements) if (!pl.isHouse) counts.set(pl.campaignId, (counts.get(pl.campaignId) ?? 0) + 1);
         return r.unit.id;
@@ -144,8 +146,8 @@ export class PackService {
   }
 
   /** Load order for a van: last stop first, so stop 1 ends up by the door. */
-  load(routeId: string): Pack[] {
-    const route = [...this.packs.values()].filter((p) => p.routeId === routeId);
+  load(routeId: string, runId?: string): Pack[] {
+    const route = [...this.packs.values()].filter((p) => p.routeId === routeId && (runId ? p.runId === runId : true) && p.status !== 'returned');
     const unsealed = route.filter((p) => p.status !== 'sealed' && p.status !== 'loaded' && p.status !== 'delivered');
     if (unsealed.length) throw new Error(`${unsealed.length} pack(s) on ${routeId} aren't sealed yet.`);
     const order = route.sort((a, b) => b.stop - a.stop);
@@ -159,8 +161,8 @@ export class PackService {
   }
 
   /** At the door: the stop is marked delivered only when the box scanned is the box for this address. */
-  deliver(input: { routeId: string; stop: number; scannedPackId: string; atAddress: boolean; photoProof: boolean; emptiesCollected: number }): DeliveryResult {
-    const right = [...this.packs.values()].find((p) => p.routeId === input.routeId && p.stop === input.stop);
+  deliver(input: { routeId: string; runId?: string; stop: number; scannedPackId: string; atAddress: boolean; photoProof: boolean; emptiesCollected: number }): DeliveryResult {
+    const right = [...this.packs.values()].find((p) => p.routeId === input.routeId && p.stop === input.stop && (input.runId ? p.runId === input.runId : true));
     if (!right) return { ok: false, reason: `No pack is planned for stop ${input.stop}.` };
     const reject = (reason: string): DeliveryResult => {
       this.platform.bus.publish('delivery.rejected', right.companyId, { packId: right.id, scannedPackId: input.scannedPackId, stop: input.stop, reason }, newId('rej'));
@@ -176,6 +178,16 @@ export class PackService {
     this.save(right);
     this.platform.bus.publish('pack.delivered', right.companyId, { packId: right.id, routeId: right.routeId, stop: right.stop, emptiesCollected: input.emptiesCollected, photoProof: input.photoProof }, `${right.id}:delivered`);
     return { ok: true, pack: right };
+  }
+
+  /** The driver couldn't leave it (no safe place, gate locked): the pack comes back to the micro-factory. */
+  fail(packId: string, reason: string): Pack {
+    const pack = this.need(packId);
+    if (pack.status !== 'loaded') throw new Error(`Pack ${packId} isn't out on a van.`);
+    pack.status = 'returned';
+    this.save(pack);
+    this.platform.bus.publish('delivery.failed', pack.companyId, { packId, routeId: pack.routeId, stop: pack.stop, reason }, `${packId}:failed`);
+    return pack;
   }
 
   /** Put packs loaded from storage back in place. */

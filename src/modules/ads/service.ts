@@ -146,33 +146,46 @@ export class AdsService {
   /** See it before submitting: every size, on a real label, on a box, and the scan page. */
   async preview(id: string, companyId: string, advertiserId: string) {
     const r = await this.row(id, companyId, advertiserId);
-    const company = this.platform.companies.get(companyId)!;
     const adv = await this.advertiser(companyId, advertiserId);
     const d = r.draft;
+    const spec = { brand: adv.name, headline: 'Your headline', colors: { bg: '#EEF6FB', fg: '#0B0B0B', accent: '#1E7DB8' }, ...(d.poster ?? {}) } as PosterSpec;
+    const ready = !!d.experienceId && this.host.checkConfig(d.experienceId, d.experienceConfig ?? {}) === null;
+    return this.render({ companyId, advertiserId, advertiserName: adv.name, category: d.category ?? adv.category, draw: (w, h) => renderPoster(spec, w, h), sizes: d.sizes?.length ? d.sizes : ([1, 2, 3] as Sixths[]), formats: d.formats ?? ['label'], experience: ready ? { id: d.experienceId!, config: d.experienceConfig ?? {} } : null, theme: themeFromPoster(d) });
+  }
+
+  /** The same views for a submitted campaign, for the people reviewing it. */
+  async campaignPreview(campaignId: string, companyId: string) {
+    const c = this.platform.campaigns.get(campaignId);
+    if (!c || c.companyId !== companyId) throw new AdsError(404, 'not_found', 'Campaign not found.');
+    return { campaign: { id: c.id, name: c.name ?? null, advertiser: c.advertiserName, category: c.category, where: c.targeting.locations ?? 'all', buy: c.buy, review: c.review ?? null, experienceId: c.experienceId },
+      ...(await this.render({ companyId, advertiserId: c.advertiserId, advertiserName: c.advertiserName, category: c.category, draw: (w, h) => c.creative.svg(w, h), sizes: c.sizes, formats: c.formats ?? ['label'], experience: { id: c.experienceId, config: c.experienceConfig ?? {} }, theme: c.theme ?? {} })) };
+  }
+
+  private async render(o: { companyId: string; advertiserId: string; advertiserName: string; category: string; draw: (w: number, h: number) => string; sizes: Sixths[]; formats: string[]; experience: { id: string; config: unknown } | null; theme: Partial<import('../experiences/blocks').Theme> }) {
+    const company = this.platform.companies.get(o.companyId)!;
     const product = [...this.platform.products.values()][0]!;
     const sixthPx = ((product.label.widthIn - product.label.seamIn - product.label.panelWidthIn) * 100) / 6;
-    const spec = { brand: adv.name, headline: 'Your headline', colors: { bg: '#EEF6FB', fg: '#0B0B0B', accent: '#1E7DB8' }, ...(d.poster ?? {}) } as PosterSpec;
-    const wrap = (w: number, h: number) => `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(w)}" height="${h}" viewBox="0 0 ${w.toFixed(1)} ${h}">${renderPoster(spec, w, h)}</svg>`;
-    const sizes = (d.sizes?.length ? d.sizes : ([1, 2, 3] as Sixths[])).map((s) => ({ sixths: s, svg: wrap(s * sixthPx, 450) }));
+    const wrap = (w: number, h: number) => `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(w)}" height="${h}" viewBox="0 0 ${w.toFixed(1)} ${h}">${o.draw(w, h)}</svg>`;
+    const sizes = o.sizes.map((s) => ({ sixths: s, svg: wrap(s * sixthPx, 450) }));
 
     // A sample label: this ad at its biggest size, the rest filled with the company's own ad.
-    const biggest = Math.max(...sizes.map((s) => s.sixths)) as Sixths;
-    const house = [...this.platform.campaigns.values()].find((c) => c.isHouse && c.companyId === companyId);
-    const temp: Campaign = { id: 'preview', companyId, advertiserId, advertiserName: adv.name, category: d.category ?? adv.category, sizes: [biggest], creative: { svg: (w, h) => renderPoster(spec, w, h) }, experienceId: 'offer', targeting: {}, buy: { type: 'guaranteed', remainingPrints: 1 }, active: false };
+    const biggest = Math.max(...o.sizes) as Sixths;
+    const house = [...this.platform.campaigns.values()].find((c) => c.isHouse && c.companyId === o.companyId);
+    const temp: Campaign = { id: 'preview', companyId: o.companyId, advertiserId: o.advertiserId, advertiserName: o.advertiserName, category: o.category, sizes: [biggest], creative: { svg: o.draw }, experienceId: 'offer', targeting: {}, buy: { type: 'guaranteed', remainingPrints: 1 }, active: false };
     const campaigns = new Map(this.platform.campaigns);
     campaigns.set('preview', temp);
     const rest = 6 - biggest;
     const layout = [biggest, ...(rest ? [rest] : [])] as Sixths[];
     const placements = layout.map((s, i) => (i === 0
-      ? { slotIndex: 0, sixths: s, campaignId: 'preview', advertiserId, advertiserName: adv.name, experienceId: 'offer', priceCents: 0, isHouse: false }
+      ? { slotIndex: 0, sixths: s, campaignId: 'preview', advertiserId: o.advertiserId, advertiserName: o.advertiserName, experienceId: 'offer', priceCents: 0, isHouse: false }
       : { slotIndex: i, sixths: s, campaignId: house!.id, advertiserId: house!.advertiserId, advertiserName: house!.advertiserName, experienceId: house!.experienceId, priceCents: 0, isHouse: true }));
-    const unit: Unit = { id: 'preview', companyId, productId: product.id, locationId: 'preview', kind: 'ad_supported', placements, layout, status: 'rendered', createdAt: this.platform.bus.now().toISOString() };
+    const unit: Unit = { id: 'preview', companyId: o.companyId, productId: product.id, locationId: 'preview', kind: 'ad_supported', placements, layout, status: 'rendered', createdAt: this.platform.bus.now().toISOString() };
     const label = await this.registry.rendererFor(company).render({ unit, product, company, campaigns });
 
-    const boxFace = (d.formats ?? ['label']).includes('box-face') ? wrap(424, 312) : null;
-    const theme = themeFor(company.brand, themeFromPoster(d));
-    const scan = d.experienceId && this.host.checkConfig(d.experienceId, d.experienceConfig ?? {}) === null
-      ? await this.host.open({ pluginId: d.experienceId, config: d.experienceConfig, theme, scan: { target: { kind: 'slot', unitId: 'preview', slot: 0 }, companyId, locationId: 'preview', owner: { name: adv.name, advertiserId, campaignId: 'preview' }, viewer: { key: 'preview', signedIn: false, interests: [], firstTimeWithAdvertiser: true }, now: this.platform.bus.now() } })
+    const boxFace = o.formats.includes('box-face') ? wrap(424, 312) : null;
+    const theme = themeFor(company.brand, o.theme);
+    const scan = o.experience
+      ? await this.host.open({ pluginId: o.experience.id, config: o.experience.config, theme, scan: { target: { kind: 'slot', unitId: 'preview', slot: 0 }, companyId: o.companyId, locationId: 'preview', owner: { name: o.advertiserName, advertiserId: o.advertiserId, campaignId: 'preview' }, viewer: { key: 'preview', signedIn: false, interests: [], firstTimeWithAdvertiser: true }, now: this.platform.bus.now() } })
       : null;
     const footer = { company: company.name, brand: company.brand, ads: 3, giving: givingLine(company, 'preview'), receiptUrl: null, packUrl: null };
     return { sizes, labelSvg: label.svg, boxFaceSvg: boxFace, scan: scan ? { doc: scan, footer } : null };

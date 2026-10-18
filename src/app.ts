@@ -22,6 +22,10 @@ import { DesignService } from './modules/custom/service';
 import { BuiltinDesigner } from './modules/ai/builtinDesigner';
 import { ClaudeDesigner } from './modules/ai/claudeDesigner';
 import type { DesignAssistant } from './modules/ai/designContract';
+import { DeliveryService } from './modules/delivery/service';
+import { SimpleRoutePlanner, type RoutePlanner } from './modules/delivery/planner';
+import { TestGeocoder, type Geocoder } from './adapters/geocoding/contract';
+import { OpsService } from './modules/ops/service';
 import { bottle16oz, boxes, builtinCreatives, freewater, locations, peakSpring, sampleCampaigns } from './demo/seed';
 
 export interface AppOptions {
@@ -36,7 +40,9 @@ export interface AppOptions {
   assets?: AssetStore; // defaults to storing files in the database
   pluginTimeoutMs?: number;
   assistant?: AdAssistant;
-  designer?: DesignAssistant; // the AI that helps people design their own bottles; same defaults as the ad assistant // the AI that helps make ads; defaults to Claude when ANTHROPIC_API_KEY is set, else the built-in helper
+  designer?: DesignAssistant;
+  geocoder?: Geocoder; // defaults to the test geocoder
+  planner?: RoutePlanner; // defaults to the simple route planner // the AI that helps people design their own bottles; same defaults as the ad assistant // the AI that helps make ads; defaults to Claude when ANTHROPIC_API_KEY is set, else the built-in helper
 }
 
 /** Start the platform on a database: migrate, load everything, and keep writing every change back. */
@@ -101,7 +107,11 @@ export async function createApp(opts: AppOptions) {
   const designer = opts.designer ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeDesigner({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL, fallback: builtinDesigner }) : builtinDesigner);
   const designs = new DesignService(db, platform, made.registry, host, assets, designer);
 
-  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs };
+  const geocoder = opts.geocoder ?? new TestGeocoder({ Austin: { lat: 30.2672, lng: -97.7431, radiusKm: 6 }, Denver: { lat: 39.7392, lng: -104.9903, radiusKm: 6 } });
+  const delivery = new DeliveryService(db, platform, packs, accounts, messenger, geocoder, opts.planner ?? new SimpleRoutePlanner(), () => persistence.flush());
+  const ops = new OpsService(db, platform, delivery, host);
+
+  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

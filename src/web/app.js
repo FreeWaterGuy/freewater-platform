@@ -77,6 +77,7 @@
     [/^\/app\/bottles\/([A-Za-z0-9_-]+)$/, bottleScreen],
     [/^\/app\/design$/, designScreen],
     [/^\/app\/printing$/, printingScreen],
+    [/^\/app\/delivery$/, deliveryScreen],
   ];
   let stopCurrent = null;
   function go(path, replace) {
@@ -171,10 +172,11 @@
   // ---------- home ----------
   async function homeScreen() {
     const me = await loadMe();
-    const [machines, mine, saved] = await Promise.all([
+    const [machines, mine, saved, delivery] = await Promise.all([
       api('GET', `/v1/public/companies/${state.config.companyId}/machines`).catch(() => []),
       me ? api('GET', '/v1/me/bottles').catch(() => null) : null,
       me ? api('GET', '/v1/me/saved').catch(() => []) : [],
+      me ? api('GET', '/v1/me/delivery').catch(() => null) : null,
     ]);
     const stats = mine?.stats ?? { bottles: 0, donatedCents: 0, savedCents: 0 };
     const m0 = machines[0];
@@ -189,6 +191,7 @@
           h('div', {}, h('b', { text: money(stats.savedCents) }), h('span', { text: 'saved' })))
           : h('p', { style: 'margin:0;opacity:.85', text: 'Free spring water, paid for by the ads on the bottle. Every bottle gives to charity.' })),
       link('/app/scan', { class: 'tile blue' }, h('span', { class: 'tile-ico' }, icon(I.scan)), h('span', { class: 'grow' }, h('b', { text: 'Scan a bottle' }), h('span', { text: 'Open the AR printed on any FreeWater' }))),
+      deliveryCard(delivery),
       m0 && link(`/app/m/${m0.id}`, { class: 'tile ice' }, h('span', { class: 'grow' }, h('b', { text: `${m0.id} on ${m0.name}` }), h('span', { class: 'muted small', text: m0.address || m0.city })), h('span', { class: 'go', text: 'Get one' })),
       me && h('h2', { class: 'section' }, 'Your bottles'),
       me && (mine?.bottles.length
@@ -198,6 +201,84 @@
       saved.length ? h('div', { class: 'rail' }, saved.slice(0, 10).map(savedCard)) : h('div', { class: 'empty', text: me ? 'Tap “Save” on any ad you scan and it waits for you here.' : 'Sign in, then tap “Save” on any ad you scan. It waits for you here.' }),
     );
   }
+  const truck = 'M3 6h11v10H3z|M14 9h4l3 3v4h-7|M7 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z|M17 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z';
+  const niceDate = (d) => new Date(`${d}T12:00:00Z`).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'UTC' });
+  function deliveryLine(d) {
+    const t = d.today;
+    if (t?.status === 'delivered') return `Delivered today at ${new Date(t.deliveredAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}. Leave your empties out next time.`;
+    if (t?.status === 'not_delivered') return `We couldn’t leave it today (${t.reason.toLowerCase()}). It comes with your next delivery.`;
+    if (t && t.runStatus === 'out') return t.stopsAway === 0 ? 'The van is at your door.' : `On the van. You’re ${t.stopsAway} stop${t.stopsAway === 1 ? '' : 's'} away.`;
+    if (t) return 'Being printed and packed for you today.';
+    if (d.status === 'paused') return 'Paused. Turn it back on any time.';
+    return `Printed for you the night before. Leave your empties out.`;
+  }
+  function deliveryCard(d) {
+    if (!state.me) return null;
+    if (!d) return link('/app/delivery', { class: 'tile plain' }, h('span', { class: 'tile-ico', style: 'background:var(--ice)' }, icon(truck)), h('span', { class: 'grow' }, h('b', { text: 'Get packs delivered, free' }), h('span', { class: 'muted small', text: '6, 12 or 24 bottles at your door, paid for by the ads.' })), h('span', { class: 'go', text: 'Start' }));
+    const when = d.today && d.today.status === 'planned' ? 'today' : d.nextDate ? niceDate(d.nextDate).split(',')[0] : null;
+    return h('section', { class: 'tile plain', style: 'flex-direction:column;align-items:stretch;gap:12px' },
+      h('div', { style: 'display:flex;gap:14px;align-items:center' }, h('span', { class: 'tile-ico', style: 'background:var(--ice)' }, icon(truck)),
+        h('span', { class: 'grow' }, h('b', { text: d.status === 'paused' ? `Your ${d.packSize}-pack is paused` : when ? `Your ${d.packSize}-pack arrives ${when}` : `Your ${d.packSize}-pack` }), h('span', { class: 'muted small', text: deliveryLine(d) }))),
+      h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' }, link('/app/delivery', { class: 'btn small' }, 'Manage delivery'), d.status === 'active' && !d.today ? h('button', { class: 'btn small secondary', type: 'button', onclick: async () => { await api('PATCH', '/v1/me/delivery', { action: 'skip' }); toast('Skipped. See you next time.'); render(); } }, 'Skip next') : null));
+  }
+
+  async function deliveryScreen() {
+    if (!(await ensureSignedIn('Sign in to get packs delivered.'))) { go('/app', true); return; }
+    const d = await api('GET', '/v1/me/delivery');
+    const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const FREQ = [['weekly', 'Every week'], ['biweekly', 'Every 2 weeks'], ['every4weeks', 'Every 4 weeks']];
+    const choice = (opts, value, onPick) => h('div', { class: 'chips' }, opts.map(([v, label]) => h('button', { type: 'button', class: 'chip-btn', 'aria-pressed': String(v === value), onclick: (e) => { e.currentTarget.parentElement.querySelectorAll('.chip-btn').forEach((b) => b.setAttribute('aria-pressed', String(b === e.currentTarget))); onPick(v); } }, label)));
+    const err = h('div', { class: 'notice err', hidden: true });
+    if (!d) {
+      const f = { packSize: 12, frequency: 'weekly', day: null, address: '', days: [] };
+      const addr = h('input', { class: 'input', id: 'dl-addr', autocomplete: 'street-address', placeholder: '1306 Kenwood Ave, Austin, TX' });
+      const found = h('div', {});
+      const dayBox = h('div', {});
+      const notes = h('input', { class: 'input', id: 'dl-notes', maxlength: '300', placeholder: 'Side gate, leave by the porch…' });
+      const check = async () => {
+        err.hidden = true; found.replaceChildren(); dayBox.replaceChildren();
+        if (addr.value.trim().length < 6) return;
+        try {
+          const c = await api('POST', '/v1/public/delivery/check', { companyId: state.config.companyId, address: addr.value.trim() });
+          if (!c.covered) { found.replaceChildren(h('div', { class: 'notice warn', text: 'We don’t deliver there yet. We’re adding neighborhoods all the time.' })); return; }
+          f.days = c.days; f.day = c.days[0];
+          found.replaceChildren(h('div', { class: 'notice' }, h('b', { text: `We deliver to ${c.routeName}` }), ` on ${c.days.map((x) => DAYS[x]).join(' and ')}.`));
+          dayBox.replaceChildren(h('div', { class: 'field' }, h('label', { text: 'Which day' }), choice(c.days.map((x) => [x, DAYS[x]]), f.day, (v) => { f.day = v; })));
+        } catch (x) { found.replaceChildren(h('div', { class: 'notice err', text: x.message })); }
+      };
+      addr.addEventListener('change', check);
+      screen({ nav: 'home' }, backBar('Home delivery', 'Free. Printed for you the night before.', '/app'),
+        h('div', { class: 'field' }, h('label', { for: 'dl-addr', text: 'Your address' }), h('div', { style: 'display:flex;gap:8px' }, addr, h('button', { class: 'btn small secondary', type: 'button', onclick: check }, 'Check'))),
+        found,
+        h('div', { class: 'field' }, h('label', { text: 'Pack size' }), choice([[6, '6 bottles'], [12, '12 bottles'], [24, '24 bottles']], f.packSize, (v) => { f.packSize = v; })),
+        h('div', { class: 'field' }, h('label', { text: 'How often' }), choice(FREQ, f.frequency, (v) => { f.frequency = v; })),
+        dayBox,
+        h('div', { class: 'field' }, h('label', { for: 'dl-notes', text: 'Note for the driver (optional)' }), notes),
+        h('p', { class: 'small muted', style: 'margin:0', text: 'Every bottle is different and printed fresh. Leave your empties out and the driver takes them for recycling.' }),
+        err,
+        h('button', { class: 'btn', type: 'button', onclick: async () => {
+          err.hidden = true;
+          if (!f.day && f.day !== 0) { await check(); if (f.day === null) { err.textContent = 'Check your address first.'; err.hidden = false; return; } }
+          try { await api('POST', '/v1/me/delivery', { address: addr.value.trim(), packSize: f.packSize, frequency: f.frequency, day: f.day, ...(notes.value.trim() ? { notes: notes.value.trim() } : {}) }); toast('You’re on the route. See you soon!'); go('/app'); }
+          catch (x) { err.textContent = x.message; err.hidden = false; }
+        } }, 'Start free delivery'));
+      return;
+    }
+    const change = async (body, msg) => { try { await api('PATCH', '/v1/me/delivery', body); toast(msg); render(); } catch (x) { toast(x.message); } };
+    const confirmBox = h('div', { class: 'notice err', hidden: true }, h('p', { style: 'margin:0 0 10px', text: 'Stop all deliveries? You can start again any time.' }), h('button', { class: 'btn small', style: 'background:var(--danger)', type: 'button', onclick: async () => { await api('PATCH', '/v1/me/delivery', { action: 'cancel' }); toast('Deliveries stopped'); go('/app'); } }, 'Yes, stop deliveries'));
+    const notes = h('input', { class: 'input', id: 'dl-notes', maxlength: '300', value: d.notes ?? '', placeholder: 'Side gate, leave by the porch…' });
+    screen({ nav: 'home' }, backBar('Home delivery', d.address, '/app'),
+      h('section', { class: 'hero-card' }, h('div', { class: 'headline' }, d.status === 'paused' ? 'Paused' : `${d.packSize} bottles`, h('span', { text: d.status === 'paused' ? 'Turn it back on any time.' : d.today && d.today.status === 'planned' ? 'Coming today' : d.nextDate ? niceDate(d.nextDate) : '' })),
+        h('p', { style: 'margin:0;opacity:.85', text: deliveryLine(d) }), d.today ? h('p', { style: 'margin:0;opacity:.7;font-size:13px', text: `Your box is marked ${d.today.stopCode}.` }) : null),
+      d.status === 'active' ? h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' }, h('button', { class: 'btn small secondary', type: 'button', onclick: () => change({ action: 'skip' }, 'Skipped. See you next time.') }, 'Skip the next one'), h('button', { class: 'btn small secondary', type: 'button', onclick: () => change({ action: 'pause' }, 'Paused') }, 'Pause'))
+        : h('button', { class: 'btn', type: 'button', onclick: () => change({ action: 'resume' }, 'Back on. See you soon!') }, 'Turn deliveries back on'),
+      h('div', { class: 'field' }, h('label', { text: 'Pack size' }), choice([[6, '6 bottles'], [12, '12 bottles'], [24, '24 bottles']], d.packSize, (v) => change({ action: 'update', packSize: v }, `Now ${v} bottles`))),
+      h('div', { class: 'field' }, h('label', { text: 'How often' }), choice(FREQ, d.frequency, (v) => change({ action: 'update', frequency: v }, 'Changed'))),
+      h('div', { class: 'field' }, h('label', { text: `Which day (${d.routeName})` }), choice(d.routeDays.map((x) => [x, DAYS[x]]), d.day, (v) => change({ action: 'update', day: v }, `Moved to ${DAYS[v]}`))),
+      h('form', { class: 'field', onsubmit: (e) => { e.preventDefault(); change({ action: 'update', notes: notes.value.trim() }, 'Note saved'); } }, h('label', { for: 'dl-notes', text: 'Note for the driver' }), h('div', { style: 'display:flex;gap:8px' }, notes, h('button', { class: 'btn small', type: 'submit' }, 'Save'))),
+      h('button', { class: 'btn danger', type: 'button', onclick: () => { confirmBox.hidden = false; } }, 'Stop deliveries'), confirmBox);
+  }
+
   function bottleCard(b) {
     const strip = h('div', { class: 'strip' });
     labelImage(b).then((src) => { if (src) strip.style.backgroundImage = `url("${src}")`; });

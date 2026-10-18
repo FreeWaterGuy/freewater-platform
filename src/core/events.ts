@@ -22,6 +22,7 @@ export interface EventPayloads {
   'pack.sealed': { packId: string };
   'pack.loaded': { packId: string; routeId: string; loadPosition: number };
   'pack.delivered': { packId: string; routeId: string; stop: number; emptiesCollected: number; photoProof: boolean };
+  'delivery.failed': { packId: string; routeId: string; stop: number; reason: string };
   'delivery.rejected': { packId: string; scannedPackId: string; stop: number; reason: string };
   'box.scanned': { packId: string; face: string; viewerKey: string; experienceLoaded: boolean };
   'box.ar_launched': { packId: string; face: string; viewerKey: string; loaded: boolean };

@@ -112,6 +112,36 @@ npm run demo:app-preview   # builds out/app-preview/, a clickable copy that need
 - **Saved, Machines, Scan, Me.** Saved offers from your scans. A list of machines. A scanner that reads FreeWater codes with the camera and ignores everyone else's. Your name, privacy switches (all off to start), interests, saved card, download your data, sign out, delete your account.
 - **Design my own bottle, by chatting.** See the next section.
 
+## Home delivery, the ops console and the driver app
+
+```
+npm run demo:ops           # ~30 homes on two routes due today, today's boxes printed, an ad waiting for review
+                           #   /ops as ops@freewater.io · /driver as driver@freewater.io · /app as maya@example.com
+npm run demo:ops-preview   # builds out/ops-preview/ and out/driver-preview/, clickable copies that need no server
+```
+
+**Home delivery (in the app, `/v1/me/delivery`).** Free 6, 12 or 24 packs every week, every 2 weeks or every 4 weeks, on the days a neighbourhood's route runs. Check an address first (`POST /v1/public/delivery/check`), then skip the next one, pause, resume, change size, day or the note for the driver, or stop. The app shows when it arrives and, on the day, how many stops away the van is. Bottles in a pack count as the customer's bottles, with their AR.
+
+**The night's routes (`POST /v1/ops/runs/plan`).** Everyone due that night, grouped by route, put in driving order from the micro-factory, and a pack printed for each stop. Every bottle in a pack is different and the box carries its stop code ("R3 · 14") and its own box number. Planning the same night twice prints nothing new.
+- **Swappable pieces.** Addresses become map points through a `Geocoder` (the test geocoder stands in until a real one is chosen). Stops are ordered by a `RoutePlanner` (the simple planner goes to the nearest stop next and then untangles crossings; a real routing service with roads and traffic plugs in the same way).
+- **Packing check (`POST /v1/ops/runs/:id/pack-check`).** Every bottle in every box is checked before the box is sealed. A real packing line reports each scan through the packs API instead.
+
+**The driver app (`/driver`).**
+- **Load the van.** The driver takes a route, then scans each box into the van in load order (`POST /v1/driver/runs/:id/load`), last stop first, so stop 1 ends up by the door. A box out of order is refused.
+- **House after house.** Each stop shows the address, the note, the box to grab (stop code and box number) and the next few houses.
+- **At the door.** The driver scans the box. It's delivered only if it's that house's box and the driver is there: GPS within 100 m, or the driver confirms. A wrong box shows a full-screen "Wrong box. Don't leave it." and names the right one. Ops sees every wrong scan.
+- **Proof and empties.** A photo of the box at the door, and a count of the empty bottles picked up.
+- **Can't deliver.** "Problem at this stop" sends the box back and tells the customer why.
+- **The customer hears about it.** They get a text or email when the box is delivered, or if it couldn't be left.
+
+**The ops console (`/ops`).** For the company's own team.
+- **Today:** bottles, scans, money earned and given, deliveries, and what needs attention (ads to review, failed prints, scan pages that fell back, wrong boxes).
+- **Ad review:** each ad on a sample label, at every size, on a box and as its scan page, with a checklist. Approve, or send it back with a note.
+- **Machines:** prints today, failures and the last print for each machine, plus any scan pages that fell back.
+- **Routes:** plan and print a night, run the packing check, and follow every stop.
+- **Deliveries:** everyone getting packs.
+- **Books:** the public totals and the latest ledger lines.
+
 ## Designing your own bottle by chatting
 
 The paid, ad-free bottles people design themselves: birthdays, weddings, teams, thank-yous.
@@ -182,4 +212,4 @@ All prices in `src/demo/seed.ts` are placeholders.
 
 - A real printer adapter for the Model 6 and the micro-factory lines, once the printers are chosen (the virtual printer shows the contract any printer must follow)
 - Webhooks, so partners hear about events without polling
-- The ops console, driver app and delivery subscriptions with route planning (step 6)
+- The public open-books site and charity transfers (step 7), then the white-label console, developer portal and webhooks (step 8)

@@ -1,0 +1,93 @@
+<meta charset="utf-8">
+<title>/*TITLE*/</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@600;700&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&display=swap">
+<style>
+/*CSS*/
+.preview-note { background: #FFF4D6; color: #5C3F00; padding: 8px max(16px, env(safe-area-inset-right, 0px)) 8px max(16px, env(safe-area-inset-left, 0px)); font-size: 13px; }
+</style>
+<div class="preview-note" id="pnote"></div>
+<div id="root"></div>
+<script>
+(() => {
+  const R = /*REC*/;
+  const WHICH = '/*START*/';
+  const SCAN_CSS = /*SCAN_CSS*/, SCAN_JS = /*SCAN_JS*/;
+  document.getElementById('pnote').innerHTML = WHICH === 'ops'
+    ? '<b>Preview.</b> Sign in with any email and any 6 digits. This is the real ops console on a saved copy of today: approve the ad, run the packing check for Travis Heights, look around.'
+    : '<b>Preview.</b> Sign in with any email and any 6 digits. Take the Mueller route, load the van, then deliver house by house. Try scanning the wrong box. No camera or GPS here: tap the box buttons and confirm you’re at the door.';
+  const S = { me: null, runs: structuredClone(R.runs.runs), queue: structuredClone(R.queue), ov: structuredClone(R.overview) };
+  const fail = (status, message) => { const e = new Error(message); e.status = status; throw e; };
+  const stopCode = (routeId, n) => `R${routeId.replace(/^route-/, '')} · ${n}`;
+  const recount = (r) => {
+    r.counts.delivered = r.stops.filter((s) => s.status === 'delivered').length;
+    r.counts.notDelivered = r.stops.filter((s) => s.status === 'not_delivered').length;
+    r.counts.empties = r.stops.reduce((n, s) => n + (s.emptiesCollected || 0), 0);
+    r.nextStop = (r.stops.find((s) => s.status === 'planned') || {}).stop ?? null;
+    r.loadOrder.forEach((l) => { const s = r.stops.find((x) => x.stop === l.stop); l.loaded = !!s.loaded || r.status === 'out' || r.status === 'done'; });
+    if (r.status === 'out' && r.stops.every((s) => s.status !== 'planned')) r.status = 'done';
+    return structuredClone(r);
+  };
+  const runOf = (id) => S.runs.find((r) => r.id === id) || fail(404, 'Route run not found.');
+  const scanFrame = () => {
+    const f = document.createElement('iframe');
+    f.title = 'Scan page';
+    f.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${SCAN_CSS}</style></head><body><main id="app"></main><script>window.__FW_FIXTURE__={path:'/preview/scan',api:async()=>({})};<\/script><script>${SCAN_JS.replace(/<\/script/g, '<\\/script')}<\/script></body></html>`;
+    return f;
+  };
+  const api = async (method, url, body) => {
+    await new Promise((r) => setTimeout(r, 80));
+    const path = url.split('?')[0], key = `${method} ${path}`;
+    if (key === 'GET /v1/public/app-config') return R.config;
+    if (key === 'POST /v1/auth/start') return { sent: true };
+    if (key === 'POST /v1/auth/verify') { if (!/^\d{6}$/.test(String(body.code).trim())) fail(400, 'That code isn’t right.'); S.me = WHICH === 'ops' ? R.opsMe : R.driverMe; return { token: 'fws_preview' }; }
+    if (!S.me) fail(401, 'Sign in again.');
+    if (key === 'GET /v1/me') return S.me;
+    if (key === 'POST /v1/auth/sign-out') { S.me = null; return null; }
+    // ops
+    if (key === 'GET /v1/ops/overview') return { ...S.ov, attention: { ...S.ov.attention, adsToReview: S.queue.length }, delivery: { ...S.ov.delivery, delivered: S.runs.reduce((n, r) => n + r.counts.delivered, 0), notDelivered: S.runs.reduce((n, r) => n + r.counts.notDelivered, 0) } };
+    if (key === 'GET /v1/ops/machines') return R.machines;
+    if (key === 'GET /v1/ops/plugin-failures') return R.failures;
+    if (key === 'GET /v1/review/campaigns') return S.queue;
+    let m = /^\/v1\/review\/campaigns\/([\w-]+)(\/preview)?$/.exec(path);
+    if (m && m[2]) return R.previews[m[1]];
+    if (m && method === 'POST') { S.queue = S.queue.filter((q) => q.id !== m[1]); return { id: m[1] }; }
+    if (key === 'GET /v1/ops/runs') return { date: R.runs.date, runs: S.runs.map((r) => structuredClone(r)) };
+    if (key === 'POST /v1/ops/runs/plan') return S.runs;
+    m = /^\/v1\/ops\/runs\/([^/]+)\/pack-check$/.exec(path);
+    if (m) { const r = runOf(decodeURIComponent(m[1])); r.status = 'ready'; r.stops.forEach((s) => { s.packStatus = 'sealed'; }); return { run: recount(r), problems: [] }; }
+    if (key === 'GET /v1/ops/subscriptions') return R.subs;
+    if (key === `GET /v1/public/companies/${R.config.companyId}/totals`) return R.totals;
+    if (key === 'GET /v1/ledger') return R.ledger;
+    // driver
+    if (key === 'GET /v1/driver/runs') return S.runs.map((r) => structuredClone(r));
+    m = /^\/v1\/driver\/runs\/([^/]+)(\/start|\/load|\/stops\/(\d+)\/(deliver|fail))?$/.exec(path);
+    if (m) {
+      const r = runOf(decodeURIComponent(m[1]));
+      if (!m[2]) return structuredClone(r);
+      if (m[2] === '/start') { if (r.status !== 'ready') fail(409, r.status === 'packing' ? 'These boxes haven’t been checked and sealed yet. (In this preview, run the packing check from the ops console, or take Mueller.)' : `This route is ${r.status}.`); r.driverId = S.me.id; return recount(r); }
+      if (m[2] === '/load') {
+        const next = [...r.stops].sort((a, b) => b.stop - a.stop).find((s) => !s.loaded);
+        if (body.packId !== next.packId) { const o = r.stops.find((s) => s.packId === body.packId); fail(409, o ? `That's the box for stop ${o.stop}. Load stop ${next.stop} first, so the boxes come out in order.` : 'That box isn’t on this route.'); }
+        next.loaded = true; if (r.stops.every((s) => s.loaded)) { r.status = 'out'; r.stops.forEach((s) => { s.packStatus = 'loaded'; }); }
+        return recount(r);
+      }
+      const s = r.stops.find((x) => x.stop === Number(m[3]));
+      if (m[4] === 'deliver') {
+        if (body.scannedPackId !== s.packId) { S.ov.delivery.wrongBoxScans++; const o = r.stops.find((x) => x.packId === body.scannedPackId); fail(409, o ? `Wrong box. That one is for stop ${o.stop}, ${o.address}. Grab the box marked ${stopCode(r.routeId, s.stop)}.` : `That code isn't a pack on this route. Grab the box marked ${stopCode(r.routeId, s.stop)}.`); }
+        if (!body.confirmedAtDoor) fail(409, `You're not at ${s.address} yet.`);
+        Object.assign(s, { status: 'delivered', packStatus: 'delivered', at: new Date().toISOString(), emptiesCollected: body.emptiesCollected, atAddressBy: 'driver' });
+        return recount(r);
+      }
+      Object.assign(s, { status: 'not_delivered', packStatus: 'returned', reason: body.reason, at: new Date().toISOString() });
+      return recount(r);
+    }
+    if (key === 'POST /v1/driver/photos') return { url: '/assets/preview.jpg' };
+    fail(404, 'Not in this preview.');
+  };
+  window.__FW_OPS_FIXTURE__ = { start: '/ops', api, scanFrame };
+  window.__FW_DRIVER_FIXTURE__ = { api, here: () => null };
+})();
+</script>
+<script>
+/*APP_JS*/
+</script>

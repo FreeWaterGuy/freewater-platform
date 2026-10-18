@@ -72,6 +72,29 @@
       if (key === 'GET /v1/me/bottles') return { stats: statsOf(), bottles: S.bottles };
       let m = /^\/v1\/me\/bottles\/([^/]+)(\/label\.svg)?$/.exec(path);
       if (m) { const b = S.bottles.find((x) => x.id === m[1]); if (!b) err(404, 'not_found', 'Bottle not found.'); return m[2] ? S.labels[b.id] : b; }
+      if (key === 'POST /v1/public/delivery/check') {
+        if (!/\d/.test(body.address)) err(422, 'address_not_found', 'We couldn’t find that address. Include the street number and city.');
+        return { covered: true, routeName: 'Travis Heights', days: [2, 5] };
+      }
+      if (key === 'GET /v1/me/delivery') return S.delivery ?? null;
+      const DAYN = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      const nextOn = (day) => { const d = new Date(); d.setDate(d.getDate() + 1); while (d.getDay() !== day) d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); };
+      const STEPS = { weekly: 7, biweekly: 14, every4weeks: 28 };
+      if (key === 'POST /v1/me/delivery') {
+        if (S.delivery) err(409, 'already_subscribed', 'You already have deliveries. Change them instead.');
+        const day = body.day ?? 2;
+        S.delivery = { id: 'sub_preview', address: body.address, packSize: body.packSize, frequency: body.frequency, day, dayName: DAYN[day], status: 'active', nextDate: nextOn(day), routeId: 'route-3', routeName: 'Travis Heights', routeDays: [2, 5], notes: body.notes ?? null, today: null };
+        return S.delivery;
+      }
+      if (key === 'PATCH /v1/me/delivery') {
+        const d = S.delivery; if (!d) err(404, 'not_found', 'You don’t have deliveries yet.');
+        if (body.action === 'skip') d.nextDate = new Date(Date.parse(`${d.nextDate}T12:00:00Z`) + STEPS[d.frequency] * 864e5).toISOString().slice(0, 10);
+        if (body.action === 'pause') { d.status = 'paused'; d.nextDate = null; }
+        if (body.action === 'resume') { d.status = 'active'; d.nextDate = nextOn(d.day); }
+        if (body.action === 'cancel') { S.delivery = null; return null; }
+        if (body.action === 'update') { if (body.packSize) d.packSize = body.packSize; if (body.frequency) d.frequency = body.frequency; if (body.day !== undefined) { d.day = body.day; d.dayName = DAYN[body.day]; if (d.status === 'active') d.nextDate = nextOn(body.day); } if (body.notes !== undefined) d.notes = body.notes || null; }
+        return d;
+      }
       if (key === 'POST /v1/me/designs') {
         const r = { id: `ds_${(++DS.n).toString(36)}`, status: 'open', design: { quantity: 1 }, messages: [{ role: 'assistant', text: 'Hi! What’s the occasion, and who is it for? Tell me the colors you like, and tap + to add photos or a video.' }] };
         DS.designs.set(r.id, r); return designView(r);

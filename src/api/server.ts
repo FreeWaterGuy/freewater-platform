@@ -2,6 +2,8 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { ApiError, notFound, obj, S, type Handler, type RouteDef } from './http';
 import { consumerRoutes } from './consumer';
 import { adsRoutes } from './ads';
+import { deliveryRoutes } from './delivery';
+import { DeliveryError } from '../modules/delivery/service';
 import { AdsError } from '../modules/ads/service';
 import { DesignError } from '../modules/custom/service';
 import type { App } from '../app';
@@ -490,6 +492,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   consumerRoutes(app, route, { me, checkExperience });
   adsRoutes(app, route, { me });
+  deliveryRoutes(app, route, { me });
 
   // ---------- wiring ----------
 
@@ -538,6 +541,10 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     'icon.svg': { type: 'image/svg+xml', path: join(webDir, 'icon.svg') },
     'ads.js': { type: 'text/javascript', path: join(webDir, 'ads.js') },
     'ads.css': { type: 'text/css', path: join(webDir, 'ads.css') },
+    'driver.js': { type: 'text/javascript', path: join(webDir, 'driver.js') },
+    'driver.css': { type: 'text/css', path: join(webDir, 'driver.css') },
+    'ops.js': { type: 'text/javascript', path: join(webDir, 'ops.js') },
+    'ops.css': { type: 'text/css', path: join(webDir, 'ops.css') },
     'jsqr.js': { type: 'text/javascript', path: createRequire(import.meta.url).resolve('jsqr/dist/jsQR.js') },
   };
   const cache = new Map<string, Buffer>();
@@ -551,6 +558,14 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   const adsPage = async (_req: FastifyRequest, reply: FastifyReply) => reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', "default-src 'self'; img-src 'self' data: blob:; connect-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; frame-src 'self'; frame-ancestors 'none'").send(file(join(webDir, 'ads.html')));
   server.get('/ads', adsPage);
   server.get('/ads/*', adsPage);
+
+  // The ops console (frames the scan preview for ad review) and the driver app (camera, location).
+  const opsPage = async (_req: FastifyRequest, reply: FastifyReply) => reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', "default-src 'self'; img-src 'self' data: blob:; connect-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; frame-src 'self'; frame-ancestors 'none'").send(file(join(webDir, 'ops.html')));
+  server.get('/ops', opsPage);
+  server.get('/ops/*', opsPage);
+  const driverPage = async (_req: FastifyRequest, reply: FastifyReply) => reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; frame-ancestors 'none'").header('permissions-policy', 'camera=(self), geolocation=(self)').send(file(join(webDir, 'driver.html')));
+  server.get('/driver', driverPage);
+  server.get('/driver/*', driverPage);
 
   // The FreeWater app: one page that handles every /app address itself.
   const appPage = async (_req: FastifyRequest, reply: FastifyReply) => reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; frame-ancestors 'none'").header('permissions-policy', 'camera=(self), geolocation=(self)').send(file(join(webDir, 'app.html')));
@@ -582,7 +597,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   server.setErrorHandler((err: any, _req, reply) => {
     if (err instanceof ApiError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
-    if (err instanceof AccountsError || err instanceof PaymentError || err instanceof ExperienceError || err instanceof AssetError || err instanceof AdsError || err instanceof DesignError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
+    if (err instanceof AccountsError || err instanceof PaymentError || err instanceof ExperienceError || err instanceof AssetError || err instanceof AdsError || err instanceof DesignError || err instanceof DeliveryError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
     if (err.code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE') return reply.code(415).send({ error: { code: 'unsupported_type', message: 'Send JSON, or for uploads a .glb, PNG, JPEG, WebP or MP4 file.' } });
     if (err.code === 'FST_ERR_CTP_BODY_TOO_LARGE') return reply.code(413).send({ error: { code: 'too_large', message: 'That is too big to upload.' } });
     if (err.validation) return reply.code(400).send({ error: { code: 'invalid_request', message: err.message } });
