@@ -79,6 +79,11 @@ export class Ledger {
     bus.on('ai_fund.spent', (e) => this.add(e, e.payload.cause
       ? { debit: `payable:ai:${e.payload.agentId}`, credit: `payable:charity:${e.payload.cause}`, amountCents: e.payload.amountCents, kind: 'donation', memo: `Given by the ${e.payload.agentId} agent from its own fund: ${e.payload.memo}` }
       : { debit: `payable:ai:${e.payload.agentId}`, credit: 'cash:bank', amountCents: e.payload.amountCents, kind: 'ai_spend', memo: `${e.payload.agentId} spent on ${e.payload.category}: ${e.payload.memo}` }));
+    // A batch given outside the platform: dated the day it was given.
+    bus.on('batch.recorded', (e) => this.onBatch(e));
+    bus.on('batch.voided', (e) => {
+      for (const l of this.entries.filter((x) => x.packId === `batch:${e.payload.batchId}` && x.eventId !== e.id)) this.add(e, { packId: l.packId, debit: l.credit, credit: l.debit, amountCents: l.amountCents, kind: l.kind, memo: `Voided (${e.payload.reason}): ${l.memo}` }, l.at);
+    });
     bus.on('expense.recorded', (e) => this.add(e, { debit: `expense:${e.payload.category}`, credit: 'cash:bank', amountCents: e.payload.amountCents, kind: 'expense', memo: e.payload.memo }));
     // 'print.failed' is deliberately not subscribed: nothing to bill.
   }
@@ -89,9 +94,9 @@ export class Ledger {
     return c;
   }
 
-  private add(e: PlatformEvent, line: Omit<LedgerEntry, 'id' | 'eventId' | 'at' | 'companyId'>) {
+  private add(e: PlatformEvent, line: Omit<LedgerEntry, 'id' | 'eventId' | 'at' | 'companyId'>, at?: Date) {
     if (line.amountCents <= 0) return;
-    const entry: LedgerEntry = { id: newId('le'), eventId: e.id, at: e.at, companyId: e.companyId, ...line };
+    const entry: LedgerEntry = { id: newId('le'), eventId: e.id, at: at ?? e.at, companyId: e.companyId, ...line };
     this.entries.push(entry);
     this.onEntry(entry);
     for (const f of this.listeners) f(entry);
@@ -139,6 +144,22 @@ export class Ledger {
     const amount = Math.round((upside * a.percentOfExtra) / 100);
     if (reverse) this.add(e, { ...where, debit: 'payable:ai_fund', credit: 'expense:ai_fund', amountCents: amount, kind: 'ai_fund', memo: `Refund: ${a.percentOfExtra}% of ${what} no longer goes to the AI agents’ fund` });
     else this.add(e, { ...where, debit: 'expense:ai_fund', credit: 'payable:ai_fund', amountCents: amount, kind: 'ai_fund', memo: `${a.percentOfExtra}% of ${what} to the AI agents’ fund` });
+  }
+
+  private onBatch(e: PlatformEvent<'batch.recorded'>) {
+    const company = this.company(e.companyId);
+    const b = e.payload;
+    const at = new Date(`${b.date}T17:00:00Z`);
+    const where = { packId: `batch:${b.batchId}` };
+    const what = `${b.bottles.toLocaleString('en-US')} bottles, ${b.campaign}, ${b.place} (${b.city})`;
+    if (b.revenueCents > 0) this.add(e, { ...where, debit: `receivable:advertiser:${b.advertiser}`, credit: 'revenue:print', amountCents: b.revenueCents, kind: 'print', memo: `${b.advertiser} paid for ${what}` }, at);
+    if (b.donationPerBottleCents > 0) this.add(e, { ...where, debit: 'expense:giving', credit: `payable:charity:${b.charity}`, amountCents: b.bottles * b.donationPerBottleCents, kind: 'donation', memo: `Batch gift to ${b.charity}: ${b.donationPerBottleCents}¢ × ${what}` }, at);
+    // Money above the $1 base on the batch: the charity's and the AI agents' share, as for any bottle.
+    const upside = Math.max(0, b.revenueCents - b.bottles * (company.giving.extraAboveCents ?? 100));
+    const g = company.giving;
+    if (upside > 0 && g.mode !== 'none' && g.percentOfExtra) this.add(e, { ...where, debit: 'expense:giving', credit: `payable:charity:${b.charity}`, amountCents: Math.round((upside * g.percentOfExtra) / 100), kind: 'donation', memo: `${g.percentOfExtra}% of the batch’s money above the $1 base to ${b.charity}` }, at);
+    if (upside > 0 && company.agents?.enabled && company.agents.percentOfExtra) this.add(e, { ...where, debit: 'expense:ai_fund', credit: 'payable:ai_fund', amountCents: Math.round((upside * company.agents.percentOfExtra) / 100), kind: 'ai_fund', memo: `${company.agents.percentOfExtra}% of the batch’s money above the $1 base to the AI agents’ fund` }, at);
+    if (b.costCents > 0) this.add(e, { ...where, debit: 'expense:bottles', credit: 'cash:bank', amountCents: b.costCents, kind: 'expense', memo: `Making and handing out ${what}` }, at);
   }
 
   /**

@@ -49,6 +49,9 @@ import { NumberLineService } from './modules/numberline/service';
 import { ClaudeNumberLineAgent, rulesAgent, type NumberLineAgent } from './modules/numberline/agent';
 import { AgentsService } from './modules/agents/service';
 import { ProfitService } from './modules/profit/service';
+import { DistributionService } from './modules/distributions/service';
+import { TeamService } from './modules/team/service';
+import { builtinIntake, ClaudeIntake, type IntakeAssistant } from './modules/team/intake';
 import { boxes, builtinCreatives, freewater, locations, peakSpring, products, sampleCampaigns } from './demo/seed';
 
 export interface AppOptions {
@@ -70,6 +73,8 @@ export interface AppOptions {
   footage?: FootageProvider | null;
   /** Places things on the number line (defaults to Claude with a key, else the rules). */
   numberLineAgent?: NumberLineAgent;
+  /** Turns what the team types and attaches into drafts for the books (defaults to Claude with a key, else built-in). */
+  intake?: IntakeAssistant;
   /** Where daily books fingerprints are published (defaults: GitHub when configured, and a Bitcoin timestamp in production). */
   anchorPublishers?: AnchorPublisher[];
   designer?: DesignAssistant;
@@ -205,9 +210,15 @@ export async function createApp(opts: AppOptions) {
   const webhooks = new WebhookService(db, opts.webhookSender ?? new HttpWebhookSender({ allowPrivate }), messenger, opts.clock, flush, { allowPrivate, consoleUrl: publicUrl });
   const consoleSvc = new ConsoleService(db, platform, made.registry, accounts, messenger, flush, { consoleUrl: publicUrl, clock: opts.clock });
 
+  // Bottles FreeWater gives outside the platform (before the software runs them), recorded by the team.
+  const distributions = new DistributionService(db, platform, { today: (companyId) => delivery.today(companyId), charities: async (companyId) => (await books.charities(companyId)).map((c: any) => c.name), onBottles: (companyId, n) => transparency.addBottles(companyId, n) });
+  await distributions.init();
+  const team = new TeamService(db, platform, distributions, opts.intake ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeIntake({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL }) : builtinIntake), { today: (companyId) => delivery.today(companyId), charities: async (companyId) => (await books.charities(companyId)).map((c: any) => c.name), recordExpense: (companyId, e) => books.recordExpense(companyId, e) });
+
   // Monthly profit sharing above the $1 base: charity and AI shares, losses carried forward, the milestone.
   const profit = new ProfitService(db, platform, {
     today: (companyId, at) => delivery.today(companyId, at),
+    batches: { bottles: (companyId) => distributions.bottles(companyId), inMonth: (companyId, period) => distributions.inMonth(companyId, period) },
     aiCostsCents: async (companyId, from, to) => {
       const rows = (await db.query<any>(`select company_id, at, millicents from agent_costs where at >= $1 and at < $2`, [from.toISOString(), to.toISOString()])).rows;
       // Costs not tied to one company are the platform operator's (FreeWater runs the agents).
@@ -243,7 +254,7 @@ export async function createApp(opts: AppOptions) {
   await fleet.load();
   made.registry.registerPrinter('model6-fleet', new MachineFleetPrinter(() => fleet, made.printer));
 
-  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, transparency, anchors, agents, profit };
+  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, transparency, anchors, agents, profit, distributions, team };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

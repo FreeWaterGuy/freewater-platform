@@ -51,6 +51,7 @@ export class TransparencyService {
     });
     bus.on('purchase.refunded', (e) => this.add(e.companyId, e.at, 'refund', 'A sale was refunded; its commission and gift were taken back', undefined));
     bus.on('charity.transferred', (e) => this.add(e.companyId, e.at, 'transfer', `${money(e.payload.amountCents)} sent to ${e.payload.charity} (transfer ${e.payload.number})`, undefined, { paid: e.payload.amountCents }, '', true));
+    bus.on('batch.recorded', (e) => this.add(e.companyId, e.at, 'bottle', `${e.payload.bottles.toLocaleString('en-US')} free bottles given at ${e.payload.place} (${e.payload.campaign})`, undefined, { given: e.payload.bottles * e.payload.donationPerBottleCents }, e.payload.donationPerBottleCents ? ` · ${money(e.payload.bottles * e.payload.donationPerBottleCents)} to ${e.payload.charity}` : '', false));
     bus.on('ai_fund.spent', (e) => { if (e.payload.cause) this.add(e.companyId, e.at, 'gift', `The ${e.payload.agentId} agent gave from its own fund to ${e.payload.cause}`, undefined, { given: e.payload.amountCents }, ` · ${money(e.payload.amountCents)}`); });
     bus.on('lottery.won', (e) => this.add(e.companyId, e.at, 'prize', `Someone caught the red ball and won ${e.payload.prizeName}`, undefined, { paid: e.payload.valueCents }));
   }
@@ -116,6 +117,8 @@ export class TransparencyService {
 
   feed(companyId: string, limit = 50) { return (this.feeds.get(companyId) ?? []).slice(0, Math.min(200, limit)); }
 
+  /** Bottles given outside the platform count in the live totals too. */
+  addBottles(companyId: string, n: number) { this.c(companyId).bottles += n; this.push(companyId, undefined); }
   counters(companyId: string): Counters {
     const x = this.c(companyId);
     const names = new Set([...x.given.keys(), ...x.sent.keys()]);

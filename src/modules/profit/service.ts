@@ -31,7 +31,7 @@ export interface Period {
 }
 
 export class ProfitService {
-  constructor(private db: SqlClient, private platform: Platform, private deps: { today: (companyId: string, at?: Date) => string; aiCostsCents: (companyId: string, from: Date, to: Date) => Promise<number> }) {}
+  constructor(private db: SqlClient, private platform: Platform, private deps: { today: (companyId: string, at?: Date) => string; aiCostsCents: (companyId: string, from: Date, to: Date) => Promise<number>; batches?: { bottles: (companyId: string) => Promise<number>; inMonth: (companyId: string, period: string) => Promise<{ bottles: number; revenueCents: number }[]> } }) {}
   private now() { return this.platform.bus.now(); }
   private company(id: string): CompanyConfig { const c = this.platform.companies.get(id); if (!c) throw new ProfitError('not_found', 'Company not found.', 404); return c; }
   private month(companyId: string, at: Date | string) { return this.deps.today(companyId, new Date(at)).slice(0, 7); }
@@ -53,7 +53,8 @@ export class ProfitService {
     const c = this.company(companyId);
     const goal = c.agents?.milestone ?? { factories: 10, beverages: 100_000_000 };
     const factories = (await this.db.query<any>(`select name, city, opened_on from factories where company_id = $1 order by opened_on`, [companyId])).rows.map((r) => ({ name: r.name, city: r.city, openedOn: String(r.opened_on).slice(0, 10) }));
-    const beverages = n((await this.db.query<any>(`select count(*)::bigint as n from units where company_id = $1 and status in ('printed','dispensed')`, [companyId])).rows[0]?.n);
+    // Every beverage given: bottles printed by the platform, and batches given outside it.
+    const beverages = n((await this.db.query<any>(`select count(*)::bigint as n from units where company_id = $1 and status in ('printed','dispensed')`, [companyId])).rows[0]?.n) + (this.deps.batches ? await this.deps.batches.bottles(companyId) : 0);
     const row = (await this.db.query<any>(`select reached_at, reason from milestones where company_id = $1`, [companyId])).rows[0];
     return { goal, factories: factories.length, factoryList: factories, beverages, reached: !!row, ...(row ? { reachedAt: new Date(row.reached_at).toISOString(), reason: row.reason } : {}) };
   }
@@ -90,7 +91,9 @@ export class ProfitService {
     // Each bottle's print (and custom) money above the base, plus every other kind of revenue.
     const perUnit = new Map<string, number>();
     for (const l of lines) if ((l.kind === 'print' || l.kind === 'custom') && l.unitId) perUnit.set(l.unitId, (perUnit.get(l.unitId) ?? 0) + l.amountCents);
-    const upside = [...perUnit.values()].reduce((a, v) => a + Math.max(0, v - base), 0) + sum((l) => ['scan', 'ar', 'box_face', 'commission'].includes(l.kind)) - sum((l) => l.kind === 'commission_reversal');
+    // Batches given outside the platform: their money above the $1 base per bottle is upside too.
+    const batchUpside = this.deps.batches ? (await this.deps.batches.inMonth(companyId, period)).reduce((a, b) => a + Math.max(0, b.revenueCents - b.bottles * base), 0) : 0;
+    const upside = batchUpside + [...perUnit.values()].reduce((a, v) => a + Math.max(0, v - base), 0) + sum((l) => ['scan', 'ar', 'box_face', 'commission'].includes(l.kind)) - sum((l) => l.kind === 'commission_reversal');
     const total = sum((l) => l.credit.startsWith('revenue:')) - sum((l) => l.kind === 'commission_reversal');
     const bottles = [...this.platform.units.values()].filter((u) => u.companyId === companyId && (u.status === 'printed' || u.status === 'dispensed') && inMonth(u.createdAt)).length;
     const uc = c.unitCosts ? c.unitCosts.water + c.unitCosts.bottle + c.unitCosts.label + c.unitCosts.machine : 0;
@@ -107,7 +110,9 @@ export class ProfitService {
     const profit = Math.max(0, net), carriedOut = Math.max(0, -net);
     // The charity: what it already got from the upside as it was earned, topped up to its share of the profit.
     const g = c.giving;
-    const given = sum((l) => l.kind === 'donation' && l.debit === 'expense:giving') - sum((l) => l.kind === 'donation' && l.credit === 'expense:giving');
+    // A batch's gift per bottle isn't upside giving; its share of the money above the base is.
+    const isBatchBase = (l: (typeof lines)[number]) => !!l.packId?.startsWith('batch:') && l.memo.includes('Batch gift');
+    const given = sum((l) => l.kind === 'donation' && l.debit === 'expense:giving' && !isBatchBase(l)) - sum((l) => l.kind === 'donation' && l.credit === 'expense:giving' && !isBatchBase(l));
     const floor = g.mode === 'per_unit' ? Math.max(0, given - bottles * (g.centsPerUnit ?? 0)) : g.mode === 'none' ? 0 : given;
     const charityPercent = g.mode === 'none' ? 0 : g.percentOfProfit ?? 0;
     const topUp = Math.max(0, Math.round((profit * charityPercent) / 100) - floor);

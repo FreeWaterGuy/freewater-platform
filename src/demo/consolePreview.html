@@ -84,6 +84,9 @@
     if (key === 'GET /v1/honest-data') return clone(R.honest);
     if (key === 'GET /v1/agents') return clone(R.agents);
     if (key === 'GET /v1/profit') return clone(R.profit);
+    if (key === 'GET /v1/team/batches') return clone(R.team);
+    if (key === 'POST /v1/team/intake') return clone(R.intake);
+    if (key.startsWith('POST /v1/team/')) return fail(400, 'This preview doesn’t record anything. In the real console this works.');
     if (key.startsWith('POST /v1/agents/')) return fail(400, 'This preview doesn’t change anything. In the real console this works.');
     if (key === 'POST /v1/lottery/redeem') { const c = String(body.code).trim().toUpperCase(); if (!/^WIN-[0-9A-Z]{4}-[0-9A-Z]{4}$/.test(c)) fail(404, 'That prize code isn’t one of ours.'); return { claimCode: c, prize: 'a free 12-pack from FreeWater', alreadyRedeemed: false, redeemedAt: new Date().toISOString() }; }
     if (key === 'POST /v1/console/products/check' || key === 'POST /v1/console/products') {

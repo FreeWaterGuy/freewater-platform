@@ -10,7 +10,7 @@ export class ApiError extends Error {
 }
 export const notFound = (what: string) => new ApiError(404, 'not_found', `${what} not found.`);
 
-export type Handler = (req: FastifyRequest, key: ApiKey | null) => Promise<{ status?: number; body?: unknown; type?: string; raw?: string }>;
+export type Handler = (req: FastifyRequest, key: ApiKey | null) => Promise<{ status?: number; body?: unknown; type?: string; raw?: string | Uint8Array; headers?: Record<string, string> }>;
 export interface RouteDef {
   method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   url: string;

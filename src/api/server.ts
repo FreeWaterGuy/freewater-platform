@@ -14,6 +14,7 @@ import { moreRoutes } from './more';
 import { dataRoutes } from './data';
 import { transparencyRoutes } from './transparency';
 import { agentRoutes } from './agents';
+import { teamRoutes } from './team';
 import { VideoError } from '../modules/video/service';
 import { DataError, DataService } from '../modules/data/service';
 import { NumberLineError } from '../modules/numberline/service';
@@ -544,6 +545,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   dataRoutes(app, route);
   transparencyRoutes(app, server, route);
   agentRoutes(app, route);
+  teamRoutes(app, route);
 
   // ---------- wiring ----------
 
@@ -596,7 +598,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
         await persistence.flush(); // answer only once the change is safely stored
         logActivity(r, req, (req as any).apiKey as ApiKey | null, out.status ?? 200);
         reply.code(out.status ?? 200);
-        if (out.raw !== undefined) return reply.type(out.type ?? 'text/plain').send(out.raw);
+        if (out.headers) reply.headers(out.headers);
+        if (out.raw !== undefined) return reply.type(out.type ?? 'text/plain').send(typeof out.raw === 'string' ? out.raw : Buffer.from(out.raw));
         return reply.send(out.body);
       },
     });

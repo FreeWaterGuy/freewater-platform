@@ -17,6 +17,7 @@
   const NS = 'http://www.w3.org/2000/svg';
   const icon = (d) => { const s = document.createElementNS(NS, 'svg'); for (const [k, v] of Object.entries({ viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' })) s.setAttribute(k, v); for (const p of d.split('|')) { const e = document.createElementNS(NS, 'path'); e.setAttribute('d', p); s.append(e); } return s; };
   const I = {
+    box: 'M3 7l9-4 9 4v10l-9 4-9-4z|M3 7l9 4 9-4|M12 11v10',
     ai: 'M12 3a4 4 0 0 1 4 4v1h1a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3v-6a3 3 0 0 1 3-3h1V7a4 4 0 0 1 4-4Z|M9 13h.01|M15 13h.01|M9 17h6',
     start: 'M5 12l5 5L20 7', company: 'M3 21h18|M5 21V7l7-4 7 4v14|M9 9h1|M14 9h1|M9 13h1|M14 13h1|M10 21v-4h4v4', brand: 'M12 3a9 9 0 1 0 0 18c1 0 1.5-.7 1.5-1.5 0-.4-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1 0-.8.7-1.5 1.5-1.5H16a5 5 0 0 0 5-5c0-4.4-4-7.8-9-7.8Z|M7.5 11.5h.01|M10.5 7.5h.01|M15.5 7.5h.01',
     game: 'M12 21a7 7 0 1 0 0-14 7 7 0 0 0 0 14Z|M4 4l3 3|M20 4l-3 3|M12 2v3', eye: 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z|M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z', shield: 'M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6l-8-3Z', line: 'M3 12h18|M7 9v6|M12 8v8|M17 9v6', ads: 'M4 5h16v14H4z|M4 10h16|M10 10v9', giving: 'M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L12 21l7.8-7.5 1-1.1a5.5 5.5 0 0 0 0-7.8Z', modules: 'M4 4h7v7H4z|M13 4h7v7h-7z|M4 13h7v7H4z|M13 13h7v7h-7z',
@@ -45,7 +46,7 @@
   }
 
   const routes = [
-    [/^\/console\/?$/, startPage], [/^\/console\/company$/, companyPage], [/^\/console\/brand$/, brandPage], [/^\/console\/ads$/, adsPage], [/^\/console\/giving$/, givingPage], [/^\/console\/game$/, gamePage], [/^\/console\/transparency$/, transparencyPage], [/^\/console\/data$/, dataPage], [/^\/console\/numberline$/, numberLinePage], [/^\/console\/agents$/, agentsPage],
+    [/^\/console\/?$/, startPage], [/^\/console\/company$/, companyPage], [/^\/console\/brand$/, brandPage], [/^\/console\/ads$/, adsPage], [/^\/console\/giving$/, givingPage], [/^\/console\/game$/, gamePage], [/^\/console\/transparency$/, transparencyPage], [/^\/console\/data$/, dataPage], [/^\/console\/numberline$/, numberLinePage], [/^\/console\/agents$/, agentsPage], [/^\/console\/given$/, givenPage],
     [/^\/console\/modules$/, modulesPage], [/^\/console\/codes$/, codesPage], [/^\/console\/products$/, productsPage], [/^\/console\/machines$/, machinesPage], [/^\/console\/team$/, teamPage], [/^\/console\/history$/, historyPage],
     [/^\/console\/keys$/, keysPage], [/^\/console\/webhooks$/, webhooksPage], [/^\/console\/webhooks\/([\w-]+)$/, webhookPage], [/^\/console\/licensees$/, licenseesPage],
   ];
@@ -81,6 +82,7 @@
       ['start', '/console', 'Get started', I.start], ['company', '/console/company', 'Company', I.company], ['brand', '/console/brand', 'Brand', I.brand], ['ads', '/console/ads', 'Ads and prices', I.ads], ['codes', '/console/codes', 'QR codes and AR', I.qr], ['products', '/console/products', 'Products', I.product],
       ['giving', '/console/giving', 'Giving', I.giving], ['game', '/console/game', 'Prize game', I.game], ['transparency', '/console/transparency', 'Transparency', I.eye], ['data', '/console/data', 'Data and privacy', I.shield], ['numberline', '/console/numberline', 'Number line', I.line], ['agents', '/console/agents', 'AI agents', I.ai], ['modules', '/console/modules', 'Modules', I.modules], ['machines', '/console/machines', 'Machines', I.machine], ['team', '/console/team', 'Team', I.team], ['history', '/console/history', 'History', I.history],
       'Developers', ['keys', '/console/keys', 'API keys', I.key], ['webhooks', '/console/webhooks', 'Webhooks', I.hook], ['docs', '/developers', 'Docs', I.docs],
+      ...(S.ov?.config?.id === 'freewater' ? ['FreeWater team', ['given', '/console/given', 'Bottles given & receipts', I.box]] : []),
       ...(S.ov?.you?.platform ? ['Platform', ['licensees', '/console/licensees', 'Licensees', I.licensees]] : []),
     ];
     const b = S.ov?.config?.brand ?? S.config?.brand ?? { logoTop: 'free', logoBottom: 'water' };
@@ -513,6 +515,97 @@
           h('div', { class: 'kpis', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, ['1', '2', '3', '4a', '4b', '5'].map((k) => [k, hd.tiers[k]]).map(([k, label]) => h('div', { class: 'kpi' }, h('span', { text: `Tier ${k}: ${label}` }), h('b', { text: `${(hd.byTier[k] ?? 0).toLocaleString()}` }), h('small', { class: 'muted', text: pct(hd.byTier[k] ?? 0) })))),
           h('h3', { style: 'margin:18px 0 8px;font-size:15px', text: 'By economic system' }),
           h('div', { class: 'kpis', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, Object.entries(SYS).map(([k, label]) => h('div', { class: 'kpi' }, h('span', { text: label }), h('b', { text: `${(hd.bySystem[k] ?? 0).toLocaleString()}` }), h('small', { class: 'muted', text: pct(hd.bySystem[k] ?? 0) })))))));
+  }
+
+  // ---------- FreeWater's team: bottles given outside the platform, receipts and documents ----------
+  async function givenPage() {
+    if (S.ov.config.id !== 'freewater') return shell('', h('div', { class: 'notice err', text: 'Only FreeWater’s own team uses this page.' }));
+    const data = await api('GET', '/v1/team/batches');
+    const cents = (c) => (Math.abs(c) < 100 ? `${c}¢` : dollars(c));
+    const history = [];
+    const log = h('div', { class: 'stack', style: 'gap:10px;max-height:420px;overflow-y:auto' });
+    const draftsBox = h('div', { class: 'stack' });
+    let pendingFiles = [], keptFiles = [];
+    const say = (role, text) => { history.push({ role, text }); log.append(h('div', { class: `msg ${role}`, style: role === 'user' ? 'align-self:flex-end;background:#000;color:#fff;padding:10px 14px;border-radius:18px 18px 4px 18px;max-width:85%' : 'max-width:85%', text })); log.scrollTop = 1e9; };
+    say('assistant', 'Tell me what happened, in your own words: how many bottles, where, when, and what for (for example “We gave 500 bottles at SXSW today for the WeFunder campaign”). Attach receipts, photos or documents. I’ll make a draft for you to check before anything goes in the books.');
+    const fileInput = h('input', { type: 'file', multiple: '', accept: '.pdf,.png,.jpg,.jpeg,.webp,.heic,.csv,.txt,.xlsx,.docx,image/*,application/pdf', style: 'display:none' });
+    const chips = h('div', { class: 'chips' });
+    const drawChips = () => chips.replaceChildren(...pendingFiles.map((f, i) => h('span', { class: 'pill' }, f.name, ' ', h('button', { type: 'button', 'aria-label': `Remove ${f.name}`, style: 'border:0;background:none;cursor:pointer', onclick: () => { pendingFiles.splice(i, 1); drawChips(); } }, '×'))));
+    fileInput.addEventListener('change', async () => {
+      for (const f of fileInput.files) {
+        if (f.size > 20 * 1048576) { toast(`${f.name} is over 20 MB.`); continue; }
+        const b64 = await new Promise((res) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.readAsDataURL(f); });
+        pendingFiles.push({ name: f.name, contentType: f.type || (f.name.endsWith('.heic') ? 'image/heic' : 'application/octet-stream'), dataBase64: b64 });
+      }
+      fileInput.value = ''; drawChips();
+    });
+    const box = h('textarea', { class: 'input', rows: 3, placeholder: 'What happened? Attach receipts with the paperclip.', style: 'min-height:80px' });
+    const send = h('button', { class: 'btn blue', type: 'button' }, 'Send');
+    const charities = S.ov.charities ?? [];
+    const field = (label, input) => h('div', { class: 'field' }, h('label', { text: label }), input);
+    const drawDraft = (d, files) => {
+      const inp = (v, o = {}) => { const i = h('input', { class: 'input', value: v ?? '', ...o }); return i; };
+      const wrapEl = h('div', { class: 'panel-box' });
+      if (d.type === 'batch') {
+        const f = { date: inp(d.date, { type: 'date' }), bottles: inp(d.bottles, { type: 'number', min: 1 }), city: inp(d.city), place: inp(d.place), campaign: inp(d.campaign), advertiser: inp(d.advertiser, { placeholder: 'FreeWater (our own ad)' }), revenue: inp(d.revenueCents != null ? d.revenueCents / 100 : 0, { type: 'number', min: 0, step: '0.01' }), cost: inp(d.costCents != null ? d.costCents / 100 : '', { type: 'number', min: 0, step: '0.01', placeholder: 'Standard cost per bottle' }), notes: inp(d.notes) };
+        const charity = h('select', { class: 'input' }, charities.map((c) => h('option', { value: c, selected: c === (d.charity ?? S.ov.config.giving.defaultCharity) ? '' : null, text: c })));
+        wrapEl.append(h('h2', { text: 'Bottles given' }), h('div', { class: 'form' }, field('Day given', f.date), field('Bottles', f.bottles), field('City', f.city), field('Where (event or place)', f.place), field('What for (campaign)', f.campaign), field('Whose ad was on it', f.advertiser), field('A sponsor paid ($, 0 for our own ads)', f.revenue), field('What it cost ($, blank for standard)', f.cost), field('Charity', charity), field('Notes', f.notes)),
+          files.length ? h('p', { class: 'muted', style: 'margin:0;font-size:13px', text: `Attached: ${files.map((x) => x.name).join(', ')}` }) : '',
+          h('div', { class: 'toolbar' }, h('button', { class: 'btn blue', type: 'button', onclick: async (e) => {
+            e.currentTarget.disabled = true;
+            try {
+              await api('POST', '/v1/team/batches', { date: f.date.value, bottles: Number(f.bottles.value), city: f.city.value, place: f.place.value, campaign: f.campaign.value, ...(f.advertiser.value ? { advertiser: f.advertiser.value } : {}), revenueCents: Math.round(Number(f.revenue.value || 0) * 100), ...(f.cost.value !== '' ? { costCents: Math.round(Number(f.cost.value) * 100) } : {}), ...(charity.value ? { charity: charity.value } : {}), ...(f.notes.value ? { notes: f.notes.value } : {}), fileIds: files.map((x) => x.id) });
+              toast('Recorded in the books.'); render();
+            } catch (x) { toast(x.message); e.currentTarget.disabled = false; }
+          } }, 'Record it'), h('button', { class: 'btn secondary', type: 'button', onclick: () => wrapEl.remove() }, 'Discard')));
+      } else {
+        const f = { date: inp(d.date, { type: 'date' }), amount: inp(d.amountCents != null ? d.amountCents / 100 : '', { type: 'number', min: 0, step: '0.01' }), category: inp(d.category ?? 'other'), memo: inp(d.memo) };
+        wrapEl.append(h('h2', { text: 'An expense' }), h('div', { class: 'form' }, field('Day paid', f.date), field('Amount ($)', f.amount), field('Kind', f.category), field('What it was for', f.memo)),
+          files.length ? h('p', { class: 'muted', style: 'margin:0;font-size:13px', text: `Attached: ${files.map((x) => x.name).join(', ')}` }) : '',
+          h('div', { class: 'toolbar' }, h('button', { class: 'btn blue', type: 'button', onclick: async (e) => {
+            e.currentTarget.disabled = true;
+            try { await api('POST', '/v1/team/expenses', { date: f.date.value, amountCents: Math.round(Number(f.amount.value) * 100), category: f.category.value || 'other', memo: f.memo.value || 'Expense', fileIds: files.map((x) => x.id) }); toast('Recorded in the books.'); render(); }
+            catch (x) { toast(x.message); e.currentTarget.disabled = false; }
+          } }, 'Record it'), h('button', { class: 'btn secondary', type: 'button', onclick: () => wrapEl.remove() }, 'Discard')));
+      }
+      draftsBox.prepend(wrapEl);
+    };
+    send.addEventListener('click', async () => {
+      const text = box.value.trim();
+      if (!text && !pendingFiles.length) return;
+      say('user', `${text}${pendingFiles.length ? ` [${pendingFiles.map((f) => f.name).join(', ')}]` : ''}`);
+      send.disabled = true;
+      try {
+        const r = await api('POST', '/v1/team/intake', { message: text, files: pendingFiles, history: history.slice(0, -1) });
+        keptFiles = r.files; pendingFiles = []; drawChips(); box.value = '';
+        say('assistant', r.reply);
+        for (const d of r.drafts) drawDraft(d, keptFiles);
+      } catch (x) { say('assistant', x.message); }
+      send.disabled = false;
+    });
+    box.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send.click(); });
+    const openFile = async (f) => {
+      try { const res = await fetch(f.url, { headers: { authorization: `Bearer ${S.token}` } }); const blob = await res.blob(); window.open(URL.createObjectURL(blob), '_blank'); } catch { toast('Couldn’t open it.'); }
+    };
+    const t = data.totals;
+    shell('given', head('Bottles given & receipts', 'For FreeWater’s team: bottles we give outside the platform (before the software runs them, like the WeFunder campaign), and any receipt or document. Each batch goes into the books with its gift to charity, counts toward the milestone, and shows in the open books.'),
+      h('div', { class: 'stack' },
+        section('Tell me what happened', null, log, h('div', { class: 'field' }, box), chips,
+          h('div', { class: 'toolbar' }, send, h('button', { class: 'btn secondary', type: 'button', onclick: () => fileInput.click() }, 'Attach files'), fileInput, h('button', { class: 'btn secondary', type: 'button', onclick: () => drawDraft({ type: 'batch', date: new Date().toISOString().slice(0, 10), revenueCents: 0 }, []) }, 'Add a batch by hand'), h('button', { class: 'btn secondary', type: 'button', onclick: () => drawDraft({ type: 'expense', date: new Date().toISOString().slice(0, 10) }, []) }, 'Add an expense by hand'))),
+        draftsBox,
+        section('Given so far', null,
+          h('div', { class: 'kpis', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' },
+            h('div', { class: 'kpi' }, h('span', { text: 'Bottles' }), h('b', { text: t.bottles.toLocaleString() }), h('small', { class: 'muted', text: `${t.batches} batches` })),
+            h('div', { class: 'kpi' }, h('span', { text: 'Given to charity' }), h('b', { text: cents(t.givenCents) })),
+            h('div', { class: 'kpi' }, h('span', { text: 'Paid by sponsors' }), h('b', { text: cents(t.revenueCents) })),
+            h('div', { class: 'kpi' }, h('span', { text: 'Cost' }), h('b', { text: cents(t.costCents) }))),
+          data.batches.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Day', 'Bottles', 'Where', 'For', 'Charity', 'Files', ''].map((x) => h('th', { text: x })))),
+            h('tbody', {}, data.batches.map((b) => h('tr', { style: b.voidedAt ? 'opacity:.5' : null },
+              h('td', { text: b.date }), h('td', { text: b.bottles.toLocaleString() }), h('td', { text: `${b.place}, ${b.city}` }), h('td', { text: `${b.campaign}${b.revenueCents ? ` · ${b.advertiser} paid ${cents(b.revenueCents)}` : ''}` }),
+              h('td', { text: b.voidedAt ? `Voided: ${b.voidReason}` : `${cents(b.givenCents)} to ${b.charity}` }),
+              h('td', {}, b.files.map((f) => h('button', { type: 'button', class: 'btn secondary small', style: 'margin:0 4px 4px 0', onclick: () => openFile(f) }, f.name))),
+              h('td', {}, b.voidedAt ? null : h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { const reason = window.prompt('Why void this batch? (for the record)'); if (!reason) return; try { await api('POST', `/v1/team/batches/${b.id}/void`, { reason }); toast('Voided.'); render(); } catch (x) { toast(x.message); } } }, 'Void')))))))
+            : h('p', { class: 'muted', style: 'margin:0', text: 'Nothing recorded yet.' }))));
   }
 
   // ---------- the AI agents ----------

@@ -873,6 +873,16 @@ create table milestones (company_id text primary key, reached_at timestamptz not
 create table agent_upsides (company_id text not null, id text not null, data jsonb not null, status text not null, by text, at timestamptz not null, primary key (company_id, id));
 `,
   },
+  {
+    id: '019_distributions',
+    sql: `
+-- Bottles given outside the platform, recorded by the team: one row per batch, voided (never deleted) if wrong.
+create table distributions (id text primary key, company_id text not null, day date not null, bottles int not null, data jsonb not null, recorded_by text not null, at timestamptz not null, voided_at timestamptz, voided_by text, void_reason text);
+create index distributions_company on distributions(company_id, day);
+-- Receipts, photos and documents the team attaches, kept with the batch or expense they prove.
+create table team_files (id text primary key, company_id text not null, name text not null, content_type text not null, bytes bytea not null, sha256 text not null, size_bytes int not null, uploaded_by text not null, linked_to text, at timestamptz not null);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

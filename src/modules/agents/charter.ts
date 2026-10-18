@@ -121,6 +121,7 @@ export const agentRegistry = {
   'ad-assistant': { name: 'Ad assistant', role: 'Helps advertisers make the best ad they can, in the console.', essential: false },
   designer: { name: 'Bottle designer', role: 'Helps people design their own custom bottles.', essential: false },
   'video-writer': { name: 'Video writer', role: 'Writes the personalized videos behind “Show me more.”', essential: false },
+  'team-assistant': { name: 'Team assistant', role: 'Turns what FreeWater’s team types, and the receipts they attach, into drafts for the books.', essential: false },
   value: { name: 'Value agent', role: 'Finds where the system can lower costs, capture more value and give more, and proposes the changes: how far each part still is from the deepest price it could fund.', essential: false },
   code: { name: 'Code agent', role: 'Improves the platform’s code as a whole: lower running costs, faster, fewer failures. Its changes go through review.', essential: false },
 } as const;

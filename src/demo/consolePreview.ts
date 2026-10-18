@@ -95,6 +95,13 @@ const rec = {
     setNow(end); await app.agents.measure(); await app.agents.settle('freewater'); await app.agents.scan('freewater');
     return call('GET', '/v1/agents', token);
   })(),
+  team: await (async () => {
+    const day = new Date(end - 2 * 86_400_000).toISOString().slice(0, 10);
+    await call('POST', '/v1/team/batches', token, { date: day, bottles: 2400, city: 'Austin', place: 'WeFunder launch party', campaign: 'WeFunder campaign', revenueCents: 0 });
+    await call('POST', '/v1/team/batches', token, { date: day, bottles: 300, city: 'Austin', place: 'Zilker Park run', campaign: 'Sponsor run', advertiser: 'Austin Daily', revenueCents: 60_000 });
+    return call('GET', '/v1/team/batches', token);
+  })(),
+  intake: await call('POST', '/v1/team/intake', token, { message: 'We gave 500 bottles at SXSW today in Austin for the WeFunder campaign' }),
   profit: await (async () => { await call('POST', '/v1/milestones/factories', token, { name: 'Austin micro factory 1', city: 'Austin', openedOn: new Date(end - 30 * 86_400_000).toISOString().slice(0, 10) }); return call('GET', '/v1/profit', token); })(),
 };
 await server.close();

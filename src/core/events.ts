@@ -33,6 +33,9 @@ export interface EventPayloads {
   'charity.transferred': { transferId: string; number: string; charity: string; amountCents: Cents; provider: string; providerRef: string };
   /** Someone tapped the ball in time and won a prize. */
   'lottery.won': { chanceId: string; prizeId: string; prizeName: string; valueCents: Cents; claimCode: string; target: string; sponsor?: string };
+  /** A batch of bottles given outside the platform (before the software runs it), recorded by the team. */
+  'batch.recorded': { batchId: string; date: string; bottles: number; productId: string; city: string; place: string; campaign: string; advertiser: string; revenueCents: Cents; donationPerBottleCents: Cents; charity: string; costCents: Cents; notes?: string };
+  'batch.voided': { batchId: string; bottles: number; reason: string };
   /** A month closed: the profit on the upside, shared with the charity and the AI agents. */
   'profit.shared': { period: string; profitCents: Cents; charityPercent: number; charityCents: Cents; alreadyGivenCents: Cents; aiPercent: number; aiCents: Cents; milestoneReached: boolean };
   /** The AI fund's daily share-out: to each agent the governor allows, held for agents still proving themselves. */
