@@ -18,7 +18,7 @@
   const icon = (d) => { const s = document.createElementNS(NS, 'svg'); for (const [k, v] of Object.entries({ viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' })) s.setAttribute(k, v); for (const p of d.split('|')) { const e = document.createElementNS(NS, 'path'); e.setAttribute('d', p); s.append(e); } return s; };
   const I = {
     start: 'M5 12l5 5L20 7', company: 'M3 21h18|M5 21V7l7-4 7 4v14|M9 9h1|M14 9h1|M9 13h1|M14 13h1|M10 21v-4h4v4', brand: 'M12 3a9 9 0 1 0 0 18c1 0 1.5-.7 1.5-1.5 0-.4-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1 0-.8.7-1.5 1.5-1.5H16a5 5 0 0 0 5-5c0-4.4-4-7.8-9-7.8Z|M7.5 11.5h.01|M10.5 7.5h.01|M15.5 7.5h.01',
-    ads: 'M4 5h16v14H4z|M4 10h16|M10 10v9', giving: 'M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L12 21l7.8-7.5 1-1.1a5.5 5.5 0 0 0 0-7.8Z', modules: 'M4 4h7v7H4z|M13 4h7v7h-7z|M4 13h7v7H4z|M13 13h7v7h-7z',
+    game: 'M12 21a7 7 0 1 0 0-14 7 7 0 0 0 0 14Z|M4 4l3 3|M20 4l-3 3|M12 2v3', ads: 'M4 5h16v14H4z|M4 10h16|M10 10v9', giving: 'M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L12 21l7.8-7.5 1-1.1a5.5 5.5 0 0 0 0-7.8Z', modules: 'M4 4h7v7H4z|M13 4h7v7h-7z|M4 13h7v7H4z|M13 13h7v7h-7z',
     machine: 'M6 3h12v18H6z|M9 7h6|M10 17h4', team: 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z|M2 21a7 7 0 0 1 14 0|M17 3a4 4 0 0 1 0 8|M22 21a7 7 0 0 0-5-6.7', history: 'M3 12a9 9 0 1 0 3-6.7L3 8|M3 3v5h5|M12 7v5l3 3',
     key: 'M15 7a4 4 0 1 1-3.5 6H8v3H5v-3H3v-3h8.5A4 4 0 0 1 15 7Z', hook: 'M18 16.1A5 5 0 0 0 15 7a5 5 0 0 0-4.5 7.2|M6 16.1A5 5 0 1 0 12 21h5|M12 3a5 5 0 0 0-3 9l-3 5', docs: 'M4 4h12a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4z|M8 8h8|M8 12h8|M8 16h5', licensees: 'M3 7h18v13H3z|M8 7V4h8v3|M3 12h18',
     qr: 'M4 4h6v6H4z|M14 4h6v6h-6z|M4 14h6v6H4z|M14 14h2v2h-2z|M18 18h2v2h-2z|M14 18h2|M18 14h2', product: 'M9 2h6v3l2 3v13a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V8l2-3z|M7 11h10|M7 17h10',
@@ -44,7 +44,7 @@
   }
 
   const routes = [
-    [/^\/console\/?$/, startPage], [/^\/console\/company$/, companyPage], [/^\/console\/brand$/, brandPage], [/^\/console\/ads$/, adsPage], [/^\/console\/giving$/, givingPage],
+    [/^\/console\/?$/, startPage], [/^\/console\/company$/, companyPage], [/^\/console\/brand$/, brandPage], [/^\/console\/ads$/, adsPage], [/^\/console\/giving$/, givingPage], [/^\/console\/game$/, gamePage],
     [/^\/console\/modules$/, modulesPage], [/^\/console\/codes$/, codesPage], [/^\/console\/products$/, productsPage], [/^\/console\/machines$/, machinesPage], [/^\/console\/team$/, teamPage], [/^\/console\/history$/, historyPage],
     [/^\/console\/keys$/, keysPage], [/^\/console\/webhooks$/, webhooksPage], [/^\/console\/webhooks\/([\w-]+)$/, webhookPage], [/^\/console\/licensees$/, licenseesPage],
   ];
@@ -78,7 +78,7 @@
   function shell(active, ...content) {
     const nav = [
       ['start', '/console', 'Get started', I.start], ['company', '/console/company', 'Company', I.company], ['brand', '/console/brand', 'Brand', I.brand], ['ads', '/console/ads', 'Ads and prices', I.ads], ['codes', '/console/codes', 'QR codes and AR', I.qr], ['products', '/console/products', 'Products', I.product],
-      ['giving', '/console/giving', 'Giving', I.giving], ['modules', '/console/modules', 'Modules', I.modules], ['machines', '/console/machines', 'Machines', I.machine], ['team', '/console/team', 'Team', I.team], ['history', '/console/history', 'History', I.history],
+      ['giving', '/console/giving', 'Giving', I.giving], ['game', '/console/game', 'Prize game', I.game], ['modules', '/console/modules', 'Modules', I.modules], ['machines', '/console/machines', 'Machines', I.machine], ['team', '/console/team', 'Team', I.team], ['history', '/console/history', 'History', I.history],
       'Developers', ['keys', '/console/keys', 'API keys', I.key], ['webhooks', '/console/webhooks', 'Webhooks', I.hook], ['docs', '/developers', 'Docs', I.docs],
       ...(S.ov?.you?.platform ? ['Platform', ['licensees', '/console/licensees', 'Licensees', I.licensees]] : []),
     ];
@@ -380,6 +380,67 @@
         h('section', { class: 'section' }, h('h2', { text: 'Add a product' }), h('p', { class: 'lead', text: 'Every product is checked before it’s saved: the wrap has to close, and every ad has to fit a readable QR code.' }), form, result)));
   }
 
+  // ---------- the prize game ----------
+  async function gamePage() {
+    let stats = null;
+    try { stats = await api('GET', '/v1/lottery'); } catch {}
+    settingsPage('game', 'Prize game', 'Off unless you turn it on. People can only win by engaging with an ad: scanning its code, watching its video or opening its AR. A winner sees a red ball bounce across the screen for about 2.5 seconds and has to tap it to collect, so only people really watching win.', (ctx) => {
+      // A company that never set the game up starts from the defaults, which count as unchanged until edited.
+      if (!ctx.draft.lottery) { ctx.draft.lottery = structuredClone(S.ov.options.lottery); S.ov.config.lottery = structuredClone(S.ov.options.lottery); }
+      const L = () => ctx.draft.lottery;
+      const cur = ctx.draft.lottery ?? S.ov.options.lottery;
+      const on = h('input', { type: 'checkbox' }); on.checked = !!cur.enabled;
+      const body = h('div', { class: 'stack' });
+      const prizes = h('div', { class: 'field full' });
+      const drawPrizes = () => {
+        const list = (ctx.draft.lottery ?? S.ov.options.lottery).prizes;
+        const total = list.reduce((a, p) => a + (Number(p.weight) || 0), 0) || 1;
+        const inp = (p, k, o = {}) => { const i = h('input', { class: 'input', type: o.type ?? 'text', min: o.min, max: o.max, step: o.step, maxlength: o.maxlength, value: o.scale ? (p[k] ?? 0) / o.scale : p[k] ?? '', placeholder: o.placeholder ?? '', 'aria-label': o.label, style: o.style ?? '' }); i.addEventListener('change', () => { const P = L().prizes.find((x) => x.id === p.id); let v = o.type === 'number' ? (i.value === '' ? undefined : Number(i.value) * (o.scale ?? 1)) : i.value; if (o.type === 'number' && v !== undefined) v = o.int === false ? v : Math.round(v); if (v === undefined || v === '') delete P[k]; else P[k] = v; ctx.changed(); drawPrizes(); }); return i; };
+        prizes.replaceChildren(h('label', { text: 'Prizes' }), h('div', { class: 'scroll-x' }, h('table', { class: 'list' },
+          h('thead', {}, h('tr', {}, ['Prize', 'Worth ($)', 'How often', 'Most a day', ''].map((t) => h('th', { text: t })))),
+          h('tbody', {}, list.map((p) => h('tr', {},
+            h('td', {}, inp(p, 'name', { label: 'Prize name', maxlength: 80 }), inp(p, 'description', { label: 'How to collect it', maxlength: 200, placeholder: 'How to collect it', style: 'margin-top:6px' })),
+            h('td', { style: 'width:110px' }, inp(p, 'valueCents', { type: 'number', min: 0, max: 10000, step: 0.01, scale: 100, label: 'Worth in dollars' })),
+            h('td', { style: 'width:120px' }, inp(p, 'weight', { type: 'number', min: 0, max: 1000, label: 'How often', int: false }), h('div', { class: 'hint', text: `${Math.round(((p.weight || 0) / total) * 100)}% of wins` })),
+            h('td', { style: 'width:110px' }, inp(p, 'perDay', { type: 'number', min: 0, max: 100000, placeholder: 'No limit', label: 'Most a day' })),
+            h('td', { style: 'width:44px' }, h('button', { type: 'button', class: 'btn secondary small', 'aria-label': `Remove ${p.name}`, onclick: () => { L().prizes = L().prizes.filter((x) => x.id !== p.id); ctx.changed(); drawPrizes(); } }, '×'))))))),
+          h('button', { type: 'button', class: 'btn secondary small', style: 'margin-top:8px', onclick: () => { const id = `prize-${Date.now().toString(36)}`; L().prizes.push({ id, name: 'A new prize', valueCents: 500, weight: 1 }); ctx.changed(); drawPrizes(); } }, 'Add a prize'));
+      };
+      const drawBody = () => {
+        const g = ctx.draft.lottery ?? S.ov.options.lottery;
+        const odds = g.oddsPercent ? Math.round(100 / g.oddsPercent) : 0;
+        body.hidden = !g.enabled;
+        body.replaceChildren(
+          section('Odds and limits', `About 1 in ${odds} engagements wins. Changes start tomorrow, so today’s draws always follow the rules published this morning.`, h('div', { class: 'form' },
+            num(ctx, 'lottery.oddsPercent', 'Chance each engagement wins', { min: 0.01, max: 50, step: 0.1, int: false, suffix: '%', hint: (v) => (v ? `About 1 in ${Math.round(100 / v)}.` : '') }),
+            num(ctx, 'lottery.chancesPerDay', 'Chances per person a day', { min: 1, max: 50, hint: 'Each bottle ad gives one chance for its page, one for its video and one for its AR.' }),
+            num(ctx, 'lottery.winsPerDay', 'Prizes per person a day', { min: 1, max: 10 }),
+            num(ctx, 'lottery.watchSeconds', 'Watching before the ball can appear', { min: 1, max: 60, int: false, suffix: 's', hint: 'The ball shows up at a random moment after this.' }),
+            num(ctx, 'lottery.ballMs', 'The ball is on screen for', { min: 1.5, max: 5, step: 0.1, scale: 0.001, suffix: 's' }),
+            num(ctx, 'lottery.minAge', 'Youngest age to play', { min: 13, max: 21 }))),
+          section('Prizes', 'What can be won, how often each comes up, and the most of each a day. A prize that’s all given out for the day can’t be won until tomorrow.', prizes),
+          section('Rules', 'Shown under the ball game on every ad page. Check the rules with a lawyer before you turn the game on: prize games have their own laws in each state and country.', h('div', { class: 'form' },
+            text(ctx, 'lottery.rulesText', 'Rules note', { max: 400, area: true, full: true }),
+            text(ctx, 'lottery.rulesUrl', 'Official rules link', { max: 200, placeholder: 'https://…', full: true }))),
+          section('Fair for everyone', null, h('p', { style: 'margin:0', text: 'Each day has a secret random seed. Its fingerprint is published before the day starts and the seed itself after it ends, so anyone can check every draw. Nobody, you included, can choose who wins.' }),
+            h('p', { style: 'margin:8px 0 0' }, h('a', { href: `/v1/public/lottery/${S.ov.config.id}/fairness`, target: '_blank', rel: 'noopener', text: 'See today’s fingerprint' }))));
+        drawPrizes();
+      };
+      on.addEventListener('change', () => { L().enabled = on.checked; ctx.changed(); drawBody(); });
+      drawBody();
+      // Results and prize codes.
+      const code = h('input', { class: 'input', placeholder: 'WIN-XXXX-XXXX', style: 'max-width:220px;font-family:var(--mono)' });
+      const out = h('div', { class: 'hint' });
+      const redeem = h('form', { style: 'display:flex;gap:8px;flex-wrap:wrap;align-items:center', onsubmit: async (e) => { e.preventDefault(); try { const r = await api('POST', '/v1/lottery/redeem', { code: code.value }); out.textContent = r.alreadyRedeemed ? `${r.claimCode} was already given out (${new Date(r.redeemedAt).toLocaleString()}).` : `${r.claimCode}: ${r.prize}. Marked as given out.`; } catch (x) { out.textContent = x.message; } } }, code, h('button', { class: 'btn secondary', type: 'submit' }, 'Check a prize code'), out);
+      const results = stats ? section('This week', null, h('div', { class: 'kpis', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' },
+        ...[['Chances', stats.chances], ['Balls shown', stats.balls], ['Caught', stats.won], ['Missed', stats.missed]].map(([k, v]) => h('div', { class: 'kpi' }, h('span', { text: k }), h('b', { text: String(v) })))),
+        stats.winners.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('tbody', {}, stats.winners.slice(0, 10).map((w) => h('tr', {}, h('td', { style: 'font-family:var(--mono)', text: w.claimCode }), h('td', { text: w.prize }), h('td', { text: `from ${w.via === 'ar' ? 'AR' : w.via}` }), h('td', { text: w.redeemed ? 'Given out' : 'Not yet' })))))) : null, redeem) : null;
+      return [h('div', { class: 'stack' },
+        section('Turn it on', null, h('label', { class: 'switch full' }, on, h('div', {}, h('b', { text: 'Run the prize game' }), h('span', { text: 'Off by default. Turn it on and every ad page gets a chance to show the red ball.' })))),
+        body, results)];
+    });
+  }
+
   // ---------- giving ----------
   function givingPage() {
     settingsPage('giving', 'Giving', 'What your bottles give, and to whom. It’s printed on every bottle and shown in the open books. Giving can be off.', (ctx) => {
@@ -390,8 +451,28 @@
         const where = S.ov.locations;
         amount.replaceChildren(...(g.mode === 'none' ? [h('p', { class: 'full muted', style: 'margin:0', text: 'Nothing is given and the giving line disappears from your bottles.' })] : [
           g.mode === 'per_unit' ? num(ctx, 'giving.centsPerUnit', 'Each bottle gives', { min: 1, max: 100, suffix: '¢' }) : num(ctx, 'giving.percentOfRevenue', 'Share of ad money given', { min: 0.5, max: 50, step: 0.5, int: false, suffix: '%' }),
-          num(ctx, 'giving.percentOfEngagement', 'Plus this share of scan, AR and sales money', { min: 0, max: 50, step: 0.5, int: false, suffix: '%', hint: 'On top of the above: part of what each scan, AR launch and sales commission earns. 0 for none.' }),
+          num(ctx, 'giving.percentOfExtra', 'Plus this share of every other dollar', { min: 0, max: 50, step: 0.5, int: false, suffix: '%', hint: 'Bids above the starting price, more ads on a bottle, scans, AR launches, box sides, custom bottles and sales commissions. 0 for none.' }),
+          g.mode === 'per_unit' ? num(ctx, 'giving.extraAboveCents', 'The per-bottle gift covers the first', { min: 0, max: 100000, suffix: '¢', hint: (v) => `Print money on a bottle above ${dollars(v ?? 0)} gives the extra share. Usually your whole-label starting price.` }) : null,
           charityOpts().length ? select(ctx, 'giving.defaultCharity', 'Charity', charityOpts(), { hint: 'Add charities below.' }) : text(ctx, 'giving.defaultCharity', 'Charity', { max: 80 }),
+          (() => {
+            // Splitting between charities: each gets its percent of every gift.
+            const box = h('div', { class: 'field full' });
+            const draw = () => {
+              const split = g.charitySplit ?? null;
+              const total = split ? Object.values(split).reduce((a, v) => a + Number(v || 0), 0) : 0;
+              const on = h('input', { type: 'checkbox' }); on.checked = !!split;
+              on.addEventListener('change', () => { const names = [g.defaultCharity, ...charityOpts().map(([c]) => c).filter((c) => c !== g.defaultCharity)].filter(Boolean).slice(0, 2); g.charitySplit = on.checked ? Object.fromEntries(names.map((c) => [c, names.length === 1 ? 100 : 50])) : null; draw(); ctx.changed(); });
+              box.replaceChildren(h('label', { class: 'chip-check' }, on, ' Split the giving between charities'),
+                split ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('tbody', {}, charityOpts().map(([c]) => {
+                  const i = h('input', { class: 'input', type: 'number', min: 0, max: 99, step: 1, value: split[c] ?? '', placeholder: '0', 'aria-label': `Share for ${c}`, style: 'max-width:110px' });
+                  i.addEventListener('change', () => { const m = { ...(g.charitySplit ?? {}) }; const v = Math.round(Number(i.value)); if (v > 0) m[c] = v; else delete m[c]; g.charitySplit = m; draw(); ctx.changed(); });
+                  return h('tr', {}, h('td', { text: c }), h('td', { style: 'width:40%' }, h('span', { style: 'display:flex;gap:6px;align-items:center' }, i, '%')));
+                })))) : null,
+                split ? h('p', { class: total === 100 ? 'muted' : 'error', style: 'margin:4px 0 0;font-size:13px', text: total === 100 ? 'Adds up to 100%. Machines or routes with their own charity below still give only to theirs.' : `These add up to ${total}%. They need to add up to 100%.` }) : h('p', { class: 'muted', style: 'margin:4px 0 0;font-size:13px', text: 'Give to more than one charity at once, by percent. Add charities below first.' }));
+            };
+            draw();
+            return box;
+          })(),
           num(ctx, 'giving.minimumTransferCents', 'Send to a charity once it’s owed at least', { min: 1, max: 10000, scale: 0.01, suffix: '$', hint: 'Smaller amounts wait for the next transfer.' }),
           where.length ? h('div', { class: 'field full' }, h('label', { text: 'A different charity for some machines or routes' }), h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('tbody', {}, where.map((l) => {
             const sel = h('select', { class: 'input', 'aria-label': `Charity for ${l.name}` }, h('option', { value: '', text: 'Same as above' }), charityOpts().map(([v]) => h('option', { value: v, text: v })));

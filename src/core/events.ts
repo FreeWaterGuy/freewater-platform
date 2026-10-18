@@ -31,6 +31,8 @@ export interface EventPayloads {
   /** Something a viewer did inside an experience (saved it, opened a link, picked a side). Counted, never billed. */
   'experience.engaged': { target: string; viewerKey: string; action: 'save' | 'link' | 'call' | 'addon' | 'room' | 'slot' | 'video'; detail?: string; advertiserId?: string; campaignId?: string };
   'charity.transferred': { transferId: string; number: string; charity: string; amountCents: Cents; provider: string; providerRef: string };
+  /** Someone tapped the ball in time and won a prize. */
+  'lottery.won': { chanceId: string; prizeId: string; prizeName: string; valueCents: Cents; claimCode: string; target: string; sponsor?: string };
   'expense.recorded': { expenseId: string; category: string; amountCents: Cents; memo: string; date: string };
   'machine.incident_opened': { incidentId: string; locationId: string; kind: string; severity: 'warning' | 'critical'; message: string };
   'machine.incident_resolved': { incidentId: string; locationId: string; kind: string; minutes: number };

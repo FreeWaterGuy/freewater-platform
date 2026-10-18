@@ -37,8 +37,11 @@ const moments: Record<string, unknown> = {};
 for (const daypart of ['morning', 'afternoon', 'evening', 'night']) for (const who of ['first', 'passed', 'returning']) {
   moments[`${daypart}:${who}`] = await call('POST', '/v1/campaigns/cmp-joes/preview-moment', token, { daypart, passedOn: who === 'passed', firstScanner: who !== 'passed', newToAdvertiser: who !== 'returning' });
 }
+// For the code page, Joe bids (instead of his guaranteed buy) so the "Your bid" section shows.
+const joeCodes = await call('GET', '/v1/campaigns/cmp-joes/codes', token);
+joeCodes.buy = { type: 'bid', maxCentsPerLabel: 140, dailyCapCents: 5000, spentTodayCents: 1240, pacing: 'even', frequencyCap: 2, adjustments: { dayparts: { morning: -20, afternoon: 25 }, interests: { food: 15 }, newCustomers: 30 } };
 const rec = {
-  joeCodes: await call('GET', '/v1/campaigns/cmp-joes/codes', token),
+  joeCodes,
   joeQr: await call('POST', '/v1/qr/preview', token, {}),
   joeQrLogo: await call('POST', '/v1/qr/preview', token, { logo: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="20" fill="#D7262E"/><text x="50" y="66" text-anchor="middle" font-family="Arial" font-weight="700" font-size="44" fill="#FFC93C">J</text></svg>' }),
   moments,

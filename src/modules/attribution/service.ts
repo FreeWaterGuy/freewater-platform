@@ -45,14 +45,14 @@ export class AttributionService {
   private sig(body: string) { return createHmac('sha256', this.secret).update(`link:${body}`).digest('base64url').slice(0, 16); }
 
   /** Someone tapped a link: record it and return where to send them, with our click id added. */
-  async click(token: string, viewerKey?: string): Promise<{ url: string; clickId: string }> {
+  async click(token: string, viewerKey?: string, via?: string): Promise<{ url: string; clickId: string }> {
     const [body, sig] = token.split('.');
     if (!body || !sig || sig.length !== 16 || !timingSafeEqual(Buffer.from(sig), Buffer.from(this.sig(body)))) throw new AttributionError('bad_link', 'That link isn’t one of ours.', 404);
     const t = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as { s: AdSpot; a: string; c: string | null; k: string; u: string };
     const clickId = `FWC${randomCode(17)}`;
     const cols = spotCols(t.s);
-    await this.db.query(`insert into clicks (id, company_id, advertiser_id, campaign_id, unit_id, slot, pack_id, face, viewer_key, url, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-      [clickId, t.k, t.a, t.c, cols.unit_id, cols.slot, cols.pack_id, cols.face, viewerKey && /^[A-Za-z0-9_-]{8,64}$/.test(viewerKey) ? viewerKey : null, t.u, this.now().toISOString()]);
+    await this.db.query(`insert into clicks (id, company_id, advertiser_id, campaign_id, unit_id, slot, pack_id, face, viewer_key, url, created_at, via) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      [clickId, t.k, t.a, t.c, cols.unit_id, cols.slot, cols.pack_id, cols.face, viewerKey && /^[A-Za-z0-9_-]{8,64}$/.test(viewerKey) ? viewerKey : null, t.u, this.now().toISOString(), via === 'ar' ? 'ar' : 'page']);
     const u = new URL(t.u);
     u.searchParams.set('fwclid', clickId);
     return { url: u.toString(), clickId };
@@ -224,9 +224,11 @@ export class AttributionService {
     const one = async (sql: string) => (await this.db.query<any>(sql, args)).rows[0];
     const clicks = await one(`select count(*)::int as n from clicks where company_id = $1 and created_at >= $2 ${adv}`);
     const conv = await one(`select count(*)::int as n, coalesce(sum(value_cents),0)::int as value, coalesce(sum(commission_cents),0)::int as commission, count(*) filter (where source = 'tag')::int as tag, count(*) filter (where source = 'server')::int as server, count(*) filter (where source = 'coupon')::int as coupon from conversions where company_id = $1 and created_at >= $2 and refunded_at is null ${adv}`);
+    // Sales from people who tapped buy inside the AR, not just on the page.
+    const ar = await one(`select count(*)::int as n, coalesce(sum(v.value_cents),0)::int as value from conversions v join clicks k on k.id = v.click_id where v.company_id = $1 and v.created_at >= $2 and v.refunded_at is null and k.via = 'ar' ${adv.replace('advertiser_id', 'v.advertiser_id')}`);
     const coupons = await one(`select count(*)::int as issued, count(redeemed_at)::int as redeemed from coupon_codes where company_id = $1 and created_at >= $2 ${adv}`);
     const recent = (await this.db.query<any>(`select * from conversions where company_id = $1 and created_at >= $2 ${adv} order by created_at desc limit 20`, args)).rows.map((r) => this.view(r));
-    return { since, clicks: clicks.n, sales: { count: conv.n, valueCents: conv.value, commissionCents: conv.commission, bySource: { tag: conv.tag, server: conv.server, coupon: conv.coupon } }, coupons: { issued: coupons.issued, redeemed: coupons.redeemed }, recent };
+    return { since, clicks: clicks.n, sales: { count: conv.n, valueCents: conv.value, commissionCents: conv.commission, bySource: { tag: conv.tag, server: conv.server, coupon: conv.coupon }, fromAr: { count: ar.n, valueCents: ar.value } }, coupons: { issued: coupons.issued, redeemed: coupons.redeemed }, recent };
   }
 }
 

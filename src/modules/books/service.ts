@@ -195,7 +195,8 @@ export class BooksService {
         const loc = p.locations.get(e.locationId);
         if (e.kind === 'custom') return { at, text: `Custom bottle printed at ${e.locationId} · paid by a customer` };
         const ads = e.placements.filter((x: any) => !x.isHouse).length;
-        const charity = company.giving.charityByLocation?.[e.locationId] ?? company.giving.defaultCharity;
+        const split = company.giving.charitySplit ? Object.keys(company.giving.charitySplit) : [];
+        const charity = company.giving.charityByLocation?.[e.locationId] ?? (split.length > 1 ? split.join(', ') : company.giving.defaultCharity);
         return { at, text: `Bottle printed ${loc?.kind === 'route' ? `for delivery on ${loc.name}` : `at ${e.locationId}`} · ${ads} ad${ads === 1 ? '' : 's'}${company.giving.mode === 'per_unit' && charity ? ` · ${company.giving.centsPerUnit}¢ to ${charity}` : ''}` };
       }
       if (r.type === 'unit.failed') return { at, text: `Failed print at ${p.units.get(e.unitId)?.locationId ?? 'a machine'} · not billed to anyone` };

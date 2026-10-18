@@ -23,8 +23,11 @@ beforeAll(async () => {
   app = await createApp({ db, seedDemo: true, seed: 8, clock, payouts });
   keys = app.demoKeys!;
   server = await buildServer(app);
-  // These tests follow the 10¢ a bottle; the extra 10% of scan and sales money is tested in codes-ar.test.ts.
-  app.platform.companies.get('freewater')!.giving.percentOfEngagement = 0;
+  // These tests follow the 10¢ a bottle (the extra 10% is tested in pricing.test.ts), and give two machines'
+  // and routes' bottles to other charities than Well Aware, as a company can.
+  const g = app.platform.companies.get('freewater')!.giving;
+  g.percentOfExtra = 0;
+  g.charityByLocation = { 'ATX-014': 'Austin Parks Foundation', 'route-3': 'Central Texas Food Bank' };
   // 300 bottles at Congress Ave (Austin Parks Foundation) and a few scans.
   for (let i = 0; i < 300; i++) {
     const r = await app.platform.order({ companyId: 'freewater', orderId: `b-${i}`, locationId: 'ATX-014', productId: 'bottle-16oz' });
@@ -95,7 +98,7 @@ describe('the public books', () => {
     const s = (await call('GET', '/v1/public/books/freewater')).json();
     expect(s.totals.bottles).toBe(560);
     expect(s.totals).toMatchObject({ donatedCents: 5600, sentCents: 5600, owedCents: 0, costsCents: 12_500, moneyOutCents: 12_500 + 5600 });
-    expect(s.charities.map((c: any) => c.name)).toEqual(['Austin Parks Foundation', 'Central Texas Food Bank']);
+    expect(s.charities.map((c: any) => c.name)).toEqual(['Austin Parks Foundation', 'Central Texas Food Bank', 'Well Aware']);
     expect(s.activity[0].text).toMatch(/sent to Central Texas Food Bank \(T-1003\)/);
     expect(JSON.stringify(s)).not.toMatch(/@|viewer-|v-\d/); // no emails, no viewer keys
     expect(s.monthly.at(-1)).toMatchObject({ outCents: 12_500 + 5600 });

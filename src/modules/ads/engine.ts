@@ -2,13 +2,15 @@ import type { Campaign, CompanyConfig, Placement, Product, Share, SlotRect } fro
 import { layoutsFor, type Layout } from './layouts';
 import type { AdEngine, FillRequest, FillResult, PrintAudience } from './contract';
 import { canAfford, priceFor } from './budget';
+import { AuctionStats, momentAt, paced, piecePrice, rankBidders, rollDay, secondPrice, type AuctionMoment, type Bidder } from './auction';
 
 /**
  * FreeWater's default ad engine.
- * 1. Keep only campaigns this company allows here (category rules, targeting, budget left).
- * 2. Rank them: guaranteed buys first, then by what they pay.
- * 3. Pick 1–6 of them, never two from the same competitor group.
- * 4. Try every allowed layout and keep the one that earns the most; leftover slots get the house ad.
+ * 1. Keep only campaigns this company allows here (category rules, targeting, budget left, pacing, frequency caps).
+ * 2. Run the auction (modules/ads/auction): adjusted bids plus expected engagement, guaranteed buys first.
+ * 3. Pick up to the most ads a bottle may carry, never two from the same competitor group.
+ * 4. Each winner pays the second price. Try every layout and keep the one that earns the most; leftover pieces get
+ *    the house ad.
  */
 export const freewaterAdEngine: AdEngine = {
   name: 'freewater-ads',
@@ -16,12 +18,19 @@ export const freewaterAdEngine: AdEngine = {
     const { company, product, location, random } = req;
     const factor = product.priceFactor ?? 1;
     const house = req.campaigns.find((c) => c.isHouse && c.companyId === company.id);
+    const moment = momentFor(req);
     const capped = (c: Campaign) => !!req.frequency && (req.frequency.counts.get(c.id) ?? 0) >= req.frequency.max;
-    const eligible = req.campaigns.filter((c) => isEligible(c, company, location.id, { product, audience: req.audience ?? null }) && !capped(c));
+    const tooOften = (c: Campaign) => c.buy.type === 'bid' && !!c.buy.frequencyCap && (req.audience?.campaignsToday?.get(c.id) ?? 0) >= c.buy.frequencyCap;
+    for (const c of req.campaigns) rollDay(c, moment.dayKey);
+    const eligible = req.campaigns.filter((c) => isEligible(c, company, location.id, { product, audience: req.audience ?? null }) && !capped(c) && !tooOften(c) && paced(c, moment));
     const why = new Map(eligible.filter((c) => c.targeting.audience).map((c) => [c.id, audienceMatch(c, req.audience ?? null) ?? []]));
 
-    // Shuffle first so equal offers rotate fairly, then rank.
-    const ranked = shuffle(eligible, random).sort((a, b) => rank(b, company, factor) - rank(a, company, factor));
+    // Shuffle first so equal offers rotate fairly, then rank by the auction.
+    const bidders = rankBidders(shuffle(eligible, random), company, moment, req.stats ?? new AuctionStats());
+    const ranked = bidders.map((b) => b.campaign);
+    // What each one pays for the whole label: the second price.
+    const labelPrice = new Map<string, { paid: number; bidder: Bidder }>(bidders.map((b, i) => [b.campaign.id, { paid: secondPrice(b, bidders[i + 1], company, product), bidder: b }]));
+    const priceOf = (c: Campaign, share: Share) => { const lp = labelPrice.get(c.id); return lp ? piecePrice(lp.paid, company, share, product) : priceFor(c, company, share, factor); };
 
     const chosen: Campaign[] = [];
     const groups = new Set<string>();
@@ -42,7 +51,7 @@ export const freewaterAdEngine: AdEngine = {
     const lineups = req.avoidSignatures ? [chosen, ...Array.from({ length: 6 }, () => shuffle(chosen, random))] : [chosen];
     for (const pool of lineups) {
       for (const layout of shuffle(layoutsFor(product, { maxAds: company.adRules.maxAdsPerUnit, minAds: company.adRules.minAdsPerUnit }), random)) {
-        const placements = assign(layout, pool, house, company, factor, why);
+        const placements = assign(layout, pool, house, company, factor, why, priceOf, labelPrice);
         if (!placements) continue;
         const option = { layout: layout.shares, placements, revenue: placements.reduce((s, p) => s + p.priceCents, 0) };
         if (!best || option.revenue > best.revenue) best = option;
@@ -116,13 +125,15 @@ function rank(c: Campaign, company: CompanyConfig, factor = 1): number {
 }
 
 /** Fill the biggest slots first with the best-paying campaign that has artwork that size. */
-function assign(layout: Layout, chosen: Campaign[], house: Campaign | undefined, company: CompanyConfig, factor = 1, why = new Map<string, string[]>()): Placement[] | null {
+function assign(layout: Layout, chosen: Campaign[], house: Campaign | undefined, company: CompanyConfig, factor = 1, why = new Map<string, string[]>(), priceOf?: (c: Campaign, share: Share) => number, auction?: Map<string, { paid: number; bidder: Bidder }>): Placement[] | null {
   const order = layout.shares.map((share, slotIndex) => ({ share, slotIndex })).sort((a, b) => a.share - b.share);
   const pool = [...chosen];
   const out: Placement[] = [];
   for (const { share, slotIndex } of order) {
     const rect = layout.rects[slotIndex]!;
-    const i = pool.findIndex((c) => c.sizes.includes(share) && canAfford(c, company, share, factor));
+    const cost = (c: Campaign) => (priceOf ? priceOf(c, share) : priceFor(c, company, share, factor));
+    const affordable = (c: Campaign) => (c.buy.type === 'guaranteed' ? c.buy.remainingPrints > 0 : priceOf ? c.buy.spentTodayCents + cost(c) <= c.buy.dailyCapCents : canAfford(c, company, share, factor));
+    const i = pool.findIndex((c) => c.sizes.includes(share) && affordable(c));
     if (i >= 0) {
       const c = pool.splice(i, 1)[0]!;
       out.push({
@@ -133,9 +144,10 @@ function assign(layout: Layout, chosen: Campaign[], house: Campaign | undefined,
         advertiserId: c.advertiserId,
         advertiserName: c.advertiserName,
         experienceId: c.experienceId,
-        priceCents: priceFor(c, company, share, factor),
+        priceCents: cost(c),
         isHouse: false,
         ...(why.has(c.id) ? { audienceMatch: why.get(c.id) } : {}),
+        ...(auction?.has(c.id) ? { auction: (({ paid, bidder }) => ({ bidCents: bidder.adjustedBid, paidLabelCents: paid, rankCents: Math.round(bidder.rank % 1e6), adjustments: bidder.applied }))(auction.get(c.id)!) } : {}),
       });
     } else if (house) {
       out.push(housePlacement(slotIndex, share, rect, house));
@@ -169,4 +181,10 @@ function shuffle<T>(items: T[], random: () => number): T[] {
     [a[i], a[j]] = [a[j]!, a[i]!];
   }
   return a;
+}
+
+/** When and where this bottle is printed, for bid adjustments and pacing. */
+function momentFor(req: FillRequest): AuctionMoment {
+  const m = req.moment ?? momentAt(new Date(), req.company.timezone ?? 'UTC');
+  return { ...m, locationId: req.location.id, product: req.product, audience: req.audience ?? null };
 }

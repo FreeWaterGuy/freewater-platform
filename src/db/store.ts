@@ -249,6 +249,7 @@ function upgradeCompany(c: any): CompanyConfig {
     c.prices.perPrintByShare = { 1: old[6], 2: old[3], 3: old[2], 4: Math.round((old[1] + old[2]) / 2), 6: old[1], 8: old[1], 10: old[1] };
     delete c.prices.perPrintBySixths;
   }
+  if (c.giving?.percentOfEngagement !== undefined && c.giving.percentOfExtra === undefined) { c.giving.percentOfExtra = c.giving.percentOfEngagement; delete c.giving.percentOfEngagement; }
   return c;
 }
 function upgradeCampaign(c: any): CampaignRecord {

@@ -1,5 +1,6 @@
 import { checkQrColor, checkQrLogo } from '../print/qr';
 import { SHARES, type CompanyConfig } from '../../core/types';
+import { checkLottery } from '../lottery/rules';
 
 // What a company may change about itself, the checks each change must pass, and plain words for what changed.
 
@@ -15,7 +16,7 @@ export const fontChoices: { id: string; label: string; value: string }[] = [
 export const adCategories = ['food', 'drink', 'coffee', 'fitness', 'health', 'news', 'retail', 'local-services', 'real-estate', 'auto', 'finance', 'entertainment', 'events', 'travel', 'tech', 'education', 'nonprofit', 'politics', 'alcohol', 'tobacco', 'cannabis', 'gambling', 'weapons', 'dating'];
 
 /** The parts of the settings a PATCH may send. Anything else is refused. */
-export const editableKeys = ['name', 'receiptBaseUrl', 'scanBaseUrl', 'brand', 'productFacts', 'giving', 'openBooks', 'unitCosts', 'consumerPricing', 'timezone', 'consumer', 'machines', 'qr', 'ar', 'standardProductId', 'adRules', 'prices', 'modules'] as const;
+export const editableKeys = ['name', 'receiptBaseUrl', 'scanBaseUrl', 'brand', 'productFacts', 'giving', 'openBooks', 'unitCosts', 'consumerPricing', 'timezone', 'consumer', 'machines', 'qr', 'ar', 'standardProductId', 'adRules', 'prices', 'modules', 'lottery'] as const;
 export type EditableKey = (typeof editableKeys)[number];
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
@@ -57,8 +58,14 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
   if (!g || !['per_unit', 'percent_of_revenue', 'none'].includes(g.mode)) return 'Pick how the company gives: per bottle, a share of ad money, or not at all.';
   if (g.mode === 'per_unit' && !isInt(g.centsPerUnit, 1, 100)) return 'Giving per bottle must be 1¢ to 100¢.';
   if (g.mode === 'percent_of_revenue' && !isNum(g.percentOfRevenue, 0.5, 50)) return 'The share of ad money given must be 0.5% to 50%.';
-  if (g.percentOfEngagement !== undefined && !isNum(g.percentOfEngagement, 0, 50)) return 'The share of scan, AR and sales money given must be 0% to 50%.';
+  if (g.percentOfExtra !== undefined && !isNum(g.percentOfExtra, 0, 50)) return 'The share of every other dollar given must be 0% to 50%.';
+  if (g.extraAboveCents !== undefined && !isInt(g.extraAboveCents, 0, 100_000)) return 'Where the extra share starts must be $0 to $1,000 a bottle.';
   if (g.mode !== 'none' && !str(g.defaultCharity, 2, 80)) return 'Name the charity that gets the giving.';
+  if (g.charitySplit !== undefined && g.charitySplit !== null) {
+    const parts = Object.entries(g.charitySplit);
+    if (typeof g.charitySplit !== 'object' || parts.length < 2 || parts.length > 8 || !parts.every(([n, p]) => str(n, 2, 80) && isInt(p, 1, 99))) return 'To split giving, name 2 to 8 charities, each with 1% to 99%.';
+    if (parts.reduce((a, [, p]) => a + p, 0) !== 100) return 'The charities’ shares must add up to 100%.';
+  }
   if (g.charityByLocation && (typeof g.charityByLocation !== 'object' || !Object.values(g.charityByLocation).every((v) => str(v, 2, 80)))) return 'Each machine or route’s charity needs a name.';
   if (g.minimumTransferCents !== undefined && !isInt(g.minimumTransferCents, 100, 1_000_000)) return 'The smallest transfer to a charity must be $1 to $10,000.';
   if (c.openBooks !== undefined && typeof c.openBooks !== 'boolean') return 'Open books is either on or off.';
@@ -98,6 +105,9 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
   if (!isNum(p.commissionPercent, 0, 50)) return 'Commission on sales must be 0% to 50%.';
   if (!isInt(p.customUnit, 0, 10_000) || !isInt(p.perBoxFace, 0, 5000)) return 'The custom bottle price must be $0 to $100, and a box side $0 to $50.';
 
+  const lot = checkLottery(c.lottery);
+  if (lot) return `Prize game: ${lot}`;
+
   const m = c.modules;
   if (!m || !registered.ads.includes(m.ads)) return `Pick an ad engine: ${registered.ads.join(', ')}.`;
   if (!registered.renderer.includes(m.renderer)) return `Pick a label maker: ${registered.renderer.join(', ')}.`;
@@ -124,7 +134,7 @@ export function applyChange(cur: CompanyConfig, change: Partial<Record<EditableK
 const labels: Record<string, string> = {
   name: 'Company name', receiptBaseUrl: 'QR web address', 'brand.logoTop': 'Logo top line', 'brand.logoBottom': 'Logo bottom line', 'brand.tagline': 'Tagline',
   'brand.panelColor': 'Panel color', 'brand.accentColor': 'Accent color', 'brand.textColor': 'Text color', 'brand.fontFamily': 'Lettering', productFacts: 'Product facts',
-  'giving.mode': 'How you give', 'giving.centsPerUnit': 'Giving per bottle', 'giving.percentOfRevenue': 'Share of ad money given', 'giving.percentOfEngagement': 'Share of scan, AR and sales money given', 'giving.defaultCharity': 'Charity',
+  'giving.mode': 'How you give', 'giving.centsPerUnit': 'Giving per bottle', 'giving.percentOfRevenue': 'Share of ad money given', 'giving.percentOfExtra': 'Share of every other dollar given', 'giving.extraAboveCents': 'Extra giving starts above', 'giving.defaultCharity': 'Charity', 'giving.charitySplit': 'Giving split between charities',
   'giving.charityByLocation': 'Charity by machine or route', 'giving.minimumTransferCents': 'Smallest transfer', openBooks: 'Open books',
   unitCosts: 'Standard costs', consumerPricing: 'Bottle price', timezone: 'Time zone', 'consumer.freeBottlesPerDay': 'Free bottles per person a day', 'consumer.retailValueCents': 'Store price of a bottle',
   'adRules.minAdsPerUnit': 'Fewest ads per bottle', 'adRules.maxAdsPerUnit': 'Most ads per bottle', 'adRules.blockedCategories': 'Blocked categories', 'adRules.competitorSeparation': 'Keep competitors apart',
@@ -133,8 +143,9 @@ const labels: Record<string, string> = {
   scanBaseUrl: 'Short QR address', standardProductId: 'Standard product', 'qr.logo': 'Logo in your codes', 'qr.logoSvg': 'Your code logo', 'qr.color': 'Code color',
   'qr.advertiserLogos': 'Advertisers’ logos in their codes', 'qr.allowStatic': 'Static codes allowed', 'ar.trackingCodes': 'AR tracking strip', 'ar.stripEverywhere': 'Tracking strip along every ad',
   'machines.offlineWalkUp': 'Free bottles while offline', 'machines.offlinePerHour': 'Offline bottles per hour', 'machines.bufferSize': 'Labels kept ready', 'modules.ads': 'Ad engine', 'modules.renderer': 'Label maker', 'modules.printer': 'Printer',
+  'lottery.enabled': 'Prize game', 'lottery.oddsPercent': 'Chance of winning', 'lottery.chancesPerDay': 'Chances per person a day', 'lottery.winsPerDay': 'Prizes per person a day', 'lottery.watchSeconds': 'Watching before the ball', 'lottery.ballMs': 'Time the ball is on screen', 'lottery.prizes': 'Prizes', 'lottery.minAge': 'Youngest age to play', 'lottery.rulesUrl': 'Official rules link', 'lottery.rulesText': 'Rules note',
 };
-const deep = new Set(['brand', 'giving', 'consumer', 'machines', 'qr', 'ar', 'adRules', 'prices', 'modules']);
+const deep = new Set(['brand', 'giving', 'consumer', 'machines', 'qr', 'ar', 'adRules', 'prices', 'modules', 'lottery']);
 const show = (v: unknown) => (v === undefined ? 'none' : typeof v === 'string' ? (v.length > 30 ? `${v.slice(0, 28)}…` : v || 'blank') : typeof v === 'boolean' ? (v ? 'on' : 'off') : Array.isArray(v) ? (v.length ? v.join(', ').slice(0, 40) : 'none') : typeof v === 'object' && v ? 'changed' : String(v));
 
 /** What changed, as a short list a person can read in the history. */

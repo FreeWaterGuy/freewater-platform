@@ -116,3 +116,18 @@ video { width: 100%; border-radius: var(--radius); background: #000; display: bl
 .ar-card .ar-art svg{width:150px;height:auto}
 .ar-card .section-title{margin:0}
 .ar-card .text{margin:0}
+
+/* The prize game: the red ball, and what happens after */
+.game-note{display:flex;gap:10px;align-items:flex-start;margin:0 16px;padding:10px 12px;border-radius:14px;background:color-mix(in srgb,#E5252A 10%,var(--bg));font-size:13px;line-height:1.4}
+.game-note a{color:inherit}
+.mini-ball{flex:none;width:14px;height:14px;margin-top:2px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#ff8a8a,#E5252A 55%,#a30f14)}
+.fw-ball{position:fixed;left:0;top:0;z-index:2147483600;width:96px;height:96px;margin:-48px 0 0 -48px;padding:0;border:0;background:transparent;cursor:pointer;touch-action:none;-webkit-tap-highlight-color:transparent}
+.fw-ball i{position:absolute;inset:18px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#ff9a9a,#E5252A 55%,#a30f14);box-shadow:0 6px 16px rgba(0,0,0,.35),0 0 0 3px rgba(255,255,255,.85)}
+.fw-prize{position:fixed;inset:0;z-index:2147483601;display:grid;place-items:end center;background:rgba(0,0,0,.45);padding:16px}
+.fw-prize .card{width:100%;max-width:420px;background:var(--bg);color:var(--text);border-radius:22px;padding:22px 20px;display:flex;flex-direction:column;gap:10px;text-align:center;box-shadow:0 20px 50px rgba(0,0,0,.35)}
+.fw-prize h2{font:700 24px/1.2 var(--display);margin:0}
+.fw-prize p{margin:0}
+.fw-prize .muted{opacity:.7;font-size:14px}
+.fw-prize .dot{width:56px;height:56px;margin:0 auto;border-radius:50%;background:radial-gradient(circle at 35% 30%,#ff9a9a,#E5252A 55%,#a30f14)}
+.fw-prize .dot.gone{opacity:.35;filter:grayscale(.4)}
+.fw-prize .code{font:700 22px/1.2 ui-monospace,Menlo,monospace;letter-spacing:.06em;padding:12px;border-radius:12px;border:2px dashed color-mix(in srgb,var(--text) 30%,transparent)}

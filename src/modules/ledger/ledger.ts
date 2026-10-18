@@ -18,7 +18,7 @@ export interface LedgerEntry {
   debit: string;
   credit: string;
   amountCents: Cents;
-  kind: 'print' | 'scan' | 'ar' | 'commission' | 'commission_reversal' | 'custom' | 'donation' | 'box_face' | 'payment' | 'charity_transfer' | 'expense';
+  kind: 'print' | 'scan' | 'ar' | 'commission' | 'commission_reversal' | 'custom' | 'donation' | 'box_face' | 'payment' | 'charity_transfer' | 'expense' | 'prize';
   memo: string;
 }
 
@@ -59,6 +59,8 @@ export class Ledger {
     });
     // Money going out: donations sent to charities, and the costs of running the business.
     bus.on('charity.transferred', (e) => this.add(e, { debit: `payable:charity:${e.payload.charity}`, credit: `cash:${e.payload.provider}`, amountCents: e.payload.amountCents, kind: 'charity_transfer', memo: `Transfer ${e.payload.number} to ${e.payload.charity}` }));
+    // A prize won: owed to the winner until it's handed over.
+    bus.on('lottery.won', (e) => this.add(e, { debit: 'expense:prizes', credit: 'payable:prizes', amountCents: e.payload.valueCents, kind: 'prize', memo: `Prize won: ${e.payload.prizeName} (${e.payload.claimCode})${e.payload.sponsor ? `, given by ${e.payload.sponsor}` : ''}` }));
     bus.on('expense.recorded', (e) => this.add(e, { debit: `expense:${e.payload.category}`, credit: 'cash:bank', amountCents: e.payload.amountCents, kind: 'expense', memo: e.payload.memo }));
     // 'print.failed' is deliberately not subscribed: nothing to bill.
   }
@@ -94,11 +96,40 @@ export class Ledger {
     }
 
     const g = company.giving;
-    const charity = g.charityByLocation?.[locationId] ?? g.defaultCharity ?? 'charity';
-    let donation = 0;
-    if (g.mode === 'per_unit') donation = g.centsPerUnit ?? 0;
+    const charity = 'CHARITY';
+    let donation = 0, memo = `Donation to ${charity}`;
+    if (g.mode === 'per_unit') {
+      donation = g.centsPerUnit ?? 0;
+      // Print money above the starting point (bids over $1, several ads on one bottle, a custom design) gives its share too.
+      const above = Math.max(0, revenue - (g.extraAboveCents ?? Infinity));
+      const extra = g.percentOfExtra && above > 0 ? Math.round((above * g.percentOfExtra) / 100) : 0;
+      if (extra) { donation += extra; memo = `Donation to ${charity}: ${g.centsPerUnit}¢ for the bottle + ${g.percentOfExtra}% of ${above}¢ above ${g.extraAboveCents}¢`; }
+    }
     if (g.mode === 'percent_of_revenue') donation = Math.round((revenue * (g.percentOfRevenue ?? 0)) / 100);
-    this.add(e, { unitId, debit: 'expense:giving', credit: `payable:charity:${charity}`, amountCents: donation, kind: 'donation', memo: `Donation to ${charity}` });
+    this.give(e, company, { unitId }, locationId, donation, (name) => memo.replace(charity, name));
+  }
+
+  /**
+   * Record a gift: to the machine or route's own charity if it has one, otherwise split between the company's
+   * charities by their percents (the cents always add up to the gift), otherwise to its one default charity.
+   */
+  private give(e: PlatformEvent, company: CompanyConfig, where: { unitId?: string; packId?: string }, locationId: string | undefined, amount: number, memo: (charity: string) => string, reverse = false) {
+    if (amount <= 0) return;
+    const g = company.giving;
+    const own = locationId ? g.charityByLocation?.[locationId] : undefined;
+    const split = !own && g.charitySplit ? Object.entries(g.charitySplit).filter(([, p]) => p > 0) : [];
+    let parts: [string, number][];
+    if (split.length > 1) {
+      const total = split.reduce((a, [, p]) => a + p, 0);
+      const exact = split.map(([n, p]) => [n, (amount * p) / total] as const);
+      parts = exact.map(([n, v]) => [n, Math.floor(v)]);
+      let left = amount - parts.reduce((a, [, v]) => a + v, 0);
+      for (const i of exact.map((x, i) => [x[1] - Math.floor(x[1]), i] as const).sort((a, b) => b[0] - a[0]).map(([, i]) => i)) { if (left-- <= 0) break; parts[i]![1] += 1; }
+    } else parts = [[own ?? split[0]?.[0] ?? g.defaultCharity ?? 'charity', amount]];
+    for (const [name, cents] of parts) {
+      if (reverse) this.add(e, { ...where, debit: `payable:charity:${name}`, credit: 'expense:giving', amountCents: cents, kind: 'donation', memo: memo(name) });
+      else this.add(e, { ...where, debit: 'expense:giving', credit: `payable:charity:${name}`, amountCents: cents, kind: 'donation', memo: memo(name) });
+    }
   }
 
   private onBoxPrinted(e: PlatformEvent<'box.printed'>) {
@@ -106,6 +137,7 @@ export class Ledger {
     for (const f of e.payload.faces) {
       if (f.isHouse) continue;
       this.add(e, { packId: e.payload.packId, campaignId: f.campaignId, debit: `receivable:advertiser:${f.advertiserId}`, credit: 'revenue:box', amountCents: f.priceCents, kind: 'box_face', memo: `${f.advertiserName}, ${f.face} of the box, printed` });
+      this.giveShare(e, this.company(e.companyId), f.priceCents, { packId: e.payload.packId }, undefined, 'a box side');
     }
   }
 
@@ -135,12 +167,9 @@ export class Ledger {
   /** The company's share of engagement and sales money for charity, on top of what each bottle gives. */
   private giveShare(e: PlatformEvent, company: CompanyConfig, earned: number, where: { unitId?: string; packId?: string }, locationId: string | undefined, what: string, reverse = false) {
     const g = company.giving;
-    if (g.mode === 'none' || !g.percentOfEngagement) return;
-    const amount = Math.round((earned * g.percentOfEngagement) / 100);
-    if (amount <= 0) return;
-    const charity = (locationId && g.charityByLocation?.[locationId]) || g.defaultCharity || 'charity';
-    if (reverse) this.add(e, { ...where, debit: `payable:charity:${charity}`, credit: 'expense:giving', amountCents: amount, kind: 'donation', memo: `Refund: ${g.percentOfEngagement}% of the commission no longer goes to ${charity}` });
-    else this.add(e, { ...where, debit: 'expense:giving', credit: `payable:charity:${charity}`, amountCents: amount, kind: 'donation', memo: `${g.percentOfEngagement}% of ${what} to ${charity}` });
+    if (g.mode === 'none' || !g.percentOfExtra) return;
+    const amount = Math.round((earned * g.percentOfExtra) / 100);
+    this.give(e, company, where, locationId, amount, (charity) => (reverse ? `Refund: ${g.percentOfExtra}% of ${what} no longer goes to ${charity}` : `${g.percentOfExtra}% of ${what} to ${charity}`), reverse);
   }
 
   /** Scans and AR launches from a box face are billed to that face's advertiser, with the same rules as bottles. */

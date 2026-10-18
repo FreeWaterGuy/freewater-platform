@@ -261,6 +261,30 @@
     tCustomers.value = aud.customers ?? '';
     const prodBoxes = c.products.map((p) => { const b = h('input', { type: 'checkbox', value: p.id }); b.checked = (d.targeting.products ?? []).includes(p.id); return [b, h('label', { class: 'chip-check' }, b, ` ${p.name}`)]; });
 
+    // 3b. The bid, for ads that bid.
+    const bidBox = (() => {
+      if (c.buy?.type !== 'bid') return null;
+      const b = c.buy, a = b.adjustments ?? {};
+      const money = (v) => h('input', { class: 'input', inputmode: 'decimal', value: (v / 100).toFixed(2), style: 'max-width:140px' });
+      const pct = (v) => h('input', { class: 'input', type: 'number', min: -90, max: 300, step: 5, value: v ?? '', placeholder: '0', style: 'max-width:110px' });
+      const pairs = (o) => Object.entries(o ?? {}).map(([k, v]) => `${k} ${v > 0 ? '+' : ''}${v}%`).join(', ');
+      const parsePairs = (t) => Object.fromEntries(t.split(',').map((x) => x.trim()).filter(Boolean).map((x) => { const m = /^(.+?)\s*([+-]?\d+)\s*%?$/.exec(x); return m ? [m[1].trim(), Number(m[2])] : null; }).filter(Boolean));
+      const f = { bid: money(b.maxCentsPerLabel), cap: money(b.dailyCapCents), pacing: h('select', { class: 'input' }, h('option', { value: 'even', text: 'Spread it over the day' }), h('option', { value: 'fast', text: 'Spend it as bottles come' })), freq: h('input', { class: 'input', type: 'number', min: 1, max: 50, value: b.frequencyCap ?? '', placeholder: 'No cap', style: 'max-width:120px' }),
+        parts: DAYPARTS.map(([k, l]) => [k, l, pct(a.dayparts?.[k])]), newC: pct(a.newCustomers), retC: pct(a.returningCustomers), ints: h('input', { class: 'input', value: pairs(a.interests), placeholder: 'coffee +20, running +10' }), locs: h('input', { class: 'input', value: pairs(a.locations), placeholder: 'ATX-014 +15, ATX-022 -20' }) };
+      f.pacing.value = b.pacing ?? 'even';
+      d.bidding = () => {
+        const num = (i) => (i.value === '' ? undefined : Number(i.value));
+        const adjustments = { dayparts: Object.fromEntries(f.parts.filter(([, , i]) => num(i)).map(([k, , i]) => [k, num(i)])), interests: parsePairs(f.ints.value), locations: parsePairs(f.locs.value), ...(num(f.newC) ? { newCustomers: num(f.newC) } : {}), ...(num(f.retC) ? { returningCustomers: num(f.retC) } : {}) };
+        for (const k of ['dayparts', 'interests', 'locations']) if (!Object.keys(adjustments[k]).length) delete adjustments[k];
+        return { maxCentsPerLabel: Math.round(Number(f.bid.value) * 100), dailyCapCents: Math.round(Number(f.cap.value) * 100), pacing: f.pacing.value, frequencyCap: num(f.freq) ?? null, adjustments: Object.keys(adjustments).length ? adjustments : null };
+      };
+      return h('section', { class: 'panel', style: 'gap:12px' }, h('h2', { class: 'section', text: 'Your bid' }),
+        h('p', { style: 'margin:0', text: `You bid for the whole label; smaller pieces pay the same share. Bidding starts at ${cents(c.engagement?.floorCents ?? 100)}. You pay only enough to beat the next ad in line, never more than your bid. Ads people engage with more can win with lower bids.` }),
+        h('div', { class: 'form' }, field('Most you’ll pay for the whole label ($)', f.bid), field('Daily budget ($)', f.cap), field('Budget pacing', f.pacing), field('Most bottles one person gets a day', f.freq)),
+        h('div', { class: 'field' }, h('label', { text: 'Bid more or less (%) by time of day' }), h('div', { class: 'chips' }, f.parts.map(([, l, i]) => h('label', { class: 'chip-check' }, `${l} `, i)))),
+        h('div', { class: 'form' }, field('New customers (%)', f.newC), field('Returning customers (%)', f.retC), field('By interest', f.ints, 'Only for people who shared their interests.'), field('By machine or route', f.locs)));
+    })();
+
     // 4. Try a moment.
     const mDay = h('select', { class: 'input' }, DAYPARTS.map(([v, l]) => h('option', { value: v, text: l })));
     const mWho = h('select', { class: 'input' }, [['first', 'First to scan, new to you'], ['passed', 'Passed the bottle by someone'], ['returning', 'Has scanned you before']].map(([v, l]) => h('option', { value: v, text: l })));
@@ -278,7 +302,7 @@
     const save = async () => {
       const body = {
         qr: d.qr.mode === 'static' ? { mode: 'static', staticUrl: d.qr.staticUrl, bottleRef: d.qr.bottleRef, ...(d.logo ? { logo: d.logo } : {}), ...(d.qr.color ? { color: d.qr.color } : {}) } : { mode: 'dynamic', ...(d.logo ? { logo: d.logo } : {}), ...(d.qr.color ? { color: d.qr.color } : {}) },
-        variants: d.variants, personalize: d.personalize, afterEnd: d.afterEnd,
+        variants: d.variants, personalize: d.personalize, afterEnd: d.afterEnd, ...(d.bidding ? { bidding: d.bidding() } : {}),
         targeting: { products: prodBoxes.filter(([b]) => b.checked).map(([b]) => b.value), audience: { interestsAny: tInterests.value.split(',').map((x) => x.trim()).filter(Boolean), ...(tCustomers.value ? { customers: tCustomers.value } : {}) } },
       };
       try { await api('PATCH', `/v1/campaigns/${id}/codes`, body); toast('Saved. Changes to what people see go to review first.'); go('/ads'); } catch (x) { toast(x.message); }
@@ -302,6 +326,7 @@
           h('div', { class: 'form' }, field('People who like', tInterests, 'Your ad then only prints on bottles for someone who fits, and we show you each bottle reached them.'), field('Customers', tCustomers)),
           c.engagement?.table ? h('p', { style: 'margin:0;color:var(--muted);font-size:14px', text: `Targeting makes each engagement worth more, so it costs more: places +${c.engagement.table.locations}%, products +${c.engagement.table.products}%, interests +${c.engagement.table.interests}%, new or returning customers +${c.engagement.table.customers}% (at most +${c.engagement.table.max}% in all). Right now yours adds ${c.engagement.premium.percent}%: ${cents(Math.round(c.engagement.perScanCents * (1 + c.engagement.premium.percent / 100)))} a scan and ${cents(Math.round(c.engagement.perArLaunchCents * (1 + c.engagement.premium.percent / 100)))} an AR launch.` }) : null,
           c.products.length > 1 ? h('div', { class: 'field' }, h('label', { text: 'Only on these products (none ticked: all)' }), h('div', { class: 'chips' }, prodBoxes.map(([, l]) => l))) : null),
+        bidBox,
         h('section', { class: 'panel', style: 'gap:12px' }, h('h2', { class: 'section', text: 'When this ad ends' }),
           h('div', { class: 'radio-cards', role: 'radiogroup', 'aria-label': 'When this ad ends' }, [['current', 'Old bottles open your current ad', 'Bottles still out there keep working for you.'], ['keep', 'Old bottles keep this ad', 'For offers that should stay as printed.']].map(([v, t, desc]) => { const r = h('input', { type: 'radio', name: 'after', value: v }); r.checked = d.afterEnd === v; r.addEventListener('change', () => { d.afterEnd = v; }); return h('label', {}, r, h('b', { text: t }), h('span', { text: desc })); }))),
         h('section', { class: 'panel', style: 'gap:12px' }, h('h2', { class: 'section', text: 'Try a moment' }),

@@ -79,9 +79,10 @@ describe('labels', () => {
   });
 
   it('prints the donation line only when giving is on', async () => {
-    expect(givingLine(freewater, 'ATX-014')).toBe('10¢ a bottle + 10% of scans & sales go to Austin Parks Foundation');
-    expect(givingLine(freewater, 'route-3')).toBe('10¢ a bottle + 10% of scans & sales go to Central Texas Food Bank');
-    expect(givingLine({ ...freewater, giving: { ...freewater.giving, percentOfEngagement: 0 } }, 'ATX-014')).toBe('10¢ a bottle goes to Austin Parks Foundation');
+    expect(givingLine(freewater, 'ATX-014')).toBe('10¢ a bottle + 10% of every dollar beyond goes to Well Aware');
+    expect(givingLine({ ...freewater, giving: { ...freewater.giving, charityByLocation: { 'route-3': 'Central Texas Food Bank' } } }, 'route-3')).toBe('10¢ a bottle + 10% of every dollar beyond goes to Central Texas Food Bank');
+    expect(givingLine({ ...freewater, giving: { ...freewater.giving, percentOfExtra: 0 } }, 'ATX-014')).toBe('10¢ a bottle goes to Well Aware');
+    expect(givingLine({ ...freewater, giving: { ...freewater.giving, charitySplit: { 'Well Aware': 70, 'Austin Parks Foundation': 30 } } }, 'ATX-014')).toBe('10¢ a bottle + 10% of every dollar beyond goes to Well Aware & Austin Parks Foundation');
     expect(givingLine(peakSpring, 'PS-001')).toBeNull();
     const s = setup();
     const r = await s.order('PS-001', 'peak-spring');
@@ -156,14 +157,16 @@ describe('billing', () => {
     s.platform.refund(r.unit.id, slot, 'pos-1', 1000);
     expect(s.platform.ledger.receipt(r.unit.id).earned.commission).toBe(0);
     s.platform.purchase(r.unit.id, slot, 'pos-2', 1000);
-    expect(s.platform.ledger.receipt(r.unit.id).earned.commission).toBe(80);
+    expect(s.platform.ledger.receipt(r.unit.id).earned.commission).toBe(30); // 3% of $10
   });
 
   it('records the donation for each printed bottle, and none when giving is off', async () => {
     const s = setup();
     const a = await s.order('ATX-014');
     const b = await s.order('PS-001', 'peak-spring');
-    expect(a.ok && s.platform.ledger.receipt(a.unit.id).donatedCents).toBe(10);
+    // 10¢ for the bottle, plus 10% of whatever its ads paid above $1.
+    const paid = a.ok ? a.unit.placements.filter((p) => !p.isHouse).reduce((x, p) => x + p.priceCents, 0) : 0;
+    expect(a.ok && s.platform.ledger.receipt(a.unit.id).donatedCents).toBe(10 + Math.round(Math.max(0, paid - 100) * 0.1));
     expect(b.ok && s.platform.ledger.receipt(b.unit.id).donatedCents).toBe(0);
   });
 

@@ -86,13 +86,23 @@ export interface CompanyConfig {
     mode: GivingMode;
     centsPerUnit?: Cents; // for per_unit
     percentOfRevenue?: number; // for percent_of_revenue, 0–100
-    /** On top of either: this percent of what scans, AR launches and sales commissions earn also goes to charity. */
-    percentOfEngagement?: number;
-    defaultCharity?: string;
+    /**
+     * On top of either: this percent of every other dollar earned also goes to charity. That's the print money a
+     * bottle earns above `extraAboveCents` (bids above the starting price, several ads on one bottle), and all of what
+     * scans, AR launches, box sides, custom bottles and sales commissions earn.
+     */
+    percentOfExtra?: number;
+    /** Print money per bottle up to this amount is covered by the per-bottle gift (FreeWater: $1, where bids start). */
+    extraAboveCents?: number;
+    defaultCharity?: string; // the charity everything goes to unless a machine or route names another
+    /** To give to more than one charity: each charity's percent of every gift (adding up to 100). Used instead of defaultCharity. */
+    charitySplit?: Record<string, number> | null;
     charityByLocation?: Record<string, string>;
     /** Donations are sent to charities in transfers once they reach this amount. */
     minimumTransferCents?: number;
   };
+  /** The prize game. Off unless the company turns it on. */
+  lottery?: LotterySettings;
   /**
    * The QR codes it prints. Codes are dynamic (looked up each time they're scanned) unless an advertiser is allowed
    * to choose a static one and does.
@@ -172,7 +182,27 @@ export interface Creative {
 export type Buy =
   | { type: 'guaranteed'; remainingPrints: number }
   /** A bid for the whole label; smaller sizes pay the same share of it as the starting prices do. Never below the starting price. */
-  | { type: 'bid'; maxCentsPerLabel: Cents; dailyCapCents: Cents; spentTodayCents: Cents };
+  | {
+      type: 'bid'; maxCentsPerLabel: Cents; dailyCapCents: Cents; spentTodayCents: Cents;
+      /** The company-local day that spentTodayCents belongs to; a new day starts the budget again. */
+      spentDay?: string;
+      /** Raise or lower the bid by place, product, time, interests and customers (percent, -90 to +300). */
+      adjustments?: BidAdjustments;
+      /** The most bottles with this ad one person gets in a day. */
+      frequencyCap?: number;
+      /** even (the default) spreads the daily budget over the day; fast spends it as bottles come. */
+      pacing?: 'even' | 'fast';
+    };
+
+export interface BidAdjustments {
+  locations?: Record<string, number>;
+  products?: Record<string, number>;
+  dayparts?: Partial<Record<'morning' | 'afternoon' | 'evening' | 'night', number>>;
+  days?: Partial<Record<'0' | '1' | '2' | '3' | '4' | '5' | '6', number>>;
+  interests?: Record<string, number>;
+  newCustomers?: number;
+  returningCustomers?: number;
+}
 
 export interface Campaign {
   id: string;
@@ -263,6 +293,8 @@ export interface Placement {
   isHouse: boolean;
   /** Why this ad was chosen for this person ("likes coffee", "new customer"), when it targets people. */
   audienceMatch?: string[];
+  /** How it won: its bid for the whole label after adjustments, what it paid for the whole label, its rank. */
+  auction?: { bidCents: number; paidLabelCents: number; rankCents: number; adjustments: string[] };
 }
 
 export type BoxFace = 'top' | 'front' | 'back' | 'right' | 'left' | 'bottom';
@@ -308,4 +340,41 @@ export interface Unit {
   intendedFor?: string;
   /** For custom bottles: what scanning it opens (the sender's message, video, photos). */
   experienceConfig?: Record<string, unknown>;
+}
+
+/**
+ * The prize game. People can only win by engaging with an ad: scanning its code, watching its video or opening its
+ * AR. Each engagement is one fair, random chance. A winner sees a red ball bounce across the screen for about 2.5
+ * seconds and has to tap it to collect, so only people who are actually watching win.
+ */
+export interface LotterySettings {
+  enabled: boolean;
+  /** The chance each engagement wins, in percent (2 means 1 in 50). */
+  oddsPercent: number;
+  /** The most chances one person gets in a day. */
+  chancesPerDay: number;
+  /** The most prizes one person can win in a day. */
+  winsPerDay: number;
+  /** How long someone must be watching before a winning ball can appear, in seconds. */
+  watchSeconds: number;
+  /** How long the ball is on screen, in milliseconds (2500 = 2.5 seconds). */
+  ballMs: number;
+  prizes: LotteryPrize[];
+  /** Who can play: the youngest age, and where the official rules live. */
+  minAge: number;
+  rulesUrl?: string;
+  /** A sentence shown under the game, like how to enter without buying anything. */
+  rulesText?: string;
+}
+export interface LotteryPrize {
+  id: string;
+  name: string; // "A free FreeWater t-shirt"
+  description?: string; // how to collect it
+  valueCents: Cents;
+  /** How often this prize comes up compared with the others (2 is twice as often as 1). */
+  weight: number;
+  /** The most of this prize that can be won in a day. */
+  perDay?: number;
+  /** An advertiser who gives this prize, if any. */
+  sponsor?: string;
 }

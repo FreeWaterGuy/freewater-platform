@@ -9,6 +9,8 @@ import { machineRoutes } from './machine';
 import { attributionRoutes } from './attribution';
 import { applyExtras, extrasSchema } from '../modules/experiences/extras';
 import { codesArRoutes } from './codesAr';
+import { lotteryRoutes } from './lottery';
+import { LotteryError } from '../modules/lottery/service';
 import { AttributionError } from '../modules/attribution/service';
 import { FleetError } from '../modules/fleet/service';
 import { WebhookError } from '../modules/webhooks/service';
@@ -149,7 +151,11 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   const openExperience = async (req: FastifyRequest, target: Target) => {
     const viewer = String((req.query as any).viewer ?? '');
     if (!/^[A-Za-z0-9_-]{8,64}$/.test(viewer)) throw new ApiError(400, 'viewer_required', 'Send ?viewer=<the random id this phone keeps>.');
-    return { body: await experiences.open(target, { key: viewer, user: await optionalUser(req) }) };
+    const opened = await experiences.open(target, { key: viewer, user: await optionalUser(req) });
+    // The prize game, if this company runs it: only on ads (not someone's own custom bottle).
+    const custom = target.kind === 'slot' && platform.units.get(target.unitId)?.kind === 'custom';
+    const game = custom ? null : app.lottery.settings(experiences.ownerOf(target).companyId);
+    return { body: { ...opened, lottery: game ? app.lottery.publicInfo(game) : null } };
   };
   route({ method: 'GET', url: '/v1/public/experience/:unitId/:slot', scope: 'public', summary: 'The page a bottle slot opens, as blocks. Opening it is free; the page then reports the scan once it has shown.', handler: async (req) => {
     const { unitId, slot } = req.params as any;
@@ -199,7 +205,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const company = platform.companies.get(id);
     if (!company) throw notFound('Company');
     const r = await db.query<any>(
-      `select coalesce(sum(amount_cents) filter (where kind = 'donation'),0)::bigint as donated,
+      `select coalesce(sum(amount_cents) filter (where kind = 'donation' and debit = 'expense:giving'),0)::bigint - coalesce(sum(amount_cents) filter (where kind = 'donation' and credit = 'expense:giving'),0)::bigint as donated,
               coalesce(sum(amount_cents) filter (where credit like 'revenue:%'),0)::bigint as revenue,
               coalesce(sum(amount_cents) filter (where kind = 'commission_reversal'),0)::bigint as reversed
        from ledger_entries where company_id = $1`, [id]);
@@ -521,6 +527,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   machineRoutes(app, route);
   attributionRoutes(app, server, route);
   codesArRoutes(app, server, route);
+  lotteryRoutes(app, route, parseTarget);
 
   // ---------- wiring ----------
 
@@ -646,7 +653,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   server.setErrorHandler((err: any, _req, reply) => {
     if (err instanceof ApiError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
-    if (err instanceof AccountsError || err instanceof PaymentError || err instanceof ExperienceError || err instanceof AssetError || err instanceof AdsError || err instanceof DesignError || err instanceof DeliveryError || err instanceof BooksError || err instanceof WebhookError || err instanceof ConsoleError || err instanceof FleetError || err instanceof AttributionError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
+    if (err instanceof AccountsError || err instanceof PaymentError || err instanceof ExperienceError || err instanceof AssetError || err instanceof AdsError || err instanceof DesignError || err instanceof DeliveryError || err instanceof BooksError || err instanceof WebhookError || err instanceof ConsoleError || err instanceof FleetError || err instanceof AttributionError || err instanceof LotteryError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
     if (err.code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE') return reply.code(415).send({ error: { code: 'unsupported_type', message: 'Send JSON, or for uploads a .glb, PNG, JPEG, WebP or MP4 file.' } });
     if (err.code === 'FST_ERR_CTP_BODY_TOO_LARGE') return reply.code(413).send({ error: { code: 'too_large', message: 'That is too big to upload.' } });
     if (err.validation) return reply.code(400).send({ error: { code: 'invalid_request', message: err.message } });

@@ -46,7 +46,7 @@ const freewaterPrices: CompanyConfig['prices'] = {
   perScan: 25,
   perArLaunch: 40,
   targetingPremium: { locations: 10, products: 5, interests: 25, customers: 15, max: 60 },
-  commissionPercent: 8,
+  commissionPercent: 3,
   customUnit: 300,
   perBoxFace: 40,
 };
@@ -56,7 +56,7 @@ const placeholderPrices: CompanyConfig['prices'] = {
   perPrintByShare: { 1: 12, 2: 7, 3: 5, 4: 4, 6: 3, 8: 3, 10: 2 },
   perScan: 25,
   perArLaunch: 40,
-  commissionPercent: 8,
+  commissionPercent: 3,
   customUnit: 300,
   perBoxFace: 40,
 };
@@ -67,7 +67,10 @@ export const freewater: CompanyConfig = {
   receiptBaseUrl: 'https://go.freewater.io',
   brand: { logoTop: 'free', logoBottom: 'water', tagline: "Put your brand in everyone's hand!", panelColor: '#000000', accentColor: '#7FC6EA', textColor: '#FFFFFF', fontFamily: "Comfortaa, 'DM Sans', Arial, sans-serif" },
   productFacts: ['SPRING WATER', '16 fl oz (473 ml)', 'Source: Natural Spring Water, Tiger, GA', 'Manufactured by RAIN Bottling Co for FreeWater Inc, Austin, TX', 'Processed by ozonation'],
-  giving: { mode: 'per_unit', centsPerUnit: 10, percentOfEngagement: 10, defaultCharity: 'Austin Parks Foundation', charityByLocation: { 'route-3': 'Central Texas Food Bank', 'route-5': 'Central Texas Food Bank' }, minimumTransferCents: 2500 },
+  // 10¢ a bottle (covering the first $1 of ads on it, where bids start), plus 10% of every dollar beyond that:
+  // higher bids, more ads, scans, AR launches, box sides, custom bottles and sales commissions. All to Well Aware,
+  // the Austin nonprofit that builds water wells in Africa, unless a machine or route names another charity.
+  giving: { mode: 'per_unit', centsPerUnit: 10, percentOfExtra: 10, extraAboveCents: 100, defaultCharity: 'Well Aware', minimumTransferCents: 2500 },
   consumerPricing: 'free',
   timezone: 'America/Chicago',
   consumer: { freeBottlesPerDay: 3, retailValueCents: 100 },

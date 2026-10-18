@@ -73,6 +73,7 @@ const rec = {
   sample,
   ids: { warehouse: warehouse.id, crm: crm.id },
   products: await call('GET', '/v1/console/products', token),
+  lottery: await call('GET', '/v1/lottery', token),
 };
 await server.close();
 

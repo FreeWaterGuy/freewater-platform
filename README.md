@@ -222,7 +222,28 @@ npm run demo:ops-preview   # builds out/ops-preview/ and out/driver-preview/, cl
 
 **Targeting costs more per engagement (`src/modules/ads/targeting.ts`).** Like Google and Facebook: each scan and AR launch costs the base price (FreeWater: 25¢ and 40¢) plus a premium for each kind of targeting. FreeWater's settings: chosen machines or routes +10%, chosen products +5%, people's interests +25%, new or returning customers +15%, at most +60% in all. The ledger line says what was added, and advertisers see their premium on the "Code, versions and AI" page.
 
-**Giving on engagement too.** On top of 10¢ a bottle, 10% of what scans, AR launches and sales commissions earn goes to the same charity (and comes back out if a sale is refunded). The label says "10¢ a bottle + 10% of scans & sales go to …". Every company can change both, or turn either off, in the console (Giving).
+**Giving: 10¢ a bottle, plus 10% of every dollar beyond.** FreeWater's default charity is Well Aware (Austin; builds water wells in Africa). Each bottle gives 10¢, covering its first $1 of ads. On top of that, 10% of every other dollar goes to charity: print money above $1 (higher bids, several ads on one bottle), scans, AR launches, box sides, custom bottles and sales commissions. A refund takes its share back. The label says "10¢ a bottle + 10% of every dollar beyond goes to Well Aware". In the console (Giving), every company, white-label ones included, can change the amounts, add charities, give a machine or route its own charity, or split every gift between several charities by percent (to the cent).
+
+**3% commission on sales.** This is the default for FreeWater and new licensees. It applies to sales after a QR scan and to sales made straight from the buy button inside AR. AR clicks are marked, and advertisers see "sales from AR" on their tracking page.
+
+**The auction (`src/modules/ads/auction.ts`).** It works like Google's and Meta's:
+- Bid adjustments by machine, product, time of day, day of week, interests, and new or returning customers. They multiply together.
+- Ad rank is the bid plus the engagement the ad is expected to earn, so a good ad can win with less.
+- Second price: the winner pays just enough to beat the next ad, never more than its bid and never below $1.
+- Even pacing of daily budgets, reset each day in the company's time zone.
+- A cap on how many bottles one person gets with the same ad each day.
+
+Each placement records what it bid, what it paid and which adjustments applied. Advertisers set all of this under "Your bid" on the ad's code page.
+
+## The prize game (`src/modules/lottery`)
+
+It is off for every company until turned on in the console (Prize game).
+- **Who can win:** only engagement counts. Each ad gives one chance for its page loading, one for its video playing and one for its AR opening, with a limit per person per day.
+- **Fair:** each day has a secret random seed. Its SHA-256 fingerprint is public before the day starts (`GET /v1/public/lottery/:company/fairness`), and the seed and every draw are published after the day ends. A draw is HMAC-SHA256(seed, company:day:person:n), so nobody can choose winners. Odds and prizes are frozen for the day.
+- **Paying attention:** a winning chance doesn't say what was won. A few seconds in, a red ball bounces across the screen for 2.5 seconds. The phone sends where and when it was tapped, and the server works out where the ball was at that moment (the same path, in `ball.ts` and `scan.js`). Only a tap on the ball while it is showing wins.
+- **After the ball:** winners get a prize code, which the company checks and marks given out (`POST /v1/lottery/redeem`). A miss shows what the prize was.
+- **Books:** prizes go into the books as `expense:prizes`.
+- **Legal:** have a lawyer check the rules ("no purchase necessary", eligibility, state registration) before turning it on.
 
 ## Model 6 machine software
 

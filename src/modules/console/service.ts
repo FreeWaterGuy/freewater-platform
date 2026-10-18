@@ -6,6 +6,7 @@ import type { Messenger } from '../../adapters/messaging/contract';
 import type { AccountsService } from '../accounts/service';
 import { createApiKey, listApiKeys } from '../../db/store';
 import { posterCreative, type PosterSpec } from '../creative/poster';
+import { lotteryDefaults } from '../lottery/rules';
 import { adCategories, applyChange, checkSettings, describeChange, editableKeys, fontChoices, type EditableKey } from './settings';
 
 export class ConsoleError extends Error {
@@ -64,7 +65,7 @@ export class ConsoleService {
     const charities = (await this.db.query<{ name: string }>(`select name from charities where company_id = $1 order by name`, [companyId])).rows.map((r) => r.name);
     return {
       config, version,
-      options: { modules: this.registry.names(), fonts: fontChoices, categories: adCategories, timezones: commonTimezones, editable: editableKeys },
+      options: { modules: this.registry.names(), fonts: fontChoices, categories: adCategories, timezones: commonTimezones, editable: editableKeys, lottery: lotteryDefaults(config) },
       locations: this.locations(companyId),
       charities,
       checklist: await this.checklist(companyId),
@@ -234,7 +235,7 @@ export class ConsoleService {
       receiptBaseUrl: input.receiptBaseUrl ?? `https://${id}.go.freewater.io`,
       brand: { logoTop: name.split(/\s+/)[0]!.toLowerCase().slice(0, 12), logoBottom: (name.split(/\s+/)[1] ?? '').toLowerCase().slice(0, 12), panelColor: '#000000', accentColor: '#7FC6EA', textColor: '#FFFFFF', fontFamily: fontChoices[1]!.value, ...input.brand },
       productFacts: ['SPRING WATER', '16 fl oz (473 ml)', `Bottled for ${name}`.slice(0, 60)],
-      giving: input.giving === 'per_unit' ? { mode: 'per_unit', centsPerUnit: 10, defaultCharity: 'Charity to be chosen', minimumTransferCents: 2500 } : { mode: 'none' },
+      giving: input.giving === 'per_unit' ? { mode: 'per_unit', centsPerUnit: 10, percentOfExtra: 10, extraAboveCents: base.prices.perPrintByShare[1], defaultCharity: 'Charity to be chosen', minimumTransferCents: 2500 } : { mode: 'none' },
       openBooks: true,
     };
     if (!config.brand.tagline) delete config.brand.tagline;

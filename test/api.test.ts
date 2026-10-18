@@ -78,7 +78,9 @@ describe('orders and scans', () => {
     const slot = unit.slots.find((s: any) => !s.isHouse).slot;
     const receipt = await call('GET', `/v1/public/receipts/${unit.id}`);
     expect(receipt.statusCode).toBe(200);
-    expect(receipt.json().donatedCents).toBe(10);
+    // 10¢ for the bottle, plus 10% of whatever its ads paid above the $1 starting price.
+    const paid = app.platform.units.get(unit.id)!.placements.filter((p) => !p.isHouse).reduce((x, p) => x + p.priceCents, 0);
+    expect(receipt.json().donatedCents).toBe(10 + Math.round(Math.max(0, paid - 100) * 0.1));
     expect(receipt.headers['access-control-allow-origin']).toBe('*');
 
     expect((await call('GET', `/v1/public/scan/${unit.id}/${slot}`)).json().experienceId).toBeTruthy();
@@ -175,8 +177,9 @@ describe('the books', () => {
     await expect(db.query('delete from ledger_entries')).rejects.toThrow(/append-only/);
     await expect(db.query('update events set type = $1', ['x'])).rejects.toThrow(/append-only/);
     const totals = (await call('GET', '/v1/public/companies/freewater/totals')).json();
-    const extra = Number((await db.query<any>(`select coalesce(sum(case when debit = 'expense:giving' then amount_cents else -amount_cents end),0)::int as n from ledger_entries where company_id = 'freewater' and kind = 'donation' and unit_id is not null and memo not like 'Donation to %'`)).rows[0].n);
-    expect(totals.donatedCents).toBe(totals.bottles * 10 + extra); // 10¢ a bottle, plus 10% of scans, AR launches and sales
+    const given = Number((await db.query<any>(`select coalesce(sum(case when debit = 'expense:giving' then amount_cents else -amount_cents end),0)::int as n from ledger_entries where company_id = 'freewater' and kind = 'donation'`)).rows[0].n);
+    expect(totals.donatedCents).toBe(given); // the public totals are exactly the books
+    expect(given).toBeGreaterThanOrEqual(totals.bottles * 10); // at least 10¢ a bottle, plus 10% of every dollar beyond
   });
 });
 

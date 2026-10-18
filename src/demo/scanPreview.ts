@@ -5,6 +5,7 @@ import { createPgliteClient } from '../db/pglite';
 import { builtinModel, builtinModelIds } from '../modules/models/builtin';
 import { mayaDesign } from './seed';
 import { arBundle } from '../web/ar/bundle';
+import { lotteryDefaults } from '../modules/lottery/service';
 
 // Builds out/scan-preview/: one offline page showing real scan pages, with the server's real answers baked in.
 // npm run demo:scan-preview
@@ -51,7 +52,7 @@ for (const [id, a] of active) app.platform.campaigns.get(id)!.active = a;
 await app.persistence.flush();
 const labelSvg = async (unitId: string) => (await server.inject({ method: 'GET', url: `/v1/public/labels/${unitId}.svg` })).body;
 
-const scenes: { id: string; label: string; note: string; path: string; data: unknown; ar?: unknown; labelSvg?: string }[] = [];
+const scenes: { id: string; label: string; note: string; path: string; data: unknown; ar?: unknown; labelSvg?: string; game?: unknown }[] = [];
 const arScene = async (id: string, label: string, note: string, b: { unitId: string; slot: number }, viewer: string) => {
   scenes.push({ id, label, note, path: `/s/${b.unitId}/${b.slot}`, data: await get(`/v1/public/experience/${b.unitId}/${b.slot}?viewer=${viewer}`), ar: await get(`/v1/public/ar/${b.unitId}`), labelSvg: await labelSvg(b.unitId) });
 };
@@ -70,6 +71,14 @@ await slotScene('coffee', 'Coffee offer', 'A first-time offer people can save. T
 await slotScene('coupon', 'One-time coupon', 'Everyone gets their own code. The cashier scans it: it shows valid once, and the sale is credited to this bottle. Screenshots can’t be used twice.', 'cmp-patty');
 await slotScene('gym', 'Book a class', 'Pick a time and book. The link goes through FreeWater first, so a booking is matched back to this bottle.', 'cmp-orbit');
 await slotScene('news', 'News story', 'A short story with a link to the rest.', 'cmp-daily');
+// The prize game, turned on just for this scene (it's off unless a company turns it on).
+{
+  const s = slots.get('cmp-luma') ?? slots.get('cmp-joes')!;
+  const fw = app.platform.companies.get('freewater')!;
+  fw.lottery = { ...lotteryDefaults(fw), enabled: true };
+  scenes.push({ id: 'game', label: 'Prize game: the red ball', note: 'Off unless the company turns it on. Watching an ad can win a prize, but only if you catch it: a few seconds in, a red ball bounces across the screen for 2.5 seconds. Tap it to collect. Miss it and you see what you missed. Reload the scene to play again.', path: `/s/${s.unitId}/${s.slot}`, data: await get(`/v1/public/experience/${s.unitId}/${s.slot}?viewer=game-viewer-01`), game: { seed: 20261020, prize: { id: 'free-pack', name: fw.lottery.prizes[0]!.name, description: fw.lottery.prizes[0]!.description, valueCents: fw.lottery.prizes[0]!.valueCents } } });
+  delete fw.lottery;
+}
 if (custom.ok) scenes.push({ id: 'custom', label: 'Custom bottle', note: 'A bottle someone paid to design. No ads: the sender’s message and confetti.', path: `/s/${custom.unit.id}/0`, data: await get(`/v1/public/experience/${custom.unit.id}/0?viewer=preview-viewer`) });
 scenes.push({ id: 'box', label: `Box: ${top.advertiserName}`, note: 'Every side of a delivery box has its own code. Scans are billed to that side’s advertiser.', path: `/b/${pack.id}/top`, data: await get(`/v1/public/experience/box/${pack.id}/top?viewer=preview-viewer`) });
 scenes.push({ id: 'pack', label: 'Pack page', note: 'The code on the box’s panel: what’s in the pack and what it gave. Never the address.', path: `/p/${pack.id}`, data: await get(`/v1/public/packs/${pack.id}`) });

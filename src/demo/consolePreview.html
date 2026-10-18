@@ -77,6 +77,8 @@
         note: style.logo ? (plan.logo ? `Your logo fits at ${pct(plan.logo.share)}% of the code’s width. The code still reads with ${pct(plan.damageTolerance.withLogo)}% of it damaged (${pct(plan.damageTolerance.plain)}% without the logo).` : 'There wasn’t room for a logo in this code without making it unreliable, so it prints without one.') : null };
     }
     if (key === 'GET /v1/console/products') return clone(S.products);
+    if (key === 'GET /v1/lottery') return clone(R.lottery);
+    if (key === 'POST /v1/lottery/redeem') { const c = String(body.code).trim().toUpperCase(); if (!/^WIN-[0-9A-Z]{4}-[0-9A-Z]{4}$/.test(c)) fail(404, 'That prize code isn’t one of ours.'); return { claimCode: c, prize: 'a free 12-pack from FreeWater', alreadyRedeemed: false, redeemedAt: new Date().toISOString() }; }
     if (key === 'POST /v1/console/products/check' || key === 'POST /v1/console/products') {
       const check = L.checkProduct(body.product);
       if (key === 'POST /v1/console/products') {

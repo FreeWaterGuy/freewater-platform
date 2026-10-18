@@ -61,13 +61,14 @@ export function codesArRoutes(app: App, server: FastifyInstance, route: (r: Rout
     personalize: c.personalize ?? { ai: false, greeting: false },
     afterEnd: c.afterEnd ?? 'current',
     targeting: c.targeting,
+    buy: c.buy,
   });
   route({ method: 'GET', url: '/v1/campaigns/:id/codes', scope: 'campaigns', summary: 'A campaign’s code (dynamic or static, logo, color), the versions of its call to action and who each is for, AI personalization, and who it targets. Also what the company allows and the products its ads can go on.', handler: async (req, key) => {
     const c = campaignFor(key!, (req.params as any).id);
     const company = platform.companies.get(c.companyId)!;
     return { body: { ...extrasView(c), experienceId: c.experienceId, experienceConfig: c.experienceConfig ?? {}, arMode: experiences.host.info(c.experienceId)?.arMode ?? null,
       allowed: { static: !!company.qr?.allowStatic, logos: company.qr?.advertiserLogos ?? true },
-      engagement: { perScanCents: company.prices.perScan, perArLaunchCents: company.prices.perArLaunch, premium: targetingPremium(c, company), table: company.prices.targetingPremium ?? null },
+      engagement: { floorCents: company.prices.perPrintByShare[1], perScanCents: company.prices.perScan, perArLaunchCents: company.prices.perArLaunch, premium: targetingPremium(c, company), table: company.prices.targetingPremium ?? null },
       products: productsFor(c.companyId).map((p) => ({ id: p.id, name: p.name, category: p.category ?? null })) } };
   } });
   route({ method: 'PATCH', url: '/v1/campaigns/:id/codes', scope: 'campaigns', summary: 'Change a campaign’s code, its versions of the call to action, AI personalization, what old bottles open once it ends, or who it targets. An advertiser changing what people see sends it back to review.', body: { ...obj(extrasSchema as any), minProperties: 1 }, handler: async (req, key) => {

@@ -128,7 +128,7 @@
       }
       if (/^\/v1\/campaigns\/[\w-]+\/codes$/.test(path)) {
         S.codes ??= structuredClone(R.joeCodes);
-        if (method === 'PATCH') { for (const k of ['variants', 'personalize', 'afterEnd']) if (body[k] !== undefined) S.codes[k] = body[k]; if (body.qr) S.codes.qr = { ...S.codes.qr, mode: body.qr.mode, staticUrl: body.qr.staticUrl ?? null, hasLogo: S.codes.qr.hasLogo || !!body.qr.logo }; if (body.targeting) S.codes.targeting = { ...S.codes.targeting, ...body.targeting }; }
+        if (method === 'PATCH') { for (const k of ['variants', 'personalize', 'afterEnd']) if (body[k] !== undefined) S.codes[k] = body[k]; if (body.qr) S.codes.qr = { ...S.codes.qr, mode: body.qr.mode, staticUrl: body.qr.staticUrl ?? null, hasLogo: S.codes.qr.hasLogo || !!body.qr.logo }; if (body.targeting) S.codes.targeting = { ...S.codes.targeting, ...body.targeting }; if (body.bidding) { const { adjustments, frequencyCap, ...rest } = body.bidding; S.codes.buy = { ...S.codes.buy, ...rest, ...(frequencyCap ? { frequencyCap } : {}), ...(adjustments ? { adjustments } : {}) }; } }
         return structuredClone(S.codes);
       }
       if (key === 'POST /v1/qr/preview') return body.logo ? R.joeQrLogo : R.joeQr; // the preview shows a sample logo for any upload

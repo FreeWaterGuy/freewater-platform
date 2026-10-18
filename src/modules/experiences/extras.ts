@@ -1,4 +1,4 @@
-import type { Campaign, CompanyConfig, CtaVariant } from '../../core/types';
+import type { BidAdjustments, Campaign, CompanyConfig, CtaVariant } from '../../core/types';
 import { checkQrColor, checkQrLogo } from '../print/qr';
 import { safeUrl } from './blocks';
 import { checkConditions } from './dynamic';
@@ -13,6 +13,8 @@ export interface CampaignExtras {
   variants?: CtaVariant[];
   personalize?: Campaign['personalize'] | null;
   afterEnd?: Campaign['afterEnd'];
+  /** For bids: the whole-label bid, daily budget, adjustments, frequency cap and pacing. */
+  bidding?: { maxCentsPerLabel?: number; dailyCapCents?: number; adjustments?: BidAdjustments | null; frequencyCap?: number | null; pacing?: 'even' | 'fast' };
   targeting?: Partial<Campaign['targeting']>;
 }
 
@@ -21,6 +23,18 @@ export const extrasSchema = {
   variants: { type: 'array', maxItems: 10, items: { type: 'object', additionalProperties: false, properties: { id: { type: 'string', maxLength: 40 }, name: { type: 'string', minLength: 1, maxLength: 60 }, when: { type: 'object' }, experienceId: { type: 'string', maxLength: 60 }, experienceConfig: { type: 'object' } }, required: ['id', 'name', 'experienceConfig'] } },
   personalize: { type: ['object', 'null'], additionalProperties: false, properties: { ai: { type: 'boolean' }, greeting: { type: 'boolean' } } },
   afterEnd: { type: 'string', enum: ['current', 'keep'] },
+  bidding: { type: 'object', additionalProperties: false, properties: {
+    maxCentsPerLabel: { type: 'integer', minimum: 1, maximum: 100_000 }, dailyCapCents: { type: 'integer', minimum: 500, maximum: 10_000_000 },
+    frequencyCap: { type: ['integer', 'null'], minimum: 1, maximum: 50 }, pacing: { type: 'string', enum: ['even', 'fast'] },
+    adjustments: { type: ['object', 'null'], additionalProperties: false, properties: {
+      locations: { type: 'object', maxProperties: 200, additionalProperties: { type: 'number', minimum: -90, maximum: 300 } },
+      products: { type: 'object', maxProperties: 50, additionalProperties: { type: 'number', minimum: -90, maximum: 300 } },
+      dayparts: { type: 'object', additionalProperties: false, properties: Object.fromEntries(['morning', 'afternoon', 'evening', 'night'].map((d) => [d, { type: 'number', minimum: -90, maximum: 300 }])) },
+      days: { type: 'object', additionalProperties: false, properties: Object.fromEntries(['0', '1', '2', '3', '4', '5', '6'].map((d) => [d, { type: 'number', minimum: -90, maximum: 300 }])) },
+      interests: { type: 'object', maxProperties: 30, additionalProperties: { type: 'number', minimum: -90, maximum: 300 } },
+      newCustomers: { type: 'number', minimum: -90, maximum: 300 }, returningCustomers: { type: 'number', minimum: -90, maximum: 300 },
+    } },
+  } },
   targeting: { type: 'object', additionalProperties: false, properties: {
     locations: { type: 'array', items: { type: 'string' } },
     products: { type: 'array', maxItems: 50, items: { type: 'string', maxLength: 60 } },
@@ -61,6 +75,11 @@ export function applyExtras(company: CompanyConfig, c: Campaign, x: CampaignExtr
   if (x.targeting?.products) for (const id of x.targeting.products) if (!/^[a-z0-9][a-z0-9-]{1,40}$/.test(id)) return `"${id}" isn't a product id.`;
   if (x.targeting?.audience?.interestsAny && !x.targeting.audience.interestsAny.every((i) => /^[\p{L}\p{N} &'-]{1,40}$/u.test(i))) return 'Interests must be short words like coffee or running.';
 
+  if (x.bidding) {
+    if (c.buy.type !== 'bid') return 'This ad has a set number of bottles at the starting price; bids and adjustments are for ads that bid.';
+    if (x.bidding.maxCentsPerLabel !== undefined && x.bidding.maxCentsPerLabel < company.prices.perPrintByShare[1]) return `Bids start at ${company.prices.perPrintByShare[1]}¢ for the whole label.`;
+  }
+
   if (x.qr !== undefined) {
     if (x.qr === null) delete c.qr;
     else {
@@ -74,6 +93,14 @@ export function applyExtras(company: CompanyConfig, c: Campaign, x: CampaignExtr
   if (x.variants !== undefined) { if (x.variants.length) c.variants = x.variants.map((v) => ({ ...v, ...(v.when && Object.keys(v.when).length ? {} : { when: undefined }) })).map(clean); else delete c.variants; }
   if (x.personalize !== undefined) { if (!x.personalize || (!x.personalize.ai && !x.personalize.greeting)) delete c.personalize; else c.personalize = { ai: !!x.personalize.ai, greeting: !!x.personalize.greeting }; }
   if (x.afterEnd !== undefined) c.afterEnd = x.afterEnd;
+  if (x.bidding && c.buy.type === 'bid') {
+    const b = c.buy;
+    if (x.bidding.maxCentsPerLabel !== undefined) b.maxCentsPerLabel = x.bidding.maxCentsPerLabel;
+    if (x.bidding.dailyCapCents !== undefined) b.dailyCapCents = x.bidding.dailyCapCents;
+    if (x.bidding.pacing !== undefined) b.pacing = x.bidding.pacing;
+    if (x.bidding.frequencyCap !== undefined) { if (x.bidding.frequencyCap === null) delete b.frequencyCap; else b.frequencyCap = x.bidding.frequencyCap; }
+    if (x.bidding.adjustments !== undefined) { if (!x.bidding.adjustments || !Object.keys(x.bidding.adjustments).length) delete b.adjustments; else b.adjustments = { ...x.bidding.adjustments, ...(x.bidding.adjustments.interests ? { interests: Object.fromEntries(Object.entries(x.bidding.adjustments.interests).map(([k, v]) => [k.toLowerCase(), v])) } : {}) }; }
+  }
   if (x.targeting) {
     const t = { ...c.targeting, ...x.targeting };
     for (const k of ['products', 'productCategories'] as const) if (!t[k]?.length) delete t[k];

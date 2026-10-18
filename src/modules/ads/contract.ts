@@ -18,12 +18,18 @@ export interface FillRequest {
    * can only go on bottles for someone who fits; bottles for nobody in particular never carry them.
    */
   audience?: PrintAudience | null;
+  /** When and where, for bid adjustments and pacing. Worked out from the clock if missing. */
+  moment?: Omit<import('./auction').AuctionMoment, 'product' | 'audience' | 'locationId'>;
+  /** Each ad's results so far, to predict its engagement. */
+  stats?: import('./auction').AuctionStats;
 }
 
 export interface PrintAudience {
   personKey: string; // their anonymous viewer key
   interests: string[]; // only if they turned on personalized offers
   advertisersSeen: Set<string>;
+  /** How many bottles with each campaign this person already got today (for frequency caps). */
+  campaignsToday?: Map<string, number>;
 }
 
 export interface FillResult {

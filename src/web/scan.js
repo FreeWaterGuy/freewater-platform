@@ -90,7 +90,10 @@
       h('div', { class: 'who' }, custom ? h('b', { text: 'Made just for you' }) : [h('span', { class: 'chip-ad', text: 'Ad' }), h('b', { text: doc.owner.name })]),
       h('span', { text: target.kind === 'box-face' ? `${target.face} of your box` : '' }));
     const body = h('section', { class: 'blocks' }, doc.blocks.map((b) => block(b, ctx)).filter(Boolean));
-    app.replaceChildren(top, body, panel(footer, target));
+    game.info = custom ? null : opened.lottery || null;
+    game.ctx = ctx;
+    app.replaceChildren(top, ...(game.info ? [gameNote(game.info)] : []), body, panel(footer, target));
+    if (game.info && record) checkPending();
 
     // The scan counts once the page has actually shown. If the experience failed, it isn't billed.
     if (record) requestAnimationFrame(() => setTimeout(() => {
@@ -98,7 +101,7 @@
       const rec = target.kind === 'slot'
         ? api('POST', '/v1/public/scans', { unitId: target.unitId, slot: target.slot, viewerKey, experienceLoaded: loaded, ...(opened.variant ? { variant: opened.variant.id } : {}) })
         : api('POST', '/v1/public/box-scans', { packId: target.packId, face: target.face, viewerKey, experienceLoaded: loaded });
-      rec.catch(() => {});
+      rec.then(() => { if (loaded) play('scan', ctx); }).catch(() => {});
     }, 0));
   }
 
@@ -106,10 +109,10 @@
   const engage = (ctx, action, detail) => previewMode ? Promise.resolve() : api('POST', '/v1/public/engagements', { target: ctx.targetKey, viewerKey, action, ...(detail ? { detail: String(detail).slice(0, 120) } : {}) }).catch(() => {});
   // Links out of an ad go through our own address (/go/…), which records the click and hands the advertiser a click id.
   // This phone's viewer id goes along, so the click joins up with the scan.
-  const withAttribution = (url) => {
+  const withAttribution = (url, from) => {
     try {
       const u = new URL(url, location.href);
-      if (u.origin === location.origin && u.pathname.startsWith('/go/')) u.searchParams.set('v', viewerKey);
+      if (u.origin === location.origin && u.pathname.startsWith('/go/')) { u.searchParams.set('v', viewerKey); if (from) u.searchParams.set('from', from); }
       return u.toString();
     } catch { return url; }
   };
@@ -174,7 +177,7 @@
       }
       case 'video': {
         const v = h('video', { src: b.url, poster: b.posterUrl, controls: true, playsinline: true, preload: 'metadata' });
-        v.addEventListener('play', () => engage(ctx, 'video'), { once: true });
+        v.addEventListener('play', () => engage(ctx, 'video').then(() => play('video', ctx)), { once: true });
         return h('figure', { style: 'margin:0' }, v, b.caption && h('figcaption', { class: 'text', style: 'margin-top:6px;color:var(--muted)', text: b.caption }));
       }
       case 'article': return h('article', { class: 'article' }, h('h2', { text: b.headline }), b.byline && h('p', { class: 'byline', text: b.byline }), b.paragraphs.map((p) => h('p', { text: p })));
@@ -209,7 +212,7 @@
     return `${new URL(usdzFor(model.glbUrl), location.href).toString()}#${p.toString().replace(/\+/g, '%20')}`;
   }
   function sceneViewerIntent(model, buy) {
-    const q = new URLSearchParams({ file: new URL(model.glbUrl, location.href).toString(), mode: 'ar_preferred', title: buy.title, link: withAttribution(buy.url) });
+    const q = new URLSearchParams({ file: new URL(model.glbUrl, location.href).toString(), mode: 'ar_preferred', title: buy.title, link: withAttribution(buy.url, 'ar') });
     return `intent://arvr.google.com/scene-viewer/1.0?${q.toString()}#Intent;scheme=https;package=com.google.android.googlequicksearchbox;action=android.intent.action.VIEW;S.browser_fallback_url=${encodeURIComponent(location.href)};end;`;
   }
 
@@ -221,7 +224,7 @@
     if (buy) {
       if (isIOS) mv.setAttribute('ios-src', quickLookSrc(model, buy));
       // Apple's AR banner button was tapped: go on to buy, through our click tracking.
-      mv.addEventListener('quick-look-button-tapped', () => { engage(ctx, 'link', 'buy from AR'); location.href = withAttribution(buy.url); });
+      mv.addEventListener('quick-look-button-tapped', () => { engage(ctx, 'link', 'buy from AR'); location.href = withAttribution(buy.url, 'ar'); });
     }
     let launched = false;
     const launch = async () => {
@@ -239,7 +242,7 @@
       const body = ctx.target.kind === 'slot'
         ? ['/v1/public/ar-launches', { unitId: ctx.target.unitId, slot: ctx.target.slot, viewerKey, loaded }]
         : ['/v1/public/box-ar-launches', { packId: ctx.target.packId, face: ctx.target.face, viewerKey, loaded }];
-      api('POST', ...body).catch(() => {});
+      api('POST', ...body).then(() => { if (loaded) playWhenBack('ar', ctx); }).catch(() => {});
       setTimeout(() => (launched = false), 1500);
     };
     mv.addEventListener('fw-ar', launch);
@@ -275,8 +278,8 @@
       getMap: () => api('GET', `/v1/public/ar/${ctx.target.unitId}`),
       getLabelSvg: (url) => (fixture ? fixture.text(url) : fetch(url).then((r) => { if (!r.ok) throw new Error('label'); return r.text(); })),
       // An AR launch is billed only once it has actually loaded on this phone.
-      onReady: (loaded) => { if (reported || previewMode) return; reported = true; api('POST', '/v1/public/ar-launches', { unitId: ctx.target.unitId, slot: ctx.target.slot, viewerKey, loaded }).catch(() => {}); },
-      onLink: (url) => { engage(ctx, 'link', 'from AR'); location.href = withAttribution(url); },
+      onReady: (loaded) => { if (reported || previewMode) return; reported = true; api('POST', '/v1/public/ar-launches', { unitId: ctx.target.unitId, slot: ctx.target.slot, viewerKey, loaded }).then(() => { if (loaded) play('ar', ctx); }).catch(() => {}); },
+      onLink: (url) => { engage(ctx, 'link', 'from AR'); location.href = withAttribution(url, 'ar'); },
     });
     return h('div', { class: `ar-card ar-${b.mode}` },
       h('div', { class: 'ar-art', 'aria-hidden': 'true' }, arArt(b.mode)),
@@ -302,6 +305,97 @@
     if (window.FWAR) return window.FWAR.open(opts);
     arScript ??= new Promise((res, rej) => { const sc = document.createElement('script'); sc.src = '/static/ar.js'; sc.onload = res; sc.onerror = () => { arScript = null; rej(new Error('ar')); }; document.head.append(sc); });
     arScript.then(() => window.FWAR.open(opts)).catch(() => toast('AR couldn’t load. Check your connection.'));
+  }
+
+  // ---------- the prize game (only when the company turns it on) ----------
+  // Engaging with an ad (its page, its video, its AR) is a chance. A winning chance shows a red ball that bounces
+  // across the screen for about 2.5 seconds; tap it to collect. Miss it and we say what the prize was.
+  // ball:start (the same path the server checks taps against, src/modules/lottery/ball.ts)
+  function ballAt(seed, tMs, durationMs) {
+    let a = seed >>> 0;
+    const rnd = () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    const fromLeft = rnd() < 0.5, bounces = 3 + Math.floor(rnd() * 3), floor = 0.55 + rnd() * 0.3, height = 0.25 + rnd() * 0.2;
+    const p = Math.max(0, Math.min(1, tMs / durationMs));
+    const x = fromLeft ? -0.06 + p * 1.12 : 1.06 - p * 1.12;
+    const y = floor - Math.abs(Math.sin(Math.PI * bounces * p)) * height * (1 - 0.45 * p);
+    return { x, y };
+  }
+  // ball:end
+  const game = { info: null, ctx: null, asked: new Set(), queue: [], busy: false };
+  const pendingKey = 'fw_lottery_pending';
+  const pending = { all() { try { return JSON.parse(store.get(pendingKey) || '[]'); } catch { return []; } }, add(id) { pending.save([...pending.all().filter((x) => x !== id), id].slice(-10)); }, drop(id) { pending.save(pending.all().filter((x) => x !== id)); }, save(a) { store.set(pendingKey, JSON.stringify(a)); } };
+
+  /** Ask for a chance for something this person really did. Only once per kind of engagement per ad. */
+  function play(via, ctx) {
+    ctx = ctx || game.ctx;
+    if (!game.info || !ctx || previewMode || game.asked.has(`${ctx.targetKey}|${via}`)) return;
+    game.asked.add(`${ctx.targetKey}|${via}`);
+    api('POST', '/v1/public/lottery/chances', { target: ctx.targetKey, viewerKey, via }).then((r) => {
+      if (!r?.ball || !r.chanceId) return;
+      pending.add(r.chanceId);
+      setTimeout(() => { game.queue.push({ id: r.chanceId, ...r.ball }); nextBall(); }, r.ball.inMs);
+    }).catch(() => {});
+  }
+  // AR that opens outside the page (Apple's or Google's): the chance starts once the person is back.
+  function playWhenBack(via, ctx) {
+    if (document.visibilityState === 'visible' && document.hasFocus()) { setTimeout(() => { if (document.visibilityState === 'visible') play(via, ctx); else playWhenBack(via, ctx); }, 1200); return; }
+    const back = () => { if (document.visibilityState !== 'visible') return; document.removeEventListener('visibilitychange', back); window.removeEventListener('focus', back); play(via, ctx); };
+    document.addEventListener('visibilitychange', back); window.addEventListener('focus', back);
+  }
+
+  function nextBall() {
+    if (game.busy || !game.queue.length) return;
+    game.busy = true;
+    const b = game.queue.shift();
+    const ball = h('button', { type: 'button', class: 'fw-ball', 'aria-label': 'A red ball! Tap it to win' }, h('i'));
+    document.body.append(ball);
+    const start = performance.now();
+    let done = false;
+    const place = (t) => { const p = ballAt(b.seed, t, b.durationMs); ball.style.transform = `translate(${p.x * innerWidth}px, ${p.y * innerHeight}px)`; };
+    const frame = () => {
+      if (done) return;
+      const t = performance.now() - start;
+      if (t > b.durationMs) { finish(); api('GET', `/v1/public/lottery/chances/${b.id}?viewer=${encodeURIComponent(viewerKey)}`).then((r) => showResult(b.id, r)).catch(() => {}); return; }
+      place(t); requestAnimationFrame(frame);
+    };
+    const finish = () => { done = true; ball.remove(); game.busy = false; };
+    ball.addEventListener('pointerdown', (e) => {
+      if (done) return;
+      e.preventDefault(); e.stopPropagation();
+      const tap = { tMs: Math.round(performance.now() - start), x: e.clientX / innerWidth, y: e.clientY / innerHeight };
+      finish();
+      api('POST', `/v1/public/lottery/chances/${b.id}/claim`, { viewerKey, tap }).then((r) => showResult(b.id, r)).catch(() => toast('That didn’t go through. Check your connection.'));
+    });
+    place(0); requestAnimationFrame(frame);
+    if (navigator.vibrate) try { navigator.vibrate(30); } catch {}
+  }
+
+  function showResult(id, r) {
+    if (!r || r.status === 'waiting' || r.status === 'none') { if (r?.status === 'none') pending.drop(id); return; }
+    pending.drop(id);
+    const won = r.status === 'won';
+    if (won) confetti();
+    const close = () => { sheet.remove(); nextBall(); };
+    const copy = won ? h('button', { type: 'button', class: 'btn', onclick: async () => { try { await navigator.clipboard.writeText(r.claimCode); toast('Code copied'); } catch { toast(r.claimCode); } } }, 'Copy my code') : null;
+    const sheet = h('div', { class: 'fw-prize', role: 'dialog', 'aria-modal': 'true', 'aria-label': won ? 'You won' : 'You missed it' },
+      h('div', { class: 'card' },
+        h('div', { class: `dot${won ? '' : ' gone'}`, 'aria-hidden': 'true' }),
+        h('h2', { text: won ? 'You caught it!' : 'So close. You missed it.' }),
+        h('p', { text: won ? `You won ${r.prize.name}.` : `The red ball went by. The prize was ${r.prize.name}.` }),
+        r.prize.description && won ? h('p', { class: 'muted', text: r.prize.description }) : null,
+        won ? h('div', { class: 'code', text: r.claimCode }) : h('p', { class: 'muted', text: 'Keep an eye out next time: watching an ad, its video or its AR can bring the ball back.' }),
+        copy,
+        h('button', { type: 'button', class: `btn${won ? ' secondary' : ''}`, onclick: close }, won ? 'Done' : 'Got it')));
+    document.body.append(sheet);
+  }
+
+  // A ball that came while the person was away (or the page closed) is still a miss they should hear about.
+  function checkPending() {
+    for (const id of pending.all()) api('GET', `/v1/public/lottery/chances/${id}?viewer=${encodeURIComponent(viewerKey)}`).then((r) => showResult(id, r)).catch((e) => { if (e.status === 404) pending.drop(id); });
+  }
+  function gameNote(info) {
+    return h('div', { class: 'game-note' }, h('span', { class: 'mini-ball', 'aria-hidden': 'true' }),
+      h('span', {}, h('b', { text: 'Watch for the red ball. ' }), `Tap it before it’s gone to win a prize. ${info.rulesText ? info.rulesText + ' ' : ''}`, info.rulesUrl ? h('a', { href: info.rulesUrl, target: '_blank', rel: 'noopener', text: 'Official rules' }) : null));
   }
 
   function confetti() {

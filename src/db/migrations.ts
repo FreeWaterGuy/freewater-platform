@@ -642,6 +642,47 @@ alter table conversions add column bottle_code text;
 create index conversions_bottle on conversions(bottle_code);
 `,
   },
+  {
+    // The prize game: a secret seed for each day (its fingerprint is public before the day starts, the seed itself
+    // after it ends, so anyone can check every draw), every chance and how it went.
+    id: '013_lottery',
+    sql: `
+create table lottery_days (
+  company_id text not null,
+  day text not null,
+  seed text not null,
+  commitment text not null,
+  rules jsonb not null,
+  created_at timestamptz not null,
+  primary key (company_id, day)
+);
+create table lottery_chances (
+  id text primary key,
+  company_id text not null,
+  day text not null,
+  viewer_key text not null,
+  target text not null,
+  via text not null,
+  draw_key text not null,
+  draw numeric not null,
+  status text not null,
+  prize_id text,
+  prize jsonb,
+  show_at timestamptz,
+  ball_seed bigint,
+  ball_ms integer,
+  claim_code text,
+  tap jsonb,
+  created_at timestamptz not null,
+  settled_at timestamptz,
+  redeemed_at timestamptz,
+  unique (company_id, viewer_key, target, via)
+);
+create index lottery_chances_day on lottery_chances(company_id, day, viewer_key);
+create index lottery_chances_status on lottery_chances(company_id, status, created_at);
+alter table clicks add column via text;
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

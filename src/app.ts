@@ -36,6 +36,7 @@ import { ConsoleService } from './modules/console/service';
 import { FleetService, MachineFleetPrinter } from './modules/fleet/service';
 import { CodeService, loadSecret } from './modules/codes/service';
 import { AttributionService } from './modules/attribution/service';
+import { LotteryService } from './modules/lottery/service';
 import { boxes, builtinCreatives, freewater, locations, peakSpring, products, sampleCampaigns } from './demo/seed';
 
 export interface AppOptions {
@@ -81,8 +82,9 @@ export async function createApp(opts: AppOptions) {
     for (const c of sampleCampaigns().filter((x) => !x.isHouse)) {
       await db.query(`insert into advertisers (id, company_id, name, category) values ($1,$2,$3,$4) on conflict do nothing`, [c.advertiserId, c.companyId, c.advertiserName, c.category]);
     }
-    // The charities FreeWater's sample bottles give to. Contact details are placeholders.
-    for (const [id, name, website] of [['ch_apf', 'Austin Parks Foundation', 'https://austinparks.org'], ['ch_ctfb', 'Central Texas Food Bank', 'https://www.centraltexasfoodbank.org']]) {
+    // FreeWater gives to Well Aware (wellawareworld.org) by default; two more Austin charities are on the list to choose
+    // for particular machines or routes. Contact and bank details are placeholders.
+    for (const [id, name, website] of [['ch_wellaware', 'Well Aware', 'https://wellawareworld.org'], ['ch_apf', 'Austin Parks Foundation', 'https://austinparks.org'], ['ch_ctfb', 'Central Texas Food Bank', 'https://www.centraltexasfoodbank.org']]) {
       await db.query(`insert into charities (id, company_id, name, website, email, payout_label) values ($1,'freewater',$2,$3,$4,'Bank account (test)') on conflict do nothing`, [id, name, website, `giving@${id}.example.org`]);
     }
     await make('peak-spring-admin', 'peak-spring', ['orders', 'packs', 'campaigns', 'purchases', 'ledger', 'events', 'admin']);
@@ -112,6 +114,8 @@ export async function createApp(opts: AppOptions) {
   const printedUnits = state.units.filter((u) => u.status === 'dispensed' || u.status === 'printed').map((u) => ({ unitId: u.id, placements: u.placements, locationId: u.locationId }));
   const printedBoxes = state.packs.filter((p) => p.faces.length > 0).map((p) => ({ packId: p.id, faces: p.faces }));
   platform.ledger.restore({ entries: state.ledger, printed: printedUnits, boxes: printedBoxes, engagementEvents: state.engagementEvents });
+  // The auction picks up where it left off: what each ad has earned per bottle.
+  for (const l of state.ledger) if (l.campaignId && l.unitId) { if (l.kind === 'print') platform.auctionStats.add(l.campaignId, 'prints'); if (l.kind === 'scan') platform.auctionStats.add(l.campaignId, 'scans'); if (l.kind === 'ar') platform.auctionStats.add(l.campaignId, 'arLaunches'); }
 
   const messenger = opts.messenger ?? new TestOutbox(process.env.ECHO_CODES === '1');
   const accounts = new AccountsService(db, messenger, opts.clock, (id) => platform.companies.get(id)?.name ?? 'FreeWater');
@@ -123,6 +127,7 @@ export async function createApp(opts: AppOptions) {
   const experiences = new ExperienceService(platform, packs, host, db, accounts);
   const attribution = new AttributionService(db, platform, await loadSecret(db, 'links'), opts.clock);
   experiences.attribution = attribution;
+  const lottery = new LotteryService(db, platform, opts.clock);
   attribution.codes = codes;
   attribution.packFace = (packId, face) => packs.packs.get(packId)?.faces.find((f) => f.face === face)?.advertiserId;
   attribution.boxStatic = (packId, face, code) => !!packs.packs.get(packId)?.rendered?.faceUrls[face as 'top']?.includes(`fwb=${code}`);
@@ -159,7 +164,7 @@ export async function createApp(opts: AppOptions) {
   await fleet.load();
   made.registry.registerPrinter('model6-fleet', new MachineFleetPrinter(() => fleet, made.printer));
 
-  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer };
+  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

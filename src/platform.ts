@@ -5,6 +5,7 @@ import { Registry } from './core/registry';
 import type { Campaign, CompanyConfig, Creative, Location, Placement, Product, Unit } from './core/types';
 import { release, reserve } from './modules/ads/budget';
 import { targetingPremium } from './modules/ads/targeting';
+import { AuctionStats, momentAt } from './modules/ads/auction';
 import { Ledger } from './modules/ledger/ledger';
 import type { RenderedLabel } from './modules/print/contract';
 
@@ -51,6 +52,8 @@ export class Platform {
   private maxAttempts: number;
   /** Makes the smart code in every QR printed. Set when the platform runs with a database. */
   codes?: import('./modules/codes/service').CodeMinter;
+  /** Each ad's results so far, so the auction can predict how it will do. */
+  readonly auctionStats = new AuctionStats();
   /** Which slots on a bottle use AR that follows the bottle, so its label gets the tracking strip there. Set at start-up. */
   arTracking?: (unit: Unit) => number[];
 
@@ -69,8 +72,29 @@ export class Platform {
       onEntry: (entry) => this.persist.ledgerEntry(entry),
       engagementPremium: (id) => { const c = campaigns.get(id); const co = c && companies.get(c.companyId); return c && co ? targetingPremium(c, co).percent : 0; },
     });
+    // The auction learns how each ad does: bottles printed, scans and AR launches that loaded.
+    this.bus.on('label.printed', (e) => { for (const p of e.payload.placements) if (!p.isHouse) this.auctionStats.add(p.campaignId, 'prints'); });
+    const engaged = (kind: 'scans' | 'arLaunches') => (e: any) => {
+      const loaded = e.payload.experienceLoaded ?? e.payload.loaded;
+      const p = loaded ? this.units.get(e.payload.unitId)?.placements.find((x) => x.slotIndex === e.payload.slotIndex) : undefined;
+      if (p && !p.isHouse) this.auctionStats.add(p.campaignId, kind);
+    };
+    this.bus.on('unit.scanned', engaged('scans'));
+    this.bus.on('ar.launched', engaged('arLaunches'));
     this.random = seededRandom(opts.seed ?? 42);
     this.maxAttempts = opts.maxPrintAttempts ?? 2;
+  }
+
+  /** For frequency caps: how many bottles with each campaign this person already got today. */
+  private withToday(a: import('./modules/ads/contract').PrintAudience | null, tz?: string) {
+    if (!a) return null;
+    const today = momentAt(this.bus.now(), tz ?? 'UTC').dayKey;
+    const counts = new Map<string, number>();
+    for (const u of this.units.values()) {
+      if (u.intendedFor !== a.personKey || u.status === 'failed' || momentAt(new Date(u.createdAt), tz ?? 'UTC').dayKey !== today) continue;
+      for (const p of u.placements) if (!p.isHouse) counts.set(p.campaignId, (counts.get(p.campaignId) ?? 0) + 1);
+    }
+    return { ...a, campaignsToday: counts };
   }
 
   /** The product a company hands out unless something else is asked for. */
@@ -120,7 +144,7 @@ export class Platform {
     // 1. Fill slots (custom units have no ads).
     const fill = opts.custom
       ? { layout: [1 as const], placements: [] }
-      : this.registry.adsFor(company).fill({ company, product, location, campaigns: [...this.campaigns.values()], random: this.random, frequency: opts.frequency, avoidSignatures: opts.avoidSignatures, audience: opts.audience ?? null });
+      : this.registry.adsFor(company).fill({ company, product, location, campaigns: [...this.campaigns.values()], random: this.random, frequency: opts.frequency, avoidSignatures: opts.avoidSignatures, audience: this.withToday(opts.audience ?? null, company.timezone), moment: momentAt(this.bus.now(), company.timezone ?? 'UTC'), stats: this.auctionStats });
     reserve(fill.placements, this.campaigns);
     this.persistCampaigns(fill.placements);
 

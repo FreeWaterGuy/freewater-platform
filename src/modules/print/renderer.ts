@@ -165,10 +165,11 @@ export function panel(company: CompanyConfig, x: number, w: number, h: number, r
 /** The donation line follows the company's giving setting, and disappears entirely when giving is off. */
 export function givingLine(company: CompanyConfig, locationId: string): string | null {
   const g = company.giving;
-  const charity = g.charityByLocation?.[locationId] ?? g.defaultCharity;
+  const split = g.charitySplit ? Object.keys(g.charitySplit) : [];
+  const charity = g.charityByLocation?.[locationId] ?? (split.length > 1 ? (split.length === 2 ? split.join(' & ') : `${split.length} charities`) : g.defaultCharity);
   const to = charity ? ` to ${charity}` : ' to charity';
-  const extra = g.percentOfEngagement ? ` + ${g.percentOfEngagement}% of scans & sales` : '';
-  if (g.mode === 'per_unit' && g.centsPerUnit) return `${g.centsPerUnit}¢ a bottle${extra} ${extra ? 'go' : 'goes'}${to}`;
+  if (g.mode === 'per_unit' && g.centsPerUnit) return g.percentOfExtra ? `${g.centsPerUnit}¢ a bottle + ${g.percentOfExtra}% of every dollar beyond goes${to}` : `${g.centsPerUnit}¢ a bottle goes${to}`;
+  const extra = g.percentOfExtra ? ` + ${g.percentOfExtra}% of scans & sales` : '';
   if (g.mode === 'percent_of_revenue' && g.percentOfRevenue) return `${g.percentOfRevenue}% of ad revenue${extra} goes${to}`;
   return null;
 }

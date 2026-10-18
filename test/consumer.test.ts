@@ -83,7 +83,8 @@ describe('Get my free water', () => {
     expect(again.json().bottle.id).toBe(body.bottle.id);
 
     const mine = (await call('GET', '/v1/me/bottles', t)).json();
-    expect(mine.stats).toEqual({ bottles: 1, donatedCents: 10, savedCents: 100 });
+    expect(mine.stats).toEqual({ bottles: 1, donatedCents: app.platform.ledger.receipt(body.bottle.id).donatedCents, savedCents: 100 });
+    expect(mine.stats.donatedCents).toBeGreaterThanOrEqual(10);
     expect((await call('GET', `/v1/me/bottles/${body.bottle.id}/label.svg`, t)).body).toContain('<svg');
     const stranger = await signIn('stranger@example.com');
     expect((await call('GET', `/v1/me/bottles/${body.bottle.id}`, stranger)).statusCode).toBe(404);

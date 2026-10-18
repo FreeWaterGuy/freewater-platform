@@ -163,9 +163,9 @@ describe('seeing the sale ourselves', () => {
     expect((await report('https://shop.joesburgers.example', { orderId: 'A-1003', valueCents: 2500 })).status).toBe(422); // not from a bottle: not ours to count
 
     const lines = (await db.query<any>(`select kind, amount_cents from ledger_entries where unit_id = $1 and kind = 'commission'`, [unit.id])).rows;
-    expect(lines).toEqual([{ kind: 'commission', amount_cents: 200 }]); // 8% of $25, once
+    expect(lines).toEqual([{ kind: 'commission', amount_cents: 75 }]); // 3% of $25, once
     const summary = (await call('GET', '/v1/ads/tracking', keys['advertiser-joes'])).body.summary;
-    expect(summary.sales).toMatchObject({ count: 1, valueCents: 2500, commissionCents: 200, bySource: { tag: 1 } });
+    expect(summary.sales).toMatchObject({ count: 1, valueCents: 2500, commissionCents: 75, bySource: { tag: 1 }, fromAr: { count: 0 } });
   });
 
   it('takes sales from the advertiser’s server too, and gives the commission back on a refund', async () => {
@@ -174,12 +174,22 @@ describe('seeing the sale ourselves', () => {
     const fwclid = new URL((await call('GET', e.doc.blocks.find((b: any) => b.type === 'button' && b.action.kind === 'link').action.url)).headers.location as string).searchParams.get('fwclid');
     const r = await call('POST', '/v1/conversions', keys['advertiser-joes'], { fwclid, orderId: 'S-77', valueCents: 5000 });
     expect(r.status).toBe(201);
-    expect(r.body.conversion).toMatchObject({ source: 'server', valueCents: 5000, commissionCents: 400, spot: { unitId: unit.id, slot } });
+    expect(r.body.conversion).toMatchObject({ source: 'server', valueCents: 5000, commissionCents: 150, spot: { unitId: unit.id, slot } });
     expect((await call('POST', '/v1/conversions', keys['freewater-admin'], { fwclid, orderId: 'S-78', valueCents: 5000 })).status).toBe(403); // advertisers only
     expect((await call('POST', '/v1/conversions', pattyKey, { fwclid, orderId: 'S-79', valueCents: 5000 })).status).toBe(404); // not Patty's click
     await call('POST', '/v1/conversions/S-77/refund', keys['advertiser-joes']);
     const lines = (await db.query<any>(`select kind, amount_cents from ledger_entries where unit_id = $1 and kind like 'commission%' order by at`, [unit.id])).rows;
     expect(lines.map((l) => l.kind)).toEqual(['commission', 'commission_reversal']);
+
+    // Bought straight from inside the AR: the buy button's link says so, and the sale earns the same 3% (and 10% of
+    // that 3% for charity).
+    const url = e.doc.blocks.find((b: any) => b.type === 'button' && b.action.kind === 'link').action.url;
+    const arClick = new URL((await call('GET', `${url}${url.includes('?') ? '&' : '?'}v=viewer-eeeeeeee&from=ar`)).headers.location as string);
+    expect(arClick.searchParams.get('from')).toBeNull(); // our own note stays with us
+    const before = app.platform.ledger.entries.length;
+    expect((await call('POST', '/v1/conversions', keys['advertiser-joes'], { fwclid: arClick.searchParams.get('fwclid'), orderId: 'AR-1', valueCents: 10_000 })).status).toBe(201);
+    expect(app.platform.ledger.entries.slice(before).map((l) => [l.kind, l.amountCents])).toEqual([['commission', 300], ['donation', 30]]);
+    expect((await call('GET', '/v1/ads/tracking', keys['advertiser-joes'])).body.summary.sales.fromAr).toEqual({ count: 1, valueCents: 10_000 });
   });
 
   it('gives every person their own one-time coupon, checked and used up at the counter through us', async () => {
@@ -201,13 +211,13 @@ describe('seeing the sale ourselves', () => {
     const check = await call('GET', `/v1/coupons/${a.code}`, pattyKey);
     expect(check.body).toMatchObject({ status: 'valid', headline: 'Double stack Tuesdays', from: 'a bottle from ATX-014 (Congress Ave)' });
     const used = await call('POST', `/v1/coupons/${a.code}/redeem`, pattyKey, { valueCents: 1800, orderId: 'TILL-5' });
-    expect(used.body).toMatchObject({ status: 'used', valueCents: 1800, conversion: { source: 'coupon', commissionCents: 144 } });
+    expect(used.body).toMatchObject({ status: 'used', valueCents: 1800, conversion: { source: 'coupon', commissionCents: 54 } });
     const again = await call('POST', `/v1/coupons/${a.code}/redeem`, pattyKey, { valueCents: 1800 });
     expect(again.status).toBe(409);
     expect(again.body.error.message).toMatch(/Already used/);
     expect((await open('viewer-ffffffff')).redeemed).toBe(true);
     const lines = (await db.query<any>(`select kind, amount_cents from ledger_entries where unit_id = $1 and kind = 'commission'`, [unit.id])).rows;
-    expect(lines).toEqual([{ kind: 'commission', amount_cents: 144 }]);
+    expect(lines).toEqual([{ kind: 'commission', amount_cents: 54 }]); // 3% of $18
     const ops = (await call('GET', '/v1/ops/attribution', keys['freewater-admin'])).body;
     expect(ops.coupons.redeemed).toBeGreaterThanOrEqual(1);
     expect(ops.sales.count).toBeGreaterThanOrEqual(2);

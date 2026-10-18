@@ -81,7 +81,17 @@ function open(i) {
   const data = JSON.stringify(withModels(s.data)).replace(/</g, '\\u003c');
   const ar = s.ar ? JSON.stringify(s.ar).replace(/</g, '\\u003c') : 'null';
   const label = s.labelSvg ? JSON.stringify(s.labelSvg).replace(/</g, '\\u003c') : '""';
-  const fixture = `window.__FW_FIXTURE__ = { path: ${JSON.stringify(s.path)}, api: async (m, url) => (m === 'GET' ? (String(url).startsWith('/v1/public/ar/') ? ${ar} : ${data}) : { recorded: true }), text: async () => ${label} };`;
+  // The prize game scene plays for real in the page: a ball a few seconds in, and a win or a miss.
+  const game = s.game ? JSON.stringify(s.game).replace(/</g, '\\u003c') : 'null';
+  const fixture = `window.__FW_FIXTURE__ = (() => { const g = ${game}; let shown = false, tap = null; return { path: ${JSON.stringify(s.path)}, api: async (m, url, body) => {
+    url = String(url);
+    if (g && url.startsWith('/v1/public/lottery/chances')) {
+      if (m === 'POST' && url.endsWith('/claim')) { tap = body.tap; return { status: 'won', prize: g.prize, claimCode: 'WIN-7Q4K-M2XD' }; }
+      if (m === 'POST') { shown = true; return { playing: true, chanceId: 'lc_preview', drawKey: 'freewater:2026-10-20:preview:1', ball: { inMs: 3500, durationMs: 2500, seed: g.seed }, rules: {} }; }
+      return shown ? (tap ? { status: 'won', prize: g.prize, claimCode: 'WIN-7Q4K-M2XD' } : { status: 'missed', prize: g.prize, reason: 'The ball went by without a tap.' }) : { status: 'none' };
+    }
+    return m === 'GET' ? (url.startsWith('/v1/public/ar/') ? ${ar} : ${data}) : { recorded: true };
+  }, text: async () => ${label} }; })();`;
   frame.srcdoc = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base href="${base}"><meta name="theme-color" content="#000"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@600;700&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&display=swap"><style>${css}</style><script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer@3.5.0/dist/model-viewer.min.js"><\/script></head><body><main id="app"></main><script>${fixture}<\/script><script>${js.replace(/<\/script/g, '<\\/script')}<\/script>${s.ar ? `<script>${arJs.replace(/<\/script/g, '<\\/script')}<\/script>` : ''}</body></html>`;
 }
 scenes.forEach((s, i) => {

@@ -74,10 +74,10 @@ export function attributionRoutes(app: App, server: FastifyInstance, route: (r: 
   server.get('/go/:token', async (req, reply) => {
     try {
       const q = req.query as Record<string, string>;
-      const { url } = await attribution.click(String((req.params as any).token), q.v || undefined);
+      const { url } = await attribution.click(String((req.params as any).token), q.v || undefined, q.from);
       // Anything the page added (like the booking time picked) goes along to the advertiser.
       const out = new URL(url);
-      for (const [k, v] of Object.entries(q)) if (k !== 'v' && k !== 'fwclid' && typeof v === 'string') out.searchParams.set(k, v);
+      for (const [k, v] of Object.entries(q)) if (k !== 'v' && k !== 'from' && k !== 'fwclid' && typeof v === 'string') out.searchParams.set(k, v);
       await app.persistence.flush();
       return reply.header('cache-control', 'no-store').header('referrer-policy', 'no-referrer').redirect(302, out.toString());
     } catch (e) { return fail(reply, e); }
