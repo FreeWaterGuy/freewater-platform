@@ -14,6 +14,7 @@ import { moreRoutes } from './more';
 import { dataRoutes } from './data';
 import { transparencyRoutes } from './transparency';
 import { agentRoutes } from './agents';
+import { BadKeyGuard, classify, limits, RateLimiter, securityHeaders, SecurityLog } from './security';
 import { teamRoutes } from './team';
 import { VideoError } from '../modules/video/service';
 import { DataError, DataService } from '../modules/data/service';
@@ -52,7 +53,9 @@ import { dirname, join } from 'node:path';
 const PLATFORM_COMPANY = process.env.PLATFORM_COMPANY ?? 'freewater';
 
 export async function buildServer(app: App, opts: { logger?: boolean } = {}): Promise<FastifyInstance> {
-  const server = Fastify({ logger: opts.logger ?? false, bodyLimit: 3 * 1024 * 1024, maxParamLength: 1000 });
+  // Behind a load balancer, set TRUST_PROXY (1, or the proxy's address) so each caller's real address is used.
+  const trustProxy = process.env.TRUST_PROXY ? (process.env.TRUST_PROXY === '1' ? true : process.env.TRUST_PROXY) : false;
+  const server = Fastify({ logger: opts.logger ?? false, bodyLimit: 3 * 1024 * 1024, maxParamLength: 1000, trustProxy });
   const { platform, packs, persistence, db, experiences } = app;
   for (const type of Object.keys(allowedTypes)) server.addContentTypeParser(type, { parseAs: 'buffer', bodyLimit: 64 * 1024 * 1024 }, (_req, body, done) => done(null, body));
   const routes: RouteDef[] = [];
@@ -550,6 +553,48 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   // ---------- wiring ----------
 
   server.get('/health', async () => ({ ok: true, database: db.name }));
+  route({ method: 'GET', url: '/v1/security/events', scope: 'admin', summary: 'The security log: sign-ins, failed sign-ins, keys made and revoked, team changes, settings saved, callers blocked. Addresses are shortened.', handler: async (_req, key) => {
+    if (key!.advertiserId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can see this.');
+    const events = await securityLog.list(key!.companyId, { platform: key!.scopes.includes('platform') });
+    const proposals = (await app.agents.proposals(key!.companyId, 200)).filter((p) => p.agentId === 'security');
+    return { body: { events, proposals, limits } };
+  } });
+  route({ method: 'POST', url: '/v1/security/review', scope: 'admin', summary: 'Have the security agent review things now (it also does every hour, in the background).', handler: async (_req, key) => {
+    if (key!.advertiserId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.');
+    await securityLog.idle();
+    return { body: await app.agents.securityReview(key!.companyId) };
+  } });
+
+  // ---------- security: limits, blocks, headers, the security log ----------
+  const limiter = new RateLimiter();
+  const badKeys = new BadKeyGuard();
+  const securityLog = new SecurityLog(db, () => platform.bus.now());
+  (server as any).securityLog = securityLog;
+  const tooMany = (reply: FastifyReply, retryAfterSec: number) => { reply.header('retry-after', String(retryAfterSec)); return new ApiError(429, 'too_many_requests', `Too many requests. Try again in ${retryAfterSec} seconds.`); };
+  // The server's own machine (its tests, a reverse proxy on the same host) is never limited: behind a proxy that
+  // isn't trusted every visitor would look like it, and limiting it would block everyone at once.
+  const local = (ip: string) => ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+  const limit = (req: FastifyRequest, reply: FastifyReply, who: string, kind: keyof typeof limits) => {
+    if (local(req.ip)) return;
+    const l = limits[kind];
+    const r = limiter.take(`${kind}:${who}`, l.capacity, l.perMinute);
+    if (!r.ok) { securityLog.record({ kind: 'rate_limited', ip: req.ip, detail: { limit: kind, url: req.routeOptions?.url ?? req.url.split('?')[0] } }, `rl:${kind}:${who}`); throw tooMany(reply, r.retryAfterSec); }
+  };
+  server.addHook('onRequest', async (req, reply) => {
+    if (!local(req.ip) && badKeys.blocked(req.ip)) throw tooMany(reply, badKeys.retryAfterSec(req.ip));
+    limit(req, reply, req.ip, 'everything');
+  });
+  server.addHook('onSend', async (req, reply, payload) => {
+    securityHeaders({ get: (k) => reply.getHeader(k), set: (k, v) => reply.header(k, v) }, req.protocol === 'https' || process.env.HSTS === '1');
+    return payload;
+  });
+  /** Things worth a line in the security log when they succeed. */
+  const sensitive: Record<string, string> = {
+    'POST /v1/auth/verify': 'signed_in', 'POST /v1/keys': 'key_created', 'DELETE /v1/keys/:id': 'key_revoked', 'POST /v1/team': 'team_member_added', 'DELETE /v1/team/:userId': 'team_member_removed',
+    'PATCH /v1/console/settings': 'settings_saved', 'POST /v1/console/history/:version/restore': 'settings_restored', 'POST /v1/agents/autonomy': 'autonomy_changed', 'POST /v1/platform/companies': 'licensee_created',
+    'POST /v1/team/batches/:id/void': 'batch_voided', 'POST /v1/webhooks': 'webhook_created',
+  };
+  const mask = (to: unknown) => { const s = String(to ?? ''); const at = s.indexOf('@'); return at > 0 ? `${s[0]}***${s.slice(at)}` : s.length > 4 ? `***${s.slice(-4)}` : '***'; };
 
   server.addHook('onRequest', async (req, reply) => {
     if (req.url.startsWith('/v1/public/')) {
@@ -590,13 +635,30 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       schema: r.body ? { body: r.body } : undefined,
       ...(r.rawBodyLimit ? { bodyLimit: r.rawBodyLimit } : {}),
       // Check the key before the body is even read, so a caller without access learns nothing and uploads nothing.
-      onRequest: async (req: FastifyRequest) => {
-        (req as any).apiKey = r.scope === 'public' ? null : await authenticate(req, r.scope);
+      onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
+        const kind = classify(r.method, r.url, !!r.rawBodyLimit);
+        if (kind === 'signIn' || kind === 'publicWrite' || (kind === 'heavy' && r.scope === 'public')) limit(req, reply, req.ip, kind === 'heavy' ? 'heavy' : kind);
+        let key: ApiKey | null = null;
+        if (r.scope !== 'public') {
+          try { key = await authenticate(req, r.scope); }
+          catch (e: any) {
+            if (e?.status === 401 && e.code !== 'missing_key' && !local(req.ip) && badKeys.fail(req.ip)) securityLog.record({ kind: 'blocked_bad_keys', ip: req.ip, detail: { url: r.url, minutes: 15 } });
+            throw e;
+          }
+          limit(req, reply, key.id, 'api');
+          if (kind === 'heavy') limit(req, reply, key.id, 'heavy');
+        }
+        (req as any).apiKey = key;
       },
       handler: async (req: FastifyRequest, reply: FastifyReply) => {
         const out = await r.handler(req, (req as any).apiKey as ApiKey | null);
         await persistence.flush(); // answer only once the change is safely stored
         logActivity(r, req, (req as any).apiKey as ApiKey | null, out.status ?? 200);
+        const what = sensitive[`${r.method} ${r.url}`];
+        if (what) {
+          const k = (req as any).apiKey as ApiKey | null, b: any = req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body) ? req.body : {};
+          securityLog.record({ kind: what, companyId: k?.companyId ?? (typeof b.companyId === 'string' ? b.companyId : null), actor: k ? `${k.name} (${k.userId ? 'person' : 'key'} ${k.id})` : mask(b.to), ip: req.ip, detail: { ...(req.params as object), ...(what === 'key_created' ? { name: b.name, scopes: b.scopes } : {}), ...(what === 'team_member_added' ? { email: mask(b.email), role: b.role } : {}), ...(what === 'autonomy_changed' ? { area: b.area, level: b.level } : {}) } });
+        }
         reply.code(out.status ?? 200);
         if (out.headers) reply.headers(out.headers);
         if (out.raw !== undefined) return reply.type(out.type ?? 'text/plain').send(typeof out.raw === 'string' ? out.raw : Buffer.from(out.raw));
@@ -695,7 +757,11 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     return reply.type(found.asset.contentType).header('cache-control', 'public, max-age=31536000, immutable').header('x-content-type-options', 'nosniff').header('content-disposition', 'inline').header('access-control-allow-origin', '*').send(Buffer.from(found.bytes));
   });
 
-  server.setErrorHandler((err: any, _req, reply) => {
+  server.setErrorHandler((err: any, req, reply) => {
+    if (req.routeOptions?.url === '/v1/auth/verify' && (err?.status ?? err?.statusCode ?? 500) < 500 && err?.status !== 429) {
+      const b: any = req.body ?? {};
+      securityLog.record({ kind: 'sign_in_failed', companyId: typeof b.companyId === 'string' && platform.companies.has(b.companyId) ? b.companyId : null, actor: mask(b.to), ip: req.ip, detail: { reason: err.code ?? 'invalid' } }, `sif:${req.ip}:${b.to}`);
+    }
     if (err instanceof ApiError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
     if (err instanceof AccountsError || err instanceof PaymentError || err instanceof ExperienceError || err instanceof AssetError || err instanceof AdsError || err instanceof DesignError || err instanceof DeliveryError || err instanceof BooksError || err instanceof WebhookError || err instanceof ConsoleError || err instanceof FleetError || err instanceof AttributionError || err instanceof LotteryError || err instanceof VideoError || err instanceof DataError || err instanceof NumberLineError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
     if (err.code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE') return reply.code(415).send({ error: { code: 'unsupported_type', message: 'Send JSON, or for uploads a .glb, PNG, JPEG, WebP or MP4 file.' } });

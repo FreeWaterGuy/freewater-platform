@@ -101,6 +101,14 @@ const rec = {
     await call('POST', '/v1/team/batches', token, { date: day, bottles: 300, city: 'Austin', place: 'Zilker Park run', campaign: 'Sponsor run', advertiser: 'Austin Daily', revenueCents: 60_000 });
     return call('GET', '/v1/team/batches', token);
   })(),
+  security: await (async () => {
+    // A few wrong codes from one address, a key made, then the security agent's look.
+    for (const to of ['owner@freewater.io', 'owner@freewater.io', 'owner@freewater.io']) await server.inject({ method: 'POST', url: '/v1/auth/verify', remoteAddress: '198.51.100.23', payload: { companyId: 'freewater', channel: 'email', to, code: '000000' } });
+    await createApiKey(db, { companyId: 'freewater', name: 'Old test script', scopes: ['admin'] });
+    await db.query(`update api_keys set created_at = now() - interval '120 days' where name = 'Old test script'`);
+    await call('POST', '/v1/security/review', token);
+    return call('GET', '/v1/security/events', token);
+  })(),
   intake: await call('POST', '/v1/team/intake', token, { message: 'We gave 500 bottles at SXSW today in Austin for the WeFunder campaign' }),
   profit: await (async () => { await call('POST', '/v1/milestones/factories', token, { name: 'Austin micro factory 1', city: 'Austin', openedOn: new Date(end - 30 * 86_400_000).toISOString().slice(0, 10) }); return call('GET', '/v1/profit', token); })(),
 };

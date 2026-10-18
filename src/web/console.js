@@ -46,7 +46,7 @@
   }
 
   const routes = [
-    [/^\/console\/?$/, startPage], [/^\/console\/company$/, companyPage], [/^\/console\/brand$/, brandPage], [/^\/console\/ads$/, adsPage], [/^\/console\/giving$/, givingPage], [/^\/console\/game$/, gamePage], [/^\/console\/transparency$/, transparencyPage], [/^\/console\/data$/, dataPage], [/^\/console\/numberline$/, numberLinePage], [/^\/console\/agents$/, agentsPage], [/^\/console\/given$/, givenPage],
+    [/^\/console\/?$/, startPage], [/^\/console\/company$/, companyPage], [/^\/console\/brand$/, brandPage], [/^\/console\/ads$/, adsPage], [/^\/console\/giving$/, givingPage], [/^\/console\/game$/, gamePage], [/^\/console\/transparency$/, transparencyPage], [/^\/console\/data$/, dataPage], [/^\/console\/numberline$/, numberLinePage], [/^\/console\/agents$/, agentsPage], [/^\/console\/given$/, givenPage], [/^\/console\/security$/, securityPage],
     [/^\/console\/modules$/, modulesPage], [/^\/console\/codes$/, codesPage], [/^\/console\/products$/, productsPage], [/^\/console\/machines$/, machinesPage], [/^\/console\/team$/, teamPage], [/^\/console\/history$/, historyPage],
     [/^\/console\/keys$/, keysPage], [/^\/console\/webhooks$/, webhooksPage], [/^\/console\/webhooks\/([\w-]+)$/, webhookPage], [/^\/console\/licensees$/, licenseesPage],
   ];
@@ -80,7 +80,7 @@
   function shell(active, ...content) {
     const nav = [
       ['start', '/console', 'Get started', I.start], ['company', '/console/company', 'Company', I.company], ['brand', '/console/brand', 'Brand', I.brand], ['ads', '/console/ads', 'Ads and prices', I.ads], ['codes', '/console/codes', 'QR codes and AR', I.qr], ['products', '/console/products', 'Products', I.product],
-      ['giving', '/console/giving', 'Giving', I.giving], ['game', '/console/game', 'Prize game', I.game], ['transparency', '/console/transparency', 'Transparency', I.eye], ['data', '/console/data', 'Data and privacy', I.shield], ['numberline', '/console/numberline', 'Number line', I.line], ['agents', '/console/agents', 'AI agents', I.ai], ['modules', '/console/modules', 'Modules', I.modules], ['machines', '/console/machines', 'Machines', I.machine], ['team', '/console/team', 'Team', I.team], ['history', '/console/history', 'History', I.history],
+      ['giving', '/console/giving', 'Giving', I.giving], ['game', '/console/game', 'Prize game', I.game], ['transparency', '/console/transparency', 'Transparency', I.eye], ['data', '/console/data', 'Data and privacy', I.shield], ['numberline', '/console/numberline', 'Number line', I.line], ['agents', '/console/agents', 'AI agents', I.ai], ['security', '/console/security', 'Security', I.shield], ['modules', '/console/modules', 'Modules', I.modules], ['machines', '/console/machines', 'Machines', I.machine], ['team', '/console/team', 'Team', I.team], ['history', '/console/history', 'History', I.history],
       'Developers', ['keys', '/console/keys', 'API keys', I.key], ['webhooks', '/console/webhooks', 'Webhooks', I.hook], ['docs', '/developers', 'Docs', I.docs],
       ...(S.ov?.config?.id === 'freewater' ? ['FreeWater team', ['given', '/console/given', 'Bottles given & receipts', I.box]] : []),
       ...(S.ov?.you?.platform ? ['Platform', ['licensees', '/console/licensees', 'Licensees', I.licensees]] : []),
@@ -515,6 +515,37 @@
           h('div', { class: 'kpis', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, ['1', '2', '3', '4a', '4b', '5'].map((k) => [k, hd.tiers[k]]).map(([k, label]) => h('div', { class: 'kpi' }, h('span', { text: `Tier ${k}: ${label}` }), h('b', { text: `${(hd.byTier[k] ?? 0).toLocaleString()}` }), h('small', { class: 'muted', text: pct(hd.byTier[k] ?? 0) })))),
           h('h3', { style: 'margin:18px 0 8px;font-size:15px', text: 'By economic system' }),
           h('div', { class: 'kpis', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, Object.entries(SYS).map(([k, label]) => h('div', { class: 'kpi' }, h('span', { text: label }), h('b', { text: `${(hd.bySystem[k] ?? 0).toLocaleString()}` }), h('small', { class: 'muted', text: pct(hd.bySystem[k] ?? 0) })))))));
+  }
+
+  // ---------- security ----------
+  async function securityPage() {
+    const s = await api('GET', '/v1/security/events');
+    const act = async (method, url, body, msg) => { try { await api(method, url, body); toast(msg); render(); } catch (e) { toast(e.message); } };
+    const NAMES = { signed_in: 'Signed in', sign_in_failed: 'Failed sign-in', key_created: 'Key made', key_revoked: 'Key turned off', team_member_added: 'Team member added', team_member_removed: 'Team member removed', settings_saved: 'Settings saved', settings_restored: 'Old settings put back', autonomy_changed: 'Self-running level changed', licensee_created: 'Licensee set up', batch_voided: 'Batch voided', webhook_created: 'Webhook added', rate_limited: 'Too many requests (slowed down)', blocked_bad_keys: 'Blocked for wrong keys' };
+    const week = s.events.filter((e) => Date.parse(e.at) > Date.now() - 7 * 86400000);
+    const n = (k) => week.filter((e) => e.kind === k).length;
+    const open = s.proposals.filter((p) => ['proposed', 'noted'].includes(p.status));
+    shell('security', head('Security', 'Protected without slowing anything down: every check is a quick count in memory. The security agent reads this log in the background every hour and suggests what to tighten. Anything that can’t be undone waits for you.', h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', '/v1/security/review', {}, 'The security agent took a look.') }, 'Have the security agent look now')),
+      h('div', { class: 'stack' },
+        h('div', { class: 'kpis', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' },
+          h('div', { class: 'kpi' }, h('span', { text: 'Sign-ins this week' }), h('b', { text: String(n('signed_in')) })),
+          h('div', { class: 'kpi' }, h('span', { text: 'Failed sign-ins' }), h('b', { text: String(n('sign_in_failed')) })),
+          h('div', { class: 'kpi' }, h('span', { text: 'Blocked for wrong keys' }), h('b', { text: String(n('blocked_bad_keys')) })),
+          h('div', { class: 'kpi' }, h('span', { text: 'Slowed down' }), h('b', { text: String(n('rate_limited')) }))),
+        section('The security agent suggests', open.length ? null : 'Nothing right now.', ...open.map((p) => h('div', { class: 'panel-box', style: 'padding:14px' },
+          h('b', { text: p.title }), h('p', { style: 'margin:6px 0;font-size:14px', text: p.detail }),
+          p.status === 'proposed' ? h('div', { class: 'toolbar' }, h('button', { class: 'btn blue small', type: 'button', onclick: () => act('POST', `/v1/agents/proposals/${p.id}/decide`, { approve: true }, 'Done.') }, 'Do it'), h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', `/v1/agents/proposals/${p.id}/decide`, { approve: false }, 'Left as it is.') }, 'Leave it')) : ''))),
+        section('What’s protecting you', null, h('ul', { style: 'margin:0;padding-left:18px;line-height:1.8' },
+          h('li', { text: 'Keys and sign-in tokens are stored only as fingerprints: a stolen database can’t be used to get in.' }),
+          h('li', { text: `Sign-in: ${s.limits.signIn.perMinute} tries a minute per address, plus limits per email or phone; wrong codes run out after a few tries.` }),
+          h('li', { text: 'An address that keeps sending wrong keys is blocked for 15 minutes.' }),
+          h('li', { text: `Generous limits per address and per key (a stadium of phones on one Wi-Fi is never blocked), and tighter ones on uploads and AI assistants (${s.limits.heavy.perMinute} a minute).` }),
+          h('li', { text: 'Every page tells browsers to refuse scripts from elsewhere and being framed by other sites; encrypted connections are required once the site runs on https.' }),
+          h('li', { text: 'Each day’s books are fingerprinted and published, so the past can’t be quietly rewritten, and the agents’ governor stops all spending if the books can’t be verified.' }))),
+        section('The log', 'Newest first. Addresses are shortened: enough to spot a pattern, not to find a person.',
+          s.events.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['When', 'What', 'Who', 'From', 'Details'].map((x) => h('th', { text: x })))),
+            h('tbody', {}, s.events.slice(0, 200).map((e) => h('tr', {}, h('td', { style: 'white-space:nowrap', text: when(e.at) }), h('td', { text: NAMES[e.kind] ?? e.kind }), h('td', { style: 'font-size:13px', text: e.actor ?? '' }), h('td', { class: 'mono', text: e.ip ?? '' }), h('td', { class: 'muted', style: 'font-size:12px;max-width:320px', text: Object.entries(e.detail ?? {}).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`).join(' · ') }))))))
+            : h('p', { class: 'muted', style: 'margin:0', text: 'Nothing logged yet.' }))));
   }
 
   // ---------- FreeWater's team: bottles given outside the platform, receipts and documents ----------

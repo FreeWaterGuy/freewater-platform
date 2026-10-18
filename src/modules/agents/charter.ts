@@ -105,6 +105,7 @@ export const autonomyAreas = {
   giving: { name: 'How much goes to charity', max: 1, start: 1 },
   code: { name: 'Changes to the platform’s code', max: 2, start: 1 },
   spending: { name: 'Agents spending their own funds', max: 3, start: 2 },
+  security: { name: 'Security changes (turning off keys)', max: 1, start: 1 },
 } as const satisfies Record<string, { name: string; max: AutonomyLevel; start: AutonomyLevel }>;
 export type AutonomyArea = keyof typeof autonomyAreas;
 
@@ -122,6 +123,7 @@ export const agentRegistry = {
   designer: { name: 'Bottle designer', role: 'Helps people design their own custom bottles.', essential: false },
   'video-writer': { name: 'Video writer', role: 'Writes the personalized videos behind “Show me more.”', essential: false },
   'team-assistant': { name: 'Team assistant', role: 'Turns what FreeWater’s team types, and the receipts they attach, into drafts for the books.', essential: false },
+  security: { name: 'Security agent', role: 'Makes FreeWater safer over time without slowing it down: reads the security log, keys, team and connections in the background each hour, and proposes what to tighten. Anything that can’t be undone waits for a person. Its value is harm that didn’t happen, which the books can’t price, so its work is treated as essential.', essential: true },
   value: { name: 'Value agent', role: 'Finds where the system can lower costs, capture more value and give more, and proposes the changes: how far each part still is from the deepest price it could fund.', essential: false },
   code: { name: 'Code agent', role: 'Improves the platform’s code as a whole: lower running costs, faster, fewer failures. Its changes go through review.', essential: false },
 } as const;

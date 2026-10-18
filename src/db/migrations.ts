@@ -883,6 +883,14 @@ create index distributions_company on distributions(company_id, day);
 create table team_files (id text primary key, company_id text not null, name text not null, content_type text not null, bytes bytea not null, sha256 text not null, size_bytes int not null, uploaded_by text not null, linked_to text, at timestamptz not null);
 `,
   },
+  {
+    id: '020_security_events',
+    sql: `
+-- Sign-ins, failed sign-ins, keys made and revoked, team changes, settings saved, callers blocked.
+create table security_events (id text primary key, company_id text, kind text not null, actor text, ip text, ip_tag text, detail jsonb not null, at timestamptz not null);
+create index security_events_company on security_events(company_id, at desc);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

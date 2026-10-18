@@ -10,6 +10,8 @@ import {
 } from './charter';
 import { judge, type Cycle, type Verdict } from './governor';
 import { library as builtinLibrary, type Upside } from './library';
+import { securityScan, type SecurityFacts } from './securityScout';
+import { revokeApiKey } from '../../db/store';
 import { changeable, codeScan, frontierOf, perBottle, read, valueScan, type ChainOnLine, type Idea, type Window } from './scouts';
 import { aiExternalityCents, bottleExternalityCents, efficiency, estimates, growthTest, type Efficiency } from './efficiency';
 
@@ -295,9 +297,11 @@ export class AgentsService {
 
   async propose(companyId: string, idea: Idea) {
     const c = this.company(companyId);
-    if (!c.agents?.enabled) throw new AgentsError('off', `${c.name} hasn’t turned on the AI agents.`, 409);
+    // Security never waits on the agents' fund being on: every company gets its security agent.
+    if (!c.agents?.enabled && idea.agentId !== 'security') throw new AgentsError('off', `${c.name} hasn’t turned on the AI agents.`, 409);
     let change = idea.change ?? null, area: AutonomyArea | null = null, from: unknown = null;
     if (idea.kind === 'code') area = 'code';
+    else if (idea.kind === 'security') { area = 'security'; if (!change?.path.startsWith('security:')) throw new AgentsError('not_changeable', 'A security change names what it does.'); }
     else if (change) {
       const rule = changeable[change.path];
       if (!rule) throw new AgentsError('not_changeable', `Agents can’t change ${change.path}. That’s a person’s decision.`);
@@ -336,6 +340,13 @@ export class AgentsService {
     if ((await this.companyOf(id)) !== companyId) throw new AgentsError('not_found', 'Proposal not found.', 404);
     if (p.status !== 'proposed') throw new AgentsError('decided', `Already ${p.status}.`, 409);
     if (!approve) { await this.db.query(`update agent_proposals set status = 'rejected', decided_by = $2, decided_at = $3 where id = $1`, [id, by, iso(this.now())]); return this.proposal(id); }
+    if (p.kind === 'security') {
+      // Done straight away, never measured in money; it can't be undone, so it always waited for this person.
+      const [, action, target] = String(p.change?.path ?? '').split(':');
+      if (action === 'revoke-key' && target) await revokeApiKey(this.db, target, companyId);
+      await this.db.query(`update agent_proposals set status = 'done', decided_by = $2, decided_at = $3, applied_at = $3 where id = $1`, [id, by, iso(this.now())]);
+      return this.proposal(id);
+    }
     if (p.kind === 'code') { await this.db.query(`update agent_proposals set status = 'approved', decided_by = $2, decided_at = $3 where id = $1`, [id, by, iso(this.now())]); return this.proposal(id); }
     return this.apply(id, by);
   }
@@ -418,6 +429,31 @@ export class AgentsService {
       made.push(await this.propose(companyId, idea));
     }
     return { window: w, frontier, proposals: made };
+  }
+
+  /**
+   * The security agent's hourly review, for every company: what it finds goes in as proposals (notes, or a change a
+   * person must approve). It runs in the background, never in the way of a request.
+   */
+  async securityReview(companyId: string) {
+    const c = this.company(companyId);
+    const now = this.now();
+    const open = new Set((await this.db.query<any>(`select change from agent_proposals where company_id = $1 and status in ('proposed','approved','applied')`, [companyId])).rows.map((r) => j(r.change)?.path).filter(Boolean));
+    const noted = new Set((await this.db.query<any>(`select title from agent_proposals where company_id = $1 and agent_id = 'security' and created_at > $2`, [companyId, iso(new Date(now.getTime() - 7 * DAY))])).rows.map((r) => r.title));
+    const made = [];
+    for (const idea of securityScan(c, await this.securityFacts(companyId), open)) if (!noted.has(idea.title)) made.push(await this.propose(companyId, idea));
+    return made;
+  }
+
+  /** What the security agent reads: the last week of the security log, the company's keys, webhooks and owners. */
+  async securityFacts(companyId: string): Promise<SecurityFacts> {
+    const now = this.now();
+    const since = iso(new Date(now.getTime() - 7 * DAY));
+    const events = (await this.db.query<any>(`select kind, ip_tag, actor, at from security_events where (company_id = $1 or company_id is null) and at >= $2 order by at desc limit 5000`, [companyId, since])).rows.map((r) => ({ kind: r.kind, ipTag: r.ip_tag, actor: r.actor, at: iso(r.at) }));
+    const keys = (await this.db.query<any>(`select id, name, scopes, created_at, last_used_at, advertiser_id, location_id from api_keys where company_id = $1 and revoked_at is null`, [companyId])).rows.map((r) => ({ id: r.id, name: r.name, scopes: r.scopes ?? [], createdAt: iso(r.created_at), lastUsedAt: r.last_used_at ? iso(r.last_used_at) : null, advertiserId: r.advertiser_id, locationId: r.location_id }));
+    const webhooks = (await this.db.query<any>(`select id, url, status from webhook_endpoints where company_id = $1`, [companyId])).rows;
+    const owners = n((await this.db.query<any>(`select count(*)::int as n from users where company_id = $1 and role = 'owner' and deleted_at is null`, [companyId])).rows[0]?.n);
+    return { events, keys, webhooks, owners, now };
   }
 
   // ---------- the fund ----------
