@@ -15,7 +15,7 @@ export interface LedgerEntry {
   debit: string;
   credit: string;
   amountCents: Cents;
-  kind: 'print' | 'scan' | 'ar' | 'commission' | 'commission_reversal' | 'custom' | 'donation' | 'box_face';
+  kind: 'print' | 'scan' | 'ar' | 'commission' | 'commission_reversal' | 'custom' | 'donation' | 'box_face' | 'payment';
   memo: string;
 }
 
@@ -45,6 +45,10 @@ export class Ledger {
     bus.on('purchase.completed', (e) => this.onPurchase(e, false));
     bus.on('purchase.refunded', (e) => this.onPurchase(e, true));
     bus.on('box.printed', (e) => this.onBoxPrinted(e));
+    bus.on('payment.captured', (e) => {
+      const p = e.payload;
+      this.add(e, { debit: `cash:${p.provider}`, credit: `receivable:${p.payerType === 'user' ? 'customer' : 'advertiser'}:${p.payerId}`, amountCents: p.amountCents, kind: 'payment', memo: p.purpose === 'invoice' ? `Invoice ${p.ref} paid` : `Custom bottle order ${p.ref} paid` });
+    });
     // 'print.failed' is deliberately not subscribed: nothing to bill.
   }
 

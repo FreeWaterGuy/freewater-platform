@@ -99,6 +99,107 @@ create table api_keys (
 );
 `,
   },
+  {
+    id: '002_accounts_payments',
+    sql: `
+-- People: consumers, company team members and advertiser staff. Signed in by one-time codes; no passwords.
+create table users (
+  id text primary key,
+  company_id text not null references companies(id),
+  email text,
+  phone text,
+  role text not null,
+  advertiser_id text,
+  display_name text,
+  consents jsonb not null default '{}',
+  interests jsonb not null default '[]',
+  viewer_key text not null unique,
+  created_at timestamptz not null default now(),
+  deleted_at timestamptz
+);
+create unique index users_email on users(company_id, email) where email is not null and deleted_at is null;
+create unique index users_phone on users(company_id, phone) where phone is not null and deleted_at is null;
+
+create table login_codes (
+  id text primary key,
+  company_id text not null,
+  destination text not null,
+  code_hash text not null,
+  expires_at timestamptz not null,
+  attempts int not null default 0,
+  used_at timestamptz,
+  created_at timestamptz not null default now()
+);
+create index login_codes_dest on login_codes(company_id, destination, created_at);
+
+create table sessions (
+  id text primary key,
+  user_id text not null references users(id),
+  token_hash text not null unique,
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null,
+  revoked_at timestamptz
+);
+
+-- Payments. Card numbers never touch this database: only the provider's references.
+create table payment_customers (
+  id text primary key,
+  company_id text not null references companies(id),
+  owner_type text not null check (owner_type in ('user', 'advertiser')),
+  owner_id text not null,
+  provider text not null,
+  provider_customer_id text not null,
+  created_at timestamptz not null default now(),
+  unique (company_id, owner_type, owner_id)
+);
+
+create table payment_methods (
+  id text primary key,
+  customer_id text not null references payment_customers(id),
+  provider_method_id text not null,
+  brand text not null,
+  last4 text not null,
+  exp_month int not null,
+  exp_year int not null,
+  is_default boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+create table payments (
+  id text primary key,
+  company_id text not null,
+  customer_id text not null references payment_customers(id),
+  purpose text not null check (purpose in ('custom_order', 'invoice')),
+  ref text not null,
+  amount_cents bigint not null check (amount_cents > 0),
+  status text not null check (status in ('authorized', 'captured', 'voided', 'declined', 'failed')),
+  provider_ref text,
+  failure text,
+  idempotency_key text not null unique,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table invoices (
+  id text primary key,
+  company_id text not null,
+  advertiser_id text not null,
+  period_end timestamptz not null,
+  total_cents bigint not null,
+  status text not null check (status in ('open', 'paid', 'failed')),
+  payment_id text references payments(id),
+  created_at timestamptz not null default now()
+);
+create index invoices_adv on invoices(company_id, advertiser_id);
+
+-- Which ledger lines each invoice covers. A line can only ever be invoiced once.
+create table invoice_lines (
+  invoice_id text not null references invoices(id),
+  ledger_entry_id text not null unique,
+  amount_cents bigint not null
+);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

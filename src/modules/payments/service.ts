@@ -1,0 +1,206 @@
+import type { EventBus } from '../../core/events';
+import { newId } from '../../core/ids';
+import type { SqlClient } from '../../db/client';
+import type { PaymentProvider } from '../../adapters/payments/contract';
+
+export class PaymentError extends Error {
+  constructor(public code: string, message: string, public status = 402) {
+    super(message);
+  }
+}
+
+export type OwnerType = 'user' | 'advertiser';
+
+export interface Payment {
+  id: string;
+  companyId: string;
+  customerId: string;
+  purpose: 'custom_order' | 'invoice';
+  ref: string;
+  amountCents: number;
+  status: 'authorized' | 'captured' | 'voided' | 'declined' | 'failed';
+  failure: string | null;
+}
+
+export interface Invoice {
+  id: string;
+  advertiserId: string;
+  periodEnd: string;
+  totalCents: number;
+  status: 'open' | 'paid' | 'failed';
+  lines: number;
+}
+
+/**
+ * Payments: holds and charges through whichever provider the company uses, and invoices advertisers from the ledger.
+ * Custom bottles: money is held before printing, taken only once the bottle prints, released if it doesn't.
+ * Advertisers: invoices list exactly the ledger lines they cover; a line can be invoiced only once.
+ */
+export class PaymentsService {
+  constructor(
+    private db: SqlClient,
+    private provider: PaymentProvider,
+    private bus: EventBus,
+    private beforeRead: () => Promise<void> = async () => {}, // make sure the ledger is fully stored before invoicing
+  ) {}
+
+  async customer(companyId: string, ownerType: OwnerType, ownerId: string, contact: { email?: string | null; name?: string | null } = {}) {
+    const found = (await this.db.query<any>(`select * from payment_customers where company_id = $1 and owner_type = $2 and owner_id = $3`, [companyId, ownerType, ownerId])).rows[0];
+    if (found) return found as { id: string; provider_customer_id: string };
+    const { customerRef } = await this.provider.createCustomer(contact);
+    const id = newId('pcus');
+    await this.db.query(`insert into payment_customers (id, company_id, owner_type, owner_id, provider, provider_customer_id) values ($1,$2,$3,$4,$5,$6)`, [id, companyId, ownerType, ownerId, this.provider.name, customerRef]);
+    return { id, provider_customer_id: customerRef };
+  }
+
+  /** Save a card from the provider's form. The new card becomes the default. */
+  async addMethod(companyId: string, ownerType: OwnerType, ownerId: string, token: string) {
+    const c = await this.customer(companyId, ownerType, ownerId);
+    let saved;
+    try {
+      saved = await this.provider.saveMethod(c.provider_customer_id, token);
+    } catch (e: any) {
+      throw new PaymentError('card_refused', e.message, 422);
+    }
+    const id = newId('pm');
+    await this.db.transaction(async (tx) => {
+      await tx.query(`update payment_methods set is_default = false where customer_id = $1`, [c.id]);
+      await tx.query(`insert into payment_methods (id, customer_id, provider_method_id, brand, last4, exp_month, exp_year, is_default) values ($1,$2,$3,$4,$5,$6,$7,true)`, [id, c.id, saved.methodRef, saved.brand, saved.last4, saved.expMonth, saved.expYear]);
+    });
+    return { id, brand: saved.brand, last4: saved.last4, expMonth: saved.expMonth, expYear: saved.expYear, isDefault: true };
+  }
+
+  async methods(companyId: string, ownerType: OwnerType, ownerId: string) {
+    return (await this.db.query<any>(
+      `select m.id, m.brand, m.last4, m.exp_month, m.exp_year, m.is_default from payment_methods m join payment_customers c on c.id = m.customer_id where c.company_id = $1 and c.owner_type = $2 and c.owner_id = $3 order by m.created_at`,
+      [companyId, ownerType, ownerId],
+    )).rows.map((m) => ({ id: m.id, brand: m.brand, last4: m.last4, expMonth: m.exp_month, expYear: m.exp_year, isDefault: m.is_default }));
+  }
+
+  /** Hold money on the default card. The same idempotency key returns the same hold. */
+  async authorize(input: { companyId: string; ownerType: OwnerType; ownerId: string; amountCents: number; purpose: Payment['purpose']; ref: string; idempotencyKey: string; description: string }): Promise<Payment> {
+    const prior = (await this.db.query<any>(`select * from payments where idempotency_key = $1`, [input.idempotencyKey])).rows[0];
+    if (prior) return toPayment(prior);
+    const c = await this.customer(input.companyId, input.ownerType, input.ownerId);
+    const m = (await this.db.query<any>(`select * from payment_methods where customer_id = $1 and is_default`, [c.id])).rows[0];
+    if (!m) throw new PaymentError('no_payment_method', 'Add a card first.');
+    const r = await this.provider.authorize({ customerRef: c.provider_customer_id, methodRef: m.provider_method_id, amountCents: input.amountCents, idempotencyKey: input.idempotencyKey, description: input.description });
+    const id = newId('pay');
+    const status = r.status === 'authorized' ? 'authorized' : 'declined';
+    await this.db.query(
+      `insert into payments (id, company_id, customer_id, purpose, ref, amount_cents, status, provider_ref, failure, idempotency_key) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [id, input.companyId, c.id, input.purpose, input.ref, input.amountCents, status, r.status === 'authorized' ? r.ref : null, r.status === 'declined' ? r.reason : null, input.idempotencyKey],
+    );
+    if (r.status === 'authorized') this.bus.publish('payment.authorized', input.companyId, { paymentId: id, payerType: input.ownerType, payerId: input.ownerId, amountCents: input.amountCents, purpose: input.purpose, ref: input.ref }, id);
+    else this.bus.publish('payment.declined', input.companyId, { paymentId: id, payerType: input.ownerType, payerId: input.ownerId, reason: r.reason, ref: input.ref }, id);
+    return (await this.get(id))!;
+  }
+
+  /** Take held money. Records the payment in the ledger. */
+  async capture(paymentId: string): Promise<Payment> {
+    const p = (await this.db.query<any>(`select p.*, c.owner_type, c.owner_id from payments p join payment_customers c on c.id = p.customer_id where p.id = $1`, [paymentId])).rows[0];
+    if (!p) throw new PaymentError('not_found', 'Payment not found.', 404);
+    if (p.status === 'captured') return toPayment(p);
+    if (p.status !== 'authorized') throw new PaymentError('not_held', `This payment is ${p.status}; there is nothing to take.`, 409);
+    const r = await this.provider.capture(p.provider_ref, Number(p.amount_cents));
+    if (r.status === 'failed') {
+      await this.db.query(`update payments set status = 'failed', failure = $2, updated_at = now() where id = $1`, [paymentId, r.reason]);
+      throw new PaymentError('capture_failed', r.reason);
+    }
+    await this.db.query(`update payments set status = 'captured', updated_at = now() where id = $1`, [paymentId]);
+    this.bus.publish('payment.captured', p.company_id, { paymentId, payerType: p.owner_type, payerId: p.owner_id, amountCents: Number(p.amount_cents), purpose: p.purpose, ref: p.ref, provider: this.provider.name }, paymentId);
+    return (await this.get(paymentId))!;
+  }
+
+  /** Release a hold. Nothing is charged. */
+  async void(paymentId: string): Promise<Payment> {
+    const p = (await this.db.query<any>(`select * from payments where id = $1`, [paymentId])).rows[0];
+    if (!p) throw new PaymentError('not_found', 'Payment not found.', 404);
+    if (p.status !== 'authorized') return toPayment(p);
+    await this.provider.void(p.provider_ref);
+    await this.db.query(`update payments set status = 'voided', updated_at = now() where id = $1`, [paymentId]);
+    this.bus.publish('payment.voided', p.company_id, { paymentId, ref: p.ref }, `${paymentId}:void`);
+    return (await this.get(paymentId))!;
+  }
+
+  async get(paymentId: string): Promise<Payment | null> {
+    const r = (await this.db.query<any>(`select * from payments where id = $1`, [paymentId])).rows[0];
+    return r ? toPayment(r) : null;
+  }
+
+  /**
+   * Bill every advertiser for what they owe: prints, scans, AR launches, commission and box faces since their last invoice,
+   * less any refunds. Charges their saved card if they have one; otherwise the invoice stays open.
+   */
+  async runInvoices(companyId: string, periodEnd: Date): Promise<Invoice[]> {
+    await this.beforeRead();
+    const lines = (await this.db.query<any>(
+      `select l.id, l.debit, l.credit, l.amount_cents from ledger_entries l
+       left join invoice_lines il on il.ledger_entry_id = l.id
+       where l.company_id = $1 and il.ledger_entry_id is null and l.kind <> 'payment' and l.at <= $2
+         and (l.debit like 'receivable:advertiser:%' or l.credit like 'receivable:advertiser:%')
+       order by l.seq`,
+      [companyId, periodEnd.toISOString()],
+    )).rows;
+    const byAdvertiser = new Map<string, { id: string; signed: number }[]>();
+    for (const l of lines) {
+      const owes = (l.debit as string).startsWith('receivable:advertiser:');
+      const adv = (owes ? l.debit : l.credit).slice('receivable:advertiser:'.length);
+      const list = byAdvertiser.get(adv) ?? [];
+      list.push({ id: l.id, signed: owes ? Number(l.amount_cents) : -Number(l.amount_cents) });
+      byAdvertiser.set(adv, list);
+    }
+    const out: Invoice[] = [];
+    for (const [advertiserId, items] of byAdvertiser) {
+      const total = items.reduce((s, i) => s + i.signed, 0);
+      if (total <= 0) continue; // nothing owed yet; these lines roll into the next invoice
+      const id = newId('inv');
+      await this.db.transaction(async (tx) => {
+        await tx.query(`insert into invoices (id, company_id, advertiser_id, period_end, total_cents, status) values ($1,$2,$3,$4,$5,'open')`, [id, companyId, advertiserId, periodEnd.toISOString(), total]);
+        for (const i of items) await tx.query(`insert into invoice_lines (invoice_id, ledger_entry_id, amount_cents) values ($1,$2,$3)`, [id, i.id, i.signed]);
+      });
+      this.bus.publish('invoice.issued', companyId, { invoiceId: id, advertiserId, totalCents: total, lines: items.length }, id);
+      await this.payInvoice(id);
+      out.push((await this.invoice(id))!);
+    }
+    return out;
+  }
+
+  /** Try to charge an open invoice to the advertiser's default card. */
+  async payInvoice(invoiceId: string): Promise<Invoice> {
+    const inv = (await this.db.query<any>(`select * from invoices where id = $1`, [invoiceId])).rows[0];
+    if (!inv) throw new PaymentError('not_found', 'Invoice not found.', 404);
+    if (inv.status === 'paid') return (await this.invoice(invoiceId))!;
+    const hasCard = (await this.methods(inv.company_id, 'advertiser', inv.advertiser_id)).some((m) => m.isDefault);
+    if (!hasCard) return (await this.invoice(invoiceId))!; // stays open: pay later or by transfer
+    const attempt = (await this.db.query<{ n: number }>(`select count(*)::int as n from payments where purpose = 'invoice' and ref = $1`, [invoiceId])).rows[0]!.n + 1;
+    const p = await this.authorize({ companyId: inv.company_id, ownerType: 'advertiser', ownerId: inv.advertiser_id, amountCents: Number(inv.total_cents), purpose: 'invoice', ref: invoiceId, idempotencyKey: `invoice:${invoiceId}:${attempt}`, description: `Invoice ${invoiceId}` });
+    if (p.status === 'declined') {
+      await this.db.query(`update invoices set status = 'failed' where id = $1`, [invoiceId]);
+      this.bus.publish('invoice.failed', inv.company_id, { invoiceId, advertiserId: inv.advertiser_id, reason: p.failure ?? 'Declined' }, `${invoiceId}:failed:${attempt}`);
+      return (await this.invoice(invoiceId))!;
+    }
+    await this.capture(p.id);
+    await this.db.query(`update invoices set status = 'paid', payment_id = $2 where id = $1`, [invoiceId, p.id]);
+    this.bus.publish('invoice.paid', inv.company_id, { invoiceId, advertiserId: inv.advertiser_id, paymentId: p.id, totalCents: Number(inv.total_cents) }, `${invoiceId}:paid`);
+    return (await this.invoice(invoiceId))!;
+  }
+
+  async invoice(id: string): Promise<(Invoice & { companyId: string; items: { ledgerEntryId: string; amountCents: number; memo: string }[] }) | null> {
+    const inv = (await this.db.query<any>(`select * from invoices where id = $1`, [id])).rows[0];
+    if (!inv) return null;
+    const items = (await this.db.query<any>(`select il.ledger_entry_id, il.amount_cents, l.memo from invoice_lines il join ledger_entries l on l.id = il.ledger_entry_id where il.invoice_id = $1 order by l.seq`, [id])).rows;
+    return { id, companyId: inv.company_id, advertiserId: inv.advertiser_id, periodEnd: new Date(inv.period_end).toISOString(), totalCents: Number(inv.total_cents), status: inv.status, lines: items.length, items: items.map((i) => ({ ledgerEntryId: i.ledger_entry_id, amountCents: Number(i.amount_cents), memo: i.memo })) };
+  }
+
+  async invoices(companyId: string, advertiserId?: string) {
+    const rows = (await this.db.query<any>(`select id from invoices where company_id = $1 and ($2::text is null or advertiser_id = $2) order by created_at desc`, [companyId, advertiserId ?? null])).rows;
+    const out = [];
+    for (const r of rows) out.push((await this.invoice(r.id))!);
+    return out;
+  }
+}
+
+function toPayment(r: any): Payment {
+  return { id: r.id, companyId: r.company_id, customerId: r.customer_id, purpose: r.purpose, ref: r.ref, amountCents: Number(r.amount_cents), status: r.status, failure: r.failure };
+}

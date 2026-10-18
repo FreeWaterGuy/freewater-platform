@@ -4,6 +4,8 @@ import { findApiKey, type ApiKey, type Scope } from '../db/store';
 import type { Campaign, Sixths } from '../core/types';
 import { svgCreative } from '../modules/print/svgCreative';
 import { newId } from '../core/ids';
+import { AccountsError, roleScopes, type Role } from '../modules/accounts/service';
+import { PaymentError } from '../modules/payments/service';
 
 // ---------- small helpers ----------
 
@@ -16,7 +18,7 @@ const notFound = (what: string) => new ApiError(404, 'not_found', `${what} not f
 
 type Handler = (req: FastifyRequest, key: ApiKey | null) => Promise<{ status?: number; body?: unknown; type?: string; raw?: string }>;
 interface RouteDef {
-  method: 'GET' | 'POST' | 'PATCH';
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   url: string;
   scope: Scope | Scope[] | 'public';
   summary: string;
@@ -280,6 +282,103 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     return { body: rows.map((r) => ({ seq: Number(r.seq), id: r.id, type: r.type, at: r.at, payload: typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload })) };
   } });
 
+  // ---------- accounts: people sign in with a code, no passwords ----------
+
+  const me = (key: ApiKey | null) => {
+    if (!key?.userId) throw new ApiError(403, 'person_required', 'Sign in as a person to do this; API keys belong to systems.');
+    return key.userId;
+  };
+  const channelProp = { type: 'string', enum: ['email', 'sms'] };
+
+  route({ method: 'POST', url: '/v1/auth/start', scope: 'public', summary: 'Send a sign-in code by email or text. The answer is the same whether or not an account exists.', body: obj({ companyId: S.str, channel: channelProp, to: S.str }, ['companyId', 'channel', 'to']), handler: async (req) => {
+    const b = req.body as any;
+    if (!platform.companies.has(b.companyId)) throw notFound('Company');
+    return { status: 202, body: await app.accounts.startSignIn(b) };
+  } });
+
+  route({ method: 'POST', url: '/v1/auth/verify', scope: 'public', summary: 'Check the code. Returns a sign-in token. A new email or phone number becomes a new account.', body: obj({ companyId: S.str, channel: channelProp, to: S.str, code: { type: 'string', pattern: '^[0-9 ]{6,8}$' } }, ['companyId', 'channel', 'to', 'code']), handler: async (req) => {
+    const r = await app.accounts.verify(req.body as any);
+    return { body: { token: r.token, isNew: r.isNew, user: r.user } };
+  } });
+
+  route({ method: 'POST', url: '/v1/auth/sign-out', scope: 'me', summary: 'End this sign-in.', handler: async (_req, key) => {
+    me(key);
+    await app.accounts.signOut(key!.sessionToken!);
+    return { status: 204 };
+  } });
+
+  route({ method: 'GET', url: '/v1/me', scope: 'me', summary: 'Your account, privacy choices and what you can do.', handler: async (_req, key) => ({ body: { ...(await app.accounts.get(me(key))), scopes: key!.scopes } }) });
+
+  route({ method: 'PATCH', url: '/v1/me', scope: 'me', summary: 'Change your name, privacy choices or interests.', body: obj({
+    displayName: { type: ['string', 'null'], maxLength: 80 },
+    consents: obj({ personalizedOffers: S.bool, shareInterestsWithAdvertisers: S.bool, location: S.bool, marketing: S.bool }),
+    interests: { type: 'array', maxItems: 30, items: { type: 'string', minLength: 1, maxLength: 40 } },
+  }), handler: async (req, key) => ({ body: await app.accounts.updateProfile(me(key), req.body as any) }) });
+
+  route({ method: 'GET', url: '/v1/me/export', scope: 'me', summary: 'Download everything stored about you.', handler: async (_req, key) => ({ body: await app.accounts.exportData(me(key)) }) });
+
+  route({ method: 'DELETE', url: '/v1/me', scope: 'me', summary: 'Delete your account. Contact details and choices are erased; the books keep only a random id.', handler: async (_req, key) => {
+    await app.accounts.deleteAccount(me(key));
+    return { status: 204 };
+  } });
+
+  route({ method: 'POST', url: '/v1/team', scope: 'admin', summary: 'Add a team member or advertiser staff. They sign in with a code sent to their email.', body: obj({ email: S.str, role: { type: 'string', enum: ['owner', 'ops', 'finance', 'reviewer', 'driver', 'advertiser'] }, advertiserId: S.str, displayName: S.str }, ['email', 'role']), handler: async (req, key) => {
+    if (key!.advertiserId) throw new ApiError(403, 'missing_scope', 'Advertisers cannot add team members.');
+    return { status: 201, body: await app.accounts.invite({ companyId: key!.companyId, ...(req.body as any) }) };
+  } });
+
+  // ---------- payments: cards, custom bottles, advertiser invoices ----------
+
+  route({ method: 'GET', url: '/v1/me/cards', scope: 'me', summary: 'Your saved cards (brand and last 4 digits only).', handler: async (_req, key) => ({ body: await app.payments.methods(key!.companyId, 'user', me(key)) }) });
+  route({ method: 'POST', url: '/v1/me/cards', scope: 'me', summary: "Save a card using the token from the payment provider's form. Card numbers never reach FreeWater.", body: obj({ token: S.str }, ['token']), handler: async (req, key) => ({ status: 201, body: await app.payments.addMethod(key!.companyId, 'user', me(key), (req.body as any).token) }) });
+
+  route({ method: 'POST', url: '/v1/me/custom-orders', scope: 'me', summary: 'Print your own design. Money is held first, taken only once it prints, and released if it does not.', body: obj({ orderId: S.str, locationId: S.str, productId: S.str, svg: { type: 'string', minLength: 1, maxLength: 2_000_000 } }, ['orderId', 'locationId', 'productId', 'svg']), handler: async (req, key) => {
+    const userId = me(key);
+    const b = req.body as any;
+    const company = platform.companies.get(key!.companyId)!;
+    if (!platform.locations.has(b.locationId)) throw new ApiError(422, 'unknown_location', `Location ${b.locationId} doesn't exist.`);
+    if (!platform.products.has(b.productId)) throw new ApiError(422, 'unknown_product', `Product ${b.productId} doesn't exist.`);
+    let art;
+    try { art = svgCreative(b.svg); } catch (e: any) { throw new ApiError(422, 'artwork_refused', e.message); }
+    const price = company.prices.customUnit; // the server sets the price, never the app
+    const hold = await app.payments.authorize({ companyId: company.id, ownerType: 'user', ownerId: userId, amountCents: price, purpose: 'custom_order', ref: b.orderId, idempotencyKey: `custom:${company.id}:${userId}:${b.orderId}`, description: `Custom ${b.productId}` });
+    if (hold.status === 'declined') return { status: 402, body: { error: { code: 'card_declined', message: `${hold.failure} Nothing was printed or charged.` } } };
+    const r = await platform.order({ companyId: company.id, orderId: `${userId}:${b.orderId}`, locationId: b.locationId, productId: b.productId, custom: { customerId: userId, art, priceCents: price } });
+    if (!r.ok) {
+      const voided = await app.payments.void(hold.id);
+      return { status: 422, body: { error: { code: 'print_failed', message: 'It did not print, so the hold on your card was released. Nothing was charged.' }, payment: voided } };
+    }
+    const paid = hold.status === 'captured' ? hold : await app.payments.capture(hold.id);
+    return { status: 201, body: { unit: unitView(r.unit.id), payment: paid } };
+  } });
+
+  const advertiserScope = (key: ApiKey, advertiserId: string) => {
+    if (key.advertiserId && key.advertiserId !== advertiserId) throw notFound('Advertiser');
+  };
+  route({ method: 'POST', url: '/v1/advertisers/:advertiserId/cards', scope: 'invoices', summary: "Save an advertiser's card for paying invoices.", body: obj({ token: S.str }, ['token']), handler: async (req, key) => {
+    const id = (req.params as any).advertiserId;
+    advertiserScope(key!, id);
+    return { status: 201, body: await app.payments.addMethod(key!.companyId, 'advertiser', id, (req.body as any).token) };
+  } });
+
+  route({ method: 'POST', url: '/v1/invoices/run', scope: 'invoices', summary: 'Invoice every advertiser for everything billed since their last invoice. Saved cards are charged; others stay open.', body: obj({ periodEnd: { type: 'string', format: 'date-time' } }), handler: async (req, key) => {
+    if (key!.advertiserId) throw new ApiError(403, 'missing_scope', 'Only the company runs invoices.');
+    const end = (req.body as any)?.periodEnd ? new Date((req.body as any).periodEnd) : platform.bus.now();
+    return { body: await app.payments.runInvoices(key!.companyId, end) };
+  } });
+
+  route({ method: 'GET', url: '/v1/invoices', scope: 'invoices', summary: "Invoices. An advertiser sees only its own.", handler: async (_req, key) => ({ body: await app.payments.invoices(key!.companyId, key!.advertiserId) }) });
+  const invoiceFor = async (key: ApiKey, id: string) => {
+    const inv = await app.payments.invoice(id);
+    if (!inv || inv.companyId !== key.companyId || (key.advertiserId && inv.advertiserId !== key.advertiserId)) throw notFound('Invoice');
+    return inv;
+  };
+  route({ method: 'GET', url: '/v1/invoices/:id', scope: 'invoices', summary: 'One invoice with every ledger line it covers.', handler: async (req, key) => ({ body: await invoiceFor(key!, (req.params as any).id) }) });
+  route({ method: 'POST', url: '/v1/invoices/:id/pay', scope: 'invoices', summary: 'Pay an open or failed invoice with the saved card.', handler: async (req, key) => {
+    const inv = await invoiceFor(key!, (req.params as any).id);
+    return { body: await app.payments.payInvoice(inv.id) };
+  } });
+
   // ---------- wiring ----------
 
   server.get('/health', async () => ({ ok: true, database: db.name }));
@@ -315,17 +414,26 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   server.setErrorHandler((err: any, _req, reply) => {
     if (err instanceof ApiError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
+    if (err instanceof AccountsError || err instanceof PaymentError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
     if (err.validation) return reply.code(400).send({ error: { code: 'invalid_request', message: err.message } });
     if (/^Unknown (bottle|unit|pack)/i.test(err.message)) return reply.code(404).send({ error: { code: 'not_found', message: err.message } });
     server.log.error(err);
     return reply.code(500).send({ error: { code: 'server_error', message: 'Something went wrong on our side. It has been logged.' } });
   });
 
+  /** A caller is either a system with an API key (fwk_…) or a signed-in person with a session (fws_…). */
   async function authenticate(req: FastifyRequest, scope: Scope | Scope[]): Promise<ApiKey> {
     const h = req.headers.authorization ?? '';
     const raw = h.startsWith('Bearer ') ? h.slice(7).trim() : '';
-    if (!raw) throw new ApiError(401, 'missing_key', 'Send your API key as: Authorization: Bearer <key>');
-    const key = await findApiKey(db, raw);
+    if (!raw) throw new ApiError(401, 'missing_key', 'Send your API key or sign-in token as: Authorization: Bearer <key>');
+    let key: ApiKey | null = null;
+    if (raw.startsWith('fws_')) {
+      const user = await app.accounts.userFromToken(raw);
+      if (!user) throw new ApiError(401, 'signed_out', 'Your sign-in has expired. Sign in again.');
+      key = { id: user.id, companyId: user.companyId, name: user.displayName ?? user.email ?? user.phone ?? user.id, scopes: roleScopes[user.role as Role], advertiserId: user.advertiserId ?? undefined, userId: user.id, sessionToken: raw };
+    } else {
+      key = await findApiKey(db, raw);
+    }
     if (!key) throw new ApiError(401, 'invalid_key', 'That API key is not valid or was revoked.');
     const need = Array.isArray(scope) ? scope : [scope];
     if (!need.some((s) => key.scopes.includes(s)) && !key.scopes.includes('admin')) throw new ApiError(403, 'missing_scope', `This key can't do that. It needs one of: ${need.join(', ')}.`);

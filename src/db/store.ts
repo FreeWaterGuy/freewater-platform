@@ -164,7 +164,7 @@ export async function saveCatalog(db: SqlClient, input: { companies?: CompanyCon
 
 // ---------- API keys ----------
 
-export type Scope = 'orders' | 'packs' | 'campaigns' | 'purchases' | 'ledger' | 'events' | 'admin';
+export type Scope = 'orders' | 'packs' | 'campaigns' | 'purchases' | 'ledger' | 'events' | 'invoices' | 'me' | 'admin';
 
 export interface ApiKey {
   id: string;
@@ -172,6 +172,8 @@ export interface ApiKey {
   name: string;
   scopes: Scope[];
   advertiserId?: string; // an advertiser's key only ever sees that advertiser's campaigns and sales
+  userId?: string; // set when the caller is a signed-in person rather than a system
+  sessionToken?: string;
 }
 
 const hashKey = (raw: string) => createHash('sha256').update(raw).digest('hex');

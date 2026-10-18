@@ -8,7 +8,7 @@ You need Node.js 20 or newer.
 
 ```bash
 npm install
-SEED_DEMO=1 npm start   # starts the API on http://localhost:8080 with sample data; prints demo API keys once
+SEED_DEMO=1 ECHO_CODES=1 npm start   # API on http://localhost:8080 with sample data; prints demo keys once and sign-in codes
 npm run demo         # prints a morning of bottles in Austin; open out/index.html
 npm run demo:packs   # prints a night of 6, 12 and 24 packs and delivers them; open out/packs.html
 npm test             # checks every business rule
@@ -53,9 +53,27 @@ One API for every app, machine, micro-factory, driver, advertiser and partner. T
 | Scan pages and the open-books site (no key) | `GET /v1/public/scan/:unit/:slot`, `POST /v1/public/scans`, `POST /v1/public/ar-launches`, `GET /v1/public/receipts/:unit`, `GET /v1/public/companies/:id/totals` |
 | Advertisers | `GET/POST /v1/campaigns` (SVG artwork, checked for anything unsafe), `PATCH /v1/campaigns/:id`, `POST /v1/purchases`, `POST /v1/refunds` |
 | Micro-factory and drivers | `POST /v1/packs`, `/verify`, `/replace`, `/seal`, `POST /v1/routes/:id/load`, `POST /v1/deliveries` |
-| Finance | `GET /v1/ledger`, `GET /v1/events` |
+| People signing in (no key) | `POST /v1/auth/start`, `POST /v1/auth/verify`, then `GET/PATCH/DELETE /v1/me`, `GET /v1/me/export`, `POST /v1/auth/sign-out` |
+| Consumers | `GET/POST /v1/me/cards`, `POST /v1/me/custom-orders` |
+| Finance | `GET /v1/ledger`, `GET /v1/events`, `POST /v1/invoices/run`, `GET /v1/invoices`, `POST /v1/invoices/:id/pay`, `POST /v1/advertisers/:id/cards` |
+| Owners | `POST /v1/team` |
 
 **Keys.** Every call except the public ones needs `Authorization: Bearer <key>`. A key belongs to one company and only ever sees that company. It has scopes (`orders`, `packs`, `campaigns`, `purchases`, `ledger`, `events`, `admin`), and an advertiser's key only sees that advertiser's campaigns and sales. New campaigns start paused until a company key turns them on (content review). Only a hash of each key is stored. Make one with `npm run key -- freewater "ATX-022 machine" orders`.
+
+## Accounts and payments
+
+**Signing in.** People sign in with a 6-digit code sent by email or text; there are no passwords to leak. Codes expire after 10 minutes, allow 5 tries, and at most 3 can be sent per 10 minutes. The answer never reveals whether an account exists. A sign-in lasts 30 days and can be ended any time. Only hashes of codes and sign-in tokens are stored.
+
+**Who can do what.** Consumers manage only their own account. Team members are added by an owner with a role: owner, ops, finance, reviewer, driver, or advertiser staff (tied to one advertiser). Roles map to the same scopes as API keys.
+
+**Privacy.** Every choice starts off: personalized offers, sharing interests with advertisers, location, and marketing. Interests are used for offers only while personalized offers is on. People can download everything stored about them and delete their account; deleting erases contact details, name, interests and choices, and ends every sign-in. The books keep only the account's random id.
+
+**Payments.** Card numbers never reach FreeWater: apps send them to the payment provider and FreeWater keeps only a reference, brand and last 4 digits.
+- *Custom bottles:* the price is set by the server. The money is held first, taken only once the bottle prints, and released if it doesn't. A declined card prints nothing. The same order sent twice is printed and charged once.
+- *Advertiser invoices:* `POST /v1/invoices/run` bills each advertiser for every ledger line since their last invoice (prints, scans, AR launches, commission, box faces, less refunds). Each ledger line can be on only one invoice. A saved card is charged; without one the invoice stays open, and a declined card marks it failed until it's paid.
+- Every payment taken is a ledger line, so the books show both what was billed and what was collected.
+
+**Swappable.** Sign-in messages go through a messenger contract (`src/adapters/messaging`) and money through a payment contract (`src/adapters/payments`). The built-in test outbox sends nothing, and the test payment provider moves no real money; its test cards are `tok_visa`, `tok_mastercard`, `tok_amex`, `tok_declined`, `tok_insufficient_funds` and `tok_expired`. A real email or SMS service and a real provider such as Stripe plug in behind the same contracts.
 
 ## The database
 
@@ -79,6 +97,9 @@ The server keeps working state in memory and writes through to the database, so 
 | `src/modules/packs` | Packs, box faces, packing check, van loading and delivery |
 | `src/adapters/printers` | Printer contract and the virtual printer |
 | `src/db` | Database contract, PGlite and Postgres adapters, migrations, storage |
+| `src/modules/accounts` | Sign-in codes, sessions, roles, privacy, export and delete |
+| `src/modules/payments` | Holds, charges, saved cards, advertiser invoices |
+| `src/adapters/messaging`, `src/adapters/payments` | Messenger and payment contracts with test versions |
 | `src/api` | The public API (v1) and its OpenAPI description |
 | `src/app.ts`, `src/server` | Start-up: load from the database, run the API, make keys |
 | `src/platform.ts` | The thin core that runs the pipeline |

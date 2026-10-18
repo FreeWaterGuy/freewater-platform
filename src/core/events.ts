@@ -23,6 +23,14 @@ export interface EventPayloads {
   'pack.loaded': { packId: string; routeId: string; loadPosition: number };
   'pack.delivered': { packId: string; routeId: string; stop: number; emptiesCollected: number; photoProof: boolean };
   'delivery.rejected': { packId: string; scannedPackId: string; stop: number; reason: string };
+  'unit.failed': { unitId: string; orderId?: string; reason: string };
+  'payment.authorized': { paymentId: string; payerType: 'user' | 'advertiser'; payerId: string; amountCents: Cents; purpose: 'custom_order' | 'invoice'; ref: string };
+  'payment.captured': { paymentId: string; payerType: 'user' | 'advertiser'; payerId: string; amountCents: Cents; purpose: 'custom_order' | 'invoice'; ref: string; provider: string };
+  'payment.voided': { paymentId: string; ref: string };
+  'payment.declined': { paymentId: string; payerType: 'user' | 'advertiser'; payerId: string; reason: string; ref: string };
+  'invoice.issued': { invoiceId: string; advertiserId: string; totalCents: Cents; lines: number };
+  'invoice.paid': { invoiceId: string; advertiserId: string; paymentId: string; totalCents: Cents };
+  'invoice.failed': { invoiceId: string; advertiserId: string; reason: string };
 }
 
 export type EventType = keyof EventPayloads;

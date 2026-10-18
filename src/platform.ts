@@ -152,6 +152,7 @@ export class Platform {
     release(unit.placements, this.campaigns);
     this.persistCampaigns(unit.placements);
     this.persist.unit(unit);
+    this.bus.publish('unit.failed', company.id, { unitId: unit.id, orderId: opts.orderId, reason: 'Printing failed after retrying' }, unit.id);
     return { ok: false, unit, reason: 'Printing failed after retrying', attempts: this.maxAttempts };
   }
 
