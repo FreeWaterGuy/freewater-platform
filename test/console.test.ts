@@ -297,7 +297,7 @@ describe('the white-label console', () => {
     const bottle = await call('POST', '/v1/orders', machine.apiKey, { orderId: 'lw-1', locationId: 'LW-001', productId: 'bottle-16oz' });
     expect(bottle.status).toBe(201);
     expect(bottle.body.slots.every((s: any) => s.isHouse && s.advertiser === 'Lake Water Co')).toBe(true);
-    expect(bottle.body.receiptUrl).toMatch(/^https:\/\/lake-water\.go\.freewater\.io\/r\//);
+    expect(bottle.body.receiptUrl).toMatch(/^HTTPS:\/\/LAKE-WATER\.GO\.FREEWATER\.IO\/Q\/[0-9A-Z]{14}$/);
     const after = (await call('GET', '/v1/console', ana)).body.checklist;
     expect(after.find((c: any) => c.id === 'bottle').done).toBe(true);
     // FreeWater's own ads never reach her bottles, and her settings never touch FreeWater's.

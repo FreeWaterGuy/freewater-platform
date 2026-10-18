@@ -100,3 +100,8 @@ video { width: 100%; border-radius: var(--radius); background: #000; display: bl
 .list a { display: flex; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--line); color: var(--text); text-decoration: none; }
 .error { flex: 1; display: grid; place-content: center; text-align: center; padding: 24px; gap: 6px; }
 .error h1 { font: 700 24px/1.2 var(--display); margin: 0; }
+.coupon-qr { background: #fff; border-radius: 14px; padding: 10px; width: 168px; margin: 12px 0 4px; }
+.coupon-qr img { display: block; width: 100%; height: auto; }
+.offer.coupon.used { opacity: .6; }
+.offer.coupon.used .coupon-qr { filter: grayscale(1); }
+.panel .story { opacity: .85; }

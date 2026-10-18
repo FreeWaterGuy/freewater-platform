@@ -148,13 +148,16 @@ export class Ledger {
 
   private onPurchase(e: PlatformEvent<'purchase.completed'> | PlatformEvent<'purchase.refunded'>, refund: boolean) {
     const company = this.company(e.companyId);
-    const unit = this.printedUnits.get(e.payload.unitId);
-    const placement = unit?.placements.find((x) => x.slotIndex === e.payload.slotIndex);
+    const p = e.payload;
+    const placement = p.unitId !== undefined
+      ? this.printedUnits.get(p.unitId)?.placements.find((x) => x.slotIndex === p.slotIndex)
+      : p.packId ? this.printedBoxes.get(p.packId)?.find((f) => f.face === p.face) : undefined;
     if (!placement || placement.isHouse) return;
-    const amount = Math.round((e.payload.amountCents * company.prices.commissionPercent) / 100);
+    const amount = Math.round((p.amountCents * company.prices.commissionPercent) / 100);
     const adv = `receivable:advertiser:${placement.advertiserId}`;
-    if (refund) this.add(e, { unitId: e.payload.unitId, campaignId: placement.campaignId, debit: 'revenue:commission', credit: adv, amountCents: amount, kind: 'commission_reversal', memo: `Refund on order ${e.payload.orderId}, commission returned` });
-    else this.add(e, { unitId: e.payload.unitId, campaignId: placement.campaignId, debit: adv, credit: 'revenue:commission', amountCents: amount, kind: 'commission', memo: `Commission on order ${e.payload.orderId}` });
+    const where = p.unitId !== undefined ? { unitId: p.unitId } : { packId: p.packId };
+    if (refund) this.add(e, { ...where, campaignId: placement.campaignId, debit: 'revenue:commission', credit: adv, amountCents: amount, kind: 'commission_reversal', memo: `Refund on order ${e.payload.orderId}, commission returned` });
+    else this.add(e, { ...where, campaignId: placement.campaignId, debit: adv, credit: 'revenue:commission', amountCents: amount, kind: 'commission', memo: `Commission on order ${e.payload.orderId}` });
   }
 
   /** After a restart: reload past lines and what the billing rules need to remember. Nothing is billed again. */

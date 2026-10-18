@@ -28,7 +28,7 @@ export const svgLabelRenderer: LabelRenderer = {
     if (unit.kind === 'custom') {
       const art = req.customArt?.svg(adW, H) ?? '';
       parts.push(nested(adX, 0, adW, H, art));
-      const url = `${base}/s/${unit.id}/0`;
+      const url = req.codes ? req.codes.slot(company, unit.id, 0) : `${base}/s/${unit.id}/0`;
       parts.push(qrSvg(url, adX + adW - 92, H - 92, 80));
       slots.push({ slotIndex: 0, xIn: adX / PX_PER_IN, widthIn: adW / PX_PER_IN, advertiserName: 'Custom design', qrUrl: url });
     } else {
@@ -38,7 +38,7 @@ export const svgLabelRenderer: LabelRenderer = {
         const campaign = campaigns.get(p.campaignId);
         if (!campaign) throw new Error(`Unit ${unit.id} slot ${p.slotIndex} points at unknown campaign ${p.campaignId}.`);
         parts.push(nested(x, 0, w, H, campaign.creative.svg(w, H)));
-        const url = `${base}/s/${unit.id}/${p.slotIndex}`;
+        const url = req.codes ? req.codes.slot(company, unit.id, p.slotIndex) : `${base}/s/${unit.id}/${p.slotIndex}`;
         const q = Math.min(78, w * 0.42);
         parts.push(qrSvg(url, x + w - q - 10, H - q - 10, q));
         slots.push({ slotIndex: p.slotIndex, xIn: x / PX_PER_IN, widthIn: w / PX_PER_IN, advertiserName: p.advertiserName, qrUrl: url });
@@ -46,7 +46,7 @@ export const svgLabelRenderer: LabelRenderer = {
       }
     }
 
-    const receiptUrl = `${base}/r/${unit.id}`;
+    const receiptUrl = req.codes ? req.codes.receipt(company, unit.id) : `${base}/r/${unit.id}`;
     parts.push(panel(company, W - panelW, panelW, H, receiptUrl, unit.locationId));
 
     const svg =

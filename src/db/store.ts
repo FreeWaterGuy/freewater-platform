@@ -40,6 +40,13 @@ export class SqlPersistence implements Persistence {
     }
   }
 
+  code(c: import('../modules/codes/service').CodeRow) {
+    this.enqueue(() =>
+      this.db.query(`insert into codes (code, company_id, kind, unit_id, slot, pack_id, face, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8) on conflict do nothing`,
+        [c.code, c.companyId, c.kind, c.unitId ?? null, c.slot ?? null, c.packId ?? null, c.face ?? null, c.createdAt]),
+    );
+  }
+
   event(e: PlatformEvent) {
     this.enqueue(() =>
       this.db.query(

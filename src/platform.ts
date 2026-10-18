@@ -46,6 +46,8 @@ export class Platform {
   private orders = new Map<string, Promise<OrderOutcome>>();
   private orderUnits = new Map<string, string>(); // "company:orderId" → unit id, survives restarts
   private maxAttempts: number;
+  /** Makes the smart code in every QR printed. Set when the platform runs with a database. */
+  codes?: import('./modules/codes/service').CodeMinter;
 
   constructor(
     readonly registry: Registry,
@@ -129,7 +131,7 @@ export class Platform {
 
     // 2. Render.
     const t0 = performance.now();
-    const label = await this.registry.rendererFor(company).render({ unit, product, company, campaigns: this.campaigns, customArt: opts.custom?.art });
+    const label = await this.registry.rendererFor(company).render({ unit, product, company, campaigns: this.campaigns, customArt: opts.custom?.art, codes: this.codes });
     unit.status = 'rendered';
     this.labels.set(unit.id, label);
     this.persist.label(label, company.id);
@@ -232,6 +234,13 @@ export class Platform {
   purchase(unitId: string, slotIndex: number, orderId: string, amountCents: number) {
     const unit = need(this.units, unitId, 'unit');
     return this.bus.publish('purchase.completed', unit.companyId, { unitId, slotIndex, orderId, amountCents }, orderId);
+  }
+  /** A sale that came from the ad on a side of a delivery box. */
+  purchaseFromBox(packId: string, face: string, orderId: string, amountCents: number) {
+    return this.bus.publish('purchase.completed', this.packCompany(packId), { packId, face, orderId, amountCents }, orderId);
+  }
+  refundFromBox(packId: string, face: string, orderId: string, amountCents: number) {
+    return this.bus.publish('purchase.refunded', this.packCompany(packId), { packId, face, orderId, amountCents }, orderId);
   }
   refund(unitId: string, slotIndex: number, orderId: string, amountCents: number) {
     const unit = need(this.units, unitId, 'unit');

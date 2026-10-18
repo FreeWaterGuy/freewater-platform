@@ -17,7 +17,11 @@ export interface ScanContext {
     firstTimeWithAdvertiser: boolean;
   };
   now: Date;
+  /** This bottle's own story, from its unique codes: where and when it was printed, and how it has been scanned. */
+  bottle?: BottleStory;
 }
+
+export interface BottleStory { printedAt: string; place: string; minutesSincePrint: number; scans: number; people: number; passedOn: boolean }
 
 export interface PluginTools {
   /** URL of a built-in 3D model, such as "burger". */

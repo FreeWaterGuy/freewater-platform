@@ -3,6 +3,7 @@ import type { PlatformEvent } from './events';
 import type { RenderedLabel } from '../modules/print/contract';
 import type { LedgerEntry } from '../modules/ledger/ledger';
 import type { Pack } from '../modules/packs/service';
+import type { CodeRow } from '../modules/codes/service';
 
 /**
  * Where state goes when it changes. The core calls these and doesn't care what's behind them:
@@ -15,8 +16,9 @@ export interface Persistence {
   label(l: RenderedLabel, companyId: string): void;
   campaign(c: Campaign): void;
   pack(p: Pack): void;
+  code(c: CodeRow): void;
 }
 
 export const noPersistence: Persistence = {
-  event() {}, ledgerEntry() {}, unit() {}, label() {}, campaign() {}, pack() {},
+  event() {}, ledgerEntry() {}, unit() {}, label() {}, campaign() {}, pack() {}, code() {},
 };

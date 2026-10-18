@@ -1,0 +1,212 @@
+import { createHmac, timingSafeEqual } from 'node:crypto';
+import type { SqlClient } from '../../db/client';
+import type { Platform } from '../../platform';
+import type { CompanyConfig } from '../../core/types';
+import { newId } from '../../core/ids';
+import { randomCode, scanBase } from '../codes/service';
+import { qrSvg } from '../print/qr';
+
+export class AttributionError extends Error {
+  constructor(public code: string, message: string, public status = 400) {
+    super(message);
+  }
+}
+
+/** Where on the bottle (or box) an ad was: a sale is credited to exactly that. */
+export type AdSpot = { unitId: string; slot: number } | { packId: string; face: string };
+const spotCols = (s: AdSpot) => ('unitId' in s ? { unit_id: s.unitId, slot: s.slot, pack_id: null, face: null } : { unit_id: null, slot: null, pack_id: s.packId, face: s.face });
+const spotOf = (r: any): AdSpot | null => (r.unit_id ? { unitId: r.unit_id, slot: Number(r.slot) } : r.pack_id ? { packId: r.pack_id, face: r.face } : null);
+
+/** How long after a click a sale still counts. */
+export const CLICK_WINDOW_DAYS = 30;
+const MAX_SALES_PER_CLICK = 5;
+const MAX_SALE_CENTS = 500_000;
+
+/**
+ * Seeing the sale ourselves, the way the big ad platforms do:
+ *  - every link out of an ad goes through our own address first and leaves with a click id (fwclid);
+ *  - the advertiser's site carries our tag, which reports each purchase with that click id (or their server does);
+ *  - every person gets their own one-time coupon, checked and used up through us at the counter.
+ * Each sale is matched to the exact bottle and ad, and the commission is billed from that.
+ */
+export class AttributionService {
+  constructor(private db: SqlClient, private platform: Platform, private secret: Buffer, private clock: () => Date = () => new Date()) {}
+
+  private now() { return this.clock(); }
+
+  // ---------- links out of an ad ----------
+
+  /** A signed address for a link in an ad. Following it records the click and goes on to the advertiser. */
+  linkFor(spot: AdSpot, ad: { advertiserId: string; campaignId?: string; companyId: string }, url: string): string {
+    const body = Buffer.from(JSON.stringify({ s: spot, a: ad.advertiserId, c: ad.campaignId ?? null, k: ad.companyId, u: url })).toString('base64url');
+    return `/go/${body}.${this.sig(body)}`;
+  }
+  private sig(body: string) { return createHmac('sha256', this.secret).update(`link:${body}`).digest('base64url').slice(0, 16); }
+
+  /** Someone tapped a link: record it and return where to send them, with our click id added. */
+  async click(token: string, viewerKey?: string): Promise<{ url: string; clickId: string }> {
+    const [body, sig] = token.split('.');
+    if (!body || !sig || sig.length !== 16 || !timingSafeEqual(Buffer.from(sig), Buffer.from(this.sig(body)))) throw new AttributionError('bad_link', 'That link isn’t one of ours.', 404);
+    const t = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as { s: AdSpot; a: string; c: string | null; k: string; u: string };
+    const clickId = `FWC${randomCode(17)}`;
+    const cols = spotCols(t.s);
+    await this.db.query(`insert into clicks (id, company_id, advertiser_id, campaign_id, unit_id, slot, pack_id, face, viewer_key, url, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+      [clickId, t.k, t.a, t.c, cols.unit_id, cols.slot, cols.pack_id, cols.face, viewerKey && /^[A-Za-z0-9_-]{8,64}$/.test(viewerKey) ? viewerKey : null, t.u, this.now().toISOString()]);
+    const u = new URL(t.u);
+    u.searchParams.set('fwclid', clickId);
+    return { url: u.toString(), clickId };
+  }
+
+  // ---------- the advertiser's tracking tag ----------
+
+  async tagFor(companyId: string, advertiserId: string) {
+    let r = (await this.db.query<any>(`select * from advertiser_tags where advertiser_id = $1`, [advertiserId])).rows[0];
+    if (!r) {
+      await this.db.query(`insert into advertiser_tags (id, company_id, advertiser_id, created_at) values ($1,$2,$3,$4) on conflict (advertiser_id) do nothing`, [`fwt_${randomCode(16).toLowerCase()}`, companyId, advertiserId, this.now().toISOString()]);
+      r = (await this.db.query<any>(`select * from advertiser_tags where advertiser_id = $1`, [advertiserId])).rows[0];
+    }
+    return { tagId: r.id as string, domains: r.domains as string[] };
+  }
+  /** The web addresses the tag may report sales from. Reports from anywhere else are refused. */
+  async setTagDomains(companyId: string, advertiserId: string, domains: string[]) {
+    const clean = [...new Set(domains.map((d) => d.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '')).filter(Boolean))];
+    if (clean.length > 10 || clean.some((d) => !/^[a-z0-9.-]+\.[a-z]{2,}$/.test(d))) throw new AttributionError('bad_domains', 'List your website addresses, like shop.joesburgers.com (up to 10).');
+    await this.tagFor(companyId, advertiserId);
+    await this.db.query(`update advertiser_tags set domains = $2 where advertiser_id = $1`, [advertiserId, clean]);
+    return this.tagFor(companyId, advertiserId);
+  }
+
+  // ---------- sales ----------
+
+  private commission(companyId: string, valueCents: number) {
+    return Math.round((valueCents * this.platform.companies.get(companyId)!.prices.commissionPercent) / 100);
+  }
+
+  /**
+   * Record a sale. It must be matched to one of our clicks (fwclid) or one of our coupons; anything else isn't ours
+   * and isn't counted. The same order twice is counted once.
+   */
+  async conversion(input: { source: 'tag' | 'server' | 'coupon'; advertiserId?: string; tagId?: string; origin?: string | null; clickId?: string; couponCode?: string; orderId: string; valueCents: number }) {
+    if (!Number.isInteger(input.valueCents) || input.valueCents < 0 || input.valueCents > MAX_SALE_CENTS) throw new AttributionError('bad_value', 'The sale amount must be a whole number of cents, up to $5,000.');
+    if (!/^[\w.:#\/-]{1,80}$/.test(input.orderId)) throw new AttributionError('bad_order', 'Send your order number (letters, numbers, - _ . : # /), up to 80 characters.');
+    let advertiserId = input.advertiserId;
+    if (input.source === 'tag') {
+      const tag = (await this.db.query<any>(`select * from advertiser_tags where id = $1`, [input.tagId ?? ''])).rows[0];
+      if (!tag) throw new AttributionError('unknown_tag', 'That tag isn’t ours.', 404);
+      // The tag only reports from the advertiser's own websites.
+      const host = (() => { try { return new URL(input.origin ?? '').hostname.toLowerCase(); } catch { return ''; } })();
+      if (!tag.domains.length || !tag.domains.some((d: string) => host === d || host.endsWith(`.${d}`))) throw new AttributionError('wrong_site', 'This tag can only report sales from the advertiser’s own websites. Add the site in FreeWater Ads under Tracking.', 403);
+      advertiserId = tag.advertiser_id;
+    }
+    if (!advertiserId) throw new AttributionError('advertiser_required', 'Which advertiser is this for?');
+    const done = (await this.db.query<any>(`select * from conversions where advertiser_id = $1 and order_id = $2`, [advertiserId, input.orderId])).rows[0];
+    if (done) return { conversion: this.view(done), duplicate: true };
+
+    let spot: AdSpot | null = null, companyId: string | null = null, clickId: string | null = null, coupon: string | null = null;
+    if (input.clickId) {
+      const c = (await this.db.query<any>(`select * from clicks where id = $1`, [input.clickId.toUpperCase()])).rows[0];
+      if (!c || c.advertiser_id !== advertiserId) throw new AttributionError('unknown_click', 'That click id isn’t one of this advertiser’s clicks.', 404);
+      if (this.now().getTime() - new Date(c.created_at).getTime() > CLICK_WINDOW_DAYS * 86_400_000) throw new AttributionError('click_too_old', `Sales count for ${CLICK_WINDOW_DAYS} days after the click.`, 422);
+      const used = Number((await this.db.query<{ n: number }>(`select count(*)::int as n from conversions where click_id = $1`, [c.id])).rows[0]!.n);
+      if (used >= MAX_SALES_PER_CLICK) throw new AttributionError('click_used_up', `One click can lead to at most ${MAX_SALES_PER_CLICK} sales.`, 422);
+      spot = spotOf(c); companyId = c.company_id; clickId = c.id;
+    } else if (input.couponCode) {
+      const c = (await this.db.query<any>(`select * from coupon_codes where code = $1`, [input.couponCode.toUpperCase()])).rows[0];
+      if (!c || c.advertiser_id !== advertiserId) throw new AttributionError('unknown_coupon', 'That coupon isn’t one of this advertiser’s.', 404);
+      if (c.redeemed_at && c.order_id !== input.orderId) throw new AttributionError('coupon_used', `That coupon was already used${c.order_id ? ` on order ${c.order_id}` : ''}.`, 409);
+      spot = spotOf(c); companyId = c.company_id; coupon = c.code;
+      await this.db.query(`update coupon_codes set redeemed_at = coalesce(redeemed_at, $2), redeemed_by = coalesce(redeemed_by, $3), order_id = $4, value_cents = $5 where code = $1`, [c.code, this.now().toISOString(), input.source, input.orderId, input.valueCents]);
+    } else throw new AttributionError('no_match', 'Send the fwclid from the link, or the coupon code. Sales we can’t match to a bottle aren’t counted.', 422);
+    if (!spot || !companyId) throw new AttributionError('no_match', 'That sale can’t be matched to a bottle.', 422);
+
+    const commission = this.commission(companyId, input.valueCents);
+    const id = newId('cv');
+    const cols = spotCols(spot);
+    await this.db.query(`insert into conversions (id, company_id, advertiser_id, order_id, source, click_id, coupon_code, unit_id, slot, pack_id, face, value_cents, commission_cents, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+      [id, companyId, advertiserId, input.orderId, input.source, clickId, coupon, cols.unit_id, cols.slot, cols.pack_id, cols.face, input.valueCents, commission, this.now().toISOString()]);
+    // The sale goes into the books like any other: commission billed to the advertiser, once per order.
+    if (input.valueCents > 0) {
+      const key = `${advertiserId}:${input.orderId}`;
+      if ('unitId' in spot) this.platform.purchase(spot.unitId, spot.slot, key, input.valueCents);
+      else this.platform.purchaseFromBox(spot.packId, spot.face, key, input.valueCents);
+    }
+    return { conversion: this.view((await this.db.query<any>(`select * from conversions where id = $1`, [id])).rows[0]), duplicate: false };
+  }
+
+  async refund(advertiserId: string, orderId: string) {
+    const c = (await this.db.query<any>(`select * from conversions where advertiser_id = $1 and order_id = $2`, [advertiserId, orderId])).rows[0];
+    if (!c) throw new AttributionError('not_found', 'No sale with that order number.', 404);
+    if (!c.refunded_at) {
+      await this.db.query(`update conversions set refunded_at = $2 where id = $1`, [c.id, this.now().toISOString()]);
+      const key = `${advertiserId}:${orderId}`;
+      const spot = spotOf(c)!;
+      if (Number(c.value_cents) > 0) {
+        if ('unitId' in spot) this.platform.refund(spot.unitId, spot.slot, key, Number(c.value_cents));
+        else this.platform.refundFromBox(spot.packId, spot.face, key, Number(c.value_cents));
+      }
+    }
+    return this.view((await this.db.query<any>(`select * from conversions where id = $1`, [c.id])).rows[0]);
+  }
+
+  private view(r: any) {
+    return { id: r.id, orderId: r.order_id, source: r.source, clickId: r.click_id, couponCode: r.coupon_code, spot: spotOf(r), valueCents: Number(r.value_cents), commissionCents: Number(r.commission_cents), refunded: !!r.refunded_at, at: new Date(r.created_at).toISOString() };
+  }
+
+  // ---------- one-time coupons ----------
+
+  /** This person's own code for this ad. Asking again gives the same one; each person gets one per campaign. */
+  async coupon(company: CompanyConfig, spot: AdSpot, ad: { advertiserId: string; campaignId?: string }, base: string, viewerKey: string, headline: string) {
+    const existing = (await this.db.query<any>(`select * from coupon_codes where viewer_key = $1 and advertiser_id = $2 and campaign_id is not distinct from $3`, [viewerKey, ad.advertiserId, ad.campaignId ?? null])).rows[0];
+    let code = existing?.code as string | undefined;
+    if (!code) {
+      const prefix = base.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12) || 'FW';
+      code = `${prefix}-${randomCode(6)}`;
+      const cols = spotCols(spot);
+      await this.db.query(`insert into coupon_codes (code, base, company_id, advertiser_id, campaign_id, unit_id, slot, pack_id, face, viewer_key, headline, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) on conflict do nothing`,
+        [code, base, company.id, ad.advertiserId, ad.campaignId ?? null, cols.unit_id, cols.slot, cols.pack_id, cols.face, viewerKey, headline, this.now().toISOString()]);
+      code = (await this.db.query<any>(`select code from coupon_codes where viewer_key = $1 and advertiser_id = $2 and campaign_id is not distinct from $3`, [viewerKey, ad.advertiserId, ad.campaignId ?? null])).rows[0].code;
+    }
+    const row = (await this.db.query<any>(`select * from coupon_codes where code = $1`, [code])).rows[0];
+    const verifyUrl = `${scanBase(company)}/V/${code}`;
+    return { code: code!, redeemed: !!row.redeemed_at, verifyUrl, qrSvg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">${qrSvg(verifyUrl, 0, 0, 200)}</svg>` };
+  }
+
+  /** What the cashier sees when they scan someone's coupon. */
+  async checkCoupon(code: string, advertiserId?: string) {
+    const c = (await this.db.query<any>(`select * from coupon_codes where code = $1`, [code.toUpperCase()])).rows[0];
+    if (!c || (advertiserId && c.advertiser_id !== advertiserId)) throw new AttributionError('unknown_coupon', 'That isn’t one of your coupons. Don’t accept it.', 404);
+    const unit = c.unit_id ? this.platform.units.get(c.unit_id) : null;
+    const loc = unit ? this.platform.locations.get(unit.locationId) : null;
+    return {
+      code: c.code, headline: c.headline, advertiserId: c.advertiser_id, campaignId: c.campaign_id,
+      status: c.redeemed_at ? 'used' : 'valid', issuedAt: new Date(c.created_at).toISOString(),
+      usedAt: c.redeemed_at ? new Date(c.redeemed_at).toISOString() : null, orderId: c.order_id, valueCents: c.value_cents === null ? null : Number(c.value_cents),
+      from: loc ? `a bottle from ${loc.id} (${loc.name})` : c.pack_id ? 'a delivery box' : 'a bottle',
+    };
+  }
+
+  /** The cashier (or the advertiser's till) uses the coupon. Single use; the sale is credited to that bottle. */
+  async redeem(code: string, advertiserId: string, input: { valueCents: number; orderId?: string; by: string }) {
+    const c = await this.checkCoupon(code, advertiserId);
+    if (c.status === 'used') throw new AttributionError('coupon_used', `Already used ${new Date(c.usedAt!).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}. Don’t accept it again.`, 409);
+    const orderId = input.orderId?.trim() || `coupon:${c.code}`;
+    const r = await this.conversion({ source: 'coupon', advertiserId, couponCode: c.code, orderId, valueCents: input.valueCents });
+    await this.db.query(`update coupon_codes set redeemed_by = $2 where code = $1`, [c.code, input.by.slice(0, 80)]);
+    return { ...(await this.checkCoupon(c.code, advertiserId)), conversion: r.conversion };
+  }
+
+  // ---------- what advertisers and ops see ----------
+
+  async summary(companyId: string, advertiserId?: string, sinceIso?: string) {
+    const since = sinceIso ?? new Date(this.now().getTime() - 30 * 86_400_000).toISOString();
+    const adv = advertiserId ? 'and advertiser_id = $3' : '';
+    const args = advertiserId ? [companyId, since, advertiserId] : [companyId, since];
+    const one = async (sql: string) => (await this.db.query<any>(sql, args)).rows[0];
+    const clicks = await one(`select count(*)::int as n from clicks where company_id = $1 and created_at >= $2 ${adv}`);
+    const conv = await one(`select count(*)::int as n, coalesce(sum(value_cents),0)::int as value, coalesce(sum(commission_cents),0)::int as commission, count(*) filter (where source = 'tag')::int as tag, count(*) filter (where source = 'server')::int as server, count(*) filter (where source = 'coupon')::int as coupon from conversions where company_id = $1 and created_at >= $2 and refunded_at is null ${adv}`);
+    const coupons = await one(`select count(*)::int as issued, count(redeemed_at)::int as redeemed from coupon_codes where company_id = $1 and created_at >= $2 ${adv}`);
+    const recent = (await this.db.query<any>(`select * from conversions where company_id = $1 and created_at >= $2 ${adv} order by created_at desc limit 20`, args)).rows.map((r) => this.view(r));
+    return { since, clicks: clicks.n, sales: { count: conv.n, valueCents: conv.value, commissionCents: conv.commission, bySource: { tag: conv.tag, server: conv.server, coupon: conv.coupon } }, coupons: { issued: coupons.issued, redeemed: coupons.redeemed }, recent };
+  }
+}
+

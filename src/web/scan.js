@@ -104,11 +104,12 @@
 
   let previewMode = false;
   const engage = (ctx, action, detail) => previewMode ? Promise.resolve() : api('POST', '/v1/public/engagements', { target: ctx.targetKey, viewerKey, action, ...(detail ? { detail: String(detail).slice(0, 120) } : {}) }).catch(() => {});
-  const withAttribution = (url, ctx) => {
+  // Links out of an ad go through our own address (/go/…), which records the click and hands the advertiser a click id.
+  // This phone's viewer id goes along, so the click joins up with the scan.
+  const withAttribution = (url) => {
     try {
       const u = new URL(url, location.href);
-      if (ctx.target.kind === 'slot') { u.searchParams.set('fw_unit', ctx.target.unitId); u.searchParams.set('fw_slot', String(ctx.target.slot)); }
-      else { u.searchParams.set('fw_pack', ctx.target.packId); u.searchParams.set('fw_face', ctx.target.face); }
+      if (u.origin === location.origin && u.pathname.startsWith('/go/')) u.searchParams.set('v', viewerKey);
       return u.toString();
     } catch { return url; }
   };
@@ -125,7 +126,7 @@
   function markSaved(btn) { btn.classList.add('saved'); btn.replaceChildren(icon(ICON.check), 'Saved'); btn.disabled = true; }
 
   function action(a, ctx, label) {
-    if (a.kind === 'link') return { href: withAttribution(a.url, ctx), onclick: () => engage(ctx, 'link', label) };
+    if (a.kind === 'link') return { href: withAttribution(a.url), onclick: () => engage(ctx, 'link', label) };
     if (a.kind === 'call') return { href: `tel:${a.phone.replace(/[^\d+]/g, '')}`, onclick: () => engage(ctx, 'call') };
     return {};
   }
@@ -155,7 +156,16 @@
         }
         return h('a', { class: `button ${cls}`, rel: 'noopener', target: b.action.kind === 'link' ? '_blank' : undefined, ...action(b.action, ctx, b.label) }, b.label, b.action.kind === 'link' ? icon(ICON.link) : icon(ICON.call));
       }
-      case 'model': return modelStage(b.model, b.addOns || [], ctx, b.arLabel || 'See it in your space');
+      case 'model': return modelStage(b.model, b.addOns || [], ctx, b.arLabel || 'See it in your space', b.buy);
+      case 'coupon': {
+        // This person's own code: shown at the counter, scanned by the cashier, and used up through FreeWater.
+        const copy = h('button', { type: 'button', text: 'Copy', onclick: async () => { try { await navigator.clipboard.writeText(b.code); copy.textContent = 'Copied'; } catch { copy.textContent = b.code; } engage(ctx, 'save', 'copied code'); } });
+        return h('div', { class: `offer coupon${b.redeemed ? ' used' : ''}`, style: 'color:var(--accent-ink)' },
+          h('h2', { text: b.headline }), b.details && h('p', { text: b.details }),
+          h('div', { class: 'coupon-qr' }, h('img', { alt: `Coupon code ${b.code}`, src: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(b.qrSvg)}` })),
+          h('div', { class: 'code', style: 'border-color:currentColor' }, h('span', { text: b.code }), copy),
+          h('div', { class: 'expires', text: b.redeemed ? 'Used. Each code works once.' : `Just for you, one use. Show it at the counter${b.expires ? ` · ${b.expires}` : ''}.` }));
+      }
       case 'tour': {
         const wrap = h('div', { class: 'tour' }, h('h2', { class: 'section-title', text: b.title }));
         if (b.model) wrap.append(modelStage(b.model, [], ctx, 'Put the house on your table'));
@@ -173,7 +183,7 @@
         const go = h('a', { class: 'button btn', rel: 'noopener', target: '_blank', 'aria-disabled': 'true', style: 'opacity:.45;pointer-events:none' }, 'Pick a time');
         const pills = b.slots.map((s) => h('button', { type: 'button', class: 'pill', 'aria-pressed': 'false', onclick: (e) => {
           pills.forEach((p) => p.setAttribute('aria-pressed', 'false')); e.currentTarget.setAttribute('aria-pressed', 'true'); picked = s;
-          const u = new URL(withAttribution(b.action.url, ctx)); u.searchParams.set('slot', s);
+          const u = new URL(withAttribution(b.action.url)); u.searchParams.set('slot', s);
           go.href = u.toString(); go.textContent = `Book ${s}`; go.style.cssText = ''; go.removeAttribute('aria-disabled');
           engage(ctx, 'slot', s);
         } }, s));
@@ -187,10 +197,30 @@
     }
   }
 
-  function modelStage(model, addOns, ctx, arLabel) {
+  // In AR, a buy button sits over the 3D model. On iPhone it's Apple's own AR banner, on Android Google's; both go
+  // through our click tracking, so a sale made from inside AR is credited to this bottle like any other.
+  const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const isAndroid = /Android/i.test(navigator.userAgent);
+  const usdzFor = (glbUrl) => glbUrl.replace(/\.glb(\?.*)?$/, '.usdz');
+  function quickLookSrc(model, buy) {
+    const p = new URLSearchParams({ callToAction: buy.label, checkoutTitle: buy.title, checkoutSubtitle: model.alt });
+    return `${new URL(usdzFor(model.glbUrl), location.href).toString()}#${p.toString().replace(/\+/g, '%20')}`;
+  }
+  function sceneViewerIntent(model, buy) {
+    const q = new URLSearchParams({ file: new URL(model.glbUrl, location.href).toString(), mode: 'ar_preferred', title: buy.title, link: withAttribution(buy.url) });
+    return `intent://arvr.google.com/scene-viewer/1.0?${q.toString()}#Intent;scheme=https;package=com.google.android.googlequicksearchbox;action=android.intent.action.VIEW;S.browser_fallback_url=${encodeURIComponent(location.href)};end;`;
+  }
+
+  function modelStage(model, addOns, ctx, arLabel, buy) {
     const items = [{ id: 'main', label: model.alt, model }, ...addOns];
     const mv = h('model-viewer', { src: model.glbUrl, alt: model.alt, 'camera-controls': true, 'auto-rotate': true, 'auto-rotate-delay': '0', 'rotation-per-second': '24deg', 'shadow-intensity': '1', 'shadow-softness': '0.9', exposure: '1.05', 'environment-image': 'neutral', 'camera-orbit': '30deg 70deg auto', ar: true, 'ar-modes': 'webxr scene-viewer quick-look', 'ar-scale': 'fixed', 'interaction-prompt': 'none', 'touch-action': 'pan-y' });
     const stage = h('div', { class: 'stage' }, mv, h('div', { class: 'hint', text: 'Drag to spin' }));
+    let current = model;
+    if (buy) {
+      if (isIOS) mv.setAttribute('ios-src', quickLookSrc(model, buy));
+      // Apple's AR banner button was tapped: go on to buy, through our click tracking.
+      mv.addEventListener('quick-look-button-tapped', () => { engage(ctx, 'link', 'buy from AR'); location.href = withAttribution(buy.url); });
+    }
     let launched = false;
     const launch = async () => {
       if (!mv.canActivateAR) {
@@ -198,7 +228,8 @@
         stage.append(h('div', { class: 'ar-note', text: 'AR opens on a phone. Spin it here, or scan the bottle with your phone’s camera.' }));
         return;
       }
-      mv.activateAR();
+      if (buy && isAndroid) location.href = sceneViewerIntent(current, buy);
+      else mv.activateAR();
       if (launched) return;
       launched = true;
       // Billed only once the model actually loaded on this phone.
@@ -215,7 +246,8 @@
     if (items.length > 1) {
       const pills = items.map((it, i) => h('button', { type: 'button', class: 'pill', 'aria-pressed': i === 0 ? 'true' : 'false', onclick: (e) => {
         pills.forEach((p) => p.setAttribute('aria-pressed', 'false')); e.currentTarget.setAttribute('aria-pressed', 'true');
-        mv.src = it.model.glbUrl; mv.alt = it.model.alt;
+        mv.src = it.model.glbUrl; mv.alt = it.model.alt; current = it.model;
+        if (buy && isIOS) mv.setAttribute('ios-src', quickLookSrc(it.model, buy));
         if (it.id !== 'main') engage(ctx, 'addon', it.id);
       } }, i === 0 ? 'The main event' : it.label));
       parts.push(h('div', { class: 'pills' }, pills));
@@ -238,6 +270,11 @@
     if (f.ads !== null) facts.push(h('div', { text: f.ads === 0 ? (target.kind === 'box-face' ? 'This box carries our own message.' : 'This bottle carries our own message.') : `This ${target.kind === 'box-face' ? 'box' : 'bottle'} has ${f.ads} ${f.ads === 1 ? 'ad' : 'ads'}. They paid for your water.` }));
     else facts.push(h('div', { text: 'A custom bottle, designed and paid for by the sender.' }));
     if (f.giving) facts.push(h('div', { class: 'giving', text: f.giving }));
+    if (f.story) {
+      const m = f.story.minutesSincePrint;
+      const ago = m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`;
+      facts.push(h('div', { class: 'story', text: `Genuine. Printed fresh at ${f.story.place}, ${ago}.${f.story.passedOn ? ` It’s been passed along: ${f.story.people} people have scanned it.` : ''}` }));
+    }
     const links = [];
     if (f.receiptUrl) links.push(h('a', { href: fixture ? '#' : f.receiptUrl, text: 'See this bottle’s receipt' }));
     if (f.packUrl && target.kind !== 'slot') links.push(h('a', { href: fixture ? '#' : f.packUrl, text: 'Everything in this pack' }));

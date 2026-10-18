@@ -46,6 +46,8 @@ export interface CompanyConfig {
   id: string;
   name: string;
   receiptBaseUrl: string; // where scan and receipt links point, e.g. https://go.freewater.io
+  /** A short address just for QR codes, e.g. https://fw.ac. Shorter means fewer, bigger squares. Defaults to receiptBaseUrl. */
+  scanBaseUrl?: string;
   brand: {
     logoTop: string; // "free"
     logoBottom: string; // "water"

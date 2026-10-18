@@ -17,7 +17,9 @@ export type Block =
   | { type: 'text'; text: string }
   | { type: 'offer'; headline: string; details?: string; code?: string; expires?: string }
   | { type: 'button'; label: string; action: Action; style?: 'primary' | 'secondary' }
-  | { type: 'model'; model: ModelRef; arLabel?: string; addOns?: { id: string; label: string; model: ModelRef }[] }
+  | { type: 'model'; model: ModelRef; arLabel?: string; addOns?: { id: string; label: string; model: ModelRef }[]; buy?: { label: string; url: string; title: string } }
+  /** A one-time coupon made for this viewer (added by the platform, never by a plug-in). */
+  | { type: 'coupon'; headline: string; details?: string; expires?: string; code: string; qrSvg: string; redeemed: boolean }
   | { type: 'tour'; title: string; rooms: { name: string; imageUrl?: string; color?: string; note?: string }[]; model?: ModelRef }
   | { type: 'video'; url: string; posterUrl?: string; caption?: string }
   | { type: 'article'; headline: string; byline?: string; paragraphs: string[] }

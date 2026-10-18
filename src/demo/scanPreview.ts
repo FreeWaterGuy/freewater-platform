@@ -18,6 +18,15 @@ for (let i = 0; i < 80 && slots.size < 8; i++) {
   const r = await app.platform.order({ companyId: 'freewater', orderId: `pv-${i}`, locationId: 'ATX-014', productId: 'bottle-16oz' });
   if (r.ok) for (const p of r.unit.placements) if (!slots.has(p.campaignId)) slots.set(p.campaignId, { unitId: r.unit.id, slot: p.slotIndex });
 }
+// Joe's guaranteed burger ad always takes the burger spot; pause it briefly so Patty's coupon ad gets a bottle too.
+app.platform.campaigns.get('cmp-joes')!.active = false;
+for (let i = 0; i < 80 && !slots.has('cmp-patty'); i++) {
+  const r = await app.platform.order({ companyId: 'freewater', orderId: `pv-p-${i}`, locationId: 'ATX-014', productId: 'bottle-16oz' });
+  const p = r.unit.placements.find((x) => x.campaignId === 'cmp-patty');
+  if (r.ok && p) slots.set('cmp-patty', { unitId: r.unit.id, slot: p.slotIndex });
+}
+app.platform.campaigns.get('cmp-joes')!.active = true;
+await app.persistence.flush();
 const custom = await app.platform.order({ companyId: 'freewater', orderId: 'pv-maya', locationId: 'ATX-014', productId: 'bottle-16oz', custom: { customerId: 'jordan', art: mayaDesign, priceCents: 300, experienceConfig: { from: 'Jordan and friends', message: 'Happy 30th, Maya!', confetti: true } } });
 const pack = await app.packs.compose({ companyId: 'freewater', customerId: 'c1', address: 'hidden', routeId: 'route-3', stop: 1, boxId: 'box-6', productId: 'bottle-16oz' });
 const top = pack.faces.find((f) => f.face === 'top')!;
@@ -28,10 +37,11 @@ const slotScene = async (id: string, label: string, note: string, campaignId: st
   if (!s) return;
   scenes.push({ id, label, note, path: `/s/${s.unitId}/${s.slot}`, data: await get(`/v1/public/experience/${s.unitId}/${s.slot}?viewer=preview-viewer`) });
 };
-await slotScene('burger', "Joe's 3D menu", 'Spin the burger, add fries or a drink, then tap the red button to put it on your table in AR. First-time scanners get free fries.', 'cmp-joes');
+await slotScene('burger', "Joe's 3D menu", 'Spin the burger, add fries or a drink, then put it on your table in AR. In AR there’s an Order button, so a sale from inside AR is credited to this bottle.', 'cmp-joes');
 await slotScene('home', 'Home tour', 'A doll’s-house model of the home you can place in AR, then a room-by-room tour and showing times.', 'cmp-maple');
 await slotScene('coffee', 'Coffee offer', 'A first-time offer people can save. The colors are Luma’s own.', 'cmp-luma');
-await slotScene('gym', 'Book a class', 'Pick a time and book. The booking link carries the bottle’s id so the sale is credited.', 'cmp-orbit');
+await slotScene('coupon', 'One-time coupon', 'Everyone gets their own code. The cashier scans it: it shows valid once, and the sale is credited to this bottle. Screenshots can’t be used twice.', 'cmp-patty');
+await slotScene('gym', 'Book a class', 'Pick a time and book. The link goes through FreeWater first, so a booking is matched back to this bottle.', 'cmp-orbit');
 await slotScene('news', 'News story', 'A short story with a link to the rest.', 'cmp-daily');
 if (custom.ok) scenes.push({ id: 'custom', label: 'Custom bottle', note: 'A bottle someone paid to design. No ads: the sender’s message and confetti.', path: `/s/${custom.unit.id}/0`, data: await get(`/v1/public/experience/${custom.unit.id}/0?viewer=preview-viewer`) });
 scenes.push({ id: 'box', label: `Box: ${top.advertiserName}`, note: 'Every side of a delivery box has its own code. Scans are billed to that side’s advertiser.', path: `/b/${pack.id}/top`, data: await get(`/v1/public/experience/box/${pack.id}/top?viewer=preview-viewer`) });

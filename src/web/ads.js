@@ -18,7 +18,7 @@
   const NS = 'http://www.w3.org/2000/svg';
   const svgEl = (tag, attrs) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, String(v)); return e; };
   const icon = (d) => { const s = svgEl('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' }); for (const p of d.split('|')) s.append(svgEl('path', { d: p })); return s; };
-  const I = { chart: 'M4 20V10|M10 20V4|M16 20v-7|M22 20H2', plus: 'M12 5v14|M5 12h14', card: 'M3 6h18v12H3z|M3 10h18', clip: 'M21 11l-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L15 7', send: 'M5 12h14|M13 6l6 6-6 6', back: 'M15 18l-6-6 6-6' };
+  const I = { target: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z|M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z|M12 12h.01', ticket: 'M3 7h18v4a2 2 0 0 0 0 4v4H3v-4a2 2 0 0 0 0-4z|M13 7v12', chart: 'M4 20V10|M10 20V4|M16 20v-7|M22 20H2', plus: 'M12 5v14|M5 12h14', card: 'M3 6h18v12H3z|M3 10h18', clip: 'M21 11l-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L15 7', send: 'M5 12h14|M13 6l6 6-6 6', back: 'M15 18l-6-6 6-6' };
   const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} } };
   const dollars = (c) => `$${(c / 100).toLocaleString(undefined, { minimumFractionDigits: c % 100 ? 2 : 0, maximumFractionDigits: 2 })}`;
   const cents = (c) => (c < 100 ? `${c}¢` : dollars(c));
@@ -40,7 +40,7 @@
   // ---------- routing ----------
   const routes = [
     [/^\/ads\/?$/, overview], [/^\/ads\/new$/, newAd], [/^\/ads\/drafts\/([\w-]+)$/, builder], [/^\/ads\/drafts\/([\w-]+)\/review$/, review],
-    [/^\/ads\/campaigns\/([\w-]+)\/change$/, changeAd], [/^\/ads\/billing$/, billing],
+    [/^\/ads\/campaigns\/([\w-]+)\/change$/, changeAd], [/^\/ads\/billing$/, billing], [/^\/ads\/tracking$/, tracking], [/^\/ads\/redeem(?:\/([\w-]+))?$/, redeem],
   ];
   let cleanup = null;
   function go(path, replace) { state.path = path; if (!fixture) history[replace ? 'replaceState' : 'pushState'](null, '', path); render(); }
@@ -60,6 +60,8 @@
         h('nav', { 'aria-label': 'Main' },
           link('/ads', { 'aria-current': active === 'overview' ? 'page' : null }, icon(I.chart), 'Overview'),
           link('/ads/new', { 'aria-current': active === 'new' ? 'page' : null }, icon(I.plus), 'New ad'),
+          link('/ads/tracking', { 'aria-current': active === 'tracking' ? 'page' : null }, icon(I.target), 'Sales tracking'),
+          link('/ads/redeem', { 'aria-current': active === 'redeem' ? 'page' : null }, icon(I.ticket), 'Check a coupon'),
           link('/ads/billing', { 'aria-current': active === 'billing' ? 'page' : null }, icon(I.card), 'Billing')),
         h('div', { class: 'who' }, h('b', { text: state.business?.name ?? '' }), me?.email || me?.phone || '', h('br'), h('button', { type: 'button', onclick: async () => { try { await api('POST', '/v1/auth/sign-out'); } catch {} state.token = null; state.me = null; state.business = null; store.set('fw_ads_token', null); render(); } }, 'Sign out'))),
       h('main', { class: 'main' }, ...content)));
@@ -115,6 +117,71 @@
         catch (x) { err.textContent = x.message; err.hidden = false; }
       } }, h('div', { class: 'field' }, h('label', { for: 's-name', text: 'Business name' }), name), h('div', { class: 'field' }, h('label', { for: 's-cat', text: 'What you do' }), cat), h('div', { class: 'field' }, h('label', { for: 's-site', text: 'Website (optional)' }), site), err, h('button', { class: 'btn wide', type: 'submit' }, 'Start making my ad')))));
     name.focus();
+  }
+
+  // ---------- sales tracking: the tag, server reporting, and what it found ----------
+  async function tracking() {
+    const t = await api('GET', '/v1/ads/tracking');
+    const s = t.summary;
+    const copyBtn = (text) => h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { try { await navigator.clipboard.writeText(text); toast('Copied'); } catch { toast('Select it and copy it'); } } }, 'Copy');
+    const codeBox = (text) => h('div', { style: 'display:flex;flex-direction:column;gap:8px' }, h('pre', { class: 'snippet', text }), h('div', {}, copyBtn(text)));
+    const domains = h('input', { class: 'input', id: 't-domains', value: t.domains.join(', '), placeholder: 'joesburgers.com, order.joesburgers.com' });
+    const kpi = (label, value, sub, dark) => h('div', { class: `kpi${dark ? ' dark' : ''}` }, h('span', { text: label }), h('b', { text: value }), sub ? h('small', { text: sub }) : null);
+    shell('tracking',
+      h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Sales tracking' }), h('p', { text: `Every sale that came from your ads, matched to the exact bottle. Last 30 days.` }))),
+      h('div', { class: 'kpis' },
+        kpi('Taps on your links', num(s.clicks), 'each gets its own click id', true),
+        kpi('Sales from bottles', num(s.sales.count), `${s.sales.bySource.tag} website · ${s.sales.bySource.server} your server · ${s.sales.bySource.coupon} at the counter`),
+        kpi('Those sales', dollars(s.sales.valueCents), 'what customers spent'),
+        kpi('Commission', dollars(s.sales.commissionCents), 'on your invoice'),
+        kpi('Coupons used', `${num(s.coupons.redeemed)}/${num(s.coupons.issued)}`, 'used / given out')),
+      h('div', { class: 'review', style: 'max-width:900px' },
+        h('section', { class: 'panel', style: 'gap:10px' }, h('h2', { class: 'section', text: '1. Add our tag to your website' }),
+          h('p', { style: 'margin:0', text: 'Put this on every page, just before </head>. It remembers when someone arrived from one of your bottles.' }), codeBox(t.install.everyPage),
+          h('p', { style: 'margin:0', text: 'On your order confirmation page, report the sale with your order number and the amount:' }), codeBox(t.install.orderConfirmation),
+          h('p', { style: 'margin:0;color:var(--muted);font-size:14px', text: `It only reports sales from people who came from a bottle in the last ${t.clickWindowDays} days, or who used one of your FreeWater coupons. Nothing about your other customers is sent.` })),
+        h('section', { class: 'panel', style: 'gap:10px' }, h('h2', { class: 'section', text: '2. Say which websites are yours' }),
+          h('form', { style: 'display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end', onsubmit: async (e) => { e.preventDefault(); try { await api('POST', '/v1/ads/tracking/domains', { domains: domains.value.split(/[\s,]+/).filter(Boolean) }); toast('Saved. Your tag now reports from these sites.'); } catch (x) { toast(x.message); } } },
+            h('div', { class: 'field', style: 'flex:1;min-width:240px' }, h('label', { for: 't-domains', text: 'Your websites' }), domains), h('button', { class: 'btn', type: 'submit' }, 'Save')),
+          h('p', { style: 'margin:0;color:var(--muted);font-size:14px', text: 'Sales reported from anywhere else are refused, so nobody can report sales in your name.' })),
+        h('section', { class: 'panel', style: 'gap:10px' }, h('h2', { class: 'section', text: 'Or report sales from your server' }),
+          h('p', { style: 'margin:0', text: 'Send the fwclid your site received (or the coupon code), your order number and the amount. Ask us for a server key.' }),
+          codeBox(`curl ${location.origin}/v1/conversions \\\n  -H "Authorization: Bearer YOUR_SERVER_KEY" -H "Content-Type: application/json" \\\n  -d '{ "fwclid": "FWC…", "orderId": "A-10442", "valueCents": 1250 }'`)),
+        h('section', { class: 'panel', style: 'gap:10px' }, h('h2', { class: 'section', text: '3. At the counter' }),
+          h('p', { style: 'margin:0', text: 'Each customer gets their own one-time coupon with a code to scan. Scan it with your phone’s camera, or type it in. You’ll see at once if it’s real and unused, and screenshots can’t be used twice.' }),
+          h('div', {}, link('/ads/redeem', { class: 'btn' }, 'Check a coupon'))),
+        s.recent.length ? h('section', { class: 'panel', style: 'gap:10px' }, h('h2', { class: 'section', text: 'Recent sales from bottles' }),
+          h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['When', 'Order', 'How', 'Amount', 'Commission'].map((x) => h('th', { text: x })))),
+            h('tbody', {}, s.recent.map((c) => h('tr', {}, h('td', { text: new Date(c.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) }), h('td', { text: c.orderId }), h('td', { text: { tag: 'Website', server: 'Your server', coupon: 'Coupon' }[c.source] }), h('td', { text: dollars(c.valueCents) }), h('td', { text: c.refunded ? 'Refunded' : dollars(c.commissionCents) }))))))) : null));
+  }
+
+  // ---------- checking and using a coupon at the counter ----------
+  async function redeem(code) {
+    if (!code) {
+      const input = h('input', { class: 'input code-input', id: 'r-code', autocomplete: 'off', autocapitalize: 'characters', placeholder: 'BOTTLE2X-7F3A9Q', style: 'letter-spacing:.06em' });
+      shell('redeem', h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Check a coupon' }), h('p', { text: 'Scan the code on the customer’s phone with your camera, or type it here.' }))),
+        h('form', { class: 'review', style: 'max-width:480px', onsubmit: (e) => { e.preventDefault(); const c = input.value.trim().toUpperCase(); if (c) go(`/ads/redeem/${encodeURIComponent(c)}`); } }, h('div', { class: 'field' }, h('label', { for: 'r-code', text: 'Coupon code' }), input), h('button', { class: 'btn wide', type: 'submit' }, 'Check it')));
+      input.focus();
+      return;
+    }
+    let c;
+    try { c = await api('GET', `/v1/coupons/${encodeURIComponent(code)}`); }
+    catch (x) { shell('redeem', h('div', { class: 'review', style: 'max-width:520px' }, h('div', { class: 'verdict bad' }, h('b', { text: 'Not valid' }), h('span', { text: x.message })), link('/ads/redeem', { class: 'btn secondary' }, 'Check another'))); return; }
+    const amount = h('input', { class: 'input', id: 'r-amount', inputmode: 'decimal', placeholder: '12.50' });
+    const order = h('input', { class: 'input', id: 'r-order', placeholder: 'Optional' });
+    const box = h('div', { class: 'review', style: 'max-width:520px' });
+    const show = (cc, done) => box.replaceChildren(
+      cc.status === 'valid' ? h('div', { class: 'verdict ok' }, h('b', { text: 'Valid' }), h('span', { text: 'Real, and not used yet.' })) : h('div', { class: 'verdict bad' }, h('b', { text: done ? 'Done' : 'Already used' }), h('span', { text: done ? `Credited${cc.valueCents ? `: ${dollars(cc.valueCents)}` : ''}. It can’t be used again.` : `Used ${new Date(cc.usedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}. Don’t accept it again.` })),
+      h('div', { class: 'facts' }, h('div', {}, h('span', { text: 'Offer' }), h('b', { text: cc.headline || '' })), h('div', {}, h('span', { text: 'Code' }), h('b', { text: cc.code })), h('div', {}, h('span', { text: 'From' }), h('b', { text: cc.from })), h('div', {}, h('span', { text: 'Given' }), h('b', { text: new Date(cc.issuedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) }))),
+      cc.status === 'valid' ? h('form', { style: 'display:flex;flex-direction:column;gap:12px', onsubmit: async (e) => {
+        e.preventDefault();
+        const v = Math.round(Number(String(amount.value).replace(/[^0-9.]/g, '')) * 100);
+        if (!Number.isFinite(v) || v < 0) return toast('Type the sale amount, like 12.50');
+        try { const r = await api('POST', `/v1/coupons/${encodeURIComponent(cc.code)}/redeem`, { valueCents: v, ...(order.value.trim() ? { orderId: order.value.trim() } : {}) }); show(r, true); } catch (x) { toast(x.message); }
+      } }, h('div', { class: 'field' }, h('label', { for: 'r-amount', text: 'Sale amount ($)' }), amount), h('div', { class: 'field' }, h('label', { for: 'r-order', text: 'Order or receipt number' }), order), h('button', { class: 'btn wide', type: 'submit' }, 'Use this coupon')) : null,
+      link('/ads/redeem', { class: 'btn secondary' }, 'Check another'));
+    show(c, false);
+    shell('redeem', h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Check a coupon' }))), box);
   }
 
   // ---------- overview ----------

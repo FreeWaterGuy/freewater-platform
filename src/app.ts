@@ -32,6 +32,8 @@ import { WebhookService } from './modules/webhooks/service';
 import { HttpWebhookSender, type WebhookSender } from './adapters/webhooks/contract';
 import { ConsoleService } from './modules/console/service';
 import { FleetService, MachineFleetPrinter } from './modules/fleet/service';
+import { CodeService, loadSecret } from './modules/codes/service';
+import { AttributionService } from './modules/attribution/service';
 import { bottle16oz, boxes, builtinCreatives, freewater, locations, peakSpring, sampleCampaigns } from './demo/seed';
 
 export interface AppOptions {
@@ -98,6 +100,9 @@ export async function createApp(opts: AppOptions) {
     seed: opts.seed ?? Date.now() % 2147483647,
   });
   const { platform, packs } = made;
+  // Every QR printed carries our own signed smart code.
+  const codes = new CodeService(db, () => persistence, await loadSecret(db, 'codes'), opts.clock);
+  platform.codes = codes;
   for (const u of state.units) platform.restoreUnit(u, state.labels.get(u.id));
   packs.restore(state.packs);
   platform.bus.restoreSeen(state.seen);
@@ -112,6 +117,8 @@ export async function createApp(opts: AppOptions) {
   const host = new ExperienceHost({ builtinModel: (id) => (builtinModelIds.includes(id) ? `/models/builtin/${id}.glb` : `/models/builtin/missing.glb`) }, { timeoutMs: opts.pluginTimeoutMs });
   for (const plugin of [...builtinPlugins, ...(opts.plugins ?? [])]) host.register(plugin);
   const experiences = new ExperienceService(platform, packs, host, db, accounts);
+  const attribution = new AttributionService(db, platform, await loadSecret(db, 'links'), opts.clock);
+  experiences.attribution = attribution;
   const assets = opts.assets ?? new SqlAssetStore(db);
 
   const builtinAssistant = new BuiltinAdAssistant();
@@ -139,7 +146,7 @@ export async function createApp(opts: AppOptions) {
   await fleet.load();
   made.registry.registerPrinter('model6-fleet', new MachineFleetPrinter(() => fleet, made.printer));
 
-  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet };
+  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

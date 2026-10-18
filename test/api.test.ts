@@ -61,7 +61,13 @@ describe('orders and scans', () => {
     const b = await orderOne('ord-api-1');
     expect(a.status).toBe(201);
     expect(b.body.id).toBe(a.body.id);
-    expect(a.body.slots.every((s: any) => s.qrUrl.includes(a.body.id))).toBe(true);
+    // Every printed QR is our own short signed code, and each one opens exactly this bottle's slot.
+    expect(a.body.slots.every((s: any) => /^HTTPS:\/\/GO\.FREEWATER\.IO\/Q\/[0-9A-Z]{14}$/.test(s.qrUrl))).toBe(true);
+    for (const s of a.body.slots) {
+      const r = await server.inject({ method: 'GET', url: new URL(s.qrUrl.toLowerCase()).pathname.replace('/q/', '/Q/') + '' });
+      expect(r.statusCode).toBe(302);
+      expect(r.headers.location).toBe(`/s/${a.body.id}/${s.slot}?c=${s.qrUrl.split('/').pop()}`);
+    }
     const svg = await call('GET', `/v1/units/${a.body.id}/label.svg`, keys['machine-ATX-014']);
     expect(svg.headers['content-type']).toContain('image/svg+xml');
     expect(svg.body.startsWith('<svg')).toBe(true);

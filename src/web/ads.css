@@ -167,3 +167,8 @@ table.list td { padding: 12px 8px; border-bottom: 1px solid var(--line); font-va
   .stage .sizes img { height: 200px; }
 }
 @media (prefers-reduced-motion: reduce) { .msg.thinking i { animation: none; } }
+pre.snippet { margin: 0; background: #0B0B0B; color: #E8EEF2; border-radius: 14px; padding: 12px 14px; font: 500 12.5px/1.55 ui-monospace, Menlo, monospace; overflow-x: auto; white-space: pre; }
+.verdict { border-radius: 18px; padding: 18px; display: flex; flex-direction: column; gap: 4px; }
+.verdict b { font: 700 30px/1.1 var(--display); }
+.verdict.ok { background: #E7F5EC; color: #145C33; }
+.verdict.bad { background: #FDECEC; color: #7A1C1C; }

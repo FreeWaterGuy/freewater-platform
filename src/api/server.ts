@@ -6,6 +6,8 @@ import { deliveryRoutes } from './delivery';
 import { booksRoutes } from './books';
 import { consoleRoutes } from './console';
 import { machineRoutes } from './machine';
+import { attributionRoutes } from './attribution';
+import { AttributionError } from '../modules/attribution/service';
 import { FleetError } from '../modules/fleet/service';
 import { WebhookError } from '../modules/webhooks/service';
 import { ConsoleError } from '../modules/console/service';
@@ -23,6 +25,7 @@ import { PaymentError } from '../modules/payments/service';
 import { ExperienceError, targetKey, type Target } from '../modules/experiences/service';
 import { AssetError, allowedTypes } from '../modules/assets/store';
 import { builtinModel } from '../modules/models/builtin';
+import { glbToUsdz } from '../modules/models/usdz';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -36,7 +39,7 @@ import { dirname, join } from 'node:path';
 const PLATFORM_COMPANY = process.env.PLATFORM_COMPANY ?? 'freewater';
 
 export async function buildServer(app: App, opts: { logger?: boolean } = {}): Promise<FastifyInstance> {
-  const server = Fastify({ logger: opts.logger ?? false, bodyLimit: 3 * 1024 * 1024 });
+  const server = Fastify({ logger: opts.logger ?? false, bodyLimit: 3 * 1024 * 1024, maxParamLength: 1000 });
   const { platform, packs, persistence, db, experiences } = app;
   for (const type of Object.keys(allowedTypes)) server.addContentTypeParser(type, { parseAs: 'buffer', bodyLimit: 16 * 1024 * 1024 }, (_req, body, done) => done(null, body));
   const routes: RouteDef[] = [];
@@ -507,6 +510,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   booksRoutes(app, route);
   consoleRoutes(app, route);
   machineRoutes(app, route);
+  attributionRoutes(app, server, route);
 
   // ---------- wiring ----------
 
@@ -607,23 +611,30 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     if (!f) return reply.code(404).send({ error: { code: 'not_found', message: 'File not found.' } });
     return reply.type(f.type).header('cache-control', 'public, max-age=300').send(file(f.path));
   });
+  // Every 3D model also comes as USDZ, made by our own converter, so iPhones can show a buy button in AR.
+  const usdzCache = new Map<string, Buffer>();
+  const usdz = (key: string, glb: Uint8Array, name: string) => { let b = usdzCache.get(key); if (!b) { b = Buffer.from(glbToUsdz(glb, { name })); if (usdzCache.size > 200) usdzCache.clear(); usdzCache.set(key, b); } return b; };
   server.get('/models/builtin/:file', async (req, reply) => {
-    const m = /^([a-z]+)\.glb$/.exec((req.params as any).file);
+    const m = /^([a-z]+)\.(glb|usdz)$/.exec((req.params as any).file);
     const bytes = m ? builtinModel(m[1]!) : null;
     if (!bytes) return reply.code(404).send({ error: { code: 'not_found', message: 'Model not found.' } });
+    if (m![2] === 'usdz') return reply.type('model/vnd.usdz+zip').header('cache-control', 'public, max-age=86400').header('access-control-allow-origin', '*').send(usdz(`b:${m![1]}`, bytes, m![1]!));
     return reply.type('model/gltf-binary').header('cache-control', 'public, max-age=86400').header('access-control-allow-origin', '*').send(Buffer.from(bytes));
   });
   server.get('/assets/:file', async (req, reply) => {
-    const m = /^([A-Za-z0-9_-]+)\.[a-z0-9]+$/.exec((req.params as any).file);
+    const m = /^([A-Za-z0-9_-]+)\.([a-z0-9]+)$/.exec((req.params as any).file);
     const found = m ? await app.assets.get(m[1]!) : null;
     if (!found) return reply.code(404).send({ error: { code: 'not_found', message: 'File not found.' } });
+    if (m![2] === 'usdz' && found.asset.contentType === 'model/gltf-binary') {
+      try { return reply.type('model/vnd.usdz+zip').header('cache-control', 'public, max-age=31536000, immutable').header('access-control-allow-origin', '*').send(usdz(`a:${m![1]}`, found.bytes, 'Model')); } catch { return reply.code(422).send({ error: { code: 'not_convertible', message: 'This model can’t be shown in iPhone AR.' } }); }
+    }
     // Uploaded files are served as exactly what they were checked to be, never as a page.
     return reply.type(found.asset.contentType).header('cache-control', 'public, max-age=31536000, immutable').header('x-content-type-options', 'nosniff').header('content-disposition', 'inline').header('access-control-allow-origin', '*').send(Buffer.from(found.bytes));
   });
 
   server.setErrorHandler((err: any, _req, reply) => {
     if (err instanceof ApiError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
-    if (err instanceof AccountsError || err instanceof PaymentError || err instanceof ExperienceError || err instanceof AssetError || err instanceof AdsError || err instanceof DesignError || err instanceof DeliveryError || err instanceof BooksError || err instanceof WebhookError || err instanceof ConsoleError || err instanceof FleetError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
+    if (err instanceof AccountsError || err instanceof PaymentError || err instanceof ExperienceError || err instanceof AssetError || err instanceof AdsError || err instanceof DesignError || err instanceof DeliveryError || err instanceof BooksError || err instanceof WebhookError || err instanceof ConsoleError || err instanceof FleetError || err instanceof AttributionError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
     if (err.code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE') return reply.code(415).send({ error: { code: 'unsupported_type', message: 'Send JSON, or for uploads a .glb, PNG, JPEG, WebP or MP4 file.' } });
     if (err.code === 'FST_ERR_CTP_BODY_TOO_LARGE') return reply.code(413).send({ error: { code: 'too_large', message: 'That is too big to upload.' } });
     if (err.validation) return reply.code(400).send({ error: { code: 'invalid_request', message: err.message } });

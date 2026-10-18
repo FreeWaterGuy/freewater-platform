@@ -142,6 +142,39 @@ npm run demo:ops-preview   # builds out/ops-preview/ and out/driver-preview/, cl
 - **Deliveries:** everyone getting packs.
 - **Books:** the public totals and the latest ledger lines.
 
+## Smart codes and seeing the sale
+
+**Our own QR codes (`src/modules/print/qrEncoder.ts`).**
+- Every QR on every bottle, box, receipt, coupon and machine screen is made by our own encoder, written from the QR standard (ISO/IEC 18004). No QR library and no QR service, so nobody else sees our codes or our scans.
+- **Strongest protection:** codes use level H, so they still read with up to 30% of the code damaged, and have the standard 4-square white border.
+- **Fewer squares:** our addresses use the standard's compact letters-and-numbers mode, which needs fewer, bigger squares than the usual mode.
+- **Tested:** checked against an independent QR reader at every level. Real labels read 56 of 56 codes at 600, 300 and 200 dpi.
+
+**Smart codes (`src/modules/codes`).** A printed code is `HTTPS://GO.FREEWATER.IO/Q/7KX2M9QPA4ZR1C`: 12 random characters plus a 2-character signature.
+- **Can't be guessed or faked.** A fake code is refused before anything is looked up, and its page warns that the bottle may not be genuine.
+- **The bottle's ID is never printed.**
+- **Every scan reaches our server first.** It's counted (`code.opened`), then the page opens.
+- **Where it leads is decided at scan time,** not when it was printed.
+- **Each bottle tells its story:** "Genuine. Printed fresh at ATX-014, Congress Ave, 12 min ago", and whether it has been passed along.
+- **Short scan domain:** a company can set one (`scanBaseUrl`, e.g. `https://fw.ac`) for even fewer squares.
+
+**Seeing the sale (`src/modules/attribution`).** Sales are matched to the exact bottle and ad by the platform itself, not on the advertiser's word.
+- **Click ids:** every link out of an ad goes through `/go/…` (signed, so it can't be used to send people elsewhere). We record the click and send the person on with `fwclid=FWC…`.
+- **Our tag** (`/t.js`): advertisers put it on their site. It remembers the fwclid for 30 days and reports `freewater('purchase', { orderId, value, coupon })`. It's only accepted from the advertiser's own listed websites.
+- **Server to server:** `POST /v1/conversions` with the fwclid or coupon code.
+- **What counts:** only sales matched to one of our clicks or coupons. The same order counts once, at most 5 sales per click, within 30 days. Refunds give the commission back.
+- **One-time coupons:** every person gets their own code (e.g. `BOTTLE2X-7F3A9Q`) with its own QR.
+  - The cashier scans it with a phone camera, which opens FreeWater Ads → Check a coupon. It shows valid or already used, then the sale amount is entered and credited to that bottle.
+  - Tills can use `POST /v1/coupons/{code}/redeem`.
+  - A screenshot can't be used twice, which is why advertisers want to check every coupon.
+- **Buy in AR:**
+  - The ad's main link becomes a buy button inside AR, through the same click tracking.
+  - **iPhone:** our own converter makes a USDZ file for every model (`/models/…usdz`, `/assets/…usdz`), and Apple's AR viewer shows the buy banner.
+  - **Android:** Google's AR viewer gets the link.
+- **Where results show:** advertisers see clicks, matched sales, commission and coupons in FreeWater Ads → Sales tracking. The company sees all of it at `/v1/ops/attribution`.
+
+**Still to check on real phones:** the iPhone AR banner and the Android AR link.
+
 ## Model 6 machine software
 
 ```
@@ -282,6 +315,9 @@ The server keeps working state in memory and writes through to the database, so 
 | `src/modules/ledger` | Billing rules and the open-books receipt |
 | `src/modules/books` | Public books, daily fingerprints, charity transfers and costs |
 | `src/adapters/payouts` | Payout contract (sending money to charities) and the test version |
+| `src/modules/codes`, `src/modules/print/qrEncoder.ts` | Our own QR encoder and the smart codes printed on everything |
+| `src/modules/attribution` | Click ids, the tracking tag, sales matched to bottles, one-time coupons |
+| `src/modules/models/usdz.ts` | Our own GLB to USDZ converter, for iPhone AR with a buy button |
 | `src/modules/fleet` | Model 6 machines: jobs, heartbeats, problems, commands, labels kept for offline |
 | `src/machine` | The machine software: agent, screen server, memory, hardware contracts and the simulated Model 6 |
 | `src/modules/console` | Company settings, their rules and version history, machines, licensee setup |

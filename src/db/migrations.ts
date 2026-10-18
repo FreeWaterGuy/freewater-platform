@@ -542,6 +542,98 @@ create table machine_buffer (
 create index machine_buffer_location on machine_buffer(location_id, status);
 `,
   },
+  {
+    id: '011_smart_codes_attribution',
+    sql: `
+-- Secrets the platform makes for itself on first run (signing codes and links).
+create table platform_secrets (name text primary key, value text not null);
+
+-- Every QR code printed: a short signed code that opens a bottle slot, a receipt, a box side or a pack.
+create table codes (
+  code text primary key,
+  company_id text not null,
+  kind text not null check (kind in ('slot', 'receipt', 'box', 'pack')),
+  unit_id text,
+  slot integer,
+  pack_id text,
+  face text,
+  created_at timestamptz not null,
+  opens integer not null default 0,
+  first_opened_at timestamptz,
+  last_opened_at timestamptz
+);
+create index codes_unit on codes(unit_id);
+create index codes_pack on codes(pack_id);
+
+-- Every tap on a link out of an ad, with the click id the advertiser's site sends back with a sale.
+create table clicks (
+  id text primary key,
+  company_id text not null,
+  advertiser_id text not null,
+  campaign_id text,
+  unit_id text,
+  slot integer,
+  pack_id text,
+  face text,
+  viewer_key text,
+  url text not null,
+  created_at timestamptz not null
+);
+create index clicks_advertiser on clicks(advertiser_id, created_at);
+
+-- An advertiser's tracking tag: a public id, and the web addresses it may report from.
+create table advertiser_tags (
+  id text primary key,
+  company_id text not null,
+  advertiser_id text not null unique,
+  domains text[] not null default '{}',
+  created_at timestamptz not null
+);
+
+-- Sales matched to a bottle: from the tag, from the advertiser's server, or from a coupon redeemed at the counter.
+create table conversions (
+  id text primary key,
+  company_id text not null,
+  advertiser_id text not null,
+  order_id text not null,
+  source text not null check (source in ('tag', 'server', 'coupon')),
+  click_id text,
+  coupon_code text,
+  unit_id text,
+  slot integer,
+  pack_id text,
+  face text,
+  value_cents integer not null,
+  commission_cents integer not null,
+  refunded_at timestamptz,
+  created_at timestamptz not null,
+  unique (advertiser_id, order_id)
+);
+create index conversions_company on conversions(company_id, created_at);
+
+-- One-time coupon codes: one per person per ad, checked and used up through the platform.
+create table coupon_codes (
+  code text primary key,
+  base text not null,
+  company_id text not null,
+  advertiser_id text not null,
+  campaign_id text,
+  unit_id text,
+  slot integer,
+  pack_id text,
+  face text,
+  viewer_key text not null,
+  headline text,
+  created_at timestamptz not null,
+  redeemed_at timestamptz,
+  redeemed_by text,
+  order_id text,
+  value_cents integer,
+  unique (viewer_key, advertiser_id, campaign_id)
+);
+create index coupon_codes_advertiser on coupon_codes(advertiser_id, created_at);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

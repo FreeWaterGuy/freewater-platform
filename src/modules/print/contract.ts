@@ -8,6 +8,8 @@ export interface RenderRequest {
   company: CompanyConfig;
   campaigns: Map<string, Campaign>;
   customArt?: Creative; // the whole ad area for a paid custom design
+  /** Makes the smart code printed in each QR. Without it (previews, proofs) the plain addresses are used. */
+  codes?: import('../codes/service').CodeMinter;
 }
 
 export interface RenderedSlot {

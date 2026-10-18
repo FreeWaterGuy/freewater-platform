@@ -68,7 +68,7 @@ export class PackService {
 
     // 2. The box itself.
     pack.faces = fillBoxFaces({ company, box, routeId: pack.routeId, campaigns: [...p.campaigns.values()], random: p.random });
-    pack.rendered = renderBox({ packId: pack.id, box, company, faces: pack.faces, campaigns: p.campaigns, routeId: pack.routeId, stop: pack.stop });
+    pack.rendered = renderBox({ packId: pack.id, box, company, faces: pack.faces, campaigns: p.campaigns, routeId: pack.routeId, stop: pack.stop, codes: p.codes });
     const printer = p.registry.printerFor(company);
     for (let attempt = 1; attempt <= 2; attempt++) {
       const jobId = newId('job');
