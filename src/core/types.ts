@@ -1,0 +1,122 @@
+// Shared records. Every module speaks these shapes and nothing else.
+// Money is always integer US cents to avoid rounding errors.
+
+export type Cents = number;
+
+/** Slot width on a label, counted in sixths of the ad area (1 = 1/6, 6 = full wrap). */
+export type Sixths = 1 | 2 | 3 | 4 | 5 | 6;
+
+export interface Location {
+  id: string; // e.g. "ATX-014" for a machine, "route-3" for a delivery route
+  kind: 'machine' | 'route' | 'event';
+  city: string;
+  name: string;
+}
+
+export interface Product {
+  id: string; // "bottle-16oz"
+  name: string;
+  label: {
+    widthIn: number; // full printed width, including the panel and seam
+    heightIn: number;
+    seamIn: number; // overlap at the end of the wrap where nothing is printed
+    panelWidthIn: number; // locked company panel
+  };
+  /** Layouts the ad engine may use, each a list of slot widths in sixths that sum to 6. */
+  layouts: Sixths[][];
+}
+
+export type GivingMode = 'per_unit' | 'percent_of_revenue' | 'none';
+
+/** Everything a company (FreeWater or a white-label licensee) can change. FreeWater's values are only defaults. */
+export interface CompanyConfig {
+  id: string;
+  name: string;
+  receiptBaseUrl: string; // where scan and receipt links point, e.g. https://go.freewater.io
+  brand: {
+    logoTop: string; // "free"
+    logoBottom: string; // "water"
+    tagline?: string;
+    panelColor: string;
+    accentColor: string;
+    textColor: string;
+    fontFamily: string;
+  };
+  productFacts: string[]; // lines printed on the locked panel
+  giving: {
+    mode: GivingMode;
+    centsPerUnit?: Cents; // for per_unit
+    percentOfRevenue?: number; // for percent_of_revenue, 0–100
+    defaultCharity?: string;
+    charityByLocation?: Record<string, string>;
+  };
+  consumerPricing: 'free' | 'discounted' | 'full';
+  adRules: {
+    minAdsPerUnit: number;
+    maxAdsPerUnit: number;
+    blockedCategories: string[];
+    competitorSeparation: boolean;
+    repeatScanWindowSec: number;
+  };
+  prices: {
+    perPrintBySixths: Record<Sixths, Cents>;
+    perScan: Cents;
+    perArLaunch: Cents;
+    commissionPercent: number;
+    customUnit: Cents;
+  };
+  /** Which registered implementation each module slot uses. Swapping one never touches the others. */
+  modules: {
+    ads: string;
+    renderer: string;
+    printer: string;
+  };
+}
+
+export interface Creative {
+  /** Artwork as SVG markup sized to any box; the renderer scales it to the slot. A real system stores an asset URL. */
+  svg: (widthPx: number, heightPx: number) => string;
+}
+
+export type Buy =
+  | { type: 'guaranteed'; remainingPrints: number }
+  | { type: 'bid'; maxCentsPerSixth: Cents; dailyCapCents: Cents; spentTodayCents: Cents };
+
+export interface Campaign {
+  id: string;
+  companyId: string; // which licensee sells this campaign
+  advertiserId: string;
+  advertiserName: string;
+  category: string; // "food", "alcohol", "real-estate"...
+  competitorGroup?: string; // two campaigns in the same group never share a unit
+  sizes: Sixths[]; // slot sizes this campaign has artwork for
+  creative: Creative;
+  experienceId: string; // which plug-in opens when its QR is scanned
+  targeting: { locations?: string[] };
+  buy: Buy;
+  isHouse?: boolean; // the company's own filler, used when nothing else fits; never billed
+  active: boolean;
+}
+
+export interface Placement {
+  slotIndex: number;
+  sixths: Sixths;
+  campaignId: string;
+  advertiserId: string;
+  advertiserName: string;
+  experienceId: string;
+  priceCents: Cents; // what the advertiser pays if, and only if, the print is confirmed
+  isHouse: boolean;
+}
+
+export interface Unit {
+  id: string; // random, unguessable
+  companyId: string;
+  productId: string;
+  locationId: string;
+  kind: 'ad_supported' | 'custom';
+  ownerId?: string; // for custom units, the customer who paid
+  placements: Placement[];
+  layout: Sixths[];
+  status: 'filled' | 'rendered' | 'printed' | 'failed' | 'dispensed';
+}

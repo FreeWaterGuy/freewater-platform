@@ -1,0 +1,25 @@
+{
+  "name": "freewater-platform",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "FreeWater platform: modular middleware for printing personalized, ad-supported products in real time.",
+  "scripts": {
+    "demo": "tsx src/demo/run.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/qrcode": "^1.5.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  }
+}

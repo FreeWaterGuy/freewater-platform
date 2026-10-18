@@ -1,0 +1,27 @@
+import { Registry } from './core/registry';
+import type { Campaign, CompanyConfig, Location, Product } from './core/types';
+import { freewaterAdEngine, houseOnlyAdEngine } from './modules/ads/engine';
+import { svgLabelRenderer } from './modules/print/renderer';
+import { VirtualPrinter, type VirtualPrinterOptions } from './adapters/printers/virtual';
+import { Platform } from './platform';
+
+/** Wire up a platform with the default modules. Swap any of them by registering another name and pointing a company at it. */
+export function createPlatform(input: {
+  companies: CompanyConfig[];
+  products: Product[];
+  locations: Location[];
+  campaigns: Campaign[];
+  printer?: VirtualPrinterOptions;
+  seed?: number;
+  clock?: () => Date;
+}) {
+  const printer = new VirtualPrinter(input.printer);
+  const registry = new Registry()
+    .registerAds(freewaterAdEngine.name, freewaterAdEngine)
+    .registerAds(houseOnlyAdEngine.name, houseOnlyAdEngine)
+    .registerRenderer(svgLabelRenderer.name, svgLabelRenderer)
+    .registerPrinter(printer.name, printer);
+  const byId = <T extends { id: string }>(xs: T[]) => new Map(xs.map((x) => [x.id, x]));
+  const platform = new Platform(registry, byId(input.companies), byId(input.products), byId(input.locations), byId(input.campaigns), { seed: input.seed, clock: input.clock });
+  return { platform, printer, registry };
+}
