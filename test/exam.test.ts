@@ -104,4 +104,22 @@ describe('an agent’s changes wait for its test', () => {
     expect(r.body.find((p: any) => p.productId === 'bottle-16oz')).toMatchObject({ score: 82 });
     expect((await call('POST', '/v1/agents/quality', { productId: 'bottle-16oz', score: 101, basis: 'too good to be true here' })).status).toBe(400);
   });
+
+  it('shows each month’s surplus and where it went: put back in, paid to owners, or held (shown, not decided)', async () => {
+    for (let i = 0; i < 5; i++) await app.platform.order({ companyId: 'freewater', orderId: `surplus-${i}`, locationId: 'ATX-014', productId: 'bottle-16oz' });
+    const costsBefore = (await call('GET', '/v1/books/surplus')).body.months.at(-1).costsCents;
+    const today = new Date().toISOString().slice(0, 10);
+    expect((await call('POST', '/v1/books/reinvestments', { category: 'capacity', amountCents: 300, memo: 'Deposit on a second machine', date: today })).status).toBe(201);
+    expect((await call('POST', '/v1/books/owner-payouts', { kind: 'dividend', amountCents: 100, memo: 'Test payout', date: today })).status).toBe(201);
+    expect((await call('POST', '/v1/books/reinvestments', { category: 'yachts', amountCents: 1, memo: 'no', date: today })).status).toBe(400);
+    const s = (await call('GET', '/v1/books/surplus')).body;
+    expect(s.totals).toMatchObject({ reinvestedCents: 300, paidOutCents: 100 });
+    expect(s.totals.heldCents).toBe(s.totals.surplusCents - 400);
+    const pub = (await server.inject({ method: 'GET', url: '/v1/public/books/freewater' })).json();
+    expect(pub.surplus.totals.reinvestedCents).toBe(300);
+    // Put back into the system isn't a cost of running it: the month's costs are the same with or without it.
+    const month = s.months.at(-1);
+    expect(month.costsCents).toBe(costsBefore);
+    expect(month.surplusCents).toBe(month.inCents - month.costsCents - month.givenCents - month.aiFundCents);
+  });
 });

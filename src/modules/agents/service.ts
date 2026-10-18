@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { aiMeter, type AiUsage } from '../ai/anthropic';
 import type { NumberLineService } from '../numberline/service';
 import {
-  agentIds, agentRegistry, autonomyAreas, autonomyLevels, autonomyRequirements, charter, forbiddenSpend, governor, priceOf, spendCategories,
+  agentIds, agentRegistry, autonomyAreas, autonomyLevels, autonomyRequirements, charter, forbiddenSpend, governor, priceOf, spendCategories, winCondition,
   type AgentId, type AutonomyArea, type AutonomyLevel, type SpendCategory,
 } from './charter';
 import { judge, type Cycle, type Verdict } from './governor';
@@ -940,7 +940,7 @@ export class AgentsService {
     const history = (await this.db.query<any>(`select agent_id, day, verdict from agent_standings where day >= $1 order by day`, [iso(new Date(now.getTime() - 90 * DAY)).slice(0, 10)])).rows;
     return {
       enabled: !!c.agents?.enabled, percentOfExtra: c.agents?.percentOfExtra ?? 0, percentOfProfit: c.agents?.percentOfProfit ?? 0, ratchet: !!c.ratchet, growth: await this.growthGate(companyId),
-      charter, governor, spendCategories,
+      winCondition, charter, governor, spendCategories,
       agents: await Promise.all(this.standings().map(async (s) => ({ ...s, ledger: await this.ledger(companyId, s.agentId), fund: bal[s.agentId], valueAllTimeCents: valueBy.get(s.agentId) ?? 0, computeCreditCents: n(state.get(s.agentId)?.compute_credit_millicents) / 1000, storageCents: n(state.get(s.agentId)?.storage_cents), spentTodayCents: (this.spentToday.get(`${s.agentId}|${this.day()}`) ?? 0) / 1000, trend: history.filter((h) => h.agent_id === s.agentId).map((h) => ({ day: h.day, netCents: j(h.verdict).netCents, standing: j(h.verdict).standing })) }))),
       pool: bal.pool, common: bal.common,
       system: await this.system(companyId), systemHistory: await this.systemHistory(companyId), library: await this.library(companyId),

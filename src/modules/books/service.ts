@@ -14,6 +14,9 @@ export class BooksError extends Error {
 }
 
 export const expenseCategories = ['water', 'bottles', 'labels-ink', 'machines', 'delivery', 'people', 'rent', 'other'] as const;
+/** Where surplus can be put back into the system (no rule says how much: the books just show it). */
+export const reinvestCategories = ['capacity', 'energy', 'routes', 'research', 'reserve'] as const;
+export const ownerPayoutKinds = ['dividend', 'buyback', 'distribution'] as const;
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 const n = (v: unknown) => Number(v ?? 0);
 
@@ -116,6 +119,60 @@ export class BooksService {
 
   // ---------- costs ----------
 
+  /** Surplus put back into the system: a new machine or factory, energy, routes, research, or held in reserve. */
+  async recordReinvestment(companyId: string, input: { category: string; amountCents: number; memo: string; date: string }) {
+    this.company(companyId, true);
+    const id = newId('ri');
+    this.platform.bus.publish('reinvestment.recorded', companyId, { reinvestmentId: id, ...input }, `reinvestment:${id}`);
+    await this.flush();
+    return { id, ...input };
+  }
+  /** Money paid out to the owners. Shown in the open books beside what was put back in. */
+  async recordOwnerPayout(companyId: string, input: { kind: string; amountCents: number; memo: string; date: string }) {
+    this.company(companyId, true);
+    const id = newId('op');
+    this.platform.bus.publish('owner_payout.recorded', companyId, { payoutId: id, ...input }, `owner_payout:${id}`);
+    await this.flush();
+    return { id, ...input };
+  }
+
+  /**
+   * Where each month's surplus went: what's left after costs, giving and the agents' share, then how much of it was
+   * put back into the system, how much was paid out to owners, and how much is held. No rule decides the split; the
+   * books only show it, every month, so the choice is visible whenever it's made.
+   */
+  async surplus(companyId: string) {
+    const c = this.company(companyId, true);
+    await this.flush();
+    const rows = (await this.db.query<any>(`select at, kind, credit, debit, amount_cents from ledger_entries where company_id = $1 and kind in ('print','scan','ar','box_face','commission','commission_reversal','custom','donation','expense','prize','ai_fund','reinvestment','owner_payout')`, [companyId])).rows;
+    const uc = c.unitCosts ? c.unitCosts.water + c.unitCosts.bottle + c.unitCosts.label + c.unitCosts.machine : 0;
+    const months = new Map<string, { month: string; inCents: number; costsCents: number; givenCents: number; aiFundCents: number; reinvestedCents: number; paidOutCents: number }>();
+    const get = (m: string) => { let x = months.get(m); if (!x) months.set(m, (x = { month: m, inCents: 0, costsCents: 0, givenCents: 0, aiFundCents: 0, reinvestedCents: 0, paidOutCents: 0 })); return x; };
+    for (const r of rows) {
+      const x = get(this.monthOf(companyId, new Date(r.at)));
+      const a = n(r.amount_cents);
+      if (String(r.credit).startsWith('revenue:')) x.inCents += a;
+      else if (r.kind === 'commission_reversal') x.inCents -= a;
+      else if (r.kind === 'expense' || r.kind === 'prize') x.costsCents += a;
+      else if (r.kind === 'donation') x.givenCents += r.debit === 'expense:giving' ? a : r.credit === 'expense:giving' ? -a : 0;
+      else if (r.kind === 'ai_fund') x.aiFundCents += r.credit === 'payable:ai_fund' ? a : -a;
+      else if (r.kind === 'reinvestment') x.reinvestedCents += a;
+      else if (r.kind === 'owner_payout') x.paidOutCents += a;
+    }
+    for (const u of this.platform.units.values()) if (u.companyId === companyId && (u.status === 'printed' || u.status === 'dispensed')) get(this.monthOf(companyId, new Date(u.createdAt))).costsCents += uc;
+    const list = [...months.values()].sort((a, b) => a.month.localeCompare(b.month)).map((x) => {
+      const surplusCents = x.inCents - x.costsCents - x.givenCents - x.aiFundCents;
+      return { ...x, surplusCents, heldCents: surplusCents - x.reinvestedCents - x.paidOutCents };
+    });
+    const t = list.reduce((a, x) => ({ surplusCents: a.surplusCents + x.surplusCents, reinvestedCents: a.reinvestedCents + x.reinvestedCents, paidOutCents: a.paidOutCents + x.paidOutCents, heldCents: a.heldCents + x.heldCents }), { surplusCents: 0, reinvestedCents: 0, paidOutCents: 0, heldCents: 0 });
+    const positive = Math.max(0, t.surplusCents);
+    return {
+      note: 'Surplus is what’s left after costs (standard costs per bottle plus recorded costs), giving and the agents’ share. Where it goes is shown, not decided, here.',
+      totals: { ...t, reinvestedShare: positive ? Math.round((t.reinvestedCents / positive) * 1000) / 10 : null, paidOutShare: positive ? Math.round((t.paidOutCents / positive) * 1000) / 10 : null },
+      months: list.slice(-24),
+    };
+  }
+
   async recordExpense(companyId: string, input: { category: string; amountCents: number; memo: string; date: string }) {
     const id = newId('ex');
     this.platform.bus.publish('expense.recorded', companyId, { expenseId: id, ...input }, `expense:${id}`);
@@ -158,6 +215,7 @@ export class BooksService {
       perBottle: { revenueCents: per(revenue), givingCents: givingOn ? per(n(t.donated)) : 0, standardCosts: uc ?? null, costsAreStandard: true },
       charities,
       monthly: await this.monthly(companyId),
+      surplus: await this.surplus(companyId),
       activity: await this.activity(companyId),
       transfers: givingOn ? (await this.transfers(companyId)).slice(0, 20) : [],
       machines: [...p.locations.values()].filter((l) => l.companyId === companyId && l.kind === 'machine').map((l) => ({ id: l.id, name: l.name, city: l.city, bottles: [...p.units.values()].filter((u) => u.locationId === l.id && u.status !== 'failed').length })),

@@ -43,6 +43,10 @@ export interface EventPayloads {
   /** An agent spent from its own fund (on compute, storage, knowledge, growth, exploration, or a cause it chose). */
   'ai_fund.spent': { spendId: string; agentId: string; category: string; amountCents: Cents; memo: string; cause?: string };
   'expense.recorded': { expenseId: string; category: string; amountCents: Cents; memo: string; date: string };
+  /** Surplus put back into the system: new capacity, energy, routes, research, or held in reserve. Not a cost. */
+  'reinvestment.recorded': { reinvestmentId: string; category: string; amountCents: Cents; memo: string; date: string };
+  /** Money paid out to the company's owners (a dividend, a buyback, a distribution). */
+  'owner_payout.recorded': { payoutId: string; kind: string; amountCents: Cents; memo: string; date: string };
   'machine.incident_opened': { incidentId: string; locationId: string; kind: string; severity: 'warning' | 'critical'; message: string };
   'machine.incident_resolved': { incidentId: string; locationId: string; kind: string; minutes: number };
   'unit.failed': { unitId: string; orderId?: string; reason: string };

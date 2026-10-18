@@ -18,7 +18,7 @@ export interface LedgerEntry {
   debit: string;
   credit: string;
   amountCents: Cents;
-  kind: 'print' | 'scan' | 'ar' | 'commission' | 'commission_reversal' | 'custom' | 'donation' | 'box_face' | 'payment' | 'charity_transfer' | 'expense' | 'prize' | 'ai_fund' | 'ai_allocation' | 'ai_spend';
+  kind: 'print' | 'scan' | 'ar' | 'commission' | 'commission_reversal' | 'custom' | 'donation' | 'box_face' | 'payment' | 'charity_transfer' | 'expense' | 'prize' | 'ai_fund' | 'ai_allocation' | 'ai_spend' | 'reinvestment' | 'owner_payout';
   memo: string;
 }
 
@@ -92,6 +92,9 @@ export class Ledger {
       for (const l of this.entries.filter((x) => x.packId === `batch:${e.payload.batchId}` && x.eventId !== e.id)) this.add(e, { packId: l.packId, debit: l.credit, credit: l.debit, amountCents: l.amountCents, kind: l.kind, memo: `Voided (${e.payload.reason}): ${l.memo}` }, l.at);
     });
     bus.on('expense.recorded', (e) => this.add(e, { debit: `expense:${e.payload.category}`, credit: 'cash:bank', amountCents: e.payload.amountCents, kind: 'expense', memo: e.payload.memo }));
+    // Surplus put back into the system is an asset the system now owns, not a cost; money paid to owners leaves it.
+    bus.on('reinvestment.recorded', (e) => this.add(e, { debit: `asset:${e.payload.category}`, credit: 'cash:bank', amountCents: e.payload.amountCents, kind: 'reinvestment', memo: e.payload.memo }));
+    bus.on('owner_payout.recorded', (e) => this.add(e, { debit: `equity:payout:${e.payload.kind}`, credit: 'cash:bank', amountCents: e.payload.amountCents, kind: 'owner_payout', memo: e.payload.memo }));
     // 'print.failed' is deliberately not subscribed: nothing to bill.
   }
 
