@@ -503,7 +503,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   route({ method: 'GET', url: '/v1/me/export', scope: 'me', summary: 'Download everything stored about you.', handler: async (_req, key) => ({ body: await app.accounts.exportData(me(key)) }) });
 
-  route({ method: 'DELETE', url: '/v1/me', scope: 'me', summary: 'Delete your account. Contact details and choices are erased; the books keep only a random id.', handler: async (_req, key) => {
+  route({ method: 'DELETE', url: '/v1/me', scope: 'me', summary: 'Delete your account and everything kept about you: contact details, choices, what you did, uploads, designs, saved items, address and cards. The books keep only a random id.', handler: async (_req, key) => {
+    await app.data.erase(key!.companyId, `user:${me(key)}`);
     await app.accounts.deleteAccount(me(key));
     return { status: 204 };
   } });
@@ -666,7 +667,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const body: any = req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body) ? req.body : undefined;
     const companyId = key?.companyId ?? companyOfPublic(body);
     if (!companyId || !platform.companies.has(companyId)) return;
-    app.data.activity(companyId, actorOf(key, body), `${r.method} ${r.url}`, { target: JSON.stringify(req.params ?? {}).slice(0, 200), detail: { status, ...(body ? { body } : {}) }, ip: req.ip, device: String(req.headers['user-agent'] ?? ''), gpc: String(req.headers['sec-gpc'] ?? '') === '1' }).catch(() => {});
+    const masked = body ? Object.fromEntries(Object.entries(body).map(([k, v]) => [k, /^(to|email|phone|address|code|password|token|dataBase64)$/i.test(k) ? (k === 'to' || k === 'email' || k === 'phone' ? mask(v) : '[kept out]') : v])) : undefined;
+    app.data.activity(companyId, actorOf(key, masked), `${r.method} ${r.url}`, { target: JSON.stringify(req.params ?? {}).slice(0, 200), detail: { status, ...(masked ? { body: masked } : {}) }, ip: req.ip, device: String(req.headers['user-agent'] ?? ''), gpc: String(req.headers['sec-gpc'] ?? '') === '1' }).catch(() => {});
   };
 
   for (const r of routes) {

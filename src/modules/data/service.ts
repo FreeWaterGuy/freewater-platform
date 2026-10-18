@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { createHash } from 'node:crypto';
 import type { SqlClient } from '../../db/client';
 import type { Platform } from '../../platform';
@@ -154,17 +155,47 @@ export class DataService {
     };
   }
 
-  /** Erase a person's data. The books keep the money lines, with the person replaced by an anonymous code. */
+  /** Removes a person's own uploads (and their files in file storage). Set by the app. */
+  removeUploads?: (companyId: string, userIds: string[]) => Promise<number>;
+
+  /**
+   * Erase a person's data: everything kept about them, everything they uploaded or saved, their address, their cards,
+   * their designs. What has to stay for the books (a sale, a prize, a click an advertiser paid for) stays with the
+   * person replaced by a random code that leads back to no one. Printed bottles stay as printed.
+   */
   async erase(companyId: string, subject: string) {
     const prof = await this.profile(companyId, subject);
     const viewers = new Set<string>([subject, ...prof.links.filter((l: any) => l.kind === 'viewer').map((l: any) => l.value)]);
     for (const a of prof.accounts) viewers.add((await this.db.query<any>(`select viewer_key from users where id = $1`, [a.id])).rows[0]?.viewer_key);
-    const v = [...viewers].filter(Boolean);
-    await this.db.query(`delete from interactions where company_id = $1 and viewer_key = any($2)`, [companyId, v]);
-    await this.db.query(`delete from choices where company_id = $1 and person = any($2)`, [companyId, [...v, ...prof.accounts.map((a) => `user:${a.id}`)]]);
-    if (prof.person) { await this.db.query(`delete from activity where person_id = $1`, [prof.person]); await this.db.query(`delete from person_links where person_id = $1`, [prof.person]); await this.db.query(`delete from people where id = $1`, [prof.person]); }
-    await this.db.query(`delete from data_consents where company_id = $1 and subject = any($2)`, [companyId, v]);
-    return { erased: true, kept: 'Money records in the books stay, as the law requires, with no name attached.' };
+    const v = [...viewers].filter((x) => x && !x.includes(':'));
+    const users = prof.accounts.map((a: any) => a.id as string);
+    const erased = () => `erased_${randomBytes(9).toString('base64url')}`;
+    const counts: Record<string, number> = {};
+    const run = async (name: string, sql: string, params: unknown[]) => { const r: any = await this.db.query(sql, params); counts[name] = (counts[name] ?? 0) + Number(r.rowCount ?? r.affectedRows ?? 0); };
+    // What's about them: gone.
+    await run('interactions', `delete from interactions where company_id = $1 and viewer_key = any($2)`, [companyId, v]);
+    await run('choices', `delete from choices where company_id = $1 and person = any($2)`, [companyId, [...v, ...users.map((id) => `user:${id}`)]]);
+    if (prof.person) { await run('activity', `delete from activity where person_id = $1`, [prof.person]); await this.db.query(`delete from person_links where person_id = $1`, [prof.person]); await this.db.query(`delete from people where id = $1`, [prof.person]); }
+    await run('consents', `delete from data_consents where company_id = $1 and subject = any($2)`, [companyId, v]);
+    await run('advertisers seen', `delete from viewer_advertisers where company_id = $1 and viewer_key = any($2)`, [companyId, v]);
+    // What has to stay for the books or an advertiser's bill: kept, with the phone replaced by a random code.
+    for (const key of v) {
+      const code = erased();
+      await run('clicks', `update clicks set viewer_key = $3 where company_id = $1 and viewer_key = $2`, [companyId, key, code]);
+      await run('coupons', `update coupon_codes set viewer_key = $3 || '_' || code where company_id = $1 and viewer_key = $2`, [companyId, key, code]);
+      await run('prize draws', `update lottery_chances set viewer_key = $3 where company_id = $1 and viewer_key = $2`, [companyId, key, code]);
+      await run('holdout records', `update agent_arms set viewer_key = $3 where company_id = $1 and viewer_key = $2`, [companyId, key, code]);
+    }
+    if (users.length) {
+      await run('saved', `delete from saved_items where company_id = $1 and user_id = any($2)`, [companyId, users]);
+      await run('designs', `delete from custom_designs where company_id = $1 and user_id = any($2)`, [companyId, users]);
+      // A custom order's proof stays (it's what was paid for), without the names and pictures on it.
+      await run('proofs', `update proofs set design_svg = '', label_svg = '', names = null, spec = null, experience = null where company_id = $1 and user_id = any($2)`, [companyId, users]);
+      await run('deliveries', `update subscriptions set address = 'erased', lat = 0, lng = 0, notes = null, status = 'cancelled' where company_id = $1 and user_id = any($2)`, [companyId, users]);
+      await run('cards', `delete from payment_methods where customer_id in (select id from payment_customers where company_id = $1 and owner_type = 'user' and owner_id = any($2))`, [companyId, users]);
+      if (this.removeUploads) counts.uploads = await this.removeUploads(companyId, users);
+    }
+    return { erased: true, counts, kept: 'Money records in the books stay, as the law requires, with no name attached. Printed bottles stay as printed.' };
   }
 
   /** Delete what's older than each company keeps, for each kind. Run daily. */

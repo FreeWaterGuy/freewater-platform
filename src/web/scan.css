@@ -199,3 +199,6 @@ video { width: 100%; border-radius: var(--radius); background: #000; display: bl
 .m-words .kicker{display:block;margin:0 0 10px;font:700 12px/1 var(--display);letter-spacing:.14em;text-transform:uppercase;opacity:.8}
 .m-words h3{text-wrap:balance}
 @media (prefers-reduced-motion: reduce){.m-shape{animation:none}}
+
+.your-data{margin:18px 16px 28px;text-align:center;font-size:12px;opacity:.7}
+.your-data .linkish{background:none;border:0;padding:4px;color:inherit;font:inherit;text-decoration:underline;cursor:pointer}

@@ -188,6 +188,7 @@ export async function createApp(opts: AppOptions) {
   experiences.videos = videos;
   const interactions = new InteractionService(db, platform, opts.clock);
   const data = new DataService(db, platform, interactions, opts.clock);
+  data.removeUploads = async (companyId, userIds) => ('removeForUsers' in assets ? (assets as SqlAssetStore).removeForUsers(companyId, userIds) : 0);
   // The number line and honest data: everything placed, every choice sorted, from the first bottle on.
   const numberline = new NumberLineService(db, platform, opts.numberLineAgent ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeNumberLineAgent({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL }) : rulesAgent), opts.clock);
   numberline.rewardInPlay = (companyId) => !!platform.companies.get(companyId)?.lottery?.enabled;

@@ -96,7 +96,7 @@
     game.info = custom ? null : opened.lottery || null;
     game.ctx = ctx;
     const consent = consentBar(opened);
-    app.replaceChildren(top, ...(game.info ? [gameNote(game.info)] : []), body, panel(footer, target), ...(consent ? [consent] : []));
+    app.replaceChildren(top, ...(game.info ? [gameNote(game.info)] : []), body, panel(footer, target), ...(fixture ? [] : [yourData(opened)]), ...(consent ? [consent] : []));
     if (record) { pageCtx = ctx; pageStart = performance.now(); track(ctx, 'page_view'); }
     if (game.info && record) checkPending();
 
@@ -451,6 +451,20 @@
       h('p', { text: `May we keep anonymous notes on how you use this page (${ask.map((a) => a.label.toLowerCase()).join(', ')}) to make it better? Nothing is sold, and you can change your mind any time.` }),
       h('div', { class: 'row' }, h('button', { type: 'button', class: 'btn', onclick: () => answer(true) }, 'Yes, that’s fine'), h('button', { type: 'button', class: 'btn secondary', onclick: () => answer(false) }, 'No thanks')));
     return bar;
+  }
+
+  // Anyone can erase what their phone did here, without an account. A second tap confirms (no pop-ups).
+  function yourData(opened) {
+    let armed = false;
+    const btn = h('button', { type: 'button', class: 'linkish' }, 'Erase what this phone did here');
+    btn.addEventListener('click', () => {
+      if (!armed) { armed = true; btn.textContent = 'Tap again to erase it'; return; }
+      btn.disabled = true;
+      api('POST', `/v1/public/data/${encodeURIComponent(opened.companyId)}/forget`, { viewerKey })
+        .then(() => { store.set('fw_no_tracking', '1'); btn.textContent = 'Erased. From now on only scans are counted, with nothing about you.'; })
+        .catch(() => { btn.disabled = false; armed = false; btn.textContent = 'Couldn’t erase just now. Try again'; });
+    });
+    return h('p', { class: 'your-data' }, btn);
   }
 
   // ---------- the advertiser's own ad: the first thing anyone sees ----------

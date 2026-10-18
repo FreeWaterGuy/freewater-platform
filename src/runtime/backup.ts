@@ -93,7 +93,13 @@ export async function restore(o: { store: BlobStore; key: Buffer; targetUrl: str
     await writeFile(enc, bytes);
     await decryptFile(enc, dump, o.key);
     await run('psql', [o.targetUrl, '-v', 'ON_ERROR_STOP=1', '-q', '-c', 'drop schema public cascade; create schema public;']);
-    await run('pg_restore', ['--no-owner', '--no-privileges', '--exit-on-error', `--dbname=${o.targetUrl}`, dump]);
+    // Through plain SQL, so a newer pg_restore can load into an older server: it adds settings only it knows
+    // (transaction_timeout, PostgreSQL 17), which are dropped here. Any other error stops the restore.
+    const sqlFile = join(dir, 'db.sql');
+    await run('pg_restore', ['--no-owner', '--no-privileges', `--file=${sqlFile}`, dump]);
+    const sql = (await readFile(sqlFile, 'utf8')).replace(/^SET transaction_timeout = .*;$/gm, '');
+    await writeFile(sqlFile, sql);
+    await run('psql', [o.targetUrl, '-v', 'ON_ERROR_STOP=1', '-q', '-f', sqlFile]);
     log(`Restored ${latest.name} into the spare database.`);
     return { name: latest.name as string };
   } finally { await rm(dir, { recursive: true, force: true }); }
