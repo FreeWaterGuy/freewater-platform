@@ -4,6 +4,7 @@ import type { Platform } from '../../platform';
 import { newId } from '../../core/ids';
 import type { DistributionService, BatchInput } from '../distributions/service';
 import type { IntakeAssistant } from './intake';
+import { getChecked, type BlobStore } from '../assets/blobs';
 
 // The FreeWater team's page: type what happened, attach receipts and documents, check the drafts, record them.
 // Files are kept with what they prove (a batch or an expense), and only FreeWater's team can open them.
@@ -18,7 +19,7 @@ const allowed: Record<string, { ext: string; max: number }> = {
 };
 
 export class TeamService {
-  constructor(private db: SqlClient, private platform: Platform, private batches: DistributionService, private assistant: IntakeAssistant, private deps: { today: (companyId: string) => string; charities: (companyId: string) => Promise<string[]>; recordExpense: (companyId: string, e: { category: string; amountCents: number; memo: string; date: string }) => Promise<{ id: string }> }) {}
+  constructor(private db: SqlClient, private platform: Platform, private batches: DistributionService, private assistant: IntakeAssistant, private deps: { today: (companyId: string) => string; charities: (companyId: string) => Promise<string[]>; recordExpense: (companyId: string, e: { category: string; amountCents: number; memo: string; date: string }) => Promise<{ id: string }> }, private blobs?: BlobStore) {}
 
   async upload(companyId: string, f: { name: string; contentType: string; dataBase64: string }, by: string) {
     const t = allowed[f.contentType];
@@ -27,12 +28,20 @@ export class TeamService {
     if (!bytes.length) throw new TeamError('empty_file', 'That file is empty.', 422);
     if (bytes.length > t.max) throw new TeamError('too_large', `That file is ${(bytes.length / 1048576).toFixed(1)} MB; the most is ${t.max >> 20} MB.`, 413);
     const id = newId('tf');
-    await this.db.query(`insert into team_files (id, company_id, name, content_type, bytes, sha256, size_bytes, uploaded_by, at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [id, companyId, String(f.name || `file.${t.ext}`).slice(0, 200), f.contentType, bytes, createHash('sha256').update(bytes).digest('hex'), bytes.length, by, this.platform.bus.now().toISOString()]);
+    const blobKey = this.blobs ? `team/${companyId}/${id}` : null;
+    if (this.blobs && blobKey) await this.blobs.put(blobKey, bytes, f.contentType);
+    await this.db.query(`insert into team_files (id, company_id, name, content_type, bytes, sha256, size_bytes, uploaded_by, at, blob_key) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [id, companyId, String(f.name || `file.${t.ext}`).slice(0, 200), f.contentType, blobKey ? null : bytes, createHash('sha256').update(bytes).digest('hex'), bytes.length, by, this.platform.bus.now().toISOString(), blobKey]);
     return { id, name: f.name, contentType: f.contentType, sizeBytes: bytes.length, url: `/v1/team/files/${id}` };
   }
   async file(companyId: string, id: string) {
     const r = (await this.db.query<any>(`select * from team_files where id = $1 and company_id = $2`, [id, companyId])).rows[0];
     if (!r) throw new TeamError('not_found', 'File not found.', 404);
+    if (r.blob_key) {
+      if (!this.blobs) throw new Error(`File ${id} is in file storage, but no file storage is set up (FILE_STORAGE).`);
+      const bytes = await getChecked(this.blobs, r.blob_key, r.sha256);
+      if (!bytes) throw new TeamError('not_found', 'That file is missing from file storage.', 404);
+      return { name: r.name as string, contentType: r.content_type as string, bytes };
+    }
     return { name: r.name as string, contentType: r.content_type as string, bytes: new Uint8Array(r.bytes) };
   }
   private async link(companyId: string, fileIds: string[] | undefined, to: string) {

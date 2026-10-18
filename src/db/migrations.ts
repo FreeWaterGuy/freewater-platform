@@ -1,7 +1,7 @@
 import type { SqlClient } from './client';
 
 // Each migration runs once, in order. Never edit one that has shipped; add a new one.
-const migrations: { id: string; sql: string }[] = [
+export const migrations: { id: string; sql: string }[] = [
   {
     id: '001_init',
     sql: `
@@ -921,19 +921,39 @@ alter table agent_value add column original_cents bigint;
 create table agent_predictions (id text primary key, company_id text not null, agent_id text not null, title text not null, detail text not null, ask_cents_per_month bigint not null, predicted_value_cents_per_month bigint not null, predicted_charity_cents_per_month bigint not null, confidence int not null, experiment_cost_cents bigint not null, horizon_days int not null, baseline_cents_per_day double precision not null, status text not null, result jsonb, created_at timestamptz not null, due_at timestamptz not null, scored_at timestamptz);
 `,
   },
+  {
+    id: '024_production',
+    sql: `
+-- Changes that couldn't be written, kept word for word until a person has looked and tried them again.
+create table persistence_failures (id bigserial primary key, kind text not null, sql text not null, params jsonb not null, error text not null, at timestamptz not null default now(), retried_at timestamptz);
+-- Only one server owns the data at a time. It renews this every few seconds; another waits until it's released or lapses.
+create table instance_lease (name text primary key, holder text not null, expires_at timestamptz not null, started_at timestamptz not null default now());
+-- Background jobs: when each last ran and how it went, so a restart neither skips nor repeats one.
+create table job_runs (name text primary key, last_started_at timestamptz, last_finished_at timestamptz, last_ok boolean, last_error text, runs bigint not null default 0, failures bigint not null default 0);
+-- Uploaded files can live in file storage instead of the database: then only their key is kept here.
+alter table assets alter column bytes drop not null;
+alter table assets add column blob_key text;
+alter table team_files alter column bytes drop not null;
+alter table team_files add column blob_key text;
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {
   await db.exec(`create table if not exists schema_migrations (id text primary key, applied_at timestamptz not null default now())`);
   const done = new Set((await db.query<{ id: string }>(`select id from schema_migrations`)).rows.map((r) => r.id));
-  const applied: string[] = [];
-  for (const m of migrations) {
-    if (done.has(m.id)) continue;
-    await db.transaction(async (tx) => {
+  if (migrations.every((m) => done.has(m.id))) return [];
+  // All pending migrations in one transaction, holding a lock, so two servers starting at once can't both run them.
+  return db.transaction(async (tx) => {
+    await tx.query(`select pg_advisory_xact_lock(724260)`);
+    const now = new Set((await tx.query<{ id: string }>(`select id from schema_migrations`)).rows.map((r) => r.id));
+    const applied: string[] = [];
+    for (const m of migrations) {
+      if (now.has(m.id)) continue;
       await tx.exec(m.sql);
       await tx.query(`insert into schema_migrations (id) values ($1)`, [m.id]);
-    });
-    applied.push(m.id);
-  }
-  return applied;
+      applied.push(m.id);
+    }
+    return applied;
+  });
 }

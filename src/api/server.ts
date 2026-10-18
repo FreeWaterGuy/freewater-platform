@@ -16,6 +16,7 @@ import { transparencyRoutes } from './transparency';
 import { agentRoutes } from './agents';
 import { BadKeyGuard, classify, limits, RateLimiter, securityHeaders, SecurityLog } from './security';
 import { teamRoutes } from './team';
+import { operationsRoutes } from './operations';
 import { VideoError } from '../modules/video/service';
 import { DataError, DataService } from '../modules/data/service';
 import { NumberLineError } from '../modules/numberline/service';
@@ -55,7 +56,7 @@ const PLATFORM_COMPANY = process.env.PLATFORM_COMPANY ?? 'freewater';
 export async function buildServer(app: App, opts: { logger?: boolean } = {}): Promise<FastifyInstance> {
   // Behind a load balancer, set TRUST_PROXY (1, or the proxy's address) so each caller's real address is used.
   const trustProxy = process.env.TRUST_PROXY ? (process.env.TRUST_PROXY === '1' ? true : process.env.TRUST_PROXY) : false;
-  const server = Fastify({ logger: opts.logger ?? false, bodyLimit: 3 * 1024 * 1024, maxParamLength: 1000, trustProxy });
+  const server = Fastify({ logger: opts.logger ?? false, bodyLimit: 3 * 1024 * 1024, routerOptions: { maxParamLength: 1000 }, trustProxy });
   const { platform, packs, persistence, db, experiences } = app;
   for (const type of Object.keys(allowedTypes)) server.addContentTypeParser(type, { parseAs: 'buffer', bodyLimit: 64 * 1024 * 1024 }, (_req, body, done) => done(null, body));
   const routes: RouteDef[] = [];
@@ -591,7 +592,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   // ---------- wiring ----------
 
-  server.get('/health', async () => ({ ok: true, database: db.name }));
+  operationsRoutes(app, server, route);
   route({ method: 'GET', url: '/v1/security/events', scope: 'admin', summary: 'The security log: sign-ins, failed sign-ins, keys made and revoked, team changes, settings saved, callers blocked. Addresses are shortened.', handler: async (_req, key) => {
     if (key!.advertiserId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can see this.');
     const events = await securityLog.list(key!.companyId, { platform: key!.scopes.includes('platform') });
@@ -809,6 +810,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     if (err.validation) return reply.code(400).send({ error: { code: 'invalid_request', message: err.message } });
     if (/^Unknown (bottle|unit|pack)/i.test(err.message)) return reply.code(404).send({ error: { code: 'not_found', message: err.message } });
     server.log.error(err);
+    void app.runtime.alerts.alert(`500:${req.method} ${req.routeOptions?.url ?? '?'}`, 'warning', `Server error on ${req.method} ${req.routeOptions?.url ?? req.url.split('?')[0]}`, String(err?.stack ?? err?.message ?? err));
     return reply.code(500).send({ error: { code: 'server_error', message: 'Something went wrong on our side. It has been logged.' } });
   });
 

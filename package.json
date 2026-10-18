@@ -9,7 +9,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "demo:packs": "tsx src/demo/night.ts",
-    "start": "tsx src/server/main.ts",
+    "start": "node --import tsx src/server/main.ts",
     "key": "tsx src/server/keys.ts",
     "demo:scan": "tsx src/demo/scanDemo.ts",
     "demo:scan-preview": "tsx src/demo/scanPreview.ts",
@@ -24,13 +24,17 @@
     "demo:console": "tsx src/demo/consoleDemo.ts",
     "demo:console-preview": "tsx src/demo/consolePreview.ts",
     "agents:library": "tsx src/demo/libraryFolder.ts",
+    "files:move": "tsx src/server/moveFiles.ts",
     "demo:machine": "tsx src/demo/machineDemo.ts",
     "machine": "tsx src/machine/main.ts",
     "demo:machine-preview": "tsx src/demo/machinePreview.ts",
-    "demo:ar": "tsx src/demo/arDemo.ts"
+    "demo:ar": "tsx src/demo/arDemo.ts",
+    "books:check": "tsx src/server/booksCheck.ts",
+    "load": "tsx src/server/loadTest.ts",
+    "backup": "tsx src/server/backup.ts"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.2.12",
@@ -40,13 +44,13 @@
     "fastify": "^5.12.7",
     "jsqr": "^1.4.0",
     "pg": "^8.13.1",
-    "three": "0.163.0"
+    "three": "0.163.0",
+    "tsx": "^4.19.2"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
     "@types/pg": "^8.11.10",
     "@types/three": "0.163.0",
-    "tsx": "^4.19.2",
     "typescript": "^5.6.3",
     "vitest": "^4.1.11"
   }

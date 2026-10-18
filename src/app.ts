@@ -53,10 +53,18 @@ import { ProfitService } from './modules/profit/service';
 import { DistributionService } from './modules/distributions/service';
 import { TeamService } from './modules/team/service';
 import { builtinIntake, ClaudeIntake, type IntakeAssistant } from './modules/team/intake';
+import { Alerter } from './runtime/alerts';
+import type { BlobStore } from './modules/assets/blobs';
+import type { InstanceLease } from './runtime/lease';
+import type { JobRunner } from './runtime/jobs';
 import { boxes, builtinCreatives, freewater, locations, peakSpring, products, sampleCampaigns } from './demo/seed';
+
+/** What the running server adds around the app: alerts, and (in production) the lease and the job runner. */
+export interface Runtime { alerts: Alerter; startedAt: Date; lease?: InstanceLease; jobs?: JobRunner }
 
 export interface AppOptions {
   db: SqlClient;
+  alerts?: Alerter;
   builtins?: Record<string, Creative>;
   seedDemo?: boolean; // load FreeWater's sample catalog and print demo API keys when the database is empty
   clock?: () => Date;
@@ -65,6 +73,8 @@ export interface AppOptions {
   payments?: PaymentProvider; // defaults to the test provider (no real money)
   plugins?: ExperiencePlugin<any>[]; // extra experience plug-ins (partners'); FreeWater's built-ins are always installed
   assets?: AssetStore; // defaults to storing files in the database
+  /** Where uploaded files' bytes go (FILE_STORAGE). Without one, they stay in the database. */
+  blobs?: BlobStore;
   pluginTimeoutMs?: number;
   assistant?: AdAssistant;
   personalizer?: Personalizer;
@@ -118,7 +128,8 @@ export async function createApp(opts: AppOptions) {
 
   const now = opts.clock?.() ?? new Date();
   const state = await loadState(db, builtins, now);
-  const persistence = new SqlPersistence(db);
+  const runtime: Runtime = { alerts: opts.alerts ?? new Alerter(), startedAt: new Date() };
+  const persistence = new SqlPersistence(db, { onProblem: (p) => void runtime.alerts.alert('persistence', 'critical', 'A change couldn’t be saved; the platform has paused changes', `${p.kind}: ${p.message} (kept in ${p.saved}). Fix the cause, then replay from the platform status page.`) });
   const made = createPlatform({
     companies: state.companies,
     products: state.products,
@@ -165,7 +176,7 @@ export async function createApp(opts: AppOptions) {
   experiences.personalizer = personalizer;
   // Bottles carrying AR that follows the bottle get the tracking strip on those slots.
   platform.arTracking = (unit) => experiences.trackSlots(unit);
-  const assets = opts.assets ?? new SqlAssetStore(db);
+  const assets = opts.assets ?? new SqlAssetStore(db, opts.blobs);
   // Personalized videos behind "Show me more", and every interaction people have with a page.
   const videoWriter = opts.videoWriter ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeWriter({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL }) : builtinWriter);
   const footage = opts.footage === null ? undefined : opts.footage ?? (process.env.GEMINI_API_KEY ? new VeoProvider({ apiKey: process.env.GEMINI_API_KEY, model: process.env.VEO_MODEL, image: async (url) => {
@@ -217,7 +228,7 @@ export async function createApp(opts: AppOptions) {
   // Bottles FreeWater gives outside the platform (before the software runs them), recorded by the team.
   const distributions = new DistributionService(db, platform, { today: (companyId) => delivery.today(companyId), charities: async (companyId) => (await books.charities(companyId)).map((c: any) => c.name), onBottles: (companyId, n) => transparency.addBottles(companyId, n) });
   await distributions.init();
-  const team = new TeamService(db, platform, distributions, opts.intake ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeIntake({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL }) : builtinIntake), { today: (companyId) => delivery.today(companyId), charities: async (companyId) => (await books.charities(companyId)).map((c: any) => c.name), recordExpense: (companyId, e) => books.recordExpense(companyId, e) });
+  const team = new TeamService(db, platform, distributions, opts.intake ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeIntake({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL }) : builtinIntake), { today: (companyId) => delivery.today(companyId), charities: async (companyId) => (await books.charities(companyId)).map((c: any) => c.name), recordExpense: (companyId, e) => books.recordExpense(companyId, e) }, opts.blobs);
 
   // Monthly profit sharing above the $1 base: charity and AI shares, losses carried forward, the milestone.
   const profit = new ProfitService(db, platform, {
@@ -261,7 +272,7 @@ export async function createApp(opts: AppOptions) {
   await fleet.load();
   made.registry.registerPrinter('model6-fleet', new MachineFleetPrinter(() => fleet, made.printer));
 
-  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, transparency, anchors, agents, profit, distributions, team, secondStep };
+  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, transparency, anchors, agents, profit, distributions, team, secondStep };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

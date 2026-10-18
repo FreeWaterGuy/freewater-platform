@@ -15,25 +15,87 @@ import type { SqlClient } from './client';
  * Writes every change to the database, in the order it happened.
  * The core keeps working state in memory and calls these; `flush()` waits until everything is stored.
  * An API request answers only after its changes are flushed.
+ *
+ * Changes made together are written together, in one transaction: all of a bottle's ledger lines land, or none do.
+ * A failed write is tried again (the database may be restarting). If it still fails, each change is tried on its own,
+ * so the good ones are kept, and any that can't be written are kept word for word in `persistence_failures` (or, if
+ * the database can't be reached at all, in a file) so nothing is lost. Then the platform stops taking changes until a
+ * person has looked: its memory and its database may now disagree, and money must never be counted from a guess.
  */
+type Op = { kind: string; sql: string; params: unknown[] };
+export interface PersistenceProblem { at: string; kind: string; message: string; saved: 'database' | 'file' | 'lost' }
+
 export class SqlPersistence implements Persistence {
-  private tail: Promise<void> = Promise.resolve();
+  private pending: Op[] = [];
+  private running: Promise<void> | null = null;
   private failure: unknown = null;
+  /** Set when a change couldn't be written. Changes are refused until it's cleared by a person (see `replay`). */
+  problem: PersistenceProblem | null = null;
+  stats = { written: 0, batches: 0, retries: 0, failed: 0 };
 
-  constructor(private db: SqlClient) {}
+  constructor(private db: SqlClient, private opts: { retries?: number; retryDelayMs?: number; maxBatch?: number; fallbackFile?: string; onProblem?: (p: PersistenceProblem) => void } = {}) {}
 
-  private enqueue(fn: () => Promise<unknown>) {
-    this.tail = this.tail.then(async () => {
+  private enqueue(kind: string, sql: string, params: unknown[]) {
+    this.pending.push({ kind, sql, params });
+    this.schedule();
+  }
+
+  private schedule() {
+    if (this.running) return;
+    this.running = (async () => {
+      await null; // let changes made in the same moment gather into one batch
       try {
-        await fn();
-      } catch (e) {
-        this.failure ??= e;
+        while (this.pending.length) await this.write(this.pending.splice(0, this.opts.maxBatch ?? 500));
+      } finally {
+        this.running = null;
       }
-    });
+    })();
+  }
+
+  private async write(batch: Op[]) {
+    const tries = this.opts.retries ?? 3;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        if (batch.length === 1) await this.db.query(batch[0]!.sql, batch[0]!.params);
+        else await this.db.transaction(async (tx) => { for (const op of batch) await tx.query(op.sql, op.params); });
+        this.stats.written += batch.length; this.stats.batches++;
+        return;
+      } catch (e) {
+        if (attempt >= tries) { if (batch.length === 1) return this.giveUp(batch[0]!, e); break; }
+        this.stats.retries++;
+        await new Promise((r) => setTimeout(r, (this.opts.retryDelayMs ?? 100) * 4 ** attempt));
+      }
+    }
+    // The batch as a whole won't go in: write each change on its own, so one bad change doesn't cost the rest.
+    for (const op of batch) {
+      try { await this.db.query(op.sql, op.params); this.stats.written++; } catch (e) { await this.giveUp(op, e); }
+    }
+  }
+
+  private async giveUp(op: Op, e: unknown) {
+    this.stats.failed++;
+    this.failure ??= e;
+    const message = String((e as any)?.message ?? e).slice(0, 500);
+    let saved: PersistenceProblem['saved'] = 'lost';
+    try {
+      await this.db.query(`insert into persistence_failures (kind, sql, params, error) values ($1,$2,$3,$4)`, [op.kind, op.sql, JSON.stringify(op.params), message]);
+      saved = 'database';
+    } catch {
+      try {
+        const { appendFileSync } = await import('node:fs');
+        appendFileSync(this.opts.fallbackFile ?? 'persistence-failures.jsonl', JSON.stringify({ at: new Date().toISOString(), ...op, error: message }) + '\n');
+        saved = 'file';
+      } catch {}
+    }
+    this.problem ??= { at: new Date().toISOString(), kind: op.kind, message, saved };
+    this.opts.onProblem?.(this.problem);
   }
 
   async flush(): Promise<void> {
-    await this.tail;
+    while (this.running || this.pending.length) {
+      if (!this.running) this.schedule();
+      await this.running;
+    }
     if (this.failure) {
       const f = this.failure;
       this.failure = null;
@@ -41,67 +103,72 @@ export class SqlPersistence implements Persistence {
     }
   }
 
+  /** Changes that couldn't be written, waiting for a person. */
+  async failures() {
+    return (await this.db.query<any>(`select id, kind, error, at, retried_at from persistence_failures order by id`)).rows;
+  }
+
+  /**
+   * Try the kept changes again (after the cause is fixed). If every one goes in, changes are taken again. A change
+   * that still fails stays kept, and the platform stays paused. A restart reloads memory from the database.
+   */
+  async replay(): Promise<{ written: number; stillFailing: number }> {
+    await this.flush().catch(() => {});
+    const rows = (await this.db.query<any>(`select id, sql, params from persistence_failures where retried_at is null order by id`)).rows;
+    let written = 0, stillFailing = 0;
+    for (const r of rows) {
+      try {
+        await this.db.query(r.sql, typeof r.params === 'string' ? JSON.parse(r.params) : r.params);
+        await this.db.query(`update persistence_failures set retried_at = now() where id = $1`, [r.id]);
+        written++;
+      } catch { stillFailing++; }
+    }
+    if (!stillFailing) this.problem = null;
+    return { written, stillFailing };
+  }
+
   code(c: import('../modules/codes/service').CodeRow) {
-    this.enqueue(() =>
-      this.db.query(`insert into codes (code, company_id, kind, unit_id, slot, pack_id, face, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8) on conflict do nothing`,
-        [c.code, c.companyId, c.kind, c.unitId ?? null, c.slot ?? null, c.packId ?? null, c.face ?? null, c.createdAt]),
-    );
+    this.enqueue('code', `insert into codes (code, company_id, kind, unit_id, slot, pack_id, face, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8) on conflict do nothing`,
+        [c.code, c.companyId, c.kind, c.unitId ?? null, c.slot ?? null, c.packId ?? null, c.face ?? null, c.createdAt]);
   }
 
   event(e: PlatformEvent) {
-    this.enqueue(() =>
-      this.db.query(
+    this.enqueue('event', 
         `insert into events (id, company_id, type, at, idempotency_key, payload) values ($1,$2,$3,$4,$5,$6) on conflict do nothing`,
-        [e.id, e.companyId, e.type, e.at.toISOString(), e.idempotencyKey, JSON.stringify(e.payload)],
-      ),
-    );
+        [e.id, e.companyId, e.type, e.at.toISOString(), e.idempotencyKey, JSON.stringify(e.payload)]);
   }
 
   ledgerEntry(l: LedgerEntry) {
-    this.enqueue(() =>
-      this.db.query(
-        `insert into ledger_entries (id, event_id, company_id, at, unit_id, pack_id, debit, credit, amount_cents, kind, memo, campaign_id) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-        [l.id, l.eventId, l.companyId, l.at.toISOString(), l.unitId ?? null, l.packId ?? null, l.debit, l.credit, l.amountCents, l.kind, l.memo, l.campaignId ?? null],
-      ),
-    );
+    this.enqueue('ledgerEntry', 
+        `insert into ledger_entries (id, event_id, company_id, at, unit_id, pack_id, debit, credit, amount_cents, kind, memo, campaign_id) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) on conflict (id) do nothing`,
+        [l.id, l.eventId, l.companyId, l.at.toISOString(), l.unitId ?? null, l.packId ?? null, l.debit, l.credit, l.amountCents, l.kind, l.memo, l.campaignId ?? null]);
   }
 
   unit(u: Unit) {
     const data = JSON.stringify(u);
-    this.enqueue(() =>
-      this.db.query(
+    this.enqueue('unit', 
         `insert into units (id, company_id, order_id, pack_id, status, data, created_at) values ($1,$2,$3,$4,$5,$6,$7)
          on conflict (id) do update set status = excluded.status, pack_id = excluded.pack_id, data = excluded.data`,
-        [u.id, u.companyId, u.orderId ?? null, u.packId ?? null, u.status, data, u.createdAt],
-      ),
-    );
+        [u.id, u.companyId, u.orderId ?? null, u.packId ?? null, u.status, data, u.createdAt]);
   }
 
   label(l: RenderedLabel, companyId: string) {
     const { svg, ...meta } = l;
-    this.enqueue(() =>
-      this.db.query(`insert into labels (unit_id, company_id, svg, meta) values ($1,$2,$3,$4) on conflict (unit_id) do update set svg = excluded.svg, meta = excluded.meta`, [l.unitId, companyId, svg, JSON.stringify(meta)]),
-    );
+    this.enqueue('label', `insert into labels (unit_id, company_id, svg, meta) values ($1,$2,$3,$4) on conflict (unit_id) do update set svg = excluded.svg, meta = excluded.meta`, [l.unitId, companyId, svg, JSON.stringify(meta)]);
   }
 
   campaign(c: Campaign) {
     const data = JSON.stringify(campaignRecord(c));
-    this.enqueue(() =>
-      this.db.query(
+    this.enqueue('campaign', 
         `insert into campaigns (id, company_id, advertiser_id, data, updated_at) values ($1,$2,$3,$4,now()) on conflict (id) do update set data = excluded.data, updated_at = now()`,
-        [c.id, c.companyId, c.advertiserId, data],
-      ),
-    );
+        [c.id, c.companyId, c.advertiserId, data]);
   }
 
   pack(p: Pack) {
     const data = JSON.stringify(p);
-    this.enqueue(() =>
-      this.db.query(
+    this.enqueue('pack', 
         `insert into packs (id, company_id, route_id, stop, status, data) values ($1,$2,$3,$4,$5,$6) on conflict (id) do update set status = excluded.status, data = excluded.data`,
-        [p.id, p.companyId, p.routeId, p.stop, p.status, data],
-      ),
-    );
+        [p.id, p.companyId, p.routeId, p.stop, p.status, data]);
   }
 }
 

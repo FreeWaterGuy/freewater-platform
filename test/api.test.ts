@@ -33,7 +33,7 @@ async function orderOne(orderId: string, key = keys['machine-ATX-014']!) {
 
 describe('API basics', () => {
   it('answers health and describes itself', async () => {
-    expect((await call('GET', '/health')).json()).toEqual({ ok: true, database: 'pglite' });
+    expect((await call('GET', '/health')).json()).toMatchObject({ ok: true, database: 'pglite' });
     const doc = (await call('GET', '/v1/openapi.json')).json();
     expect(Object.keys(doc.paths)).toContain('/v1/orders');
     expect(doc.paths['/v1/orders'].post['x-scopes']).toEqual(['orders']);

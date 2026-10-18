@@ -1,0 +1,62 @@
+# Checks every change before it can go live: types, every test, known security holes, and that the server image
+# builds and starts against a real Postgres database.
+name: checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - name: Known security holes in what runs in production
+        run: npm audit --omit=dev --audit-level=high
+
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: fw
+          POSTGRES_PASSWORD: fw
+          POSTGRES_DB: freewater
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U fw" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the server image
+        run: docker build --build-arg GIT_SHA=${{ github.sha }} -t freewater:${{ github.sha }} .
+      - name: Start it the way production does, and wait until it's ready
+        run: |
+          docker run -d --name fw --network host \
+            -e NODE_ENV=production -e PORT=8080 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
+            -e DATABASE_URL=postgres://fw:fw@localhost:5432/freewater \
+            freewater:${{ github.sha }}
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:8080/health/ready; then echo; exit 0; fi
+            sleep 2
+          done
+          docker logs fw; exit 1
+      - name: A second copy must wait, not share the data
+        run: |
+          docker run --rm --network host -e NODE_ENV=production -e PORT=8081 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
+            -e DATABASE_URL=postgres://fw:fw@localhost:5432/freewater -e LEASE_WAIT_MS=5000 \
+            freewater:${{ github.sha }} && exit 1 || echo "refused, as it should"
+      - name: Stops cleanly and hands over
+        run: |
+          docker stop -t 50 fw
+          docker logs fw | tail -5

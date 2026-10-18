@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { newId } from '../../core/ids';
 import type { SqlClient } from '../../db/client';
+import { getChecked, type BlobStore } from './blobs';
 
 // Where uploaded files live. Today: the database. Later: any object storage (S3, R2, GCS) behind the same contract.
 
@@ -37,7 +38,8 @@ export function checkAsset(contentType: string, bytes: Uint8Array) {
 }
 
 export class SqlAssetStore implements AssetStore {
-  constructor(private db: SqlClient) {}
+  /** With a blob store, the bytes go there and the database keeps only what the file is. */
+  constructor(private db: SqlClient, private blobs?: BlobStore) {}
 
   private view(r: any): Asset {
     return { id: r.id, companyId: r.company_id, advertiserId: r.advertiser_id ?? undefined, userId: r.user_id ?? undefined, contentType: r.content_type, sizeBytes: Number(r.size_bytes), sha256: r.sha256, name: r.name ?? undefined, url: `/assets/${r.id}.${allowedTypes[r.content_type]?.ext ?? 'bin'}` };
@@ -49,13 +51,20 @@ export class SqlAssetStore implements AssetStore {
     const existing = (await this.db.query<any>(`select id, company_id, advertiser_id, user_id, content_type, size_bytes, sha256, name from assets where company_id = $1 and advertiser_id is not distinct from $2 and user_id is not distinct from $3 and sha256 = $4`, [input.companyId, input.advertiserId ?? null, input.userId ?? null, sha])).rows[0];
     if (existing) return this.view(existing); // the same file twice is stored once
     const id = newId('as');
-    await this.db.query(`insert into assets (id, company_id, advertiser_id, user_id, content_type, bytes, size_bytes, sha256, name) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [id, input.companyId, input.advertiserId ?? null, input.userId ?? null, input.contentType, Buffer.from(input.bytes), input.bytes.length, sha, input.name?.slice(0, 200) ?? null]);
+    const blobKey = this.blobs ? `assets/${input.companyId}/${id}` : null;
+    if (this.blobs && blobKey) await this.blobs.put(blobKey, input.bytes, input.contentType); // stored first: a row never points at nothing
+    await this.db.query(`insert into assets (id, company_id, advertiser_id, user_id, content_type, bytes, size_bytes, sha256, name, blob_key) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [id, input.companyId, input.advertiserId ?? null, input.userId ?? null, input.contentType, blobKey ? null : Buffer.from(input.bytes), input.bytes.length, sha, input.name?.slice(0, 200) ?? null, blobKey]);
     return this.view({ id, company_id: input.companyId, advertiser_id: input.advertiserId, user_id: input.userId, content_type: input.contentType, size_bytes: input.bytes.length, sha256: sha, name: input.name });
   }
 
   async get(id: string) {
     const r = (await this.db.query<any>(`select * from assets where id = $1`, [id])).rows[0];
     if (!r) return null;
+    if (r.blob_key) {
+      if (!this.blobs) throw new Error(`File ${id} is in file storage, but no file storage is set up (FILE_STORAGE).`);
+      const bytes = await getChecked(this.blobs, r.blob_key, r.sha256);
+      return bytes ? { asset: this.view(r), bytes } : null;
+    }
     return { asset: this.view(r), bytes: new Uint8Array(r.bytes) };
   }
 

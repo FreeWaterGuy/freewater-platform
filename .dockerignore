@@ -1,0 +1,12 @@
+node_modules
+data
+out
+files
+.git
+test
+design
+agents
+*.log
+*.jsonl
+.env
+.env.*
