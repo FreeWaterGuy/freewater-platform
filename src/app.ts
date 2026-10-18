@@ -28,6 +28,9 @@ import { TestGeocoder, type Geocoder } from './adapters/geocoding/contract';
 import { OpsService } from './modules/ops/service';
 import { BooksService } from './modules/books/service';
 import { TestPayoutProvider, type PayoutProvider } from './adapters/payouts/contract';
+import { WebhookService } from './modules/webhooks/service';
+import { HttpWebhookSender, type WebhookSender } from './adapters/webhooks/contract';
+import { ConsoleService } from './modules/console/service';
 import { bottle16oz, boxes, builtinCreatives, freewater, locations, peakSpring, sampleCampaigns } from './demo/seed';
 
 export interface AppOptions {
@@ -45,7 +48,10 @@ export interface AppOptions {
   designer?: DesignAssistant;
   geocoder?: Geocoder; // defaults to the test geocoder
   planner?: RoutePlanner; // defaults to the simple route planner
-  payouts?: PayoutProvider; // sends money to charities; defaults to the test provider (no real money) // the AI that helps people design their own bottles; same defaults as the ad assistant // the AI that helps make ads; defaults to Claude when ANTHROPIC_API_KEY is set, else the built-in helper
+  payouts?: PayoutProvider; // sends money to charities; defaults to the test provider (no real money)
+  webhookSender?: WebhookSender; // sends webhooks; defaults to real HTTPS
+  allowPrivateWebhooks?: boolean; // let webhooks reach localhost and private networks (development only)
+  publicUrl?: string; // where the console lives, for links in emails, e.g. https://console.freewater.io
 }
 
 /** Start the platform on a database: migrate, load everything, and keep writing every change back. */
@@ -62,7 +68,7 @@ export async function createApp(opts: AppOptions) {
     const make = async (label: string, companyId: string, scopes: Scope[], advertiserId?: string) => {
       demoKeys![label] = (await createApiKey(db, { companyId, name: label, scopes, advertiserId })).key;
     };
-    await make('freewater-admin', 'freewater', ['orders', 'packs', 'campaigns', 'purchases', 'ledger', 'events', 'admin']);
+    await make('freewater-admin', 'freewater', ['orders', 'packs', 'campaigns', 'purchases', 'ledger', 'events', 'admin', 'platform']);
     await make('machine-ATX-014', 'freewater', ['orders']);
     await make('advertiser-joes', 'freewater', ['campaigns', 'purchases', 'invoices'], 'adv-joes');
     for (const c of sampleCampaigns().filter((x) => !x.isHouse)) {
@@ -120,7 +126,13 @@ export async function createApp(opts: AppOptions) {
 
   const books = new BooksService(db, platform, packs, messenger, opts.payouts ?? new TestPayoutProvider(), (c, at) => delivery.today(c, at), () => persistence.flush());
 
-  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books };
+  const flush = () => persistence.flush();
+  const publicUrl = opts.publicUrl ?? process.env.PUBLIC_URL;
+  const allowPrivate = opts.allowPrivateWebhooks ?? process.env.ALLOW_PRIVATE_WEBHOOKS === '1';
+  const webhooks = new WebhookService(db, opts.webhookSender ?? new HttpWebhookSender({ allowPrivate }), messenger, opts.clock, flush, { allowPrivate, consoleUrl: publicUrl });
+  const consoleSvc = new ConsoleService(db, platform, made.registry, accounts, messenger, flush, { consoleUrl: publicUrl, clock: opts.clock });
+
+  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

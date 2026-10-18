@@ -7,7 +7,7 @@ import { createApiKey, type Scope } from '../db/store';
 
 const [companyId, name, scopes, advertiserId] = process.argv.slice(2);
 if (!companyId || !name || !scopes) {
-  console.error('Usage: npm run key -- <company> "<name>" <scope,scope> [advertiserId]\nScopes: orders, packs, campaigns, purchases, ledger, events, admin');
+  console.error('Usage: npm run key -- <company> "<name>" <scope,scope> [advertiserId]\nScopes: orders, packs, campaigns, purchases, ledger, events, invoices, webhooks, admin');
   process.exit(1);
 }
 const db = process.env.DATABASE_URL ? createPostgresClient(process.env.DATABASE_URL) : await createPgliteClient(process.env.DATA_DIR ?? './data');

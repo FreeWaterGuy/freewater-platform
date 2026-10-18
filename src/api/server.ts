@@ -4,6 +4,9 @@ import { consumerRoutes } from './consumer';
 import { adsRoutes } from './ads';
 import { deliveryRoutes } from './delivery';
 import { booksRoutes } from './books';
+import { consoleRoutes } from './console';
+import { WebhookError } from '../modules/webhooks/service';
+import { ConsoleError } from '../modules/console/service';
 import { BooksError } from '../modules/books/service';
 import { DeliveryError } from '../modules/delivery/service';
 import { AdsError } from '../modules/ads/service';
@@ -27,6 +30,9 @@ import { dirname, join } from 'node:path';
  * The public API, version 1. Every app, machine, portal and partner system uses this and only this.
  * Keys belong to one company; nothing outside that company is ever visible through them.
  */
+/** The company that runs the platform and may set up licensees. */
+const PLATFORM_COMPANY = process.env.PLATFORM_COMPANY ?? 'freewater';
+
 export async function buildServer(app: App, opts: { logger?: boolean } = {}): Promise<FastifyInstance> {
   const server = Fastify({ logger: opts.logger ?? false, bodyLimit: 3 * 1024 * 1024 });
   const { platform, packs, persistence, db, experiences } = app;
@@ -496,6 +502,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   adsRoutes(app, route, { me });
   deliveryRoutes(app, route, { me });
   booksRoutes(app, route);
+  consoleRoutes(app, route);
 
   // ---------- wiring ----------
 
@@ -550,6 +557,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     'ops.css': { type: 'text/css', path: join(webDir, 'ops.css') },
     'books.js': { type: 'text/javascript', path: join(webDir, 'books.js') },
     'books.css': { type: 'text/css', path: join(webDir, 'books.css') },
+    'console.js': { type: 'text/javascript', path: join(webDir, 'console.js') },
+    'console.css': { type: 'text/css', path: join(webDir, 'console.css') },
     'jsqr.js': { type: 'text/javascript', path: createRequire(import.meta.url).resolve('jsqr/dist/jsQR.js') },
   };
   const cache = new Map<string, Buffer>();
@@ -574,6 +583,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   server.get('/books', booksPage);
   server.get('/r/:unitId', booksPage); // the QR on every bottle's black panel opens its open-books receipt
   server.get('/books/*', booksPage);
+  // The white-label console and the developer portal: one page; /developers is readable without signing in.
+  const consolePage = async (_req: FastifyRequest, reply: FastifyReply) => reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', "default-src 'self'; img-src 'self' data: blob:; connect-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; frame-ancestors 'none'").send(file(join(webDir, 'console.html')));
+  for (const u of ['/console', '/console/*', '/developers', '/developers/*']) server.get(u, consolePage);
   server.get('/driver', driverPage);
   server.get('/driver/*', driverPage);
 
@@ -607,7 +619,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   server.setErrorHandler((err: any, _req, reply) => {
     if (err instanceof ApiError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
-    if (err instanceof AccountsError || err instanceof PaymentError || err instanceof ExperienceError || err instanceof AssetError || err instanceof AdsError || err instanceof DesignError || err instanceof DeliveryError || err instanceof BooksError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
+    if (err instanceof AccountsError || err instanceof PaymentError || err instanceof ExperienceError || err instanceof AssetError || err instanceof AdsError || err instanceof DesignError || err instanceof DeliveryError || err instanceof BooksError || err instanceof WebhookError || err instanceof ConsoleError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
     if (err.code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE') return reply.code(415).send({ error: { code: 'unsupported_type', message: 'Send JSON, or for uploads a .glb, PNG, JPEG, WebP or MP4 file.' } });
     if (err.code === 'FST_ERR_CTP_BODY_TOO_LARGE') return reply.code(413).send({ error: { code: 'too_large', message: 'That is too big to upload.' } });
     if (err.validation) return reply.code(400).send({ error: { code: 'invalid_request', message: err.message } });
@@ -625,13 +637,16 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     if (raw.startsWith('fws_')) {
       const user = await app.accounts.userFromToken(raw);
       if (!user) throw new ApiError(401, 'signed_out', 'Your sign-in has expired. Sign in again.');
-      key = { id: user.id, companyId: user.companyId, name: user.displayName ?? user.email ?? user.phone ?? user.id, scopes: roleScopes[user.role as Role], advertiserId: user.advertiserId ?? undefined, userId: user.id, sessionToken: raw };
+      // The platform operator's owners may also set up licensees.
+      const scopes = user.role === 'owner' && user.companyId === PLATFORM_COMPANY ? [...roleScopes.owner, 'platform' as Scope] : roleScopes[user.role as Role];
+      key = { id: user.id, companyId: user.companyId, name: user.displayName ?? user.email ?? user.phone ?? user.id, scopes, advertiserId: user.advertiserId ?? undefined, userId: user.id, sessionToken: raw };
     } else {
       key = await findApiKey(db, raw);
     }
     if (!key) throw new ApiError(401, 'invalid_key', 'That API key is not valid or was revoked.');
     const need = Array.isArray(scope) ? scope : [scope];
-    if (!need.some((s) => key.scopes.includes(s)) && !key.scopes.includes('admin')) throw new ApiError(403, 'missing_scope', `This key can't do that. It needs one of: ${need.join(', ')}.`);
+    // 'admin' covers everything a company does for itself, never the platform operator's own powers.
+    if (!need.some((s) => key.scopes.includes(s)) && !(key.scopes.includes('admin') && !need.includes('platform'))) throw new ApiError(403, 'missing_scope', `This key can't do that. It needs one of: ${need.join(', ')}.`);
     return key;
   }
 

@@ -182,6 +182,25 @@ export class AccountsService {
     return this.createUser({ companyId: input.companyId, email, role: input.role, advertiserId: input.advertiserId, displayName: input.displayName });
   }
 
+  /** Everyone on the company's team and advertiser staff, newest first. Customers are not listed. */
+  async team(companyId: string): Promise<(User & { lastSignInAt: string | null })[]> {
+    const rows = (await this.db.query<any>(`select u.*, (select max(created_at) from sessions s where s.user_id = u.id) as last_sign_in from users u where u.company_id = $1 and u.role <> 'consumer' and u.deleted_at is null order by u.created_at desc`, [companyId])).rows;
+    return rows.map((r) => ({ ...toUser(r), lastSignInAt: r.last_sign_in ? new Date(r.last_sign_in).toISOString() : null }));
+  }
+
+  /** Take someone off the team: they keep a plain customer account and are signed out everywhere. */
+  async removeFromTeam(companyId: string, userId: string, by?: string): Promise<void> {
+    const u = await this.get(userId);
+    if (!u || u.companyId !== companyId || u.role === 'consumer') throw new AccountsError('not_found', 'That person isn’t on the team.', 404);
+    if (userId === by) throw new AccountsError('cannot_remove_self', 'You can’t remove yourself. Ask another owner.', 409);
+    if (u.role === 'owner') {
+      const owners = (await this.db.query<{ n: number }>(`select count(*)::int as n from users where company_id = $1 and role = 'owner' and deleted_at is null`, [companyId])).rows[0]!.n;
+      if (owners <= 1) throw new AccountsError('last_owner', 'Every company needs at least one owner.', 409);
+    }
+    await this.db.query(`update users set role = 'consumer', advertiser_id = null where id = $1`, [userId]);
+    await this.db.query(`update sessions set revoked_at = $2 where user_id = $1 and revoked_at is null`, [userId, this.clock().toISOString()]);
+  }
+
   private async findBy(companyId: string, col: 'email' | 'phone', value: string): Promise<User | null> {
     const r = (await this.db.query<any>(`select * from users where company_id = $1 and ${col} = $2 and deleted_at is null`, [companyId, value])).rows[0];
     return r ? toUser(r) : null;

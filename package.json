@@ -20,7 +20,9 @@
     "demo:ops": "tsx src/demo/opsDemo.ts",
     "demo:ops-preview": "tsx src/demo/opsPreview.ts",
     "demo:books": "tsx src/demo/booksDemo.ts",
-    "demo:books-preview": "tsx src/demo/booksPreview.ts"
+    "demo:books-preview": "tsx src/demo/booksPreview.ts",
+    "demo:console": "tsx src/demo/consoleDemo.ts",
+    "demo:console-preview": "tsx src/demo/consolePreview.ts"
   },
   "engines": {
     "node": ">=20"

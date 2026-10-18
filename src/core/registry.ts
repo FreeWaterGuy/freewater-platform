@@ -16,6 +16,9 @@ export class Registry {
   registerRenderer(name: string, impl: LabelRenderer) { this.renderers.set(name, impl); return this; }
   registerPrinter(name: string, impl: PrinterAdapter) { this.printers.set(name, impl); return this; }
 
+  /** Every registered name, so a console can offer the choices. */
+  names() { return { ads: [...this.ads.keys()], renderer: [...this.renderers.keys()], printer: [...this.printers.keys()] }; }
+
   adsFor(c: CompanyConfig): AdEngine { return pick(this.ads, c.modules.ads, 'ad engine'); }
   rendererFor(c: CompanyConfig): LabelRenderer { return pick(this.renderers, c.modules.renderer, 'renderer'); }
   printerFor(c: CompanyConfig): PrinterAdapter { return pick(this.printers, c.modules.printer, 'printer'); }

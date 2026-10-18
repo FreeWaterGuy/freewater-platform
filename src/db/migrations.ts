@@ -405,6 +405,66 @@ create table charity_transfers (
 create index charity_transfers_company on charity_transfers(company_id, created_at);
 `,
   },
+  {
+    id: '009_console_webhooks',
+    sql: `
+-- API keys: a hint to recognise each one by (never the key itself), who made it, and when it was last used.
+alter table api_keys add column hint text;
+alter table api_keys add column created_by text;
+alter table api_keys add column last_used_at timestamptz;
+
+-- Every saved change to a company's settings, so any of them can be looked at again or put back.
+create table company_config_versions (
+  company_id text not null references companies(id),
+  version integer not null,
+  config jsonb not null,
+  changed_by text,
+  summary text not null,
+  created_at timestamptz not null default now(),
+  primary key (company_id, version)
+);
+
+-- Webhooks: a partner's address that hears about events, signed with its own secret.
+create table webhook_endpoints (
+  id text primary key,
+  company_id text not null references companies(id),
+  url text not null,
+  description text,
+  events text[] not null, -- public event names, or '*' for all
+  secret text not null, -- needed to sign each delivery; shown to the company's admins only
+  status text not null check (status in ('active', 'disabled')),
+  disabled_reason text,
+  last_event_seq bigint not null default 0, -- events after this one are still to be queued
+  failing_since timestamptz,
+  created_by text,
+  created_at timestamptz not null,
+  updated_at timestamptz not null
+);
+create index webhook_endpoints_company on webhook_endpoints(company_id);
+
+-- One row per event per endpoint. The body is stored so every retry sends exactly the same bytes.
+create table webhook_deliveries (
+  id text primary key,
+  endpoint_id text not null references webhook_endpoints(id) on delete cascade,
+  company_id text not null,
+  event_id text not null,
+  event_type text not null,
+  body text not null,
+  status text not null check (status in ('pending', 'retrying', 'delivered', 'gave_up')),
+  attempts integer not null default 0,
+  next_attempt_at timestamptz,
+  last_status integer,
+  last_error text,
+  last_response text,
+  duration_ms integer,
+  created_at timestamptz not null,
+  delivered_at timestamptz,
+  unique (endpoint_id, event_id)
+);
+create index webhook_deliveries_due on webhook_deliveries(status, next_attempt_at);
+create index webhook_deliveries_endpoint on webhook_deliveries(endpoint_id, created_at desc);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

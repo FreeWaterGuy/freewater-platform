@@ -1,0 +1,144 @@
+<meta charset="utf-8">
+<title>FreeWater Console</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@600;700&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+/*CSS*/
+.preview-note { background: #FFF4D6; color: #5C3F00; padding: 8px 16px; font-size: 13px; line-height: 1.5; }
+</style>
+<div class="preview-note"><b>Preview.</b> The real console and developer portal on a saved copy of FreeWater’s settings (sample data). Change the brand and watch the bottle redraw, save, put an old version back, make a key, send a test webhook, set up a licensee. Nothing leaves this page.</div>
+<div id="root"></div>
+<script>/*LOCAL*/</script>
+<script>
+(() => {
+  const R = /*REC*/;
+  const L = FWLocal;
+  const clone = (x) => structuredClone(x);
+  const fail = (status, message) => { const e = new Error(message); e.status = status; throw e; };
+  const rid = (p) => `${p}_${Math.random().toString(16).slice(2, 14)}`;
+  const nowIso = () => new Date().toISOString();
+  const campaigns = L.campaigns();
+  const registered = R.ov.options.modules;
+  const S = {
+    me: R.me, config: clone(R.ov.config), version: R.ov.version, history: clone(R.history), versions: clone(R.versions),
+    locations: clone(R.ov.locations), charities: clone(R.ov.charities), team: clone(R.team), keys: clone(R.keys.keys),
+    hooks: clone(R.hooks), hookDetail: clone(R.hookDetail), deliveries: clone(R.deliveries), deliveryDetail: clone(R.deliveryDetail), companies: clone(R.companies),
+  };
+  const checklist = () => R.ov.checklist.map((c) => ({ ...c, done: c.done || (c.id === 'brand' && S.version > R.ov.version) }));
+  const commit = (next, changes) => {
+    S.config = next; S.version += 1; S.versions[S.version] = clone(next);
+    S.history.unshift({ version: S.version, changedBy: S.me.displayName, changes, at: nowIso() });
+    return { config: clone(next), version: S.version, changes };
+  };
+  const hookStats = (id) => { const ds = S.deliveries[id] ?? []; const n = (s) => ds.filter((d) => d.status === s).length; return { delivered: n('delivered'), retrying: n('retrying') + n('pending'), gaveUp: n('gave_up'), lastDeliveryAt: ds[0]?.createdAt ?? null }; };
+  const deliver = (hookId, type, data) => {
+    const w = S.hookDetail[hookId];
+    const ok = !w.url.includes('crm.');
+    const id = rid('whd'), eventId = rid('evt_test');
+    const body = JSON.stringify({ id: eventId, type, created: nowIso(), company: 'freewater', apiVersion: '2026-10-01', data });
+    const d = { id, endpointId: hookId, eventId, type, status: ok ? 'delivered' : 'retrying', attempts: 1, nextAttemptAt: ok ? null : new Date(Date.now() + 60000).toISOString(), lastStatus: ok ? 200 : 503, lastError: ok ? null : 'Your server answered 503.', lastResponse: ok ? '{"ok":true}' : 'Down for maintenance', durationMs: 120 + Math.round(Math.random() * 90), createdAt: nowIso(), deliveredAt: ok ? nowIso() : null };
+    (S.deliveries[hookId] ??= []).unshift(d);
+    S.deliveryDetail[id] = { ...d, body };
+    return clone(S.deliveryDetail[id]);
+  };
+  async function api(method, url, body) {
+    await new Promise((r) => setTimeout(r, 70));
+    const [path, qs] = url.split('?');
+    const q = new URLSearchParams(qs || '');
+    const key = `${method} ${path}`;
+    let m;
+    if (key === 'GET /v1/public/app-config') return R.config;
+    if (key === 'POST /v1/auth/start') return { sent: true };
+    if (key === 'POST /v1/auth/verify') { if (!/^\d{6}$/.test(String(body.code).trim())) fail(401, 'That code is wrong or has expired. Ask for a new one.'); return { token: 'fws_preview' }; }
+    if (key === 'POST /v1/auth/sign-out') return null;
+    if (key === 'GET /v1/me') return S.me;
+    if (key === 'GET /v1/openapi.json') return R.openapi;
+    if (key === 'GET /v1/public/webhook-events') return R.catalog;
+    if (key === 'GET /v1/console') return { ...clone(R.ov), config: clone(S.config), version: S.version, locations: clone(S.locations), charities: [...S.charities], checklist: checklist() };
+    if (key === 'PATCH /v1/console/settings') {
+      if (body.version !== undefined && body.version !== S.version) fail(409, `Someone else saved changes (now version ${S.version}). Reload to see them, then make your change again.`);
+      let next; try { next = L.applyChange(S.config, body.changes); } catch (e) { fail(400, e.message); }
+      const problem = L.checkSettings(next, registered); if (problem) fail(422, problem);
+      const changes = L.describeChange(S.config, next);
+      return changes.length ? commit(next, changes) : { config: clone(S.config), version: S.version, changes };
+    }
+    if (key === 'POST /v1/console/preview-label') {
+      let draft; try { draft = L.applyChange(S.config, body.changes || {}); } catch (e) { return { svg: null, problem: e.message }; }
+      const problem = L.checkSettings(draft, registered);
+      const label = await L.renderer.render({ unit: R.sample, product: L.product, company: problem ? S.config : draft, campaigns });
+      return { svg: label.svg, problem };
+    }
+    if (key === 'GET /v1/console/history') return clone(S.history);
+    if ((m = /^\/v1\/console\/history\/(\d+)\/restore$/.exec(path))) {
+      const old = S.versions[m[1]] || fail(404, `There is no version ${m[1]}.`);
+      const changes = L.describeChange(S.config, old);
+      return changes.length ? commit(clone(old), [`Put back version ${m[1]}`, ...changes]) : { config: clone(S.config), version: S.version, changes };
+    }
+    if (key === 'POST /v1/console/machines') {
+      const id = String(body.id).trim().toUpperCase();
+      if (!/^[A-Z0-9][A-Z0-9-]{2,19}$/.test(id)) fail(400, 'A machine id is 3 to 20 capital letters, numbers and dashes, like ATX-031.');
+      if (S.locations.some((l) => l.id === id)) fail(409, `There is already a machine or route called ${id}. Pick another id.`);
+      if (!body.name || !body.city) fail(400, 'Give the machine a name and a city.');
+      const machine = { id, kind: 'machine', name: body.name, city: body.city, address: body.address ?? null, lat: null, lng: null, printSeconds: 25 };
+      S.locations.push(machine);
+      S.keys.unshift({ id: rid('key'), name: `Machine ${id}`, scopes: ['orders'], advertiserId: null, hint: 'fwk_prev…demo', createdBy: S.me.displayName, createdAt: nowIso(), lastUsedAt: null, revokedAt: null });
+      return clone({ machine, apiKey: `fwk_preview_${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}` });
+    }
+    if (key === 'POST /v1/charities') { if (!body.name || body.name.length < 2) fail(400, 'Name the charity.'); if (S.charities.includes(body.name)) fail(409, 'That charity is already on your list.'); S.charities.push(body.name); S.charities.sort(); return { id: rid('ch'), name: body.name }; }
+    if (key === 'GET /v1/team') return clone(S.team);
+    if (key === 'POST /v1/team') { if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(body.email || '')) fail(400, 'That email doesn’t look right.'); S.team = S.team.filter((t) => t.email !== body.email.toLowerCase()); S.team.unshift({ id: rid('usr'), email: body.email.toLowerCase(), displayName: body.displayName ?? null, role: body.role, advertiserId: null, addedAt: nowIso(), lastSignInAt: null }); return S.team[0]; }
+    if ((m = /^\/v1\/team\/([\w-]+)$/.exec(path)) && method === 'DELETE') { const t = S.team.find((x) => x.id === m[1]) || fail(404, 'That person isn’t on the team.'); if (t.role === 'owner' && S.team.filter((x) => x.role === 'owner').length <= 1) fail(409, 'Every company needs at least one owner.'); S.team = S.team.filter((x) => x.id !== m[1]); return null; }
+    if (key === 'GET /v1/keys') return { keys: clone(S.keys), scopes: R.keys.scopes };
+    if (key === 'POST /v1/keys') {
+      const raw = `fwk_${Array.from(crypto.getRandomValues(new Uint8Array(18)), (b) => 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_'[b & 63]).join('')}`;
+      const k = { id: rid('key'), name: body.name, scopes: body.scopes, advertiserId: null, hint: `${raw.slice(0, 8)}…${raw.slice(-4)}`, createdBy: S.me.displayName, createdAt: nowIso(), lastUsedAt: null, revokedAt: null };
+      S.keys.unshift(k); return { ...clone(k), key: raw };
+    }
+    if ((m = /^\/v1\/keys\/([\w-]+)$/.exec(path)) && method === 'DELETE') { const k = S.keys.find((x) => x.id === m[1] && !x.revokedAt) || fail(404, 'Key not found, or already turned off.'); k.revokedAt = nowIso(); return null; }
+    if (key === 'GET /v1/webhooks') return S.hooks.map((w) => ({ ...clone(S.hookDetail[w.id]), secret: undefined, stats: hookStats(w.id) }));
+    if (key === 'POST /v1/webhooks') {
+      const bad = L.checkWebhookUrl(body.url || ''); if (bad) fail(400, bad);
+      const id = rid('wh'); const secret = `whsec_${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+      const w = { id, url: body.url, description: body.description ?? null, events: body.events.includes('*') ? ['*'] : body.events, status: 'active', disabledReason: null, failingSince: null, createdAt: nowIso(), secretHint: `${secret.slice(0, 10)}…${secret.slice(-4)}`, secret };
+      S.hooks.push({ id }); S.hookDetail[id] = w; S.deliveries[id] = [];
+      return clone(w);
+    }
+    if ((m = /^\/v1\/webhooks\/([\w-]+)(\/[\w-]+)?$/.exec(path))) {
+      const w = S.hookDetail[m[1]] || fail(404, 'Webhook not found.');
+      const sub = m[2];
+      if (!sub && method === 'GET') return clone(w);
+      if (!sub && method === 'PATCH') { if (body.url) { const bad = L.checkWebhookUrl(body.url); if (bad) fail(400, bad); w.url = body.url; } if (body.events) w.events = body.events; if (body.status) { w.status = body.status; w.disabledReason = body.status === 'disabled' ? 'Turned off by your team.' : null; } return clone(w); }
+      if (!sub && method === 'DELETE') { S.hooks = S.hooks.filter((x) => x.id !== m[1]); delete S.hookDetail[m[1]]; return null; }
+      if (sub === '/rotate-secret') { w.secret = `whsec_${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`; w.secretHint = `${w.secret.slice(0, 10)}…${w.secret.slice(-4)}`; return { secret: w.secret }; }
+      if (sub === '/test') return deliver(m[1], 'webhook.test', { message: 'If you can read this, your webhook works.' });
+      if (sub === '/deliveries') { const st = q.get('status'); return clone((S.deliveries[m[1]] ?? []).filter((d) => !st || d.status === st).slice(0, Number(q.get('limit') || 50))); }
+    }
+    if ((m = /^\/v1\/webhook-deliveries\/([\w-]+)(\/retry)?$/.exec(path))) {
+      const d = S.deliveryDetail[m[1]] || fail(404, 'This preview only kept the latest 40 deliveries.');
+      if (m[2]) {
+        if (S.hookDetail[d.endpointId].url.includes('crm.')) { d.attempts += 1; d.nextAttemptAt = new Date(Date.now() + 300000).toISOString(); }
+        else Object.assign(d, { status: 'delivered', attempts: d.attempts + 1, lastStatus: 200, lastError: null, lastResponse: '{"ok":true}', deliveredAt: nowIso(), nextAttemptAt: null });
+        const row = (S.deliveries[d.endpointId] ?? []).find((x) => x.id === d.id); if (row) Object.assign(row, { ...d, body: undefined });
+      }
+      return clone(d);
+    }
+    if (key === 'GET /v1/platform/companies') return clone(S.companies);
+    if (key === 'POST /v1/platform/companies') {
+      if (!/^[a-z][a-z0-9-]{2,29}$/.test(body.id || '')) fail(400, 'A company id is 3 to 30 lowercase letters, numbers and dashes, like peak-spring.');
+      if (S.companies.some((c) => c.id === body.id)) fail(409, `There is already a company called ${body.id}.`);
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(body.ownerEmail || '')) fail(400, 'That email doesn’t look right.');
+      const words = body.name.trim().split(/\s+/);
+      const brand = { logoTop: words[0].toLowerCase().slice(0, 12), logoBottom: (words[1] ?? '').toLowerCase().slice(0, 12), panelColor: '#000000', accentColor: '#7FC6EA', textColor: '#FFFFFF', fontFamily: "'DM Sans', Arial, sans-serif", ...body.brand };
+      const problem = L.checkSettings({ ...S.config, id: body.id, name: body.name, brand, giving: body.giving === 'per_unit' ? { mode: 'per_unit', centsPerUnit: 10, defaultCharity: 'Charity to be chosen', minimumTransferCents: 2500 } : { mode: 'none' } }, registered);
+      if (problem) fail(422, problem);
+      const c = { id: body.id, name: body.name.trim(), brand, giving: body.giving ?? 'none', openBooks: true, modules: S.config.modules, machines: 0, team: 1, bottles: 0, lastBottleAt: null };
+      S.companies.push(c);
+      return { company: clone(c), owner: { id: rid('usr'), email: body.ownerEmail.toLowerCase() } };
+    }
+    fail(404, 'That isn’t part of this preview.');
+  }
+  window.__FW_CONSOLE_FIXTURE__ = { start: '/console', token: 'fws_preview', api };
+})();
+</script>
+<script>
+/*APP_JS*/
+</script>

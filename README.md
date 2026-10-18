@@ -142,6 +142,35 @@ npm run demo:ops-preview   # builds out/ops-preview/ and out/driver-preview/, cl
 - **Deliveries:** everyone getting packs.
 - **Books:** the public totals and the latest ledger lines.
 
+## The console, developer portal and webhooks
+
+```
+npm run demo:console           # sample settings history, team, keys and two webhooks (one healthy, one failing)
+                               #   /console as owner@freewater.io (the code is printed) · /developers needs no sign-in
+npm run demo:console-preview   # builds out/console-preview/, a clickable copy that needs no server
+```
+
+**The console (`/console`).** For each company's owners: FreeWater, or any white-label licensee.
+- **Getting started:** a checklist for a new company: brand, giving, first machine, team, connecting systems, first bottle.
+- **Company, Brand, Ads and prices, Giving, Modules:** every setting a company has, with plain-language checks. For example, text that's too hard to read on the panel is refused. The brand page redraws a real bottle label as you type.
+- **History:** every saved change is a numbered version showing who, when and what changed ("Accent color: #7FC6EA → #F2C14E"). Any version can be put back, which becomes a new version. Two people saving at once never overwrite each other.
+- **Machines:** add a machine and get its own key, which can only print bottles. The key is shown once.
+- **Team:** add people with a role, remove them (they're signed out everywhere). The last owner can't be removed.
+- **Licensees** (FreeWater only): set up a new company with its own brand, house ad and first owner, who is emailed a link. Licensee owners can never do this, and no company can see another's.
+
+**API keys (`/v1/keys`).** Each system gets its own key with only the scopes it needs. A key is shown once; only a fingerprint and a short hint are kept. The list shows when each key was last used. Advertiser keys are limited to their own campaigns, sales and invoices.
+
+**Webhooks (`/v1/webhooks`).** A company adds an https address and picks events (or all). Every matching event is sent as JSON, signed with the endpoint's own secret (`FreeWater-Signature: t=…,v1=HMAC-SHA256("t.body")`).
+- **Events:** partners get stable public events (`bottle.printed`, `bottle.scanned`, `pack.delivered`, `charity.transferred`, …), never personal details. The list is at `/v1/public/webhook-events`.
+- **Retries:** after 1 min, 5 min, 30 min, 2 h, 6 h, 12 h and 24 h. After three days of failures the webhook is turned off and the owners are emailed. Turned back on, it carries on from then.
+- **Never missed:** events are read in order from the stored event log, so a restart loses nothing.
+- **Safety:** addresses must be public https. The sender checks the address again when it connects, so a name can't be pointed at a private network.
+- **Console tools:** send a test event, replace the secret, see the full delivery log (exactly what was sent and what came back), and resend anything.
+- **Swappable:** sending goes through a `WebhookSender` (real HTTPS, or a test one).
+- **Partner side:** `verifySignature` in `src/modules/webhooks/signature.ts` shows how a partner checks a webhook.
+
+**The developer portal (`/developers`).** Public: getting a key, a first call, errors, webhooks with signature checking in Node and Python, every event with an example, and the full API reference (from `/v1/openapi.json`).
+
 ## Open books and charity transfers
 
 ```
@@ -215,6 +244,8 @@ The server keeps working state in memory and writes through to the database, so 
 | `src/modules/ledger` | Billing rules and the open-books receipt |
 | `src/modules/books` | Public books, daily fingerprints, charity transfers and costs |
 | `src/adapters/payouts` | Payout contract (sending money to charities) and the test version |
+| `src/modules/console` | Company settings, their rules and version history, machines, licensee setup |
+| `src/modules/webhooks`, `src/adapters/webhooks` | Webhook endpoints, signed deliveries, retries, the public event list, and the sender contract |
 | `src/modules/packs` | Packs, box faces, packing check, van loading and delivery |
 | `src/adapters/printers` | Printer contract and the virtual printer |
 | `src/db` | Database contract, PGlite and Postgres adapters, migrations, storage |
@@ -234,4 +265,4 @@ All prices in `src/demo/seed.ts` are placeholders.
 ## Next
 
 - A real printer adapter for the Model 6 and the micro-factory lines, once the printers are chosen (the virtual printer shows the contract any printer must follow)
-- The white-label console, developer portal and webhooks (step 8)
+- The Model 6 machine software (step 9), then going live (step 10)
