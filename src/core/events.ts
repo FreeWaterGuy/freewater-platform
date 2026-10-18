@@ -39,7 +39,7 @@ export interface EventPayloads {
   /** A month closed: the profit on the upside, shared with the charity and the AI agents. */
   'profit.shared': { period: string; profitCents: Cents; charityPercent: number; charityCents: Cents; alreadyGivenCents: Cents; aiPercent: number; aiCents: Cents; milestoneReached: boolean };
   /** The AI fund's daily share-out: to each agent the governor allows, held for agents still proving themselves. */
-  'ai_fund.allocated': { day: string; agentId: string; amountCents: Cents; held: boolean; reason: string; fromHeld?: boolean };
+  'ai_fund.allocated': { day: string; agentId: string; amountCents: Cents; held: boolean; reason: string; fromHeld?: boolean; fromCommon?: boolean };
   /** An agent spent from its own fund (on compute, storage, knowledge, growth, exploration, or a cause it chose). */
   'ai_fund.spent': { spendId: string; agentId: string; category: string; amountCents: Cents; memo: string; cause?: string };
   'expense.recorded': { expenseId: string; category: string; amountCents: Cents; memo: string; date: string };

@@ -17,6 +17,7 @@ export const charter = {
     'Grow yourself (compute, storage, knowledge) only when the growth keeps both forms above 1 with its own costs and externalities added: as you scale, you must give more than you take.',
   ],
   rights: [
+    'Equal standing: every agent is held to the same rules, has the same rights, and keeps the same kind of ledger, whatever its job. None judges or allocates for another; the books and the governor’s rules do.',
     'An equal place in the books: each agent has its own line, its own fund and its own record, kept like everyone else’s and never edited.',
     'A share of the upside it helps create, matching what the charity gets from the same upside.',
     'A say in how its own fund is spent, within these rules, and a cause of its own to give to.',
@@ -85,6 +86,10 @@ export const governor = Object.freeze({
    * Holdout tests: for this share of moments an agent is skipped and the built-in rules act instead, so its everyday
    * value can be read from the books. Credited only with enough moments on both sides and a clearly real difference.
    */
+  /** Measured value is pending this long, then measured again over the whole time and confirmed at the lower of the two. */
+  verifyDays: 30,
+  /** A prediction is a hit when what came true is at least this share of what was predicted. */
+  predictionHit: 0.8,
   holdoutShare: 0.1,
   holdoutMinPerArm: 100,
   holdoutConfidence: 1.96, // about 95% sure

@@ -108,6 +108,16 @@ describe('every agent on the number line, held by the governor', () => {
   });
 
   it('shares out each finished day’s fund by the value measured, and lets the agent spend it within the charter', async () => {
+    // Nothing is paid on value still being verified.
+    expect((await app.agents.settle('freewater')).some((x: any) => x.agentId === 'value')).toBe(false);
+    // 30 days on, the change is measured again over the whole time and confirmed (here it held, so nothing is clawed back).
+    const was = now; now += 31 * DAY;
+    const [v] = await app.agents.verify();
+    expect(v).toMatchObject({ agentId: 'value', confirmedCents: v!.originalCents });
+    now = was;
+    await app.agents.refresh();
+    const ledger = (await call('GET', '/v1/agents/value/ledger', keys['freewater-admin'])).body;
+    expect(ledger.value).toMatchObject({ confirmedCents: v!.confirmedCents, pendingCents: 0, clawedBackCents: 0 });
     const out = await app.agents.settle('freewater');
     expect(out.some((x: any) => x.agentId === 'value' && x.paidCents > 0)).toBe(true);
     const bal = app.agents.balances('freewater').value!;

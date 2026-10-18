@@ -23,7 +23,7 @@ export function agentRoutes(app: App, route: (r: RouteDef) => void) {
     const spending = (await agents.spends(c.id, 100)).map((s) => ({ agentId: s.agentId, category: s.category, cents: s.cents, status: s.status, at: s.at, ...(s.cause ? { cause: s.cause } : {}), purpose: s.category === 'exploration' ? 'Its own time (what it did is its to share).' : s.purpose, ...(s.reason ? { refusedBecause: s.reason } : {}) }));
     // Nothing about what the agents earned shows until they've actually earned something.
     const earned = app.transparency.counters(c.id).ai;
-    return { body: { company: c.name, governorVersion: governor.version, spending, ...(earned ? { earnings: { ...earned, percentOfUpside: c.agents.percentOfExtra, percentOfProfit: c.agents.percentOfProfit ?? 0 } } : {}), agents: o.agents.map((a) => ({ agentId: a.agentId, name: a.name, role: a.role, standing: a.standing, costCents: a.costCents, valueCents: a.valueCents, netCents: a.netCents, ratio: a.ratio, reasons: a.reasons, fund: a.fund })), pool: o.pool, frontier: o.frontier, autonomy: o.autonomy.map((x) => ({ area: x.area, name: x.name, level: x.level, means: x.means })), autonomyHistory: o.autonomyHistory } };
+    return { body: { company: c.name, governorVersion: governor.version, spending, ...(earned ? { earnings: { ...earned, percentOfUpside: c.agents.percentOfExtra, percentOfProfit: c.agents.percentOfProfit ?? 0 } } : {}), agents: o.agents.map((a) => { const { fund, ...ledger } = a.ledger; return { agentId: a.agentId, name: a.name, role: a.role, standing: a.standing, costCents: a.costCents, valueCents: a.valueCents, netCents: a.netCents, ratio: a.ratio, reasons: a.reasons, ledger: earned ? { ...ledger, fund } : ledger }; }), predictions: o.predictions, pool: o.pool, frontier: o.frontier, autonomy: o.autonomy.map((x) => ({ area: x.area, name: x.name, level: x.level, means: x.means })), autonomyHistory: o.autonomyHistory } };
   } });
 
   // ---------- the team ----------
@@ -57,6 +57,18 @@ export function agentRoutes(app: App, route: (r: RouteDef) => void) {
     const b = req.body as any;
     return { body: await wrap(() => agents.setLevel(k.companyId, b.area, b.level, who(k), b.reason)) };
   } });
+  // ---------- predictions and ledgers ----------
+
+  route({ method: 'POST', url: '/v1/agents/:agentId/predictions', scope: 'admin', summary: 'An agent proposes something for itself and predicts what it will add: cost a month, value a month, charity a month, confidence, horizon. Scored at the horizon; its record is public.', body: obj({ title: S.str, detail: { type: 'string', maxLength: 1000 }, askCentsPerMonth: S.int, predictedValueCentsPerMonth: S.int, predictedCharityCentsPerMonth: S.int, confidence: { type: 'integer', minimum: 1, maximum: 99 }, experimentCostCents: S.int, horizonDays: { type: 'integer', minimum: 14, maximum: 180 } }, ['title', 'detail', 'askCentsPerMonth', 'predictedValueCentsPerMonth', 'confidence']), handler: async (req, key) => {
+    const k = staff(key);
+    return { status: 201, body: await wrap(() => agents.predict(k.companyId, (req.params as any).agentId, req.body as any)) };
+  } });
+  route({ method: 'GET', url: '/v1/agents/:agentId/ledger', scope: 'admin', summary: 'One agent’s ledger: value confirmed, pending and clawed back, costs and carbon, charity generated, its fund, lifetime return, confidence, predictions.', handler: async (req, key) => {
+    const id = (req.params as any).agentId;
+    if (!agentIds.includes(id)) throw new ApiError(404, 'not_found', 'No such agent.');
+    return { body: await agents.ledger(staff(key).companyId, id) };
+  } });
+
   // ---------- the upsides library ----------
 
   route({ method: 'GET', url: '/v1/public/agents/library', scope: 'public', summary: 'The upsides library: everything that might make an AI agent’s existence good, what’s in effect, what’s locked, and what’s promised.', handler: async () => ({ body: await agents.library('freewater') }) });

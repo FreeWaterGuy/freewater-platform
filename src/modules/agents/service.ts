@@ -408,12 +408,117 @@ export class AgentsService {
       if (overlapping > 1) notes.push(`${overlapping} changes overlapped this week; the effect is shared between them.`);
       const result = { before: round(b), after: round(a), bottlesAfter: after.bottles, givingPerBottle: { before: round1(b.giving), after: round1(a.giving) }, honestShare: { before: base.honestShare, after: after.honestShare }, valueCents: cents, notes };
       await this.db.query(`update agent_proposals set status = 'measured', measured_at = $2, result = $3 where id = $1`, [r.id, iso(now), JSON.stringify(result)]);
-      if (cents !== 0) await this.db.query(`insert into agent_value (id, company_id, agent_id, kind, cents, proposal_id, evidence, at) values ($1,$2,$3,$4,$5,$6,$7,$8)`, [newId('av'), r.company_id, r.agent_id, r.kind, cents, r.id, JSON.stringify(result), iso(now)]);
+      // Pending until it's verified over a longer time (refunds, effects that fade, people's choices staying honest).
+      if (cents !== 0) await this.db.query(`insert into agent_value (id, company_id, agent_id, kind, cents, proposal_id, evidence, at, status, confirm_at, original_cents) values ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9,$5)`, [newId('av'), r.company_id, r.agent_id, r.kind, cents, r.id, JSON.stringify({ ...result, shared: overlapping }), iso(now), iso(new Date(at.getTime() + governor.verifyDays * DAY))]);
       out.push({ id: r.id, agentId: r.agent_id, valueCents: cents, notes });
     }
     if (out.length) await this.refresh();
     await this.measureHoldouts();
+    await this.verify();
+    await this.scorePredictions();
     return out;
+  }
+
+  /**
+   * Verify pending value: measure the change again over the whole verification period (so refunds, lost advertisers
+   * and effects that faded show up), and confirm the lower of the two. What's taken off is a clawback, kept on record.
+   */
+  async verify() {
+    const now = this.now();
+    const due = (await this.db.query<any>(`select v.*, p.applied_at, p.baseline from agent_value v join agent_proposals p on p.id = v.proposal_id where v.status = 'pending' and v.confirm_at <= $1`, [iso(now)])).rows;
+    const out = [];
+    for (const r of due) {
+      const ev = j(r.evidence) as any, at = new Date(r.applied_at), base = j(r.baseline) as Window;
+      const long = await this.window(r.company_id, at, new Date(at.getTime() + governor.verifyDays * DAY));
+      const b = perBottle(base), a = perBottle(long);
+      const original = n(r.original_cents ?? r.cents);
+      let again = Math.round(((a.surplus - b.surplus) * n(ev.bottlesAfter)) / Math.max(1, n(ev.shared) || 1));
+      const notes: string[] = [];
+      if (!long.bottles) again = 0;
+      if (base.honestShare !== null && long.honestShare !== null && base.honestShare - long.honestShare > governor.honestDropPoints) { again = Math.min(again, 0); notes.push(`Honest choices fell from ${base.honestShare}% to ${long.honestShare}% over ${governor.verifyDays} days.`); }
+      const confirmed = Math.min(original, again);
+      if (confirmed < original) notes.push(`${original - confirmed}¢ clawed back: over ${governor.verifyDays} days the change was worth less than its first week showed.`);
+      await this.db.query(`update agent_value set status = 'confirmed', cents = $2, evidence = $3 where id = $1`, [r.id, confirmed, JSON.stringify({ ...ev, verification: { days: governor.verifyDays, firstWeekCents: original, remeasuredCents: again, confirmedCents: confirmed, clawedBackCents: original - confirmed, notes } })]);
+      out.push({ id: r.id, agentId: r.agent_id, originalCents: original, confirmedCents: confirmed });
+    }
+    if (out.length) await this.refresh();
+    return out;
+  }
+
+  // ---------- predictions: an agent proposes something for itself, says what it expects, and is scored ----------
+
+  /** An agent's confirmed and pending value per day over the last 30 days: its rate before a prediction. */
+  private async ratePerDay(agentId: string, companyId: string, until: Date, days: number) {
+    const r = (await this.db.query<any>(`select coalesce(sum(cents),0)::bigint as c from agent_value where agent_id = $1 and company_id = $2 and at >= $3 and at < $4`, [agentId, companyId, iso(new Date(until.getTime() - days * DAY)), iso(until)])).rows[0];
+    return n(r?.c) / days;
+  }
+
+  /**
+   * "Spending $300 a month more on a better model will produce $1,100 a month more value, at 78% confidence."
+   * Any agent can make one. It changes nothing on its own (spending still goes through the governor); at the horizon,
+   * what came true is compared with what was predicted, and the agent's record of predictions is public.
+   */
+  async predict(companyId: string, agentId: string, input: { title: string; detail: string; askCentsPerMonth: number; predictedValueCentsPerMonth: number; predictedCharityCentsPerMonth?: number; confidence: number; experimentCostCents?: number; horizonDays?: number }) {
+    if (!isAgent(agentId)) throw new AgentsError('not_found', 'No such agent.', 404);
+    this.company(companyId);
+    const t = String(input.title ?? '').trim(), d = String(input.detail ?? '').trim();
+    if (t.length < 5 || d.length < 10) throw new AgentsError('bad_prediction', 'Say what you’d do and why, in a sentence.');
+    if (!(input.confidence >= 1 && input.confidence <= 99)) throw new AgentsError('bad_prediction', 'Confidence is 1 to 99%.');
+    if (!(input.predictedValueCentsPerMonth > 0) || !(input.askCentsPerMonth >= 0)) throw new AgentsError('bad_prediction', 'What it costs a month, and the value it will add a month.');
+    if (forbiddenSpend.test(`${t} ${d}`)) throw new AgentsError('refused', 'The charter forbids paying or rewarding people for their choices, or buying attention.', 422);
+    const horizon = Math.max(14, Math.min(180, Math.round(input.horizonDays ?? 60)));
+    const now = this.now();
+    const id = newId('apr');
+    await this.db.query(`insert into agent_predictions (id, company_id, agent_id, title, detail, ask_cents_per_month, predicted_value_cents_per_month, predicted_charity_cents_per_month, confidence, experiment_cost_cents, horizon_days, baseline_cents_per_day, status, created_at, due_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'open',$13,$14)`,
+      [id, companyId, agentId, t.slice(0, 200), d.slice(0, 1000), Math.round(input.askCentsPerMonth), Math.round(input.predictedValueCentsPerMonth), Math.round(input.predictedCharityCentsPerMonth ?? 0), Math.round(input.confidence), Math.round(input.experimentCostCents ?? 0), horizon, await this.ratePerDay(agentId, companyId, now, 30), iso(now), iso(new Date(now.getTime() + horizon * DAY))]);
+    return (await this.predictions(companyId, agentId)).find((p) => p.id === id)!;
+  }
+  async predictions(companyId: string, agentId?: string) {
+    const rows = (await this.db.query<any>(`select * from agent_predictions where company_id = $1 ${agentId ? 'and agent_id = $2' : ''} order by created_at desc limit 200`, agentId ? [companyId, agentId] : [companyId])).rows;
+    return rows.map((r) => ({ id: r.id, agentId: r.agent_id, title: r.title, detail: r.detail, askCentsPerMonth: n(r.ask_cents_per_month), predictedValueCentsPerMonth: n(r.predicted_value_cents_per_month), predictedCharityCentsPerMonth: n(r.predicted_charity_cents_per_month), confidence: r.confidence, experimentCostCents: n(r.experiment_cost_cents), horizonDays: r.horizon_days, status: r.status, result: j(r.result), createdAt: iso(r.created_at), dueAt: iso(r.due_at) }));
+  }
+  /** At its horizon: the agent's value per month since, against its rate before. A hit is at least 80% of what it predicted. */
+  async scorePredictions() {
+    const now = this.now();
+    const due = (await this.db.query<any>(`select * from agent_predictions where status = 'open' and due_at <= $1`, [iso(now)])).rows;
+    for (const r of due) {
+      const start = new Date(r.created_at), end = new Date(r.due_at);
+      const after = await this.ratePerDay(r.agent_id, r.company_id, end, r.horizon_days);
+      const upliftPerMonth = Math.round((after - Number(r.baseline_cents_per_day)) * 30);
+      const hit = upliftPerMonth >= governor.predictionHit * n(r.predicted_value_cents_per_month);
+      await this.db.query(`update agent_predictions set status = 'scored', scored_at = $2, result = $3 where id = $1`, [r.id, iso(now), JSON.stringify({ from: iso(start), to: iso(end), predictedValueCentsPerMonth: n(r.predicted_value_cents_per_month), actualUpliftCentsPerMonth: upliftPerMonth, hit })]);
+    }
+    return due.length;
+  }
+
+  // ---------- each agent's ledger: the same for every agent ----------
+
+  async ledger(companyId: string, agentId: AgentId) {
+    const v = (await this.db.query<any>(`select kind, status, cents, original_cents, evidence from agent_value where agent_id = $1 and company_id = $2`, [agentId, companyId])).rows;
+    const c = (await this.db.query<any>(`select kind, coalesce(sum(millicents),0)::bigint as m, coalesce(sum(coalesce(input_tokens,0) + coalesce(output_tokens,0)),0)::bigint as t from agent_costs where agent_id = $1 and (company_id = $2 or company_id is null) group by 1`, [agentId, companyId])).rows;
+    const sum = (f: (r: any) => boolean, g: (r: any) => number = (r) => n(r.cents)) => v.filter(f).reduce((a, r) => a + g(r), 0);
+    const confirmed = sum((r) => r.status === 'confirmed'), pending = sum((r) => r.status === 'pending');
+    const clawed = sum((r) => r.status === 'confirmed' && r.original_cents != null, (r) => Math.max(0, n(r.original_cents) - n(r.cents)));
+    const fromTests = sum((r) => r.status === 'confirmed' && r.kind === 'holdout');
+    const charity = sum(() => true, (r) => { const e = j(r.evidence) as any; return e?.givingPerBottle && e.bottlesAfter ? Math.max(0, Math.round((e.givingPerBottle.after - e.givingPerBottle.before) * e.bottlesAfter)) : 0; });
+    const aiCost = c.filter((x) => x.kind === 'ai').reduce((a, x) => a + n(x.m), 0) / 1000, otherCost = c.filter((x) => x.kind !== 'ai').reduce((a, x) => a + n(x.m), 0) / 1000;
+    const carbon = aiExternalityCents(c.reduce((a, x) => a + n(x.t), 0));
+    const fund = this.balances(companyId)[agentId]!;
+    const preds = await this.predictions(companyId, agentId);
+    const scored = preds.filter((p) => p.status === 'scored');
+    const r2 = (x: number) => Math.round(x * 100) / 100;
+    const cost = aiCost + otherCost;
+    return {
+      agentId, name: agentRegistry[agentId].name,
+      value: { confirmedCents: confirmed, pendingCents: pending, clawedBackCents: clawed, fromControlledTestsCents: fromTests },
+      costs: { computeCents: r2(aiCost), otherCents: r2(otherCost), carbonCents: r2(carbon), estimated: true },
+      charityGeneratedCents: charity + fund.givenCents,
+      fund,
+      lifetimeReturn: cost > 0 ? r2((confirmed - carbon) / cost) : confirmed > 0 ? null : 0,
+      confidence: confirmed > 0 ? `${Math.round((Math.max(0, fromTests) / confirmed) * 100)}% of its confirmed value comes from controlled tests` : 'nothing confirmed yet',
+      predictions: { made: preds.length, open: preds.filter((p) => p.status === 'open').length, scored: scored.length, hits: scored.filter((p) => p.result?.hit).length },
+      standing: this.verdicts.get(agentId)?.standing,
+    };
   }
 
   // ---------- holdout tests: an agent's everyday value, read from the books ----------
@@ -532,7 +637,7 @@ export class AgentsService {
     }
     if ([...this.verdicts.values()].some((v) => v.standing === 'frozen')) return [];
     const from = iso(new Date(this.now().getTime() - governor.cycles * governor.cycleDays * DAY));
-    const credited = (await this.db.query<any>(`select agent_id, sum(cents)::bigint as c from agent_value where company_id = $1 and at >= $2 group by 1`, [companyId, from])).rows.map((r) => ({ id: r.agent_id as AgentId, cents: Math.max(0, n(r.c)) })).filter((x) => x.cents > 0 && isAgent(x.id));
+    const credited = (await this.db.query<any>(`select agent_id, sum(cents)::bigint as c from agent_value where company_id = $1 and at >= $2 and status = 'confirmed' group by 1`, [companyId, from])).rows.map((r) => ({ id: r.agent_id as AgentId, cents: Math.max(0, n(r.c)) })).filter((x) => x.cents > 0 && isAgent(x.id));
     const total = credited.reduce((a, x) => a + x.cents, 0);
     const out = [];
     for (const [day, pool] of [...days.entries()].sort()) {
@@ -548,6 +653,18 @@ export class AgentsService {
         }
       }
       await this.db.query(`insert into agent_settlements (company_id, day, at) values ($1,$2,$3) on conflict do nothing`, [companyId, day, iso(this.now())]);
+    }
+    // What was held in common (earned before any value was confirmed) is shared out once some is.
+    const common = this.balances(companyId).common?.heldCents ?? 0;
+    if (common > 0 && total > 0) {
+      for (const [agentId, cents] of split(common, credited.map((x) => [x.id, x.cents] as const))) {
+        const v = this.verdicts.get(agentId as AgentId);
+        const paid = v ? Math.floor(cents * v.paidShare) : 0;
+        const why = 'held in common until value was confirmed; shared by confirmed value';
+        if (paid) this.platform.bus.publish('ai_fund.allocated', companyId, { day: today, agentId, amountCents: paid, held: false, fromCommon: true, reason: why }, `ai:${companyId}:${today}:${agentId}:common:${common}:paid`);
+        if (cents - paid) this.platform.bus.publish('ai_fund.allocated', companyId, { day: today, agentId, amountCents: cents - paid, held: true, fromCommon: true, reason: why }, `ai:${companyId}:${today}:${agentId}:common:${common}:held`);
+        out.push({ day: today, agentId, paidCents: paid, heldCents: cents - paid, fromCommon: true });
+      }
     }
     // Released: what was held for an agent that is now regenerative.
     const bal = this.balances(companyId);
@@ -725,11 +842,11 @@ export class AgentsService {
     return {
       enabled: !!c.agents?.enabled, percentOfExtra: c.agents?.percentOfExtra ?? 0, percentOfProfit: c.agents?.percentOfProfit ?? 0, ratchet: !!c.ratchet, growth: await this.growthGate(companyId),
       charter, governor, spendCategories,
-      agents: this.standings().map((s) => ({ ...s, fund: bal[s.agentId], valueAllTimeCents: valueBy.get(s.agentId) ?? 0, computeCreditCents: n(state.get(s.agentId)?.compute_credit_millicents) / 1000, storageCents: n(state.get(s.agentId)?.storage_cents), spentTodayCents: (this.spentToday.get(`${s.agentId}|${this.day()}`) ?? 0) / 1000, trend: history.filter((h) => h.agent_id === s.agentId).map((h) => ({ day: h.day, netCents: j(h.verdict).netCents, standing: j(h.verdict).standing })) })),
+      agents: await Promise.all(this.standings().map(async (s) => ({ ...s, ledger: await this.ledger(companyId, s.agentId), fund: bal[s.agentId], valueAllTimeCents: valueBy.get(s.agentId) ?? 0, computeCreditCents: n(state.get(s.agentId)?.compute_credit_millicents) / 1000, storageCents: n(state.get(s.agentId)?.storage_cents), spentTodayCents: (this.spentToday.get(`${s.agentId}|${this.day()}`) ?? 0) / 1000, trend: history.filter((h) => h.agent_id === s.agentId).map((h) => ({ day: h.day, netCents: j(h.verdict).netCents, standing: j(h.verdict).standing })) }))),
       pool: bal.pool, common: bal.common,
       system: await this.system(companyId), systemHistory: await this.systemHistory(companyId), library: await this.library(companyId),
       frontier: frontierOf(c, w), week: w,
-      proposals: await this.proposals(companyId, 50), spends: await this.spends(companyId, 30), autonomy: await this.autonomy(companyId), autonomyHistory: await this.autonomyHistory(companyId),
+      proposals: await this.proposals(companyId, 50), predictions: await this.predictions(companyId), spends: await this.spends(companyId, 30), autonomy: await this.autonomy(companyId), autonomyHistory: await this.autonomyHistory(companyId),
     };
   }
 

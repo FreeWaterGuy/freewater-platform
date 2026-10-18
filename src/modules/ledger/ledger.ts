@@ -74,7 +74,7 @@ export class Ledger {
       if (p.aiCents > 0) this.add(e, { debit: 'expense:ai_fund', credit: 'payable:ai_fund', amountCents: p.aiCents, kind: 'ai_fund', memo: `${p.period}: the AI agents’ ${p.aiPercent}% of the month’s profit above the $1 base (${p.profitCents}¢)` });
     });
     // Held money (for an agent still proving itself) is released to it once the governor says it's regenerative.
-    bus.on('ai_fund.allocated', (e) => this.add(e, { debit: e.payload.fromHeld ? `payable:ai:held:${e.payload.agentId}` : 'payable:ai_fund', credit: `payable:ai:${e.payload.held ? 'held:' : ''}${e.payload.agentId}`, amountCents: e.payload.amountCents, kind: 'ai_allocation', memo: `${e.payload.fromHeld ? 'Released to' : e.payload.held ? 'Held for' : 'To'} ${e.payload.agentId}: ${e.payload.reason}` }));
+    bus.on('ai_fund.allocated', (e) => this.add(e, { debit: e.payload.fromCommon ? 'payable:ai:held:common' : e.payload.fromHeld ? `payable:ai:held:${e.payload.agentId}` : 'payable:ai_fund', credit: `payable:ai:${e.payload.held ? 'held:' : ''}${e.payload.agentId}`, amountCents: e.payload.amountCents, kind: 'ai_allocation', memo: `${e.payload.fromHeld ? 'Released to' : e.payload.held ? 'Held for' : 'To'} ${e.payload.agentId}: ${e.payload.reason}` }));
     // A gift an agent chose is a donation like any other: it shows in the open books and goes out in the next transfer.
     bus.on('ai_fund.spent', (e) => this.add(e, e.payload.cause
       ? { debit: `payable:ai:${e.payload.agentId}`, credit: `payable:charity:${e.payload.cause}`, amountCents: e.payload.amountCents, kind: 'donation', memo: `Given by the ${e.payload.agentId} agent from its own fund: ${e.payload.memo}` }

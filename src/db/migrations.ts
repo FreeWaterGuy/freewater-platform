@@ -909,6 +909,18 @@ create table agent_arms (agent_id text not null, company_id text not null, unit_
 create index agent_arms_at on agent_arms(agent_id, at);
 `,
   },
+  {
+    id: '023_verified_value_predictions',
+    sql: `
+-- Value is verified before it's paid: measured value waits 30 days, is measured again over the longer window, and is
+-- confirmed at the lower of the two (the difference is clawed back).
+alter table agent_value add column status text not null default 'confirmed';
+alter table agent_value add column confirm_at timestamptz;
+alter table agent_value add column original_cents bigint;
+-- What an agent predicts about itself, and how it turned out.
+create table agent_predictions (id text primary key, company_id text not null, agent_id text not null, title text not null, detail text not null, ask_cents_per_month bigint not null, predicted_value_cents_per_month bigint not null, predicted_charity_cents_per_month bigint not null, confidence int not null, experiment_cost_cents bigint not null, horizon_days int not null, baseline_cents_per_day double precision not null, status text not null, result jsonb, created_at timestamptz not null, due_at timestamptz not null, scored_at timestamptz);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {
