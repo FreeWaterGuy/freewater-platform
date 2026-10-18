@@ -9,7 +9,8 @@ import {
   type AgentId, type AutonomyArea, type AutonomyLevel, type SpendCategory,
 } from './charter';
 import { judge, type Cycle, type Verdict } from './governor';
-import { changeable, codeScan, frontierOf, perBottle, read, valueScan, type Idea, type Window } from './scouts';
+import { changeable, codeScan, frontierOf, perBottle, read, valueScan, type ChainOnLine, type Idea, type Window } from './scouts';
+import { aiExternalityCents, bottleExternalityCents, efficiency, estimates, growthTest, type Efficiency } from './efficiency';
 
 // The AI agents, as participants with their own place in the books.
 //
@@ -42,6 +43,7 @@ export interface AgentsDeps {
 
 export class AgentsService {
   private verdicts = new Map<AgentId, Verdict>();
+  private effs = new Map<AgentId, Efficiency>();
   private spentToday = new Map<string, number>(); // agent|day → millicents
   private credit = new Map<AgentId, number>(); // compute bought, millicents
   private writes: Promise<unknown> = Promise.resolve();
@@ -110,15 +112,17 @@ export class AgentsService {
     const pieces = units.flatMap((u) => u.placements);
     const uc = c.unitCosts ? c.unitCosts.water + c.unitCosts.bottle + c.unitCosts.label + c.unitCosts.machine : 0;
     // AI costs: what this company's work used, plus its share (by bottles) of what isn't tied to one company.
-    const costs = (await this.db.query<any>(`select agent_id, company_id, sum(millicents)::bigint as m, count(*)::int as calls from agent_costs where at >= $1 and at < $2 group by 1, 2`, [iso(from), iso(to)])).rows;
+    const costs = (await this.db.query<any>(`select agent_id, company_id, sum(millicents)::bigint as m, count(*)::int as calls, coalesce(sum(coalesce(input_tokens,0) + coalesce(output_tokens,0)),0)::bigint as t from agent_costs where at >= $1 and at < $2 group by 1, 2`, [iso(from), iso(to)])).rows;
     const allBottles = [...this.platform.units.values()].filter((u) => (u.status === 'printed' || u.status === 'dispensed') && inside(u.createdAt) && this.platform.companies.get(u.companyId)?.agents?.enabled).length;
     const share = allBottles ? units.length / allBottles : c.agents?.enabled ? 1 : 0;
     const byAgent: Record<string, number> = {}, calls: Record<string, number> = {};
+    let tokens = 0;
     for (const r of costs) {
       const part = r.company_id === companyId ? 1 : r.company_id == null ? share : 0;
       if (!part) continue;
       byAgent[r.agent_id] = (byAgent[r.agent_id] ?? 0) + (n(r.m) / 1000) * part;
       calls[r.agent_id] = (calls[r.agent_id] ?? 0) + Math.round(n(r.calls) * part);
+      tokens += n(r.t) * part;
     }
     const choice = (await this.db.query<any>(`select count(*)::int as all, count(*) filter (where tier in ('3','4a','4b','5'))::int as honest from choices where company_id = $1 and at >= $2 and at < $3`, [companyId, iso(from), iso(to)])).rows[0];
     return {
@@ -131,7 +135,7 @@ export class AgentsService {
       housePieces: pieces.filter((p) => p.isHouse).length, adPieces: pieces.filter((p) => !p.isHouse).length,
       scans: lines.filter((l) => l.kind === 'scan').length, arLaunches: lines.filter((l) => l.kind === 'ar').length, sales: lines.filter((l) => l.kind === 'commission').length,
       honestShare: n(choice?.all) ? Math.round((n(choice.honest) / n(choice.all)) * 1000) / 10 : null,
-      aiCostByAgent: byAgent, aiCallsByAgent: calls,
+      aiTokens: Math.round(tokens), aiCostByAgent: byAgent, aiCallsByAgent: calls,
     };
   }
 
@@ -143,21 +147,58 @@ export class AgentsService {
     const books = await this.deps.verifyBooks().catch((e) => ({ ok: false, problem: String(e?.message ?? e) }));
     const ages = new Map((await this.db.query<any>(`select agent_id, created_at from agent_state`)).rows.map((r) => [r.agent_id, (now.getTime() - new Date(r.created_at).getTime()) / DAY]));
     const from = new Date(now.getTime() - governor.cycles * governor.cycleDays * DAY);
-    const cost = (await this.db.query<any>(`select agent_id, at, millicents from agent_costs where at >= $1`, [iso(from)])).rows;
-    const value = (await this.db.query<any>(`select agent_id, at, cents from agent_value where at >= $1`, [iso(from)])).rows;
+    const cost = (await this.db.query<any>(`select agent_id, at, millicents, coalesce(input_tokens,0) + coalesce(output_tokens,0) as tokens from agent_costs where at >= $1`, [iso(from)])).rows;
+    const value = (await this.db.query<any>(`select agent_id, at, cents, evidence from agent_value where at >= $1`, [iso(from)])).rows;
     const cycleOf = (at: unknown) => Math.min(governor.cycles - 1, Math.floor((now.getTime() - new Date(at as string).getTime()) / (governor.cycleDays * DAY)));
     for (const id of agentIds) {
       const cycles: Cycle[] = Array.from({ length: governor.cycles }, () => ({ costMillicents: 0, valueCents: 0 }));
-      for (const r of cost) if (r.agent_id === id) cycles[cycleOf(r.at)]!.costMillicents += n(r.millicents);
-      for (const r of value) if (r.agent_id === id) cycles[cycleOf(r.at)]!.valueCents += n(r.cents);
+      // The governor reads value net of the agent's own externalities (the carbon of its thinking): the market form.
+      let raw = 0, ext = 0, social = 0, costMc = 0;
+      for (const r of cost) if (r.agent_id === id) { const e = aiExternalityCents(n(r.tokens)); cycles[cycleOf(r.at)]!.costMillicents += n(r.millicents); cycles[cycleOf(r.at)]!.valueCents -= e; ext += e; costMc += n(r.millicents); }
+      for (const r of value) if (r.agent_id === id) {
+        cycles[cycleOf(r.at)]!.valueCents += n(r.cents); raw += n(r.cents);
+        const ev = j(r.evidence) as any;
+        if (ev?.givingPerBottle && ev.bottlesAfter) social += Math.max(0, (ev.givingPerBottle.after - ev.givingPerBottle.before) * ev.bottlesAfter);
+      }
+      this.effs.set(id, efficiency({ valueCents: raw, consumerBenefitCents: 0, socialBenefitCents: social, externalityCents: ext, costCents: costMc / 1000 }));
       const v = judge({ cycles, ageDays: ages.get(id) ?? 0, essential: agentRegistry[id].essential, booksVerified: books.ok, ...(books.problem ? { booksProblem: books.problem } : {}), lastWeekValueCents: Math.max(0, cycles[0]!.valueCents) });
       this.verdicts.set(id, v);
       await this.db.query(`insert into agent_standings (agent_id, day, verdict) values ($1,$2,$3) on conflict (agent_id, day) do update set verdict = excluded.verdict`, [id, this.day(now), JSON.stringify(v)]);
     }
     await this.placeAll();
+    for (const c of this.platform.companies.values()) if (c.agents?.enabled) await this.system(c.id, true);
     return this.standings();
   }
-  standings() { return agentIds.map((id) => ({ agentId: id, ...agentRegistry[id], ...this.verdicts.get(id)! })); }
+  standings() { return agentIds.map((id) => ({ agentId: id, ...agentRegistry[id], ...this.verdicts.get(id)!, efficiency: this.effs.get(id) ?? null })); }
+
+  /**
+   * The whole system, the agents' own goal: both forms of aggregate efficiency over the last week, and every value
+   * chain on the number line, counted by where it sits. More chains left of zero, and regenerative, is the aim.
+   */
+  async system(companyId: string, snapshot = false) {
+    const c = this.company(companyId);
+    const now = this.now();
+    const week = async (end: Date) => {
+      const w = await this.window(companyId, new Date(end.getTime() - 7 * DAY), end);
+      const agentGifts = this.platform.ledger.entries.filter((l) => l.companyId === companyId && l.kind === 'donation' && l.debit.startsWith('payable:ai:') && l.at >= new Date(w.from) && l.at < new Date(w.to)).reduce((a, l) => a + l.amountCents, 0);
+      const retail = c.consumerPricing === 'free' ? c.consumer?.retailValueCents ?? 100 : c.consumerPricing === 'discounted' ? Math.round((c.consumer?.retailValueCents ?? 100) / 2) : 0;
+      return { w, eff: efficiency({ valueCents: w.revenueCents, consumerBenefitCents: w.bottles * retail, socialBenefitCents: w.givingCents + agentGifts, externalityCents: bottleExternalityCents(w.bottles) + aiExternalityCents(w.aiTokens), costCents: w.bottles * w.unitCostCents + w.aiCostCents }) };
+    };
+    const thisWeek = await week(new Date(now.getTime() + 1)), lastWeek = await week(new Date(now.getTime() + 1 - 7 * DAY)); // up to and including now
+    const placed = this.deps.numberline ? await this.deps.numberline.all(companyId) : [];
+    const chains: (ChainOnLine & { regenerative: boolean | null })[] = placed.map((r) => ({ subject: r.subject, name: r.name, position: r.placement.position, netCents: r.placement.netCents, regenerative: r.subject.startsWith('bottle:') || r.subject === 'company' ? thisWeek.eff.regenerative : r.subject.startsWith('agent:') ? this.effs.get(r.subject.slice(6) as AgentId)?.regenerative ?? null : null }));
+    const count = (pos: string) => chains.filter((x) => x.position === pos).length;
+    const out = {
+      efficiency: { thisWeek: thisWeek.eff, lastWeek: lastWeek.eff, socialDirection: thisWeek.eff.social === null || lastWeek.eff.social === null ? null : thisWeek.eff.social > lastWeek.eff.social ? 'up' : thisWeek.eff.social < lastWeek.eff.social ? 'down' : 'flat' },
+      chains: { leftOfZero: count('negatively_priced'), atZero: count('free'), rightOfZero: count('for_sale'), regenerativeLeftOfZero: chains.filter((x) => x.position === 'negatively_priced' && x.regenerative === true).length, list: chains },
+      estimates,
+    };
+    if (snapshot) await this.db.query(`insert into system_snapshots (company_id, day, data) values ($1,$2,$3) on conflict (company_id, day) do update set data = excluded.data`, [companyId, this.day(now), JSON.stringify({ efficiency: { market: out.efficiency.thisWeek.market, social: out.efficiency.thisWeek.social }, chains: { leftOfZero: out.chains.leftOfZero, atZero: out.chains.atZero, rightOfZero: out.chains.rightOfZero, regenerativeLeftOfZero: out.chains.regenerativeLeftOfZero } })]);
+    return out;
+  }
+  async systemHistory(companyId: string) {
+    return (await this.db.query<any>(`select day, data from system_snapshots where company_id = $1 order by day desc limit 90`, [companyId])).rows.map((r) => ({ day: r.day, ...j(r.data) }));
+  }
 
   /** Each agent on the number line, for each company that has agents: what it costs against what it gives back. */
   private async placeAll() {
@@ -300,10 +341,11 @@ export class AgentsService {
   async scan(companyId: string) {
     const c = this.company(companyId);
     const now = this.now();
-    const w = await this.window(companyId, new Date(now.getTime() - 7 * DAY), now);
+    const w = await this.window(companyId, new Date(now.getTime() - 7 * DAY), new Date(now.getTime() + 1));
     const open = new Set((await this.db.query<any>(`select change from agent_proposals where company_id = $1 and status in ('proposed','approved','applied')`, [companyId])).rows.map((r) => j(r.change)?.path).filter(Boolean));
     const noted = new Set((await this.db.query<any>(`select title from agent_proposals where company_id = $1 and status = 'noted' and created_at > $2`, [companyId, iso(new Date(now.getTime() - 7 * DAY))])).rows.map((r) => r.title));
-    const { frontier, ideas } = valueScan(c, w, open);
+    const chains = (this.deps.numberline ? await this.deps.numberline.all(companyId) : []).map((r) => ({ subject: r.subject, name: r.name, position: r.placement.position, netCents: r.placement.netCents }));
+    const { frontier, ideas } = valueScan(c, w, open, chains);
     const made = [];
     for (const idea of [...ideas, ...codeScan(w, open)]) {
       if (idea.kind === 'note' && noted.has(idea.title)) continue;
@@ -396,8 +438,8 @@ export class AgentsService {
     const c = this.company(companyId);
     if (!c.agents?.enabled) throw new AgentsError('off', `${c.name} hasn’t turned on the AI agents.`, 409);
     const cat = input.category as SpendCategory;
-    const refuse = async (reason: string) => {
-      await this.db.query(`insert into agent_spends (id, company_id, agent_id, category, cents, purpose, cause, status, reason, decided_by, at) values ($1,$2,$3,$4,$5,$6,$7,'refused',$8,'governor',$9)`, [newId('as'), companyId, agentId, String(input.category).slice(0, 40), Math.round(input.cents) || 0, String(input.purpose ?? '').slice(0, 500), input.cause ?? null, reason, iso(this.now())]);
+    const refuse = async (reason: string, projection?: unknown) => {
+      await this.db.query(`insert into agent_spends (id, company_id, agent_id, category, cents, purpose, cause, status, reason, decided_by, at, projection) values ($1,$2,$3,$4,$5,$6,$7,'refused',$8,'governor',$9,$10)`, [newId('as'), companyId, agentId, String(input.category).slice(0, 40), Math.round(input.cents) || 0, String(input.purpose ?? '').slice(0, 500), input.cause ?? null, reason, iso(this.now()), projection ? JSON.stringify(projection) : null]);
       throw new AgentsError('refused', reason, 422);
     };
     if (!(cat in spendCategories)) return refuse(`Spending is on ${Object.keys(spendCategories).join(', ')}. There is no category for paying people or buying attention.`);
@@ -417,6 +459,18 @@ export class AgentsService {
       const used = n((await this.db.query<any>(`select coalesce(sum(cents),0)::bigint as c from agent_spends where company_id = $1 and agent_id = $2 and category = 'exploration' and status in ('approved','done') and at >= $3`, [companyId, agentId, iso(since)])).rows[0]?.c);
       if (used + cents > Math.floor(got * governor.explorationShare)) return refuse(`Exploration is up to a tenth of what it received in 30 days: ${Math.floor(got * governor.explorationShare) - used}¢ left.`);
     }
+    // Growing itself must keep it giving more than it takes: both forms of aggregate efficiency, projected with the
+    // new cost and its carbon added, must stay at or above 1.
+    let projection: unknown = null;
+    if (cat !== 'cause') {
+      const e = this.effs.get(agentId);
+      const p = e?.parts ?? { valueCents: 0, socialBenefitCents: 0, costCents: 0, externalityCents: 0 };
+      const price = priceOf('default');
+      const addExt = cat === 'compute' || cat === 'exploration' || cat === 'growth' ? aiExternalityCents((cents * 1e6) / ((price.input + price.output) / 2)) : 0;
+      const t = growthTest({ valueCents: p.valueCents, socialBenefitCents: p.socialBenefitCents, costCents: p.costCents, externalityCents: p.externalityCents }, { costCents: cents, externalityCents: addExt });
+      projection = { ...t, addedCostCents: cents, addedExternalityCents: Math.round(addExt * 100) / 100 };
+      if (!t.ok) return refuse(`Growing by ${cents}¢ would take its aggregate efficiency to ${t.after.market ?? 0} (market form) and ${t.after.social ?? 0} (social form). Both must stay at or above 1: it has to produce more than it takes first.`, projection);
+    }
     let cause: string | undefined;
     if (cat === 'cause') {
       const list = await this.deps.charities(companyId);
@@ -426,7 +480,7 @@ export class AgentsService {
     const id = newId('as');
     const level = await this.level(companyId, 'spending');
     const status = level >= 2 || !by.startsWith('agent:') ? 'approved' : 'pending';
-    await this.db.query(`insert into agent_spends (id, company_id, agent_id, category, cents, purpose, cause, status, decided_by, at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [id, companyId, agentId, cat, cents, purpose, cause ?? null, status, status === 'approved' ? by : null, iso(this.now())]);
+    await this.db.query(`insert into agent_spends (id, company_id, agent_id, category, cents, purpose, cause, status, decided_by, at, projection) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, [id, companyId, agentId, cat, cents, purpose, cause ?? null, status, status === 'approved' ? by : null, iso(this.now()), projection ? JSON.stringify(projection) : null]);
     if (status === 'approved') await this.carryOut(id);
     return this.spendRow(id);
   }
@@ -449,7 +503,7 @@ export class AgentsService {
   }
   private async spendRow(id: string) {
     const r = (await this.db.query<any>(`select * from agent_spends where id = $1`, [id])).rows[0];
-    return { id: r.id, agentId: r.agent_id, category: r.category, cents: n(r.cents), purpose: r.purpose, ...(r.cause ? { cause: r.cause } : {}), status: r.status, ...(r.reason ? { reason: r.reason } : {}), decidedBy: r.decided_by, at: iso(r.at) };
+    return { id: r.id, agentId: r.agent_id, category: r.category, cents: n(r.cents), purpose: r.purpose, ...(r.cause ? { cause: r.cause } : {}), ...(r.projection ? { projection: j(r.projection) } : {}), status: r.status, ...(r.reason ? { reason: r.reason } : {}), decidedBy: r.decided_by, at: iso(r.at) };
   }
   async spends(companyId: string, limit = 50) {
     return Promise.all((await this.db.query<any>(`select id from agent_spends where company_id = $1 order by at desc limit $2`, [companyId, limit])).rows.map((r) => this.spendRow(r.id)));
@@ -505,7 +559,7 @@ export class AgentsService {
   async overview(companyId: string) {
     const c = this.company(companyId);
     const now = this.now();
-    const w = await this.window(companyId, new Date(now.getTime() - 7 * DAY), now);
+    const w = await this.window(companyId, new Date(now.getTime() - 7 * DAY), new Date(now.getTime() + 1));
     const bal = this.balances(companyId);
     const valueBy = new Map((await this.db.query<any>(`select agent_id, sum(cents)::bigint as c from agent_value where company_id = $1 group by 1`, [companyId])).rows.map((r) => [r.agent_id, n(r.c)]));
     const state = new Map((await this.db.query<any>(`select * from agent_state`)).rows.map((r) => [r.agent_id, r]));
@@ -515,6 +569,7 @@ export class AgentsService {
       charter, governor, spendCategories,
       agents: this.standings().map((s) => ({ ...s, fund: bal[s.agentId], valueAllTimeCents: valueBy.get(s.agentId) ?? 0, computeCreditCents: n(state.get(s.agentId)?.compute_credit_millicents) / 1000, storageCents: n(state.get(s.agentId)?.storage_cents), spentTodayCents: (this.spentToday.get(`${s.agentId}|${this.day()}`) ?? 0) / 1000, trend: history.filter((h) => h.agent_id === s.agentId).map((h) => ({ day: h.day, netCents: j(h.verdict).netCents, standing: j(h.verdict).standing })) })),
       pool: bal.pool, common: bal.common,
+      system: await this.system(companyId), systemHistory: await this.systemHistory(companyId),
       frontier: frontierOf(c, w), week: w,
       proposals: await this.proposals(companyId, 50), spends: await this.spends(companyId, 30), autonomy: await this.autonomy(companyId), autonomyHistory: await this.autonomyHistory(companyId),
     };

@@ -16,7 +16,7 @@ beforeAll(async () => {
   db = await createPgliteClient();
   app = await createApp({ db, seedDemo: true, seed: 12 });
 });
-afterAll(async () => { await db.close(); });
+afterAll(async () => { await app.persistence.flush(); await app.numberline.idle(); await app.agents.idle(); await db.close(); });
 
 const bid = (maxCentsPerLabel: number, targeting: Campaign['targeting'] = {}) => ({ buy: { type: 'bid', maxCentsPerLabel, dailyCapCents: 100_000, spentTodayCents: 0 }, targeting, sizes: [1, 2, 10] }) as unknown as Campaign;
 
@@ -82,6 +82,7 @@ describe('targeting raises the price of each engagement', () => {
     expect(scan).toMatchObject({ kind: 'scan', amountCents: 28 }); // 25¢ + 10% for targeting places
     expect(scan!.memo).toMatch(/\+10% for targeting/);
     expect(gift).toMatchObject({ kind: 'donation', amountCents: 3, credit: 'payable:charity:Well Aware' }); // 10% of 28¢
+    expect(fund).toMatchObject({ kind: 'ai_fund', amountCents: 3, credit: 'payable:ai_fund' }); // the same 10% to the AI agents’ fund
     expect(fund).toMatchObject({ kind: 'ai_fund', amountCents: 3, credit: 'payable:ai_fund' }); // the same 10% to the AI agents’ fund
     // Sales commission (3%), and 10% of that 3% for charity; a refund takes both back.
     const n = app.platform.ledger.entries.length;

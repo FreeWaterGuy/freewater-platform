@@ -17,6 +17,7 @@
   const NS = 'http://www.w3.org/2000/svg';
   const icon = (d) => { const s = document.createElementNS(NS, 'svg'); for (const [k, v] of Object.entries({ viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' })) s.setAttribute(k, v); for (const p of d.split('|')) { const e = document.createElementNS(NS, 'path'); e.setAttribute('d', p); s.append(e); } return s; };
   const I = {
+    ai: 'M12 3a4 4 0 0 1 4 4v1h1a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3v-6a3 3 0 0 1 3-3h1V7a4 4 0 0 1 4-4Z|M9 13h.01|M15 13h.01|M9 17h6',
     start: 'M5 12l5 5L20 7', company: 'M3 21h18|M5 21V7l7-4 7 4v14|M9 9h1|M14 9h1|M9 13h1|M14 13h1|M10 21v-4h4v4', brand: 'M12 3a9 9 0 1 0 0 18c1 0 1.5-.7 1.5-1.5 0-.4-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1 0-.8.7-1.5 1.5-1.5H16a5 5 0 0 0 5-5c0-4.4-4-7.8-9-7.8Z|M7.5 11.5h.01|M10.5 7.5h.01|M15.5 7.5h.01',
     game: 'M12 21a7 7 0 1 0 0-14 7 7 0 0 0 0 14Z|M4 4l3 3|M20 4l-3 3|M12 2v3', eye: 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z|M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z', shield: 'M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6l-8-3Z', line: 'M3 12h18|M7 9v6|M12 8v8|M17 9v6', ads: 'M4 5h16v14H4z|M4 10h16|M10 10v9', giving: 'M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L12 21l7.8-7.5 1-1.1a5.5 5.5 0 0 0 0-7.8Z', modules: 'M4 4h7v7H4z|M13 4h7v7h-7z|M4 13h7v7H4z|M13 13h7v7h-7z',
     machine: 'M6 3h12v18H6z|M9 7h6|M10 17h4', team: 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z|M2 21a7 7 0 0 1 14 0|M17 3a4 4 0 0 1 0 8|M22 21a7 7 0 0 0-5-6.7', history: 'M3 12a9 9 0 1 0 3-6.7L3 8|M3 3v5h5|M12 7v5l3 3',
@@ -44,7 +45,7 @@
   }
 
   const routes = [
-    [/^\/console\/?$/, startPage], [/^\/console\/company$/, companyPage], [/^\/console\/brand$/, brandPage], [/^\/console\/ads$/, adsPage], [/^\/console\/giving$/, givingPage], [/^\/console\/game$/, gamePage], [/^\/console\/transparency$/, transparencyPage], [/^\/console\/data$/, dataPage], [/^\/console\/numberline$/, numberLinePage],
+    [/^\/console\/?$/, startPage], [/^\/console\/company$/, companyPage], [/^\/console\/brand$/, brandPage], [/^\/console\/ads$/, adsPage], [/^\/console\/giving$/, givingPage], [/^\/console\/game$/, gamePage], [/^\/console\/transparency$/, transparencyPage], [/^\/console\/data$/, dataPage], [/^\/console\/numberline$/, numberLinePage], [/^\/console\/agents$/, agentsPage],
     [/^\/console\/modules$/, modulesPage], [/^\/console\/codes$/, codesPage], [/^\/console\/products$/, productsPage], [/^\/console\/machines$/, machinesPage], [/^\/console\/team$/, teamPage], [/^\/console\/history$/, historyPage],
     [/^\/console\/keys$/, keysPage], [/^\/console\/webhooks$/, webhooksPage], [/^\/console\/webhooks\/([\w-]+)$/, webhookPage], [/^\/console\/licensees$/, licenseesPage],
   ];
@@ -78,7 +79,7 @@
   function shell(active, ...content) {
     const nav = [
       ['start', '/console', 'Get started', I.start], ['company', '/console/company', 'Company', I.company], ['brand', '/console/brand', 'Brand', I.brand], ['ads', '/console/ads', 'Ads and prices', I.ads], ['codes', '/console/codes', 'QR codes and AR', I.qr], ['products', '/console/products', 'Products', I.product],
-      ['giving', '/console/giving', 'Giving', I.giving], ['game', '/console/game', 'Prize game', I.game], ['transparency', '/console/transparency', 'Transparency', I.eye], ['data', '/console/data', 'Data and privacy', I.shield], ['numberline', '/console/numberline', 'Number line', I.line], ['modules', '/console/modules', 'Modules', I.modules], ['machines', '/console/machines', 'Machines', I.machine], ['team', '/console/team', 'Team', I.team], ['history', '/console/history', 'History', I.history],
+      ['giving', '/console/giving', 'Giving', I.giving], ['game', '/console/game', 'Prize game', I.game], ['transparency', '/console/transparency', 'Transparency', I.eye], ['data', '/console/data', 'Data and privacy', I.shield], ['numberline', '/console/numberline', 'Number line', I.line], ['agents', '/console/agents', 'AI agents', I.ai], ['modules', '/console/modules', 'Modules', I.modules], ['machines', '/console/machines', 'Machines', I.machine], ['team', '/console/team', 'Team', I.team], ['history', '/console/history', 'History', I.history],
       'Developers', ['keys', '/console/keys', 'API keys', I.key], ['webhooks', '/console/webhooks', 'Webhooks', I.hook], ['docs', '/developers', 'Docs', I.docs],
       ...(S.ov?.you?.platform ? ['Platform', ['licensees', '/console/licensees', 'Licensees', I.licensees]] : []),
     ];
@@ -512,6 +513,72 @@
           h('div', { class: 'kpis', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, ['1', '2', '3', '4a', '4b', '5'].map((k) => [k, hd.tiers[k]]).map(([k, label]) => h('div', { class: 'kpi' }, h('span', { text: `Tier ${k}: ${label}` }), h('b', { text: `${(hd.byTier[k] ?? 0).toLocaleString()}` }), h('small', { class: 'muted', text: pct(hd.byTier[k] ?? 0) })))),
           h('h3', { style: 'margin:18px 0 8px;font-size:15px', text: 'By economic system' }),
           h('div', { class: 'kpis', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, Object.entries(SYS).map(([k, label]) => h('div', { class: 'kpi' }, h('span', { text: label }), h('b', { text: `${(hd.bySystem[k] ?? 0).toLocaleString()}` }), h('small', { class: 'muted', text: pct(hd.bySystem[k] ?? 0) })))))));
+  }
+
+  // ---------- the AI agents ----------
+  async function agentsPage() {
+    const o = await api('GET', '/v1/agents');
+    const STAND = { regenerative: 'Regenerative', building: 'Building', constrained: 'Near the line', paused: 'Paused', frozen: 'Frozen (books not verified)' };
+    const cents = (c) => (c == null ? '–' : Math.abs(c) < 100 ? `${Math.round(c * 100) / 100}¢` : dollars(Math.round(c)));
+    const ratio = (x) => (x == null ? '–' : `${x}`);
+    const act = async (method, url, body, msg) => { try { await api(method, url, body); toast(msg); render(); } catch (e) { toast(e.message); } };
+    const sys = o.system, e = sys.efficiency.thisWeek, prev = sys.efficiency.lastWeek;
+    const arrow = { up: '↑ rising', down: '↓ falling', flat: '→ flat' }[sys.efficiency.socialDirection] ?? 'no week to compare yet';
+    settingsPage('agents', 'AI agents', 'Every agent has its own place on the number line and its own fund. Their goal is the whole system’s: move everything as far left of zero as it can go, and create as many regenerative loops and negatively priced value chains as possible, giving more than they take. The governor always runs.', (ctx) => {
+      if (!ctx.draft.agents) { ctx.draft.agents = { enabled: false, percentOfExtra: 10 }; S.ov.config.agents = structuredClone(ctx.draft.agents); }
+      return [h('div', { class: 'stack' },
+        section('The agents’ fund', 'A share of the same upside your charity’s extra share comes from: bids above the starting price, more ads, scans, AR, box sides, custom bottles and sales commissions. FreeWater: 10%, matching the charity.',
+          h('div', { class: 'form' }, toggle(ctx, 'agents.enabled', 'Give the AI agents their own fund and place in the books', 'Off: no fund, and agents run without a share. The governor runs either way.', { full: true }),
+            num(ctx, 'agents.percentOfExtra', 'Their share of the upside', { min: 0, max: 50, step: 0.5, int: false, suffix: '%' }))),
+        section('The whole system', `Both of the book’s aggregate-efficiency formulas, over the last week. Externalities (carbon from bottles and from the agents’ own thinking) are estimates until real figures replace them.`,
+          h('div', { class: 'kpis', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' },
+            h('div', { class: 'kpi' }, h('span', { text: 'Market form' }), h('b', { text: ratio(e.market) }), h('small', { class: 'muted', text: `(value − externalities) ÷ cost · last week ${ratio(prev.market)} · ${e.market == null ? 'no bottles yet' : e.market >= 1 ? 'above 1: regenerative' : 'below 1: carried'}` })),
+            h('div', { class: 'kpi' }, h('span', { text: 'Social form' }), h('b', { text: ratio(e.social) }), h('small', { class: 'muted', text: `adds what people and causes receive · ${arrow}` })),
+            h('div', { class: 'kpi' }, h('span', { text: 'Externalities (estimated)' }), h('b', { text: cents(e.parts.externalityCents) }), h('small', { class: 'muted', text: `against ${cents(e.parts.costCents)} of cost` })),
+            h('div', { class: 'kpi' }, h('span', { text: 'Value chains left of zero' }), h('b', { text: String(sys.chains.leftOfZero) }), h('small', { class: 'muted', text: `${sys.chains.regenerativeLeftOfZero} of them regenerative` })),
+            h('div', { class: 'kpi' }, h('span', { text: 'At zero' }), h('b', { text: String(sys.chains.atZero) }), h('small', { class: 'muted', text: 'free, not yet giving back' })),
+            h('div', { class: 'kpi' }, h('span', { text: 'Right of zero' }), h('b', { text: String(sys.chains.rightOfZero) }), h('small', { class: 'muted', text: 'for sale: chains to help cross' }))),
+          h('p', { class: 'muted', style: 'margin:12px 0 0;font-size:13px', text: `Room to go deeper: each bottle earned ${cents(o.frontier.revenueCents)} and cost ${cents(o.frontier.costCents)}; it gives ${cents(o.frontier.givenCents)} and the agents’ fund gets ${cents(o.frontier.aiFundCents)}. ${cents(o.frontier.unclaimedCents)} a bottle is kept, to build the next machine or go deeper.` }),
+          h('div', { class: 'toolbar', style: 'margin-top:12px' }, h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', '/v1/agents/scan', {}, 'The value and code agents looked at last week’s books.') }, 'Look for ways to go deeper'), h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', '/v1/agents/refresh', {}, 'The governor read the books.') }, 'Have the governor read the books'), h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', '/v1/agents/settle', {}, 'The fund was shared out.') }, 'Share out the fund'))),
+        section('Each agent', 'Cost to run (from the AI providers’ own usage figures) against the value the books show its work produced. Left of zero: it gives back more than it takes.',
+          h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Agent', 'Standing', 'Aggregate efficiency', 'Cost · value (4 weeks)', 'On the line', 'Its fund', 'Today'].map((x) => h('th', { text: x })))),
+            h('tbody', {}, o.agents.map((a) => h('tr', {},
+              h('td', { style: 'max-width:240px' }, h('b', { text: a.name }), h('div', { class: 'muted', style: 'font-size:12px', text: a.role })),
+              h('td', {}, h('span', { class: 'pill', text: STAND[a.standing] ?? a.standing }), h('div', { class: 'muted', style: 'font-size:12px;max-width:260px', text: a.reasons.at(-1) })),
+              h('td', { text: a.efficiency ? `market ${ratio(a.efficiency.market ?? (a.efficiency.regenerative ? '∞' : null))} · social ${ratio(a.efficiency.social ?? (a.efficiency.regenerative ? '∞' : null))}` : '–' }),
+              h('td', { text: `${cents(a.costCents)} · ${cents(a.valueCents)}` }),
+              h('td', { text: a.netCents < 0 ? `${cents(-a.netCents)} left of zero` : a.netCents > 0 ? `${cents(a.netCents)} right of zero` : 'at zero' }),
+              h('td', { style: 'font-size:13px', text: `${cents(a.fund?.balanceCents ?? 0)} to spend${a.fund?.heldCents ? ` · ${cents(a.fund.heldCents)} held` : ''}${a.fund?.givenCents ? ` · gave ${cents(a.fund.givenCents)}` : ''}` }),
+              h('td', { class: 'muted', style: 'font-size:13px', text: `${cents(a.spentTodayCents)} of ${cents(a.budgetCents)}${a.computeCreditCents ? ` + ${cents(a.computeCreditCents)} bought` : ''}` }))))))),
+        section('Proposals', 'What the agents propose. Approving makes the change as a normal settings change; a week later the books measure what it did, and only that counts as the agent’s value (good or bad). A change that makes people’s choices less honest earns nothing.',
+          o.proposals.length ? h('div', { class: 'stack' }, o.proposals.map((p) => {
+            const pr = h('input', { class: 'input', placeholder: 'Pull request link', style: 'max-width:280px' });
+            return h('div', { class: 'panel-box', style: 'padding:14px' },
+              h('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap' }, h('b', { text: p.title }), h('span', { class: 'pill', text: p.status }), h('span', { class: 'muted', style: 'font-size:12px', text: `${p.agentId} agent · ${when(p.createdAt)}` })),
+              h('p', { style: 'margin:6px 0;font-size:14px', text: p.detail }),
+              p.change && !String(p.change.path).startsWith('code:') ? h('p', { class: 'muted', style: 'margin:0;font-size:13px', text: `Change: ${p.change.path} from ${JSON.stringify(p.from)} to ${JSON.stringify(p.change.value)}` }) : null,
+              p.result?.valueCents != null ? h('p', { style: 'margin:6px 0 0;font-size:13px', text: `Measured: ${p.result.valueCents >= 0 ? '+' : ''}${cents(p.result.valueCents)} of surplus over ${p.result.bottlesAfter} bottles. ${p.result.notes.join(' ')}` }) : null,
+              h('div', { class: 'toolbar', style: 'margin-top:8px' },
+                p.status === 'proposed' && p.kind !== 'code' ? [h('button', { class: 'btn blue small', type: 'button', onclick: () => act('POST', `/v1/agents/proposals/${p.id}/decide`, { approve: true }, 'Approved and made.') }, 'Approve'), h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', `/v1/agents/proposals/${p.id}/decide`, { approve: false }, 'Rejected.') }, 'Reject')] : null,
+                p.kind === 'code' && ['proposed', 'approved'].includes(p.status) ? [pr, h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', `/v1/agents/proposals/${p.id}/merged`, { ref: pr.value }, 'Recorded; its effect will be measured.') }, 'Merged')] : null,
+                p.status === 'applied' ? h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', `/v1/agents/proposals/${p.id}/undo`, {}, 'Put back.') }, 'Undo') : null));
+          })) : h('p', { class: 'muted', style: 'margin:0', text: 'Nothing yet. “Look for ways to go deeper” asks the value and code agents.' })),
+        section('What the agents spent', 'From their own funds: compute, storage, knowledge, growth, exploration, or a cause they chose. Growing themselves only passes while both aggregate-efficiency forms stay above 1 with the new cost added.',
+          o.spends.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('tbody', {}, o.spends.map((x) => h('tr', {}, h('td', { text: `${x.agentId} agent` }), h('td', { text: `${x.category}${x.cause ? `: ${x.cause}` : ''}` }), h('td', { text: cents(x.cents) }), h('td', { style: 'font-size:13px;max-width:320px', text: x.reason ?? x.purpose }), h('td', {}, h('span', { class: 'pill', text: x.status })), x.status === 'pending' ? h('td', {}, h('button', { class: 'btn blue small', type: 'button', onclick: () => act('POST', `/v1/agents/spends/${x.id}/decide`, { approve: true }, 'Approved.') }, 'Approve')) : h('td'))))))
+            : h('p', { class: 'muted', style: 'margin:0', text: 'Nothing spent yet.' })),
+        section('Running itself, step by step', 'Each area climbs only on a track record the books show, and only when someone on your team moves it, with a reason, in the open. Lower any area at any time. The governor, the charter and the books’ rules are never on this ladder.',
+          h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('tbody', {}, o.autonomy.map((a) => {
+            const sel = h('select', { class: 'input', 'aria-label': `Level for ${a.name}`, style: 'min-width:110px' }, [0, 1, 2, 3].filter((l) => l <= a.max).map((l) => h('option', { value: l, selected: l === a.level ? '' : null, text: `Level ${l}` })));
+            const why = h('input', { class: 'input', placeholder: 'Why (for the record)', style: 'max-width:220px' });
+            return h('tr', {}, h('td', {}, h('b', { text: a.name }), h('div', { class: 'muted', style: 'font-size:12px', text: `Now: ${a.means}${a.next && !a.next.eligible ? ` · Next step needs ${a.next.missing.join('; ')}` : a.next ? ' · Next step allowed' : ' · As high as it goes for now'}` })),
+              h('td', {}, sel), h('td', {}, why), h('td', {}, h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', '/v1/agents/autonomy', { area: a.area, level: Number(sel.value), reason: why.value }, 'Recorded.') }, 'Set')));
+          }))))),
+        section('Their charter, and the governor', o.charter.purpose,
+          h('h3', { style: 'margin:6px 0;font-size:15px', text: 'Goals' }), h('ul', {}, o.charter.goals.map((g) => h('li', { text: g }))),
+          h('h3', { style: 'margin:6px 0;font-size:15px', text: 'Rights' }), h('ul', {}, o.charter.rights.map((g) => h('li', { text: g }))),
+          h('h3', { style: 'margin:6px 0;font-size:15px', text: 'Duties' }), h('ul', {}, o.charter.duties.map((g) => h('li', { text: g }))),
+          h('p', { class: 'muted', style: 'font-size:13px', text: `Governor version ${o.governor.version}, always on. Regenerative: more value than cost, after its own carbon, in ${o.governor.cyclesAbove} of the last ${o.governor.cycles} weeks. Below half its cost a non-essential agent is paused and falls back to built-in rules. If the books can’t be verified, spending and pay stop. Public at /v1/public/agents/charter.` })))];
+    });
   }
 
   // ---------- giving ----------

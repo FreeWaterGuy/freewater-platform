@@ -13,6 +13,7 @@ export interface Window {
   housePieces: number; adPieces: number;
   scans: number; arLaunches: number; sales: number;
   honestShare: number | null;
+  aiTokens: number;
   aiCostByAgent: Record<string, number>;
   aiCallsByAgent: Record<string, number>;
 }
@@ -48,7 +49,9 @@ export const changeable: Record<string, { area: AutonomyArea; only?: 'up' | 'dow
 export function read(c: CompanyConfig, path: string): unknown { return path.split('.').reduce<any>((o, k) => (o == null ? undefined : o[k]), c); }
 
 /** The value agent's look at the books: how far each part is from the deepest price it could fund, and what to try. */
-export function valueScan(c: CompanyConfig, w: Window, open: Set<string>): { frontier: ReturnType<typeof frontierOf>; ideas: Idea[] } {
+export interface ChainOnLine { subject: string; name: string; position: string; netCents: number }
+
+export function valueScan(c: CompanyConfig, w: Window, open: Set<string>, chains: ChainOnLine[] = []): { frontier: ReturnType<typeof frontierOf>; ideas: Idea[] } {
   const ideas: Idea[] = [];
   const f = frontierOf(c, w);
   const add = (i: Omit<Idea, 'agentId'>) => { if (!i.change || !open.has(i.change.path)) ideas.push({ agentId: 'value', ...i }); };
@@ -71,6 +74,11 @@ export function valueScan(c: CompanyConfig, w: Window, open: Set<string>): { fro
     const total = c.unitCosts.water + c.unitCosts.bottle + c.unitCosts.label + c.unitCosts.machine;
     const [line, cents] = Object.entries(c.unitCosts).sort((a, b) => b[1] - a[1])[0]!;
     if (total > 30) ideas.push({ agentId: 'value', kind: 'note', title: `Bring the bottle’s cost under 30¢ (now ${total}¢)`, detail: `The biggest line is the ${line} at ${cents}¢. Every cent off it is a cent more that can go to the cause, the household, or the next machine. Get quotes; when a lower one is real, record it as a cost change.`, expected: `Up to ${total - 20}¢ more per bottle at scale.` });
+  }
+  // Every offering still right of zero (or at it) is a value chain that could cross: a small gift back on each sale
+  // (to a cause, or to the buyer) makes it negatively priced, and one more loop that gives more than it takes.
+  for (const ch of chains.filter((x) => x.subject.startsWith('offering:') && x.position !== 'negatively_priced').slice(0, 3)) {
+    ideas.push({ agentId: 'value', kind: 'note', title: `Help ${ch.name.split(':')[0]} cross zero`, detail: `Their offering sits ${ch.position === 'for_sale' ? 'right of zero (people pay)' : 'at zero'}. If they add a gift back on each sale, 10¢ to a cause or a few cents to the buyer, it becomes a negatively priced value chain, and people who scan are more likely to choose it. Offer to set it up in their ad.`, expected: 'One more negatively priced value chain.' });
   }
   if (f.unclaimedCents > 0 && c.giving.mode !== 'none') ideas.push({ agentId: 'value', kind: 'note', title: `Room to go deeper: ${f.unclaimedCents}¢ a bottle`, detail: `Each bottle earned ${f.revenueCents}¢ and cost ${f.costCents}¢ to make and run, so the deepest it could fund is ${f.frontierCents}¢ back to people and causes. It gives ${f.givenCents}¢ now and ${f.aiFundCents}¢ goes to the agents. ${f.unclaimedCents}¢ is kept: that is what builds the next machine, or could go deeper.` });
   return { frontier: f, ideas };

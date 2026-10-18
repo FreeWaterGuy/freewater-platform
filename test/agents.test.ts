@@ -6,6 +6,7 @@ import { createPgliteClient } from '../src/db/pglite';
 import type { SqlClient } from '../src/db/client';
 import { aiMeter } from '../src/modules/ai/anthropic';
 import { ClaudeNumberLineAgent } from '../src/modules/numberline/agent';
+import { efficiency, growthTest } from '../src/modules/agents/efficiency';
 
 let db: SqlClient;
 let app: App;
@@ -126,6 +127,36 @@ describe('every agent on the number line, held by the governor', () => {
     const feed = (await call('GET', '/v1/public/companies/freewater/feed?limit=5')).body.items.map((i: any) => i.text);
     expect(feed.some((t: string) => /value agent gave from its own fund to Central Texas Food Bank/.test(t))).toBe(true);
     expect(app.agents.balances('freewater').value!.balanceCents).toBe(bal.balanceCents - gift);
+  });
+
+  it('grows itself only while it still gives more than it takes, by both aggregate-efficiency formulas', async () => {
+    const eff = app.agents.standings().find((x) => x.agentId === 'value')!.efficiency!;
+    expect(eff.regenerative).toBe(true);
+    const left = app.agents.balances('freewater').value!.balanceCents;
+    const grow = (await call('POST', '/v1/agents/value/spend', keys['freewater-admin'], { category: 'compute', cents: Math.min(2, left), purpose: 'A better model so it reads the books more carefully' })).body;
+    expect(grow.status).toBe('done');
+    expect(grow.projection.after.market).toBeGreaterThanOrEqual(1);
+    expect(grow.projection.after.social).toBeGreaterThanOrEqual(1);
+    // The rule itself: growth that would make it take more than it gives is refused.
+    expect(growthTest({ valueCents: 100, socialBenefitCents: 0, costCents: 50, externalityCents: 5 }, { costCents: 40, externalityCents: 1 }).ok).toBe(true);
+    expect(growthTest({ valueCents: 100, socialBenefitCents: 0, costCents: 50, externalityCents: 5 }, { costCents: 60, externalityCents: 1 }).ok).toBe(false);
+    // The book's worked case: 1.25 on its own books is 0.80 once the externalities are counted.
+    expect(efficiency({ valueCents: 125, consumerBenefitCents: 0, socialBenefitCents: 0, externalityCents: 0, costCents: 100 }).market).toBe(1.25);
+    expect(efficiency({ valueCents: 125, consumerBenefitCents: 0, socialBenefitCents: 0, externalityCents: 45, costCents: 100 }).market).toBe(0.8);
+  });
+
+  it('measures the whole system with both formulas and counts every value chain by where it sits on the number line', async () => {
+    await week(4);
+    const sys = (await call('GET', '/v1/agents', keys['freewater-admin'])).body.system;
+    expect(sys.efficiency.thisWeek.market).not.toBeNull();
+    expect(sys.efficiency.thisWeek.social).toBeGreaterThan(sys.efficiency.thisWeek.market); // free bottles and giving count for people and society
+    expect(sys.efficiency.thisWeek.parts.externalityCents).toBeGreaterThan(0);
+    expect(sys.efficiency.thisWeek.estimated).toBe(true);
+    expect(sys.chains.leftOfZero).toBeGreaterThan(0);
+    expect(sys.chains.list.find((c: any) => c.subject === 'agent:value')).toMatchObject({ position: 'negatively_priced', regenerative: true });
+    // Offerings still right of zero become ideas to help them cross.
+    const scan = (await call('POST', '/v1/agents/scan', keys['freewater-admin'])).body;
+    expect(JSON.stringify(scan.proposals)).toMatch(/cross zero/);
   });
 
   it('fails closed: when the books can’t be verified, nothing is spent or shared out', async () => {

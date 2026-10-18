@@ -847,6 +847,15 @@ create table autonomy (company_id text not null, area text not null, level int n
 create table autonomy_changes (id text primary key, company_id text not null, area text not null, from_level int not null, to_level int not null, by text not null, reason text not null, at timestamptz not null);
 `,
   },
+  {
+    id: '016_agent_efficiency',
+    sql: `
+-- Before an agent grows itself, both aggregate-efficiency forms are projected with the new cost; kept with the spend.
+alter table agent_spends add column projection jsonb;
+-- The whole system each day: both forms of aggregate efficiency and how many value chains sit where on the number line.
+create table system_snapshots (company_id text not null, day text not null, data jsonb not null, primary key (company_id, day));
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

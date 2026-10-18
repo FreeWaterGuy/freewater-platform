@@ -181,7 +181,7 @@ describe('scan pages over the API', () => {
     const premium = targetingPremium(app.platform.campaigns.get(face.campaignId), app.platform.companies.get('freewater')!).percent;
     expect(line).toMatchObject({ packId: pack.id, debit: `receivable:advertiser:${face.advertiserId}`, kind: 'scan', amountCents: Math.round(25 * (1 + premium / 100)) });
     // 10% of it goes to charity too.
-    expect(app.platform.ledger.entries.at(-1)).toMatchObject({ packId: pack.id, kind: 'donation', amountCents: Math.round(line.amountCents / 10) });
+    expect(app.platform.ledger.entries.filter((l) => l.kind === 'donation').at(-1)).toMatchObject({ packId: pack.id, kind: 'donation', amountCents: Math.round(line.amountCents / 10) });
     now += 11 * 60 * 1000;
     expect((await call('POST', '/v1/public/box-scans', undefined, body)).json().billed).toBe(true);
     expect((await call('POST', '/v1/public/box-scans', undefined, { ...body, viewerKey: 'boxviewer02', experienceLoaded: false })).json().billed).toBe(false);
