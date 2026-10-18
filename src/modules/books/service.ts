@@ -241,20 +241,48 @@ export class BooksService {
   }
 
   /** One fingerprint per day, each built on the day before. If any past line changed, every fingerprint after it would too. */
+  /**
+   * Worked out once, then kept up to date: new lines (they only ever arrive at the end) are read and only the days
+   * they touch, and the days after them, are fingerprinted again. A full pass would read the whole ledger every time.
+   */
+  private dayCache = new Map<string, { lastSeq: number; days: { date: string; lines: number; inCents: number; outCents: number; prevHash: string; hash: string }[] }>();
+
   async days(companyId: string) {
     this.company(companyId, true);
     await this.flush();
-    const rows = (await this.db.query<any>(`select seq, id, at, debit, credit, amount_cents, kind, memo from ledger_entries where company_id = $1 order by seq`, [companyId])).rows;
+    const start = sha(`freewater-open-books:${companyId}`);
+    const cached = this.dayCache.get(companyId);
+    const lastSeq = cached?.lastSeq ?? 0;
+    const fresh = (await this.db.query<any>(`select seq, id, at, debit, credit, amount_cents, kind, memo from ledger_entries where company_id = $1 and seq > $2 order by seq`, [companyId, lastSeq])).rows;
+    if (cached && !fresh.length) return [...cached.days].reverse();
+    // The earliest day the new lines touch: it and every day after it get fingerprinted again.
+    const kept = cached?.days ?? [];
+    const from = fresh.map((r) => this.today(companyId, new Date(r.at))).reduce((a, b) => (a < b ? a : b), '9999-12-31');
+    const keep = kept.filter((d) => d.date < from);
+    let all: any[];
+    if (!cached) all = fresh;
+    else {
+      // Re-read every line from the start of the earliest touched day (a day before, for time zones), then keep only those days.
+      all = (await this.db.query<any>(`select seq, id, at, debit, credit, amount_cents, kind, memo from ledger_entries where company_id = $1 and at >= $2::date - interval '1 day' order by seq`, [companyId, from])).rows
+        .filter((r) => this.today(companyId, new Date(r.at)) >= from);
+    }
     const byDay = new Map<string, ReturnType<BooksService['publicLine']>[]>();
-    for (const r of rows) { const l = this.publicLine(r); const d = this.today(companyId, new Date(l.at)); byDay.set(d, [...(byDay.get(d) ?? []), l]); }
-    let prev = sha(`freewater-open-books:${companyId}`);
-    const out = [];
+    for (const r of all) {
+      const l = this.publicLine(r);
+      const d = this.today(companyId, new Date(l.at));
+      const list = byDay.get(d);
+      if (list) list.push(l); else byDay.set(d, [l]);
+    }
+    let prev = keep.length ? keep[keep.length - 1]!.hash : start;
+    const out = [...keep];
     for (const [date, lines] of [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b))) {
       const hash = sha(`${prev}\n${lines.map(BooksService.lineText).join('\n')}`);
       out.push({ date, lines: lines.length, inCents: lines.filter((l) => l.credit.startsWith('revenue:')).reduce((s, l) => s + l.amountCents, 0), outCents: lines.filter((l) => l.kind === 'charity_transfer' || l.kind === 'expense').reduce((s, l) => s + l.amountCents, 0), prevHash: prev, hash });
       prev = hash;
     }
-    return out.reverse();
+    const maxSeq = fresh.reduce((m, r) => Math.max(m, n(r.seq)), lastSeq);
+    this.dayCache.set(companyId, { lastSeq: maxSeq, days: out });
+    return [...out].reverse();
   }
 
   async dayLines(companyId: string, date: string) {

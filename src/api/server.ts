@@ -250,9 +250,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   route({ method: 'GET', url: '/v1/units/:id/label.svg', scope: ['orders', 'packs', 'admin'], summary: "The bottle's print-ready label (SVG, real size in inches).", handler: async (req, key) => {
     const u = unitFor(key!, (req.params as any).id);
-    const l = platform.labels.get(u.id);
-    if (!l) throw notFound('Label');
-    return { type: 'image/svg+xml', raw: l.svg };
+    const svg = await platform.labelSvg(u.id);
+    if (!svg) throw notFound('Label');
+    return { type: 'image/svg+xml', raw: svg };
   } });
 
   // ---------- purchases: advertisers' point-of-sale systems ----------

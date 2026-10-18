@@ -80,7 +80,8 @@ describe('smart codes on every bottle', () => {
     expect(label.receiptUrl).toMatch(/^HTTPS:\/\/GO\.FREEWATER\.IO\/Q\/[0-9A-Z]{14}$/);
     const qr = label.slots.find((s) => s.slotIndex === slot)!.qrUrl;
     const code = qr.split('/').pop()!;
-    expect(label.svg).not.toContain(unit.id); // the bottle's id is never printed; only its code
+    expect(await app.platform.labelSvg(unit.id)).toContain('<svg');
+    expect(await app.platform.labelSvg(unit.id)).not.toContain(unit.id); // the bottle's id is never printed; only its code
 
     const first = await call('GET', `/Q/${code}`);
     expect(first.status).toBe(302);

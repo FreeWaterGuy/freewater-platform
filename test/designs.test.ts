@@ -96,7 +96,7 @@ describe('designing a bottle by chatting', () => {
     expect(o.bottles).toHaveLength(3);
     expect(o.payment).toMatchObject({ status: 'captured', amountCents: 900 });
     expect(o.countdown.seconds).toBe(72);
-    const labels = o.bottles.map((b: any) => app.platform.labels.get(b.id)!.svg);
+    const labels = await Promise.all(o.bottles.map((b: any) => app.platform.labelSvg(b.id)));
     expect(labels[1]).toContain('>Ana<');
     expect(labels[2]).toContain('>Ben<');
     const page = (await call('GET', `/v1/public/experience/${o.bottles[2].id}/0?viewer=friend-phone-99`)).json();

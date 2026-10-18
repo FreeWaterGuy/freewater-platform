@@ -117,8 +117,9 @@ export function toGlb(meshes: Mesh[], scale = 1): Uint8Array {
     const pos = Buffer.from(new Float32Array(m.positions).buffer);
     const nor = Buffer.from(new Float32Array(m.normals).buffer);
     const idx = Buffer.from(new Uint32Array(m.indices).buffer);
-    const min = [0, 1, 2].map((k) => Math.min(...m.positions.filter((_, j) => j % 3 === k)));
-    const max = [0, 1, 2].map((k) => Math.max(...m.positions.filter((_, j) => j % 3 === k)));
+    // A loop, not Math.min(...all): a big model has more points than a function call can take.
+    const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+    for (let j = 0; j < m.positions.length; j++) { const k = j % 3, v = m.positions[j]!; if (v < min[k]!) min[k] = v; if (v > max[k]!) max[k] = v; }
     accessors.push({ bufferView: push(pos, 34962), componentType: 5126, count: m.positions.length / 3, type: 'VEC3', min, max });
     accessors.push({ bufferView: push(nor, 34962), componentType: 5126, count: m.normals.length / 3, type: 'VEC3' });
     accessors.push({ bufferView: push(idx, 34963), componentType: 5125, count: m.indices.length, type: 'SCALAR' });

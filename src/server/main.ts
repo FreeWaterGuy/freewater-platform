@@ -3,6 +3,7 @@
 //   DATABASE_URL=postgres://… npm start  uses a real Postgres server instead
 //   SEED_DEMO=1 npm start              on an empty database, loads the sample catalog and prints demo API keys
 // Production settings are explained in docs/RUNNING.md; the server checks them before it starts.
+import { getHeapStatistics } from 'node:v8';
 import { createApp } from '../app';
 import { buildServer } from '../api/server';
 import { createPgliteClient } from '../db/pglite';
@@ -62,6 +63,15 @@ const jobs: Job[] = [
   // Each hour, publish any finished day's books fingerprint not yet published.
   { name: 'fingerprints', everyMs: 3600_000, timeoutMs: 10 * 60_000, run: saved(() => app.anchors.run()) },
   // Once a day, delete data older than each company keeps.
+  // Each minute: how full memory is. The platform keeps its working state in memory (about 13 KB per bottle printed,
+  // measured), so this is what tells you, weeks ahead, when to give it more memory or move to the next stage.
+  { name: 'memory', everyMs: 60_000, remember: false, run: async () => {
+    const { used_heap_size, heap_size_limit } = getHeapStatistics();
+    const share = used_heap_size / heap_size_limit;
+    const detail = `${Math.round(used_heap_size / 1048576)} MB of ${Math.round(heap_size_limit / 1048576)} MB used, ${app.platform.units.size.toLocaleString()} bottles in memory. Give the server more memory (NODE_OPTIONS=--max-old-space-size=…) or plan the next stage (docs/RUNNING.md).`;
+    if (share > 0.85) await alerts.alert('memory', 'critical', `Memory is ${Math.round(share * 100)}% full`, detail);
+    else if (share > 0.7) await alerts.alert('memory', 'warning', `Memory is ${Math.round(share * 100)}% full`, detail);
+  } },
   { name: 'data-purge', everyMs: 24 * 3600_000, timeoutMs: 60 * 60_000, run: saved(() => app.data.purge()) },
 ];
 // Our own encrypted copy of the database each day, and each week, proof that the latest one restores.

@@ -198,7 +198,7 @@ describe('the white-label console', () => {
     // Bottles printed from now on follow the new rules and look.
     const u = await printBottle();
     expect(u.placements.length).toBeLessThanOrEqual(4);
-    expect(app.platform.labels.get(u.id)!.svg).toContain('#F2C14E');
+    expect(await app.platform.labelSvg(u.id)).toContain('#F2C14E');
 
     expect((await call('PATCH', '/v1/console/settings', owner, { version: 1, changes: { name: 'FreeWater Inc' } })).status).toBe(409);
     const unreadable = await call('PATCH', '/v1/console/settings', owner, { changes: { brand: { textColor: '#111111' } } });

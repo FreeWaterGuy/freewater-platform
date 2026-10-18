@@ -43,7 +43,10 @@ export class TransparencyService {
     bus.on('ar.launched', (e) => { if (e.payload.loaded) this.add(e.companyId, e.at, 'ar', `Someone opened ${this.adOf(e.payload.unitId, e.payload.slotIndex)} in AR`, platform.units.get(e.payload.unitId)?.locationId); });
     bus.on('box.scanned', (e) => { if (e.payload.experienceLoaded) this.add(e.companyId, e.at, 'box', 'Someone scanned the side of a delivery box', undefined); });
     bus.on('purchase.completed', (e) => {
-      const lines = platform.ledger.entries.filter((l) => l.eventId === e.id);
+      // This sale's lines were just added, so they're at the end: look back from there, not through the whole ledger.
+      const lines: typeof platform.ledger.entries = [];
+      const all = platform.ledger.entries;
+      for (let i = all.length - 1, seen = 0; i >= 0 && seen < 5000; i--, seen++) { if (all[i]!.eventId === e.id) lines.push(all[i]!); else if (lines.length) break; }
       const commission = lines.find((l) => l.kind === 'commission')?.amountCents ?? 0;
       const given = lines.filter((l) => l.kind === 'donation').reduce((a, l) => a + l.amountCents, 0);
       const where = e.payload.unitId !== undefined ? this.adOf(e.payload.unitId, e.payload.slotIndex ?? 0) : 'a box ad';

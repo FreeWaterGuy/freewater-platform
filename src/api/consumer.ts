@@ -193,9 +193,9 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
   };
   route({ method: 'GET', url: '/v1/me/bottles/:id', scope: 'me', summary: 'One of your bottles: its ads, their AR, and its receipt.', handler: async (req, key) => ({ body: bottleView(myBottle(key, (req.params as any).id)) }) });
   route({ method: 'GET', url: '/v1/me/bottles/:id/label.svg', scope: 'me', summary: "Your bottle's label, as printed.", handler: async (req, key) => {
-    const l = platform.labels.get(myBottle(key, (req.params as any).id).id);
-    if (!l) throw notFound('Label');
-    return { type: 'image/svg+xml', raw: l.svg };
+    const svg = await platform.labelSvg(myBottle(key, (req.params as any).id).id);
+    if (!svg) throw notFound('Label');
+    return { type: 'image/svg+xml', raw: svg };
   } });
 
   // ---------- design your own: approve the proof, then pay and print ----------

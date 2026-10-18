@@ -44,9 +44,12 @@ export class DeliveryService {
   ) {}
 
   /** Today's date where the company is. */
+  private dayFormats = new Map<string, Intl.DateTimeFormat>();
   today(companyId: string, at = this.platform.bus.now()) {
     const tz = this.platform.companies.get(companyId)?.timezone ?? 'UTC';
-    return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(at);
+    let f = this.dayFormats.get(tz);
+    if (!f) this.dayFormats.set(tz, (f = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' })));
+    return f.format(at);
   }
 
   routes(companyId: string): Location[] {

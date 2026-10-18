@@ -12,8 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -37,7 +37,7 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U fw" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build the server image
         run: docker build --build-arg GIT_SHA=${{ github.sha }} -t freewater:${{ github.sha }} .
       - name: Start it the way production does, and wait until it's ready
@@ -56,6 +56,11 @@ jobs:
           docker run --rm --network host -e NODE_ENV=production -e PORT=8081 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
             -e DATABASE_URL=postgres://fw:fw@localhost:5432/freewater -e LEASE_WAIT_MS=5000 \
             freewater:${{ github.sha }} && exit 1 || echo "refused, as it should"
+      - name: A backup made inside the image restores, and its books check out
+        run: |
+          docker exec fw sh -c 'psql postgres://fw:fw@localhost:5432/freewater -qc "create database spare"'
+          docker exec -e BACKUP_KEY=$(openssl rand -base64 32) -e BACKUP_DIR=/tmp/backups -e DATABASE_URL=postgres://fw:fw@localhost:5432/freewater -e RESTORE_TEST_URL=postgres://fw:fw@localhost:5432/spare fw \
+            sh -c 'npx tsx src/server/backup.ts && npx tsx src/server/backup.ts restore'
       - name: Stops cleanly and hands over
         run: |
           docker stop -t 50 fw

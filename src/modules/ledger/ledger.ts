@@ -35,6 +35,13 @@ export interface UnitReceipt {
  */
 export class Ledger {
   readonly entries: LedgerEntry[] = [];
+  /** Each bottle's own lines, so its receipt doesn't mean reading the whole ledger. */
+  private byUnit = new Map<string, LedgerEntry[]>();
+  private index(entry: LedgerEntry) {
+    if (!entry.unitId) return;
+    const list = this.byUnit.get(entry.unitId);
+    if (list) list.push(entry); else this.byUnit.set(entry.unitId, [entry]);
+  }
   private printedUnits = new Map<string, { placements: Placement[]; locationId: string }>();
   private lastEngagement = new Map<string, number>();
   private printedBoxes = new Map<string, BoxFacePlacement[]>();
@@ -98,6 +105,7 @@ export class Ledger {
     if (line.amountCents <= 0) return;
     const entry: LedgerEntry = { id: newId('le'), eventId: e.id, at: at ?? e.at, companyId: e.companyId, ...line };
     this.entries.push(entry);
+    this.index(entry);
     this.onEntry(entry);
     for (const f of this.listeners) f(entry);
   }
@@ -266,7 +274,8 @@ export class Ledger {
 
   /** After a restart: reload past lines and what the billing rules need to remember. Nothing is billed again. */
   restore(input: { entries: LedgerEntry[]; printed: { unitId: string; placements: Placement[]; locationId: string }[]; boxes?: { packId: string; faces: BoxFacePlacement[] }[]; engagementEvents: PlatformEvent[] }) {
-    this.entries.push(...input.entries);
+    // One at a time: spreading hundreds of thousands of lines into push() overflows the stack.
+    for (const l of input.entries) { this.entries.push(l); this.index(l); }
     for (const p of input.printed) this.printedUnits.set(p.unitId, { placements: p.placements, locationId: p.locationId });
     for (const b of input.boxes ?? []) this.printedBoxes.set(b.packId, b.faces);
     for (const e of input.engagementEvents) {
@@ -286,7 +295,7 @@ export class Ledger {
 
   /** The public receipt for one unit: what it earned and what it gave. */
   receipt(unitId: string): UnitReceipt {
-    const lines = this.entries.filter((l) => l.unitId === unitId);
+    const lines = [...(this.byUnit.get(unitId) ?? [])];
     const sum = (k: LedgerEntry['kind']) => lines.filter((l) => l.kind === k).reduce((s, l) => s + l.amountCents, 0);
     const earned = {
       print: sum('print'),

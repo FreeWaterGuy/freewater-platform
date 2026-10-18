@@ -44,7 +44,15 @@ export class Platform {
   readonly bus: EventBus;
   readonly ledger: Ledger;
   readonly units = new Map<string, Unit>();
+  /**
+   * What each bottle's label carries (its slots, codes, size). The drawing itself (tens of kilobytes each) is not kept
+   * here: it's in the database, and `labelSvg` fetches it, with the most recent few kept close at hand. So memory
+   * grows by a little per bottle, not by its whole picture. `svg` on these is always ''.
+   */
   readonly labels = new Map<string, RenderedLabel>();
+  private svgRecent = new Map<string, string>();
+  /** Reads a label's drawing from storage. Set when the platform runs with a database. */
+  labelSvgLoader?: (unitId: string) => Promise<string | undefined>;
   readonly random: () => number;
   readonly persist: Persistence;
   private orders = new Map<string, Promise<OrderOutcome>>();
@@ -105,10 +113,27 @@ export class Platform {
     return own ?? [...this.products.values()].find((p) => !p.companyId || p.companyId === companyId) ?? [...this.products.values()][0]!;
   }
 
+  private keepLabel(label: RenderedLabel) {
+    this.labels.set(label.unitId, { ...label, svg: '' });
+    if (label.svg) {
+      this.svgRecent.delete(label.unitId);
+      this.svgRecent.set(label.unitId, label.svg);
+      if (this.svgRecent.size > 200) this.svgRecent.delete(this.svgRecent.keys().next().value!);
+    }
+  }
+
+  /** A bottle's label drawing: from the few kept close at hand, or from storage. */
+  async labelSvg(unitId: string): Promise<string | undefined> {
+    const hit = this.svgRecent.get(unitId);
+    if (hit !== undefined) return hit;
+    if (!this.labels.has(unitId)) return undefined;
+    return this.labelSvgLoader?.(unitId);
+  }
+
   /** Put a unit loaded from storage back in place. */
   restoreUnit(unit: Unit, label?: RenderedLabel) {
     this.units.set(unit.id, unit);
-    if (label) this.labels.set(unit.id, label);
+    if (label) this.keepLabel(label);
     if (unit.orderId) this.orderUnits.set(`${unit.companyId}:${unit.orderId}`, unit.id);
   }
 
@@ -175,7 +200,7 @@ export class Platform {
     const trackSlots = this.arTracking?.(unit) ?? [];
     const label = await this.registry.rendererFor(company).render({ unit, product, company, campaigns: this.campaigns, customArt: opts.custom?.art, codes: this.codes, ...(trackSlots.length ? { tracking: true, trackSlots } : {}) });
     unit.status = 'rendered';
-    this.labels.set(unit.id, label);
+    this.keepLabel(label);
     this.persist.label(label, company.id);
     this.persist.unit(unit);
     this.bus.publish('label.rendered', company.id, { unitId: unit.id, widthIn: label.widthIn, heightIn: label.heightIn, renderMs: Math.round(performance.now() - t0) }, unit.id);
@@ -225,7 +250,7 @@ export class Platform {
    */
   async prepare(opts: OrderOptions & { orderId: string }): Promise<{ unit: Unit; label: RenderedLabel }> {
     const done = this.orderUnits.get(`${opts.companyId}:${opts.orderId}`);
-    if (done) return { unit: this.units.get(done)!, label: this.labels.get(done)! };
+    if (done) return { unit: this.units.get(done)!, label: { ...this.labels.get(done)!, svg: (await this.labelSvg(done)) ?? '' } };
     const { unit, label } = await this.fillAndRender(opts);
     return { unit, label };
   }

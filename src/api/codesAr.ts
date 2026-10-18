@@ -33,9 +33,10 @@ export function codesArRoutes(app: App, server: FastifyInstance, route: (r: Rout
     const m = /^([A-Za-z0-9_-]{4,64})\.svg$/.exec(String((req.params as any).file));
     const unit = m ? platform.units.get(m[1]!) : undefined;
     const label = unit && (unit.status === 'dispensed' || unit.status === 'printed') ? platform.labels.get(unit.id) : undefined;
-    if (!label) return reply.code(404).send({ error: { code: 'not_found', message: 'Label not found.' } });
+    const svg = label ? await platform.labelSvg(unit!.id) : undefined;
+    if (!svg) return reply.code(404).send({ error: { code: 'not_found', message: 'Label not found.' } });
     // The label as printed: anyone holding the bottle can already see it. Used to draw it in AR.
-    return reply.type('image/svg+xml').header('cache-control', 'public, max-age=86400, immutable').header('content-security-policy', "default-src 'none'; img-src data:; style-src 'unsafe-inline'").send(label.svg);
+    return reply.type('image/svg+xml').header('cache-control', 'public, max-age=86400, immutable').header('content-security-policy', "default-src 'none'; img-src data:; style-src 'unsafe-inline'").send(svg);
   });
 
   // ---------- QR codes ----------

@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { getHeapStatistics } from 'node:v8';
 import type { App } from '../app';
 import { ApiError, type RouteDef } from './http';
 
@@ -44,13 +45,14 @@ export function operationsRoutes(app: App, server: FastifyInstance, route: (r: R
 
   route({ method: 'GET', url: '/v1/platform/status', scope: 'platform', summary: 'How the platform is running: health, background jobs, saving, which server owns the data, recent alerts.', handler: async () => {
     const mem = process.memoryUsage();
+    const heap = getHeapStatistics();
     return { body: {
       ...(await readiness()),
       saving: { ...persistence.stats, problem: persistence.problem, failures: await persistence.failures().catch(() => []) },
       lease: runtime.lease ? { held: runtime.lease.held, holder: runtime.lease.holder, current: await runtime.lease.current().catch(() => null) } : null,
       jobs: runtime.jobs?.status() ?? [],
       alerts: runtime.alerts.recent,
-      memoryMb: { rss: Math.round(mem.rss / 1048576), heap: Math.round(mem.heapUsed / 1048576) },
+      memoryMb: { rss: Math.round(mem.rss / 1048576), heap: Math.round(mem.heapUsed / 1048576), heapLimit: Math.round(heap.heap_size_limit / 1048576), bottlesInMemory: app.platform.units.size, ledgerLinesInMemory: app.platform.ledger.entries.length },
       node: process.version,
     } };
   } });

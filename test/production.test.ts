@@ -259,3 +259,37 @@ describe('backups', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe('staying small and quick as the books grow', () => {
+  it('keeps label drawings in the database, not memory, and still serves them, also after a restart', async () => {
+    const ldb = await createPgliteClient();
+    const app = await createApp({ db: ldb, seedDemo: true, seed: 4 });
+    const r = await app.platform.order({ companyId: 'freewater', orderId: 'mem-1', locationId: 'ATX-014', productId: 'bottle-16oz' });
+    expect(r.ok && r.label.svg).toContain('<svg');
+    await app.persistence.flush();
+    expect(app.platform.labels.get(r.unit.id)!.svg).toBe('');
+    expect(await app.platform.labelSvg(r.unit.id)).toContain('<svg');
+    const again = await createApp({ db: ldb });
+    expect(again.platform.labels.get(r.unit.id)!.svg).toBe('');
+    expect(await again.platform.labelSvg(r.unit.id)).toContain('<svg');
+    expect(await again.platform.labelSvg('u_nope')).toBeUndefined();
+    await ldb.close();
+  });
+
+  it('keeps day fingerprints up to date without rereading the whole ledger, and they match a full reading, even with a line dated in the past', async () => {
+    let now = new Date('2026-10-10T18:00:00Z').getTime();
+    const ddb = await createPgliteClient();
+    const app = await createApp({ db: ddb, seedDemo: true, seed: 5, clock: () => new Date(now) });
+    for (let i = 0; i < 3; i++) { await app.platform.order({ companyId: 'freewater', orderId: `d-${i}`, locationId: 'ATX-014', productId: 'bottle-16oz' }); now += 24 * 3600_000; }
+    await app.persistence.flush();
+    const first = await app.books.days('freewater');
+    expect(first.length).toBeGreaterThanOrEqual(3);
+    await app.platform.order({ companyId: 'freewater', orderId: 'd-late', locationId: 'ATX-014', productId: 'bottle-16oz' });
+    await app.books.recordExpense('freewater', { category: 'printing', amountCents: 500, memo: 'Receipt found late', date: '2026-10-11' });
+    const kept = await app.books.days('freewater');
+    const full = await (await createApp({ db: ddb, clock: () => new Date(now) })).books.days('freewater'); // a fresh reading
+    expect(kept).toEqual(full);
+    expect(kept.find((d) => d.date === '2026-10-10')).toEqual(first.find((d) => d.date === '2026-10-10')); // untouched days are unchanged
+    await ddb.close();
+  });
+});

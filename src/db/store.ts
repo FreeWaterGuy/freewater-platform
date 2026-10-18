@@ -213,7 +213,8 @@ export async function loadState(db: SqlClient, builtins: Record<string, Creative
   const campaigns = (await rows<{ data: unknown }>(`select data from campaigns`)).map((r) => hydrateCampaign(upgradeCampaign(json<CampaignRecord>(r.data)), builtins));
   const units = (await rows<{ data: unknown }>(`select data from units`)).map((r) => json<Unit>(r.data));
   const labels = new Map<string, RenderedLabel>();
-  for (const r of await rows<{ unit_id: string; svg: string; meta: unknown }>(`select unit_id, svg, meta from labels`)) labels.set(r.unit_id, { ...json<Omit<RenderedLabel, 'svg'>>(r.meta), svg: r.svg });
+  // The drawings stay in the database (the platform fetches one when it's asked for); only what they carry is loaded.
+  for (const r of await rows<{ unit_id: string; meta: unknown }>(`select unit_id, meta from labels`)) labels.set(r.unit_id, { ...json<Omit<RenderedLabel, 'svg'>>(r.meta), svg: '' });
   const packs = (await rows<{ data: unknown }>(`select data from packs`)).map((r) => json<Pack>(r.data));
   const ledger = (await rows<any>(`select * from ledger_entries order by seq`)).map(
     (r): LedgerEntry => ({ id: r.id, eventId: r.event_id, companyId: r.company_id, at: new Date(r.at), unitId: r.unit_id ?? undefined, packId: r.pack_id ?? undefined, campaignId: r.campaign_id ?? undefined, debit: r.debit, credit: r.credit, amountCents: Number(r.amount_cents), kind: r.kind, memo: r.memo }),

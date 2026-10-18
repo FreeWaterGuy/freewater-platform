@@ -142,6 +142,7 @@ export async function createApp(opts: AppOptions) {
     seed: opts.seed ?? Date.now() % 2147483647,
   });
   const { platform, packs } = made;
+  platform.labelSvgLoader = async (unitId) => { await persistence.flush().catch(() => {}); return (await db.query<{ svg: string }>(`select svg from labels where unit_id = $1`, [unitId])).rows[0]?.svg; };
   // Every QR printed carries our own signed smart code.
   const codes = new CodeService(db, () => persistence, await loadSecret(db, 'codes'), opts.clock);
   platform.codes = codes;
