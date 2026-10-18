@@ -1,4 +1,6 @@
-import type { EventBus, PlatformEvent } from '../../core/events';
+import type { EventBus, EventPayloads, PlatformEvent } from '../../core/events';
+
+type EventPayloadsEngagement = EventPayloads['unit.scanned'] | EventPayloads['ar.launched'];
 import { newId } from '../../core/ids';
 import type { Cents, CompanyConfig, Placement } from '../../core/types';
 
@@ -33,7 +35,10 @@ export class Ledger {
   private printedUnits = new Map<string, { placements: Placement[]; locationId: string }>();
   private lastEngagement = new Map<string, number>();
 
-  constructor(bus: EventBus, private companies: Map<string, CompanyConfig>) {
+  private onEntry: (entry: LedgerEntry) => void;
+
+  constructor(bus: EventBus, private companies: Map<string, CompanyConfig>, hooks: { onEntry?: (entry: LedgerEntry) => void } = {}) {
+    this.onEntry = hooks.onEntry ?? (() => {});
     bus.on('label.printed', (e) => this.onPrinted(e));
     bus.on('unit.scanned', (e) => this.onEngagement(e, 'scan'));
     bus.on('ar.launched', (e) => this.onEngagement(e, 'ar'));
@@ -51,7 +56,9 @@ export class Ledger {
 
   private add(e: PlatformEvent, line: Omit<LedgerEntry, 'id' | 'eventId' | 'at' | 'companyId'>) {
     if (line.amountCents <= 0) return;
-    this.entries.push({ id: newId('le'), eventId: e.id, at: e.at, companyId: e.companyId, ...line });
+    const entry: LedgerEntry = { id: newId('le'), eventId: e.id, at: e.at, companyId: e.companyId, ...line };
+    this.entries.push(entry);
+    this.onEntry(entry);
   }
 
   private onPrinted(e: PlatformEvent<'label.printed'>) {
@@ -115,6 +122,19 @@ export class Ledger {
     const adv = `receivable:advertiser:${placement.advertiserId}`;
     if (refund) this.add(e, { unitId: e.payload.unitId, debit: 'revenue:commission', credit: adv, amountCents: amount, kind: 'commission_reversal', memo: `Refund on order ${e.payload.orderId}, commission returned` });
     else this.add(e, { unitId: e.payload.unitId, debit: adv, credit: 'revenue:commission', amountCents: amount, kind: 'commission', memo: `Commission on order ${e.payload.orderId}` });
+  }
+
+  /** After a restart: reload past lines and what the billing rules need to remember. Nothing is billed again. */
+  restore(input: { entries: LedgerEntry[]; printed: { unitId: string; placements: Placement[]; locationId: string }[]; engagementEvents: PlatformEvent[] }) {
+    this.entries.push(...input.entries);
+    for (const p of input.printed) this.printedUnits.set(p.unitId, { placements: p.placements, locationId: p.locationId });
+    for (const e of input.engagementEvents) {
+      const p = e.payload as EventPayloadsEngagement;
+      const loaded = 'experienceLoaded' in p ? p.experienceLoaded : p.loaded;
+      if (!loaded) continue;
+      const kind = e.type === 'unit.scanned' ? 'scan' : 'ar';
+      this.lastEngagement.set(`${kind}:${p.unitId}:${p.slotIndex}:${p.viewerKey}`, e.at.getTime());
+    }
   }
 
   /** The public receipt for one unit: what it earned and what it gave. */

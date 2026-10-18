@@ -53,6 +53,7 @@ export class PackService {
 
     const pack: Pack = { id: newId('pk'), companyId: company.id, customerId: order.customerId, address: order.address, routeId: order.routeId, stop: order.stop, box, unitIds: [], faces: [], status: 'composed' };
     this.packs.set(pack.id, pack);
+    this.save(pack);
 
     // 1. Bottles. Spread ads across the pack so no campaign takes over the box.
     const counts = new Map<string, number>();
@@ -72,6 +73,7 @@ export class PackService {
       const r = await printer.print({ jobId, idempotencyKey: `${pack.id}:box:${attempt}`, unitId: `${pack.id}-box`, locationId: pack.routeId, svg: pack.rendered.svg, widthIn: pack.rendered.widthIn, heightIn: pack.rendered.heightIn });
       if (r.status === 'printed') {
         pack.status = 'box_printed';
+        this.save(pack);
         p.bus.publish('box.printed', company.id, { packId: pack.id, jobId, faces: pack.faces }, pack.id);
         break;
       }
@@ -102,9 +104,11 @@ export class PackService {
     const ok = missing.length === 0 && unexpected.length === 0 && scannedUnitIds.length === pack.unitIds.length;
     if (ok) {
       pack.status = 'verified';
+      this.save(pack);
       this.platform.bus.publish('pack.verified', pack.companyId, { packId, scanned: scannedUnitIds.length }, `${packId}:verified`);
     } else {
       pack.status = 'mismatch';
+      this.save(pack);
       this.platform.bus.publish('pack.mismatch', pack.companyId, { packId, missing, unexpected }, newId('mm'));
     }
     return { ok, missing, unexpected };
@@ -124,6 +128,7 @@ export class PackService {
       const id = await this.printBottle(pack, productId, counts, max);
       pack.unitIds[i] = id;
       fresh.push(id);
+      this.save(pack);
       this.platform.bus.publish('unit.replaced', pack.companyId, { packId, oldUnitId: old, newUnitId: id }, `${packId}:${old}`);
     }
     return fresh;
@@ -133,6 +138,7 @@ export class PackService {
     const pack = this.need(packId);
     if (pack.status !== 'verified') throw new Error(`Pack ${packId} can't be sealed until every bottle is checked.`);
     pack.status = 'sealed';
+    this.save(pack);
     this.platform.bus.publish('pack.sealed', pack.companyId, { packId }, `${packId}:sealed`);
     return pack;
   }
@@ -146,6 +152,7 @@ export class PackService {
     order.forEach((p, i) => {
       p.loadPosition = i + 1;
       p.status = 'loaded';
+      this.save(p);
       this.platform.bus.publish('pack.loaded', p.companyId, { packId: p.id, routeId, loadPosition: i + 1 }, `${p.id}:loaded`);
     });
     return order;
@@ -166,8 +173,18 @@ export class PackService {
     if (!input.atAddress) return reject(`You're not at ${right.address} yet.`);
     if (right.status !== 'loaded') return reject(`This pack isn't loaded on the van.`);
     right.status = 'delivered';
+    this.save(right);
     this.platform.bus.publish('pack.delivered', right.companyId, { packId: right.id, routeId: right.routeId, stop: right.stop, emptiesCollected: input.emptiesCollected, photoProof: input.photoProof }, `${right.id}:delivered`);
     return { ok: true, pack: right };
+  }
+
+  /** Put packs loaded from storage back in place. */
+  restore(packs: Pack[]) {
+    for (const p of packs) this.packs.set(p.id, p);
+  }
+
+  private save(p: Pack) {
+    this.platform.persist.pack(p);
   }
 
   private need(id: string): Pack {

@@ -8,16 +8,22 @@
     "demo": "tsx src/demo/run.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "demo:packs": "tsx src/demo/night.ts"
+    "demo:packs": "tsx src/demo/night.ts",
+    "start": "tsx src/server/main.ts",
+    "key": "tsx src/server/keys.ts"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
+    "@electric-sql/pglite": "^0.2.12",
+    "fastify": "^4.28.1",
+    "pg": "^8.13.1",
     "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "@types/pg": "^8.11.10",
     "@types/qrcode": "^1.5.5",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",

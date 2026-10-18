@@ -120,7 +120,7 @@ describe('billing', () => {
     const s = setup();
     const a = await s.order('ATX-014', 'freewater', { orderId: 'same' });
     const b = await s.order('ATX-014', 'freewater', { orderId: 'same' });
-    expect(a).toBe(b);
+    expect(a.unit.id).toBe(b.unit.id);
     expect(s.printer.printed).toHaveLength(1);
   });
 

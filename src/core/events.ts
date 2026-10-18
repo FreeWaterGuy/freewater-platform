@@ -44,9 +44,26 @@ export class EventBus {
   private seen = new Set<string>();
   private handlers = new Map<EventType, Handler<any>[]>();
   private clock: () => Date;
+  private anyHandlers: ((e: PlatformEvent) => void)[] = [];
+  private keepLog: boolean;
 
-  constructor(clock: () => Date = () => new Date()) {
+  constructor(clock: () => Date = () => new Date(), opts: { keepLog?: boolean } = {}) {
     this.clock = clock;
+    this.keepLog = opts.keepLog ?? true;
+  }
+
+  /** Every event, in order. Persistence listens here. */
+  onAny(handler: (e: PlatformEvent) => void): void {
+    this.anyHandlers.push(handler);
+  }
+
+  /** After a restart, remember which actions already happened so they are never recorded twice. */
+  restoreSeen(keys: { companyId: string; type: EventType; idempotencyKey: string }[]): void {
+    for (const k of keys) this.seen.add(`${k.companyId}:${k.type}:${k.idempotencyKey}`);
+  }
+
+  now(): Date {
+    return this.clock();
   }
 
   on<T extends EventType>(type: T, handler: Handler<T>): void {
@@ -61,7 +78,8 @@ export class EventBus {
     if (this.seen.has(dedupeKey)) return null;
     this.seen.add(dedupeKey);
     const event: PlatformEvent<T> = { id: newId('ev'), type, companyId, at: this.clock(), idempotencyKey, payload };
-    this.log.push(event as PlatformEvent);
+    if (this.keepLog) this.log.push(event as PlatformEvent);
+    for (const h of this.anyHandlers) h(event as PlatformEvent);
     for (const h of this.handlers.get(type) ?? []) h(event);
     return event;
   }

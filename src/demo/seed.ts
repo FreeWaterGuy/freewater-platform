@@ -117,7 +117,7 @@ const peak = (w: number, h: number) => `<path d="M0 ${h * 0.55} L${w * 0.35} ${h
 
 const all: Sixths[] = [1, 2, 3, 4, 6];
 type CampaignInput = Omit<Campaign, 'companyId' | 'active' | 'targeting'> & Partial<Pick<Campaign, 'targeting'>>;
-const fw = (c: CampaignInput): Campaign => ({ companyId: 'freewater', active: true, targeting: {}, ...c });
+const fw = (c: CampaignInput): Campaign => ({ companyId: 'freewater', active: true, targeting: {}, ...c, creativeRef: { kind: 'builtin', id: c.id } });
 
 export function sampleCampaigns(): Campaign[] {
   return [
@@ -138,7 +138,7 @@ export function sampleCampaigns(): Campaign[] {
     // Blocked by FreeWater's rules (alcohol), allowed by a licensee that chooses to.
     fw({ id: 'cmp-lager', advertiserId: 'adv-lager', advertiserName: 'Lone Peak Lager', category: 'alcohol', sizes: [1, 2, 3], experienceId: 'offer', buy: { type: 'bid', maxCentsPerSixth: 9, dailyCapCents: 9000, spentTodayCents: 0 },
       creative: art({ bg: '#0F3D5E', fg: '#FFFFFF', accent: '#F2C14E', brand: 'Lone Peak', line: 'Cold and local', sub: '21+', mark: peak }) }),
-    { companyId: 'peak-spring', active: true, targeting: {}, id: 'cmp-peak-house', advertiserId: 'peak-spring', advertiserName: 'Peak Spring', category: 'house', sizes: all, isHouse: true, experienceId: 'peak-app', buy: { type: 'guaranteed', remainingPrints: 1e9 },
+    { companyId: 'peak-spring', active: true, targeting: {}, creativeRef: { kind: 'builtin', id: 'cmp-peak-house' }, id: 'cmp-peak-house', advertiserId: 'peak-spring', advertiserName: 'Peak Spring', category: 'house', sizes: all, isHouse: true, experienceId: 'peak-app', buy: { type: 'guaranteed', remainingPrints: 1e9 },
       creative: art({ bg: '#123B2A', fg: '#FFFFFF', accent: '#F2C14E', brand: 'peak spring', line: 'Cold mountain water', sub: 'From the Rockies', mark: peak }) },
   ];
 }
@@ -154,3 +154,6 @@ export const mayaDesign: Creative = {
     return s;
   },
 };
+
+/** The demo's generated artwork, by campaign id, so stored campaigns can find their art again after a restart. */
+export const builtinCreatives: Record<string, Creative> = Object.fromEntries(sampleCampaigns().map((c) => [c.id, c.creative]));

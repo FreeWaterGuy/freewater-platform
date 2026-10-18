@@ -5,6 +5,7 @@ import { freewaterAdEngine, houseOnlyAdEngine } from './modules/ads/engine';
 import { svgLabelRenderer } from './modules/print/renderer';
 import { VirtualPrinter, type VirtualPrinterOptions } from './adapters/printers/virtual';
 import { Platform } from './platform';
+import type { Persistence } from './core/persistence';
 
 /** Wire up a platform with the default modules. Swap any of them by registering another name and pointing a company at it. */
 export function createPlatform(input: {
@@ -16,6 +17,8 @@ export function createPlatform(input: {
   printer?: VirtualPrinterOptions;
   seed?: number;
   clock?: () => Date;
+  persistence?: Persistence;
+  keepEventLog?: boolean;
 }) {
   const printer = new VirtualPrinter(input.printer);
   const registry = new Registry()
@@ -24,7 +27,7 @@ export function createPlatform(input: {
     .registerRenderer(svgLabelRenderer.name, svgLabelRenderer)
     .registerPrinter(printer.name, printer);
   const byId = <T extends { id: string }>(xs: T[]) => new Map(xs.map((x) => [x.id, x]));
-  const platform = new Platform(registry, byId(input.companies), byId(input.products), byId(input.locations), byId(input.campaigns), { seed: input.seed, clock: input.clock });
+  const platform = new Platform(registry, byId(input.companies), byId(input.products), byId(input.locations), byId(input.campaigns), { seed: input.seed, clock: input.clock, persistence: input.persistence, keepEventLog: input.keepEventLog });
   const packs = new PackService(platform, byId(input.boxes ?? []));
   return { platform, printer, registry, packs };
 }

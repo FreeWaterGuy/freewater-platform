@@ -1,6 +1,6 @@
 # FreeWater platform
 
-The first working piece of the FreeWater platform: it takes an order, picks the ads, lays out a print-ready label with a unique QR for every ad, prints it on a virtual printer, and bills only what really happened.
+The FreeWater platform: it takes an order, picks the ads, lays out a print-ready label with a unique QR for every ad, prints it, and bills only what really happened. It runs as an API server on a Postgres database, and every part, including the database and the printer, can be swapped.
 
 ## Try it
 
@@ -8,6 +8,7 @@ You need Node.js 20 or newer.
 
 ```bash
 npm install
+SEED_DEMO=1 npm start   # starts the API on http://localhost:8080 with sample data; prints demo API keys once
 npm run demo         # prints a morning of bottles in Austin; open out/index.html
 npm run demo:packs   # prints a night of 6, 12 and 24 packs and delivers them; open out/packs.html
 npm test             # checks every business rule
@@ -42,6 +43,31 @@ Failed prints, failed AR and duplicate orders are never billed. Ledger lines are
 - **Loaded in reverse.** The last stop goes in the van first, so the next box is always by the door.
 - **Right box, right door.** A stop is marked delivered only when the driver scans the box planned for that address while at that address. Anything else is rejected with what to grab instead.
 
+## The API
+
+One API for every app, machine, micro-factory, driver, advertiser and partner. The full list of endpoints is at `/v1/openapi.json` while the server runs.
+
+| Who | What they call |
+|---|---|
+| Machines and the app | `POST /v1/orders` (send the same `orderId` again and nothing prints twice), `GET /v1/units/:id`, `GET /v1/units/:id/label.svg` |
+| Scan pages and the open-books site (no key) | `GET /v1/public/scan/:unit/:slot`, `POST /v1/public/scans`, `POST /v1/public/ar-launches`, `GET /v1/public/receipts/:unit`, `GET /v1/public/companies/:id/totals` |
+| Advertisers | `GET/POST /v1/campaigns` (SVG artwork, checked for anything unsafe), `PATCH /v1/campaigns/:id`, `POST /v1/purchases`, `POST /v1/refunds` |
+| Micro-factory and drivers | `POST /v1/packs`, `/verify`, `/replace`, `/seal`, `POST /v1/routes/:id/load`, `POST /v1/deliveries` |
+| Finance | `GET /v1/ledger`, `GET /v1/events` |
+
+**Keys.** Every call except the public ones needs `Authorization: Bearer <key>`. A key belongs to one company and only ever sees that company. It has scopes (`orders`, `packs`, `campaigns`, `purchases`, `ledger`, `events`, `admin`), and an advertiser's key only sees that advertiser's campaigns and sales. New campaigns start paused until a company key turns them on (content review). Only a hash of each key is stored. Make one with `npm run key -- freewater "ATX-022 machine" orders`.
+
+## The database
+
+`src/db` holds the database contract (`SqlClient`) and two adapters:
+
+- **Built-in (PGlite):** Postgres running inside the app, no server to install. Used by default (data in `./data`) and by the tests.
+- **Postgres server:** set `DATABASE_URL=postgres://…` and the same code runs on it.
+
+Migrations run on start. Events and ledger lines are append-only, enforced by the database itself: an update or delete is refused. Every change is written in the order it happened, and an API call answers only after its changes are stored. On restart the platform reloads everything, including budgets, which orders were already printed, and recent scans for the repeat window, so nothing is printed or billed twice.
+
+The server keeps working state in memory and writes through to the database, so for now it runs as one instance. Running many instances side by side is a later step; the database already holds everything that would need.
+
 ## How it's built to be swapped
 
 | Folder | What it is |
@@ -52,6 +78,9 @@ Failed prints, failed AR and duplicate orders are never billed. Ledger lines are
 | `src/modules/ledger` | Billing rules and the open-books receipt |
 | `src/modules/packs` | Packs, box faces, packing check, van loading and delivery |
 | `src/adapters/printers` | Printer contract and the virtual printer |
+| `src/db` | Database contract, PGlite and Postgres adapters, migrations, storage |
+| `src/api` | The public API (v1) and its OpenAPI description |
+| `src/app.ts`, `src/server` | Start-up: load from the database, run the API, make keys |
 | `src/platform.ts` | The thin core that runs the pipeline |
 | `src/demo` | Sample companies, made-up advertisers and the demo run |
 | `test` | Tests for every rule above |
@@ -62,6 +91,6 @@ All prices in `src/demo/seed.ts` are placeholders.
 
 ## Next
 
-- A real printer adapter for the Model 6 and the micro-factory lines
-- A database (PostgreSQL) behind the in-memory stores
-- The public API, so the apps and the advertiser portal can call this
+- A real printer adapter for the Model 6 and the micro-factory lines, once the printers are chosen (the virtual printer shows the contract any printer must follow)
+- Webhooks, so partners hear about events without polling
+- The consumer app and advertiser portal, built on this API

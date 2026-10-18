@@ -76,6 +76,9 @@ export interface CompanyConfig {
   };
 }
 
+/** How a creative is stored: uploaded SVG artwork, or one of the built-in generated designs. */
+export type CreativeRef = { kind: 'svg'; markup: string } | { kind: 'builtin'; id: string };
+
 export interface Creative {
   /** Artwork as SVG markup sized to any box; the renderer scales it to the slot. A real system stores an asset URL. */
   svg: (widthPx: number, heightPx: number) => string;
@@ -94,6 +97,7 @@ export interface Campaign {
   competitorGroup?: string; // two campaigns in the same group never share a unit
   sizes: Sixths[]; // slot sizes this campaign has artwork for
   creative: Creative;
+  creativeRef?: CreativeRef;
   experienceId: string; // which plug-in opens when its QR is scanned
   /** Where this campaign has artwork. Labels by default; 'box-face' lets it run on pack boxes. */
   formats?: ('label' | 'box-face')[];
@@ -148,4 +152,7 @@ export interface Unit {
   placements: Placement[];
   layout: Sixths[];
   status: 'filled' | 'rendered' | 'printed' | 'failed' | 'dispensed';
+  orderId?: string;
+  packId?: string;
+  createdAt: string;
 }
