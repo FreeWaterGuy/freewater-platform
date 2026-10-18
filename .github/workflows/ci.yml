@@ -19,7 +19,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npm test
+      - run: npx vitest run --reporter=default --reporter=github-actions # failures show as annotations
       - name: Known security holes in what runs in production
         run: npm audit --omit=dev --audit-level=high
 

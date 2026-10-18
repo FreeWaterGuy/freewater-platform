@@ -168,7 +168,10 @@ describe('static and dynamic codes', () => {
     // In the morning, the AI chooses among the versions that fit (and only those).
     now = new Date('2026-11-04T14:00:00Z').getTime();
     asked.length = 0;
-    const morning = await open('morning-person-3');
+    // A tenth of moments are held out from the AI on purpose (to measure it); pick one that isn't.
+    let mv = 3;
+    while (app.agents.holdout('personalizer', `${unit.id}:${slot}:morning-person-${mv}`)) mv++;
+    const morning = await open(`morning-person-${mv}`);
     expect(asked[0]).toBe('default,morning,passed-on');
     expect(morning.body.variant).toMatchObject({ id: 'morning' });
     expect(morning.body.personalizedBy).toBe('test AI');
