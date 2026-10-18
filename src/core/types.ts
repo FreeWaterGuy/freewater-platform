@@ -9,8 +9,15 @@ export type Sixths = 1 | 2 | 3 | 4 | 5 | 6;
 export interface Location {
   id: string; // e.g. "ATX-014" for a machine, "route-3" for a delivery route
   kind: 'machine' | 'route' | 'event';
+  /** The company that runs this machine or route. */
+  companyId?: string;
   city: string;
   name: string;
+  address?: string;
+  lat?: number;
+  lng?: number;
+  /** About how long a bottle takes to print and drop, shown as the countdown. */
+  printSeconds?: number;
 }
 
 export interface Product {
@@ -51,6 +58,11 @@ export interface CompanyConfig {
     charityByLocation?: Record<string, string>;
   };
   consumerPricing: 'free' | 'discounted' | 'full';
+  /** Rules for people getting bottles from the app. */
+  consumer?: {
+    freeBottlesPerDay: number; // per person, so nobody empties a machine
+    retailValueCents: number; // what a bottle would cost in a store; used for "you saved"
+  };
   adRules: {
     minAdsPerUnit: number;
     maxAdsPerUnit: number;
@@ -159,6 +171,8 @@ export interface Unit {
   orderId?: string;
   packId?: string;
   createdAt: string;
+  /** The person who got this bottle from the app, if they were signed in. */
+  consumerId?: string;
   /** For custom bottles: what scanning it opens (the sender's message, video, photos). */
   experienceConfig?: Record<string, unknown>;
 }

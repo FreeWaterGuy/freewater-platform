@@ -44,6 +44,13 @@ async function slotOf(campaignId: string) {
   throw new Error(`no slot for ${campaignId}`);
 }
 
+async function customOrder(token: string, orderId: string, svg: string, experience?: unknown) {
+  const proof = await call('POST', '/v1/me/proofs', token, { productId: 'bottle-16oz', svg, ...(experience ? { experience } : {}) });
+  if (proof.statusCode !== 201) return proof;
+  const { code } = (await call('GET', '/v1/machines/ATX-014/presence', keys['machine-ATX-014'])).json();
+  return call('POST', '/v1/me/custom-orders', token, { orderId, proofId: proof.json().proofId, locationId: 'ATX-014', presenceCode: code });
+}
+
 beforeAll(async () => {
   db = await createPgliteClient();
   app = await createApp({ db, seedDemo: true, seed: 7, clock });
@@ -254,11 +261,11 @@ describe('custom bottles and saved items', () => {
     const { token } = (await call('POST', '/v1/auth/verify', undefined, { companyId: 'freewater', channel: 'email', to: 'jordan@example.com', code })).json();
     await call('POST', '/v1/me/cards', token, { token: 'tok_visa' });
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300"><rect width="400" height="300" fill="#F7C6D4"/></svg>`;
-    const bad = await call('POST', '/v1/me/custom-orders', token, { orderId: 'm0', locationId: 'ATX-014', productId: 'bottle-16oz', svg, experience: { message: 'no sender' } });
+    const bad = await customOrder(token, 'm0', svg, { message: 'no sender' });
     expect(bad.statusCode).toBe(422);
-    const made = await call('POST', '/v1/me/custom-orders', token, { orderId: 'm1', locationId: 'ATX-014', productId: 'bottle-16oz', svg, experience: { from: 'Jordan and friends', message: 'Happy 30th, Maya!', confetti: true } });
+    const made = await customOrder(token, 'm1', svg, { from: 'Jordan and friends', message: 'Happy 30th, Maya!', confetti: true });
     expect(made.statusCode).toBe(201);
-    const unitId = made.json().unit.id;
+    const unitId = made.json().bottle.id;
     const page = (await call('GET', `/v1/public/experience/${unitId}/0?viewer=maya-phone-01`)).json();
     expect(page.doc.blocks[0]).toEqual({ type: 'message', from: 'Jordan and friends', text: 'Happy 30th, Maya!' });
     expect(page.footer.ads).toBeNull();

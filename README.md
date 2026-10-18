@@ -95,6 +95,23 @@ npm run demo:scan-preview    # builds out/scan-preview/, an offline page showing
 - **Advertisers change what their QR opens** with `PATCH /v1/campaigns/:id` (experience, settings, colors). `GET /v1/experiences` lists every plug-in with its settings and an example; `POST /v1/experiences/preview` shows the page before saving. A change by an advertiser goes back to content review.
 - **Saved.** Anyone can save on their phone; signed-in people's saves go to `GET /v1/me/saved` for the app.
 
+## The FreeWater app
+
+The app people use on their phones. It's a web app (add it to your home screen); store versions come at go-live.
+
+```
+npm run demo:app           # the app at http://localhost:8787/app, plus a stand-in machine screen at /demo/machine/ATX-014
+npm run demo:app-preview   # builds out/app-preview/, a clickable copy that needs no server
+```
+
+- **One tap.** At a machine, scan the code on its screen, tap "Get my free water", and watch the countdown. Signing in once (a code by email or text) keeps it fair.
+- **You have to be at the machine.** The machine's screen shows a code that changes every 30 seconds (`GET /v1/machines/:id/presence`, read by the machine with its own key). The app sends it with the tap; a code older than about 90 seconds is refused, so nobody can take bottles from far away.
+- **Fair limits.** Each person gets `consumer.freeBottlesPerDay` free bottles in 24 hours (3 for FreeWater; each company sets its own). Sending the same tap twice prints one bottle.
+- **The countdown shows an ad.** For a free bottle it's the biggest ad on that bottle, with a button to save the offer. For a paid custom bottle it's an ad allowed at that machine. The countdown ad isn't billed yet.
+- **Your bottles.** Every bottle you got, with each ad on it. Ads with 3D have an AR button that opens its scan page; the others open their page. Each bottle shows what it earned and gave, and links to its receipt. Home adds it up: bottles, given to charity, money saved.
+- **Saved, Machines, Scan, Me.** Saved offers from your scans. A list of machines. A scanner that reads FreeWater codes with the camera and ignores everyone else's. Your name, privacy switches (all off to start), interests, saved card, download your data, sign out, delete your account.
+- **Design my own bottle.** Words, a photo, colors and lettering for the label, and what opens when someone scans it (a message, confetti). Then a proof (`POST /v1/me/proofs`) shows the exact label that will print, panel and all, with the price. Only an approved proof can be printed (`POST /v1/me/custom-orders` takes the proof's id), within a day, at the proof's price, with the code from the machine's screen. The card is held, charged only once it prints, and released if it doesn't. The AI chat for designing comes in step 5.
+
 ## The database
 
 `src/db` holds the database contract (`SqlClient`) and two adapters:
@@ -134,4 +151,4 @@ All prices in `src/demo/seed.ts` are placeholders.
 
 - A real printer adapter for the Model 6 and the micro-factory lines, once the printers are chosen (the virtual printer shows the contract any printer must follow)
 - Webhooks, so partners hear about events without polling
-- The consumer app (step 3) and the advertiser portal with its AI chat (step 4), built on this API
+- The advertiser portal with its AI chat (step 4), then the AI design assistant (step 5)

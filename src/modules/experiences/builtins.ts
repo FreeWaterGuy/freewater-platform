@@ -47,7 +47,7 @@ export const couponPlugin: ExperiencePlugin<CouponConfig> = {
 // ---------- 3D menu in AR ----------
 interface MenuConfig { title: string; subtitle?: string; model: ModelSetting; addOns?: { id: string; label: string; model: ModelSetting }[]; firstTimeOffer?: string; regularOffer?: string; orderUrl: string; orderLabel?: string }
 export const menuPlugin: ExperiencePlugin<MenuConfig> = {
-  id: 'ar-3d-menu', name: '3D menu in AR', version: '1.0.0',
+  id: 'ar-3d-menu', name: '3D menu in AR', version: '1.0.0', ar: true,
   description: 'Spin the food in 3D, see it on your table in AR, add sides, and order.',
   configSchema: obj({ title: s(120), subtitle: s(300), model: modelSchema, addOns: { type: 'array', maxItems: 8, items: obj({ id: s(40), label: s(40), model: modelSchema }, ['id', 'label', 'model']) }, firstTimeOffer: s(120), regularOffer: s(120), orderUrl: url, orderLabel: s(40) }, ['title', 'model', 'orderUrl']),
   example: { title: '$5 combo', subtitle: 'Burger, fries and a drink. Pickup in 10 minutes.', model: { builtin: 'burger' }, addOns: [{ id: 'fries', label: 'Fries', model: { builtin: 'fries' } }, { id: 'drink', label: 'Drink', model: { builtin: 'drink' } }], firstTimeOffer: 'Free fries on your first order', regularOffer: 'Your usual is ready in 10 minutes', orderUrl: 'https://example.com/order' },
@@ -67,7 +67,7 @@ export const menuPlugin: ExperiencePlugin<MenuConfig> = {
 // ---------- home tour ----------
 interface TourConfig { address: string; price?: string; details?: string; rooms: { name: string; color?: string; imageUrl?: string; note?: string }[]; model?: ModelSetting; slots?: string[]; bookUrl: string }
 export const tourPlugin: ExperiencePlugin<TourConfig> = {
-  id: 'ar-home-tour', name: 'Home tour', version: '1.0.0',
+  id: 'ar-home-tour', name: 'Home tour', version: '1.0.0', ar: true,
   description: 'Walk through a home room by room, see a 3D model, and book a showing.',
   configSchema: obj({ address: s(120), price: s(40), details: s(500), rooms: { type: 'array', minItems: 1, maxItems: 20, items: obj({ name: s(60), color: { type: 'string', pattern: '^#[0-9a-fA-F]{6}$' }, imageUrl: { type: 'string', maxLength: 2000 }, note: s(200) }, ['name']) }, model: modelSchema, slots: { type: 'array', maxItems: 12, items: s(40) }, bookUrl: url }, ['address', 'rooms', 'bookUrl']),
   example: { address: '1406 Maple St', price: '$685,000', details: '3 bed, 2 bath, big back yard.', rooms: [{ name: 'Living room', color: '#C9D8C5', note: 'South light all afternoon' }, { name: 'Kitchen', color: '#E8DCC8' }, { name: 'Back yard', color: '#9DBF8F' }], model: { builtin: 'house' }, slots: ['Sat 10:00', 'Sat 11:30', 'Sun 1:00'], bookUrl: 'https://example.com/book' },

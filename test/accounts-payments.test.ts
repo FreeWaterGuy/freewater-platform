@@ -29,6 +29,13 @@ async function signIn(to: string, channel: 'email' | 'sms' = 'email', companyId 
 }
 const normalizePhone = (p: string) => (p.replace(/[^\d+]/g, '').length === 10 ? `+1${p.replace(/\D/g, '')}` : p.replace(/[^\d+]/g, ''));
 
+async function customOrder(token: string, orderId: string, svg: string, experience?: unknown) {
+  const proof = await call('POST', '/v1/me/proofs', token, { productId: 'bottle-16oz', svg, ...(experience ? { experience } : {}) });
+  if (proof.statusCode !== 201) return proof;
+  const { code } = (await call('GET', '/v1/machines/ATX-014/presence', keys['machine-ATX-014'])).json();
+  return call('POST', '/v1/me/custom-orders', token, { orderId, proofId: proof.json().proofId, locationId: 'ATX-014', presenceCode: code });
+}
+
 beforeAll(async () => {
   db = await createPgliteClient();
   app = await createApp({ db, seedDemo: true, seed: 2, clock });
@@ -141,20 +148,20 @@ describe('team', () => {
 describe('custom bottles', () => {
   it('holds the money, prints, then takes it, and records it in the books', async () => {
     const s = await signIn('maya.friend@example.com');
-    const noCard = await call('POST', '/v1/me/custom-orders', s.token, { orderId: 'maya-1', locationId: 'ATX-014', productId: 'bottle-16oz', svg: art });
+    const noCard = await customOrder(s.token, 'maya-1', art);
     expect(noCard.statusCode).toBe(402);
     expect(noCard.json().error.code).toBe('no_payment_method');
 
     const card = await call('POST', '/v1/me/cards', s.token, { token: 'tok_visa' });
     expect(card.json()).toMatchObject({ brand: 'visa', last4: '4242', isDefault: true });
-    const r = await call('POST', '/v1/me/custom-orders', s.token, { orderId: 'maya-1', locationId: 'ATX-014', productId: 'bottle-16oz', svg: art });
+    const r = await customOrder(s.token, 'maya-1', art);
     expect(r.statusCode).toBe(201);
     expect(r.json().payment.status).toBe('captured');
     expect(r.json().payment.amountCents).toBe(300);
-    expect(r.json().unit.kind).toBe('custom');
+    expect(r.json().bottle.kind).toBe('custom');
 
-    const again = await call('POST', '/v1/me/custom-orders', s.token, { orderId: 'maya-1', locationId: 'ATX-014', productId: 'bottle-16oz', svg: art });
-    expect(again.json().unit.id).toBe(r.json().unit.id); // same order: not printed or charged twice
+    const again = await customOrder(s.token, 'maya-1', art);
+    expect(again.json().bottle.id).toBe(r.json().bottle.id); // same order: not printed or charged twice
     expect(again.json().payment.id).toBe(r.json().payment.id);
 
     await app.persistence.flush();
@@ -169,7 +176,7 @@ describe('custom bottles', () => {
     await call('POST', '/v1/me/cards', s.token, { token: 'tok_mastercard' });
     app.printer.failNext('jam');
     app.printer.failNext('jam');
-    const r = await call('POST', '/v1/me/custom-orders', s.token, { orderId: 'u-1', locationId: 'ATX-014', productId: 'bottle-16oz', svg: art });
+    const r = await customOrder(s.token, 'u-1', art);
     expect(r.statusCode).toBe(422);
     expect(r.json().payment.status).toBe('voided');
     expect(app.platform.ledger.entries.some((l) => l.debit === `receivable:customer:${s.user.id}`)).toBe(false);
@@ -180,7 +187,7 @@ describe('custom bottles', () => {
     expect((await call('POST', '/v1/me/cards', s.token, { token: 'tok_expired' })).json().error.code).toBe('card_refused');
     await call('POST', '/v1/me/cards', s.token, { token: 'tok_declined' });
     const printedBefore = app.printer.printed.length;
-    const r = await call('POST', '/v1/me/custom-orders', s.token, { orderId: 'd-1', locationId: 'ATX-014', productId: 'bottle-16oz', svg: art });
+    const r = await customOrder(s.token, 'd-1', art);
     expect(r.statusCode).toBe(402);
     expect(r.json().error.code).toBe('card_declined');
     expect(app.printer.printed.length).toBe(printedBefore);

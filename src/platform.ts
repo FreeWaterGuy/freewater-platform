@@ -14,6 +14,7 @@ export interface OrderOptions {
   orderId?: string; // pass the same id again and nothing is printed twice
   custom?: { customerId: string; art: Creative; priceCents?: number; experienceConfig?: Record<string, unknown> };
   packId?: string;
+  consumerId?: string;
   frequency?: { counts: Map<string, number>; max: number };
   avoidSignatures?: Set<string>;
 }
@@ -117,6 +118,7 @@ export class Platform {
       orderId: opts.orderId,
       packId: opts.packId,
       createdAt: this.bus.now().toISOString(),
+      ...(opts.consumerId ? { consumerId: opts.consumerId } : {}),
       ...(opts.custom?.experienceConfig ? { experienceConfig: opts.custom.experienceConfig } : {}),
     };
     this.units.set(unit.id, unit);

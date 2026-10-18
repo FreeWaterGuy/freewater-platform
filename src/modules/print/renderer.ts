@@ -2,7 +2,7 @@ import type { CompanyConfig } from '../../core/types';
 import type { LabelRenderer, RenderRequest, RenderedLabel, RenderedSlot } from './contract';
 import { qrSvg } from './qr';
 
-const PX_PER_IN = 100; // drawing units; the SVG's width/height are set in real inches
+export const PX_PER_IN = 100; // drawing units; the SVG's width/height are set in real inches
 
 /**
  * FreeWater's default label renderer.

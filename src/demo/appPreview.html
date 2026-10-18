@@ -1,0 +1,71 @@
+<meta charset="utf-8">
+<title>FreeWater App</title>
+<meta name="theme-color" content="#FFFFFF">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@500;600;700&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&display=swap">
+<style>
+/*APP_CSS*/
+.preview-note { max-width: 520px; margin: 0 auto; padding: 10px 18px 0; font-size: 13px; color: #5C3F00; }
+.preview-note span { display: block; background: #FFF4D6; border-radius: 12px; padding: 8px 12px; }
+</style>
+<div class="preview-note"><span><b>Preview.</b> This is the real app with saved answers from the server. Sign in with any email and any 6 digits. Nothing prints and no money moves.</span></div>
+<div id="root"><div class="boot"><div class="logo big"><span>free</span><span>water</span></div></div></div>
+<script>
+(() => {
+  const D = /*DATA*/;
+  const S = { me: null, bottles: [], saved: [], cards: [], vendIndex: 0, labels: {}, proofDesign: null, customCount: 0 };
+  const err = (status, code, message) => { const e = new Error(message); e.status = status; e.code = code; throw e; };
+  const statsOf = () => ({ bottles: S.bottles.length, donatedCents: S.bottles.reduce((s, b) => s + b.donatedCents, 0), savedCents: S.bottles.filter((b) => b.kind !== 'custom').length * 100 });
+  const inner = (svg) => svg.slice(svg.indexOf('>', svg.indexOf('<svg')) + 1, svg.lastIndexOf('</svg>'));
+  window.__FW_APP_FIXTURE__ = {
+    start: '/app/m/ATX-014?c=preview',
+    async api(method, url, body, state) {
+      await new Promise((r) => setTimeout(r, 120));
+      const path = url.split('?')[0];
+      const key = `${method} ${path}`;
+      if (D.rec[key]) return D.rec[key];
+      if (key === 'POST /v1/auth/start') return { sent: true, expiresInMinutes: 10 };
+      if (key === 'POST /v1/auth/verify') {
+        if (!/^\d{6}$/.test(String(body.code).trim())) err(400, 'bad_code', 'That code isn’t right. Check it and try again.');
+        S.me = { ...D.me, email: body.channel === 'email' ? body.to : null, phone: body.channel === 'sms' ? body.to : null, displayName: null };
+        return { token: 'fws_preview', isNew: true, user: S.me };
+      }
+      if (!S.me) err(401, 'signed_out', 'Sign in again.');
+      if (key === 'GET /v1/me') return S.me;
+      if (key === 'PATCH /v1/me') { S.me = { ...S.me, ...('displayName' in body ? { displayName: body.displayName } : {}), ...(body.interests ? { interests: body.interests } : {}), consents: { ...S.me.consents, ...(body.consents || {}) } }; return S.me; }
+      if (key === 'GET /v1/me/export') return { account: S.me, bottles: S.bottles, saved: S.saved };
+      if (key === 'POST /v1/auth/sign-out' || key === 'DELETE /v1/me') { S.me = null; return null; }
+      if (key === 'GET /v1/me/cards') return S.cards;
+      if (key === 'POST /v1/me/cards') { if (body.token === 'tok_declined') err(402, 'card_declined', 'That card was declined. Try another.'); S.cards = [D.card]; return D.card; }
+      if (key === 'GET /v1/me/saved') return S.saved;
+      if (key === 'POST /v1/me/saved') { const v = D.vends.find((x) => x.saves[body.target]); const item = v.saves[body.target]; if (!S.saved.some((s) => s.target === item.target)) S.saved.unshift(item); return item; }
+      if (method === 'DELETE' && path.startsWith('/v1/me/saved/')) { S.saved = S.saved.filter((s) => s.id !== path.split('/').pop()); return null; }
+      if (key === 'POST /v1/me/vends') {
+        const free = S.bottles.filter((b) => b.kind !== 'custom').length;
+        if (free >= 3) err(429, 'daily_limit', 'You’ve had your 3 free bottles for today. Your next one is ready tomorrow.');
+        const v = D.vends[S.vendIndex++ % D.vends.length];
+        const bottle = { ...v.bottle, createdAt: new Date().toISOString() };
+        S.bottles.unshift(bottle); S.labels[bottle.id] = v.label;
+        return { bottle, countdown: v.countdown, freeLeftToday: 2 - free };
+      }
+      if (key === 'GET /v1/me/bottles') return { stats: statsOf(), bottles: S.bottles };
+      let m = /^\/v1\/me\/bottles\/([^/]+)(\/label\.svg)?$/.exec(path);
+      if (m) { const b = S.bottles.find((x) => x.id === m[1]); if (!b) err(404, 'not_found', 'Bottle not found.'); return m[2] ? S.labels[b.id] : b; }
+      if (key === 'POST /v1/me/proofs') {
+        if (/<script/i.test(body.svg)) err(422, 'artwork_refused', 'Artwork refused: scripts are not allowed');
+        S.proofDesign = { svg: body.svg, experience: body.experience };
+        return { ...D.proof, labelSvg: D.proof.labelSvg.replace(D.marker, inner(body.svg)) };
+      }
+      if (key === 'POST /v1/me/custom-orders') {
+        const id = `${D.custom.bottle.id}_${++S.customCount}`;
+        const bottle = { ...D.custom.bottle, id, labelUrl: `/v1/me/bottles/${id}/label.svg`, createdAt: new Date().toISOString(), ads: D.custom.bottle.ads.map((a) => ({ ...a, url: `/s/${id}/0` })) };
+        S.bottles.unshift(bottle); S.labels[id] = D.proof.labelSvg.replace(D.marker, inner(S.proofDesign.svg));
+        return { ...D.custom, bottle };
+      }
+      err(404, 'not_found', 'Not in this preview.');
+    },
+  };
+})();
+</script>
+<script>
+/*APP_JS*/
+</script>

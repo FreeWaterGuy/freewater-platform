@@ -29,6 +29,8 @@ export interface ExperiencePlugin<C = Record<string, unknown>> {
   name: string;
   description: string;
   version: string;
+  /** True when the page shows a 3D model people can open in AR. */
+  ar?: boolean;
   /** JSON Schema for the settings an advertiser fills in. Checked before anything is saved. */
   configSchema: Record<string, unknown>;
   example: C;

@@ -33,6 +33,7 @@ export const freewater: CompanyConfig = {
   productFacts: ['SPRING WATER', '16 fl oz (473 ml)', 'Source: Natural Spring Water, Tiger, GA', 'Manufactured by RAIN Bottling Co for FreeWater Inc, Austin, TX', 'Processed by ozonation'],
   giving: { mode: 'per_unit', centsPerUnit: 10, defaultCharity: 'Austin Parks Foundation', charityByLocation: { 'route-3': 'Central Texas Food Bank' } },
   consumerPricing: 'free',
+  consumer: { freeBottlesPerDay: 3, retailValueCents: 100 },
   adRules: { minAdsPerUnit: 1, maxAdsPerUnit: 6, blockedCategories: ['alcohol', 'tobacco', 'gambling', 'weapons'], competitorSeparation: true, repeatScanWindowSec: 600, maxPackShare: 0.5 },
   prices: placeholderPrices,
   modules: { ads: 'freewater-ads', renderer: 'svg-label', printer: 'virtual-printer' },
@@ -53,10 +54,10 @@ export const peakSpring: CompanyConfig = {
 };
 
 export const locations: Location[] = [
-  { id: 'ATX-014', kind: 'machine', city: 'Austin', name: 'Congress Ave' },
-  { id: 'ATX-022', kind: 'machine', city: 'Austin', name: 'Rainey St' },
-  { id: 'route-3', kind: 'route', city: 'Austin', name: 'Travis Heights' },
-  { id: 'PS-001', kind: 'machine', city: 'Denver', name: 'Union Station' },
+  { id: 'ATX-014', kind: 'machine', companyId: 'freewater', city: 'Austin', name: 'Congress Ave', address: '600 Congress Ave, Austin, TX', lat: 30.2687, lng: -97.7428, printSeconds: 24 },
+  { id: 'ATX-022', kind: 'machine', companyId: 'freewater', city: 'Austin', name: 'Rainey St', address: '70 Rainey St, Austin, TX', lat: 30.2589, lng: -97.7387, printSeconds: 24 },
+  { id: 'route-3', kind: 'route', companyId: 'freewater', city: 'Austin', name: 'Travis Heights' },
+  { id: 'PS-001', kind: 'machine', companyId: 'peak-spring', city: 'Denver', name: 'Union Station', address: '1701 Wynkoop St, Denver, CO', lat: 39.7527, lng: -105.0002, printSeconds: 30 },
 ];
 
 // ---------- artwork ----------

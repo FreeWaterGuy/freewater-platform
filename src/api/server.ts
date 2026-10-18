@@ -1,4 +1,6 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
+import { ApiError, notFound, obj, S, type Handler, type RouteDef } from './http';
+import { consumerRoutes } from './consumer';
 import type { App } from '../app';
 import { findApiKey, type ApiKey, type Scope } from '../db/store';
 import type { Campaign, Sixths } from '../core/types';
@@ -13,34 +15,6 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-
-// ---------- small helpers ----------
-
-class ApiError extends Error {
-  constructor(public status: number, public code: string, message: string) {
-    super(message);
-  }
-}
-const notFound = (what: string) => new ApiError(404, 'not_found', `${what} not found.`);
-
-type Handler = (req: FastifyRequest, key: ApiKey | null) => Promise<{ status?: number; body?: unknown; type?: string; raw?: string }>;
-interface RouteDef {
-  method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
-  url: string;
-  scope: Scope | Scope[] | 'public';
-  summary: string;
-  body?: Record<string, unknown>; // JSON schema
-  /** For file uploads: the body is the file itself, up to this many bytes. */
-  rawBodyLimit?: number;
-  handler: Handler;
-}
-
-const S = {
-  str: { type: 'string', minLength: 1, maxLength: 200 },
-  int: { type: 'integer', minimum: 0 },
-  bool: { type: 'boolean' },
-};
-const obj = (props: Record<string, unknown>, required: string[] = []) => ({ type: 'object', additionalProperties: false, properties: props, required });
 
 /**
  * The public API, version 1. Every app, machine, portal and partner system uses this and only this.
@@ -453,7 +427,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const offer = opened.doc.blocks.find((b) => b.type === 'offer') as any;
     const hero = opened.doc.blocks.find((b) => b.type === 'hero' || b.type === 'article') as any;
     const title = offer?.headline ?? hero?.title ?? hero?.headline ?? opened.doc.owner.name;
-    const data = { owner: opened.doc.owner.name, pluginId: opened.doc.pluginId, url: target.kind === 'slot' ? `/s/${target.unitId}/${target.slot}` : `/b/${target.packId}/${target.face}`, code: offer?.code ?? null };
+    const data = { owner: opened.doc.owner.name, pluginId: opened.doc.pluginId, url: target.kind === 'slot' ? `/s/${target.unitId}/${target.slot}` : `/b/${target.packId}/${target.face}`, code: offer?.code ?? null, theme: opened.doc.owner.theme, kind: opened.doc.pluginId };
     const id = newId('sv');
     const r = (await db.query<any>(`insert into saved_items (id, user_id, company_id, target, title, data) values ($1,$2,$3,$4,$5,$6) on conflict (user_id, target) do update set title = excluded.title, data = excluded.data returning id`, [id, userId, key!.companyId, targetKey(target), title, JSON.stringify(data)])).rows[0];
     platform.engaged(user.companyId, { target: targetKey(target), viewerKey: user.viewerKey, action: 'save', advertiserId: experiences.ownerOf(target).advertiserId }, `save:${userId}:${targetKey(target)}`);
@@ -473,27 +447,6 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   route({ method: 'GET', url: '/v1/me/cards', scope: 'me', summary: 'Your saved cards (brand and last 4 digits only).', handler: async (_req, key) => ({ body: await app.payments.methods(key!.companyId, 'user', me(key)) }) });
   route({ method: 'POST', url: '/v1/me/cards', scope: 'me', summary: "Save a card using the token from the payment provider's form. Card numbers never reach FreeWater.", body: obj({ token: S.str }, ['token']), handler: async (req, key) => ({ status: 201, body: await app.payments.addMethod(key!.companyId, 'user', me(key), (req.body as any).token) }) });
-
-  route({ method: 'POST', url: '/v1/me/custom-orders', scope: 'me', summary: 'Print your own design. Money is held first, taken only once it prints, and released if it does not.', body: obj({ orderId: S.str, locationId: S.str, productId: S.str, svg: { type: 'string', minLength: 1, maxLength: 2_000_000 }, experience: { type: 'object' } }, ['orderId', 'locationId', 'productId', 'svg']), handler: async (req, key) => {
-    const userId = me(key);
-    const b = req.body as any;
-    if (b.experience) checkExperience('custom-experience', b.experience, undefined);
-    const company = platform.companies.get(key!.companyId)!;
-    if (!platform.locations.has(b.locationId)) throw new ApiError(422, 'unknown_location', `Location ${b.locationId} doesn't exist.`);
-    if (!platform.products.has(b.productId)) throw new ApiError(422, 'unknown_product', `Product ${b.productId} doesn't exist.`);
-    let art;
-    try { art = svgCreative(b.svg); } catch (e: any) { throw new ApiError(422, 'artwork_refused', e.message); }
-    const price = company.prices.customUnit; // the server sets the price, never the app
-    const hold = await app.payments.authorize({ companyId: company.id, ownerType: 'user', ownerId: userId, amountCents: price, purpose: 'custom_order', ref: b.orderId, idempotencyKey: `custom:${company.id}:${userId}:${b.orderId}`, description: `Custom ${b.productId}` });
-    if (hold.status === 'declined') return { status: 402, body: { error: { code: 'card_declined', message: `${hold.failure} Nothing was printed or charged.` } } };
-    const r = await platform.order({ companyId: company.id, orderId: `${userId}:${b.orderId}`, locationId: b.locationId, productId: b.productId, custom: { customerId: userId, art, priceCents: price, experienceConfig: b.experience } });
-    if (!r.ok) {
-      const voided = await app.payments.void(hold.id);
-      return { status: 422, body: { error: { code: 'print_failed', message: 'It did not print, so the hold on your card was released. Nothing was charged.' }, payment: voided } };
-    }
-    const paid = hold.status === 'captured' ? hold : await app.payments.capture(hold.id);
-    return { status: 201, body: { unit: unitView(r.unit.id), payment: paid } };
-  } });
 
   const advertiserScope = (key: ApiKey, advertiserId: string) => {
     if (key.advertiserId && key.advertiserId !== advertiserId) throw notFound('Advertiser');
@@ -521,6 +474,10 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const inv = await invoiceFor(key!, (req.params as any).id);
     return { body: await app.payments.payInvoice(inv.id) };
   } });
+
+  // ---------- the FreeWater app ----------
+
+  consumerRoutes(app, route, { me, checkExperience });
 
   // ---------- wiring ----------
 
@@ -564,11 +521,25 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     'scan.js': { type: 'text/javascript', path: join(webDir, 'scan.js') },
     'scan.css': { type: 'text/css', path: join(webDir, 'scan.css') },
     'model-viewer.min.js': { type: 'text/javascript', path: modelViewerPath },
+    'app.js': { type: 'text/javascript', path: join(webDir, 'app.js') },
+    'app.css': { type: 'text/css', path: join(webDir, 'app.css') },
+    'icon.svg': { type: 'image/svg+xml', path: join(webDir, 'icon.svg') },
+    'jsqr.js': { type: 'text/javascript', path: createRequire(import.meta.url).resolve('jsqr/dist/jsQR.js') },
   };
   const cache = new Map<string, Buffer>();
   const file = (p: string) => { let b = cache.get(p); if (!b || process.env.NODE_ENV !== 'production') cache.set(p, (b = readFileSync(p))); return b; };
   const page = async (_req: FastifyRequest, reply: FastifyReply) => reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', "default-src 'self'; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' blob: data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; frame-ancestors 'none'").send(file(join(webDir, 'scan.html')));
   for (const u of ['/s/:unitId/:slot', '/r/:unitId', '/p/:packId', '/b/:packId/:face']) server.get(u, page);
+
+  // The FreeWater app: one page that handles every /app address itself.
+  const appPage = async (_req: FastifyRequest, reply: FastifyReply) => reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; frame-ancestors 'none'").header('permissions-policy', 'camera=(self), geolocation=(self)').send(file(join(webDir, 'app.html')));
+  server.get('/app', appPage);
+  server.get('/app/*', async (req, reply) => {
+    if (req.url.split('?')[0] === '/app/manifest.webmanifest') {
+      return reply.type('application/manifest+json').send({ name: 'FreeWater', short_name: 'FreeWater', start_url: '/app', display: 'standalone', background_color: '#FFFFFF', theme_color: '#FFFFFF', icons: [{ src: '/static/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' }] });
+    }
+    return appPage(req, reply);
+  });
   server.get('/static/:name', async (req, reply) => {
     const f = staticFiles[(req.params as any).name];
     if (!f) return reply.code(404).send({ error: { code: 'not_found', message: 'File not found.' } });

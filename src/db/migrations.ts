@@ -240,6 +240,32 @@ create table saved_items (
 );
 `,
   },
+  {
+    id: '004_consumer_app',
+    sql: `
+-- Each machine's secret for the changing code on its screen (proves a person is standing there).
+create table machine_secrets (
+  location_id text primary key,
+  secret text not null,
+  created_at timestamptz not null default now()
+);
+-- Designs a person reviewed and approved. Only an approved design can be printed.
+create table proofs (
+  id text primary key,
+  user_id text not null references users(id),
+  company_id text not null,
+  product_id text not null,
+  design_sha256 text not null,
+  design_svg text not null,
+  experience jsonb,
+  label_svg text not null,
+  price_cents integer not null,
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null
+);
+create index proofs_user on proofs(user_id);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {
