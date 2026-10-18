@@ -31,7 +31,8 @@
     "demo:ar": "tsx src/demo/arDemo.ts",
     "books:check": "tsx src/server/booksCheck.ts",
     "load": "tsx src/server/loadTest.ts",
-    "backup": "tsx src/server/backup.ts"
+    "backup": "tsx src/server/backup.ts",
+    "setup": "tsx src/server/setup.ts"
   },
   "engines": {
     "node": ">=22"

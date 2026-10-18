@@ -2,9 +2,13 @@
 
 The FreeWater platform: it takes an order, picks the ads, lays out a print-ready label with a unique QR for every ad, prints it, and bills only what really happened. It runs as an API server on a Postgres database, and every part, including the database and the printer, can be swapped.
 
+## Running it for real
+
+`docs/GO-LIVE.md` lists what's ready and what's left before launch; `docs/RUNNING.md` is the guide for running it in production (settings, first start, health checks, alerts, backups, deploys, the load test).
+
 ## Try it
 
-You need Node.js 20 or newer.
+You need Node.js 22 or newer.
 
 ```bash
 npm install
