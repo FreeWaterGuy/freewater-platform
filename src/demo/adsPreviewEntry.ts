@@ -1,7 +1,8 @@
 // Bundled for the offline preview of FreeWater Ads: the real assistant, draft rules, artwork and label renderer,
 // running in the browser so the preview's chat behaves exactly like the server's.
 import { BuiltinAdAssistant } from '../modules/ai/builtinAssistant';
-import { applyPatch, estimate, missing, missingLabels, themeFromPoster, allowedSizes, maxPerSixth } from '../modules/ads/draft';
+import { applyPatch, estimate, missing, missingLabels, themeFromPoster, allowedSizes } from '../modules/ads/draft';
+import { layoutsFor, adArea, shareLabel } from '../modules/ads/layouts';
 import { renderPoster, posterIcons, posterFonts } from '../modules/creative/poster';
 import { ExperienceHost, themeFor } from '../modules/experiences/host';
 import { builtinPlugins } from '../modules/experiences/builtins';
@@ -17,5 +18,5 @@ export function makeLocal() {
   };
   const host = new ExperienceHost({ builtinModel: (id) => `/models/builtin/${id}.glb` }, { compile });
   for (const p of builtinPlugins) host.register(p);
-  return { assistant: new BuiltinAdAssistant(), applyPatch, estimate, missing, missingLabels, themeFromPoster, allowedSizes, maxPerSixth, renderPoster, posterIcons, posterFonts, host, themeFor, renderer: svgLabelRenderer, givingLine, company: freewater, product: bottle16oz, campaigns: sampleCampaigns(), locations: locations.filter((l) => l.companyId === 'freewater') };
+  return { assistant: new BuiltinAdAssistant(), applyPatch, estimate, missing, missingLabels, themeFromPoster, allowedSizes, layoutsFor, adArea, shareLabel, renderPoster, posterIcons, posterFonts, host, themeFor, renderer: svgLabelRenderer, givingLine, company: freewater, product: bottle16oz, campaigns: sampleCampaigns(), locations: locations.filter((l) => l.companyId === 'freewater') };
 }

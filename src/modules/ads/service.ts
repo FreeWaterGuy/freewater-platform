@@ -1,4 +1,6 @@
-import type { Campaign, Sixths, Unit } from '../../core/types';
+import type { Campaign, Share, Unit } from '../../core/types';
+import { adArea, layoutsFor, shareLabel } from './layouts';
+import { bidFloor } from './budget';
 import { newId } from '../../core/ids';
 import type { SqlClient } from '../../db/client';
 import type { Platform } from '../../platform';
@@ -8,7 +10,7 @@ import type { ExperienceHost } from '../experiences/host';
 import { themeFor } from '../experiences/host';
 import { givingLine } from '../print/renderer';
 import type { AdAssistant, ChatMessage } from '../ai/contract';
-import { allowedSizes, applyPatch, estimate, maxPerSixth, missing, missingLabels, themeFromPoster, type AdDraft } from './draft';
+import { allowedSizes, applyPatch, estimate, missing, missingLabels, themeFromPoster, type AdDraft } from './draft';
 
 export class AdsError extends Error {
   constructor(public status: number, public code: string, message: string) {
@@ -95,7 +97,7 @@ export class AdsService {
       if (c.creativeRef?.kind !== 'poster') throw new AdsError(422, 'not_editable_here', 'This ad’s artwork was uploaded as a file. Upload a new file to change it.');
       draft = {
         name: c.name, category: c.category, poster: c.creativeRef.spec, sizes: c.sizes, formats: c.formats ?? ['label'], locations: c.targeting.locations ?? 'all',
-        buy: c.buy.type === 'guaranteed' ? { type: 'guaranteed', prints: Math.max(100, c.buy.remainingPrints) } : { type: 'bid', dailyCapCents: c.buy.dailyCapCents, maxCentsPerSixth: c.buy.maxCentsPerSixth },
+        buy: c.buy.type === 'guaranteed' ? { type: 'guaranteed', prints: Math.max(100, c.buy.remainingPrints) } : { type: 'bid', dailyCapCents: c.buy.dailyCapCents, maxCentsPerLabel: c.buy.maxCentsPerLabel },
         experienceId: c.experienceId, experienceConfig: c.experienceConfig, theme: c.theme,
       };
       greeting = 'What would you like to change? Changes go back to review before they print.';
@@ -132,7 +134,7 @@ export class AdsService {
         machines: locations.map((l) => ({ id: l.id, name: l.name, kind: l.kind })),
         plugins: this.host.list().filter((p) => p.id !== 'custom-experience' && p.id !== 'house-promo').map(({ id, name, description, example, configSchema }) => ({ id, name, description, example, configSchema })),
         icons: posterIcons, fonts: Object.keys(posterFonts), sizes: allowedSizes,
-        prices: { perPrintBySixths: company.prices.perPrintBySixths as any, perScan: company.prices.perScan, perArLaunch: company.prices.perArLaunch, commissionPercent: company.prices.commissionPercent },
+        prices: { perPrintByShare: company.prices.perPrintByShare as any, bidStartsAt: bidFloor(company), perScan: company.prices.perScan, perArLaunch: company.prices.perArLaunch, commissionPercent: company.prices.commissionPercent },
         missing: missing(r.draft, this.host),
       },
     });
@@ -155,7 +157,7 @@ export class AdsService {
     const d = r.draft;
     const spec = { brand: adv.name, headline: 'Your headline', colors: { bg: '#EEF6FB', fg: '#0B0B0B', accent: '#1E7DB8' }, ...(d.poster ?? {}) } as PosterSpec;
     const ready = !!d.experienceId && this.host.checkConfig(d.experienceId, d.experienceConfig ?? {}) === null;
-    return this.render({ companyId, advertiserId, advertiserName: adv.name, category: d.category ?? adv.category, draw: (w, h) => renderPoster(spec, w, h), sizes: d.sizes?.length ? d.sizes : ([1, 2, 3] as Sixths[]), formats: d.formats ?? ['label'], experience: ready ? { id: d.experienceId!, config: d.experienceConfig ?? {} } : null, theme: themeFromPoster(d) });
+    return this.render({ companyId, advertiserId, advertiserName: adv.name, category: d.category ?? adv.category, draw: (w, h) => renderPoster(spec, w, h), sizes: d.sizes?.length ? d.sizes : ([2, 4, 6] as Share[]), formats: d.formats ?? ['label'], experience: ready ? { id: d.experienceId!, config: d.experienceConfig ?? {} } : null, theme: themeFromPoster(d) });
   }
 
   /** The same views for a submitted campaign, for the people reviewing it. */
@@ -166,24 +168,28 @@ export class AdsService {
       ...(await this.render({ companyId, advertiserId: c.advertiserId, advertiserName: c.advertiserName, category: c.category, draw: (w, h) => c.creative.svg(w, h), sizes: c.sizes, formats: c.formats ?? ['label'], experience: { id: c.experienceId, config: c.experienceConfig ?? {} }, theme: c.theme ?? {} })) };
   }
 
-  private async render(o: { companyId: string; advertiserId: string; advertiserName: string; category: string; draw: (w: number, h: number) => string; sizes: Sixths[]; formats: string[]; experience: { id: string; config: unknown } | null; theme: Partial<import('../experiences/blocks').Theme> }) {
+  private async render(o: { companyId: string; advertiserId: string; advertiserName: string; category: string; draw: (w: number, h: number) => string; sizes: Share[]; formats: string[]; experience: { id: string; config: unknown } | null; theme: Partial<import('../experiences/blocks').Theme> }) {
     const company = this.platform.companies.get(o.companyId)!;
     const product = this.platform.standardProduct(o.companyId);
-    const sixthPx = ((product.label.widthIn - product.label.seamIn - product.label.panelWidthIn) * 100) / 6;
-    const wrap = (w: number, h: number) => `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(w)}" height="${h}" viewBox="0 0 ${w.toFixed(1)} ${h}">${o.draw(w, h)}</svg>`;
-    const sizes = o.sizes.map((s) => ({ sixths: s, svg: wrap(s * sixthPx, 450) }));
+    const area = adArea(product);
+    const layouts = layoutsFor(product, { maxAds: company.adRules.maxAdsPerUnit });
+    const wrap = (w: number, h: number) => `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(w)}" height="${Math.round(h)}" viewBox="0 0 ${w.toFixed(1)} ${h.toFixed(1)}">${o.draw(w, h)}</svg>`;
+    // Each size as it really prints: the piece of the label it gets (as square as the layout allows).
+    const pieceOf = (s: Share) => { const l = layouts.find((x) => x.shares.includes(s)); const r = l?.rects[l.shares.indexOf(s)] ?? { w: 1 / s, h: 1 }; return { w: r.w * area.w * 100, h: r.h * area.h * 100 }; };
+    const sizes = o.sizes.map((s) => { const p = pieceOf(s); return { share: s, label: shareLabel(s), svg: wrap(p.w, p.h) }; });
 
     // A sample label: this ad at its biggest size, the rest filled with the company's own ad.
-    const biggest = Math.max(...o.sizes) as Sixths;
+    const biggest = Math.min(...o.sizes) as Share;
     const house = [...this.platform.campaigns.values()].find((c) => c.isHouse && c.companyId === o.companyId);
     const temp: Campaign = { id: 'preview', companyId: o.companyId, advertiserId: o.advertiserId, advertiserName: o.advertiserName, category: o.category, sizes: [biggest], creative: { svg: o.draw }, experienceId: 'offer', targeting: {}, buy: { type: 'guaranteed', remainingPrints: 1 }, active: false };
     const campaigns = new Map(this.platform.campaigns);
     campaigns.set('preview', temp);
-    const rest = 6 - biggest;
-    const layout = [biggest, ...(rest ? [rest] : [])] as Sixths[];
-    const placements = layout.map((s, i) => (i === 0
-      ? { slotIndex: 0, sixths: s, campaignId: 'preview', advertiserId: o.advertiserId, advertiserName: o.advertiserName, experienceId: 'offer', priceCents: 0, isHouse: false }
-      : { slotIndex: i, sixths: s, campaignId: house!.id, advertiserId: house!.advertiserId, advertiserName: house!.advertiserName, experienceId: house!.experienceId, priceCents: 0, isHouse: true }));
+    const sample = [...layouts].filter((l) => l.shares.includes(biggest)).sort((a, b) => a.shares.length - b.shares.length)[0] ?? { shares: [1 as Share], rects: [{ x: 0, y: 0, w: 1, h: 1 }] };
+    const mine = sample.shares.indexOf(biggest);
+    const layout = sample.shares;
+    const placements = layout.map((s, i) => (i === mine
+      ? { slotIndex: i, share: s, rect: sample.rects[i]!, campaignId: 'preview', advertiserId: o.advertiserId, advertiserName: o.advertiserName, experienceId: 'offer', priceCents: 0, isHouse: false }
+      : { slotIndex: i, share: s, rect: sample.rects[i]!, campaignId: house!.id, advertiserId: house!.advertiserId, advertiserName: house!.advertiserName, experienceId: house!.experienceId, priceCents: 0, isHouse: true }));
     const unit: Unit = { id: 'preview', companyId: o.companyId, productId: product.id, locationId: 'preview', kind: 'ad_supported', placements, layout, status: 'rendered', createdAt: this.platform.bus.now().toISOString() };
     const label = await this.registry.rendererFor(company).render({ unit, product, company, campaigns });
 
@@ -209,7 +215,7 @@ export class AdsService {
     const existing = r.campaignId ? this.platform.campaigns.get(r.campaignId) : undefined;
     const buy: Campaign['buy'] = d.buy.type === 'guaranteed'
       ? { type: 'guaranteed', remainingPrints: d.buy.prints }
-      : { type: 'bid', dailyCapCents: d.buy.dailyCapCents, maxCentsPerSixth: Math.max(d.buy.maxCentsPerSixth ?? 0, maxPerSixth(company, d.sizes)), spentTodayCents: existing?.buy.type === 'bid' ? existing.buy.spentTodayCents : 0 };
+      : { type: 'bid', dailyCapCents: d.buy.dailyCapCents, maxCentsPerLabel: Math.max(d.buy.maxCentsPerLabel ?? 0, bidFloor(company)), spentTodayCents: existing?.buy.type === 'bid' ? existing.buy.spentTodayCents : 0 };
     const c: Campaign = {
       ...(existing ?? {}),
       id: existing?.id ?? newId('cmp'), companyId: r.companyId, advertiserId: r.advertiserId, advertiserName: adv.name,

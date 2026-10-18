@@ -28,17 +28,20 @@
       messages: [...r.messages], missing: left.map((m) => ({ id: m, label: L.missingLabels[m] })), ready: left.length === 0, estimate: L.estimate(r.draft, L.company), assistant: 'built-in helper' };
   };
   const svgWrap = (spec, w, h) => `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(w)}" height="${h}" viewBox="0 0 ${w.toFixed(1)} ${h}">${L.renderPoster(spec, w, h)}</svg>`;
-  const sixthPx = ((L.product.label.widthIn - L.product.label.seamIn - L.product.label.panelWidthIn) * 100) / 6;
+  const layouts = () => L.layoutsFor(L.product, { maxAds: L.company.adRules.maxAdsPerUnit });
   async function preview(r) {
     const d = r.draft;
     const spec = { brand: S.business.name, headline: 'Your headline', colors: { bg: '#EEF6FB', fg: '#0B0B0B', accent: '#1E7DB8' }, ...(d.poster || {}) };
-    const sizes = (d.sizes && d.sizes.length ? d.sizes : [1, 2, 3]).map((s) => ({ sixths: s, svg: svgWrap(spec, s * sixthPx, 450) }));
-    const biggest = Math.max(...sizes.map((s) => s.sixths));
+    const area = L.adArea(L.product), all = layouts();
+    const piece = (s) => { const l = all.find((x) => x.shares.includes(s)); const r = l.rects[l.shares.indexOf(s)]; return [r.w * area.w * 100, r.h * area.h * 100]; };
+    const sizes = (d.sizes && d.sizes.length ? d.sizes : [2, 4, 6]).map((s) => ({ share: s, label: L.shareLabel(s), svg: svgWrap(spec, ...piece(s)) }));
+    const biggest = Math.min(...sizes.map((s) => s.share));
     const house = L.campaigns.find((c) => c.isHouse && c.companyId === 'freewater');
     const campaigns = new Map(L.campaigns.map((c) => [c.id, c]));
     campaigns.set('preview', { id: 'preview', creative: { svg: (w, h) => L.renderPoster(spec, w, h) } });
-    const layout = [biggest, ...(6 - biggest ? [6 - biggest] : [])];
-    const placements = layout.map((s, i) => i === 0 ? { slotIndex: 0, sixths: s, campaignId: 'preview', advertiserName: S.business.name, isHouse: false } : { slotIndex: i, sixths: s, campaignId: house.id, advertiserName: house.advertiserName, isHouse: true });
+    const sample = all.filter((l) => l.shares.includes(biggest)).sort((a, b) => a.shares.length - b.shares.length)[0];
+    const layout = sample.shares, mine = layout.indexOf(biggest);
+    const placements = layout.map((s, i) => i === mine ? { slotIndex: i, share: s, rect: sample.rects[i], campaignId: 'preview', advertiserName: S.business.name, isHouse: false } : { slotIndex: i, share: s, rect: sample.rects[i], campaignId: house.id, advertiserName: house.advertiserName, isHouse: true });
     const label = await L.renderer.render({ unit: { id: 'preview', companyId: 'freewater', locationId: 'preview', kind: 'ad_supported', placements, layout }, product: L.product, company: L.company, campaigns });
     const theme = L.themeFor(L.company.brand, L.themeFromPoster(d));
     const scan = d.experienceId && L.host.checkConfig(d.experienceId, d.experienceConfig || {}) === null
@@ -103,7 +106,7 @@
           const out = await L.assistant.respond({ draft: r.draft, history: r.messages, message: body.text, attachments: body.attachments || [], context: {
             business: { name: S.business.name, category: S.business.category }, company: { name: 'FreeWater', blockedCategories: L.company.adRules.blockedCategories, giving: null },
             machines: locs.map((l) => ({ id: l.id, name: l.name, kind: l.kind })), plugins: [], icons: L.posterIcons, fonts: Object.keys(L.posterFonts), sizes: L.allowedSizes,
-            prices: { perPrintBySixths: L.company.prices.perPrintBySixths, perScan: L.company.prices.perScan, perArLaunch: L.company.prices.perArLaunch, commissionPercent: L.company.prices.commissionPercent }, missing: missing(r.draft) } });
+            prices: { perPrintByShare: L.company.prices.perPrintByShare, bidStartsAt: L.company.prices.perPrintByShare[1], perScan: L.company.prices.perScan, perArLaunch: L.company.prices.perArLaunch, commissionPercent: L.company.prices.commissionPercent }, missing: missing(r.draft) } });
           const { draft, problems } = L.applyPatch(r.draft, out.patch || {}, { company: L.company, locations: locs, host: L.host, attachments: body.attachments || [] });
           let reply = out.reply; if (problems.length) reply += `\n\nI couldn’t use part of that: ${problems.join(' ')}`;
           r.messages.push({ role: 'user', text: body.text, ...(body.attachments?.length ? { attachments: body.attachments.map((a) => a.name || 'picture') } : {}), at: nowIso() }, { role: 'assistant', text: reply, at: nowIso() });

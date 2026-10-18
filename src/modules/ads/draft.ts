@@ -1,4 +1,5 @@
-import type { CompanyConfig, Location, Sixths } from '../../core/types';
+import { SHARES, type CompanyConfig, type Location, type Share } from '../../core/types';
+import { bidFloor } from './budget';
 import { checkPosterSpec, posterIcons, posterFonts, readableOn, contrast, type PosterSpec } from '../creative/poster';
 import type { Theme } from '../experiences/blocks';
 import type { ExperienceHost } from '../experiences/host';
@@ -6,16 +7,16 @@ import type { ExperienceHost } from '../experiences/host';
 // An ad being made in the chat. The assistant (AI or not) only ever proposes changes to this;
 // every change is checked here before it is kept, so nothing an AI says can break a rule.
 
-export const allowedSizes: Sixths[] = [1, 2, 3, 4, 6];
+export const allowedSizes: Share[] = [...SHARES];
 
 export interface AdDraft {
   name?: string;
   category?: string;
   poster?: Partial<PosterSpec>;
-  sizes?: Sixths[];
+  sizes?: Share[];
   formats?: ('label' | 'box-face')[];
   locations?: string[] | 'all';
-  buy?: { type: 'guaranteed'; prints: number } | { type: 'bid'; dailyCapCents: number; maxCentsPerSixth?: number };
+  buy?: { type: 'guaranteed'; prints: number } | { type: 'bid'; dailyCapCents: number; maxCentsPerLabel?: number };
   experienceId?: string;
   experienceConfig?: Record<string, unknown>;
   theme?: Partial<Theme>;
@@ -102,8 +103,8 @@ export function applyPatch(d: AdDraft, patch: DraftPatch, ctx: DraftContext): { 
   }
 
   if (p.sizes !== undefined) {
-    const sizes = [...new Set((p.sizes ?? []).map(Number))].filter((s): s is Sixths => (allowedSizes as number[]).includes(s)).sort();
-    if (sizes.length) next.sizes = sizes; else problems.push('Sizes are 1, 2, 3, 4 or 6 sixths of the label.');
+    const sizes = [...new Set((p.sizes ?? []).map(Number))].filter((s): s is Share => (allowedSizes as number[]).includes(s)).sort((a, b) => a - b);
+    if (sizes.length) next.sizes = sizes; else problems.push('Sizes are shares of the label: 1 (the whole label), 2 (half), 3, 4, 6, 8 or 10.');
   }
   if (p.formats !== undefined) {
     const f = (p.formats ?? []).filter((x) => x === 'label' || x === 'box-face');
@@ -124,7 +125,7 @@ export function applyPatch(d: AdDraft, patch: DraftPatch, ctx: DraftContext): { 
   if (p.buy !== undefined) {
     const b: any = p.buy;
     if (b?.type === 'guaranteed' && Number.isInteger(b.prints) && b.prints >= 100 && b.prints <= 1_000_000) next.buy = { type: 'guaranteed', prints: b.prints };
-    else if (b?.type === 'bid' && Number.isInteger(b.dailyCapCents) && b.dailyCapCents >= 500 && b.dailyCapCents <= 10_000_000) next.buy = { type: 'bid', dailyCapCents: b.dailyCapCents, ...(Number.isInteger(b.maxCentsPerSixth) && b.maxCentsPerSixth > 0 ? { maxCentsPerSixth: b.maxCentsPerSixth } : {}) };
+    else if (b?.type === 'bid' && Number.isInteger(b.dailyCapCents) && b.dailyCapCents >= 500 && b.dailyCapCents <= 10_000_000) next.buy = { type: 'bid', dailyCapCents: b.dailyCapCents, ...(Number.isInteger(b.maxCentsPerLabel) && b.maxCentsPerLabel > 0 ? { maxCentsPerLabel: Math.max(b.maxCentsPerLabel, bidFloor(ctx.company)) } : {}) };
     else problems.push('A budget is either a number of bottles (at least 100) or a daily amount (at least $5).');
   }
   if (p.experienceId !== undefined || p.experienceConfig !== undefined) {
@@ -156,23 +157,21 @@ export function themeFromPoster(d: AdDraft): Partial<Theme> {
   return { background: '#FFFFFF', text: '#0B0B0B', accent: c.accent, button, buttonText: readableOn(button), ...(d.theme ?? {}) };
 }
 
-export function maxPerSixth(company: CompanyConfig, sizes: Sixths[]) {
-  return Math.max(...sizes.map((s) => Math.ceil(company.prices.perPrintBySixths[s] / s)));
-}
+
 
 /** What it will cost, in plain numbers. */
 export function estimate(d: AdDraft, company: CompanyConfig, maxFactor = 1) {
   const pr = company.prices;
   const sizes = d.sizes?.length ? d.sizes : allowedSizes;
-  const perPrint = Object.fromEntries(sizes.map((s) => [s, pr.perPrintBySixths[s]]));
-  const biggest = Math.max(...sizes) as Sixths;
-  const smallest = Math.min(...sizes) as Sixths;
-  const out: { perPrintCents: Record<string, number>; perScanCents: number; perArLaunchCents: number; commissionPercent: number; perBoxFaceCents: number; printsCostCents?: [number, number]; bottlesPerDay?: [number, number] } = {
-    perPrintCents: perPrint, perScanCents: pr.perScan, perArLaunchCents: pr.perArLaunch, commissionPercent: pr.commissionPercent, perBoxFaceCents: pr.perBoxFace,
+  const perPrint = Object.fromEntries(sizes.map((s) => [s, pr.perPrintByShare[s]]));
+  const biggest = Math.min(...sizes) as Share; // 1 is the whole label
+  const smallest = Math.max(...sizes) as Share;
+  const out: { perPrintCents: Record<string, number>; bidStartsAtCents: number; perScanCents: number; perArLaunchCents: number; commissionPercent: number; perBoxFaceCents: number; printsCostCents?: [number, number]; bottlesPerDay?: [number, number] } = {
+    perPrintCents: perPrint, bidStartsAtCents: pr.perPrintByShare[1], perScanCents: pr.perScan, perArLaunchCents: pr.perArLaunch, commissionPercent: pr.commissionPercent, perBoxFaceCents: pr.perBoxFace,
   };
   // Bigger products (a price factor above 1) cost more per print: the top of each range allows for the dearest one.
-  const top = (s: Sixths) => Math.round(pr.perPrintBySixths[s] * Math.max(1, maxFactor));
-  if (d.buy?.type === 'guaranteed') out.printsCostCents = [d.buy.prints * pr.perPrintBySixths[smallest], d.buy.prints * top(biggest)];
-  if (d.buy?.type === 'bid') out.bottlesPerDay = [Math.floor(d.buy.dailyCapCents / top(biggest)), Math.floor(d.buy.dailyCapCents / pr.perPrintBySixths[smallest])];
+  const top = (s: Share) => Math.round(pr.perPrintByShare[s] * Math.max(1, maxFactor));
+  if (d.buy?.type === 'guaranteed') out.printsCostCents = [d.buy.prints * pr.perPrintByShare[smallest], d.buy.prints * top(biggest)];
+  if (d.buy?.type === 'bid') out.bottlesPerDay = [Math.floor(d.buy.dailyCapCents / top(biggest)), Math.floor(d.buy.dailyCapCents / pr.perPrintByShare[smallest])];
   return out;
 }

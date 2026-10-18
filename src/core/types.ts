@@ -3,8 +3,13 @@
 
 export type Cents = number;
 
-/** Slot width on a label, counted in sixths of the ad area (1 = 1/6, 6 = full wrap). */
+/** A slot's size: its share of the label's ad area, as 1/n. 1 = the whole label, 2 = half … 10 = a tenth. */
+export type Share = 1 | 2 | 3 | 4 | 6 | 8 | 10;
+export const SHARES: Share[] = [1, 2, 3, 4, 6, 8, 10];
+/** Old labels counted slot widths in sixths (1 = 1/6, 6 = full wrap). Kept only to read old records. */
 export type Sixths = 1 | 2 | 3 | 4 | 5 | 6;
+/** Where a slot sits on the ad area, as fractions of it (0 to 1): left, top, width, height. */
+export interface SlotRect { x: number; y: number; w: number; h: number }
 
 export interface Location {
   id: string; // e.g. "ATX-014" for a machine, "route-3" for a delivery route
@@ -45,8 +50,11 @@ export interface Product {
     /** The smallest QR this label may carry (inches). 0.6 by default. */
     minQrIn?: number;
   };
-  /** Layouts the ad engine may use, each a list of slot widths in sixths that sum to 6. */
-  layouts: Sixths[][];
+  /**
+   * The ad sizes this product offers (shares of the ad area). Missing means every size whose pieces fit a readable
+   * QR code. The platform divides the label into pieces as close to square as it can (see modules/ads/layouts).
+   */
+  sizes?: Share[];
   /** Ad prices on this product compared with the standard bottle (a bigger label can cost more). 1 by default. */
   priceFactor?: number;
   /** Ad categories never printed on this product (no energy drinks on a kids' juice box, say). */
@@ -78,6 +86,8 @@ export interface CompanyConfig {
     mode: GivingMode;
     centsPerUnit?: Cents; // for per_unit
     percentOfRevenue?: number; // for percent_of_revenue, 0–100
+    /** On top of either: this percent of what scans, AR launches and sales commissions earn also goes to charity. */
+    percentOfEngagement?: number;
     defaultCharity?: string;
     charityByLocation?: Record<string, string>;
     /** Donations are sent to charities in transfers once they reach this amount. */
@@ -129,9 +139,16 @@ export interface CompanyConfig {
     maxPackShare: number;
   };
   prices: {
-    perPrintBySixths: Record<Sixths, Cents>;
+    /** The starting price of one print, by size. Bids start here and go up. */
+    perPrintByShare: Record<Share, Cents>;
+    /** Cost per engagement: each scan of the ad's code, and each AR launch. Targeting adds to these (below). */
     perScan: Cents;
     perArLaunch: Cents;
+    /**
+     * The more precisely an ad targets, the more each scan and AR launch costs, in percent added per kind of
+     * targeting, up to `max` percent in all.
+     */
+    targetingPremium?: { locations: number; products: number; interests: number; customers: number; max: number };
     commissionPercent: number;
     customUnit: Cents;
     perBoxFace: Cents;
@@ -154,7 +171,8 @@ export interface Creative {
 
 export type Buy =
   | { type: 'guaranteed'; remainingPrints: number }
-  | { type: 'bid'; maxCentsPerSixth: Cents; dailyCapCents: Cents; spentTodayCents: Cents };
+  /** A bid for the whole label; smaller sizes pay the same share of it as the starting prices do. Never below the starting price. */
+  | { type: 'bid'; maxCentsPerLabel: Cents; dailyCapCents: Cents; spentTodayCents: Cents };
 
 export interface Campaign {
   id: string;
@@ -163,7 +181,7 @@ export interface Campaign {
   advertiserName: string;
   category: string; // "food", "alcohol", "real-estate"...
   competitorGroup?: string; // two campaigns in the same group never share a unit
-  sizes: Sixths[]; // slot sizes this campaign has artwork for
+  sizes: Share[]; // slot sizes this campaign has artwork for
   creative: Creative;
   creativeRef?: CreativeRef;
   experienceId: string; // which plug-in opens when its QR is scanned
@@ -232,7 +250,11 @@ export interface CtaVariant {
 
 export interface Placement {
   slotIndex: number;
-  sixths: Sixths;
+  share: Share;
+  /** Where the slot is on the ad area. */
+  rect: SlotRect;
+  /** Only on placements printed before slots were shaped as squares. */
+  sixths?: Sixths;
   campaignId: string;
   advertiserId: string;
   advertiserName: string;
@@ -275,7 +297,7 @@ export interface Unit {
   kind: 'ad_supported' | 'custom';
   ownerId?: string; // for custom units, the customer who paid
   placements: Placement[];
-  layout: Sixths[];
+  layout: Share[];
   status: 'filled' | 'rendered' | 'printed' | 'failed' | 'dispensed';
   orderId?: string;
   packId?: string;

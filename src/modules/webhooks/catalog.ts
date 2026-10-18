@@ -12,12 +12,12 @@ export interface PublicEventDef {
   example: Record<string, unknown>;
 }
 
-const slots = (placements: any[] = []) => placements.map((p) => ({ slot: p.slotIndex, sixths: p.sixths, advertiserId: p.advertiserId, advertiser: p.advertiserName, campaignId: p.campaignId, house: !!p.isHouse }));
+const slots = (placements: any[] = []) => placements.map((p) => ({ slot: p.slotIndex, share: p.share ?? null, sixths: p.sixths ?? null, advertiserId: p.advertiserId, advertiser: p.advertiserName, campaignId: p.campaignId, house: !!p.isHouse }));
 
 export const publicEvents: PublicEventDef[] = [
   { type: 'bottle.printed', from: 'label.printed', group: 'Bottles', description: 'A bottle’s label printed. Advertisers are billed for their slots now.',
     data: (p) => ({ bottleId: p.unitId, locationId: p.locationId, kind: p.kind === 'custom' ? 'custom' : 'ad_supported', ads: slots(p.placements), ...(p.customPriceCents ? { customPriceCents: p.customPriceCents } : {}) }),
-    example: { bottleId: 'u_7f3a9c1e2b4d', locationId: 'ATX-014', kind: 'ad_supported', ads: [{ slot: 0, sixths: 2, advertiserId: 'adv-joes', advertiser: "Joe's Burgers", campaignId: 'cmp-joes', house: false }] } },
+    example: { bottleId: 'u_7f3a9c1e2b4d', locationId: 'ATX-014', kind: 'ad_supported', ads: [{ slot: 0, share: 3, advertiserId: 'adv-joes', advertiser: "Joe's Burgers", campaignId: 'cmp-joes', house: false }] } },
   { type: 'bottle.dispensed', from: 'unit.dispensed', group: 'Bottles', description: 'A machine dropped the bottle into someone’s hand.',
     data: (p) => ({ bottleId: p.unitId, locationId: p.locationId }), example: { bottleId: 'u_7f3a9c1e2b4d', locationId: 'ATX-014' } },
   { type: 'bottle.print_failed', from: 'print.failed', group: 'Bottles', description: 'A print failed. Nothing is billed for it.',

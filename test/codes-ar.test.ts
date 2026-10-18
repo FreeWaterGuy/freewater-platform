@@ -287,7 +287,8 @@ describe('AR that follows the bottle', () => {
     // On a bottle with on-bottle AR from one advertiser, the strip runs along every ad so tracking works all the way round.
     const roast = await bottleWith('cmp-roast', { others: ['cmp-joes', 'cmp-daily'] });
     const slotsWithMarkers = new Set(roast.label.codes!.filter((c) => c.role === 'marker').map((c) => c.slotIndex));
-    expect(slotsWithMarkers.size).toBe(roast.unit.placements.length);
+    const bottomRow = roast.unit.placements.filter((p) => Math.abs(p.rect.y + p.rect.h - 1) < 0.001).map((p) => p.slotIndex);
+    expect([...slotsWithMarkers].sort()).toEqual(bottomRow.sort()); // the strip runs along the bottom of the label, under every ad there
   });
 
   it('reads the markers in any turn of the picture', () => {
@@ -373,8 +374,8 @@ describe('any drink, any size', () => {
     expect(checkProduct(can12oz).problems).toEqual([]);
     const wrongWrap = checkProduct({ ...can12oz, container: { shape: 'can', diameterIn: 3.2 } });
     expect(wrongWrap.problems.join(' ')).toMatch(/wrap closes/);
-    const tooNarrow = checkProduct({ ...can12oz, id: 'tiny-can', label: { ...can12oz.label, widthIn: 5, panelWidthIn: 0.9 }, container: { shape: 'can' }, layouts: [[1, 1, 1, 1, 1, 1]] });
-    expect(tooNarrow.problems.join(' ')).toMatch(/too narrow for a 0.6" QR/);
+    const tiny = checkProduct({ ...can12oz, id: 'tiny-can', label: { ...can12oz.label, widthIn: 3, heightIn: 1.6, panelWidthIn: 0.7 }, container: { shape: 'can' }, sizes: [10] });
+    expect(tiny.problems.join(' ')).toMatch(/1\/10 doesn't fit on this label/);
     expect(checkProduct({ ...can12oz, container: { shape: 'pouch' } }).ar.followsBottle).toBe(false);
   });
 
@@ -392,13 +393,13 @@ describe('any drink, any size', () => {
     const big = await bottleWith('cmp-joes', { productId: 'bottle-25oz' });
     const small = await bottleWith('cmp-joes');
     const price = (u: typeof big.unit) => u.placements.find((p) => p.campaignId === 'cmp-joes')!;
-    const list = app.platform.companies.get('freewater')!.prices.perPrintBySixths;
-    expect(price(big.unit).priceCents).toBe(Math.round(list[price(big.unit).sixths] * 1.25));
-    expect(price(small.unit).priceCents).toBe(list[price(small.unit).sixths]);
+    const list = app.platform.companies.get('freewater')!.prices.perPrintByShare;
+    expect(price(big.unit).priceCents).toBe(Math.round(list[price(big.unit).share] * 1.25));
+    expect(price(small.unit).priceCents).toBe(list[price(small.unit).share]);
   });
 
   it('lets a company add its own products and choose what each machine hands out', async () => {
-    const product = { id: 'cold-brew-8oz', name: '8 oz cold brew can', category: 'coffee', container: { shape: 'can', diameterIn: 2.1 }, label: { widthIn: 6.8, heightIn: 3.4, seamIn: 0.2, panelWidthIn: 0.8 }, layouts: [[6], [3, 3], [2, 2, 2]] };
+    const product = { id: 'cold-brew-8oz', name: '8 oz cold brew can', category: 'coffee', container: { shape: 'can', diameterIn: 2.1 }, label: { widthIn: 6.8, heightIn: 3.4, seamIn: 0.2, panelWidthIn: 0.8 }, sizes: [1, 2, 4] };
     const check = await call('POST', '/v1/console/products/check', keys['freewater-admin'], { product });
     expect(check.body.check.problems).toEqual([]);
     expect(check.body.svg).toContain('width="6.8in"');

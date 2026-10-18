@@ -1,3 +1,4 @@
+import { shareFromSixths } from '../modules/ads/layouts';
 import { createHash, randomBytes } from 'node:crypto';
 import type { PlatformEvent, EventType } from '../core/events';
 import { newId } from '../core/ids';
@@ -138,11 +139,11 @@ const json = <T>(v: unknown): T => (typeof v === 'string' ? JSON.parse(v) : v) a
 /** Read everything the core needs to pick up exactly where it left off. */
 export async function loadState(db: SqlClient, builtins: Record<string, Creative>, now = new Date()): Promise<LoadedState> {
   const rows = async <T>(sql: string, params: unknown[] = []) => (await db.query<T>(sql, params)).rows;
-  const companies = (await rows<{ config: unknown }>(`select config from companies order by id`)).map((r) => json<CompanyConfig>(r.config));
-  const products = (await rows<{ data: unknown }>(`select data from products order by id`)).map((r) => json<Product>(r.data));
+  const companies = (await rows<{ config: unknown }>(`select config from companies order by id`)).map((r) => upgradeCompany(json<CompanyConfig>(r.config)));
+  const products = (await rows<{ data: unknown }>(`select data from products order by id`)).map((r) => { const p: any = json<Product>(r.data); delete p.layouts; return p as Product; });
   const boxes = (await rows<{ data: unknown }>(`select data from boxes`)).map((r) => json<BoxProduct>(r.data));
   const locations = (await rows<{ data: unknown }>(`select data from locations`)).map((r) => json<Location>(r.data));
-  const campaigns = (await rows<{ data: unknown }>(`select data from campaigns`)).map((r) => hydrateCampaign(json<CampaignRecord>(r.data), builtins));
+  const campaigns = (await rows<{ data: unknown }>(`select data from campaigns`)).map((r) => hydrateCampaign(upgradeCampaign(json<CampaignRecord>(r.data)), builtins));
   const units = (await rows<{ data: unknown }>(`select data from units`)).map((r) => json<Unit>(r.data));
   const labels = new Map<string, RenderedLabel>();
   for (const r of await rows<{ unit_id: string; svg: string; meta: unknown }>(`select unit_id, svg, meta from labels`)) labels.set(r.unit_id, { ...json<Omit<RenderedLabel, 'svg'>>(r.meta), svg: r.svg });
@@ -239,4 +240,19 @@ export async function listApiKeys(db: SqlClient, companyId: string): Promise<Api
 export async function revokeApiKey(db: SqlClient, id: string, companyId?: string): Promise<boolean> {
   const r = await db.query(`update api_keys set revoked_at = now() where id = $1 and revoked_at is null and ($2::text is null or company_id = $2) returning id`, [id, companyId ?? null]);
   return r.rows.length > 0;
+}
+
+// Records saved before ad slots were cut as squares counted sizes in sixths. They're read in today's terms.
+function upgradeCompany(c: any): CompanyConfig {
+  const old = c.prices?.perPrintBySixths;
+  if (old && !c.prices.perPrintByShare) {
+    c.prices.perPrintByShare = { 1: old[6], 2: old[3], 3: old[2], 4: Math.round((old[1] + old[2]) / 2), 6: old[1], 8: old[1], 10: old[1] };
+    delete c.prices.perPrintBySixths;
+  }
+  return c;
+}
+function upgradeCampaign(c: any): CampaignRecord {
+  if (c.sizes?.some((s: number) => s === 5) || (c.sizes && !c.buy?.maxCentsPerLabel && c.buy?.maxCentsPerSixth !== undefined)) c.sizes = [...new Set(c.sizes.map((s: number) => shareFromSixths(s)))];
+  if (c.buy?.type === 'bid' && c.buy.maxCentsPerSixth !== undefined && c.buy.maxCentsPerLabel === undefined) { c.buy.maxCentsPerLabel = c.buy.maxCentsPerSixth * 6; delete c.buy.maxCentsPerSixth; }
+  return c;
 }

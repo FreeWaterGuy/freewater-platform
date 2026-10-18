@@ -4,6 +4,7 @@ import { noPersistence, type Persistence } from './core/persistence';
 import { Registry } from './core/registry';
 import type { Campaign, CompanyConfig, Creative, Location, Placement, Product, Unit } from './core/types';
 import { release, reserve } from './modules/ads/budget';
+import { targetingPremium } from './modules/ads/targeting';
 import { Ledger } from './modules/ledger/ledger';
 import type { RenderedLabel } from './modules/print/contract';
 
@@ -64,7 +65,10 @@ export class Platform {
     this.persist = opts.persistence ?? noPersistence;
     this.bus = new EventBus(opts.clock, { keepLog: opts.keepEventLog });
     this.bus.onAny((e) => this.persist.event(e));
-    this.ledger = new Ledger(this.bus, companies, { onEntry: (entry) => this.persist.ledgerEntry(entry) });
+    this.ledger = new Ledger(this.bus, companies, {
+      onEntry: (entry) => this.persist.ledgerEntry(entry),
+      engagementPremium: (id) => { const c = campaigns.get(id); const co = c && companies.get(c.companyId); return c && co ? targetingPremium(c, co).percent : 0; },
+    });
     this.random = seededRandom(opts.seed ?? 42);
     this.maxAttempts = opts.maxPrintAttempts ?? 2;
   }
@@ -115,7 +119,7 @@ export class Platform {
 
     // 1. Fill slots (custom units have no ads).
     const fill = opts.custom
-      ? { layout: [6 as const], placements: [] }
+      ? { layout: [1 as const], placements: [] }
       : this.registry.adsFor(company).fill({ company, product, location, campaigns: [...this.campaigns.values()], random: this.random, frequency: opts.frequency, avoidSignatures: opts.avoidSignatures, audience: opts.audience ?? null });
     reserve(fill.placements, this.campaigns);
     this.persistCampaigns(fill.placements);

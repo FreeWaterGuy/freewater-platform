@@ -193,7 +193,7 @@ describe('the white-label console', () => {
     const saved = await call('PATCH', '/v1/console/settings', owner, { version: 1, changes: { brand: { accentColor: '#F2C14E', tagline: 'Water for everyone' }, adRules: { maxAdsPerUnit: 4 } } });
     expect(saved.status).toBe(200);
     expect(saved.body.version).toBe(2);
-    expect(saved.body.changes).toEqual(expect.arrayContaining(['Accent color: #7FC6EA → #F2C14E', "Tagline: Put your brand in everyone's… → Water for everyone", 'Most ads per bottle: 6 → 4']));
+    expect(saved.body.changes).toEqual(expect.arrayContaining(['Accent color: #7FC6EA → #F2C14E', "Tagline: Put your brand in everyone's… → Water for everyone", 'Most ads per bottle: 10 → 4']));
     expect(app.platform.companies.get('freewater')!.adRules.maxAdsPerUnit).toBe(4);
     // Bottles printed from now on follow the new rules and look.
     const u = await printBottle();
@@ -224,7 +224,7 @@ describe('the white-label console', () => {
     expect(app.platform.companies.get('freewater')!.brand.accentColor).toBe('#7FC6EA');
     // Saved to the database too: a restart loads the same settings.
     const row = (await db.query<any>(`select config from companies where id = 'freewater'`)).rows[0];
-    expect((typeof row.config === 'string' ? JSON.parse(row.config) : row.config).adRules.maxAdsPerUnit).toBe(6);
+    expect((typeof row.config === 'string' ? JSON.parse(row.config) : row.config).adRules.maxAdsPerUnit).toBe(10);
 
     expect((await call('GET', '/v1/console', keys['advertiser-joes'])).status).toBe(403);
     expect((await call('GET', '/v1/console', keys['machine-ATX-014'])).status).toBe(403);

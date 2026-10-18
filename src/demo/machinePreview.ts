@@ -1,3 +1,4 @@
+import { placementShare } from '../modules/ads/layouts';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createApp } from '../app';
 import { createPgliteClient } from '../db/pglite';
@@ -14,7 +15,7 @@ const screen = app.fleet.screen('ATX-014').config;
 const jobAds: any[] = [];
 for (let i = 0; i < 6; i++) {
   const r = await app.platform.order({ companyId: 'freewater', orderId: `pv-${i}`, locationId: 'ATX-022', productId: 'bottle-16oz' });
-  const own = [...r.unit.placements].filter((p) => !p.isHouse).sort((a, b) => b.sixths - a.sixths)[0];
+  const own = [...r.unit.placements].filter((p) => !p.isHouse).sort((a, b) => placementShare(a) - placementShare(b))[0];
   const c = own && app.platform.campaigns.get(own.campaignId);
   if (c) jobAds.push({ advertiser: c.advertiserName, art: `<svg xmlns="http://www.w3.org/2000/svg" width="360" height="440" viewBox="0 0 360 440">${c.creative.svg(360, 440)}</svg>`, earnedCents: r.unit.placements.filter((p) => !p.isHouse).reduce((s, p) => s + p.priceCents, 0) });
 }

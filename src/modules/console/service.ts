@@ -1,7 +1,7 @@
 import type { SqlClient } from '../../db/client';
 import type { Platform } from '../../platform';
 import type { Registry } from '../../core/registry';
-import type { Campaign, CompanyConfig, Location, Sixths, Unit } from '../../core/types';
+import type { Campaign, CompanyConfig, Location, Share, Unit } from '../../core/types';
 import type { Messenger } from '../../adapters/messaging/contract';
 import type { AccountsService } from '../accounts/service';
 import { createApiKey, listApiKeys } from '../../db/store';
@@ -170,8 +170,8 @@ export class ConsoleService {
     if (last) return last;
     const house = [...this.platform.campaigns.values()].find((c) => c.companyId === companyId && c.isHouse);
     const machine = this.locations(companyId).find((l) => l.kind === 'machine')?.id ?? 'SAMPLE';
-    const placements = house ? [{ slotIndex: 0, sixths: 6 as Sixths, campaignId: house.id, advertiserId: house.advertiserId, advertiserName: house.advertiserName, experienceId: house.experienceId, priceCents: 0, isHouse: true }] : [];
-    return { id: 'u_sample', companyId, productId: 'bottle-16oz', locationId: machine, kind: 'ad_supported', placements, layout: placements.length ? [6] : [], status: 'printed', createdAt: new Date().toISOString() };
+    const placements = house ? [{ slotIndex: 0, share: 1 as Share, rect: { x: 0, y: 0, w: 1, h: 1 }, campaignId: house.id, advertiserId: house.advertiserId, advertiserName: house.advertiserName, experienceId: house.experienceId, priceCents: 0, isHouse: true }] : [];
+    return { id: 'u_sample', companyId, productId: 'bottle-16oz', locationId: machine, kind: 'ad_supported', placements, layout: placements.length ? [1] : [], status: 'printed', createdAt: new Date().toISOString() };
   }
 
   // ---------- machines ----------

@@ -1,5 +1,5 @@
 import { checkQrColor, checkQrLogo } from '../print/qr';
-import type { CompanyConfig, Sixths } from '../../core/types';
+import { SHARES, type CompanyConfig } from '../../core/types';
 
 // What a company may change about itself, the checks each change must pass, and plain words for what changed.
 
@@ -57,6 +57,7 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
   if (!g || !['per_unit', 'percent_of_revenue', 'none'].includes(g.mode)) return 'Pick how the company gives: per bottle, a share of ad money, or not at all.';
   if (g.mode === 'per_unit' && !isInt(g.centsPerUnit, 1, 100)) return 'Giving per bottle must be 1¢ to 100¢.';
   if (g.mode === 'percent_of_revenue' && !isNum(g.percentOfRevenue, 0.5, 50)) return 'The share of ad money given must be 0.5% to 50%.';
+  if (g.percentOfEngagement !== undefined && !isNum(g.percentOfEngagement, 0, 50)) return 'The share of scan, AR and sales money given must be 0% to 50%.';
   if (g.mode !== 'none' && !str(g.defaultCharity, 2, 80)) return 'Name the charity that gets the giving.';
   if (g.charityByLocation && (typeof g.charityByLocation !== 'object' || !Object.values(g.charityByLocation).every((v) => str(v, 2, 80)))) return 'Each machine or route’s charity needs a name.';
   if (g.minimumTransferCents !== undefined && !isInt(g.minimumTransferCents, 100, 1_000_000)) return 'The smallest transfer to a charity must be $1 to $10,000.';
@@ -84,14 +85,15 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
 
   const a = c.adRules;
   if (!a) return 'Ad rules are missing.';
-  if (!isInt(a.minAdsPerUnit, 0, 6) || !isInt(a.maxAdsPerUnit, 1, 6) || a.minAdsPerUnit > a.maxAdsPerUnit) return 'Ads per bottle: the most must be 1 to 6, and the fewest no more than the most.';
+  if (!isInt(a.minAdsPerUnit, 0, 10) || !isInt(a.maxAdsPerUnit, 1, 10) || a.minAdsPerUnit > a.maxAdsPerUnit) return 'Ads per bottle: the most must be 1 to 10, and the fewest no more than the most.';
   if (!Array.isArray(a.blockedCategories) || a.blockedCategories.length > 30 || !a.blockedCategories.every((x) => typeof x === 'string' && /^[a-z][a-z-]{1,29}$/.test(x))) return 'Blocked categories are short lowercase words like alcohol or real-estate.';
   if (typeof a.competitorSeparation !== 'boolean') return 'Keeping competitors apart is either on or off.';
   if (!isInt(a.repeatScanWindowSec, 0, 7 * 86400)) return 'The repeat-scan window must be 0 seconds to 7 days.';
   if (!isNum(a.maxPackShare, 0.05, 1)) return 'One advertiser’s share of a pack must be 5% to 100%.';
 
   const p = c.prices;
-  if (!p || !([1, 2, 3, 4, 5, 6] as Sixths[]).every((k) => isInt(p.perPrintBySixths?.[k], 0, 1000))) return 'Each print price must be 0¢ to $10.';
+  if (!p || !SHARES.every((k) => isInt(p.perPrintByShare?.[k], 0, 10_000))) return 'Each starting print price must be 0¢ to $100.';
+  if (p.targetingPremium && (!(['locations', 'products', 'interests', 'customers'] as const).every((k) => isNum(p.targetingPremium![k], 0, 200)) || !isNum(p.targetingPremium.max, 0, 500))) return 'Each targeting premium must be 0% to 200%, and the most in all 0% to 500%.';
   if (!isInt(p.perScan, 0, 1000) || !isInt(p.perArLaunch, 0, 1000)) return 'Scan and AR prices must be 0¢ to $10.';
   if (!isNum(p.commissionPercent, 0, 50)) return 'Commission on sales must be 0% to 50%.';
   if (!isInt(p.customUnit, 0, 10_000) || !isInt(p.perBoxFace, 0, 5000)) return 'The custom bottle price must be $0 to $100, and a box side $0 to $50.';
@@ -110,7 +112,8 @@ export function applyChange(cur: CompanyConfig, change: Partial<Record<EditableK
     if (!(editableKeys as readonly string[]).includes(k)) throw new Error(`“${k}” can’t be changed here.`);
     if (v && typeof v === 'object' && !Array.isArray(v) && next[k] && typeof next[k] === 'object' && !Array.isArray(next[k])) {
       next[k] = { ...next[k], ...(v as object) };
-      if (k === 'prices' && (v as any).perPrintBySixths) next.prices.perPrintBySixths = { ...cur.prices.perPrintBySixths, ...(v as any).perPrintBySixths };
+      if (k === 'prices' && (v as any).perPrintByShare) next.prices.perPrintByShare = { ...cur.prices.perPrintByShare, ...(v as any).perPrintByShare };
+      if (k === 'prices' && (v as any).targetingPremium && cur.prices.targetingPremium) next.prices.targetingPremium = { ...cur.prices.targetingPremium, ...(v as any).targetingPremium };
       // A blank tagline or default charity means "none".
       if (k === 'brand' && (v as any).tagline === '') delete next.brand.tagline;
     } else next[k] = v;
@@ -121,11 +124,11 @@ export function applyChange(cur: CompanyConfig, change: Partial<Record<EditableK
 const labels: Record<string, string> = {
   name: 'Company name', receiptBaseUrl: 'QR web address', 'brand.logoTop': 'Logo top line', 'brand.logoBottom': 'Logo bottom line', 'brand.tagline': 'Tagline',
   'brand.panelColor': 'Panel color', 'brand.accentColor': 'Accent color', 'brand.textColor': 'Text color', 'brand.fontFamily': 'Lettering', productFacts: 'Product facts',
-  'giving.mode': 'How you give', 'giving.centsPerUnit': 'Giving per bottle', 'giving.percentOfRevenue': 'Share of ad money given', 'giving.defaultCharity': 'Charity',
+  'giving.mode': 'How you give', 'giving.centsPerUnit': 'Giving per bottle', 'giving.percentOfRevenue': 'Share of ad money given', 'giving.percentOfEngagement': 'Share of scan, AR and sales money given', 'giving.defaultCharity': 'Charity',
   'giving.charityByLocation': 'Charity by machine or route', 'giving.minimumTransferCents': 'Smallest transfer', openBooks: 'Open books',
   unitCosts: 'Standard costs', consumerPricing: 'Bottle price', timezone: 'Time zone', 'consumer.freeBottlesPerDay': 'Free bottles per person a day', 'consumer.retailValueCents': 'Store price of a bottle',
   'adRules.minAdsPerUnit': 'Fewest ads per bottle', 'adRules.maxAdsPerUnit': 'Most ads per bottle', 'adRules.blockedCategories': 'Blocked categories', 'adRules.competitorSeparation': 'Keep competitors apart',
-  'adRules.repeatScanWindowSec': 'Repeat-scan window', 'adRules.maxPackShare': 'One advertiser’s share of a pack', 'prices.perPrintBySixths': 'Print prices', 'prices.perScan': 'Price per scan',
+  'adRules.repeatScanWindowSec': 'Repeat-scan window', 'adRules.maxPackShare': 'One advertiser’s share of a pack', 'prices.perPrintByShare': 'Starting print prices', 'prices.targetingPremium': 'Targeting premium', 'prices.perScan': 'Price per scan',
   'prices.perArLaunch': 'Price per AR launch', 'prices.commissionPercent': 'Commission on sales', 'prices.customUnit': 'Custom bottle price', 'prices.perBoxFace': 'Box side price',
   scanBaseUrl: 'Short QR address', standardProductId: 'Standard product', 'qr.logo': 'Logo in your codes', 'qr.logoSvg': 'Your code logo', 'qr.color': 'Code color',
   'qr.advertiserLogos': 'Advertisers’ logos in their codes', 'qr.allowStatic': 'Static codes allowed', 'ar.trackingCodes': 'AR tracking strip', 'ar.stripEverywhere': 'Tracking strip along every ad',

@@ -3,6 +3,7 @@ import { campaignQrStyle, companyQrStyle, qrMode, staticTarget } from '../codes/
 import type { LabelRenderer, PrintedCode, RenderRequest, RenderedLabel, RenderedSlot } from './contract';
 import { qrDraw, type QrStyle } from './qr';
 import { MARKER_CELLS, MARKER_CODES, markerSvg } from '../ar/markers';
+import { placementRect } from '../ads/layouts';
 
 export const PX_PER_IN = 100; // drawing units; the SVG's width/height are set in real inches
 
@@ -21,7 +22,6 @@ export const svgLabelRenderer: LabelRenderer = {
     const panelW = product.label.panelWidthIn * PX_PER_IN;
     const adX = seam;
     const adW = W - seam - panelW;
-    const sixth = adW / 6;
     const base = company.receiptBaseUrl.replace(/\/$/, '');
     // Everything scales with the label, so the same layout works on a short can sleeve or a tall bottle.
     const k = Math.max(0.7, Math.min(1.4, H / 450));
@@ -44,21 +44,21 @@ export const svgLabelRenderer: LabelRenderer = {
       const url = req.codes ? req.codes.slot(company, unit.id, 0) : `${base}/s/${unit.id}/0`;
       const q = 80 * k;
       draw(url, adX + adW - q - 12 * k, H - q - 12 * k, q, companyQrStyle(company), 'slot', 0);
-      slots.push({ slotIndex: 0, xIn: adX / PX_PER_IN, widthIn: adW / PX_PER_IN, advertiserName: 'Custom design', qrUrl: url, qrMode: 'dynamic' });
+      slots.push({ slotIndex: 0, xIn: adX / PX_PER_IN, yIn: 0, widthIn: adW / PX_PER_IN, heightIn: H / PX_PER_IN, advertiserName: 'Custom design', qrUrl: url, qrMode: 'dynamic' });
     } else {
-      let x = adX;
       for (const p of unit.placements) {
-        const w = p.sixths * sixth;
+        // Each ad has its own piece of the label, as close to square as the layout allows.
+        const r = placementRect(p, unit.placements);
+        const x = adX + r.x * adW, y = r.y * H, w = r.w * adW, h = r.h * H;
         const campaign = campaigns.get(p.campaignId);
         if (!campaign) throw new Error(`Unit ${unit.id} slot ${p.slotIndex} points at unknown campaign ${p.campaignId}.`);
-        parts.push(nested(x, 0, w, H, campaign.creative.svg(w, H)));
+        parts.push(nested(x, y, w, h, campaign.creative.svg(w, h)));
         const mode = qrMode(company, campaign);
         const smart = req.codes ? req.codes.slot(company, unit.id, p.slotIndex) : `${base}/s/${unit.id}/${p.slotIndex}`;
         const url = mode === 'static' ? staticTarget(campaign, req.codes ? smart : null) : smart;
-        const q = qrFor(w);
-        draw(url, x + w - q - 10 * k, H - q - 10 * k, q, campaignQrStyle(company, campaign), 'slot', p.slotIndex);
-        slots.push({ slotIndex: p.slotIndex, xIn: x / PX_PER_IN, widthIn: w / PX_PER_IN, advertiserName: p.advertiserName, qrUrl: url, qrMode: mode });
-        x += w;
+        const q = Math.min(qrFor(Math.min(w, h * 1.4)), h - 16);
+        draw(url, x + w - q - 10 * k, y + h - q - 10 * k, q, campaignQrStyle(company, campaign), 'slot', p.slotIndex);
+        slots.push({ slotIndex: p.slotIndex, xIn: x / PX_PER_IN, yIn: y / PX_PER_IN, widthIn: w / PX_PER_IN, heightIn: h / PX_PER_IN, advertiserName: p.advertiserName, qrUrl: url, qrMode: mode });
       }
     }
 
@@ -101,6 +101,7 @@ export function markerStrip(product: import('../../core/types').Product, slots: 
   let id = 0;
   for (const s of [...slots].sort((a, b) => a.xIn - b.xIn)) {
     if (!allowed.includes(s.slotIndex)) continue;
+    if (s.yIn !== undefined && s.heightIn !== undefined && Math.abs(s.yIn + s.heightIn - product.label.heightIn) > 0.01) continue; // the strip runs along the bottom of the label
     const qr = codes.find((c) => c.role === 'slot' && c.slotIndex === s.slotIndex);
     const x0 = s.xIn * PX_PER_IN + 8 * k;
     const x1 = (qr ? (qr.xIn - 0.12) * PX_PER_IN : (s.xIn + s.widthIn) * PX_PER_IN) - 8 * k; // stop short of the QR's white margin
@@ -166,8 +167,9 @@ export function givingLine(company: CompanyConfig, locationId: string): string |
   const g = company.giving;
   const charity = g.charityByLocation?.[locationId] ?? g.defaultCharity;
   const to = charity ? ` to ${charity}` : ' to charity';
-  if (g.mode === 'per_unit' && g.centsPerUnit) return `${g.centsPerUnit}¢ per bottle goes${to}`;
-  if (g.mode === 'percent_of_revenue' && g.percentOfRevenue) return `${g.percentOfRevenue}% of ad revenue goes${to}`;
+  const extra = g.percentOfEngagement ? ` + ${g.percentOfEngagement}% of scans & sales` : '';
+  if (g.mode === 'per_unit' && g.centsPerUnit) return `${g.centsPerUnit}¢ a bottle${extra} ${extra ? 'go' : 'goes'}${to}`;
+  if (g.mode === 'percent_of_revenue' && g.percentOfRevenue) return `${g.percentOfRevenue}% of ad revenue${extra} goes${to}`;
   return null;
 }
 

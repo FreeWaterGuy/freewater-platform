@@ -24,12 +24,14 @@ async function printMany(n: number, s = setup()) {
 }
 
 describe('ad engine', () => {
-  it('fills every label edge to edge with 1 to 6 different ads', async () => {
+  it('fills every label edge to edge with 1 to 10 different ads, in pieces as square as possible', async () => {
     const { units } = await printMany(40);
     for (const u of units) {
-      expect(u.layout.reduce((a, b) => a + b, 0)).toBe(6);
+      expect(u.layout.reduce((a, b) => a + 1 / b, 0)).toBeCloseTo(1, 6); // the shares add up to the whole label
+      expect(u.placements.reduce((a, p) => a + p.rect.w * p.rect.h, 0)).toBeCloseTo(1, 3); // and so do the pieces
       expect(u.placements.length).toBeGreaterThanOrEqual(1);
-      expect(u.placements.length).toBeLessThanOrEqual(6);
+      expect(u.placements.length).toBeLessThanOrEqual(10);
+      for (const p of u.placements) { const w = p.rect.w * 7.4, h = p.rect.h * 4.5; expect(Math.max(w / h, h / w)).toBeLessThanOrEqual(2.6); }
       const ids = u.placements.filter((p) => !p.isHouse).map((p) => p.campaignId);
       expect(new Set(ids).size).toBe(ids.length);
     }
@@ -63,7 +65,7 @@ describe('ad engine', () => {
   it('can be swapped per company through config alone', async () => {
     const s = setup();
     const r = await s.order('PS-001', 'peak-spring');
-    expect(r.ok && r.unit.layout).toEqual([6]);
+    expect(r.ok && r.unit.layout).toEqual([1]);
     expect(r.ok && r.unit.placements[0]!.isHouse).toBe(true);
   });
 });
@@ -77,8 +79,9 @@ describe('labels', () => {
   });
 
   it('prints the donation line only when giving is on', async () => {
-    expect(givingLine(freewater, 'ATX-014')).toBe('10¢ per bottle goes to Austin Parks Foundation');
-    expect(givingLine(freewater, 'route-3')).toBe('10¢ per bottle goes to Central Texas Food Bank');
+    expect(givingLine(freewater, 'ATX-014')).toBe('10¢ a bottle + 10% of scans & sales go to Austin Parks Foundation');
+    expect(givingLine(freewater, 'route-3')).toBe('10¢ a bottle + 10% of scans & sales go to Central Texas Food Bank');
+    expect(givingLine({ ...freewater, giving: { ...freewater.giving, percentOfEngagement: 0 } }, 'ATX-014')).toBe('10¢ a bottle goes to Austin Parks Foundation');
     expect(givingLine(peakSpring, 'PS-001')).toBeNull();
     const s = setup();
     const r = await s.order('PS-001', 'peak-spring');

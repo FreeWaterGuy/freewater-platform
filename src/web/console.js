@@ -244,7 +244,7 @@
 
   // ---------- ads and prices ----------
   function adsPage() {
-    const sizes = [[1, 'One sixth'], [2, 'Two sixths'], [3, 'Half'], [4, 'Two thirds'], [5, 'Five sixths'], [6, 'The whole wrap']];
+    const sizes = [[1, 'The whole label'], [2, 'Half'], [3, 'A third'], [4, 'A quarter'], [6, 'A sixth'], [8, 'An eighth'], [10, 'A tenth']];
     settingsPage('ads', 'Ads and prices', 'What goes on your bottles and what advertisers pay. Prices are per print, scan, AR launch or sale.', (ctx) => {
       const blocked = new Set(ctx.draft.adRules.blockedCategories);
       const cats = [...new Set([...S.ov.options.categories, ...blocked])];
@@ -257,9 +257,15 @@
           select(ctx, 'adRules.repeatScanWindowSec', 'Don’t bill the same person’s repeat scans within', [[0, 'Bill every scan'], [300, '5 minutes'], [600, '10 minutes'], [3600, '1 hour'], [86400, '1 day']]),
           toggle(ctx, 'adRules.competitorSeparation', 'Keep competitors apart', 'Two ads from the same competitor group never share a bottle.', { full: true }))),
         section('Categories you won’t print', 'Tap to block. Advertisers in a blocked category can’t sign up or run ads.', chips),
-        section('What advertisers pay', 'Charged only when it happens: a confirmed print, a scan that loaded, an AR launch, a sale.', h('div', { class: 'form' },
-          ...sizes.map(([k, l]) => num(ctx, `prices.perPrintBySixths.${k}`, `Print: ${l.toLowerCase()} of the label`, { min: 0, max: 1000, suffix: '¢' })),
+        section('Starting prices', 'Per bottle printed, by how much of the label the ad gets. Bids start at the whole label’s price and go up; smaller pieces pay the same share of a bid. Each piece is cut as close to square as the label allows.', h('div', { class: 'form' },
+          ...sizes.map(([k, l]) => num(ctx, `prices.perPrintByShare.${k}`, l, { min: 0, max: 10000, suffix: '¢', hint: (v) => (k === 1 ? `Bids start at ${dollars(v ?? 0)}.` : `${dollars(v ?? 0)} a bottle`) })))),
+        section('What advertisers pay for engagement and sales', 'Charged only when it happens: a scan that loaded, an AR launch, a sale.', h('div', { class: 'form' },
           num(ctx, 'prices.perScan', 'Each scan', { min: 0, max: 1000, suffix: '¢' }), num(ctx, 'prices.perArLaunch', 'Each AR launch', { min: 0, max: 1000, suffix: '¢' }),
+          (ctx.draft.prices.targetingPremium ??= { locations: 0, products: 0, interests: 0, customers: 0, max: 0 }, null),
+          h('p', { class: 'hint full', style: 'grid-column:1/-1;margin:4px 0 0', text: 'Targeting premium: the more precisely an ad targets, the more each scan and AR launch costs. Each kind adds its percent, up to the most in all.' }),
+          num(ctx, 'prices.targetingPremium.locations', 'Chosen machines or routes', { min: 0, max: 200, suffix: '%' }), num(ctx, 'prices.targetingPremium.products', 'Chosen products', { min: 0, max: 200, suffix: '%' }),
+          num(ctx, 'prices.targetingPremium.interests', 'People’s interests', { min: 0, max: 200, suffix: '%' }), num(ctx, 'prices.targetingPremium.customers', 'New or returning customers', { min: 0, max: 200, suffix: '%' }),
+          num(ctx, 'prices.targetingPremium.max', 'The most in all', { min: 0, max: 500, suffix: '%', hint: (v) => `So a 25¢ scan costs at most ${Math.round(25 * (1 + (v ?? 0) / 100))}¢.` }),
           num(ctx, 'prices.commissionPercent', 'Commission on sales', { min: 0, max: 50, step: 0.5, int: false, suffix: '%' }), num(ctx, 'prices.perBoxFace', 'Each side of a delivery box', { min: 0, max: 5000, suffix: '¢' }),
           num(ctx, 'prices.customUnit', 'A custom bottle (what people pay)', { min: 0, max: 10000, suffix: '¢', hint: (v) => dollars(v ?? 0) }))))];
     });
@@ -326,7 +332,7 @@
   // ---------- products: any drink, any size ----------
   async function productsPage() {
     const list = await api('GET', '/v1/console/products');
-    const layoutsAll = [[6], [3, 3], [2, 2, 2], [4, 2], [3, 2, 1], [2, 2, 1, 1], [2, 1, 1, 2], [1, 1, 1, 1, 1, 1]];
+    const sizesAll = [[1, 'Whole label'], [2, '1/2'], [3, '1/3'], [4, '1/4'], [6, '1/6'], [8, '1/8'], [10, '1/10']];
     const f = {
       id: h('input', { class: 'input', placeholder: 'can-12oz', style: 'font-family:var(--mono)' }), name: h('input', { class: 'input', placeholder: '12 oz sparkling water can', maxlength: 80 }),
       category: h('input', { class: 'input', placeholder: 'water, soda, coffee…', maxlength: 30 }),
@@ -336,14 +342,14 @@
       seam: h('input', { class: 'input', type: 'number', step: '0.01', value: '0.2' }), panel: h('input', { class: 'input', type: 'number', step: '0.01', value: '0.9' }),
       price: h('input', { class: 'input', type: 'number', step: '0.05', value: '1' }), facts: h('textarea', { class: 'input', rows: 3, placeholder: 'SPARKLING SPRING WATER\n12 fl oz (355 ml)' }),
     };
-    const picks = layoutsAll.map((l) => { const b = h('input', { type: 'checkbox' }); b.checked = l.length <= 3; return [l, b]; });
+    const picks = sizesAll.map(([v, l]) => { const b = h('input', { type: 'checkbox' }); b.checked = true; return [v, b, l]; });
     const result = h('div', { class: 'stack' });
     const fromForm = () => {
       const n = (i) => (i.value === '' ? undefined : Number(i.value));
       return { id: f.id.value.trim(), name: f.name.value.trim(), ...(f.category.value.trim() ? { category: f.category.value.trim().toLowerCase() } : {}),
         container: { shape: f.shape.value, ...(n(f.diameter) ? { diameterIn: n(f.diameter) } : {}), ...(n(f.height) ? { heightIn: n(f.height) } : {}) },
         label: { widthIn: n(f.width), heightIn: n(f.labelH), seamIn: n(f.seam) ?? 0, panelWidthIn: n(f.panel) },
-        layouts: picks.filter(([, b]) => b.checked).map(([l]) => l), ...(n(f.price) && n(f.price) !== 1 ? { priceFactor: n(f.price) } : {}),
+        sizes: picks.filter(([, b]) => b.checked).map(([v]) => v), ...(n(f.price) && n(f.price) !== 1 ? { priceFactor: n(f.price) } : {}),
         ...(f.facts.value.trim() ? { facts: f.facts.value.split('\n').map((x) => x.trim()).filter(Boolean) } : {}) };
     };
     f.diameter.addEventListener('input', () => { const d = Number(f.diameter.value); if (d > 0 && !f.width.value) f.width.placeholder = (Math.PI * d + Number(f.seam.value || 0)).toFixed(2); });
@@ -363,14 +369,14 @@
       field('Seam overlap (inches)', f.seam), field('Your panel width (inches)', f.panel, { hint: 'At least 0.6 inches.' }),
       field('Ad prices compared with your standard bottle', f.price, { hint: '1 is the same; 1.25 is a quarter more for a bigger label.' }),
       field('Panel lines for this product', f.facts, { full: true, hint: 'What’s inside, the size, who made it. Leave empty to use your company’s lines.' }),
-      h('div', { class: 'field full' }, h('label', { text: 'Ad layouts allowed (sixths of the ad area)' }), h('div', { class: 'chips' }, picks.map(([l, b]) => h('label', { class: 'chip-check' }, b, ` ${l.join(' + ')}`)))),
+      h('div', { class: 'field full' }, h('label', { text: 'Ad sizes offered (shares of the label)' }), h('div', { class: 'chips' }, picks.map(([, b, l]) => h('label', { class: 'chip-check' }, b, ` ${l}`))), h('div', { class: 'hint', text: 'Each size is cut as close to square as this label allows. Sizes too small for a readable QR code are left out automatically.' })),
       h('div', { class: 'field full toolbar' }, h('button', { class: 'btn secondary', type: 'button', onclick: check }, 'Check and preview'), h('button', { class: 'btn', type: 'submit' }, 'Save product')));
     const row = (p) => h('tr', {}, h('td', {}, h('b', { class: 'mono', text: p.id }), p.shared ? h('div', { class: 'muted', style: 'font-size:12px', text: 'shared' }) : null), h('td', { text: p.name }), h('td', { text: p.category ?? '—' }),
-      h('td', { text: `${p.label.widthIn}" × ${p.label.heightIn}"${p.container?.diameterIn ? ` · ⌀ ${p.container.diameterIn}"` : ''}` }), h('td', { text: `${p.layouts.length}` }), h('td', { text: p.priceFactor ? `× ${p.priceFactor}` : '× 1' }),
+      h('td', { text: `${p.label.widthIn}" × ${p.label.heightIn}"${p.container?.diameterIn ? ` · ⌀ ${p.container.diameterIn}"` : ''}` }), h('td', { text: p.check.slots.map((x) => (x.share === 1 ? 'whole' : `1/${x.share}`)).join(' · ') }), h('td', { text: p.priceFactor ? `× ${p.priceFactor}` : '× 1' }),
       h('td', { text: p.check.problems.length ? p.check.problems[0] : p.check.ar.followsBottle ? 'AR on the bottle: yes' : 'AR in the room only' }));
     shell('products', head('Products', 'Any drink, any size: bottles, cans, cups and jars. Each product is its label size, its shape and the ad layouts it allows.'),
       h('div', { class: 'stack' },
-        h('section', { class: 'section' }, h('h2', { text: `${list.length} products` }), h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Id', 'Name', 'Inside', 'Label', 'Layouts', 'Ad prices', 'Check'].map((x) => h('th', { text: x })))), h('tbody', {}, list.map(row))))),
+        h('section', { class: 'section' }, h('h2', { text: `${list.length} products` }), h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Id', 'Name', 'Inside', 'Label', 'Ad sizes', 'Ad prices', 'Check'].map((x) => h('th', { text: x })))), h('tbody', {}, list.map(row))))),
         h('section', { class: 'section' }, h('h2', { text: 'Add a product' }), h('p', { class: 'lead', text: 'Every product is checked before it’s saved: the wrap has to close, and every ad has to fit a readable QR code.' }), form, result)));
   }
 
@@ -384,6 +390,7 @@
         const where = S.ov.locations;
         amount.replaceChildren(...(g.mode === 'none' ? [h('p', { class: 'full muted', style: 'margin:0', text: 'Nothing is given and the giving line disappears from your bottles.' })] : [
           g.mode === 'per_unit' ? num(ctx, 'giving.centsPerUnit', 'Each bottle gives', { min: 1, max: 100, suffix: '¢' }) : num(ctx, 'giving.percentOfRevenue', 'Share of ad money given', { min: 0.5, max: 50, step: 0.5, int: false, suffix: '%' }),
+          num(ctx, 'giving.percentOfEngagement', 'Plus this share of scan, AR and sales money', { min: 0, max: 50, step: 0.5, int: false, suffix: '%', hint: 'On top of the above: part of what each scan, AR launch and sales commission earns. 0 for none.' }),
           charityOpts().length ? select(ctx, 'giving.defaultCharity', 'Charity', charityOpts(), { hint: 'Add charities below.' }) : text(ctx, 'giving.defaultCharity', 'Charity', { max: 80 }),
           num(ctx, 'giving.minimumTransferCents', 'Send to a charity once it’s owed at least', { min: 1, max: 10000, scale: 0.01, suffix: '$', hint: 'Smaller amounts wait for the next transfer.' }),
           where.length ? h('div', { class: 'field full' }, h('label', { text: 'A different charity for some machines or routes' }), h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('tbody', {}, where.map((l) => {

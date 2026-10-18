@@ -1,3 +1,4 @@
+import { placementShare } from '../modules/ads/layouts';
 import { createHash } from 'node:crypto';
 import type { App } from '../app';
 import type { ApiKey } from '../db/store';
@@ -53,11 +54,11 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
       receiptUrl: `/r/${u.id}`,
       earnedCents: r.earned.total, donatedCents: r.donatedCents, giving: givingLine(company, u.locationId),
       ads: u.kind === 'custom'
-        ? [{ slot: 0, name: 'Your message', sixths: 6, url: `/s/${u.id}/0`, ar: false, experience: 'Custom bottle', isHouse: false }]
+        ? [{ slot: 0, name: 'Your message', share: 1, size: 'Full label', url: `/s/${u.id}/0`, ar: false, experience: 'Custom bottle', isHouse: false }]
         : u.placements.map((p) => {
             const c = platform.campaigns.get(p.campaignId);
             const info = experiences.host.info(c?.experienceId ?? p.experienceId);
-            return { slot: p.slotIndex, name: p.advertiserName, sixths: p.sixths, url: `/s/${u.id}/${p.slotIndex}`, ar: !!info?.ar, experience: info?.name ?? 'Page', isHouse: p.isHouse };
+            return { slot: p.slotIndex, name: p.advertiserName, share: placementShare(p), size: placementShare(p) === 1 ? 'Full label' : `1/${placementShare(p)}`, url: `/s/${u.id}/${p.slotIndex}`, ar: !!info?.ar, experience: info?.name ?? 'Page', isHouse: p.isHouse };
           }),
     };
   };
@@ -65,7 +66,7 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
   /** An ad for the countdown screen. For an ad-paid bottle, its own biggest ad; for a paid custom bottle, any ad that may run there. */
   const countdownAd = (u: Unit) => {
     const company = platform.companies.get(u.companyId)!;
-    const own = [...u.placements].filter((p) => !p.isHouse).sort((a, b) => b.sixths - a.sixths)[0];
+    const own = [...u.placements].filter((p) => !p.isHouse).sort((a, b) => placementShare(a) - placementShare(b))[0];
     const eligible = [...platform.campaigns.values()].filter((c) => isEligible(c, company, u.locationId)).sort((a, b) => a.id.localeCompare(b.id));
     const pick = own ? platform.campaigns.get(own.campaignId) : eligible[Math.floor(platform.random() * eligible.length)];
     const c = pick ?? [...platform.campaigns.values()].find((x) => x.isHouse && x.companyId === company.id);

@@ -41,8 +41,10 @@ export class Ledger {
 
   private onEntry: (entry: LedgerEntry) => void;
 
-  constructor(bus: EventBus, private companies: Map<string, CompanyConfig>, hooks: { onEntry?: (entry: LedgerEntry) => void } = {}) {
+  private premium: (campaignId: string) => number;
+  constructor(bus: EventBus, private companies: Map<string, CompanyConfig>, hooks: { onEntry?: (entry: LedgerEntry) => void; engagementPremium?: (campaignId: string) => number } = {}) {
     this.onEntry = hooks.onEntry ?? (() => {});
+    this.premium = hooks.engagementPremium ?? (() => 0);
     bus.on('label.printed', (e) => this.onPrinted(e));
     bus.on('unit.scanned', (e) => this.onEngagement(e, 'scan'));
     bus.on('ar.launched', (e) => this.onEngagement(e, 'ar'));
@@ -88,7 +90,7 @@ export class Ledger {
     for (const p of placements) {
       if (p.isHouse) continue;
       revenue += p.priceCents;
-      this.add(e, { unitId, campaignId: p.campaignId, debit: `receivable:advertiser:${p.advertiserId}`, credit: 'revenue:print', amountCents: p.priceCents, kind: 'print', memo: `${p.advertiserName}, ${p.sixths}/6 slot, printed` });
+      this.add(e, { unitId, campaignId: p.campaignId, debit: `receivable:advertiser:${p.advertiserId}`, credit: 'revenue:print', amountCents: p.priceCents, kind: 'print', memo: `${p.advertiserName}, ${p.share ? (p.share === 1 ? 'whole label' : `1/${p.share} of the label`) : `${p.sixths}/6 slot`}, printed` });
     }
 
     const g = company.giving;
@@ -123,8 +125,22 @@ export class Ledger {
     this.lastEngagement.set(key, t);
     if (last !== undefined && t - last < company.adRules.repeatScanWindowSec * 1000) return; // repeat, free
 
-    const amount = kind === 'scan' ? company.prices.perScan : company.prices.perArLaunch;
-    this.add(e, { unitId: p.unitId, campaignId: placement.campaignId, debit: `receivable:advertiser:${placement.advertiserId}`, credit: `revenue:${kind}`, amountCents: amount, kind, memo: `${placement.advertiserName}, ${kind === 'scan' ? 'scan' : 'AR launch'}` });
+    // Targeted ads pay more per engagement: the base price plus the campaign's targeting premium.
+    const pct = this.premium(placement.campaignId);
+    const amount = Math.round((kind === 'scan' ? company.prices.perScan : company.prices.perArLaunch) * (1 + pct / 100));
+    this.add(e, { unitId: p.unitId, campaignId: placement.campaignId, debit: `receivable:advertiser:${placement.advertiserId}`, credit: `revenue:${kind}`, amountCents: amount, kind, memo: `${placement.advertiserName}, ${kind === 'scan' ? 'scan' : 'AR launch'}${pct ? ` (+${pct}% for targeting)` : ''}` });
+    this.giveShare(e, company, amount, { unitId: p.unitId }, unit!.locationId, kind === 'scan' ? 'a scan' : 'an AR launch');
+  }
+
+  /** The company's share of engagement and sales money for charity, on top of what each bottle gives. */
+  private giveShare(e: PlatformEvent, company: CompanyConfig, earned: number, where: { unitId?: string; packId?: string }, locationId: string | undefined, what: string, reverse = false) {
+    const g = company.giving;
+    if (g.mode === 'none' || !g.percentOfEngagement) return;
+    const amount = Math.round((earned * g.percentOfEngagement) / 100);
+    if (amount <= 0) return;
+    const charity = (locationId && g.charityByLocation?.[locationId]) || g.defaultCharity || 'charity';
+    if (reverse) this.add(e, { ...where, debit: `payable:charity:${charity}`, credit: 'expense:giving', amountCents: amount, kind: 'donation', memo: `Refund: ${g.percentOfEngagement}% of the commission no longer goes to ${charity}` });
+    else this.add(e, { ...where, debit: 'expense:giving', credit: `payable:charity:${charity}`, amountCents: amount, kind: 'donation', memo: `${g.percentOfEngagement}% of ${what} to ${charity}` });
   }
 
   /** Scans and AR launches from a box face are billed to that face's advertiser, with the same rules as bottles. */
@@ -136,8 +152,10 @@ export class Ledger {
     const face = this.printedBoxes.get(p.packId)?.find((f) => f.face === p.face);
     if (!face || face.isHouse) return;
     if (this.isRepeat(`box-${kind}:${p.packId}:${p.face}:${p.viewerKey}`, e.at.getTime(), company)) return;
-    const amount = kind === 'scan' ? company.prices.perScan : company.prices.perArLaunch;
+    const pct = this.premium(face.campaignId);
+    const amount = Math.round((kind === 'scan' ? company.prices.perScan : company.prices.perArLaunch) * (1 + pct / 100));
     this.add(e, { packId: p.packId, campaignId: face.campaignId, debit: `receivable:advertiser:${face.advertiserId}`, credit: `revenue:${kind}`, amountCents: amount, kind, memo: `${face.advertiserName}, ${kind === 'scan' ? 'scan' : 'AR launch'} from the ${p.face} of a box` });
+    this.giveShare(e, company, amount, { packId: p.packId }, undefined, kind === 'scan' ? 'a scan' : 'an AR launch');
   }
 
   private isRepeat(key: string, t: number, company: CompanyConfig) {
@@ -156,8 +174,10 @@ export class Ledger {
     const amount = Math.round((p.amountCents * company.prices.commissionPercent) / 100);
     const adv = `receivable:advertiser:${placement.advertiserId}`;
     const where = p.unitId !== undefined ? { unitId: p.unitId } : { packId: p.packId };
+    const loc = p.unitId !== undefined ? this.printedUnits.get(p.unitId)?.locationId : undefined;
     if (refund) this.add(e, { ...where, campaignId: placement.campaignId, debit: 'revenue:commission', credit: adv, amountCents: amount, kind: 'commission_reversal', memo: `Refund on order ${e.payload.orderId}, commission returned` });
     else this.add(e, { ...where, campaignId: placement.campaignId, debit: adv, credit: 'revenue:commission', amountCents: amount, kind: 'commission', memo: `Commission on order ${e.payload.orderId}` });
+    this.giveShare(e, company, amount, where, loc, 'a sales commission', refund);
   }
 
   /** After a restart: reload past lines and what the billing rules need to remember. Nothing is billed again. */

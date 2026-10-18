@@ -213,6 +213,17 @@ npm run demo:ops-preview   # builds out/ops-preview/ and out/driver-preview/, cl
 
 **Still to check on real phones:** the tracking strip and living label with a real printed label, on several phones and in different light; then tune the strip size.
 
+## Prices, square pieces, targeting and giving
+
+**Pieces as square as possible (`src/modules/ads/layouts.ts`).** An ad gets a share of the label: the whole label, 1/2, 1/3, 1/4, 1/6, 1/8 or 1/10. For every mix of sizes that fills the label (up to 10 ads), the label is cut in two again and again along whichever side gives the squarest pieces. On the 16 oz bottle quarters are 2 × 2, sixths 3 × 2, eighths 4 × 2, and a half with two quarters is a column beside two stacked pieces. Pieces too thin (more than 2.6 times as long as wide) or too small for a readable QR code are never used. Products say which sizes they offer; the console shows how each one is cut.
+
+**FreeWater's starting prices** (each company sets its own; white-label licensees keep theirs): whole label $1.00, 1/2 65¢, 1/3 51¢, 1/4 42¢, 1/6 33¢, 1/8 24¢, 1/10 20¢ per bottle printed.
+- **Bids start at $1** for the whole label and go up. A smaller piece pays the same share of the bid as its starting price is of $1 (a $1.20 bid pays 78¢ for a half). A product's price factor scales all of it.
+
+**Targeting costs more per engagement (`src/modules/ads/targeting.ts`).** Like Google and Facebook: each scan and AR launch costs the base price (FreeWater: 25¢ and 40¢) plus a premium for each kind of targeting. FreeWater's settings: chosen machines or routes +10%, chosen products +5%, people's interests +25%, new or returning customers +15%, at most +60% in all. The ledger line says what was added, and advertisers see their premium on the "Code, versions and AI" page.
+
+**Giving on engagement too.** On top of 10¢ a bottle, 10% of what scans, AR launches and sales commissions earn goes to the same charity (and comes back out if a sale is refunded). The label says "10¢ a bottle + 10% of scans & sales go to …". Every company can change both, or turn either off, in the console (Giving).
+
 ## Model 6 machine software
 
 ```
@@ -360,6 +371,7 @@ The server keeps working state in memory and writes through to the database, so 
 | `src/modules/ai/personalizer.ts` | AI personalization: choosing versions and writing greetings |
 | `src/modules/handoff` | Proof that targeted bottles reached the person they were printed for |
 | `src/modules/products` | Product checks: any drink, any size |
+| `src/modules/ads/layouts.ts`, `targeting.ts` | Cutting labels into near-square pieces; the targeting premium on engagement |
 | `src/modules/models/usdz.ts` | Our own GLB to USDZ converter, for iPhone AR with a buy button |
 | `src/modules/fleet` | Model 6 machines: jobs, heartbeats, problems, commands, labels kept for offline |
 | `src/machine` | The machine software: agent, screen server, memory, hardware contracts and the simulated Model 6 |

@@ -33,6 +33,9 @@ export interface RenderedSlot {
   slotIndex: number;
   xIn: number;
   widthIn: number;
+  /** Top and height of the slot (slots can be stacked). Missing on old labels, where every slot was full height. */
+  yIn?: number;
+  heightIn?: number;
   advertiserName: string;
   qrUrl: string; // unique per unit and slot; owned by whoever bought the slot
   /** Dynamic: our smart code. Static: the advertiser's own address. */

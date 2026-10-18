@@ -18,7 +18,7 @@ export interface AdAssistantInput {
     icons: readonly string[];
     fonts: string[];
     sizes: number[];
-    prices: { perPrintBySixths: Record<string, number>; perScan: number; perArLaunch: number; commissionPercent: number };
+    prices: { perPrintByShare: Record<string, number>; bidStartsAt: number; perScan: number; perArLaunch: number; commissionPercent: number };
     missing: Missing[];
   };
 }

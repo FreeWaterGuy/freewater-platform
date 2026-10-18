@@ -1,4 +1,5 @@
-import type { Campaign, CompanyConfig, Placement, Product, Sixths } from '../../core/types';
+import type { Campaign, CompanyConfig, Placement, Product, Share, SlotRect } from '../../core/types';
+import { layoutsFor, type Layout } from './layouts';
 import type { AdEngine, FillRequest, FillResult, PrintAudience } from './contract';
 import { canAfford, priceFor } from './budget';
 
@@ -35,16 +36,15 @@ export const freewaterAdEngine: AdEngine = {
 
     // Try each layout, and when a pack asks for variety, a few different line-ups of the same campaigns.
     // Keep the best-earning label that doesn't repeat one already in this pack.
-    type Option = { layout: Sixths[]; placements: Placement[]; revenue: number };
+    type Option = { layout: Share[]; placements: Placement[]; revenue: number };
     let best: Option | null = null;
     let bestNew: Option | null = null;
     const lineups = req.avoidSignatures ? [chosen, ...Array.from({ length: 6 }, () => shuffle(chosen, random))] : [chosen];
     for (const pool of lineups) {
-      for (const layout of shuffle(product.layouts, random)) {
-        if (layout.length < company.adRules.minAdsPerUnit || layout.length > company.adRules.maxAdsPerUnit) continue;
+      for (const layout of shuffle(layoutsFor(product, { maxAds: company.adRules.maxAdsPerUnit, minAds: company.adRules.minAdsPerUnit }), random)) {
         const placements = assign(layout, pool, house, company, factor, why);
         if (!placements) continue;
-        const option = { layout, placements, revenue: placements.reduce((s, p) => s + p.priceCents, 0) };
+        const option = { layout: layout.shares, placements, revenue: placements.reduce((s, p) => s + p.priceCents, 0) };
         if (!best || option.revenue > best.revenue) best = option;
         if (req.avoidSignatures && !req.avoidSignatures.has(labelSignature(placements)) && (!bestNew || option.revenue > bestNew.revenue)) bestNew = option;
       }
@@ -53,7 +53,7 @@ export const freewaterAdEngine: AdEngine = {
 
     if (!best) {
       if (!house) throw new Error(`Company ${company.id} has no house ad to fill an empty label.`);
-      return { layout: [6], placements: [housePlacement(0, 6, house)] };
+      return { layout: [1], placements: [housePlacement(0, 1, FULL, house)] };
     }
     return { layout: best.layout, placements: best.placements };
   },
@@ -65,13 +65,15 @@ export const houseOnlyAdEngine: AdEngine = {
   fill({ company, campaigns }) {
     const house = campaigns.find((c) => c.isHouse && c.companyId === company.id);
     if (!house) throw new Error(`Company ${company.id} has no house ad.`);
-    return { layout: [6], placements: [housePlacement(0, 6, house)] };
+    return { layout: [1], placements: [housePlacement(0, 1, FULL, house)] };
   },
 };
 
+const FULL: SlotRect = { x: 0, y: 0, w: 1, h: 1 };
+
 /** Two labels with the same signature look the same: same campaigns, same sizes, same order. */
 export function labelSignature(placements: Placement[]): string {
-  return placements.map((p) => `${p.slotIndex}:${p.campaignId}:${p.sixths}`).join('|');
+  return placements.map((p) => `${p.slotIndex}:${p.campaignId}:${p.share}`).join('|');
 }
 
 export function isEligible(c: Campaign, company: CompanyConfig, locationId: string, ctx: { product?: Product; audience?: PrintAudience | null } = {}): boolean {
@@ -83,8 +85,8 @@ export function isEligible(c: Campaign, company: CompanyConfig, locationId: stri
   if (c.targeting.products?.length && (!p || !c.targeting.products.includes(p.id))) return false;
   if (c.targeting.productCategories?.length && (!p?.category || !c.targeting.productCategories.includes(p.category))) return false;
   if (c.targeting.audience && !audienceMatch(c, ctx.audience ?? null)) return false;
-  const smallest = Math.min(...c.sizes) as Sixths;
-  return canAfford(c, company, smallest, p?.priceFactor ?? 1);
+  const cheapest = Math.max(...c.sizes) as Share; // the smallest piece costs least
+  return canAfford(c, company, cheapest, p?.priceFactor ?? 1);
 }
 
 /**
@@ -108,45 +110,49 @@ export function audienceMatch(c: Campaign, a: PrintAudience | null): string[] | 
 
 function rank(c: Campaign, company: CompanyConfig, factor = 1): number {
   const guaranteedBonus = c.buy.type === 'guaranteed' ? 1_000_000 : 0;
-  const best = Math.max(...c.sizes) as Sixths;
-  return guaranteedBonus + priceFor(c, company, best, factor) / best;
+  // What it pays for the whole label's worth of space, at its biggest size.
+  const biggest = Math.min(...c.sizes) as Share;
+  return guaranteedBonus + priceFor(c, company, biggest, factor) * biggest;
 }
 
 /** Fill the biggest slots first with the best-paying campaign that has artwork that size. */
-function assign(layout: Sixths[], chosen: Campaign[], house: Campaign | undefined, company: CompanyConfig, factor = 1, why = new Map<string, string[]>()): Placement[] | null {
-  const order = layout.map((size, slotIndex) => ({ size, slotIndex })).sort((a, b) => b.size - a.size);
+function assign(layout: Layout, chosen: Campaign[], house: Campaign | undefined, company: CompanyConfig, factor = 1, why = new Map<string, string[]>()): Placement[] | null {
+  const order = layout.shares.map((share, slotIndex) => ({ share, slotIndex })).sort((a, b) => a.share - b.share);
   const pool = [...chosen];
   const out: Placement[] = [];
-  for (const { size, slotIndex } of order) {
-    const i = pool.findIndex((c) => c.sizes.includes(size) && canAfford(c, company, size, factor));
+  for (const { share, slotIndex } of order) {
+    const rect = layout.rects[slotIndex]!;
+    const i = pool.findIndex((c) => c.sizes.includes(share) && canAfford(c, company, share, factor));
     if (i >= 0) {
       const c = pool.splice(i, 1)[0]!;
       out.push({
         slotIndex,
-        sixths: size,
+        share,
+        rect,
         campaignId: c.id,
         advertiserId: c.advertiserId,
         advertiserName: c.advertiserName,
         experienceId: c.experienceId,
-        priceCents: priceFor(c, company, size, factor),
+        priceCents: priceFor(c, company, share, factor),
         isHouse: false,
         ...(why.has(c.id) ? { audienceMatch: why.get(c.id) } : {}),
       });
     } else if (house) {
-      out.push(housePlacement(slotIndex, size, house));
+      out.push(housePlacement(slotIndex, share, rect, house));
     } else {
       return null;
     }
   }
   // A layout that is only house ads is worse than the full-wrap house ad.
-  if (out.every((p) => p.isHouse) && layout.length > 1) return null;
+  if (out.every((p) => p.isHouse) && layout.shares.length > 1) return null;
   return out.sort((a, b) => a.slotIndex - b.slotIndex);
 }
 
-function housePlacement(slotIndex: number, sixths: Sixths, house: Campaign): Placement {
+function housePlacement(slotIndex: number, share: Share, rect: SlotRect, house: Campaign): Placement {
   return {
     slotIndex,
-    sixths,
+    share,
+    rect,
     campaignId: house.id,
     advertiserId: house.advertiserId,
     advertiserName: house.advertiserName,

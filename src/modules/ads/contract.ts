@@ -1,4 +1,4 @@
-import type { Campaign, CompanyConfig, Location, Placement, Product, Sixths } from '../../core/types';
+import type { Campaign, CompanyConfig, Location, Placement, Product, Share } from '../../core/types';
 
 // Contract for the "Ads and slots" module. Decides, at print time, what fills each slot.
 // What a scan shows later is the slot owner's choice, handled by experience plug-ins.
@@ -27,7 +27,7 @@ export interface PrintAudience {
 }
 
 export interface FillResult {
-  layout: Sixths[];
+  layout: Share[];
   placements: Placement[];
 }
 

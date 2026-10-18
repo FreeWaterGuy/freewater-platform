@@ -19,7 +19,7 @@ import { AdsError } from '../modules/ads/service';
 import { DesignError } from '../modules/custom/service';
 import type { App } from '../app';
 import { findApiKey, type ApiKey, type Scope } from '../db/store';
-import type { Campaign, Sixths } from '../core/types';
+import type { Campaign, Share } from '../core/types';
 import { svgCreative } from '../modules/print/svgCreative';
 import { newId } from '../core/ids';
 import { AccountsError, roleScopes, type Role } from '../modules/accounts/service';
@@ -259,13 +259,13 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   route({ method: 'POST', url: '/v1/campaigns', scope: 'campaigns', summary: 'Create a campaign with uploaded SVG artwork. It starts paused until content review approves it.', body: obj({
     advertiserId: S.str, advertiserName: S.str, category: S.str, competitorGroup: S.str,
-    sizes: { type: 'array', minItems: 1, items: { type: 'integer', enum: [1, 2, 3, 4, 5, 6] } },
+    sizes: { type: 'array', minItems: 1, items: { type: 'integer', enum: [1, 2, 3, 4, 6, 8, 10] } },
     formats: { type: 'array', items: { type: 'string', enum: ['label', 'box-face'] } },
     experienceId: S.str,
     experienceConfig: { type: 'object' },
     theme: themeProp,
     targeting: extrasSchema.targeting,
-    buy: { oneOf: [obj({ type: { const: 'guaranteed' }, remainingPrints: S.int }, ['type', 'remainingPrints']), obj({ type: { const: 'bid' }, maxCentsPerSixth: S.int, dailyCapCents: S.int }, ['type', 'maxCentsPerSixth', 'dailyCapCents'])] },
+    buy: { oneOf: [obj({ type: { const: 'guaranteed' }, remainingPrints: S.int }, ['type', 'remainingPrints']), obj({ type: { const: 'bid' }, maxCentsPerLabel: S.int, dailyCapCents: S.int }, ['type', 'maxCentsPerLabel', 'dailyCapCents'])] },
     svg: { type: 'string', minLength: 1, maxLength: 2_000_000 },
     qr: extrasSchema.qr, variants: extrasSchema.variants, personalize: extrasSchema.personalize, afterEnd: extrasSchema.afterEnd,
   }, ['advertiserName', 'category', 'sizes', 'experienceId', 'buy', 'svg']), handler: async (req, key) => {
@@ -279,7 +279,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     checkExperience(b.experienceId, b.experienceConfig ?? {}, b.theme);
     const c: Campaign = {
       id: newId('cmp'), companyId: key!.companyId, advertiserId, advertiserName: b.advertiserName, category: b.category, competitorGroup: b.competitorGroup,
-      sizes: b.sizes as Sixths[], formats: b.formats, experienceId: b.experienceId, experienceConfig: b.experienceConfig ?? {}, theme: b.theme, targeting: b.targeting ?? {},
+      sizes: b.sizes as Share[], formats: b.formats, experienceId: b.experienceId, experienceConfig: b.experienceConfig ?? {}, theme: b.theme, targeting: b.targeting ?? {},
       buy: b.buy.type === 'bid' ? { ...b.buy, spentTodayCents: 0 } : b.buy,
       creative, creativeRef: { kind: 'svg', markup: b.svg }, active: false, createdAt: platform.bus.now().toISOString(),
     };

@@ -79,8 +79,9 @@ describe('a new business makes an ad by chatting', () => {
     expect(r.messages).toHaveLength(9);
 
     const p = (await call('GET', `/v1/ads/drafts/${d.id}/preview`, t)).json();
-    expect(p.sizes.map((s: any) => s.sixths)).toEqual([1, 2, 3]);
-    expect(p.labelSvg).toContain('Two tacos');
+    expect(p.sizes.map((s: any) => s.share)).toEqual([4, 6, 8]);
+    expect(p.sizes.map((s: any) => s.label)).toEqual(['1/4', '1/6', '1/8']);
+    expect(p.labelSvg).toMatch(/Two\b[\s\S]*tacos/);
     expect(p.boxFaceSvg).toContain('<svg');
     expect(p.scan.doc.blocks.find((b: any) => b.type === 'offer').code).toBe('TACO5');
 
@@ -90,7 +91,7 @@ describe('a new business makes an ad by chatting', () => {
     expect(sub.status).toBe('in_review');
     const c = app.platform.campaigns.get(sub.campaignId)!;
     expect(c).toMatchObject({ active: false, review: { status: 'submitted' }, creativeRef: { kind: 'poster' }, targeting: {} });
-    expect(c.buy).toMatchObject({ type: 'bid', dailyCapCents: 2000, maxCentsPerSixth: 3 }); // enough to win every size it chose
+    expect(c.buy).toMatchObject({ type: 'bid', dailyCapCents: 2000, maxCentsPerLabel: 100 }); // bids start at FreeWater's $1 for the whole label
     expect((await call('PATCH', `/v1/campaigns/${c.id}`, t, { active: true })).statusCode).toBe(403);
     expect((await call('POST', `/v1/ads/drafts/${d.id}/messages`, t, { text: 'one more thing' })).json().error.code).toBe('already_submitted');
 

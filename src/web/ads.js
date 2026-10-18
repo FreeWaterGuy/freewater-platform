@@ -23,6 +23,7 @@
   const dollars = (c) => `$${(c / 100).toLocaleString(undefined, { minimumFractionDigits: c % 100 ? 2 : 0, maximumFractionDigits: 2 })}`;
   const cents = (c) => (c < 100 ? `${c}¢` : dollars(c));
   const num = (n) => n.toLocaleString();
+  const sizeName = (s) => (String(s) === '1' ? 'the whole label' : `1/${s} of the label`);
   const svgSrc = (s) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(s)}`;
   const toastEl = h('div', { class: 'toast', role: 'status' }); document.body.append(toastEl);
   let tt; const toast = (m) => { toastEl.textContent = m; toastEl.classList.add('show'); clearTimeout(tt); tt = setTimeout(() => toastEl.classList.remove('show'), 2600); };
@@ -299,6 +300,7 @@
           check('Write a short greeting for each person', d.personalize.greeting, (v) => { d.personalize.greeting = v; }, 'One line at the top of the page and over the camera in AR. Checked before it’s shown: no links, numbers or claims.')),
         h('section', { class: 'panel', style: 'gap:12px' }, h('h2', { class: 'section', text: 'Who your ad is printed for' }),
           h('div', { class: 'form' }, field('People who like', tInterests, 'Your ad then only prints on bottles for someone who fits, and we show you each bottle reached them.'), field('Customers', tCustomers)),
+          c.engagement?.table ? h('p', { style: 'margin:0;color:var(--muted);font-size:14px', text: `Targeting makes each engagement worth more, so it costs more: places +${c.engagement.table.locations}%, products +${c.engagement.table.products}%, interests +${c.engagement.table.interests}%, new or returning customers +${c.engagement.table.customers}% (at most +${c.engagement.table.max}% in all). Right now yours adds ${c.engagement.premium.percent}%: ${cents(Math.round(c.engagement.perScanCents * (1 + c.engagement.premium.percent / 100)))} a scan and ${cents(Math.round(c.engagement.perArLaunchCents * (1 + c.engagement.premium.percent / 100)))} an AR launch.` }) : null,
           c.products.length > 1 ? h('div', { class: 'field' }, h('label', { text: 'Only on these products (none ticked: all)' }), h('div', { class: 'chips' }, prodBoxes.map(([, l]) => l))) : null),
         h('section', { class: 'panel', style: 'gap:12px' }, h('h2', { class: 'section', text: 'When this ad ends' }),
           h('div', { class: 'radio-cards', role: 'radiogroup', 'aria-label': 'When this ad ends' }, [['current', 'Old bottles open your current ad', 'Bottles still out there keep working for you.'], ['keep', 'Old bottles keep this ad', 'For offers that should stay as printed.']].map(([v, t, desc]) => { const r = h('input', { type: 'radio', name: 'after', value: v }); r.checked = d.afterEnd === v; r.addEventListener('change', () => { d.afterEnd = v; }); return h('label', {}, r, h('b', { text: t }), h('span', { text: desc })); }))),
@@ -326,7 +328,7 @@
       o.drafts.length ? h('div', {}, h('h2', { class: 'section', text: 'Unfinished ads' }), h('div', { class: 'drafts' }, o.drafts.map((d) => link(`/ads/drafts/${d.id}`, {}, h('span', { text: d.headline || 'New ad' }), h('span', { style: 'color:var(--muted)', text: `${d.campaignId ? 'Change to a live ad · ' : ''}Continue` }))))) : null,
       h('h2', { class: 'section', text: 'Your ads' }),
       o.campaigns.length ? h('div', { class: 'cards' }, o.campaigns.map(campaignCard)) : h('div', { class: 'empty' }, 'No ads yet. ', link('/ads/new', {}, 'Make your first one'), ' — it takes a few minutes.'),
-      h('p', { style: 'color:var(--muted);font-size:13px;margin-top:22px', text: `You pay ${Object.entries(o.prices.perPrintCents).map(([s, c]) => `${cents(c)} for ${s}/6`).join(', ')} of a label per bottle printed, ${cents(o.prices.perScanCents)} per scan that loads, ${cents(o.prices.perArLaunchCents)} per AR launch, and ${o.prices.commissionPercent}% of sales. Repeat scans and failed prints are free.` }));
+      h('p', { style: 'color:var(--muted);font-size:13px;margin-top:22px', text: `Starting prices per bottle printed: ${Object.entries(o.prices.perPrintCents).map(([s, c]) => `${cents(c)} for ${sizeName(s)}`).join(', ')}. Bids start at ${cents(o.prices.bidStartsAtCents)} for the whole label and go up from there. Then ${cents(o.prices.perScanCents)} per scan that loads, ${cents(o.prices.perArLaunchCents)} per AR launch, and ${o.prices.commissionPercent}% of sales. The more an ad targets (places, products, interests, new or returning customers), the more each scan and AR launch costs. Repeat scans and failed prints are free.` }));
   }
   function campaignCard(c) {
     const r = c.results;
@@ -427,7 +429,7 @@
     function drawStage() {
       if (!preview) { stage.replaceChildren(h('p', { class: 'caption', text: 'Your ad appears here as you chat.' })); return; }
       if (tab === 'bottle') stage.replaceChildren(h('img', { class: 'label-img', src: svgSrc(preview.labelSvg), alt: 'A sample label with your ad on it' }), h('p', { class: 'caption', text: 'A sample label. Your ad is on the left; the other slots go to other advertisers. The black panel is the same on every bottle.' }));
-      if (tab === 'sizes') stage.replaceChildren(h('div', { class: 'sizes' }, preview.sizes.map((s) => h('figure', {}, h('img', { src: svgSrc(s.svg), alt: `Your ad at ${s.sixths}/6 of the label` }), h('figcaption', { text: `${s.sixths}/6 of the label` })))), h('p', { class: 'caption', text: 'The same ad, laid out for each size you chose. The QR code is added in the corner when it prints.' }));
+      if (tab === 'sizes') stage.replaceChildren(h('div', { class: 'sizes' }, preview.sizes.map((s) => h('figure', {}, h('img', { src: svgSrc(s.svg), alt: `Your ad at ${s.label}` }), h('figcaption', { text: s.label })))), h('p', { class: 'caption', text: 'The same ad, laid out for each size you chose. The QR code is added in the corner when it prints.' }));
       if (tab === 'box') stage.replaceChildren(h('img', { class: 'box-img', src: svgSrc(preview.boxFaceSvg), alt: 'Your ad on the side of a delivery box' }), h('p', { class: 'caption', text: 'One side of a delivery box. Each side has its own QR code.' }));
       if (tab === 'scan') {
         frameReady = false;
@@ -436,7 +438,7 @@
       }
       if (tab === 'cost') {
         const e = d.estimate;
-        const rows = [...Object.entries(e.perPrintCents).map(([s, c]) => [`Each bottle printed with your ad at ${s}/6`, cents(c)]), ['Each scan that loads', cents(e.perScanCents)], ['Each AR launch', cents(e.perArLaunchCents)], ['Sales from the bottle', `${e.commissionPercent}%`]];
+        const rows = [...Object.entries(e.perPrintCents).map(([s, c]) => [`Each bottle printed with your ad on ${sizeName(s)} (starting price)`, cents(c)]), ['Each scan that loads', cents(e.perScanCents)], ['Each AR launch', cents(e.perArLaunchCents)], ['Sales from the bottle', `${e.commissionPercent}%`]];
         if (d.draft.formats?.includes('box-face')) rows.push(['Each delivery box side', cents(e.perBoxFaceCents)]);
         const sum = e.printsCostCents ? `${num(d.draft.buy.prints)} bottles cost ${dollars(e.printsCostCents[0])}${e.printsCostCents[1] !== e.printsCostCents[0] ? ` to ${dollars(e.printsCostCents[1])}, depending on size` : ''}, plus scans and sales.` : e.bottlesPerDay ? `${dollars(d.draft.buy.dailyCapCents)} a day buys about ${num(e.bottlesPerDay[0])}${e.bottlesPerDay[1] !== e.bottlesPerDay[0] ? `–${num(e.bottlesPerDay[1])}` : ''} bottles a day. You never pay more than your daily budget for prints.` : 'Tell the assistant your budget to see what it buys.';
         stage.replaceChildren(h('table', { class: 'cost' }, h('tbody', {}, rows.map(([a, b]) => h('tr', {}, h('td', { text: a }), h('td', { text: b }))))), h('p', { class: 'caption', style: 'text-align:left', text: sum }));
@@ -493,13 +495,13 @@
     shell('new', h('div', { class: 'review' },
       h('div', { class: 'page-head', style: 'margin:0' }, h('div', {}, link(`/ads/drafts/${id}`, {}, '← Back to the chat'), h('h1', { style: 'margin-top:8px', text: 'Review your ad' }), h('p', { text: 'This is exactly what prints and what opens. Look it over before you submit.' }))),
       h('div', { class: 'stage' }, h('img', { class: 'label-img', src: svgSrc(p.labelSvg), alt: 'A sample label with your ad' })),
-      h('div', { class: 'stage' }, h('div', { class: 'sizes' }, p.sizes.map((s) => h('figure', {}, h('img', { src: svgSrc(s.svg), alt: `At ${s.sixths}/6` }), h('figcaption', { text: `${s.sixths}/6` })))), p.boxFaceSvg ? h('img', { class: 'box-img', src: svgSrc(p.boxFaceSvg), alt: 'On a box' }) : null),
+      h('div', { class: 'stage' }, h('div', { class: 'sizes' }, p.sizes.map((s) => h('figure', {}, h('img', { src: svgSrc(s.svg), alt: `At ${s.label}` }), h('figcaption', { text: s.label })))), p.boxFaceSvg ? h('img', { class: 'box-img', src: svgSrc(p.boxFaceSvg), alt: 'On a box' }) : null),
       h('div', { class: 'stage' }, frame),
       h('div', { class: 'facts' },
         h('div', {}, h('span', { text: 'Where' }), dr.locations === 'all' ? 'Every machine' : (dr.locations || []).join(', ')),
         h('div', {}, h('span', { text: 'Budget' }), budget),
         h('div', {}, h('span', { text: 'Prints on' }), dr.formats?.includes('box-face') ? 'Bottles and delivery boxes' : 'Bottles'),
-        h('div', {}, h('span', { text: 'You pay' }), `${Object.entries(d.estimate.perPrintCents).map(([s, c]) => `${cents(c)} per ${s}/6 bottle`).join(', ')}; ${cents(d.estimate.perScanCents)} per scan; ${cents(d.estimate.perArLaunchCents)} per AR launch; ${d.estimate.commissionPercent}% of sales`)),
+        h('div', {}, h('span', { text: 'You pay' }), `${Object.entries(d.estimate.perPrintCents).map(([s, c]) => `from ${cents(c)} per bottle for ${sizeName(s)}`).join(', ')}; ${cents(d.estimate.perScanCents)} per scan; ${cents(d.estimate.perArLaunchCents)} per AR launch; ${d.estimate.commissionPercent}% of sales`)),
       h('label', { class: 'check', for: 'agree' }, agree, h('span', {}, h('b', { text: 'It looks right. ' }), 'I checked the words, colors, picture and scan page, and I have the right to use them.')),
       err, submit));
   }

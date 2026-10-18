@@ -119,7 +119,7 @@ describe('advertisers', () => {
     expect(slot).toBeTruthy();
     const sale = await call('POST', '/v1/purchases', keys['advertiser-joes'], { unitId: unit.id, slot: slot.slot, orderId: 'pos-9', amountCents: 1000 });
     expect(sale.statusCode).toBe(202);
-    expect(sale.json().ledgerLines).toBe(1);
+    expect(sale.json().ledgerLines).toBe(2); // the commission, and 10% of it for charity
     const again = await call('POST', '/v1/purchases', keys['advertiser-joes'], { unitId: unit.id, slot: slot.slot, orderId: 'pos-9', amountCents: 1000 });
     expect(again.json().recorded).toBe(false);
 
@@ -128,7 +128,7 @@ describe('advertisers', () => {
   });
 
   it('creates campaigns paused until content review turns them on', async () => {
-    const created = await call('POST', '/v1/campaigns', keys['advertiser-joes'], { advertiserName: "Joe's Burgers", category: 'food', sizes: [1, 2], experienceId: 'coupon', experienceConfig: { headline: 'Two for one', code: 'TWOFER' }, buy: { type: 'bid', maxCentsPerSixth: 5, dailyCapCents: 1000 }, svg: art });
+    const created = await call('POST', '/v1/campaigns', keys['advertiser-joes'], { advertiserName: "Joe's Burgers", category: 'food', sizes: [6, 8], experienceId: 'coupon', experienceConfig: { headline: 'Two for one', code: 'TWOFER' }, buy: { type: 'bid', maxCentsPerLabel: 120, dailyCapCents: 1000 }, svg: art });
     expect(created.statusCode).toBe(201);
     const c = created.json();
     expect(c.active).toBe(false);
@@ -175,7 +175,8 @@ describe('the books', () => {
     await expect(db.query('delete from ledger_entries')).rejects.toThrow(/append-only/);
     await expect(db.query('update events set type = $1', ['x'])).rejects.toThrow(/append-only/);
     const totals = (await call('GET', '/v1/public/companies/freewater/totals')).json();
-    expect(totals.donatedCents).toBe(totals.bottles * 10); // every printed bottle gives 10¢
+    const extra = Number((await db.query<any>(`select coalesce(sum(case when debit = 'expense:giving' then amount_cents else -amount_cents end),0)::int as n from ledger_entries where company_id = 'freewater' and kind = 'donation' and unit_id is not null and memo not like 'Donation to %'`)).rows[0].n);
+    expect(totals.donatedCents).toBe(totals.bottles * 10 + extra); // 10¢ a bottle, plus 10% of scans, AR launches and sales
   });
 });
 

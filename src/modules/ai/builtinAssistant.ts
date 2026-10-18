@@ -90,11 +90,11 @@ export class BuiltinAdAssistant implements AdAssistant {
     if (/\b(no|remove|without) (the )?(photo|picture|image|logo)\b/.test(low)) patch.removeImage = true;
 
     // Sizes.
-    if (/\b(full wrap|whole (label|bottle)|full label)\b/.test(low)) patch.sizes = [6];
-    else if (/\bhalf\b/.test(low)) patch.sizes = [3];
-    else if (/\b(small|smallest|cheap(est)?)\b/.test(low)) patch.sizes = [1, 2];
-    else if (/\b(big|large|biggest)\b/.test(low)) patch.sizes = [3, 4];
-    else if (!draft.sizes) patch.sizes = [1, 2, 3];
+    if (/\b(full wrap|whole (label|bottle)|full label)\b/.test(low)) patch.sizes = [1];
+    else if (/\bhalf\b/.test(low)) patch.sizes = [2];
+    else if (/\b(small|smallest|cheap(est)?)\b/.test(low)) patch.sizes = [6, 8, 10];
+    else if (/\b(big|large|biggest)\b/.test(low)) patch.sizes = [2, 3];
+    else if (!draft.sizes) patch.sizes = [4, 6, 8];
     if (/\b(box|boxes|delivery|packs?)\b/.test(low)) patch.formats = ['label', 'box-face'];
     else if (!draft.formats) patch.formats = ['label'];
 
@@ -162,7 +162,7 @@ export class BuiltinAdAssistant implements AdAssistant {
     const q: Record<Missing, string> = {
       artwork: 'What should the ad say? A short offer works best, like “Free fries with any burger”.',
       category: 'What kind of business is it?',
-      sizes: 'How big should it be? Small (1 or 2 sixths of the label), half, or the full wrap?',
+      sizes: 'How big should it be? Small (a tenth to a sixth of the label), a quarter, half, or the whole label? Every piece is about square.',
       where: 'Where should it run? Name a machine, or say “everywhere”.',
       budget: 'What’s your budget? Say a daily amount like “$20 a day”, or a number of bottles like “2,000 bottles”.',
       scanPage: 'What should open when people scan it? An offer to save, a coupon code, a booking page, or a 3D menu. A link to your website helps.',

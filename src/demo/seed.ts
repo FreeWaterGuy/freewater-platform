@@ -1,5 +1,5 @@
 // Sample data for the demo and tests. All advertisers here are made-up brands; prices are placeholders.
-import type { BoxProduct, Campaign, CompanyConfig, Creative, Location, Product, Sixths } from '../core/types';
+import { SHARES, type BoxProduct, type Campaign, type CompanyConfig, type Creative, type Location, type Product, type Share } from '../core/types';
 
 export const bottle16oz: Product = {
   id: 'bottle-16oz',
@@ -7,7 +7,6 @@ export const bottle16oz: Product = {
   category: 'water',
   container: { shape: 'bottle', diameterIn: 2.66, heightIn: 7.5 },
   label: { widthIn: 8.6, heightIn: 4.5, seamIn: 0.25, panelWidthIn: 0.95 },
-  layouts: [[6], [3, 3], [2, 2, 2], [4, 2], [2, 1, 1, 2], [3, 2, 1], [1, 1, 1, 1, 1, 1], [2, 2, 1, 1]],
 };
 
 /** Other sizes and drinks, to show the platform isn't tied to one bottle. Sample dimensions. */
@@ -17,7 +16,6 @@ export const bottle25oz: Product = {
   category: 'water',
   container: { shape: 'bottle', diameterIn: 3.0, heightIn: 9.6 },
   label: { widthIn: 9.67, heightIn: 5.5, seamIn: 0.25, panelWidthIn: 1.1 },
-  layouts: [[6], [3, 3], [2, 2, 2], [4, 2], [2, 1, 1, 2], [3, 2, 1], [1, 1, 1, 1, 1, 1], [2, 2, 1, 1]],
   priceFactor: 1.25,
   facts: ['SPRING WATER', '25 fl oz (750 ml)', 'Source: Natural Spring Water, Tiger, GA', 'Bottled for FreeWater Inc, Austin, TX'],
 };
@@ -27,7 +25,6 @@ export const can12oz: Product = {
   category: 'sparkling water',
   container: { shape: 'can', diameterIn: 2.6, heightIn: 4.83 },
   label: { widthIn: 8.37, heightIn: 3.9, seamIn: 0.2, panelWidthIn: 0.9 },
-  layouts: [[6], [3, 3], [2, 2, 2], [4, 2], [3, 2, 1], [2, 2, 1, 1]],
   facts: ['SPARKLING SPRING WATER', '12 fl oz (355 ml)', 'Canned for FreeWater Inc, Austin, TX'],
 };
 export const products: Product[] = [bottle16oz, bottle25oz, can12oz];
@@ -39,9 +36,24 @@ export const boxes: BoxProduct[] = [
   { id: 'box-24', bottles: 24, lengthIn: 15.8, widthIn: 10.6, heightIn: 7.8, ...sides },
 ];
 
+/**
+ * FreeWater's own prices. A whole label starts at $1 a bottle, half at 65¢, and smaller pieces cost a little more
+ * for their size (each one is about 65% of the size twice as big), down to 20¢ for a tenth. Bids start here.
+ * Scans and AR launches cost more the more precisely an ad targets, like on Google or Facebook.
+ */
+const freewaterPrices: CompanyConfig['prices'] = {
+  perPrintByShare: { 1: 100, 2: 65, 3: 51, 4: 42, 6: 33, 8: 24, 10: 20 },
+  perScan: 25,
+  perArLaunch: 40,
+  targetingPremium: { locations: 10, products: 5, interests: 25, customers: 15, max: 60 },
+  commissionPercent: 8,
+  customUnit: 300,
+  perBoxFace: 40,
+};
+
+/** Placeholder prices for a white-label licensee: each company sets its own. */
 const placeholderPrices: CompanyConfig['prices'] = {
-  // Sample numbers so the demo can add things up. Each company sets its own.
-  perPrintBySixths: { 1: 3, 2: 5, 3: 7, 4: 9, 5: 11, 6: 12 },
+  perPrintByShare: { 1: 12, 2: 7, 3: 5, 4: 4, 6: 3, 8: 3, 10: 2 },
   perScan: 25,
   perArLaunch: 40,
   commissionPercent: 8,
@@ -55,15 +67,15 @@ export const freewater: CompanyConfig = {
   receiptBaseUrl: 'https://go.freewater.io',
   brand: { logoTop: 'free', logoBottom: 'water', tagline: "Put your brand in everyone's hand!", panelColor: '#000000', accentColor: '#7FC6EA', textColor: '#FFFFFF', fontFamily: "Comfortaa, 'DM Sans', Arial, sans-serif" },
   productFacts: ['SPRING WATER', '16 fl oz (473 ml)', 'Source: Natural Spring Water, Tiger, GA', 'Manufactured by RAIN Bottling Co for FreeWater Inc, Austin, TX', 'Processed by ozonation'],
-  giving: { mode: 'per_unit', centsPerUnit: 10, defaultCharity: 'Austin Parks Foundation', charityByLocation: { 'route-3': 'Central Texas Food Bank', 'route-5': 'Central Texas Food Bank' }, minimumTransferCents: 2500 },
+  giving: { mode: 'per_unit', centsPerUnit: 10, percentOfEngagement: 10, defaultCharity: 'Austin Parks Foundation', charityByLocation: { 'route-3': 'Central Texas Food Bank', 'route-5': 'Central Texas Food Bank' }, minimumTransferCents: 2500 },
   consumerPricing: 'free',
   timezone: 'America/Chicago',
   consumer: { freeBottlesPerDay: 3, retailValueCents: 100 },
   machines: { offlineWalkUp: true, offlinePerHour: 20, bufferSize: 12 },
   openBooks: true,
   unitCosts: { water: 4, bottle: 18, label: 3, machine: 6 }, // placeholders until real costs are known
-  adRules: { minAdsPerUnit: 1, maxAdsPerUnit: 6, blockedCategories: ['alcohol', 'tobacco', 'gambling', 'weapons'], competitorSeparation: true, repeatScanWindowSec: 600, maxPackShare: 0.5 },
-  prices: placeholderPrices,
+  adRules: { minAdsPerUnit: 1, maxAdsPerUnit: 10, blockedCategories: ['alcohol', 'tobacco', 'gambling', 'weapons'], competitorSeparation: true, repeatScanWindowSec: 600, maxPackShare: 0.5 },
+  prices: freewaterPrices,
   modules: { ads: 'freewater-ads', renderer: 'svg-label', printer: 'virtual-printer' },
   standardProductId: 'bottle-16oz',
   qr: { logo: 'brand', advertiserLogos: true, allowStatic: true },
@@ -81,7 +93,8 @@ export const peakSpring: CompanyConfig = {
   giving: { mode: 'none' },
   qr: { logo: 'none', advertiserLogos: false, allowStatic: false },
   consumerPricing: 'discounted',
-  adRules: { ...freewater.adRules, blockedCategories: [] },
+  adRules: { ...freewater.adRules, maxAdsPerUnit: 6, blockedCategories: [] },
+  prices: placeholderPrices,
   modules: { ads: 'house-only', renderer: 'svg-label', printer: 'virtual-printer' },
 };
 
@@ -149,7 +162,7 @@ const bolt = (w: number, h: number) => `<path d="M${w * 0.55} ${h * 0.1} L${w * 
 const drop = (w: number, h: number) => `<path d="M${w / 2} ${h * 0.12} C${w * 0.3} ${h * 0.35} ${w * 0.28} ${h * 0.45} ${w * 0.5} ${h * 0.5} C${w * 0.72} ${h * 0.45} ${w * 0.7} ${h * 0.35} ${w / 2} ${h * 0.12} Z" fill="#7FC6EA"/>`;
 const peak = (w: number, h: number) => `<path d="M0 ${h * 0.55} L${w * 0.35} ${h * 0.15} L${w * 0.55} ${h * 0.38} L${w * 0.7} ${h * 0.25} L${w} ${h * 0.55} Z" fill="#F2C14E" opacity=".9"/>`;
 
-const all: Sixths[] = [1, 2, 3, 4, 6];
+const all: Share[] = [...SHARES];
 type CampaignInput = Omit<Campaign, 'companyId' | 'active' | 'targeting'> & Partial<Pick<Campaign, 'targeting' | 'active'>>;
 const fw = (c: CampaignInput): Campaign => ({ companyId: 'freewater', active: true, targeting: {}, ...c, creativeRef: { kind: 'builtin', id: c.id } });
 
@@ -157,24 +170,24 @@ export function sampleCampaigns(): Campaign[] {
   return [
     fw({ id: 'cmp-house', formats: ['label', 'box-face'], advertiserId: 'freewater', advertiserName: 'FreeWater', category: 'house', sizes: all, isHouse: true, experienceId: 'house-promo', experienceConfig: { headline: 'Save money. Drink FreeWater.', text: 'Free spring water, paid for by the ads on the bottle. 10¢ of every bottle goes to charity.', appUrl: 'https://freewater.io/app', advertiseUrl: 'https://freewater.io/advertise' }, theme: { background: '#EEF6FB', button: '#000000', accent: '#1E7DB8' }, buy: { type: 'guaranteed', remainingPrints: 1e9 },
       creative: art({ bg: '#000000', fg: '#FFFFFF', accent: '#7FC6EA', brand: 'freewater', line: 'Save money. Drink FreeWater.', sub: 'Your ad here: freewater.io', mark: drop }) }),
-    fw({ id: 'cmp-joes', formats: ['label', 'box-face'], advertiserId: 'adv-joes', advertiserName: "Joe's Burgers", category: 'food', competitorGroup: 'burgers', sizes: [1, 2, 3], experienceId: 'ar-3d-menu', experienceConfig: { title: '$5 combo', subtitle: 'Burger, fries and a drink. Ready for pickup in 10 minutes.', model: { builtin: 'burger', alt: "Joe's cheeseburger" }, addOns: [{ id: 'fries', label: '+ Fries', model: { builtin: 'fries', alt: 'Fries' } }, { id: 'drink', label: '+ Drink', model: { builtin: 'drink', alt: 'Soft drink' } }], firstTimeOffer: 'First order? Fries are on us.', regularOffer: 'Welcome back. Your usual is 10 minutes away.', orderUrl: 'https://example.com/joes/order' }, theme: { background: '#FFF7E6', text: '#2B1A10', accent: '#D7262E', button: '#D7262E', buttonText: '#FFFFFF' }, buy: { type: 'guaranteed', remainingPrints: 20000 },
+    fw({ id: 'cmp-joes', formats: ['label', 'box-face'], advertiserId: 'adv-joes', advertiserName: "Joe's Burgers", category: 'food', competitorGroup: 'burgers', sizes: [3, 4, 6], experienceId: 'ar-3d-menu', experienceConfig: { title: '$5 combo', subtitle: 'Burger, fries and a drink. Ready for pickup in 10 minutes.', model: { builtin: 'burger', alt: "Joe's cheeseburger" }, addOns: [{ id: 'fries', label: '+ Fries', model: { builtin: 'fries', alt: 'Fries' } }, { id: 'drink', label: '+ Drink', model: { builtin: 'drink', alt: 'Soft drink' } }], firstTimeOffer: 'First order? Fries are on us.', regularOffer: 'Welcome back. Your usual is 10 minutes away.', orderUrl: 'https://example.com/joes/order' }, theme: { background: '#FFF7E6', text: '#2B1A10', accent: '#D7262E', button: '#D7262E', buttonText: '#FFFFFF' }, buy: { type: 'guaranteed', remainingPrints: 20000 },
       creative: art({ bg: '#D7262E', fg: '#FFFFFF', accent: '#FFC93C', brand: "JOE'S", line: '$5 combo', sub: 'Scan to see it on your table', mark: burger }) }),
-    fw({ id: 'cmp-patty', advertiserId: 'adv-patty', advertiserName: 'Patty Shack', category: 'food', competitorGroup: 'burgers', sizes: [1, 2], experienceId: 'coupon', experienceConfig: { headline: 'Double stack Tuesdays', code: 'BOTTLE2X', details: 'Show this code at the register. Tuesdays only.' }, theme: { background: '#FFF3D6', text: '#3B2410', accent: '#C2410C', button: '#C2410C' }, buy: { type: 'bid', maxCentsPerSixth: 4, dailyCapCents: 5000, spentTodayCents: 0 },
+    fw({ id: 'cmp-patty', advertiserId: 'adv-patty', advertiserName: 'Patty Shack', category: 'food', competitorGroup: 'burgers', sizes: [6, 8, 10], experienceId: 'coupon', experienceConfig: { headline: 'Double stack Tuesdays', code: 'BOTTLE2X', details: 'Show this code at the register. Tuesdays only.' }, theme: { background: '#FFF3D6', text: '#3B2410', accent: '#C2410C', button: '#C2410C' }, buy: { type: 'bid', maxCentsPerLabel: 110, dailyCapCents: 5000, spentTodayCents: 0 },
       creative: art({ bg: '#FFF3D6', fg: '#3B2410', accent: '#C2410C', brand: 'Patty Shack', brandSize: 26, line: 'Double stack Tuesdays', sub: 'Scan for a coupon', mark: burger }) }),
-    fw({ id: 'cmp-luma', formats: ['label', 'box-face'], advertiserId: 'adv-luma', advertiserName: 'Luma Coffee', category: 'coffee', sizes: [1, 2, 3], experienceId: 'offer', experienceConfig: { headline: 'Oat latte, on us', firstTimeHeadline: 'Your first oat latte is free', details: 'Show this at the counter before 11 am. Luma Coffee, 600 Congress Ave.', expires: 'Ends Sunday', link: { label: 'Find Luma', url: 'https://example.com/luma' } }, theme: { background: '#FBF3E8', text: '#3A1D10', accent: '#8A5A3B', button: '#3A1D10', buttonText: '#FBE9D0' }, buy: { type: 'bid', maxCentsPerSixth: 3, dailyCapCents: 4000, spentTodayCents: 0 },
+    fw({ id: 'cmp-luma', formats: ['label', 'box-face'], advertiserId: 'adv-luma', advertiserName: 'Luma Coffee', category: 'coffee', sizes: [4, 6, 8], experienceId: 'offer', experienceConfig: { headline: 'Oat latte, on us', firstTimeHeadline: 'Your first oat latte is free', details: 'Show this at the counter before 11 am. Luma Coffee, 600 Congress Ave.', expires: 'Ends Sunday', link: { label: 'Find Luma', url: 'https://example.com/luma' } }, theme: { background: '#FBF3E8', text: '#3A1D10', accent: '#8A5A3B', button: '#3A1D10', buttonText: '#FBE9D0' }, buy: { type: 'bid', maxCentsPerLabel: 105, dailyCapCents: 4000, spentTodayCents: 0 },
       creative: art({ bg: '#3A1D10', fg: '#FBE9D0', accent: '#F6E3C8', brand: 'luma', line: 'Oat latte, on us', sub: 'Before 11 am on Congress Ave', mark: cup }) }),
     fw({ id: 'cmp-maple', formats: ['label', 'box-face'], advertiserId: 'adv-maple', advertiserName: 'Maple Realty', category: 'real-estate', sizes: [2, 3, 4], experienceId: 'ar-home-tour', experienceConfig: { address: '1406 Maple St', price: '$685,000', details: '3 bed, 2 bath, big back yard', model: { builtin: 'house', alt: '3D model of 1406 Maple St' }, rooms: [{ name: 'Living room', color: '#D9CBB4', note: 'South light all afternoon' }, { name: 'Kitchen', color: '#E8DCC8', note: 'New in 2024' }, { name: 'Main bedroom', color: '#C9D8C5' }, { name: 'Back yard', color: '#9DBF8F', note: 'Room for a pool' }], slots: ['Sat 10:00', 'Sat 11:30', 'Sun 1:00'], bookUrl: 'https://example.com/maple/book' }, theme: { background: '#F1F6F2', text: '#16352A', accent: '#2F6B4F', button: '#2F6B4F' }, buy: { type: 'guaranteed', remainingPrints: 5000 }, targeting: { locations: ['ATX-014', 'route-3'] },
       creative: art({ bg: '#2F6B4F', fg: '#E8F1EA', accent: '#E8F1EA', brand: 'Maple Realty', brandSize: 26, line: '1406 Maple St. Tour it in 3D', sub: 'Scan the bottle to walk through', mark: house }) }),
-    fw({ id: 'cmp-daily', formats: ['label', 'box-face'], advertiserId: 'adv-daily', advertiserName: 'Austin Daily', category: 'news', sizes: [1, 2], experienceId: 'news-card', experienceConfig: { headline: 'Rail line opens Monday', byline: 'Austin Daily', paragraphs: ['The new line connects downtown to the airport in 22 minutes, with stops at the convention center and Riverside.', 'Trains run every 10 minutes at rush hour and every 20 minutes late at night. Rides are free for the first week.'], url: 'https://example.com/daily/rail' }, theme: { background: '#F7F5EF', text: '#1B1B1B', accent: '#1B1B1B', button: '#1B1B1B' }, buy: { type: 'bid', maxCentsPerSixth: 3, dailyCapCents: 3000, spentTodayCents: 0 },
+    fw({ id: 'cmp-daily', formats: ['label', 'box-face'], advertiserId: 'adv-daily', advertiserName: 'Austin Daily', category: 'news', sizes: [6, 8, 10], experienceId: 'news-card', experienceConfig: { headline: 'Rail line opens Monday', byline: 'Austin Daily', paragraphs: ['The new line connects downtown to the airport in 22 minutes, with stops at the convention center and Riverside.', 'Trains run every 10 minutes at rush hour and every 20 minutes late at night. Rides are free for the first week.'], url: 'https://example.com/daily/rail' }, theme: { background: '#F7F5EF', text: '#1B1B1B', accent: '#1B1B1B', button: '#1B1B1B' }, buy: { type: 'bid', maxCentsPerLabel: 100, dailyCapCents: 3000, spentTodayCents: 0 },
       creative: art({ bg: '#F1EEE6', fg: '#1B1B1B', accent: '#1B1B1B', brand: 'Austin Daily', brandSize: 24, line: 'Rail line opens Monday', sub: 'Scan for the full story', mark: paper }) }),
-    fw({ id: 'cmp-orbit', formats: ['label', 'box-face'], advertiserId: 'adv-orbit', advertiserName: 'Orbit Fitness', category: 'fitness', sizes: [1, 2, 3], experienceId: 'booking', experienceConfig: { title: 'Your first class is free', details: 'Strength, cycling or yoga. Bring water. We have the rest.', slots: ['Mon 6:00 am', 'Mon 6:00 pm', 'Tue 7:00 am', 'Wed 12:15 pm'], bookUrl: 'https://example.com/orbit/book' }, theme: { background: '#17171C', text: '#FFFFFF', accent: '#FF6A13', button: '#FF6A13' }, buy: { type: 'bid', maxCentsPerSixth: 3, dailyCapCents: 2500, spentTodayCents: 0 },
+    fw({ id: 'cmp-orbit', formats: ['label', 'box-face'], advertiserId: 'adv-orbit', advertiserName: 'Orbit Fitness', category: 'fitness', sizes: [4, 6, 8], experienceId: 'booking', experienceConfig: { title: 'Your first class is free', details: 'Strength, cycling or yoga. Bring water. We have the rest.', slots: ['Mon 6:00 am', 'Mon 6:00 pm', 'Tue 7:00 am', 'Wed 12:15 pm'], bookUrl: 'https://example.com/orbit/book' }, theme: { background: '#17171C', text: '#FFFFFF', accent: '#FF6A13', button: '#FF6A13' }, buy: { type: 'bid', maxCentsPerLabel: 100, dailyCapCents: 2500, spentTodayCents: 0 },
       creative: art({ bg: '#1E1E24', fg: '#FFFFFF', accent: '#FF6A13', brand: 'ORBIT', line: 'First class free', sub: 'Scan and book', mark: bolt }) }),
     // Blocked by FreeWater's rules (alcohol), allowed by a licensee that chooses to.
-    fw({ id: 'cmp-lager', advertiserId: 'adv-lager', advertiserName: 'Lone Peak Lager', category: 'alcohol', sizes: [1, 2, 3], experienceId: 'offer', experienceConfig: { headline: 'Cold and local', details: 'Find Lone Peak at your local store. 21+ only.' }, buy: { type: 'bid', maxCentsPerSixth: 9, dailyCapCents: 9000, spentTodayCents: 0 },
+    fw({ id: 'cmp-lager', advertiserId: 'adv-lager', advertiserName: 'Lone Peak Lager', category: 'alcohol', sizes: [3, 4, 6], experienceId: 'offer', experienceConfig: { headline: 'Cold and local', details: 'Find Lone Peak at your local store. 21+ only.' }, buy: { type: 'bid', maxCentsPerLabel: 150, dailyCapCents: 9000, spentTodayCents: 0 },
       creative: art({ bg: '#0F3D5E', fg: '#FFFFFF', accent: '#F2C14E', brand: 'Lone Peak', line: 'Cold and local', sub: '21+', mark: peak }) }),
     // AR that follows the bottle. Paused in the sample data (so the other samples behave as before); the AR demos
     // turn them on.
-    fw({ id: 'cmp-fizz', active: false, advertiserId: 'adv-fizz', advertiserName: 'Fizz Lab', category: 'drinks', sizes: [6], experienceId: 'ar-living-label',
+    fw({ id: 'cmp-fizz', active: false, advertiserId: 'adv-fizz', advertiserName: 'Fizz Lab', category: 'drinks', sizes: [1], experienceId: 'ar-living-label',
       experienceConfig: { title: 'Fizz Lab: the label that pops', subtitle: 'New Yuzu Spark. Turn the bottle.', caption: 'Turn the bottle slowly', effect: 'sparkle', color: '#E8458B', link: { label: 'Get Yuzu Spark', url: 'https://example.com/fizz/shop' } },
       variants: [
         { id: 'morning', name: 'Morning', when: { dayparts: ['morning'] }, experienceConfig: { title: 'Fizz Lab: wake up bright', subtitle: 'Yuzu Spark beats a second coffee.', caption: 'Turn the bottle to wake it up', effect: 'shimmer', color: '#F2C14E', link: { label: 'Get Yuzu Spark', url: 'https://example.com/fizz/shop' } } },
@@ -183,7 +196,7 @@ export function sampleCampaigns(): Campaign[] {
       personalize: { ai: true, greeting: true },
       theme: { background: '#FFF0F6', text: '#2A0A1A', accent: '#E8458B', button: '#2A0A1A', buttonText: '#FFFFFF' }, buy: { type: 'guaranteed', remainingPrints: 3000 },
       creative: art({ bg: '#E8458B', fg: '#FFFFFF', accent: '#FFE45C', brand: 'FIZZ LAB', line: 'Yuzu Spark', sub: 'Point your camera at me', mark: drop }) }),
-    fw({ id: 'cmp-roast', active: false, advertiserId: 'adv-roast', advertiserName: 'Roastery 9', category: 'coffee', sizes: [2, 3], experienceId: 'ar-on-bottle',
+    fw({ id: 'cmp-roast', active: false, advertiserId: 'adv-roast', advertiserName: 'Roastery 9', category: 'coffee', sizes: [3, 4], experienceId: 'ar-on-bottle',
       experienceConfig: { title: 'A latte, right on your bottle', subtitle: 'Roastery 9, 2 blocks away. Ready in 4 minutes.', caption: 'Turn the bottle', model: { builtin: 'latte', alt: 'Roastery 9 oat latte' }, placement: 'top', motion: 'spin', sizeIn: 2.6, link: { label: 'Order ahead', url: 'https://example.com/roast/order' } },
       personalize: { ai: false, greeting: true },
       qr: { mode: 'dynamic', logo: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="48" fill="#2B1A10"/><text x="50" y="66" text-anchor="middle" font-family="Arial, sans-serif" font-size="46" font-weight="700" fill="#F3D9B1">R9</text></svg>' },

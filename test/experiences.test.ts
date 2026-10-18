@@ -1,3 +1,4 @@
+import { targetingPremium } from '../src/modules/ads/targeting';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createServer } from 'node:http';
 import type { FastifyInstance } from 'fastify';
@@ -176,8 +177,11 @@ describe('scan pages over the API', () => {
     const body = { packId: pack.id, face: face.face, viewerKey: 'boxviewer01', experienceLoaded: true };
     expect((await call('POST', '/v1/public/box-scans', undefined, body)).json().billed).toBe(true);
     expect((await call('POST', '/v1/public/box-scans', undefined, body)).json().billed).toBe(false);
-    const line = app.platform.ledger.entries.at(-1)!;
-    expect(line).toMatchObject({ packId: pack.id, debit: `receivable:advertiser:${face.advertiserId}`, kind: 'scan', amountCents: 25 });
+    const line = app.platform.ledger.entries.filter((l) => l.kind === 'scan').at(-1)!;
+    const premium = targetingPremium(app.platform.campaigns.get(face.campaignId), app.platform.companies.get('freewater')!).percent;
+    expect(line).toMatchObject({ packId: pack.id, debit: `receivable:advertiser:${face.advertiserId}`, kind: 'scan', amountCents: Math.round(25 * (1 + premium / 100)) });
+    // 10% of it goes to charity too.
+    expect(app.platform.ledger.entries.at(-1)).toMatchObject({ packId: pack.id, kind: 'donation', amountCents: Math.round(line.amountCents / 10) });
     now += 11 * 60 * 1000;
     expect((await call('POST', '/v1/public/box-scans', undefined, body)).json().billed).toBe(true);
     expect((await call('POST', '/v1/public/box-scans', undefined, { ...body, viewerKey: 'boxviewer02', experienceLoaded: false })).json().billed).toBe(false);

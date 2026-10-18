@@ -110,6 +110,6 @@ describe('packs', () => {
     expect(pack.rendered!.svg).not.toContain('goes to');
     const t = setup();
     const p2 = await t.compose(1, 'box-6');
-    expect(p2.rendered!.svg).toContain('Central Texas Food Bank');
+    expect(p2.rendered!.svg).toMatch(/Central\s*(<[^>]*>\s*)*Texas/);
   });
 });

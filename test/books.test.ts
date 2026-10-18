@@ -23,6 +23,8 @@ beforeAll(async () => {
   app = await createApp({ db, seedDemo: true, seed: 8, clock, payouts });
   keys = app.demoKeys!;
   server = await buildServer(app);
+  // These tests follow the 10¢ a bottle; the extra 10% of scan and sales money is tested in codes-ar.test.ts.
+  app.platform.companies.get('freewater')!.giving.percentOfEngagement = 0;
   // 300 bottles at Congress Ave (Austin Parks Foundation) and a few scans.
   for (let i = 0; i < 300; i++) {
     const r = await app.platform.order({ companyId: 'freewater', orderId: `b-${i}`, locationId: 'ATX-014', productId: 'bottle-16oz' });

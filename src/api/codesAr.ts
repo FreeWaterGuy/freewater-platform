@@ -9,6 +9,7 @@ import { describeConditions } from '../modules/experiences/dynamic';
 import { themeFor } from '../modules/experiences/host';
 import { checkQrColor, checkQrLogo, monogramLogo, qrPlan, qrSvg } from '../modules/print/qr';
 import { checkProduct } from '../modules/products/check';
+import { targetingPremium } from '../modules/ads/targeting';
 import { ExperienceError } from '../modules/experiences/service';
 import { ApiError, notFound, obj, S, type RouteDef } from './http';
 
@@ -66,6 +67,7 @@ export function codesArRoutes(app: App, server: FastifyInstance, route: (r: Rout
     const company = platform.companies.get(c.companyId)!;
     return { body: { ...extrasView(c), experienceId: c.experienceId, experienceConfig: c.experienceConfig ?? {}, arMode: experiences.host.info(c.experienceId)?.arMode ?? null,
       allowed: { static: !!company.qr?.allowStatic, logos: company.qr?.advertiserLogos ?? true },
+      engagement: { perScanCents: company.prices.perScan, perArLaunchCents: company.prices.perArLaunch, premium: targetingPremium(c, company), table: company.prices.targetingPremium ?? null },
       products: productsFor(c.companyId).map((p) => ({ id: p.id, name: p.name, category: p.category ?? null })) } };
   } });
   route({ method: 'PATCH', url: '/v1/campaigns/:id/codes', scope: 'campaigns', summary: 'Change a campaign’s code, its versions of the call to action, AI personalization, what old bottles open once it ends, or who it targets. An advertiser changing what people see sends it back to review.', body: { ...obj(extrasSchema as any), minProperties: 1 }, handler: async (req, key) => {
@@ -120,11 +122,11 @@ export function codesArRoutes(app: App, server: FastifyInstance, route: (r: Rout
     const check = checkProduct(p);
     return { body: { check, svg: check.problems.length ? null : await sampleLabel(staff(key).companyId, p) } };
   } });
-  route({ method: 'POST', url: '/v1/console/products', scope: 'admin', summary: 'Add or change one of your products: a bottle, can, cup or jar of any size, with its label size and ad layouts. Shared products can only be changed by the platform team.', body: productBody, handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/console/products', scope: 'admin', summary: 'Add or change one of your products: a bottle, can, cup or jar of any size, with its label size and the ad sizes it offers. Shared products can only be changed by the platform team.', body: productBody, handler: async (req, key) => {
     const k = staff(key);
     const raw = (req.body as any).product as Product;
     // Only the fields a product has are kept.
-    const p = Object.fromEntries(Object.entries(raw).filter(([k]) => ['id', 'name', 'category', 'container', 'label', 'layouts', 'priceFactor', 'blockedAdCategories', 'facts'].includes(k))) as unknown as Product;
+    const p = Object.fromEntries(Object.entries(raw).filter(([k]) => ['id', 'name', 'category', 'container', 'label', 'sizes', 'priceFactor', 'blockedAdCategories', 'facts'].includes(k))) as unknown as Product;
     const existing = platform.products.get(p.id);
     const platformTeam = k.scopes.includes('platform');
     // Your own products are yours alone. Shared products (used by every company) are the platform team's.

@@ -1,18 +1,33 @@
-import type { Campaign, CompanyConfig, Placement, Sixths } from '../../core/types';
+import type { Campaign, CompanyConfig, Placement, Share } from '../../core/types';
 
-/** What this campaign pays for one print of a slot this size. Guaranteed buys pay the list price; bids pay their bid, never below list. */
-export function priceFor(c: Campaign, company: CompanyConfig, sixths: Sixths, factor = 1): number {
-  // A product's price factor scales the list price (a bigger label can cost more). Bids are per sixth of any label.
-  const list = Math.round(company.prices.perPrintBySixths[sixths] * factor);
-  if (c.buy.type === 'guaranteed') return list;
-  return Math.max(list, c.buy.maxCentsPerSixth * sixths);
+/**
+ * The starting price of one print at this size. A product's price factor scales it (a bigger label can cost more).
+ */
+export function floorPrice(company: CompanyConfig, share: Share, factor = 1): number {
+  return Math.round(company.prices.perPrintByShare[share] * factor);
 }
 
-export function canAfford(c: Campaign, company: CompanyConfig, sixths: Sixths, factor = 1): boolean {
+/**
+ * What this campaign pays for one print of a slot this size. Guaranteed buys pay the starting price. A bid is for
+ * the whole label; a smaller piece pays the same share of the bid as its starting price is of the whole label's
+ * (so a $1.20 bid pays 78¢ for a half when half starts at 65¢). Never below the starting price.
+ */
+export function priceFor(c: Campaign, company: CompanyConfig, share: Share, factor = 1): number {
+  const floor = floorPrice(company, share, factor);
+  if (c.buy.type === 'guaranteed') return floor;
+  const whole = company.prices.perPrintByShare[1] || 1;
+  return Math.max(floor, Math.round(c.buy.maxCentsPerLabel * (company.prices.perPrintByShare[share] / whole) * factor));
+}
+
+/** A bid must be at least the whole label's starting price. */
+export function bidFloor(company: CompanyConfig) {
+  return company.prices.perPrintByShare[1];
+}
+
+export function canAfford(c: Campaign, company: CompanyConfig, share: Share, factor = 1): boolean {
   if (c.buy.type === 'guaranteed') return c.buy.remainingPrints > 0;
-  const price = priceFor(c, company, sixths, factor);
-  if (c.buy.maxCentsPerSixth * sixths < Math.round(company.prices.perPrintBySixths[sixths] * factor)) return false; // bid below the floor
-  return c.buy.spentTodayCents + price <= c.buy.dailyCapCents;
+  if (c.buy.maxCentsPerLabel < bidFloor(company)) return false; // bid below the starting price
+  return c.buy.spentTodayCents + priceFor(c, company, share, factor) <= c.buy.dailyCapCents;
 }
 
 /** Hold budget when a slot is filled, so two machines can't oversell the same campaign. */

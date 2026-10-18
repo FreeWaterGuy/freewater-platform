@@ -417,7 +417,7 @@
       h('div', { class: 'sample' }, bottle),
       h('h2', { class: 'section' }, b.kind === 'custom' ? 'What it opens' : 'Tap an ad to open it'),
       h('div', {}, b.ads.map((a) => h('div', { class: 'ad-row' },
-        h('span', { class: 'size', title: `${a.sixths}/6 of the label`, text: `${a.sixths}/6` }),
+        h('span', { class: 'size', title: `${a.size} of the label`, text: a.size ?? `${a.sixths}/6` }),
         h('span', { class: 'grow' }, h('b', { text: a.name }), h('span', { class: 'small muted', text: a.isHouse ? 'From FreeWater' : a.experience })),
         a.ar ? h('a', { class: 'pill', href: fixture ? '#' : a.url, onclick: open(a) }, icon(I.ar), 'AR')
              : h('a', { class: 'pill light', href: fixture ? '#' : a.url, onclick: open(a) }, 'Open')))),

@@ -1,4 +1,5 @@
-import type { Product, Sixths } from '../../core/types';
+import { SHARES, type Product, type Share } from '../../core/types';
+import { adArea, layoutsFor } from '../ads/layouts';
 
 // Any drink or product with a printed wrap can run on the platform: a 16 oz bottle, a 12 oz can, a 750 ml bottle,
 // a coffee can, a jar. A product is just its label's size, the container's shape, and the layouts of ad slots it
@@ -10,7 +11,7 @@ const DEFAULT_MIN_QR = 0.6;
 export interface ProductCheck {
   problems: string[]; // anything here blocks saving
   notes: string[]; // facts worth knowing, in plain words
-  slots: { layout: Sixths[]; smallestIn: number }[];
+  slots: { share: Share; pieceIn: string; grid: string }[];
   ar: { followsBottle: boolean; why: string };
 }
 
@@ -43,16 +44,19 @@ export function checkProduct(p: Product): ProductCheck {
     }
   }
   const slots: ProductCheck['slots'] = [];
-  if (!Array.isArray(p.layouts) || !p.layouts.length) problems.push('Give it at least one layout, like [6] for one full-wrap ad.');
-  else if (num(l.widthIn) && num(l.seamIn) && num(l.panelWidthIn)) {
-    const adW = l.widthIn - l.seamIn - l.panelWidthIn;
-    for (const layout of p.layouts) {
-      if (!Array.isArray(layout) || !layout.every((s) => Number.isInteger(s) && s >= 1 && s <= 6) || layout.reduce((a, b) => a + b, 0) !== 6) { problems.push(`Layout ${JSON.stringify(layout)} must be sizes from 1 to 6 that add up to 6.`); continue; }
-      const smallest = (Math.min(...layout) * adW) / 6;
-      slots.push({ layout, smallestIn: Math.round(smallest * 100) / 100 });
-      if (smallest < minQr + 0.25) problems.push(`In layout ${JSON.stringify(layout)} the narrowest ad is ${smallest.toFixed(2)}" wide: too narrow for a ${minQr}" QR with its margin. Remove that layout or allow fewer, wider ads.`);
+  if (p.sizes !== undefined && (!Array.isArray(p.sizes) || !p.sizes.length || !p.sizes.every((x) => (SHARES as number[]).includes(x)))) problems.push('Sizes are shares of the label: 1 (the whole label), 2, 3, 4, 6, 8 or 10.');
+  else if (!problems.length) {
+    // The label is divided into pieces as square as possible; every piece must hold a readable QR code.
+    const layouts = layoutsFor(p, { maxAds: 10 });
+    const { w, h } = adArea(p);
+    for (const share of p.sizes?.length ? p.sizes : SHARES) {
+      const l = layouts.find((x) => x.shares.every((s) => s === share));
+      if (!l) { if (p.sizes?.length) problems.push(`${share === 1 ? 'The whole label' : `1/${share}`} doesn't fit on this label: its pieces would be too thin or too small for a ${minQr}" QR code. Leave it out.`); continue; }
+      const r = l.rects[0]!;
+      slots.push({ share, pieceIn: `${(r.w * w).toFixed(2)}" × ${(r.h * h).toFixed(2)}"`, grid: gridOf(l.rects) });
     }
-    if (!problems.length) notes.push(`Ads share ${adW.toFixed(2)}" of the wrap; the narrowest ad in any layout is ${Math.min(...slots.map((s) => s.smallestIn)).toFixed(2)}" wide.`);
+    if (!slots.length) problems.push('No ad size fits this label with a readable QR code.');
+    else notes.push(`Ad sizes: ${slots.map((x) => `${x.share === 1 ? 'whole label' : `1/${x.share}`} (${x.grid}, ${x.pieceIn})`).join('; ')}. ${layouts.length} ways to mix them on one bottle.`);
   }
   const round = !p.container || ['bottle', 'can', 'cup', 'jar'].includes(p.container.shape);
   const ar = round
@@ -60,4 +64,10 @@ export function checkProduct(p: Product): ProductCheck {
     : { followsBottle: false, why: 'Flat packages can have AR in your space, but not AR that wraps around them.' };
   if (!round) notes.push(ar.why);
   return { problems, notes, slots, ar };
+}
+
+/** "3 × 2": how the equal pieces of one size are arranged. */
+function gridOf(rects: { x: number; y: number }[]) {
+  const cols = new Set(rects.map((r) => r.x.toFixed(3))).size, rows = new Set(rects.map((r) => r.y.toFixed(3))).size;
+  return cols * rows === rects.length ? `${cols} × ${rows}` : `${rects.length} pieces`;
 }
