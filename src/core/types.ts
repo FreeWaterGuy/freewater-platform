@@ -103,6 +103,12 @@ export interface CompanyConfig {
   };
   /** The prize game. Off unless the company turns it on. */
   lottery?: LotterySettings;
+  /** How long people's interactions with pages are kept, for learning. */
+  privacy?: { keepInteractionsDays: number };
+  /** What data the company collects, by kind, and how people agree to it: a switchboard for each country's law. */
+  data?: import('../modules/data/policy').DataPolicy;
+  /** How much of the books the world sees, live. Each company chooses. */
+  transparency?: Transparency;
   /**
    * The QR codes it prints. Codes are dynamic (looked up each time they're scanned) unless an advertiser is allowed
    * to choose a static one and does.
@@ -239,6 +245,17 @@ export interface Campaign {
   variants?: CtaVariant[];
   /** AI personalization: choose the version that fits each person, and write a short greeting for them. */
   personalize?: { ai: boolean; greeting: boolean };
+  /**
+   * What the ad offers people, for the number line: what they pay (0 if free), what comes back to them or a cause,
+   * whether it's one person renting something idle to another (the sharing economy), and anything they must do first.
+   */
+  offering?: OfferingDeclaration;
+  /** The ad itself, uploaded by the advertiser: the first thing anyone sees after scanning, on every size of piece. */
+  firstSeen?: FirstSeen;
+  /** Show how many people bought from this ad's bottles, so the person passes it on. On unless turned off. */
+  socialProof?: boolean;
+  /** What "Show me more" offers, only when the person asks: personalized videos in these styles. */
+  more?: { videos: VideoStyle[]; approveFirst: boolean };
   /** When this campaign is over, old bottles open the advertiser's current campaign instead (the default) or keep this one. */
   afterEnd?: 'current' | 'keep';
   buy: Buy;
@@ -377,4 +394,40 @@ export interface LotteryPrize {
   perDay?: number;
   /** An advertiser who gives this prize, if any. */
   sponsor?: string;
+}
+
+export interface FirstSeen { kind: 'video' | 'image'; url: string; posterUrl?: string; alt: string }
+/**
+ * Personalized video styles: motion graphics (made instantly from the advertiser's own words, colors and pictures),
+ * animated (cartoon) and live action (both made by a video model, ahead of time, for each kind of moment).
+ */
+export type VideoStyle = 'motion' | 'animated' | 'live_action';
+
+/**
+ * How open a company's books are, beyond the open-books pages (openBooks):
+ * - liveFeed: a public feed of what happens as it happens (bottles printed, gifts, sales), never naming a person.
+ * - counters: live totals (bottles, given, sent to charities, prizes).
+ * - publishFingerprints: each day's books fingerprint published where the company can't change it (GitHub, and a
+ *   Bitcoin timestamp), so nobody can quietly rewrite the past.
+ * - advertiserStatements: advertisers can download every bottle they paid for and what the auction charged.
+ * - feedDetail: where things happened, in the feed: the machine, just the city, or nowhere.
+ * - showAmounts: money amounts in the feed (or just what happened).
+ */
+export interface Transparency {
+  liveFeed: boolean;
+  counters: boolean;
+  publishFingerprints: boolean;
+  advertiserStatements: boolean;
+  feedDetail: 'machine' | 'city' | 'none';
+  showAmounts: boolean;
+}
+
+export interface OfferingDeclaration {
+  description: string;
+  priceCents: number;
+  donationCents?: number;
+  paymentCents?: number;
+  cause?: string;
+  peerToPeer?: boolean;
+  conditions?: string[];
 }

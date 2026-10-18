@@ -38,6 +38,15 @@
     return data;
   }
 
+  /** Upload a file as it is (a video or picture) to the asset store. */
+  async function uploadFile(file) {
+    if (fixture) return fixture.api('POST', '/v1/assets', { name: file.name, type: file.type });
+    const res = await fetch('/v1/assets', { method: 'POST', headers: { 'content-type': file.type, ...(state.token ? { authorization: `Bearer ${state.token}` } : {}) }, body: file });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(data?.error?.message || 'That file didn’t upload.');
+    return data;
+  }
+
   // ---------- routing ----------
   const routes = [
     [/^\/ads\/?$/, overview], [/^\/ads\/new$/, newAd], [/^\/ads\/drafts\/([\w-]+)$/, builder], [/^\/ads\/drafts\/([\w-]+)\/review$/, review],
@@ -222,6 +231,77 @@
     const color = h('input', { class: 'input', placeholder: '#000000', maxlength: 7, value: d.qr.color, style: 'max-width:140px' });
     color.addEventListener('change', () => { d.qr.color = color.value.trim(); refreshQr(); });
 
+    // 0. The ad people see first, what it offers (the number line), and "Show me more".
+    d.firstSeen = c.firstSeen ? { ...c.firstSeen } : null;
+    d.socialProof = c.socialProof;
+    d.more = { videos: [...c.more.videos], approveFirst: c.more.approveFirst };
+    d.offering = c.offering ? { ...c.offering } : null;
+    const adPreview = h('div', { class: 'ad-preview' });
+    const drawAd = () => adPreview.replaceChildren(d.firstSeen ? (d.firstSeen.kind === 'video' ? h('video', { src: d.firstSeen.url, controls: true, muted: true, playsinline: true, style: 'width:100%;max-height:360px;border-radius:12px;background:#000' }) : h('img', { src: d.firstSeen.url, alt: d.firstSeen.alt, style: 'width:100%;max-height:360px;object-fit:cover;border-radius:12px' })) : h('div', { class: 'empty', text: 'No ad uploaded yet: people see your page straight away.' }));
+    drawAd();
+    const adFile = h('input', { type: 'file', accept: 'video/mp4,image/png,image/jpeg,image/webp', hidden: true, 'aria-label': 'Upload your ad' });
+    const adAlt = h('input', { class: 'input', maxlength: 200, placeholder: 'Joe’s double stack, sizzling on the grill', value: d.firstSeen?.alt ?? '' });
+    adAlt.addEventListener('input', () => { if (d.firstSeen) d.firstSeen.alt = adAlt.value.trim() || 'Your ad'; });
+    adFile.addEventListener('change', async () => {
+      const f = adFile.files?.[0]; if (!f) return;
+      try { toast('Uploading…'); const a = await uploadFile(f); d.firstSeen = { kind: f.type.startsWith('video/') ? 'video' : 'image', url: a.url, alt: adAlt.value.trim() || `${state.business?.name ?? 'Our'} ad` }; drawAd(); toast('Uploaded. Save to use it.'); } catch (x) { toast(x.message); }
+    });
+    const money = (v) => h('input', { class: 'input', inputmode: 'decimal', value: v ? (v / 100).toFixed(2) : '', placeholder: '0.00', style: 'max-width:150px' });
+    const o = d.offering ?? { description: '', priceCents: 0 };
+    const oDesc = h('input', { class: 'input', maxlength: 300, placeholder: 'A double stack burger', value: o.description ?? '' });
+    const oPrice = money(o.priceCents), oDon = money(o.donationCents), oPay = money(o.paymentCents);
+    const oCause = h('input', { class: 'input', maxlength: 80, placeholder: 'Who the donation goes to', value: o.cause ?? '' });
+    const oPeer = h('input', { type: 'checkbox' }); oPeer.checked = !!o.peerToPeer;
+    const oCond = h('input', { class: 'input', maxlength: 200, placeholder: 'Sign up, watch a video… (leave empty if nothing)', value: (o.conditions ?? []).join(', ') });
+    const oOut = h('div', { class: 'nl-out' });
+    const readOffering = () => {
+      const c2 = (i) => Math.round(Number(i.value || 0) * 100);
+      return oDesc.value.trim().length >= 3 ? { description: oDesc.value.trim(), priceCents: c2(oPrice), ...(c2(oDon) ? { donationCents: c2(oDon) } : {}), ...(c2(oPay) ? { paymentCents: c2(oPay) } : {}), ...(oCause.value.trim() ? { cause: oCause.value.trim() } : {}), ...(oPeer.checked ? { peerToPeer: true } : {}), ...(oCond.value.trim() ? { conditions: oCond.value.split(',').map((x) => x.trim()).filter((x) => x.length >= 2).slice(0, 5) } : {}) } : null;
+    };
+    const SYS = { market: 'For sale', sharing: 'Sharing economy', free_outside: 'Free, paid from outside', free_ad: 'Free, paid by ads', giving: 'Giving economy (better than free)', public: 'Public' };
+    const POS = { for_sale: 'For sale: people pay', free: 'Free', negatively_priced: 'Better than free: value goes back' };
+    const showPlacement = async () => {
+      try {
+        const r = await api('POST', '/v1/numberline/place', { subject: `offering:${id}` });
+        const p = r.placement;
+        oOut.replaceChildren(h('div', { class: 'nl-line', 'aria-hidden': 'true' }, h('span', { text: 'For sale' }), h('i', { class: `nl-mark nl-${p.position}` }), h('span', { text: 'Free' }), h('span', { text: 'Better than free' })),
+          h('b', { text: POS[p.position] }), h('div', { class: 'meta', text: p.systems.map((s) => `${SYS[s.system] ?? s.system}${p.systems.length > 1 ? ` ${Math.round(s.share * 100)}%` : ''}`).join(' · ') }),
+          h('ul', { class: 'nl-why' }, p.reasons.map((x) => h('li', { text: x }))), h('div', { class: 'meta', text: `Placed by ${r.by === 'rules' ? 'the rules' : `the number-line agent (${r.by})`}${r.status === 'needs_declaration' ? ' · say what it costs above so it’s placed exactly' : ''}` }));
+      } catch (x) { oOut.textContent = x.message; }
+    };
+    const styles = [['motion', 'Motion graphics', 'Made instantly from your own words, colors and pictures, cut for each moment.'], ['animated', 'Animated (cartoon)', 'Made by a video model ahead of time, for each kind of moment.'], ['live_action', 'Live action', 'Made by a video model ahead of time, for each kind of moment.']];
+    const styleBoxes = styles.map(([v, t, desc]) => { const b = h('input', { type: 'checkbox', value: v, disabled: !c.more.canMake.includes(v) }); b.checked = d.more.videos.includes(v); b.addEventListener('change', () => { d.more.videos = styleBoxes.filter(([x]) => x.checked).map(([x]) => x.value); }); return [b, h('label', { class: 'switch' }, b, h('div', {}, h('b', { text: t }), h('span', { text: c.more.canMake.includes(v) ? desc : `${desc} Not set up on this platform yet.` })))]; });
+    const vidList = h('div', { class: 'stack' });
+    const learn = h('div', { class: 'kpis', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' });
+    const drawVideos = async () => {
+      try {
+        const [vids, l] = await Promise.all([api('GET', `/v1/campaigns/${id}/videos`), api('GET', `/v1/campaigns/${id}/learning`)]);
+        learn.replaceChildren(...[['Watched your ad to the end', l.ad.watchedToEnd == null ? '–' : `${l.ad.watchedToEnd}%`], ['Asked for more', l.askedForMore == null ? '–' : `${l.askedForMore}%`], ['Passed it on', l.passedItOn == null ? '–' : `${l.passedItOn}%`], ['Tapped your offer', l.tappedOffer == null ? '–' : `${l.tappedOffer}%`]].map(([k, v]) => h('div', { class: 'kpi' }, h('span', { text: k }), h('b', { text: v }))));
+        const SEG = (s) => { const [dp, who, cust, int] = s.split('|'); return `${dp}, ${who === 'passed' ? 'passed on by a friend' : 'first to scan'}, ${cust === 'new' ? 'new to you' : 'returning'}${int !== '-' ? `, likes ${int}` : ''}`; };
+        vidList.replaceChildren(...(vids.length ? vids.slice(0, 20).map((v) => h('div', { class: 'version' },
+          h('div', {}, h('b', { text: `${styles.find(([k]) => k === v.style)?.[1] ?? v.style} · ${SEG(v.segment)}` }), h('div', { class: 'meta', text: v.status !== 'ready' ? (v.status === 'making' ? 'Being made…' : `Couldn’t be made: ${v.error ?? ''}`) : `${v.views} views · ${v.watchedToEnd ?? 0}% to the end · ${v.tapped ?? 0}% tapped · ${v.review === 'pending' ? 'waiting for your OK' : v.review}` })),
+          v.status === 'ready' && v.review !== 'approved' && v.style !== 'motion' ? h('div', { class: 'toolbar' }, v.url ? h('a', { class: 'btn small secondary', href: v.url, target: '_blank', rel: 'noopener' }, 'Watch') : null, h('button', { class: 'btn small', type: 'button', onclick: async () => { await api('POST', `/v1/campaigns/${id}/videos/${v.id}/review`, { approve: true }); drawVideos(); } }, 'Approve'), h('button', { class: 'btn small secondary', type: 'button', onclick: async () => { await api('POST', `/v1/campaigns/${id}/videos/${v.id}/review`, { approve: false }); drawVideos(); } }, 'Turn down')) : null)) : [h('div', { class: 'empty', text: 'None yet. They’re made the first time someone asks to see more.' })]));
+      } catch (x) { vidList.textContent = x.message; }
+    };
+    drawVideos();
+    showPlacement();
+    const firstBox = h('section', { class: 'panel', style: 'gap:12px' }, h('h2', { class: 'section', text: 'Your ad: what people see first' }),
+      h('p', { style: 'margin:0', text: 'The first thing anyone sees after scanning your code, whatever size your piece of the label is (even a tenth). Then your AR, your offer and your buttons. Nothing else comes in between.' }),
+      adPreview, h('div', { class: 'toolbar' }, h('button', { class: 'btn secondary', type: 'button', onclick: () => adFile.click() }, d.firstSeen ? 'Change your ad' : 'Upload your ad (video or picture)'), d.firstSeen ? h('button', { class: 'btn small secondary', type: 'button', onclick: () => { d.firstSeen = null; drawAd(); } }, 'Remove') : null, adFile),
+      field('Describe it (for people who can’t see it)', adAlt),
+      check('Show how many people bought', d.socialProof, (v) => { d.socialProof = v; }, 'Like “12 people bought from this very bottle”, so people pass it on and it sells again.'));
+    const offerBox = h('section', { class: 'panel', style: 'gap:12px' }, h('h2', { class: 'section', text: 'What your ad offers' }),
+      h('p', { style: 'margin:0', text: 'So every sale and scan is sorted right from the start: what people pay for what you advertise (0 if it’s free), and anything that goes back to them or a cause.' }),
+      h('div', { class: 'form' }, field('What it is', oDesc), field('What people pay ($)', oPrice, '0 for something free, like a free download.'), field('Paid back to the person ($)', oPay, 'If you pay people to use it.'), field('Donated for them ($)', oDon), field('To which cause', oCause), field('Anything they must do first', oCond)),
+      h('label', { class: 'switch' }, oPeer, h('div', {}, h('b', { text: 'One person renting something idle to another' }), h('span', { text: 'A spare room, a seat in a car, a tool, an hour of time: the sharing economy.' }))),
+      h('div', {}, h('button', { class: 'btn small secondary', type: 'button', onclick: async () => { const off = readOffering(); if (!off) { toast('Say what it is first.'); return; } try { await api('PATCH', `/v1/campaigns/${id}/codes`, { offering: off }); showPlacement(); } catch (x) { toast(x.message); } } }, 'Place it on the number line')),
+      oOut);
+    const moreBox = h('section', { class: 'panel', style: 'gap:12px' }, h('h2', { class: 'section', text: 'Show me more' }),
+      h('p', { style: 'margin:0', text: 'Only if someone taps “Show me more” after your ad: a short video made for their moment (morning or night, passed on by a friend, new or returning, what they like). Every view teaches it which cut works best.' }),
+      ...styleBoxes.map(([, l]) => l),
+      check('I approve footage before anyone sees it', d.more.approveFirst, (v) => { d.more.approveFirst = v; }, 'Motion graphics use only your own approved words and pictures, so they don’t need it.'),
+      learn, vidList);
+
     // 2. Versions of the call to action.
     const textFields = Object.entries(c.experienceConfig).filter(([k, v]) => typeof v === 'string' && !/url$/i.test(k) && !/^#/.test(v));
     const linkLabel = c.experienceConfig.link?.label;
@@ -293,16 +373,17 @@
     const tryMoment = async () => {
       try {
         const r = await api('POST', `/v1/campaigns/${id}/preview-moment`, { daypart: mDay.value, passedOn: mWho.value === 'passed', firstScanner: mWho.value !== 'passed', newToAdvertiser: mWho.value !== 'returning', interests: mInt.value.split(',').map((x) => x.trim()).filter(Boolean) });
-        const hero = r.doc.blocks.find((b) => b.type === 'hero'), greet = r.doc.blocks.find((b) => b.type === 'greeting'), ar = r.doc.blocks.find((b) => b.type === 'ar');
+        const hero = r.doc.blocks.find((b) => b.type === 'hero'), ar = r.doc.blocks.find((b) => b.type === 'ar');
         mOut.replaceChildren(...[h('div', { class: 'meta', text: r.variant ? `Version: ${r.variant.name}${r.personalizedBy ? ` · picked by ${r.personalizedBy}` : ''}` : 'Your standard version' }),
-          hero ? h('b', { text: hero.title }) : null, greet ? h('div', { class: 'greet', text: `✦ ${greet.text}` }) : null, ar ? h('div', { class: 'meta', text: `AR ${ar.mode === 'label' ? 'living label' : ar.mode === 'bottle' ? 'on the bottle' : 'in the room'}${ar.caption ? `: “${ar.caption}”` : ''}` }) : null].filter(Boolean));
+          hero ? h('b', { text: hero.title }) : null, ar ? h('div', { class: 'meta', text: `AR ${ar.mode === 'label' ? 'living label' : ar.mode === 'bottle' ? 'on the bottle' : 'in the room'}${ar.caption ? `: “${ar.caption}”` : ''}` }) : null].filter(Boolean));
       } catch (x) { toast(x.message); }
     };
 
     const save = async () => {
       const body = {
         qr: d.qr.mode === 'static' ? { mode: 'static', staticUrl: d.qr.staticUrl, bottleRef: d.qr.bottleRef, ...(d.logo ? { logo: d.logo } : {}), ...(d.qr.color ? { color: d.qr.color } : {}) } : { mode: 'dynamic', ...(d.logo ? { logo: d.logo } : {}), ...(d.qr.color ? { color: d.qr.color } : {}) },
-        variants: d.variants, personalize: d.personalize, afterEnd: d.afterEnd, ...(d.bidding ? { bidding: d.bidding() } : {}),
+        variants: d.variants, personalize: { ai: !!d.personalize.ai, greeting: false }, afterEnd: d.afterEnd, ...(d.bidding ? { bidding: d.bidding() } : {}),
+        firstSeen: d.firstSeen, socialProof: d.socialProof, more: d.more, ...(readOffering() ? { offering: readOffering() } : {}),
         targeting: { products: prodBoxes.filter(([b]) => b.checked).map(([b]) => b.value), audience: { interestsAny: tInterests.value.split(',').map((x) => x.trim()).filter(Boolean), ...(tCustomers.value ? { customers: tCustomers.value } : {}) } },
       };
       try { await api('PATCH', `/v1/campaigns/${id}/codes`, body); toast('Saved. Changes to what people see go to review first.'); go('/ads'); } catch (x) { toast(x.message); }
@@ -311,6 +392,7 @@
     shell('overview',
       h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Code, versions and AI' }), h('p', { text: 'What your code is, what each person sees when they scan it, and who your ad is printed for.' })), h('button', { class: 'btn', type: 'button', onclick: save }, 'Save')),
       h('div', { class: 'review', style: 'max-width:900px' },
+        firstBox, offerBox, moreBox,
         h('section', { class: 'panel', style: 'gap:12px' }, h('h2', { class: 'section', text: 'Your code' }), modes, staticBox,
           h('div', { style: 'display:flex;gap:18px;align-items:center;flex-wrap:wrap' }, qrImg, h('div', { class: 'stack', style: 'flex:1;min-width:220px' }, qrNote,
             c.allowed.logos ? h('div', { class: 'toolbar' }, h('button', { class: 'btn small secondary', type: 'button', onclick: () => upload.click() }, c.qr.hasLogo ? 'Change your logo' : 'Put your logo in it'), upload) : h('p', { style: 'margin:0;font-size:14px', text: 'This company doesn’t put advertisers’ logos in codes.' }),
@@ -321,7 +403,7 @@
             ...vTexts.map(([k, input]) => field(`Says: ${k}`, input)), vLink ? field('Button', vLink) : null, h('div', {}, h('button', { class: 'btn secondary', type: 'button', onclick: addVersion }, 'Add this version'))))),
         h('section', { class: 'panel', style: 'gap:12px' }, h('h2', { class: 'section', text: 'AI personalization' }),
           check('Let AI pick the version for each person', d.personalize.ai, (v) => { d.personalize.ai = v; }, 'It only ever chooses among your versions, and only ones whose conditions fit. It sees the moment (time of day, passed-on bottle, interests people shared), never who someone is.'),
-          check('Write a short greeting for each person', d.personalize.greeting, (v) => { d.personalize.greeting = v; }, 'One line at the top of the page and over the camera in AR. Checked before it’s shown: no links, numbers or claims.')),
+          ),
         h('section', { class: 'panel', style: 'gap:12px' }, h('h2', { class: 'section', text: 'Who your ad is printed for' }),
           h('div', { class: 'form' }, field('People who like', tInterests, 'Your ad then only prints on bottles for someone who fits, and we show you each bottle reached them.'), field('Customers', tCustomers)),
           c.engagement?.table ? h('p', { style: 'margin:0;color:var(--muted);font-size:14px', text: `Targeting makes each engagement worth more, so it costs more: places +${c.engagement.table.locations}%, products +${c.engagement.table.products}%, interests +${c.engagement.table.interests}%, new or returning customers +${c.engagement.table.customers}% (at most +${c.engagement.table.max}% in all). Right now yours adds ${c.engagement.premium.percent}%: ${cents(Math.round(c.engagement.perScanCents * (1 + c.engagement.premium.percent / 100)))} a scan and ${cents(Math.round(c.engagement.perArLaunchCents * (1 + c.engagement.premium.percent / 100)))} an AR launch.` }) : null,

@@ -10,6 +10,11 @@ import { attributionRoutes } from './attribution';
 import { applyExtras, extrasSchema } from '../modules/experiences/extras';
 import { codesArRoutes } from './codesAr';
 import { lotteryRoutes } from './lottery';
+import { moreRoutes } from './more';
+import { dataRoutes } from './data';
+import { VideoError } from '../modules/video/service';
+import { DataError, DataService } from '../modules/data/service';
+import { NumberLineError } from '../modules/numberline/service';
 import { LotteryError } from '../modules/lottery/service';
 import { AttributionError } from '../modules/attribution/service';
 import { FleetError } from '../modules/fleet/service';
@@ -46,7 +51,7 @@ const PLATFORM_COMPANY = process.env.PLATFORM_COMPANY ?? 'freewater';
 export async function buildServer(app: App, opts: { logger?: boolean } = {}): Promise<FastifyInstance> {
   const server = Fastify({ logger: opts.logger ?? false, bodyLimit: 3 * 1024 * 1024, maxParamLength: 1000 });
   const { platform, packs, persistence, db, experiences } = app;
-  for (const type of Object.keys(allowedTypes)) server.addContentTypeParser(type, { parseAs: 'buffer', bodyLimit: 16 * 1024 * 1024 }, (_req, body, done) => done(null, body));
+  for (const type of Object.keys(allowedTypes)) server.addContentTypeParser(type, { parseAs: 'buffer', bodyLimit: 64 * 1024 * 1024 }, (_req, body, done) => done(null, body));
   const routes: RouteDef[] = [];
   const route = (r: RouteDef) => routes.push(r);
 
@@ -154,8 +159,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const opened = await experiences.open(target, { key: viewer, user: await optionalUser(req) });
     // The prize game, if this company runs it: only on ads (not someone's own custom bottle).
     const custom = target.kind === 'slot' && platform.units.get(target.unitId)?.kind === 'custom';
-    const game = custom ? null : app.lottery.settings(experiences.ownerOf(target).companyId);
-    return { body: { ...opened, lottery: game ? app.lottery.publicInfo(game) : null } };
+    const companyId = experiences.ownerOf(target).companyId;
+    const game = custom ? null : app.lottery.settings(companyId);
+    return { body: { ...opened, companyId, lottery: game ? app.lottery.publicInfo(game) : null, privacy: { askFirst: app.data.askFirst(companyId) } } };
   };
   route({ method: 'GET', url: '/v1/public/experience/:unitId/:slot', scope: 'public', summary: 'The page a bottle slot opens, as blocks. Opening it is free; the page then reports the scan once it has shown.', handler: async (req) => {
     const { unitId, slot } = req.params as any;
@@ -336,7 +342,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   // ---------- files for experiences: 3D models, pictures, videos ----------
 
-  route({ method: 'POST', url: '/v1/assets', scope: 'campaigns', summary: 'Upload a 3D model (.glb), picture (PNG, JPEG, WebP) or video (MP4). Send the file itself as the body with its Content-Type. Returns the URL to use in experience settings.', rawBodyLimit: 16 * 1024 * 1024, handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/assets', scope: 'campaigns', summary: 'Upload a 3D model (.glb), picture (PNG, JPEG, WebP) or video (MP4). Send the file itself as the body with its Content-Type. Returns the URL to use in experience settings.', rawBodyLimit: 60 * 1024 * 1024, handler: async (req, key) => {
     const type = String(req.headers['content-type'] ?? '').split(';')[0]!.trim();
     if (!Buffer.isBuffer(req.body)) throw new ApiError(415, 'unsupported_type', 'Upload a 3D model (.glb), a picture (PNG, JPEG, WebP) or a video (MP4).');
     const name = typeof (req.query as any).name === 'string' ? (req.query as any).name : undefined;
@@ -426,8 +432,12 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     return { status: 202, body: await app.accounts.startSignIn(b) };
   } });
 
-  route({ method: 'POST', url: '/v1/auth/verify', scope: 'public', summary: 'Check the code. Returns a sign-in token. A new email or phone number becomes a new account.', body: obj({ companyId: S.str, channel: channelProp, to: S.str, code: { type: 'string', pattern: '^[0-9 ]{6,8}$' } }, ['companyId', 'channel', 'to', 'code']), handler: async (req) => {
-    const r = await app.accounts.verify(req.body as any);
+  route({ method: 'POST', url: '/v1/auth/verify', scope: 'public', summary: 'Check the code. Returns a sign-in token. A new email or phone number becomes a new account.', body: obj({ companyId: S.str, channel: channelProp, to: S.str, code: { type: 'string', pattern: '^[0-9 ]{6,8}$' }, viewerKey: { type: 'string', pattern: '^[A-Za-z0-9_-]{8,64}$' } }, ['companyId', 'channel', 'to', 'code']), handler: async (req) => {
+    const b = req.body as any;
+    const r = await app.accounts.verify({ companyId: b.companyId, channel: b.channel, to: b.to, code: b.code });
+    // One person: this account, its email or phone (as a fingerprint), and the phone it signed in on.
+    const u: any = r.user;
+    await app.data.link(b.companyId, [`user:${u.id}`, DataService.emailKey(u.email), DataService.phoneKey(u.phone), u.viewerKey, b.viewerKey].filter(Boolean), 'signed in').catch(() => null);
     return { body: { token: r.token, isNew: r.isNew, user: r.user } };
   } });
 
@@ -528,6 +538,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   attributionRoutes(app, server, route);
   codesArRoutes(app, server, route);
   lotteryRoutes(app, route, parseTarget);
+  moreRoutes(app, route, parseTarget, optionalUser);
+  dataRoutes(app, route);
 
   // ---------- wiring ----------
 
@@ -540,6 +552,30 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     }
   });
   server.options('/v1/public/*', async (_req, reply) => reply.header('Access-Control-Allow-Methods', 'GET, POST').code(204).send());
+
+  // Everything anyone does through the API goes into the activity log, as each company's data settings allow.
+  // Reading pages and lists isn't logged (scans and views are recorded on their own); doing things is.
+  const actorOf = (key: ApiKey | null, body: any): import('../modules/data/service').Actor => {
+    if (!key) return { type: body?.viewerKey ? 'viewer' : 'public', ...(body?.viewerKey ? { viewerKey: body.viewerKey } : {}) };
+    if (key.userId) return { type: key.advertiserId ? 'advertiser' : key.scopes.length === 1 && key.scopes[0] === 'me' ? 'consumer' : 'staff', userId: key.userId, id: key.advertiserId ?? key.userId };
+    if (key.locationId) return { type: 'machine', id: key.locationId };
+    return { type: key.advertiserId ? 'advertiser' : 'platform', id: key.advertiserId ?? key.id };
+  };
+  const companyOfPublic = (body: any): string | undefined => {
+    const u = body?.unitId ? platform.units.get(body.unitId) : undefined;
+    if (u) return u.companyId;
+    if (body?.packId) return packs.packs.get(body.packId)?.companyId;
+    const m = typeof body?.target === 'string' ? /^s:([A-Za-z0-9_-]+):/.exec(body.target) : null;
+    if (m) return platform.units.get(m[1]!)?.companyId;
+    return typeof body?.companyId === 'string' ? body.companyId : undefined;
+  };
+  const logActivity = (r: RouteDef, req: FastifyRequest, key: ApiKey | null, status: number) => {
+    if (r.method === 'GET' || r.url === '/v1/public/interactions' || r.rawBodyLimit) return;
+    const body: any = req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body) ? req.body : undefined;
+    const companyId = key?.companyId ?? companyOfPublic(body);
+    if (!companyId || !platform.companies.has(companyId)) return;
+    app.data.activity(companyId, actorOf(key, body), `${r.method} ${r.url}`, { target: JSON.stringify(req.params ?? {}).slice(0, 200), detail: { status, ...(body ? { body } : {}) }, ip: req.ip, device: String(req.headers['user-agent'] ?? ''), gpc: String(req.headers['sec-gpc'] ?? '') === '1' }).catch(() => {});
+  };
 
   for (const r of routes) {
     server.route({
@@ -554,6 +590,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       handler: async (req: FastifyRequest, reply: FastifyReply) => {
         const out = await r.handler(req, (req as any).apiKey as ApiKey | null);
         await persistence.flush(); // answer only once the change is safely stored
+        logActivity(r, req, (req as any).apiKey as ApiKey | null, out.status ?? 200);
         reply.code(out.status ?? 200);
         if (out.raw !== undefined) return reply.type(out.type ?? 'text/plain').send(out.raw);
         return reply.send(out.body);
@@ -653,7 +690,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   server.setErrorHandler((err: any, _req, reply) => {
     if (err instanceof ApiError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
-    if (err instanceof AccountsError || err instanceof PaymentError || err instanceof ExperienceError || err instanceof AssetError || err instanceof AdsError || err instanceof DesignError || err instanceof DeliveryError || err instanceof BooksError || err instanceof WebhookError || err instanceof ConsoleError || err instanceof FleetError || err instanceof AttributionError || err instanceof LotteryError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
+    if (err instanceof AccountsError || err instanceof PaymentError || err instanceof ExperienceError || err instanceof AssetError || err instanceof AdsError || err instanceof DesignError || err instanceof DeliveryError || err instanceof BooksError || err instanceof WebhookError || err instanceof ConsoleError || err instanceof FleetError || err instanceof AttributionError || err instanceof LotteryError || err instanceof VideoError || err instanceof DataError || err instanceof NumberLineError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
     if (err.code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE') return reply.code(415).send({ error: { code: 'unsupported_type', message: 'Send JSON, or for uploads a .glb, PNG, JPEG, WebP or MP4 file.' } });
     if (err.code === 'FST_ERR_CTP_BODY_TOO_LARGE') return reply.code(413).send({ error: { code: 'too_large', message: 'That is too big to upload.' } });
     if (err.validation) return reply.code(400).send({ error: { code: 'invalid_request', message: err.message } });

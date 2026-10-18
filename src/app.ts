@@ -37,6 +37,14 @@ import { FleetService, MachineFleetPrinter } from './modules/fleet/service';
 import { CodeService, loadSecret } from './modules/codes/service';
 import { AttributionService } from './modules/attribution/service';
 import { LotteryService } from './modules/lottery/service';
+import { VideoService } from './modules/video/service';
+import { ClaudeWriter, builtinWriter } from './modules/video/motion';
+import { VeoProvider } from './modules/video/veo';
+import type { FootageProvider, StoryWriter } from './modules/video/contract';
+import { InteractionService } from './modules/interactions/service';
+import { DataService } from './modules/data/service';
+import { NumberLineService } from './modules/numberline/service';
+import { ClaudeNumberLineAgent, rulesAgent, type NumberLineAgent } from './modules/numberline/agent';
 import { boxes, builtinCreatives, freewater, locations, peakSpring, products, sampleCampaigns } from './demo/seed';
 
 export interface AppOptions {
@@ -52,6 +60,12 @@ export interface AppOptions {
   pluginTimeoutMs?: number;
   assistant?: AdAssistant;
   personalizer?: Personalizer;
+  /** Writes motion-video storyboards (defaults to Claude with a key, else built-in). */
+  videoWriter?: StoryWriter;
+  /** Makes live-action and animated footage (defaults to Veo when GEMINI_API_KEY is set, else none). */
+  footage?: FootageProvider | null;
+  /** Places things on the number line (defaults to Claude with a key, else the rules). */
+  numberLineAgent?: NumberLineAgent;
   designer?: DesignAssistant;
   geocoder?: Geocoder; // defaults to the test geocoder
   planner?: RoutePlanner; // defaults to the simple route planner
@@ -137,6 +151,24 @@ export async function createApp(opts: AppOptions) {
   // Bottles carrying AR that follows the bottle get the tracking strip on those slots.
   platform.arTracking = (unit) => experiences.trackSlots(unit);
   const assets = opts.assets ?? new SqlAssetStore(db);
+  // Personalized videos behind "Show me more", and every interaction people have with a page.
+  const videoWriter = opts.videoWriter ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeWriter({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL }) : builtinWriter);
+  const footage = opts.footage === null ? undefined : opts.footage ?? (process.env.GEMINI_API_KEY ? new VeoProvider({ apiKey: process.env.GEMINI_API_KEY, model: process.env.VEO_MODEL, image: async (url) => {
+    const m = /^\/assets\/([A-Za-z0-9_-]+)\./.exec(url); const got = m ? await assets.get(m[1]!) : null;
+    return got && got.asset.contentType.startsWith('image/') ? { mimeType: got.asset.contentType, data: Buffer.from(got.bytes).toString('base64') } : null;
+  } }) : undefined);
+  const videos = new VideoService(db, platform, assets, videoWriter, footage, opts.clock);
+  experiences.videos = videos;
+  const interactions = new InteractionService(db, platform, opts.clock);
+  const data = new DataService(db, platform, interactions, opts.clock);
+  // The number line and honest data: everything placed, every choice sorted, from the first bottle on.
+  const numberline = new NumberLineService(db, platform, opts.numberLineAgent ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeNumberLineAgent({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL }) : rulesAgent), opts.clock);
+  numberline.rewardInPlay = (companyId) => !!platform.companies.get(companyId)?.lottery?.enabled;
+  numberline.stanceOf = async (person) => {
+    const r = (await db.query<any>(`select consents from users where (viewer_key = $1 or 'user:' || id = $1) and deleted_at is null limit 1`, [person])).rows[0];
+    const c = r ? (typeof r.consents === 'string' ? JSON.parse(r.consents) : r.consents) : null;
+    return c && (c.causeStance || c.adsStance) ? { ...(c.causeStance ? { cause: c.causeStance } : {}), ...(c.adsStance ? { ads: c.adsStance } : {}) } : undefined;
+  };
 
   const builtinAssistant = new BuiltinAdAssistant();
   const assistant = opts.assistant ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeAdAssistant({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL, fallback: builtinAssistant }) : builtinAssistant);
@@ -164,7 +196,7 @@ export async function createApp(opts: AppOptions) {
   await fleet.load();
   made.registry.registerPrinter('model6-fleet', new MachineFleetPrinter(() => fleet, made.printer));
 
-  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery };
+  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

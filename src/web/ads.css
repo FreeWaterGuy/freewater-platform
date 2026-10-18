@@ -186,3 +186,14 @@ pre.snippet { margin: 0; background: #0B0B0B; color: #E8EEF2; border-radius: 14p
 .radio-cards label span{color:var(--muted);font-size:14px}
 .stack{display:flex;flex-direction:column;gap:10px}
 details summary{cursor:pointer;font-weight:600}
+
+/* The number line */
+.nl-out{display:flex;flex-direction:column;gap:6px}
+.nl-line{position:relative;display:grid;grid-template-columns:1fr 1fr 1fr;align-items:end;height:44px;margin:6px 0 4px;border-bottom:2px solid currentColor;font-size:12px;color:var(--muted)}
+.nl-line span:nth-child(1){text-align:left}.nl-line span:nth-child(3){text-align:center}.nl-line span:nth-child(4){text-align:right}
+.nl-line span{grid-row:1;padding-bottom:16px}
+.nl-line span:nth-child(3){grid-column:2}.nl-line span:nth-child(4){grid-column:3}
+.nl-mark{position:absolute;bottom:-8px;width:14px;height:14px;border-radius:50%;background:var(--ink,#111);border:3px solid #fff;box-shadow:0 0 0 1px currentColor}
+.nl-for_sale{left:12%}.nl-free{left:calc(50% - 7px)}.nl-negatively_priced{right:12%}
+.nl-why{margin:4px 0 0;padding-left:18px;font-size:14px}
+.ad-preview .empty{padding:18px}

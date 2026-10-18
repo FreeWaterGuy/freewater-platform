@@ -40,6 +40,10 @@ export class Ledger {
   private printedBoxes = new Map<string, BoxFacePlacement[]>();
 
   private onEntry: (entry: LedgerEntry) => void;
+  private listeners: ((entry: LedgerEntry) => void)[] = [];
+  /** Hear about every new line (the live feed, counters, sales counts). */
+  set onAdd(f: (entry: LedgerEntry) => void) { this.listeners.push(f); }
+  listen(f: (entry: LedgerEntry) => void) { this.listeners.push(f); return () => { this.listeners = this.listeners.filter((x) => x !== f); }; }
 
   private premium: (campaignId: string) => number;
   constructor(bus: EventBus, private companies: Map<string, CompanyConfig>, hooks: { onEntry?: (entry: LedgerEntry) => void; engagementPremium?: (campaignId: string) => number } = {}) {
@@ -76,6 +80,7 @@ export class Ledger {
     const entry: LedgerEntry = { id: newId('le'), eventId: e.id, at: e.at, companyId: e.companyId, ...line };
     this.entries.push(entry);
     this.onEntry(entry);
+    for (const f of this.listeners) f(entry);
   }
 
   private onPrinted(e: PlatformEvent<'label.printed'>) {

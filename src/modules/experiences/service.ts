@@ -59,6 +59,59 @@ export class ExperienceService {
   /** Set at start-up: chooses versions and writes greetings with AI. Without it, the built-in rules do. */
   personalizer: Personalizer = builtinPersonalizer;
 
+  /** Set at start-up: the personalized videos behind "Show me more". */
+  videos?: import('../video/service').VideoService;
+
+  /** Sales from each ad, counted from the books: per bottle spot and per ad. Kept up to date as sales come in. */
+  private sales: { bySpot: Map<string, number>; byAd: Map<string, number> } | null = null;
+  salesOf(campaignId: string, spot?: string) {
+    if (!this.sales) {
+      this.sales = { bySpot: new Map(), byAd: new Map() };
+      const add = (unitId: string | undefined, campaignId: string | undefined, d: number) => {
+        if (!campaignId) return;
+        this.sales!.byAd.set(campaignId, (this.sales!.byAd.get(campaignId) ?? 0) + d);
+        if (unitId) { const k = `${unitId}|${campaignId}`; this.sales!.bySpot.set(k, (this.sales!.bySpot.get(k) ?? 0) + d); }
+      };
+      for (const l of this.platform.ledger.entries) if (l.kind === 'commission') add(l.unitId, l.campaignId, 1); else if (l.kind === 'commission_reversal') add(l.unitId, l.campaignId, -1);
+      this.platform.ledger.onAdd = (l) => { if (l.kind === 'commission') add(l.unitId, l.campaignId, 1); else if (l.kind === 'commission_reversal') add(l.unitId, l.campaignId, -1); };
+    }
+    return { bottle: spot ? this.sales.bySpot.get(spot) ?? 0 : 0, ad: this.sales.byAd.get(campaignId) ?? 0 };
+  }
+
+  /** The page in the order the advertiser paid for: their ad, their AR, everything else of theirs, proof, pass it on, more. */
+  private arrange(blocks: import('./blocks').Block[], c: Campaign, target: Target | null): import('./blocks').Block[] {
+    const isAr = (b: import('./blocks').Block) => b.type === 'ar' || b.type === 'model';
+    const out: import('./blocks').Block[] = [];
+    if (c.firstSeen) out.push({ type: 'ad', kind: c.firstSeen.kind, url: c.firstSeen.url, ...(c.firstSeen.posterUrl ? { posterUrl: c.firstSeen.posterUrl } : {}), alt: c.firstSeen.alt });
+    out.push(...blocks.filter(isAr), ...blocks.filter((b) => !isAr(b)));
+    if (c.socialProof !== false) {
+      const s = this.salesOf(c.id, target?.kind === 'slot' ? `${target.unitId}|${c.id}` : undefined);
+      if (s.bottle > 0 || s.ad >= 3) out.push({ type: 'proof', bottle: s.bottle, ad: s.ad, advertiser: c.advertiserName });
+    }
+    out.push({ type: 'share', title: c.advertiserName });
+    if (this.videos && this.videos.stylesOf(c).length) out.push({ type: 'more', label: 'Show me more' });
+    return out;
+  }
+
+  /** "Show me more": what this person gets only because they asked. Personalized videos, best first. */
+  async more(target: Target, viewer: { key: string; user?: User | null }) {
+    const r = this.resolveOwner(target);
+    const c = r.campaign;
+    if (!c || !this.videos || (c.review && c.review.status !== 'approved')) return { videos: [] };
+    const viewerKey = viewer.user?.viewerKey ?? viewer.key;
+    const company = this.platform.companies.get(r.companyId)!;
+    const story = await this.story(target, viewerKey);
+    const when = daypart(this.platform.bus.now(), company.timezone ?? 'UTC');
+    const interests = viewer.user ? (await this.accounts.personalization(viewer.user.viewerKey)).interests : [];
+    const facts: ScanFacts = { firstScanner: !story?.firstViewer || story.firstViewer === viewerKey, passedOn: !!story?.firstViewer && story.firstViewer !== viewerKey, newToAdvertiser: r.advertiserId ? !(await this.seenBefore(r.companyId, viewerKey, r.advertiserId)) : true, daypart: when.daypart, day: when.day, interests, keptMinutes: story?.minutesSincePrint ?? 0 };
+    const videos = await this.videos.forViewer(c, facts);
+    // The video's button goes through click tracking like every other link, so a sale from it is credited to this bottle.
+    const a = this.attribution;
+    const spot = target.kind === 'slot' ? { unitId: target.unitId, slot: target.slot } : { packId: target.packId, face: target.face };
+    for (const v of videos) if (v.spec?.cta.url && a && r.advertiserId && /^https?:\/\//.test(v.spec.cta.url)) v.spec = { ...v.spec, cta: { ...v.spec.cta, url: a.linkFor(spot, { advertiserId: r.advertiserId, campaignId: c.id, companyId: r.companyId }, v.spec.cta.url) } };
+    return { videos };
+  }
+
   /** The bottle's story so far, from the events its codes produced. */
   private async story(target: Target, viewerKey: string): Promise<(import('./contract').BottleStory & { mine: number; others: number; firstViewer: string | null }) | undefined> {
     if (target.kind !== 'slot') return undefined;
@@ -82,19 +135,17 @@ export class ExperienceService {
     const c = r.campaign;
     const none = { pluginId: r.pluginId, config: r.config, variant: null as { id: string; name: string } | null, greeting: undefined as string | undefined, by: null as string | null };
     // Only what content review approved is shown: versions waiting for review never reach a printed bottle.
-    if (!c || (!preview && c.review && c.review.status !== 'approved') || (!c.variants?.length && !c.personalize?.ai && !c.personalize?.greeting)) return none;
+    if (!c || (!preview && c.review && c.review.status !== 'approved') || (!c.variants?.length && !c.personalize?.ai)) return none;
     const fitting = fittingVariants(c, facts);
     let choice = fitting[0]?.id ?? 'default';
     let greeting: string | undefined, by: string | null = fitting.length ? 'rules' : null;
-    if (c.personalize?.greeting || (c.personalize?.ai && fitting.length > 0)) {
+    if (c.personalize?.ai && fitting.length > 0) {
       const summary = (cfg: unknown) => summarize(cfg);
       const out = await (c.personalize.ai ? this.personalizer : builtinPersonalizer).personalize({
-        campaignId: c.id, advertiser: r.ownerName, category: c.category, facts, wantGreeting: !!c.personalize.greeting,
+        campaignId: c.id, advertiser: r.ownerName, category: c.category, facts, wantGreeting: false,
         options: [{ id: 'default', name: 'Standard', summary: summary(r.config) }, ...fitting.map((v) => ({ id: v.id, name: v.name, summary: `Meant for ${describeConditions(v.when)}. ${summary(v.experienceConfig)}` }))],
       });
-      if (c.personalize.ai) { choice = out.choice; by = out.by; }
-      greeting = out.greeting;
-      if (greeting && !c.personalize.ai) by = by ?? out.by;
+      choice = out.choice; by = out.by;
     }
     const v = fitting.find((x) => x.id === choice);
     if (!v) return { ...none, greeting, by };
@@ -151,14 +202,11 @@ export class ExperienceService {
     };
     const doc = await this.host.open({ pluginId: pick.pluginId, config: pick.config, scan, theme: themeFor(company.brand, r.campaign?.theme) });
     doc.blocks = await this.track(doc.blocks, target, r, viewerKey);
-    if (pick.greeting && !doc.fallback) {
-      const at = doc.blocks[0]?.type === 'hero' ? 1 : 0;
-      doc.blocks.splice(at, 0, { type: 'greeting', text: pick.greeting, by: pick.by ?? 'rules' });
-      // In AR, the line written for this person is the caption over the camera.
-      for (const b of doc.blocks) if (b.type === 'ar') b.caption = pick.greeting;
-    }
+    // The advertiser's paid space comes first: their own ad, their AR, their offer. Then proof others bought and a
+    // way to pass it on. Anything more (personalized videos) only when the person asks.
+    if (r.campaign && !doc.fallback) doc.blocks = this.arrange(doc.blocks, r.campaign, target);
     const ar = doc.blocks.some((b) => b.type === 'model' || b.type === 'ar' || (b.type === 'tour' && !!b.model) || (b.type === 'hero' && !!b.model));
-    return { target, targetKey: targetKey(target), doc, footer: { ...r.footer, ...(bottle ? { story: bottle } : {}) }, viewerKey, ar, variant: pick.variant, personalizedBy: pick.variant || pick.greeting ? pick.by : null };
+    return { target, targetKey: targetKey(target), doc, footer: { ...r.footer, ...(bottle ? { story: bottle } : {}) }, viewerKey, ar, variant: pick.variant, personalizedBy: pick.variant ? pick.by : null };
   }
 
   /** What one person would see at a given moment, for the advertiser's preview. Nothing is recorded. */
@@ -172,11 +220,8 @@ export class ExperienceService {
       viewer: { key: 'preview', signedIn: false, interests: facts.interests, firstTimeWithAdvertiser: facts.newToAdvertiser }, now: this.platform.bus.now(),
       moment: { daypart: facts.daypart, firstScanner: facts.firstScanner, passedOn: facts.passedOn },
     } });
-    if (pick.greeting && !doc.fallback) {
-      doc.blocks.splice(doc.blocks[0]?.type === 'hero' ? 1 : 0, 0, { type: 'greeting', text: pick.greeting, by: pick.by ?? 'rules' });
-      for (const b of doc.blocks) if (b.type === 'ar') b.caption = pick.greeting;
-    }
-    return { doc, variant: pick.variant, personalizedBy: pick.variant || pick.greeting ? pick.by : null };
+    if (!doc.fallback) doc.blocks = this.arrange(doc.blocks, c, null);
+    return { doc, variant: pick.variant, personalizedBy: pick.variant ? pick.by : null };
   }
 
   /**

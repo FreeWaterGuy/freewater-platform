@@ -34,8 +34,16 @@ export type Block =
    * - label: a new label is laid over the real one, all the way round; turn the bottle and it turns with it.
    */
   | { type: 'ar'; mode: ArMode; title: string; model?: ModelRef; placement?: ArPlacement; motion?: ArMotion; sizeIn?: number; wrap?: ArWrap; caption?: string; cta?: { label: string; url: string } }
-  /** A short line written for this person (by the AI or the built-in rules); added by the platform, never by a plug-in. */
-  | { type: 'greeting'; text: string; by: string };
+  /** A short line written for this person; no longer added (kept so older pages still read). */
+  | { type: 'greeting'; text: string; by: string }
+  /** The advertiser's own uploaded ad: the first thing anyone sees. Added by the platform. */
+  | { type: 'ad'; kind: 'video' | 'image'; url: string; posterUrl?: string; alt: string }
+  /** How many people bought from this bottle and from this ad. Added by the platform. */
+  | { type: 'proof'; bottle: number; ad: number; advertiser: string }
+  /** Pass it on: share this bottle's page. Added by the platform. */
+  | { type: 'share'; title: string }
+  /** "Show me more": more only if the person asks. Added by the platform. */
+  | { type: 'more'; label: string };
 
 export type ArMode = 'world' | 'bottle' | 'label';
 export type ArPlacement = 'top' | 'front' | 'orbit' | 'beside';

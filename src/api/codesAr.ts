@@ -62,6 +62,10 @@ export function codesArRoutes(app: App, server: FastifyInstance, route: (r: Rout
     afterEnd: c.afterEnd ?? 'current',
     targeting: c.targeting,
     buy: c.buy,
+    firstSeen: c.firstSeen ?? null,
+    socialProof: c.socialProof !== false,
+    offering: c.offering ?? null,
+    more: { videos: app.videos.stylesOf(c), approveFirst: c.more?.approveFirst !== false, canMake: app.videos.canMake() },
   });
   route({ method: 'GET', url: '/v1/campaigns/:id/codes', scope: 'campaigns', summary: 'A campaign’s code (dynamic or static, logo, color), the versions of its call to action and who each is for, AI personalization, and who it targets. Also what the company allows and the products its ads can go on.', handler: async (req, key) => {
     const c = campaignFor(key!, (req.params as any).id);

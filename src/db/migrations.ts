@@ -683,6 +683,146 @@ create index lottery_chances_status on lottery_chances(company_id, status, creat
 alter table clicks add column via text;
 `,
   },
+  {
+    // Personalized videos (made for each kind of moment, learned from how people watch them), and every interaction
+    // people have with a page, kept anonymous and for as long as the company chooses.
+    id: '014_videos_interactions',
+    sql: `
+create table videos (
+  id text primary key,
+  company_id text not null,
+  campaign_id text not null,
+  segment text not null,
+  style text not null,
+  take integer not null,
+  status text not null,
+  review text not null,
+  spec jsonb,
+  url text,
+  provider text not null,
+  job_id text,
+  prompt text,
+  error text,
+  views integer not null default 0,
+  completes integer not null default 0,
+  taps integer not null default 0,
+  seconds numeric not null default 0,
+  created_at timestamptz not null,
+  ready_at timestamptz
+);
+create index videos_campaign on videos(campaign_id, segment, style);
+create index videos_making on videos(status) where status = 'making';
+create table interactions (
+  id bigserial primary key,
+  company_id text not null,
+  viewer_key text not null,
+  target text not null,
+  campaign_id text,
+  kind text not null,
+  value numeric,
+  video_id text,
+  detail text,
+  at timestamptz not null
+);
+create index interactions_campaign on interactions(campaign_id, kind, at);
+create index interactions_company_at on interactions(company_id, at);
+create index interactions_viewer on interactions(viewer_key, at);
+-- Every action anyone takes through the platform (consumers, advertisers, staff, machines, drivers), as allowed by
+-- the company's data settings for each country.
+create table activity (
+  id bigserial primary key,
+  company_id text not null,
+  actor_type text not null,
+  actor_id text,
+  person_id text,
+  kind text not null,
+  target text,
+  detail jsonb,
+  ip text,
+  device text,
+  at timestamptz not null
+);
+create index activity_company_at on activity(company_id, at);
+create index activity_person on activity(person_id, at);
+create index activity_actor on activity(actor_type, actor_id, at);
+-- One person across phones, accounts and roles (a consumer who is also an advertiser is one person).
+create table people (
+  id text primary key,
+  company_id text not null,
+  created_at timestamptz not null
+);
+create table person_links (
+  company_id text not null,
+  kind text not null,
+  value text not null,
+  person_id text not null,
+  how text not null,
+  linked_at timestamptz not null,
+  primary key (company_id, kind, value)
+);
+create index person_links_person on person_links(person_id);
+-- What each person allowed or refused, for each kind of data.
+create table data_consents (
+  company_id text not null,
+  subject text not null,
+  category text not null,
+  granted boolean not null,
+  source text not null,
+  at timestamptz not null,
+  primary key (company_id, subject, category)
+);
+-- Where each thing sits on the number line (for sale, free, negatively priced) and on which economic systems,
+-- every version kept.
+create table numberline (
+  id text primary key,
+  company_id text not null,
+  subject text not null,
+  version integer not null,
+  placement jsonb not null,
+  by text not null,
+  status text not null,
+  facts jsonb not null,
+  at timestamptz not null,
+  unique (company_id, subject, version)
+);
+-- Every choice a person made, with what else was on offer and the conditions, sorted into the honest-data tiers.
+create table choices (
+  id text primary key,
+  company_id text not null,
+  person text not null,
+  kind text not null,
+  subject text not null,
+  placement_id text,
+  position text not null,
+  system text not null,
+  systems jsonb not null,
+  tier text not null,
+  honest boolean not null,
+  net_cents integer not null,
+  alternatives jsonb not null,
+  conditions jsonb not null,
+  reasons jsonb not null,
+  ref text,
+  at timestamptz not null
+);
+create index choices_company_tier on choices(company_id, tier, at);
+create index choices_company_system on choices(company_id, system, at);
+create index choices_person on choices(person, at);
+create unique index choices_ref on choices(company_id, kind, ref) where ref is not null;
+create table anchors (
+  company_id text not null,
+  day text not null,
+  hash text not null,
+  target text not null,
+  status text not null,
+  ref text,
+  proof text,
+  error text,
+  created_at timestamptz not null,
+  primary key (company_id, day, target)
+);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

@@ -47,6 +47,9 @@
     check: 'M5 12l5 5L20 7',
     link: 'M7 17 17 7M9 7h8v8',
     call: 'M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2',
+    share: 'M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7M16 6l-4-4-4 4M12 2v13',
+    play: 'M7 4l13 8-13 8V4Z',
+    more: 'M12 5v14M5 12h14',
   };
   // Pick readable ink for text on a colored background.
   const lum = (hex) => { const n = parseInt(hex.slice(1), 16); const c = [n >> 16, (n >> 8) & 255, n & 255].map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
@@ -92,7 +95,9 @@
     const body = h('section', { class: 'blocks' }, doc.blocks.map((b) => block(b, ctx)).filter(Boolean));
     game.info = custom ? null : opened.lottery || null;
     game.ctx = ctx;
-    app.replaceChildren(top, ...(game.info ? [gameNote(game.info)] : []), body, panel(footer, target));
+    const consent = consentBar(opened);
+    app.replaceChildren(top, ...(game.info ? [gameNote(game.info)] : []), body, panel(footer, target), ...(consent ? [consent] : []));
+    if (record) { pageCtx = ctx; pageStart = performance.now(); track(ctx, 'page_view'); }
     if (game.info && record) checkPending();
 
     // The scan counts once the page has actually shown. If the experience failed, it isn't billed.
@@ -129,7 +134,7 @@
   function markSaved(btn) { btn.classList.add('saved'); btn.replaceChildren(icon(ICON.check), 'Saved'); btn.disabled = true; }
 
   function action(a, ctx, label) {
-    if (a.kind === 'link') return { href: withAttribution(a.url), onclick: () => engage(ctx, 'link', label) };
+    if (a.kind === 'link') return { href: withAttribution(a.url), onclick: () => { engage(ctx, 'link', label); track(ctx, 'offer_tap'); } };
     if (a.kind === 'call') return { href: `tel:${a.phone.replace(/[^\d+]/g, '')}`, onclick: () => engage(ctx, 'call') };
     return {};
   }
@@ -196,7 +201,23 @@
       case 'gallery': return h('div', { class: 'gallery' }, b.imageUrls.map((u) => h('img', { src: u, alt: '', loading: 'lazy' })));
       case 'message': return h('div', { class: 'message', style: 'color:var(--accent-ink)' }, h('div', { class: 'from', text: `From ${b.from}` }), h('p', { text: b.text }));
       case 'confetti': { setTimeout(confetti, 250); return null; }
-      case 'greeting': return h('div', { class: 'greeting' }, h('span', { class: 'spark', 'aria-hidden': 'true', text: '✦' }), h('span', { text: b.text }));
+      case 'greeting': return null; // no longer shown: the page belongs to the advertiser
+      case 'ad': return adBlock(b, ctx);
+      case 'proof': {
+        const parts = [];
+        if (b.bottle > 0) parts.push(`${b.bottle} ${b.bottle === 1 ? 'person' : 'people'} bought from this very bottle`);
+        if (b.ad > 0) parts.push(`${b.ad} from ${b.advertiser}’s bottles`);
+        return h('div', { class: 'proof' }, h('span', { class: 'proof-dot', 'aria-hidden': 'true' }), h('span', { text: `${parts.join(' · ')}.` }));
+      }
+      case 'share': {
+        const url = fixture ? location.href : location.origin + location.pathname;
+        return h('button', { type: 'button', class: 'btn secondary share', onclick: async () => {
+          track(ctx, 'share');
+          try { if (navigator.share) { await navigator.share({ title: b.title, url }); return; } } catch { return; }
+          try { await navigator.clipboard.writeText(url); toast('Link copied. Pass it on.'); } catch { toast(url); }
+        } }, icon(ICON.share), 'Pass it on');
+      }
+      case 'more': return moreBlock(b, ctx);
       case 'ar': return arBlock(b, ctx);
       default: return null;
     }
@@ -279,7 +300,8 @@
       getLabelSvg: (url) => (fixture ? fixture.text(url) : fetch(url).then((r) => { if (!r.ok) throw new Error('label'); return r.text(); })),
       // An AR launch is billed only once it has actually loaded on this phone.
       onReady: (loaded) => { if (reported || previewMode) return; reported = true; api('POST', '/v1/public/ar-launches', { unitId: ctx.target.unitId, slot: ctx.target.slot, viewerKey, loaded }).then(() => { if (loaded) play('ar', ctx); }).catch(() => {}); },
-      onLink: (url) => { engage(ctx, 'link', 'from AR'); location.href = withAttribution(url, 'ar'); },
+      onLink: (url) => { engage(ctx, 'link', 'from AR'); track(ctx, 'offer_tap'); location.href = withAttribution(url, 'ar'); },
+      onClose: ((t0) => () => track(ctx, 'ar_seconds', (performance.now() - t0) / 1000))(performance.now()),
     });
     return h('div', { class: `ar-card ar-${b.mode}` },
       h('div', { class: 'ar-art', 'aria-hidden': 'true' }, arArt(b.mode)),
@@ -396,6 +418,119 @@
   function gameNote(info) {
     return h('div', { class: 'game-note' }, h('span', { class: 'mini-ball', 'aria-hidden': 'true' }),
       h('span', {}, h('b', { text: 'Watch for the red ball. ' }), `Tap it before it’s gone to win a prize. ${info.rulesText ? info.rulesText + ' ' : ''}`, info.rulesUrl ? h('a', { href: info.rulesUrl, target: '_blank', rel: 'noopener', text: 'Official rules' }) : null));
+  }
+
+  // ---------- what people do on the page: kept (anonymously, as the company's data settings allow) to get better ----------
+  const tq = [];
+  let tTimer = null;
+  const sendTracks = (beacon) => {
+    if (!tq.length || previewMode || fixture) { tq.length = 0; return; }
+    const body = JSON.stringify({ viewerKey, items: tq.splice(0, 25) });
+    if (beacon && navigator.sendBeacon) { try { navigator.sendBeacon('/v1/public/interactions', new Blob([body], { type: 'application/json' })); return; } catch {} }
+    fetch('/v1/public/interactions', { method: 'POST', headers: { 'content-type': 'application/json' }, body, keepalive: true }).catch(() => {});
+  };
+  function track(ctx, kind, value, videoId) {
+    if (!ctx || store.get('fw_no_tracking') === '1') return;
+    tq.push({ target: ctx.targetKey, kind, ...(value !== undefined ? { value: Math.max(0, Math.round(value * 10) / 10) } : {}), ...(videoId ? { videoId } : {}) });
+    clearTimeout(tTimer); tTimer = setTimeout(() => sendTracks(false), 4000);
+  }
+  let pageCtx = null, pageStart = 0, maxScroll = 0;
+  addEventListener('scroll', () => { const d = document.documentElement; const p = (scrollY + innerHeight) / Math.max(1, d.scrollHeight); if (p > maxScroll) maxScroll = Math.min(1, p); }, { passive: true });
+  addEventListener('pagehide', () => { if (pageCtx) { track(pageCtx, 'page_seconds', (performance.now() - pageStart) / 1000); track(pageCtx, 'scroll_percent', maxScroll * 100); } sendTracks(true); });
+
+  // A company that must ask first (the EU, the UK, Brazil…) asks once, plainly, and records the answer.
+  function consentBar(opened) {
+    const ask = opened.privacy?.askFirst || [];
+    if (!ask.length || store.get('fw_consent_asked') === '1' || fixture) return null;
+    const answer = (yes) => {
+      store.set('fw_consent_asked', '1'); if (!yes) store.set('fw_no_tracking', '1');
+      api('POST', `/v1/public/data/${encodeURIComponent(opened.companyId)}/consent`, { viewerKey, choices: Object.fromEntries(ask.map((a) => [a.category, yes])) }).catch(() => {});
+      bar.remove();
+    };
+    const bar = h('div', { class: 'consent', role: 'region', 'aria-label': 'Your data' },
+      h('p', { text: `May we keep anonymous notes on how you use this page (${ask.map((a) => a.label.toLowerCase()).join(', ')}) to make it better? Nothing is sold, and you can change your mind any time.` }),
+      h('div', { class: 'row' }, h('button', { type: 'button', class: 'btn', onclick: () => answer(true) }, 'Yes, that’s fine'), h('button', { type: 'button', class: 'btn secondary', onclick: () => answer(false) }, 'No thanks')));
+    return bar;
+  }
+
+  // ---------- the advertiser's own ad: the first thing anyone sees ----------
+  function adBlock(b, ctx) {
+    if (b.kind === 'image') return h('figure', { class: 'ad-first' }, h('img', { src: b.url, alt: b.alt }));
+    const v = h('video', { src: b.url, poster: b.posterUrl, playsinline: true, muted: true, autoplay: true, loop: false, preload: 'auto', 'aria-label': b.alt });
+    v.muted = true;
+    const sound = h('button', { type: 'button', class: 'ad-sound', 'aria-label': 'Turn the sound on' }, 'Sound on');
+    sound.addEventListener('click', () => { v.muted = !v.muted; sound.textContent = v.muted ? 'Sound on' : 'Sound off'; if (v.paused) v.play().catch(() => {}); });
+    const replay = h('button', { type: 'button', class: 'ad-replay', hidden: true }, icon(ICON.play), 'Watch again');
+    replay.addEventListener('click', () => { v.currentTime = 0; v.play().catch(() => {}); replay.hidden = true; });
+    let watched = 0, last = null, done = false;
+    v.addEventListener('timeupdate', () => { if (last !== null && v.currentTime > last && v.currentTime - last < 1.5) watched += v.currentTime - last; last = v.currentTime; });
+    v.addEventListener('ended', () => { replay.hidden = false; if (!done) { done = true; track(ctx, 'ad_complete'); } });
+    addEventListener('pagehide', () => { if (watched > 0) track(ctx, 'ad_seconds', watched); });
+    return h('figure', { class: 'ad-first' }, v, h('div', { class: 'ad-tools' }, sound, replay));
+  }
+
+  // ---------- "Show me more": only when the person asks ----------
+  function moreBlock(b, ctx) {
+    const box = h('div', { class: 'more' });
+    const btn = h('button', { type: 'button', class: 'btn secondary more-btn' }, icon(ICON.more), b.label);
+    btn.addEventListener('click', async () => {
+      track(ctx, 'more_open');
+      btn.disabled = true; btn.textContent = 'Making something for you…';
+      const t = ctx.target;
+      const url = t.kind === 'slot' ? `/v1/public/experience/${t.unitId}/${t.slot}/more` : `/v1/public/experience/box/${t.packId}/${t.face}/more`;
+      try {
+        const r = await api('GET', `${url}?viewer=${encodeURIComponent(viewerKey)}`);
+        btn.remove();
+        if (!r.videos?.length) { box.append(h('p', { class: 'text', text: 'That’s everything for now.' })); return; }
+        box.append(h('h2', { class: 'section-title', text: 'Made for this moment' }), ...r.videos.map((v) => videoCard(v, ctx)));
+      } catch { btn.disabled = false; btn.textContent = b.label; toast('That didn’t load. Try again.'); }
+    });
+    box.append(btn);
+    return box;
+  }
+
+  function videoCard(v, ctx) {
+    if (v.kind === 'file') {
+      const el = h('video', { src: v.url, controls: true, playsinline: true, preload: 'metadata', class: 'made-video' });
+      let seen = false, sec = 0, last = null;
+      el.addEventListener('play', () => { if (!seen) { seen = true; track(ctx, 'video_view', undefined, v.id); } });
+      el.addEventListener('timeupdate', () => { if (last !== null && el.currentTime > last && el.currentTime - last < 1.5) sec += el.currentTime - last; last = el.currentTime; });
+      el.addEventListener('ended', () => track(ctx, 'video_complete', undefined, v.id));
+      addEventListener('pagehide', () => { if (sec) track(ctx, 'video_seconds', sec, v.id); });
+      return h('figure', { class: 'made' }, el);
+    }
+    return motionPlayer(v, ctx);
+  }
+
+  // A motion-graphics video, played from its storyboard: the advertiser's colors, words and pictures, cut for now.
+  function motionPlayer(v, ctx) {
+    const s = v.spec, c = s.colors;
+    const stage = h('div', { class: 'motion', style: `--m-bg:${c.background};--m-text:${c.text};--m-accent:${c.accent}`, role: 'img', 'aria-label': `A short video from ${s.brand}` });
+    const bars = h('div', { class: 'm-bars' }, s.scenes.map(() => h('i', {}, h('b'))));
+    const sceneBox = h('div', { class: 'm-scene' });
+    const playBtn = h('button', { type: 'button', class: 'm-play', 'aria-label': 'Play' }, icon(ICON.play));
+    const cta = h('a', { class: 'm-cta', rel: 'noopener', target: '_blank', href: s.cta.url ? withAttribution(s.cta.url) : '#', hidden: true, text: s.cta.label });
+    cta.addEventListener('click', (e) => { if (!s.cta.url) e.preventDefault(); track(ctx, 'video_tap', undefined, v.id); engage(ctx, 'link', 'from video'); });
+    stage.append(bars, sceneBox, h('div', { class: 'm-brand', text: s.brand }), cta, playBtn);
+    let i = -1, timer = null, started = false, t0 = 0;
+    const show = (n) => {
+      i = n;
+      [...bars.children].forEach((bar, k) => { bar.className = k < n ? 'done' : k === n ? 'on' : ''; if (k === n) bar.firstChild.style.animationDuration = `${s.scenes[n].ms}ms`; });
+      const sc = s.scenes[n];
+      const kids = [];
+      if (sc.imageUrl) kids.push(h('div', { class: `m-img m-${sc.motion}`, style: `background-image:url("${encodeURI(sc.imageUrl)}")` }));
+      kids.push(h('div', { class: `m-words m-${sc.layout} m-${sc.motion}` }, h('h3', { text: sc.title }), sc.sub ? h('p', { text: sc.sub }) : null));
+      sceneBox.replaceChildren(...kids);
+      cta.hidden = sc.layout !== 'end';
+      clearTimeout(timer);
+      timer = setTimeout(() => (n + 1 < s.scenes.length ? show(n + 1) : end()), sc.ms);
+    };
+    const end = () => { track(ctx, 'video_complete', undefined, v.id); track(ctx, 'video_seconds', (performance.now() - t0) / 1000, v.id); playBtn.hidden = false; playBtn.setAttribute('aria-label', 'Play again'); };
+    playBtn.addEventListener('click', () => { playBtn.hidden = true; if (!started) { started = true; track(ctx, 'video_view', undefined, v.id); } t0 = performance.now(); show(0); });
+    // Starts on its own once it's on screen (it was asked for).
+    const io = 'IntersectionObserver' in window ? new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting) && !started) { io.disconnect(); playBtn.click(); } }, { threshold: 0.6 }) : null;
+    setTimeout(() => (io ? io.observe(stage) : playBtn.click()), 50);
+    return h('figure', { class: 'made' }, stage);
   }
 
   function confetti() {

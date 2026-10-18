@@ -1,4 +1,4 @@
-import type { BidAdjustments, Campaign, CompanyConfig, CtaVariant } from '../../core/types';
+import type { BidAdjustments, Campaign, CompanyConfig, CtaVariant, FirstSeen, OfferingDeclaration, VideoStyle } from '../../core/types';
 import { checkQrColor, checkQrLogo } from '../print/qr';
 import { safeUrl } from './blocks';
 import { checkConditions } from './dynamic';
@@ -16,6 +16,10 @@ export interface CampaignExtras {
   /** For bids: the whole-label bid, daily budget, adjustments, frequency cap and pacing. */
   bidding?: { maxCentsPerLabel?: number; dailyCapCents?: number; adjustments?: BidAdjustments | null; frequencyCap?: number | null; pacing?: 'even' | 'fast' };
   targeting?: Partial<Campaign['targeting']>;
+  firstSeen?: FirstSeen | null;
+  socialProof?: boolean;
+  more?: { videos: VideoStyle[]; approveFirst: boolean } | null;
+  offering?: OfferingDeclaration | null;
 }
 
 export const extrasSchema = {
@@ -23,6 +27,10 @@ export const extrasSchema = {
   variants: { type: 'array', maxItems: 10, items: { type: 'object', additionalProperties: false, properties: { id: { type: 'string', maxLength: 40 }, name: { type: 'string', minLength: 1, maxLength: 60 }, when: { type: 'object' }, experienceId: { type: 'string', maxLength: 60 }, experienceConfig: { type: 'object' } }, required: ['id', 'name', 'experienceConfig'] } },
   personalize: { type: ['object', 'null'], additionalProperties: false, properties: { ai: { type: 'boolean' }, greeting: { type: 'boolean' } } },
   afterEnd: { type: 'string', enum: ['current', 'keep'] },
+  firstSeen: { type: ['object', 'null'], additionalProperties: false, properties: { kind: { type: 'string', enum: ['video', 'image'] }, url: { type: 'string', maxLength: 1000 }, posterUrl: { type: 'string', maxLength: 1000 }, alt: { type: 'string', minLength: 1, maxLength: 200 } }, required: ['kind', 'url', 'alt'] },
+  socialProof: { type: 'boolean' },
+  offering: { type: ['object', 'null'], additionalProperties: false, properties: { description: { type: 'string', minLength: 3, maxLength: 300 }, priceCents: { type: 'integer', minimum: 0, maximum: 100_000_000 }, donationCents: { type: 'integer', minimum: 0, maximum: 10_000_000 }, paymentCents: { type: 'integer', minimum: 0, maximum: 10_000_000 }, cause: { type: 'string', maxLength: 80 }, peerToPeer: { type: 'boolean' }, conditions: { type: 'array', maxItems: 5, items: { type: 'string', minLength: 2, maxLength: 80 } } }, required: ['description', 'priceCents'] },
+  more: { type: ['object', 'null'], additionalProperties: false, properties: { videos: { type: 'array', maxItems: 3, uniqueItems: true, items: { type: 'string', enum: ['motion', 'animated', 'live_action'] } }, approveFirst: { type: 'boolean' } }, required: ['videos', 'approveFirst'] },
   bidding: { type: 'object', additionalProperties: false, properties: {
     maxCentsPerLabel: { type: 'integer', minimum: 1, maximum: 100_000 }, dailyCapCents: { type: 'integer', minimum: 500, maximum: 10_000_000 },
     frequencyCap: { type: ['integer', 'null'], minimum: 1, maximum: 50 }, pacing: { type: 'string', enum: ['even', 'fast'] },
@@ -75,6 +83,14 @@ export function applyExtras(company: CompanyConfig, c: Campaign, x: CampaignExtr
   if (x.targeting?.products) for (const id of x.targeting.products) if (!/^[a-z0-9][a-z0-9-]{1,40}$/.test(id)) return `"${id}" isn't a product id.`;
   if (x.targeting?.audience?.interestsAny && !x.targeting.audience.interestsAny.every((i) => /^[\p{L}\p{N} &'-]{1,40}$/u.test(i))) return 'Interests must be short words like coffee or running.';
 
+  if (x.firstSeen) {
+    const ok = (u: string) => /^\/assets\/[A-Za-z0-9_-]+\.[a-z0-9]+$/.test(u) || (u.startsWith('https://') && !!safeUrl(u));
+    if (!ok(x.firstSeen.url)) return 'Your ad must be a file you uploaded, or an https:// link to it.';
+    if (x.firstSeen.posterUrl && !ok(x.firstSeen.posterUrl)) return 'The video’s still picture must be a file you uploaded, or an https:// link.';
+    if (x.firstSeen.kind === 'video' && x.firstSeen.url.startsWith('/assets/') && !/\.(mp4|webm|mov)$/.test(x.firstSeen.url)) return 'Upload the video as MP4, WebM or MOV.';
+    if (x.firstSeen.kind === 'image' && x.firstSeen.url.startsWith('/assets/') && !/\.(png|jpe?g|webp|gif|svg)$/.test(x.firstSeen.url)) return 'Upload the picture as PNG, JPEG, WebP or GIF.';
+  }
+
   if (x.bidding) {
     if (c.buy.type !== 'bid') return 'This ad has a set number of bottles at the starting price; bids and adjustments are for ads that bid.';
     if (x.bidding.maxCentsPerLabel !== undefined && x.bidding.maxCentsPerLabel < company.prices.perPrintByShare[1]) return `Bids start at ${company.prices.perPrintByShare[1]}¢ for the whole label.`;
@@ -93,6 +109,10 @@ export function applyExtras(company: CompanyConfig, c: Campaign, x: CampaignExtr
   if (x.variants !== undefined) { if (x.variants.length) c.variants = x.variants.map((v) => ({ ...v, ...(v.when && Object.keys(v.when).length ? {} : { when: undefined }) })).map(clean); else delete c.variants; }
   if (x.personalize !== undefined) { if (!x.personalize || (!x.personalize.ai && !x.personalize.greeting)) delete c.personalize; else c.personalize = { ai: !!x.personalize.ai, greeting: !!x.personalize.greeting }; }
   if (x.afterEnd !== undefined) c.afterEnd = x.afterEnd;
+  if (x.firstSeen !== undefined) { if (x.firstSeen) c.firstSeen = clean(x.firstSeen); else delete c.firstSeen; }
+  if (x.offering !== undefined) { if (x.offering) c.offering = clean({ ...x.offering, cause: x.offering.cause?.trim() || undefined, conditions: x.offering.conditions?.length ? x.offering.conditions : undefined }); else delete c.offering; }
+  if (x.socialProof !== undefined) { if (x.socialProof) delete c.socialProof; else c.socialProof = false; }
+  if (x.more !== undefined) { if (!x.more) delete c.more; else c.more = { videos: [...x.more.videos], approveFirst: x.more.approveFirst }; }
   if (x.bidding && c.buy.type === 'bid') {
     const b = c.buy;
     if (x.bidding.maxCentsPerLabel !== undefined) b.maxCentsPerLabel = x.bidding.maxCentsPerLabel;
@@ -114,4 +134,4 @@ export function applyExtras(company: CompanyConfig, c: Campaign, x: CampaignExtr
 const clean = <T extends object>(o: T): T => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as T;
 
 /** Whether these extras change what people see (so an advertiser's change goes back to review). */
-export const changesWhatPeopleSee = (x: CampaignExtras) => x.qr !== undefined || x.variants !== undefined || x.personalize !== undefined;
+export const changesWhatPeopleSee = (x: CampaignExtras) => x.qr !== undefined || x.variants !== undefined || x.personalize !== undefined || x.firstSeen !== undefined;

@@ -156,7 +156,8 @@ describe('static and dynamic codes', () => {
     await call('POST', '/v1/public/scans', undefined, { unitId: unit.id, slot, viewerKey: 'first-person-01', experienceLoaded: true, variant: undefined });
     const friend = await open('friend-person-02');
     expect(friend.body.variant).toMatchObject({ id: 'passed-on' });
-    expect(friend.body.doc.blocks[0]).toMatchObject({ type: 'hero', title: 'Someone shared this with you' });
+    expect(friend.body.doc.blocks[0]).toMatchObject({ type: 'ar' }); // the advertiser's AR comes first
+    expect(friend.body.doc.blocks.find((b: any) => b.type === 'hero')).toMatchObject({ title: 'Someone shared this with you' });
     // The first person scanning again still gets theirs; the friend scanning again is still the friend.
     expect((await open('first-person-01')).body.variant).toBeNull();
     await call('POST', '/v1/public/scans', undefined, { unitId: unit.id, slot, viewerKey: 'friend-person-02', experienceLoaded: true });
@@ -171,8 +172,9 @@ describe('static and dynamic codes', () => {
     expect(asked[0]).toBe('default,morning,passed-on');
     expect(morning.body.variant).toMatchObject({ id: 'morning' });
     expect(morning.body.personalizedBy).toBe('test AI');
-    expect(morning.body.doc.blocks.find((b: any) => b.type === 'greeting').text).toBe('Morning! A bright one for your walk.');
-    expect(morning.body.doc.blocks.find((b: any) => b.type === 'ar').caption).toBe('Morning! A bright one for your walk.');
+    // No written greeting any more: the page is the advertiser's; personal content comes only with "Show me more".
+    expect(morning.body.doc.blocks.some((b: any) => b.type === 'greeting')).toBe(false);
+    expect(morning.body.doc.blocks.at(-1)).toMatchObject({ type: 'more', label: 'Show me more' });
   });
 
   it('keeps old bottles useful: once a campaign ends they open the advertiser’s current one', async () => {

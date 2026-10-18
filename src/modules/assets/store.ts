@@ -24,7 +24,7 @@ export const allowedTypes: Record<string, { ext: string; maxBytes: number; magic
   'image/png': { ext: 'png', maxBytes: 5 * 1024 * 1024, magic: (b) => b[0] === 0x89 && ascii(b, 1, 4) === 'PNG' },
   'image/jpeg': { ext: 'jpg', maxBytes: 5 * 1024 * 1024, magic: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
   'image/webp': { ext: 'webp', maxBytes: 5 * 1024 * 1024, magic: (b) => ascii(b, 0, 4) === 'RIFF' && ascii(b, 8, 12) === 'WEBP' },
-  'video/mp4': { ext: 'mp4', maxBytes: 15 * 1024 * 1024, magic: (b) => ascii(b, 4, 8) === 'ftyp' },
+  'video/mp4': { ext: 'mp4', maxBytes: 60 * 1024 * 1024, magic: (b) => ascii(b, 4, 8) === 'ftyp' },
 };
 const ascii = (b: Uint8Array, from: number, to: number) => String.fromCharCode(...b.subarray(from, to));
 

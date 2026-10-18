@@ -14,6 +14,9 @@ const server = await buildServer(app, { logger: process.env.LOG !== '0' });
 const port = Number(process.env.PORT ?? 8080);
 await server.listen({ port, host: process.env.HOST ?? '127.0.0.1' });
 app.webhooks.start(); // send webhooks every few seconds
+// Check on footage being made every 10 seconds; once a day, delete data older than each company keeps.
+const videoTimer = setInterval(() => { app.videos.tick().catch((e) => console.error('videos', e)); }, 10_000);
+const dailyTimer = setInterval(() => { app.data.purge().catch((e) => console.error('purge', e)); }, 24 * 3600_000);
 
 console.log(`\nFreeWater API on http://localhost:${port}  (database: ${db.name})`);
 console.log(`API description: http://localhost:${port}/v1/openapi.json  ·  Console: http://localhost:${port}/console  ·  Developer docs: http://localhost:${port}/developers`);
@@ -24,6 +27,7 @@ if (app.demoKeys) {
 
 const stop = async () => {
   app.webhooks.stop();
+  clearInterval(videoTimer); clearInterval(dailyTimer);
   await server.close();
   await app.persistence.flush();
   await db.close();
