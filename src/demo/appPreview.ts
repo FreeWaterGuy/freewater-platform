@@ -3,6 +3,7 @@ import { createApp } from '../app';
 import { buildServer } from '../api/server';
 import { createPgliteClient } from '../db/pglite';
 import type { TestOutbox } from '../adapters/messaging/contract';
+import { build } from 'esbuild';
 
 // Builds out/app-preview/index.html: the real FreeWater app running on answers recorded from the real server,
 // so it can be clicked through anywhere with no server. npm run demo:app-preview
@@ -58,9 +59,13 @@ const data = { rec, vends, proof, custom, card: cards[0], me, marker };
 const out = 'out/app-preview';
 mkdirSync(out, { recursive: true });
 const tpl = readFileSync('src/demo/appPreview.html', 'utf8');
+const bundle = await build({ entryPoints: ['src/demo/appPreviewEntry.ts'], bundle: true, format: 'iife', globalName: 'FWLocal', platform: 'browser', minify: true, write: false });
 const safe = (s: string) => s.replace(/<\/script/gi, '<\\/script').replace(/<!--/g, '<\\!--');
 writeFileSync(`${out}/index.html`, tpl
   .replace('/*APP_CSS*/', () => readFileSync('src/web/app.css', 'utf8'))
+  .replace('/*LOCAL*/', () => safe(bundle.outputFiles[0]!.text))
+  .replace('/*SCAN_CSS*/', () => safe(JSON.stringify(readFileSync('src/web/scan.css', 'utf8'))))
+  .replace('/*SCAN_JS*/', () => safe(JSON.stringify(readFileSync('src/web/scan.js', 'utf8'))))
   .replace('/*DATA*/', () => safe(JSON.stringify(data)))
   .replace('/*APP_JS*/', () => safe(readFileSync('src/web/app.js', 'utf8'))));
 console.log(`Wrote ${out}/index.html`);

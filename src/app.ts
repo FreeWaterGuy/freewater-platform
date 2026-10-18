@@ -18,6 +18,10 @@ import { AdsService } from './modules/ads/service';
 import { BuiltinAdAssistant } from './modules/ai/builtinAssistant';
 import { ClaudeAdAssistant } from './modules/ai/claudeAssistant';
 import type { AdAssistant } from './modules/ai/contract';
+import { DesignService } from './modules/custom/service';
+import { BuiltinDesigner } from './modules/ai/builtinDesigner';
+import { ClaudeDesigner } from './modules/ai/claudeDesigner';
+import type { DesignAssistant } from './modules/ai/designContract';
 import { bottle16oz, boxes, builtinCreatives, freewater, locations, peakSpring, sampleCampaigns } from './demo/seed';
 
 export interface AppOptions {
@@ -31,7 +35,8 @@ export interface AppOptions {
   plugins?: ExperiencePlugin<any>[]; // extra experience plug-ins (partners'); FreeWater's built-ins are always installed
   assets?: AssetStore; // defaults to storing files in the database
   pluginTimeoutMs?: number;
-  assistant?: AdAssistant; // the AI that helps make ads; defaults to Claude when ANTHROPIC_API_KEY is set, else the built-in helper
+  assistant?: AdAssistant;
+  designer?: DesignAssistant; // the AI that helps people design their own bottles; same defaults as the ad assistant // the AI that helps make ads; defaults to Claude when ANTHROPIC_API_KEY is set, else the built-in helper
 }
 
 /** Start the platform on a database: migrate, load everything, and keep writing every change back. */
@@ -92,7 +97,11 @@ export async function createApp(opts: AppOptions) {
   const assistant = opts.assistant ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeAdAssistant({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL, fallback: builtinAssistant }) : builtinAssistant);
   const ads = new AdsService(db, platform, made.registry, host, assistant, () => persistence.flush());
 
-  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads };
+  const builtinDesigner = new BuiltinDesigner();
+  const designer = opts.designer ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeDesigner({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL, fallback: builtinDesigner }) : builtinDesigner);
+  const designs = new DesignService(db, platform, made.registry, host, assets, designer);
+
+  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

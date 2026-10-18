@@ -7,6 +7,7 @@ import { isEligible } from '../modules/ads/engine';
 import { svgCreative } from '../modules/print/svgCreative';
 import { givingLine, PX_PER_IN } from '../modules/print/renderer';
 import { MachinePresence } from '../modules/machines/presence';
+import { DesignService } from '../modules/custom/service';
 import { ApiError, notFound, obj, S, type RouteDef } from './http';
 
 /**
@@ -204,20 +205,48 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     const orderId = `${userId}:${b.orderId}`;
     const already = [...platform.units.values()].some((u) => u.companyId === company.id && u.orderId === orderId);
     if (!already) await atMachine(b.locationId, b.presenceCode, company.id);
-    const art = svgCreative(proof.design_svg);
     const experience = proof.experience ? (typeof proof.experience === 'string' ? JSON.parse(proof.experience) : proof.experience) : undefined;
+    const bottles = DesignService.bottlesOf(proof, app.designs.designArea());
     const price = Number(proof.price_cents); // the price shown on the proof, set by the server
-    const hold = await app.payments.authorize({ companyId: company.id, ownerType: 'user', ownerId: userId, amountCents: price, purpose: 'custom_order', ref: b.orderId, idempotencyKey: `custom:${company.id}:${userId}:${b.orderId}`, description: `Custom ${proof.product_id}` });
+    const hold = await app.payments.authorize({ companyId: company.id, ownerType: 'user', ownerId: userId, amountCents: price * bottles.length, purpose: 'custom_order', ref: b.orderId, idempotencyKey: `custom:${company.id}:${userId}:${b.orderId}`, description: `${bottles.length} custom ${proof.product_id}` });
     if (hold.status === 'declined') return { status: 402, body: { error: { code: 'card_declined', message: `${hold.failure} Nothing was printed or charged.` } } };
-    const r = await platform.order({ companyId: company.id, orderId, locationId: b.locationId, productId: proof.product_id, consumerId: userId, custom: { customerId: userId, art, priceCents: price, experienceConfig: experience } });
-    if (!r.ok) {
+    // Print them one after another. Only the bottles that print are paid for.
+    const printed: Unit[] = [];
+    for (let i = 0; i < bottles.length; i++) {
+      const r = await platform.order({ companyId: company.id, orderId: i === 0 ? orderId : `${orderId}:${i + 1}`, locationId: b.locationId, productId: proof.product_id, consumerId: userId, custom: { customerId: userId, art: svgCreative(bottles[i]!), priceCents: price, experienceConfig: experience } });
+      if (r.ok) printed.push(r.unit);
+    }
+    if (!printed.length) {
       const voided = await app.payments.void(hold.id);
       return { status: 422, body: { error: { code: 'print_failed', message: 'It did not print, so the hold on your card was released. Nothing was charged.' }, payment: voided } };
     }
-    const paid = hold.status === 'captured' ? hold : await app.payments.capture(hold.id);
+    const paid = hold.status === 'captured' ? hold : await app.payments.capture(hold.id, price * printed.length);
+    if (proof.design_id) await app.designs.markOrdered(proof.design_id);
     const loc = platform.locations.get(b.locationId)!;
-    return { status: 201, body: { bottle: bottleView(r.unit), payment: paid, countdown: { seconds: loc.printSeconds ?? 30, ad: countdownAd(r.unit) } } };
+    const short = bottles.length - printed.length;
+    return { status: 201, body: { bottle: bottleView(printed[0]!), bottles: printed.map(bottleView), payment: paid, ...(short ? { notice: `${short} of ${bottles.length} didn't print, so you were only charged for ${printed.length}.` } : {}), countdown: { seconds: (loc.printSeconds ?? 30) * printed.length, ad: countdownAd(printed[0]!) } } };
   } });
+
+  // ---------- designing by chatting ----------
+
+  route({ method: 'POST', url: '/v1/me/assets', scope: 'me', summary: 'Upload a photo or a video for your own bottle. Send the file itself as the body with its Content-Type.', rawBodyLimit: 16 * 1024 * 1024, handler: async (req, key) => {
+    const userId = h.me(key);
+    const type = String(req.headers['content-type'] ?? '').split(';')[0]!.trim();
+    if (!Buffer.isBuffer(req.body) || type === 'model/gltf-binary') throw new ApiError(415, 'unsupported_type', 'Upload a photo (PNG, JPEG, WebP) or a video (MP4).');
+    const asset = await app.assets.put({ companyId: key!.companyId, userId, contentType: type, bytes: new Uint8Array(req.body), name: typeof (req.query as any).name === 'string' ? (req.query as any).name : undefined });
+    return { status: 201, body: asset };
+  } });
+  route({ method: 'POST', url: '/v1/me/designs', scope: 'me', summary: 'Start designing your own bottle in the chat.', handler: async (_req, key) => ({ status: 201, body: await app.designs.create(key!.companyId, h.me(key)) }) });
+  route({ method: 'GET', url: '/v1/me/designs', scope: 'me', summary: 'Your designs.', handler: async (_req, key) => ({ body: await app.designs.list(h.me(key)) }) });
+  route({ method: 'GET', url: '/v1/me/designs/:id', scope: 'me', summary: 'A design, its live preview and the conversation.', handler: async (req, key) => ({ body: await app.designs.get((req.params as any).id, h.me(key)) }) });
+  const designFile = { type: 'object', additionalProperties: false, properties: { dataUrl: { type: 'string', maxLength: 1_600_000, pattern: '^data:image/(png|jpeg|webp);base64,' }, assetId: S.str, name: { type: 'string', maxLength: 120 } } };
+  route({ method: 'POST', url: '/v1/me/designs/:id/messages', scope: 'me', summary: 'Tell the designer what you want, with photos (as data) or videos (uploaded first). It changes the design and answers.', body: obj({ text: { type: 'string', maxLength: 2000 }, attachments: { type: 'array', maxItems: 6, items: designFile } }, ['text']), handler: async (req, key) => {
+    const b = req.body as any;
+    if (!b.text.trim() && !(b.attachments ?? []).length) throw new ApiError(400, 'empty', 'Say something or attach a photo.');
+    return { body: await app.designs.chat({ id: (req.params as any).id, userId: h.me(key), text: b.text, attachments: b.attachments ?? [] }) };
+  } });
+  route({ method: 'GET', url: '/v1/me/designs/:id/scan-preview', scope: 'me', summary: 'What scanning your bottle will open.', handler: async (req, key) => ({ body: await app.designs.scanPreview((req.params as any).id, h.me(key)) }) });
+  route({ method: 'POST', url: '/v1/me/designs/:id/proof', scope: 'me', summary: 'Make the proof: the full label exactly as it prints, and the price for every bottle.', handler: async (req, key) => ({ status: 201, body: await app.designs.proof((req.params as any).id, h.me(key)) }) });
 
   return { presence };
 }

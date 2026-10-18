@@ -9,15 +9,37 @@
 </style>
 <div class="preview-note"><span><b>Preview.</b> This is the real app with saved answers from the server. Sign in with any email and any 6 digits. Nothing prints and no money moves.</span></div>
 <div id="root"><div class="boot"><div class="logo big"><span>free</span><span>water</span></div></div></div>
+<script>/*LOCAL*/</script>
 <script>
 (() => {
   const D = /*DATA*/;
+  const L = FWLocal.makeLocal();
+  const SCAN_CSS = /*SCAN_CSS*/, SCAN_JS = /*SCAN_JS*/;
+  const DS = { designs: new Map(), files: new Map(), n: 0 };
+  const W = Math.round((L.product.label.widthIn - L.product.label.seamIn - L.product.label.panelWidthIn) * 100), H = Math.round(L.product.label.heightIn * 100);
+  const designView = (r) => {
+    const left = L.designMissing(r.design);
+    const { label, ...rest } = r.design;
+    return { id: r.id, status: r.status, assistant: 'built-in helper', design: { ...rest, label: label ? { ...label, photo: label.photo ? true : undefined } : undefined, quantity: r.design.quantity ?? 1 },
+      designSvg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}">${L.renderKeepsake(L.labelSpec(r.design), W, H, (r.design.names || [])[0])}</svg>`,
+      messages: [...r.messages], missing: left.map((m) => ({ id: m, label: L.designMissingLabels[m] })), ready: left.length === 0 && !!r.design.label?.headline, priceCents: 300, totalCents: 300 * (r.design.quantity ?? 1) };
+  };
+  // Files in the preview stay in the page; the scan page is shown them through their stand-in addresses.
+  const swapFiles = (o) => JSON.parse(JSON.stringify(o).replace(/\/assets\/pv-[a-z0-9]+\.(jpg|mp4)/g, (u) => DS.files.get(u) || u));
   const S = { me: null, bottles: [], saved: [], cards: [], vendIndex: 0, labels: {}, proofDesign: null, customCount: 0 };
   const err = (status, code, message) => { const e = new Error(message); e.status = status; e.code = code; throw e; };
   const statsOf = () => ({ bottles: S.bottles.length, donatedCents: S.bottles.reduce((s, b) => s + b.donatedCents, 0), savedCents: S.bottles.filter((b) => b.kind !== 'custom').length * 100 });
   const inner = (svg) => svg.slice(svg.indexOf('>', svg.indexOf('<svg')) + 1, svg.lastIndexOf('</svg>'));
   window.__FW_APP_FIXTURE__ = {
     start: '/app/m/ATX-014?c=preview',
+    upload(file) { const url = `/assets/pv-${(++DS.n).toString(36)}.mp4`; DS.files.set(url, URL.createObjectURL(file)); return { id: url, url }; },
+    scanFrame() {
+      const f = document.createElement('iframe');
+      f.title = 'What scanning it opens';
+      f.style.cssText = 'width:100%;height:520px;border:0;border-radius:22px;box-shadow:0 0 0 8px #000;background:#fff';
+      f.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${SCAN_CSS}</style></head><body><main id="app"></main><script>window.__FW_FIXTURE__={path:'/preview/scan',api:async()=>({})};<\/script><script>${SCAN_JS.replace(/<\/script/g, '<\\/script')}<\/script></body></html>`;
+      return f;
+    },
     async api(method, url, body, state) {
       await new Promise((r) => setTimeout(r, 120));
       const path = url.split('?')[0];
@@ -50,6 +72,57 @@
       if (key === 'GET /v1/me/bottles') return { stats: statsOf(), bottles: S.bottles };
       let m = /^\/v1\/me\/bottles\/([^/]+)(\/label\.svg)?$/.exec(path);
       if (m) { const b = S.bottles.find((x) => x.id === m[1]); if (!b) err(404, 'not_found', 'Bottle not found.'); return m[2] ? S.labels[b.id] : b; }
+      if (key === 'POST /v1/me/designs') {
+        const r = { id: `ds_${(++DS.n).toString(36)}`, status: 'open', design: { quantity: 1 }, messages: [{ role: 'assistant', text: 'Hi! What’s the occasion, and who is it for? Tell me the colors you like, and tap + to add photos or a video.' }] };
+        DS.designs.set(r.id, r); return designView(r);
+      }
+      let dm = /^\/v1\/me\/designs\/([\w-]+)(\/messages|\/scan-preview|\/proof)?$/.exec(path);
+      if (dm) {
+        const r = DS.designs.get(dm[1]); if (!r) err(404, 'not_found', 'Design not found.');
+        if (!dm[2]) return designView(r);
+        if (dm[2] === '/messages') {
+          const files = (body.attachments || []).map((a) => {
+            if (a.dataUrl) { const url = `/assets/pv-${(++DS.n).toString(36)}.jpg`; DS.files.set(url, a.dataUrl); return { kind: 'image', name: a.name, url, dataUrl: a.dataUrl }; }
+            return { kind: 'video', name: a.name, url: a.assetId };
+          });
+          const out = await L.designer.respond({ design: r.design, history: r.messages, message: body.text, attachments: files.map((f) => ({ kind: f.kind, name: f.name, dataUrl: f.dataUrl })),
+            context: { company: 'FreeWater', priceCents: 300, maxBottles: 24, fonts: Object.keys(L.keepsakeFonts), decorations: L.keepsakeDecorations, missing: L.designMissing(r.design), hasPhoto: !!r.design.label?.photo, hasVideo: !!r.design.scan?.videoUrl } });
+          const { design, problems } = L.applyDesignPatch(r.design, out.patch || {}, files);
+          let reply = out.reply; if (problems.length) reply += `\n\nI couldn’t do part of that: ${problems.join(' ')}`;
+          r.messages.push({ role: 'user', text: body.text, ...(files.length ? { attachments: files.map((f) => ({ kind: f.kind, name: f.name })) } : {}) }, { role: 'assistant', text: reply });
+          r.design = design;
+          return { ...designView(r), suggestions: out.suggestions };
+        }
+        if (dm[2] === '/scan-preview') {
+          const doc = await L.host.open({ pluginId: 'custom-experience', config: L.experienceOf(r.design), theme: L.themeFor(L.company.brand), scan: { target: { kind: 'slot', unitId: 'preview', slot: 0 }, companyId: 'freewater', locationId: 'preview', owner: { name: 'Made just for you', advertiserId: '', campaignId: '' }, viewer: { key: 'p', signedIn: false, interests: [], firstTimeWithAdvertiser: true }, now: new Date() } });
+          return swapFiles({ doc, footer: { company: 'FreeWater', brand: L.company.brand, ads: null, giving: L.givingLine(L.company, 'preview'), receiptUrl: null, packUrl: null } });
+        }
+        if (dm[2] === '/proof') {
+          const left = L.designMissing(r.design);
+          if (left.length || !r.design.label?.headline) err(422, 'not_ready', `Before the proof, add ${(left.length ? left : ['words']).map((m) => L.designMissingLabels[m]).join(', ')}.`);
+          const spec = L.labelSpec(r.design);
+          const quantity = r.design.quantity ?? 1;
+          const names = /\{name\}/.test(`${spec.headline} ${spec.sub ?? ''}`) ? (r.design.names || []).slice(0, quantity) : [];
+          const svgs = Array.from({ length: quantity }, (_, i) => L.keepsakeSvg(spec, W, H, names[i % Math.max(1, names.length)]));
+          const label = async (svg, id) => (await L.renderer.render({ unit: { id, companyId: 'freewater', locationId: 'ATX-014', kind: 'custom', placements: [], layout: [6] }, product: L.product, company: L.company, campaigns: new Map(), customArt: L.svgCreative(svg) })).svg;
+          const proofId = `pf_${(++DS.n).toString(36)}`;
+          DS.proof = { proofId, svgs, label, designId: r.id, experience: L.experienceOf(r.design) };
+          return { proofId, labelSvg: await label(svgs[0], proofId), quantity, names, priceCents: 300, totalCents: 300 * quantity, experience: DS.proof.experience,
+            note: quantity > 1 ? `This is bottle 1 of ${quantity}.${names.length ? ' Each bottle gets its own name.' : ''} The QR codes here are samples; yours get their own.` : 'This is exactly what will print. The QR codes here are samples; yours get their own.' };
+        }
+      }
+      if (key === 'POST /v1/me/custom-orders' && DS.proof && body.proofId === DS.proof.proofId) {
+        const bottles = [];
+        for (const svg of DS.proof.svgs) {
+          const id = `${D.custom.bottle.id}_${++S.customCount}`;
+          const bottle = { ...D.custom.bottle, id, labelUrl: `/v1/me/bottles/${id}/label.svg`, createdAt: new Date().toISOString(), ads: D.custom.bottle.ads.map((a) => ({ ...a, url: `/s/${id}/0` })) };
+          S.labels[id] = await DS.proof.label(svg, id);
+          bottles.push(bottle);
+        }
+        S.bottles.unshift(...bottles.slice().reverse());
+        DS.designs.get(DS.proof.designId).status = 'ordered';
+        return { ...D.custom, bottle: bottles[0], bottles, payment: { ...D.custom.payment, amountCents: 300 * bottles.length }, countdown: { ...D.custom.countdown, seconds: 24 * bottles.length } };
+      }
       if (key === 'POST /v1/me/proofs') {
         if (/<script/i.test(body.svg)) err(422, 'artwork_refused', 'Artwork refused: scripts are not allowed');
         S.proofDesign = { svg: body.svg, experience: body.experience };

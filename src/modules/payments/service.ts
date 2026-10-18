@@ -97,18 +97,20 @@ export class PaymentsService {
   }
 
   /** Take held money. Records the payment in the ledger. */
-  async capture(paymentId: string): Promise<Payment> {
+  /** Take the money that was held, or only part of it (say, when 11 of 12 bottles printed). */
+  async capture(paymentId: string, amountCents?: number): Promise<Payment> {
     const p = (await this.db.query<any>(`select p.*, c.owner_type, c.owner_id from payments p join payment_customers c on c.id = p.customer_id where p.id = $1`, [paymentId])).rows[0];
     if (!p) throw new PaymentError('not_found', 'Payment not found.', 404);
     if (p.status === 'captured') return toPayment(p);
     if (p.status !== 'authorized') throw new PaymentError('not_held', `This payment is ${p.status}; there is nothing to take.`, 409);
-    const r = await this.provider.capture(p.provider_ref, Number(p.amount_cents));
+    const amount = amountCents === undefined ? Number(p.amount_cents) : Math.min(amountCents, Number(p.amount_cents));
+    const r = await this.provider.capture(p.provider_ref, amount);
     if (r.status === 'failed') {
       await this.db.query(`update payments set status = 'failed', failure = $2, updated_at = now() where id = $1`, [paymentId, r.reason]);
       throw new PaymentError('capture_failed', r.reason);
     }
-    await this.db.query(`update payments set status = 'captured', updated_at = now() where id = $1`, [paymentId]);
-    this.bus.publish('payment.captured', p.company_id, { paymentId, payerType: p.owner_type, payerId: p.owner_id, amountCents: Number(p.amount_cents), purpose: p.purpose, ref: p.ref, provider: this.provider.name }, paymentId);
+    await this.db.query(`update payments set status = 'captured', amount_cents = $2, updated_at = now() where id = $1`, [paymentId, amount]);
+    this.bus.publish('payment.captured', p.company_id, { paymentId, payerType: p.owner_type, payerId: p.owner_id, amountCents: amount, purpose: p.purpose, ref: p.ref, provider: this.provider.name }, paymentId);
     return (await this.get(paymentId))!;
   }
 

@@ -278,8 +278,9 @@
     for (const [k, v] of Object.entries({ cx: 56, cy: 56, r: 50, fill: 'none', stroke: '#2a2a2a', 'stroke-width': 8 })) track.setAttribute(k, v);
     const ring = document.createElementNS(svgNS, 'svg'); ring.setAttribute('viewBox', '0 0 112 112'); ring.append(track, arc);
     const num = h('b', { text: String(left) });
-    const title = h('h1', { text: 'Your bottle is printing' });
-    const sub = h('p', { text: `It drops into the tray in ${left} seconds` });
+    const many = p.bottles?.length > 1;
+    const title = h('h1', { text: many ? `Your ${p.bottles.length} bottles are printing` : 'Your bottle is printing' });
+    const sub = h('p', { text: `${many ? 'They drop' : 'It drops'} into the tray in ${left} seconds` });
     const bar = h('i');
     const pct = h('span', { text: '0%' });
     const ads = p.bottle.ads.filter((a) => !a.isHouse).length;
@@ -293,7 +294,7 @@
           if (!(await ensureSignedIn())) return;
           try { await api('POST', '/v1/me/saved', { target: ad.target }); b.replaceChildren(icon(I.check), 'Saved'); b.disabled = true; toast('Saved. It’s on your Home screen.'); } catch (x) { toast(x.message); }
         } }, icon(I.saved), `Save this from ${ad.advertiser}`))),
-      h('div', {}, h('div', { class: 'progress-row' }, h('span', { text: p.bottle.kind === 'custom' ? 'Printing your design' : `Printing ${ads} ${ads === 1 ? 'ad' : 'ads'} on your label` }), pct), h('div', { class: 'progress', role: 'progressbar', 'aria-label': 'Printing' }, bar)),
+      h('div', {}, h('div', { class: 'progress-row' }, h('span', { text: p.bottles?.length > 1 ? `Printing your ${p.bottles.length} bottles` : p.bottle.kind === 'custom' ? 'Printing your design' : `Printing ${ads} ${ads === 1 ? 'ad' : 'ads'} on your label` }), pct), h('div', { class: 'progress', role: 'progressbar', 'aria-label': 'Printing' }, bar)),
       done);
     const t = setInterval(() => {
       left = Math.max(0, left - 1);
@@ -301,8 +302,8 @@
       arc.setAttribute('stroke-dashoffset', String(C * (1 - left / total)));
       const pc = Math.round(((total - left) / total) * 100);
       bar.style.width = `${pc}%`; pct.textContent = `${pc}%`;
-      if (left > 0) sub.textContent = `It drops into the tray in ${left} second${left === 1 ? '' : 's'}`;
-      else { title.textContent = 'It’s in the tray'; sub.textContent = 'Take it, and scan any ad on it to open its AR.'; clearInterval(t); }
+      if (left > 0) sub.textContent = `${many ? 'They drop' : 'It drops'} into the tray in ${left} second${left === 1 ? '' : 's'}`;
+      else { title.textContent = many ? 'They’re in the tray' : 'It’s in the tray'; sub.textContent = many ? 'Take them, and scan one to see the page you made.' : 'Take it, and scan any ad on it to open its AR.'; clearInterval(t); }
     }, 1000);
     stopCurrent = () => clearInterval(t);
   }
@@ -435,34 +436,7 @@
       confirmBox);
   }
 
-  // ---------- design my own bottle ----------
-  const FONTS = { Rounded: 'Comfortaa, Arial, sans-serif', Clean: "'DM Sans', Arial, sans-serif", Classic: 'Georgia, serif' };
-  const BG = ['#F7C6D4', '#FFE7A3', '#BFE3F5', '#CDEBC5', '#1F2A44', '#000000', '#FFFFFF', '#E8D9C5'];
-  const INK = ['#0B0B0B', '#FFFFFF', '#B8862E', '#D7262E', '#1E7DB8'];
-  const xml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[c]);
-  function wrapText(text, maxChars) {
-    const words = String(text).split(/\s+/).filter(Boolean); const lines = []; let line = '';
-    for (const w of words) { if ((line + ' ' + w).trim().length > maxChars && line) { lines.push(line); line = w; } else line = (line + ' ' + w).trim(); }
-    if (line) lines.push(line);
-    return lines.slice(0, 4);
-  }
-  function designSvg(d, W, H, withQrHint) {
-    const parts = [`<rect width="${W}" height="${H}" fill="${d.bg}"/>`];
-    if (d.photo) {
-      parts.push(`<image href="${d.photo}" x="0" y="0" width="${W}" height="${H}" preserveAspectRatio="xMidYMid slice"/>`);
-      if (d.headline || d.sub) parts.push(`<defs><linearGradient id="fade" x1="0" y1="0" x2="0" y2="1"><stop offset="${d.pos === 'top' ? 0 : 0.45}" stop-color="#000" stop-opacity="${d.pos === 'top' ? 0.55 : 0}"/><stop offset="${d.pos === 'top' ? 0.55 : 1}" stop-color="#000" stop-opacity="${d.pos === 'top' ? 0 : 0.6}"/></linearGradient></defs><rect width="${W}" height="${H}" fill="url(#fade)"/>`);
-    }
-    const head = wrapText(d.headline, Math.max(10, Math.round(W / 34)));
-    const sub = wrapText(d.sub, Math.max(18, Math.round(W / 15)));
-    const hs = 56, ss = 26, gap = 14;
-    const blockH = head.length * hs * 1.08 + (sub.length ? gap + sub.length * ss * 1.3 : 0);
-    let y = d.pos === 'top' ? 60 + hs * 0.8 : d.pos === 'middle' ? (H - blockH) / 2 + hs * 0.85 : H - 40 - blockH + hs * 0.85;
-    const x = 40;
-    for (const l of head) { parts.push(`<text x="${x}" y="${y.toFixed(1)}" font-family="${xml(FONTS[d.font])}" font-weight="700" font-size="${hs}" fill="${d.ink}">${xml(l)}</text>`); y += hs * 1.08; }
-    if (sub.length) { y += gap - hs * 0.08; for (const l of sub) { parts.push(`<text x="${x}" y="${y.toFixed(1)}" font-family="${xml(FONTS.Clean)}" font-size="${ss}" fill="${d.ink}" opacity=".9">${xml(l)}</text>`); y += ss * 1.3; } }
-    if (withQrHint) parts.push(`<rect x="${W - 92}" y="${H - 92}" width="80" height="80" rx="6" fill="#fff" opacity=".92"/><text x="${W - 52}" y="${H - 47}" text-anchor="middle" font-family="Arial" font-size="13" fill="#555">QR</text>`);
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}">${parts.join('')}</svg>`;
-  }
+  // ---------- design my own bottle, by chatting ----------
   async function shrinkPhoto(file) {
     const url = URL.createObjectURL(file);
     try {
@@ -471,76 +445,122 @@
       const c = document.createElement('canvas'); c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
       c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
       let q = 0.86, out = c.toDataURL('image/jpeg', q);
-      while (out.length > 1_500_000 && q > 0.4) { q -= 0.12; out = c.toDataURL('image/jpeg', q); }
+      while (out.length > 1_400_000 && q > 0.4) { q -= 0.12; out = c.toDataURL('image/jpeg', q); }
       return out;
     } finally { URL.revokeObjectURL(url); }
   }
-  const draft = (() => { try { return JSON.parse(store.get('fw_design') || 'null'); } catch { return null; } })() || { bg: '#F7C6D4', ink: '#0B0B0B', font: 'Rounded', pos: 'bottom', headline: '', sub: '', photo: null, from: '', message: '', confetti: true };
-  const saveDraft = () => { try { const { photo, ...rest } = draft; store.set('fw_design', JSON.stringify({ ...rest, photo: photo && photo.length < 1_000_000 ? photo : null })); } catch {} };
+  async function uploadVideo(file) {
+    if (file.size > 15 * 1024 * 1024) throw new Error(`${file.name} is ${(file.size / 1048576).toFixed(0)} MB. Videos can be up to 15 MB.`);
+    if (fixture) return fixture.upload(file);
+    const res = await fetch(`/v1/me/assets?name=${encodeURIComponent(file.name)}`, { method: 'POST', headers: { 'content-type': file.type || 'video/mp4', authorization: `Bearer ${state.token}` }, body: file });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(data?.error?.message || 'That video didn’t upload.');
+    return data;
+  }
+  const scanFrameFor = () => (fixture?.scanFrame ? fixture.scanFrame() : h('iframe', { src: '/preview/scan', title: 'What scanning it opens', style: 'width:100%;height:520px;border:0;border-radius:22px;box-shadow:0 0 0 8px #000;background:#fff' }));
 
   async function designScreen() {
     const q = query();
     const machineId = q.get('m');
-    const product = await api('GET', '/v1/public/products/bottle-16oz');
-    const { widthPx: W, heightPx: H } = product.designArea;
-    let layer = 'label';
-    const preview = h('div', { class: 'design-preview', 'aria-label': 'Preview of your design' });
-    const redraw = () => { preview.innerHTML = designSvg(draft, W, H, true); saveDraft(); };
-    const panel = h('div', { style: 'display:flex;flex-direction:column;gap:16px' });
-    const layerBtns = [['label', 'Label'], ['scan', 'Scan page']].map(([id, label]) => h('button', { type: 'button', class: 'chip-btn', 'aria-pressed': String(id === layer), onclick: () => { layer = id; layerBtns.forEach((b, i) => b.setAttribute('aria-pressed', String(['label', 'scan'][i] === layer))); drawPanel(); } }, label));
-    const swatches = (list, key) => h('div', { class: 'colors' }, list.map((c) => h('button', { type: 'button', class: 'color', style: `background:${c}`, 'aria-label': c, 'aria-pressed': String(draft[key] === c), onclick: (e) => { draft[key] = c; e.currentTarget.parentElement.querySelectorAll('.color').forEach((b) => b.setAttribute('aria-pressed', String(b === e.currentTarget))); redraw(); } })));
-    const choice = (opts, key) => h('div', { class: 'chips' }, opts.map((o) => h('button', { type: 'button', class: 'chip-btn', 'aria-pressed': String(draft[key] === o), onclick: (e) => { draft[key] = o; e.currentTarget.parentElement.querySelectorAll('.chip-btn').forEach((b) => b.setAttribute('aria-pressed', String(b === e.currentTarget))); redraw(); } }, o[0].toUpperCase() + o.slice(1))));
-    const textField = (id, label, key, max, area) => { const el = h(area ? 'textarea' : 'input', { class: 'input', id, maxlength: String(max), value: area ? null : draft[key] }); if (area) el.value = draft[key]; el.addEventListener('input', () => { draft[key] = el.value; redraw(); }); return h('div', { class: 'field' }, h('label', { for: id, text: label }), el); };
-    function drawPanel() {
-      if (layer === 'label') {
-        const file = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp', id: 'd-photo', hidden: true, onchange: async () => { const f = file.files[0]; if (!f) return; draft.photo = await shrinkPhoto(f); redraw(); drawPanel(); } });
-        panel.replaceChildren(
-          textField('d-head', 'Big words', 'headline', 60), textField('d-sub', 'Small words', 'sub', 120),
-          h('div', { class: 'field' }, h('label', { text: 'Photo' }), h('div', { style: 'display:flex;gap:8px' }, file, h('button', { class: 'btn small secondary', type: 'button', onclick: () => file.click() }, draft.photo ? 'Change photo' : 'Add a photo'), draft.photo && h('button', { class: 'btn small danger', type: 'button', onclick: () => { draft.photo = null; redraw(); drawPanel(); } }, 'Remove'))),
-          h('div', { class: 'field' }, h('label', { text: 'Background' }), swatches(BG, 'bg')),
-          h('div', { class: 'field' }, h('label', { text: 'Text color' }), swatches(INK, 'ink')),
-          h('div', { class: 'field' }, h('label', { text: 'Lettering' }), choice(Object.keys(FONTS), 'font')),
-          h('div', { class: 'field' }, h('label', { text: 'Words go' }), choice(['top', 'middle', 'bottom'], 'pos')));
-      } else {
-        const conf = h('input', { type: 'checkbox', id: 'd-conf', role: 'switch', onchange: () => { draft.confetti = conf.checked; saveDraft(); } }); conf.checked = !!draft.confetti;
-        panel.replaceChildren(
-          h('p', { class: 'muted', style: 'margin:0', text: 'This is what opens when someone scans your bottle.' }),
-          textField('d-from', 'From', 'from', 80), textField('d-msg', 'Your message', 'message', 400, true),
-          h('div', { class: 'toggle' }, h('label', { class: 'grow', for: 'd-conf' }, h('b', { text: 'Confetti' }), h('span', { class: 'muted', text: 'A burst of confetti when it opens.' })), h('span', { class: 'switch' }, conf, h('span'))));
-      }
-    }
+    if (!(await ensureSignedIn('Sign in so your design is saved while you work on it.'))) { go(machineId ? `/app/m/${machineId}` : '/app', true); return; }
+    let id = q.get('d');
+    let d = id ? await api('GET', `/v1/me/designs/${id}`) : await api('POST', '/v1/me/designs');
+    if (!id) { id = d.id; state.path = `/app/design?${machineId ? `m=${machineId}&` : ''}d=${id}`; if (!fixture) history.replaceState(null, '', state.path); }
+    let busy = false, files = [], suggestions = d.messages.length <= 1 ? ['Maya’s 30th birthday, pink and gold', 'Thank-you bottles for my team', 'Our wedding, cream and gold'] : [], view = 'label';
+    const bottle = h('div', { class: 'bottle', 'aria-hidden': 'true', style: 'width:96px;height:220px' }, h('div', { class: 'cap', style: 'width:32px;margin-left:-16px;height:16px' }), h('div', { class: 'neck', style: 'width:36px;margin-left:-18px;top:14px;height:28px' }), h('div', { class: 'body', style: 'top:40px' }, h('div', { class: 'wrap', style: 'top:36px;height:112px;background-size:cover;background-position:30% 50%' })));
+    const info = h('div', { style: 'display:flex;flex-direction:column;gap:4px;min-width:0' });
+    const flat = h('div', { class: 'design-preview', style: 'margin-top:10px' });
+    const scanBox = h('div', { hidden: true });
+    let frame = null, frameReady = false;
+    const sendScan = async () => { if (!frame || !frameReady) return; const p = await api('GET', `/v1/me/designs/${id}/scan-preview`); frame.contentWindow.postMessage({ type: 'fw-preview', ...p }, fixture ? '*' : location.origin); };
+    const onMsg = (e) => { if ((fixture || e.origin === location.origin) && e.data?.type === 'fw-preview-ready') { frameReady = true; sendScan(); } };
+    window.addEventListener('message', onMsg);
+    stopCurrent = () => window.removeEventListener('message', onMsg);
+    const chips = h('div', { class: 'layers' }, [['label', 'Label'], ['scan', 'Scan page']].map(([k, label]) => h('button', { type: 'button', class: 'chip-btn', 'aria-pressed': String(view === k), onclick: (e) => {
+      view = k; chips.querySelectorAll('.chip-btn').forEach((b) => b.setAttribute('aria-pressed', String(b === e.currentTarget)));
+      const scan = k === 'scan';
+      flat.hidden = scan; scanBox.hidden = !scan; card.hidden = scan;
+      if (scan && !frame) { frame = scanFrameFor(); scanBox.replaceChildren(frame); } else if (scan) sendScan();
+    } }, label)));
+    const card = h('div', { class: 'sample', style: 'flex-direction:row;justify-content:center;gap:18px;padding:16px' }, bottle, info);
+    const msgs = h('div', { style: 'display:flex;flex-direction:column;gap:12px', 'aria-live': 'polite' });
+    const sugg = h('div', { class: 'chips' });
+    const pending = h('div', { class: 'chips' });
+    const input = h('textarea', { class: 'input', id: 'design-ask', rows: 1, placeholder: 'Describe a change', style: 'min-height:48px;border-radius:24px;resize:none;flex:1', 'aria-label': 'Message' });
+    const file = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,video/mp4', multiple: true, hidden: true });
+    const review = h('button', { class: 'btn blue', type: 'button' }, 'Review my proof');
     const err = h('div', { class: 'notice err', hidden: true });
-    const review = h('button', { class: 'btn blue', type: 'button', onclick: async () => {
-      err.hidden = true;
-      if (!draft.headline && !draft.photo) { err.textContent = 'Add some words or a photo first.'; err.hidden = false; return; }
-      if (!(await ensureSignedIn('Sign in to save your design and see your proof.'))) return;
-      review.disabled = true;
+    const draw = () => {
+      info.replaceChildren(h('span', { class: 'small muted', text: 'Live preview' }), h('b', { style: 'font:700 20px/1.1 var(--display)', text: `${d.design.quantity} ${d.design.quantity === 1 ? 'bottle' : 'bottles'}` }),
+        h('span', { class: 'small muted', text: d.design.names?.length ? `A name on each: ${d.design.names.slice(0, 4).join(', ')}${d.design.names.length > 4 ? '…' : ''}` : 'No ads. All yours.' }),
+        h('span', { class: 'small', text: `${money(d.totalCents)}${d.design.quantity > 1 ? ` (${money(d.priceCents)} each)` : ''}` }));
+      bottle.querySelector('.wrap').style.backgroundImage = `url("${svgData(d.designSvg)}")`;
+      flat.innerHTML = d.designSvg;
+      msgs.replaceChildren(...d.messages.map((m) => h('div', { style: m.role === 'user' ? 'align-self:flex-end;max-width:85%;background:#000;color:#fff;padding:10px 14px;border-radius:18px 18px 4px 18px;white-space:pre-wrap' : 'max-width:92%;white-space:pre-wrap' }, m.text,
+        m.attachments?.length ? h('div', { class: 'small', style: 'opacity:.75;margin-top:4px', text: m.attachments.map((a) => `${a.kind === 'video' ? '🎬' : '🖼'} ${a.name || a.kind}`).join('  ') }) : null)));
+      if (busy) msgs.append(h('div', { class: 'muted', text: 'Designing…' }));
+      sugg.replaceChildren(...(busy ? [] : suggestions).map((t) => h('button', { type: 'button', class: 'chip-btn', onclick: () => say(t) }, t)));
+      pending.replaceChildren(...files.map((f, i) => h('button', { type: 'button', class: 'chip-btn', 'aria-label': `Remove ${f.name}`, onclick: () => { files.splice(i, 1); draw(); } }, `${f.kind === 'video' ? '🎬' : '🖼'} ${f.name} ×`)));
+      review.disabled = !d.ready || busy;
+      if (view === 'scan') sendScan();
+    };
+    async function say(text) {
+      if (busy) return;
+      text = (text ?? input.value).trim();
+      if (!text && !files.length) return;
+      busy = true; input.value = ''; err.hidden = true;
+      d.messages = [...d.messages, { role: 'user', text, attachments: files.map((f) => ({ kind: f.kind, name: f.name })) }];
+      draw();
       try {
-        const experience = draft.message.trim() ? { from: draft.from.trim() || 'A friend', message: draft.message.trim(), confetti: !!draft.confetti } : undefined;
-        const proof = await api('POST', '/v1/me/proofs', { productId: product.id, svg: designSvg(draft, W, H, false), ...(experience ? { experience } : {}) });
-        proofScreen(proof, machineId, experience);
-      } catch (x) { err.textContent = x.message; err.hidden = false; review.disabled = false; }
-    } }, 'Review my proof');
+        const r = await api('POST', `/v1/me/designs/${id}/messages`, { text, attachments: files.map((f) => (f.kind === 'video' ? { assetId: f.assetId, name: f.name } : { dataUrl: f.dataUrl, name: f.name })) });
+        d = r; suggestions = r.suggestions || []; files = [];
+      } catch (x) { d.messages = [...d.messages, { role: 'assistant', text: x.message }]; }
+      busy = false; draw();
+      msgs.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    file.addEventListener('change', async () => {
+      for (const f of [...file.files].slice(0, 6 - files.length)) {
+        try {
+          if (f.type.startsWith('video/')) { toast(`Uploading ${f.name}…`); const a = await uploadVideo(f); files.push({ kind: 'video', name: f.name, assetId: a.id }); }
+          else files.push({ kind: 'image', name: f.name, dataUrl: await shrinkPhoto(f) });
+        } catch (x) { toast(x.message); }
+      }
+      file.value = ''; draw();
+    });
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); say(); } });
+    const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const mic = Speech ? h('button', { class: 'back', type: 'button', 'aria-label': 'Speak instead of typing', onclick: () => { const r = new Speech(); r.lang = navigator.language || 'en-US'; r.onresult = (e) => { input.value = `${input.value} ${e.results[0][0].transcript}`.trim(); }; r.start(); toast('Listening…'); } }, icon('M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3Z|M5 11a7 7 0 0 0 14 0|M12 18v3')) : null;
+    review.addEventListener('click', async () => {
+      err.hidden = true; review.disabled = true;
+      try { const proof = await api('POST', `/v1/me/designs/${id}/proof`); proofScreen(proof, machineId, id); }
+      catch (x) { err.textContent = x.message; err.hidden = false; review.disabled = false; }
+    });
     screen({ nav: false },
-      backBar('Design my bottle', 'You control every part. No ads.', machineId ? `/app/m/${machineId}` : '/app'),
-      preview, h('div', { class: 'layers' }, layerBtns), panel, err, review,
-      h('p', { class: 'small muted center', style: 'margin:-6px 0 0', text: 'Next you’ll see exactly what prints, before you pay.' }));
-    drawPanel(); redraw();
+      backBar('Design my bottle', 'Describe it. Add photos and videos.', machineId ? `/app/m/${machineId}` : '/app'),
+      card, flat, scanBox, chips, msgs, pending, sugg,
+      h('form', { style: 'display:flex;gap:8px;align-items:flex-end', onsubmit: (e) => { e.preventDefault(); say(); } }, file,
+        h('button', { class: 'back', type: 'button', 'aria-label': 'Add photos or a video', onclick: () => file.click() }, icon('M12 5v14|M5 12h14')), input, mic,
+        h('button', { class: 'back', type: 'submit', 'aria-label': 'Send', style: 'background:#000;color:#fff' }, icon('M5 12h14|M13 6l6 6-6 6'))),
+      err, review,
+      h('p', { class: 'small muted center', style: 'margin:-6px 0 0', text: `Designer: ${d.assistant}. You’ll see exactly what prints before you pay.` }));
+    draw();
   }
 
-  async function proofScreen(proof, machineId, experience) {
+  async function proofScreen(proof, machineId, designId) {
     const agree = h('input', { type: 'checkbox', id: 'agree' });
     const err = h('div', { class: 'notice err', hidden: true });
     let cards = await api('GET', '/v1/me/cards').catch(() => []);
     const cardArea = h('div', {});
     const drawCards = () => {
       cardArea.replaceChildren(cards.length
-        ? h('div', { class: 'list-row' }, h('span', { class: 'grow' }, h('b', { text: `Pay with ${cards[0].brand} •••• ${cards[0].last4}` }), h('span', { class: 'small muted', text: 'Held first, charged only once it prints.' })))
+        ? h('div', { class: 'list-row' }, h('span', { class: 'grow' }, h('b', { text: `Pay with ${cards[0].brand} •••• ${cards[0].last4}` }), h('span', { class: 'small muted', text: 'Held first, charged only for bottles that print.' })))
         : h('div', { style: 'display:flex;flex-direction:column;gap:8px' }, h('p', { style: 'margin:0', class: 'small' }, h('span', { class: 'test-badge', text: 'Test mode' }), ' No real money moves yet. Pick a test card:'),
           h('div', { class: 'chips' }, [['tok_visa', 'Visa 4242'], ['tok_mastercard', 'Mastercard 4444'], ['tok_declined', 'A card that declines']].map(([t, l]) => h('button', { type: 'button', class: 'chip-btn', onclick: async () => { try { await api('POST', '/v1/me/cards', { token: t }); cards = await api('GET', '/v1/me/cards'); drawCards(); } catch (x) { toast(x.message); } } }, l)))));
     };
     drawCards();
     const code = machineId ? presenceCode(machineId) : null;
+    const total = proof.totalCents ?? proof.priceCents;
+    const qty = proof.quantity ?? 1;
     const pay = h('button', { class: 'btn', type: 'button', onclick: async () => {
       err.hidden = true;
       if (!agree.checked) { err.textContent = 'Check the box to confirm the proof looks right.'; err.hidden = false; return; }
@@ -549,19 +569,22 @@
       pay.disabled = true; pay.replaceChildren(h('span', { class: 'spin' }), 'Paying and printing');
       try {
         const r = await api('POST', '/v1/me/custom-orders', { orderId: rid(), proofId: proof.proofId, locationId: machineId, presenceCode: code });
-        state.printing = r; store.set('fw_design', null);
+        state.printing = r;
+        if (r.notice) toast(r.notice);
         go('/app/printing');
-      } catch (x) { err.textContent = x.message; err.hidden = false; pay.disabled = false; pay.replaceChildren(`Pay ${money(proof.priceCents)} and print`); }
-    } }, `Pay ${money(proof.priceCents)} and print`);
+      } catch (x) { err.textContent = x.message; err.hidden = false; pay.disabled = false; pay.replaceChildren(`Pay ${money(total)} and print`); }
+    } }, `Pay ${money(total)} and print`);
+    const exp = proof.experience;
     screen({ nav: false },
-      backBar('Your proof', 'This is exactly what prints.', null),
+      backBar('Your proof', qty > 1 ? `Bottle 1 of ${qty}. This is exactly what prints.` : 'This is exactly what prints.', null),
       h('div', { class: 'proof' }, h('img', { src: svgData(proof.labelSvg), alt: 'Your full label, laid flat, with the company panel on the right' })),
-      h('p', { class: 'small muted', style: 'margin:-6px 0 0', text: 'The label wraps all the way around the bottle. The black panel on the right is the same on every bottle. The QR codes here are samples; yours get their own.' }),
-      experience && h('div', { class: 'notice' }, h('b', { text: 'When someone scans it: ' }), `“${experience.message}” from ${experience.from}${experience.confetti ? ', with confetti' : ''}.`),
-      h('label', { class: 'check', for: 'agree' }, agree, h('span', {}, h('b', { text: 'It looks right. Print it exactly like this. ' }), h('span', { class: 'muted', text: 'I checked the spelling, the photo and the colors.' }))),
-      h('div', { class: 'price' }, h('span', { text: 'One custom bottle, no ads' }), h('b', { text: money(proof.priceCents) })),
+      h('p', { class: 'small muted', style: 'margin:-6px 0 0', text: `The label wraps all the way around the bottle. The black panel on the right is the same on every bottle. ${proof.note || ''}` }),
+      proof.names?.length ? h('div', { class: 'notice' }, h('b', { text: 'Names: ' }), proof.names.join(', ')) : null,
+      exp && h('div', { class: 'notice' }, h('b', { text: 'When someone scans it: ' }), `“${exp.message}” from ${exp.from}${exp.confetti ? ', with confetti' : ''}${exp.videoUrl ? ', and your video' : ''}${exp.photoUrls?.length ? `, and ${exp.photoUrls.length} photo${exp.photoUrls.length === 1 ? '' : 's'}` : ''}.`),
+      h('label', { class: 'check', for: 'agree' }, agree, h('span', {}, h('b', { text: 'It looks right. Print it exactly like this. ' }), h('span', { class: 'muted', text: 'I checked the spelling, the photo and the colors, and I have the right to use them.' }))),
+      h('div', { class: 'price' }, h('span', { text: qty > 1 ? `${qty} custom bottles, no ads` : 'One custom bottle, no ads' }), h('b', { text: money(total) })),
       cardArea, err, pay,
-      h('button', { class: 'btn secondary', type: 'button', onclick: () => go(`/app/design${machineId ? `?m=${machineId}` : ''}`) }, 'Change my design'));
+      h('button', { class: 'btn secondary', type: 'button', onclick: () => go(`/app/design?${machineId ? `m=${machineId}&` : ''}${designId ? `d=${designId}` : ''}`) }, 'Change my design'));
   }
 
   // ---------- start ----------

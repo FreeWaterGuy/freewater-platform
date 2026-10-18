@@ -110,7 +110,19 @@ npm run demo:app-preview   # builds out/app-preview/, a clickable copy that need
 - **The countdown shows an ad.** For a free bottle it's the biggest ad on that bottle, with a button to save the offer. For a paid custom bottle it's an ad allowed at that machine. The countdown ad isn't billed yet.
 - **Your bottles.** Every bottle you got, with each ad on it. Ads with 3D have an AR button that opens its scan page; the others open their page. Each bottle shows what it earned and gave, and links to its receipt. Home adds it up: bottles, given to charity, money saved.
 - **Saved, Machines, Scan, Me.** Saved offers from your scans. A list of machines. A scanner that reads FreeWater codes with the camera and ignores everyone else's. Your name, privacy switches (all off to start), interests, saved card, download your data, sign out, delete your account.
-- **Design my own bottle.** Words, a photo, colors and lettering for the label, and what opens when someone scans it (a message, confetti). Then a proof (`POST /v1/me/proofs`) shows the exact label that will print, panel and all, with the price. Only an approved proof can be printed (`POST /v1/me/custom-orders` takes the proof's id), within a day, at the proof's price, with the code from the machine's screen. The card is held, charged only once it prints, and released if it doesn't. The AI chat for designing comes in step 5.
+- **Design my own bottle, by chatting.** See the next section.
+
+## Designing your own bottle by chatting
+
+The paid, ad-free bottles people design themselves: birthdays, weddings, teams, thank-yous.
+
+- **Describe it.** "Maya's 30th birthday, pink and gold. Love, Jordan" and a photo makes a full design: the words, colors, the photo on the front, confetti, and a message for the scan page. Then change anything by saying so, or with the quick replies. A microphone button lets people talk instead of type, where the phone supports it.
+- **Photos and videos.** Photos go on the label (printed from the picture itself) and on the scan page; a video (`POST /v1/me/assets`, MP4 up to 15 MB) plays when friends scan the bottle. Only the person who uploaded a file can use it.
+- **Up to 24 bottles, a name on each.** "Make 12 bottles with a name on each. Names: Maya, Ana, Ben…" prints each bottle with its own name.
+- **Every layer, one preview.** The label as it will look, on a bottle and flat, and the scan page exactly as friends will see it.
+- **Proof, then pay.** `POST /v1/me/designs/:id/proof` makes the full label for bottle 1 with the price for all of them. Paying holds the money, prints the bottles one after another, and takes only what printed: if 1 of 4 jams, you pay for 3.
+- **Swappable AI, same as the ad assistant.** Claude when `ANTHROPIC_API_KEY` is set (it sees the photos), the built-in helper otherwise or if Claude can't be reached. Every change is checked (`src/modules/custom/design.ts`): readable colors, real fonts and decorations, 1 to 24 bottles.
+- **The template** (`src/modules/creative/keepsake.ts`) lays out words only, photo beside words, or a photo across the whole label, with confetti, stars, hearts, dots, stripes or balloons, and always leaves the corner clear for the QR code.
 
 ## FreeWater Ads: the advertiser portal
 
@@ -170,4 +182,4 @@ All prices in `src/demo/seed.ts` are placeholders.
 
 - A real printer adapter for the Model 6 and the micro-factory lines, once the printers are chosen (the virtual printer shows the contract any printer must follow)
 - Webhooks, so partners hear about events without polling
-- The AI design assistant for people designing their own bottles (step 5), then the ops console, driver app and delivery subscriptions (step 6)
+- The ops console, driver app and delivery subscriptions with route planning (step 6)

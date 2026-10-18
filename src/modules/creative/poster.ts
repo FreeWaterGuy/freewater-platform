@@ -90,7 +90,7 @@ export function renderPoster(s: PosterSpec, w: number, h: number): string {
 
   if (photo) {
     const px = wide ? w * 0.48 : 0, pw = wide ? w * 0.52 : w, ph = wide ? h : h * 0.52;
-    parts.push(`<svg x="${px.toFixed(1)}" y="0" width="${pw.toFixed(1)}" height="${ph.toFixed(1)}" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid slice"><image href="${photo}" x="0" y="0" width="100" height="100" preserveAspectRatio="xMidYMid slice"/></svg>`);
+    parts.push(`<image href="${photo}" x="${px.toFixed(1)}" y="0" width="${pw.toFixed(1)}" height="${ph.toFixed(1)}" preserveAspectRatio="xMidYMid slice"/>`);
     if (!wide) parts.push(`<rect y="${(ph - 2).toFixed(1)}" width="${w}" height="${(h - ph + 2).toFixed(1)}" fill="${s.colors.bg}"/>`);
   } else if (s.icon) {
     const size = wide ? Math.min(h * 0.6, w * 0.34) : Math.min(w * (narrow ? 0.72 : 0.62), h * 0.3, 150);
@@ -107,7 +107,7 @@ export function renderPoster(s: PosterSpec, w: number, h: number): string {
   let top = pad;
   if (logo) {
     const lh = narrow ? 34 : 54, lw = Math.min(textW - pad * 2, lh * 3);
-    parts.push(`<svg x="${pad}" y="${pad}" width="${lw.toFixed(1)}" height="${lh}" viewBox="0 0 300 100" preserveAspectRatio="xMinYMid meet"><image href="${logo}" x="0" y="0" width="300" height="100" preserveAspectRatio="xMinYMid meet"/></svg>`);
+    parts.push(`<image href="${logo}" x="${pad}" y="${pad}" width="${lw.toFixed(1)}" height="${lh}" preserveAspectRatio="xMinYMid meet"/>`);
     top += lh;
   } else if (!(photo && !wide)) {
     brandLines.forEach((l, i) => parts.push(`<text x="${pad}" y="${(pad + brandSize * (1 + i * 1.1)).toFixed(1)}" font-family="${esc(font)}" font-weight="700" font-size="${brandSize.toFixed(1)}" fill="${s.colors.accent}">${esc(l)}</text>`));

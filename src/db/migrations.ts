@@ -300,6 +300,33 @@ create table ad_drafts (
 create index ad_drafts_adv on ad_drafts(company_id, advertiser_id);
 `,
   },
+  {
+    id: '006_custom_designs',
+    sql: `
+-- People upload photos and videos for their own bottles.
+alter table assets add column user_id text;
+create index assets_user on assets(user_id);
+
+-- A bottle someone is designing in the chat, and the conversation that made it.
+create table custom_designs (
+  id text primary key,
+  company_id text not null,
+  user_id text not null references users(id),
+  status text not null check (status in ('open', 'ordered')),
+  data jsonb not null,
+  messages jsonb not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index custom_designs_user on custom_designs(user_id);
+
+-- A proof can cover several bottles, each with its own name.
+alter table proofs add column quantity integer not null default 1;
+alter table proofs add column names jsonb;
+alter table proofs add column spec jsonb; -- the design itself, so each bottle can be drawn with its own name
+alter table proofs add column design_id text;
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {
