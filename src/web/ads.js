@@ -29,6 +29,24 @@
   let tt; const toast = (m) => { toastEl.textContent = m; toastEl.classList.add('show'); clearTimeout(tt); tt = setTimeout(() => toastEl.classList.remove('show'), 2600); };
 
   const state = { token: store.get('fw_ads_token'), me: null, config: null, path: fixture ? fixture.start : location.pathname };
+
+  // The second sign-in step: when it's on, sign-in asks for the code from the authenticator app (or a recovery code).
+  const withSecondStep = (r) => (!r || !r.secondStep ? Promise.resolve(r) : new Promise((resolve, reject) => {
+    const wrap = document.createElement('div');
+    wrap.setAttribute('role', 'dialog'); wrap.setAttribute('aria-modal', 'true'); wrap.setAttribute('aria-label', 'Second sign-in step');
+    wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);display:grid;place-items:center;z-index:100;padding:16px';
+    const card = document.createElement('form');
+    card.style.cssText = 'background:#fff;color:#0B0B0B;border-radius:20px;padding:24px;max-width:380px;width:100%;display:flex;flex-direction:column;gap:12px';
+    const title = document.createElement('h2'); title.textContent = 'One more step'; title.style.cssText = 'margin:0;font-size:22px';
+    const p = document.createElement('p'); p.textContent = 'Enter the 6-digit code from your authenticator app, or one of your recovery codes.'; p.style.margin = '0';
+    const input = document.createElement('input'); input.className = 'input code-input'; input.autocomplete = 'one-time-code'; input.setAttribute('aria-label', 'Code from your app'); input.maxLength = 16;
+    const err = document.createElement('div'); err.className = 'notice err'; err.hidden = true;
+    const ok = document.createElement('button'); ok.className = 'btn wide'; ok.type = 'submit'; ok.textContent = 'Sign in';
+    const cancel = document.createElement('button'); cancel.className = 'btn secondary'; cancel.type = 'button'; cancel.textContent = 'Cancel';
+    cancel.onclick = () => { wrap.remove(); reject(new Error('Sign-in cancelled.')); };
+    card.onsubmit = async (e) => { e.preventDefault(); err.hidden = true; ok.disabled = true; try { const out = await api('POST', '/v1/auth/second-step', { challenge: r.challenge, code: input.value.trim() }); wrap.remove(); resolve(out); } catch (x) { err.textContent = x.message; err.hidden = false; ok.disabled = false; } };
+    card.append(title, p, input, err, ok, cancel); wrap.append(card); document.body.append(wrap); input.focus();
+  }));
   async function api(method, url, body) {
     if (fixture) return fixture.api(method, url, body);
     const res = await fetch(url, { method, headers: { ...(body ? { 'content-type': 'application/json' } : {}), ...(state.token ? { authorization: `Bearer ${state.token}` } : {}) }, body: body ? JSON.stringify(body) : undefined });
@@ -137,7 +155,7 @@
       const input = h('input', { class: 'input code-input', id: 'a-code', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: '6', 'aria-label': '6-digit code' });
       const err = h('div', { class: 'notice err', hidden: true });
       right.replaceChildren(h('h2', { style: 'font:700 26px/1.2 var(--display);margin:0', text: 'Check your email' }), h('p', { style: 'margin:0;color:var(--muted)', text: `We sent a code to ${to}.` }),
-        h('form', { style: 'display:flex;flex-direction:column;gap:12px', onsubmit: async (e) => { e.preventDefault(); err.hidden = true; try { let vk = {}; try { vk = { ...(/^[A-Za-z0-9_-]{8,64}$/.test(localStorage.getItem('fw_viewer') || '') ? { viewerKey: localStorage.getItem('fw_viewer') } : {}) }; } catch {} const r = await api('POST', '/v1/auth/verify', { companyId: state.config.companyId, channel: 'email', to, code: input.value.trim(), ...vk }); state.token = r.token; store.set('fw_ads_token', r.token); state.me = null; render(); } catch (x) { err.textContent = x.message; err.hidden = false; } } },
+        h('form', { style: 'display:flex;flex-direction:column;gap:12px', onsubmit: async (e) => { e.preventDefault(); err.hidden = true; try { let vk = {}; try { vk = { ...(/^[A-Za-z0-9_-]{8,64}$/.test(localStorage.getItem('fw_viewer') || '') ? { viewerKey: localStorage.getItem('fw_viewer') } : {}) }; } catch {} const r = await withSecondStep(await api('POST', '/v1/auth/verify', { companyId: state.config.companyId, channel: 'email', to, code: input.value.trim(), ...vk })); state.token = r.token; store.set('fw_ads_token', r.token); state.me = null; render(); } catch (x) { err.textContent = x.message; err.hidden = false; } } },
           input, err, h('button', { class: 'btn wide', type: 'submit' }, 'Sign in')),
         h('button', { class: 'btn secondary', type: 'button', onclick: step1 }, 'Use a different email'));
       input.focus();

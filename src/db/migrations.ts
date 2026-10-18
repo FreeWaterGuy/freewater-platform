@@ -891,6 +891,16 @@ create table security_events (id text primary key, company_id text, kind text no
 create index security_events_company on security_events(company_id, at desc);
 `,
   },
+  {
+    id: '021_second_step',
+    sql: `
+-- The second sign-in step: an authenticator app's secret (encrypted), recovery codes (fingerprints), sign-in tickets.
+create table second_steps (user_id text primary key, secret text not null, created_at timestamptz not null, enabled_at timestamptz, last_step bigint not null default 0);
+create table recovery_codes (id text primary key, user_id text not null, code_hash text not null, used_at timestamptz);
+create index recovery_codes_user on recovery_codes(user_id);
+create table second_step_challenges (id text primary key, user_id text not null, token_hash text not null unique, expires_at timestamptz not null, attempts int not null default 0, used_at timestamptz);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

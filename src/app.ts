@@ -7,6 +7,7 @@ import { TestOutbox, type Messenger } from './adapters/messaging/contract';
 import type { PaymentProvider } from './adapters/payments/contract';
 import { TestPaymentProvider } from './adapters/payments/test';
 import { AccountsService } from './modules/accounts/service';
+import { SecondStep } from './modules/accounts/secondStep';
 import { PaymentsService } from './modules/payments/service';
 import { ExperienceHost } from './modules/experiences/host';
 import { builtinPlugins } from './modules/experiences/builtins';
@@ -145,6 +146,9 @@ export async function createApp(opts: AppOptions) {
   const messenger = opts.messenger ?? new TestOutbox(process.env.ECHO_CODES === '1');
   const accounts = new AccountsService(db, messenger, opts.clock, (id) => platform.companies.get(id)?.name ?? 'FreeWater');
   packs.audienceFor = (customerId, companyId) => accounts.audienceFor(customerId, companyId);
+  // The second sign-in step (an authenticator app), with its secret kept encrypted.
+  const secondStep = new SecondStep(db, await loadSecret(db, 'second-step'), opts.clock);
+  accounts.secondStep = secondStep;
   const payments = new PaymentsService(db, opts.payments ?? new TestPaymentProvider(), platform.bus, () => persistence.flush());
 
   const host = new ExperienceHost({ builtinModel: (id) => (builtinModelIds.includes(id) ? `/models/builtin/${id}.glb` : `/models/builtin/missing.glb`) }, { timeoutMs: opts.pluginTimeoutMs });
@@ -254,7 +258,7 @@ export async function createApp(opts: AppOptions) {
   await fleet.load();
   made.registry.registerPrinter('model6-fleet', new MachineFleetPrinter(() => fleet, made.printer));
 
-  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, transparency, anchors, agents, profit, distributions, team };
+  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, transparency, anchors, agents, profit, distributions, team, secondStep };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

@@ -87,6 +87,8 @@
     if (key === 'GET /v1/team/batches') return clone(R.given);
     if (key === 'GET /v1/security/events') return clone(R.security);
     if (key === 'POST /v1/security/review') return [];
+    if (key === 'POST /v1/me/second-step/start') return clone(R.secondStepStart);
+    if (key.startsWith('POST /v1/me/second-step/')) return fail(400, 'This preview can’t check codes from your app. In the real console this turns it on.');
     if (key === 'POST /v1/team/intake') return clone(R.intake);
     if (key.startsWith('POST /v1/team/')) return fail(400, 'This preview doesn’t record anything. In the real console this works.');
     if (key.startsWith('POST /v1/agents/')) return fail(400, 'This preview doesn’t change anything. In the real console this works.');

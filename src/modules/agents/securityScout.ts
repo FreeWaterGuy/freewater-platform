@@ -10,6 +10,7 @@ export interface SecurityFacts {
   keys: { id: string; name: string; scopes: string[]; createdAt: string; lastUsedAt?: string | null; advertiserId?: string | null; locationId?: string | null }[];
   webhooks: { id: string; url: string; status: string }[];
   owners: number; // people with the owner role
+  ownersWithSecondStep: number;
   now: Date;
 }
 
@@ -39,6 +40,8 @@ export function securityScan(c: CompanyConfig, f: SecurityFacts, open: Set<strin
   // Connections out: webhooks should be encrypted.
   for (const w of f.webhooks) if (w.status === 'active' && w.url.startsWith('http://')) add({ kind: 'note', title: 'A webhook sends to an unencrypted address', detail: `${w.url} uses http, not https: what it receives can be read on the way. Change it to https.` });
   // Owners: one is a single point of failure, many is a wide door.
+  // The second sign-in step: the strongest protection for the accounts that can do the most.
+  if (f.owners > 0 && !c.security?.ownersNeedSecondStep) add({ kind: 'security', title: 'Require a second sign-in step for owners', detail: `Owners can do everything, so a stolen email inbox is a stolen company. With this on, owners also enter a code from an authenticator app. ${f.ownersWithSecondStep} of ${f.owners} owner${f.owners === 1 ? ' has' : 's have'} set one up; anyone who hasn’t will be asked to before doing anything else. Set yours up first (below), then turn this on.`, change: { path: 'security:require-second-step', value: null }, expected: 'A stolen email no longer opens the company.' });
   if (f.owners > 4) add({ kind: 'note', title: `${f.owners} people are owners`, detail: 'Owners can do everything. Give people the narrowest role that fits (operations, finance, reviewer) and keep owners to a few.' });
   if (f.owners === 1) add({ kind: 'note', title: 'Only one owner', detail: 'If that one account is lost, nobody can manage the company. Add a second owner you trust.' });
   void c;

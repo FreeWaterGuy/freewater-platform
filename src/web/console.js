@@ -36,6 +36,24 @@
 
   const qp = new URLSearchParams(fixture ? '' : location.search);
   const S = { token: fixture?.token ?? store.get('fw_console_token'), company: qp.get('company') || store.get('fw_console_company'), me: null, config: null, ov: null, dirty: false, path: fixture ? fixture.start : location.pathname + location.search };
+
+  // The second sign-in step: when it's on, sign-in asks for the code from the authenticator app (or a recovery code).
+  const withSecondStep = (r) => (!r || !r.secondStep ? Promise.resolve(r) : new Promise((resolve, reject) => {
+    const wrap = document.createElement('div');
+    wrap.setAttribute('role', 'dialog'); wrap.setAttribute('aria-modal', 'true'); wrap.setAttribute('aria-label', 'Second sign-in step');
+    wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);display:grid;place-items:center;z-index:100;padding:16px';
+    const card = document.createElement('form');
+    card.style.cssText = 'background:#fff;color:#0B0B0B;border-radius:20px;padding:24px;max-width:380px;width:100%;display:flex;flex-direction:column;gap:12px';
+    const title = document.createElement('h2'); title.textContent = 'One more step'; title.style.cssText = 'margin:0;font-size:22px';
+    const p = document.createElement('p'); p.textContent = 'Enter the 6-digit code from your authenticator app, or one of your recovery codes.'; p.style.margin = '0';
+    const input = document.createElement('input'); input.className = 'input code-input'; input.autocomplete = 'one-time-code'; input.setAttribute('aria-label', 'Code from your app'); input.maxLength = 16;
+    const err = document.createElement('div'); err.className = 'notice err'; err.hidden = true;
+    const ok = document.createElement('button'); ok.className = 'btn wide'; ok.type = 'submit'; ok.textContent = 'Sign in';
+    const cancel = document.createElement('button'); cancel.className = 'btn secondary'; cancel.type = 'button'; cancel.textContent = 'Cancel';
+    cancel.onclick = () => { wrap.remove(); reject(new Error('Sign-in cancelled.')); };
+    card.onsubmit = async (e) => { e.preventDefault(); err.hidden = true; ok.disabled = true; try { const out = await api('POST', '/v1/auth/second-step', { challenge: r.challenge, code: input.value.trim() }); wrap.remove(); resolve(out); } catch (x) { err.textContent = x.message; err.hidden = false; ok.disabled = false; } };
+    card.append(title, p, input, err, ok, cancel); wrap.append(card); document.body.append(wrap); input.focus();
+  }));
   async function api(method, url, body) {
     if (fixture) return fixture.api(method, url, body);
     const res = await fetch(url, { method, headers: { ...(body ? { 'content-type': 'application/json' } : {}), ...(S.token ? { authorization: `Bearer ${S.token}` } : {}) }, body: body ? JSON.stringify(body) : undefined });
@@ -70,6 +88,7 @@
     if (!S.me) return signIn();
     if (!['owner'].includes(S.me.role)) return shell('', h('div', { class: 'notice err', text: 'The console is for company owners. Ask an owner to change your role, or use the ops console.' }));
     try { S.ov = await api('GET', '/v1/console'); } catch (e) { return shell('', h('div', { class: 'notice err', text: e.message })); }
+    if (S.ov.you?.mustSetUpSecondStep) return mustSetUpPage();
     for (const [re, fn] of routes) {
       const m = re.exec(pathname);
       if (m) { try { await fn(...m.slice(1)); } catch (e) { shell('', h('div', { class: 'notice err', text: e.message })); } window.scrollTo(0, 0); return; }
@@ -100,7 +119,7 @@
     const b = S.config.brand;
     root.replaceChildren(h('div', { class: 'auth' }, h('div', { class: 'left', style: `background:${b.panelColor};color:${b.textColor}` }, h('div', { class: 'logo' }, h('span', { text: b.logoTop }), h('span', { text: b.logoBottom, style: `color:${b.accentColor}` }), h('small', { text: 'Console' })), h('h1', {}, 'Make it ', h('span', { text: 'yours', style: `color:${b.accentColor}` }), '.'), h('p', { style: 'opacity:.7;margin:0', text: `${S.config.name}: brand, ads, giving, machines, team, API keys and webhooks.` })), right));
     const step1 = () => { const input = h('input', { class: 'input', id: 'c-email', type: 'email', autocomplete: 'email', placeholder: 'you@company.com' }); right.replaceChildren(h('h2', { style: 'font:700 26px/1.2 var(--display);margin:0', text: 'Owner sign in' }), h('form', { style: 'display:flex;flex-direction:column;gap:12px', onsubmit: async (e) => { e.preventDefault(); to = input.value.trim(); try { await api('POST', '/v1/auth/start', { companyId: S.config.companyId, channel: 'email', to }); step2(); } catch (x) { toast(x.message); } } }, h('div', { class: 'field' }, h('label', { for: 'c-email', text: 'Work email' }), input), h('button', { class: 'btn wide', type: 'submit' }, 'Email me a code'), link('/developers', { style: 'text-align:center' }, 'Just looking? Read the developer docs'))); input.focus(); };
-    const step2 = () => { const input = h('input', { class: 'input code-input', id: 'c-code', inputmode: 'numeric', maxlength: '6', autocomplete: 'one-time-code', 'aria-label': '6-digit code' }); right.replaceChildren(h('h2', { style: 'font:700 26px/1.2 var(--display);margin:0', text: 'Check your email' }), h('p', { style: 'margin:0;color:var(--muted)', text: `We sent a 6-digit code to ${to}.` }), h('form', { style: 'display:flex;flex-direction:column;gap:12px', onsubmit: async (e) => { e.preventDefault(); try { const r = await api('POST', '/v1/auth/verify', { companyId: S.config.companyId, channel: 'email', to, code: input.value.trim() }); S.token = r.token; store.set('fw_console_token', r.token); store.set('fw_console_company', S.config.companyId); S.me = null; render(); } catch (x) { toast(x.message); } } }, input, h('button', { class: 'btn wide', type: 'submit' }, 'Sign in'))); input.focus(); };
+    const step2 = () => { const input = h('input', { class: 'input code-input', id: 'c-code', inputmode: 'numeric', maxlength: '6', autocomplete: 'one-time-code', 'aria-label': '6-digit code' }); right.replaceChildren(h('h2', { style: 'font:700 26px/1.2 var(--display);margin:0', text: 'Check your email' }), h('p', { style: 'margin:0;color:var(--muted)', text: `We sent a 6-digit code to ${to}.` }), h('form', { style: 'display:flex;flex-direction:column;gap:12px', onsubmit: async (e) => { e.preventDefault(); try { const r = await withSecondStep(await api('POST', '/v1/auth/verify', { companyId: S.config.companyId, channel: 'email', to, code: input.value.trim() })); S.token = r.token; store.set('fw_console_token', r.token); store.set('fw_console_company', S.config.companyId); S.me = null; render(); } catch (x) { toast(x.message); } } }, input, h('button', { class: 'btn wide', type: 'submit' }, 'Sign in'))); input.focus(); };
     step1();
   }
 
@@ -518,6 +537,37 @@
   }
 
   // ---------- security ----------
+  /** Setting up (or managing) your own second sign-in step. */
+  function secondStepBox(onDone) {
+    const you = S.ov.you;
+    const box = h('div', { class: 'stack' });
+    const showCodes = (codes) => box.replaceChildren(h('div', { class: 'once' }, h('b', { text: 'Your recovery codes. Save them now; they’re shown only once.' }), h('p', { text: 'Each works once, if your phone is lost. Keep them somewhere safe (a password manager, or printed in a drawer).' }), h('pre', { class: 'code', text: codes.join('\n') }), h('button', { class: 'btn', type: 'button', onclick: () => { copy(codes.join('\n')); } }, 'Copy them')), h('button', { class: 'btn blue', type: 'button', onclick: onDone }, 'I’ve saved them'));
+    const codeField = (label) => h('input', { class: 'input code-input', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: '16', 'aria-label': label, placeholder: '123456', style: 'max-width:220px' });
+    if (!you?.person) box.append(h('p', { class: 'muted', style: 'margin:0', text: 'Sign in as a person (not with an API key) to set this up.' }));
+    else if (!you.secondStep?.enabled) {
+      box.append(h('p', { style: 'margin:0', text: 'Off. With it on, signing in also needs the 6-digit code from an authenticator app on your phone (Google Authenticator, 1Password, Authy…). A stolen email alone won’t get in.' }),
+        h('div', { class: 'toolbar' }, h('button', { class: 'btn blue', type: 'button', onclick: async () => {
+          try {
+            const st = await api('POST', '/v1/me/second-step/start');
+            const code = codeField('Code from your app');
+            box.replaceChildren(h('p', { style: 'margin:0', text: '1. In your authenticator app, add an account and scan this:' }), h('img', { src: svgSrc(st.qrSvg), alt: 'QR code for your authenticator app', width: 220, height: 220, style: 'background:#fff;border-radius:12px;padding:8px' }), h('p', { class: 'muted', style: 'margin:0;font-size:13px' }, 'Or type this key: ', h('span', { class: 'mono', text: st.secret })), h('p', { style: 'margin:0', text: '2. Enter the 6-digit code it shows:' }),
+              h('div', { class: 'toolbar' }, code, h('button', { class: 'btn blue', type: 'button', onclick: async () => { try { const r = await api('POST', '/v1/me/second-step/confirm', { code: code.value.trim() }); toast('Your second sign-in step is on.'); showCodes(r.recoveryCodes); } catch (x) { toast(x.message); } } }, 'Turn it on')));
+          } catch (x) { toast(x.message); }
+        } }, 'Set it up')));
+    } else {
+      const code = codeField('Code from your app or a recovery code');
+      box.append(h('p', { style: 'margin:0', text: `On since ${when(you.secondStep.since)}. ${you.secondStep.recoveryCodesLeft} recovery codes left.` }),
+        h('div', { class: 'toolbar' }, code, h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { try { const r = await api('POST', '/v1/me/second-step/recovery-codes', { code: code.value.trim() }); showCodes(r.recoveryCodes); } catch (x) { toast(x.message); } } }, 'New recovery codes'),
+          h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { try { await api('POST', '/v1/me/second-step/off', { code: code.value.trim() }); toast('Turned off.'); render(); } catch (x) { toast(x.message); } } }, 'Turn it off')),
+        h('p', { class: 'muted', style: 'margin:0;font-size:13px', text: 'Either needs a code from your app (or a recovery code).' }));
+    }
+    return box;
+  }
+  /** Owners who must set it up see only this until they do. */
+  function mustSetUpPage() {
+    shell('', head('One more step to keep the company safe', 'Owners here need a second sign-in step. Set up an authenticator app on your phone; it takes a minute. Then everything else opens.'), h('div', { class: 'stack' }, section('Your second sign-in step', null, secondStepBox(() => { S.ov = null; render(); }))));
+  }
+
   async function securityPage() {
     const s = await api('GET', '/v1/security/events');
     const act = async (method, url, body, msg) => { try { await api(method, url, body); toast(msg); render(); } catch (e) { toast(e.message); } };
@@ -527,6 +577,14 @@
     const open = s.proposals.filter((p) => ['proposed', 'noted'].includes(p.status));
     shell('security', head('Security', 'Protected without slowing anything down: every check is a quick count in memory. The security agent reads this log in the background every hour and suggests what to tighten. Anything that can’t be undone waits for you.', h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', '/v1/security/review', {}, 'The security agent took a look.') }, 'Have the security agent look now')),
       h('div', { class: 'stack' },
+        section('Your second sign-in step', null, secondStepBox(() => render())),
+        S.ov.you?.role === 'owner' || S.ov.you?.platform ? section('For the whole company', null, (() => {
+          const on = !!S.ov.config.security?.ownersNeedSecondStep;
+          return h('div', { class: 'toolbar' }, h('span', { text: on ? 'Owners must use a second sign-in step.' : 'Owners may use a second sign-in step, but don’t have to.' }), h('button', { class: `btn ${on ? 'secondary' : 'blue'} small`, type: 'button', onclick: async () => {
+            if (!on && !S.ov.you?.secondStep?.enabled) return toast('Set up your own first (above), so you aren’t locked out.');
+            try { await api('PATCH', '/v1/console/settings', { version: S.ov.version, changes: { security: { ownersNeedSecondStep: !on } } }); toast(on ? 'No longer required.' : 'Now required for owners.'); S.ov = null; render(); } catch (x) { toast(x.message); }
+          } }, on ? 'Stop requiring it' : 'Require it for owners'));
+        })()) : '',
         h('div', { class: 'kpis', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' },
           h('div', { class: 'kpi' }, h('span', { text: 'Sign-ins this week' }), h('b', { text: String(n('signed_in')) })),
           h('div', { class: 'kpi' }, h('span', { text: 'Failed sign-ins' }), h('b', { text: String(n('sign_in_failed')) })),

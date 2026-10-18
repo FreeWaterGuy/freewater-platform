@@ -115,6 +115,8 @@ export interface CompanyConfig {
   data?: import('../modules/data/policy').DataPolicy;
   /** How much of the books the world sees, live. Each company chooses. */
   transparency?: Transparency;
+  /** Security choices. Owners can be required to use a second sign-in step (a code from an authenticator app). */
+  security?: { ownersNeedSecondStep: boolean };
   /**
    * The AI agents' own fund and place in the books. Off unless the company turns it on. The agents' fund gets
    * `percentOfExtra` of the upside as it's earned, before costs, the same way and the same share as the charity

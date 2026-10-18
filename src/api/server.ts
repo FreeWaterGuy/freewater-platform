@@ -444,7 +444,46 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     // One person: this account, its email or phone (as a fingerprint), and the phone it signed in on.
     const u: any = r.user;
     await app.data.link(b.companyId, [`user:${u.id}`, DataService.emailKey(u.email), DataService.phoneKey(u.phone), u.viewerKey, b.viewerKey].filter(Boolean), 'signed in').catch(() => null);
+    // Someone with a second step turned on gets a ticket for it, not yet a session.
+    if (r.challenge) return { body: { secondStep: true, challenge: r.challenge } };
     return { body: { token: r.token, isNew: r.isNew, user: r.user } };
+  } });
+  route({ method: 'POST', url: '/v1/auth/second-step', scope: 'public', summary: 'The second sign-in step: the 6-digit code from your authenticator app (or a recovery code), with the ticket from /v1/auth/verify. Returns a sign-in token.', body: obj({ challenge: { type: 'string', pattern: '^fwc_[A-Za-z0-9_-]{20,64}$' }, code: { type: 'string', minLength: 6, maxLength: 16 } }, ['challenge', 'code']), handler: async (req) => {
+    const b = req.body as any;
+    let passed;
+    try { passed = await app.secondStep.pass(b.challenge, b.code); }
+    catch (e: any) { securityLog.record({ kind: 'second_step_failed', ip: req.ip, detail: { reason: e.code } }, `ssf:${req.ip}`); throw new ApiError(e.status ?? 401, e.code ?? 'wrong_code', e.message); }
+    const user = (await app.accounts.get(passed.userId))!;
+    if (passed.usedRecoveryCode) securityLog.record({ kind: 'recovery_code_used', companyId: user.companyId, actor: user.displayName ?? user.email ?? user.id, ip: req.ip });
+    securityLog.record({ kind: 'signed_in', companyId: user.companyId, actor: user.displayName ?? user.email ?? user.id, ip: req.ip, detail: { secondStep: passed.usedRecoveryCode ? 'recovery code' : 'authenticator app' } });
+    return { body: { token: await app.accounts.createSession(user.id), isNew: false, user } };
+  } });
+
+  // ---------- your second sign-in step ----------
+  const person = (key: ApiKey | null) => { if (!key?.userId) throw new ApiError(403, 'people_only', 'A second sign-in step is for people who sign in, not API keys.'); return key.userId; };
+  const ss = async <T>(f: () => Promise<T>) => { try { return await f(); } catch (e: any) { if (e?.status && e?.code) throw new ApiError(e.status, e.code, e.message); throw e; } };
+  route({ method: 'GET', url: '/v1/me/second-step', scope: 'me', summary: 'Whether your second sign-in step is on, and how many recovery codes are left.', handler: async (_req, key) => ({ body: await app.secondStep.status(person(key)) }) });
+  route({ method: 'POST', url: '/v1/me/second-step/start', scope: 'me', summary: 'Start setting up an authenticator app: scan the QR code (or type the key) into the app.', handler: async (_req, key) => {
+    const id = person(key);
+    const company = platform.companies.get(key!.companyId)?.name ?? 'FreeWater';
+    return { body: await ss(() => app.secondStep.start(id, key!.name, company)) };
+  } });
+  route({ method: 'POST', url: '/v1/me/second-step/confirm', scope: 'me', summary: 'Finish with a code from the app. Returns 8 recovery codes, shown once: keep them somewhere safe.', body: obj({ code: { type: 'string', minLength: 6, maxLength: 8 } }, ['code']), handler: async (req, key) => {
+    const out = await ss(() => app.secondStep.confirm(person(key), (req.body as any).code));
+    secondStepCache.delete(key!.userId!);
+    securityLog.record({ kind: 'second_step_on', companyId: key!.companyId, actor: key!.name, ip: req.ip });
+    return { body: out };
+  } });
+  route({ method: 'POST', url: '/v1/me/second-step/recovery-codes', scope: 'me', summary: 'New recovery codes (the old ones stop working). Needs a code from the app.', body: obj({ code: { type: 'string', minLength: 6, maxLength: 8 } }, ['code']), handler: async (req, key) => {
+    const id = person(key);
+    if (!(await app.secondStep.check(id, (req.body as any).code))) throw new ApiError(401, 'wrong_code', 'That code doesn’t match.');
+    return { body: { recoveryCodes: await app.secondStep.newRecoveryCodes(id) } };
+  } });
+  route({ method: 'POST', url: '/v1/me/second-step/off', scope: 'me', summary: 'Turn the second sign-in step off. Needs a code from the app (or a recovery code).', body: obj({ code: { type: 'string', minLength: 6, maxLength: 16 } }, ['code']), handler: async (req, key) => {
+    const out = await ss(() => app.secondStep.turnOff(person(key), (req.body as any).code));
+    secondStepCache.delete(key!.userId!);
+    securityLog.record({ kind: 'second_step_off', companyId: key!.companyId, actor: key!.name, ip: req.ip });
+    return { body: out };
   } });
 
   route({ method: 'POST', url: '/v1/auth/sign-out', scope: 'me', summary: 'End this sign-in.', handler: async (_req, key) => {
@@ -573,6 +612,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   const tooMany = (reply: FastifyReply, retryAfterSec: number) => { reply.header('retry-after', String(retryAfterSec)); return new ApiError(429, 'too_many_requests', `Too many requests. Try again in ${retryAfterSec} seconds.`); };
   // The server's own machine (its tests, a reverse proxy on the same host) is never limited: behind a proxy that
   // isn't trusted every visitor would look like it, and limiting it would block everyone at once.
+  const secondStepCache = new Map<string, { on: boolean; at: number }>();
   const local = (ip: string) => ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
   const limit = (req: FastifyRequest, reply: FastifyReply, who: string, kind: keyof typeof limits) => {
     if (local(req.ip)) return;
@@ -788,6 +828,20 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       key = await findApiKey(db, raw);
     }
     if (!key) throw new ApiError(401, 'invalid_key', 'That API key is not valid or was revoked.');
+    // A company can require its owners to use a second sign-in step. Until they set it up, they can only set it up.
+    if (key.userId && raw.startsWith('fws_') && platform.companies.get(key.companyId)?.security?.ownersNeedSecondStep) {
+      const u = await app.accounts.get(key.userId);
+      if (u?.role === 'owner') {
+        const url = req.routeOptions?.url ?? '';
+        const open = url.startsWith('/v1/me') || url.startsWith('/v1/auth/') || (req.method === 'GET' && url === '/v1/console');
+        if (!open) {
+          const hit = secondStepCache.get(u.id);
+          const on = hit && hit.at > Date.now() - 60_000 ? hit.on : await app.secondStep.enabled(u.id);
+          secondStepCache.set(u.id, { on, at: Date.now() });
+          if (!on) throw new ApiError(403, 'second_step_required', 'Owners here need a second sign-in step. Set up an authenticator app first (in the console, or POST /v1/me/second-step/start).');
+        }
+      }
+    }
     const need = Array.isArray(scope) ? scope : [scope];
     // 'admin' covers everything a company does for itself, never the platform operator's own powers.
     if (!need.some((s) => key.scopes.includes(s)) && !(key.scopes.includes('admin') && !need.includes('platform'))) throw new ApiError(403, 'missing_scope', `This key can't do that. It needs one of: ${need.join(', ')}.`);

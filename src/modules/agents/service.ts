@@ -344,6 +344,7 @@ export class AgentsService {
       // Done straight away, never measured in money; it can't be undone, so it always waited for this person.
       const [, action, target] = String(p.change?.path ?? '').split(':');
       if (action === 'revoke-key' && target) await revokeApiKey(this.db, target, companyId);
+      if (action === 'require-second-step') await this.deps.saveConfig(companyId, { security: { ownersNeedSecondStep: true } }, `${by}, on the security agent’s suggestion`);
       await this.db.query(`update agent_proposals set status = 'done', decided_by = $2, decided_at = $3, applied_at = $3 where id = $1`, [id, by, iso(this.now())]);
       return this.proposal(id);
     }
@@ -453,7 +454,8 @@ export class AgentsService {
     const keys = (await this.db.query<any>(`select id, name, scopes, created_at, last_used_at, advertiser_id, location_id from api_keys where company_id = $1 and revoked_at is null`, [companyId])).rows.map((r) => ({ id: r.id, name: r.name, scopes: r.scopes ?? [], createdAt: iso(r.created_at), lastUsedAt: r.last_used_at ? iso(r.last_used_at) : null, advertiserId: r.advertiser_id, locationId: r.location_id }));
     const webhooks = (await this.db.query<any>(`select id, url, status from webhook_endpoints where company_id = $1`, [companyId])).rows;
     const owners = n((await this.db.query<any>(`select count(*)::int as n from users where company_id = $1 and role = 'owner' and deleted_at is null`, [companyId])).rows[0]?.n);
-    return { events, keys, webhooks, owners, now };
+    const ownersWithSecondStep = n((await this.db.query<any>(`select count(*)::int as n from users u join second_steps s on s.user_id = u.id and s.enabled_at is not null where u.company_id = $1 and u.role = 'owner' and u.deleted_at is null`, [companyId])).rows[0]?.n);
+    return { events, keys, webhooks, owners, ownersWithSecondStep, now };
   }
 
   // ---------- the fund ----------

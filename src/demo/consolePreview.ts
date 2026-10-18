@@ -109,6 +109,7 @@ const rec = {
     await call('POST', '/v1/security/review', token);
     return call('GET', '/v1/security/events', token);
   })(),
+  secondStepStart: await call('POST', '/v1/me/second-step/start', token),
   intake: await call('POST', '/v1/team/intake', token, { message: 'We gave 500 bottles at SXSW today in Austin for the WeFunder campaign' }),
   profit: await (async () => { await call('POST', '/v1/milestones/factories', token, { name: 'Austin micro factory 1', city: 'Austin', openedOn: new Date(end - 30 * 86_400_000).toISOString().slice(0, 10) }); return call('GET', '/v1/profit', token); })(),
 };

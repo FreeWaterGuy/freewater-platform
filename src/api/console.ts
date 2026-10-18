@@ -16,7 +16,12 @@ export function consoleRoutes(app: App, route: (r: RouteDef) => void) {
   // ---------- settings ----------
   route({ method: 'GET', url: '/v1/console', scope: 'admin', summary: 'Everything the console shows: your settings and their version, the choices for each, your machines and charities, and what is left to set up.', handler: async (_req, key) => {
     staff(key);
-    return { body: { ...(await cons.overview(key!.companyId)), you: { name: key!.name, platform: key!.scopes.includes('platform') } } };
+    return { body: { ...(await cons.overview(key!.companyId)), you: await (async () => {
+      const ss = key!.userId ? await app.secondStep.status(key!.userId) : null;
+      const u = key!.userId ? await app.accounts.get(key!.userId) : null;
+      const must = !!(u?.role === 'owner' && app.platform.companies.get(key!.companyId)?.security?.ownersNeedSecondStep && !ss?.enabled);
+      return { name: key!.name, platform: key!.scopes.includes('platform'), person: !!key!.userId, ...(ss ? { secondStep: ss } : {}), ...(u ? { role: u.role } : {}), mustSetUpSecondStep: must };
+    })() } };
   } });
   route({ method: 'PATCH', url: '/v1/console/settings', scope: 'admin', summary: 'Change your settings: brand, product facts, giving, open books, ad rules, prices, modules and more. Send only what changes, and the version you started from.', body: obj({ changes: changesProp, version: S.int }, ['changes']), handler: async (req, key) => {
     const b = req.body as any;

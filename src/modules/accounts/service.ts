@@ -64,6 +64,8 @@ const SESSION_DAYS = 30;
  * are invited by a company owner and sign in the same way.
  */
 export class AccountsService {
+  /** When set, someone with a second step turned on gets a ticket for it instead of a session. */
+  secondStep?: { enabled(userId: string): Promise<boolean>; challenge(userId: string): Promise<string> };
   constructor(private db: SqlClient, private messenger: Messenger, private clock: () => Date = () => new Date(), private brandName: (companyId: string) => string = () => 'FreeWater') {}
 
   /** Send a sign-in code. The answer never reveals whether an account exists. */
@@ -84,7 +86,7 @@ export class AccountsService {
   }
 
   /** Check a code. A new phone number or email becomes a new consumer account. */
-  async verify(input: { companyId: string; channel: 'email' | 'sms'; to: string; code: string }): Promise<{ token: string; user: User; isNew: boolean }> {
+  async verify(input: { companyId: string; channel: 'email' | 'sms'; to: string; code: string }): Promise<{ token: string; user: User; isNew: boolean; challenge?: undefined } | { challenge: string; user: User; isNew: false; token?: undefined }> {
     const dest = normalize(input.channel, input.to);
     const now = this.clock();
     const row = (await this.db.query<any>(`select * from login_codes where company_id = $1 and destination = $2 and used_at is null order by created_at desc limit 1`, [input.companyId, dest])).rows[0];
@@ -106,11 +108,18 @@ export class AccountsService {
       user = await this.createUser({ companyId: input.companyId, [col]: dest, role: 'consumer' });
       isNew = true;
     }
+    if (!isNew && this.secondStep && (await this.secondStep.enabled(user.id))) return { challenge: await this.secondStep.challenge(user.id), user, isNew: false };
+    return { token: await this.createSession(user.id), user, isNew };
+  }
+
+  /** A new session for someone who has passed every step. */
+  async createSession(userId: string) {
+    const now = this.clock();
     const token = `fws_${randomBytes(24).toString('base64url')}`;
     await this.db.query(`insert into sessions (id, user_id, token_hash, created_at, expires_at) values ($1,$2,$3,$4,$5)`, [
-      newId('ses'), user.id, sha(token), now.toISOString(), new Date(now.getTime() + SESSION_DAYS * 86_400_000).toISOString(),
+      newId('ses'), userId, sha(token), now.toISOString(), new Date(now.getTime() + SESSION_DAYS * 86_400_000).toISOString(),
     ]);
-    return { token, user, isNew };
+    return token;
   }
 
   async userFromToken(raw: string): Promise<User | null> {
