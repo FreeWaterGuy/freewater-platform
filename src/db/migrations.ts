@@ -901,6 +901,14 @@ create index recovery_codes_user on recovery_codes(user_id);
 create table second_step_challenges (id text primary key, user_id text not null, token_hash text not null unique, expires_at timestamptz not null, attempts int not null default 0, used_at timestamptz);
 `,
   },
+  {
+    id: '022_holdouts',
+    sql: `
+-- Holdout tests: each moment an agent was used or skipped (held out), to read its real value from the books.
+create table agent_arms (agent_id text not null, company_id text not null, unit_id text not null, slot int not null, viewer_key text not null, arm text not null, campaign_id text, at timestamptz not null, primary key (agent_id, unit_id, slot, viewer_key));
+create index agent_arms_at on agent_arms(agent_id, at);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

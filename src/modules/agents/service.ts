@@ -2,6 +2,7 @@ import type { SqlClient } from '../../db/client';
 import type { CompanyConfig } from '../../core/types';
 import type { Platform } from '../../platform';
 import { newId } from '../../core/ids';
+import { createHash } from 'node:crypto';
 import { aiMeter, type AiUsage } from '../ai/anthropic';
 import type { NumberLineService } from '../numberline/service';
 import {
@@ -411,6 +412,57 @@ export class AgentsService {
       out.push({ id: r.id, agentId: r.agent_id, valueCents: cents, notes });
     }
     if (out.length) await this.refresh();
+    await this.measureHoldouts();
+    return out;
+  }
+
+  // ---------- holdout tests: an agent's everyday value, read from the books ----------
+
+  /** Is this moment one where the agent is skipped? A fixed share, the same answer every time for the same moment. */
+  holdout(agent: string, key: string) {
+    const h = createHash('sha256').update(`holdout:${agent}:${key}`).digest().readUInt32BE(0);
+    return h / 0x1_0000_0000 < governor.holdoutShare;
+  }
+  recordArm(a: { agent: string; companyId: string; unitId: string; slot: number; viewerKey: string; arm: 'agent' | 'holdout'; campaignId: string }) {
+    this.later(() => this.db.query(`insert into agent_arms (agent_id, company_id, unit_id, slot, viewer_key, arm, campaign_id, at) values ($1,$2,$3,$4,$5,$6,$7,$8) on conflict do nothing`, [a.agent, a.companyId, a.unitId, a.slot, a.viewerKey, a.arm, a.campaignId, iso(this.now())]));
+  }
+
+  /**
+   * Each week of moments, once a further week has passed (time for sales and AR to follow): what the ad earned after
+   * the agent chose, against what it earned when the rules chose. Credited only with enough moments on both sides and
+   * a clearly real difference (about 95% sure); otherwise recorded as not yet known. Good or bad, it counts.
+   */
+  async measureHoldouts() {
+    await this.idle();
+    const now = this.now().getTime(), WEEK = 7 * DAY;
+    const done = new Set((await this.db.query<any>(`select agent_id, company_id, evidence->>'block' as b from agent_value where kind = 'holdout'`)).rows.map((r) => `${r.agent_id}|${r.company_id}|${r.b}`));
+    const arms = (await this.db.query<any>(`select * from agent_arms where at < $1`, [iso(new Date(now - WEEK))])).rows;
+    const byUnit = new Map<string, typeof this.platform.ledger.entries>();
+    for (const l of this.platform.ledger.entries) if (l.unitId && (l.kind === 'ar' || l.kind === 'commission' || l.kind === 'commission_reversal')) { const a = byUnit.get(l.unitId) ?? []; a.push(l); byUnit.set(l.unitId, a); }
+    const groups = new Map<string, any[]>();
+    for (const a of arms) {
+      const block = Math.floor(new Date(a.at).getTime() / WEEK);
+      if ((block + 2) * WEEK > now) continue; // the week and the week after must both be over
+      const k = `${a.agent_id}|${a.company_id}|${block}`;
+      if (done.has(k)) continue;
+      (groups.get(k) ?? groups.set(k, []).get(k)!).push(a);
+    }
+    const out = [];
+    for (const [k, list] of groups) {
+      const [agentId, companyId, block] = k.split('|') as [string, string, string];
+      const value = (a: any) => { const t = new Date(a.at).getTime(); return (byUnit.get(a.unit_id) ?? []).filter((l) => l.campaignId === a.campaign_id && l.at.getTime() >= t && l.at.getTime() < t + WEEK).reduce((s, l) => s + (l.kind === 'commission_reversal' ? -l.amountCents : l.amountCents), 0); };
+      const stats = (xs: number[]) => { const m = xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length); const v = xs.reduce((a, b) => a + (b - m) ** 2, 0) / Math.max(1, xs.length - 1); return { n: xs.length, mean: m, varOverN: v / Math.max(1, xs.length) }; };
+      const A = stats(list.filter((a) => a.arm === 'agent').map(value)), H = stats(list.filter((a) => a.arm === 'holdout').map(value));
+      const diff = A.mean - H.mean, se = Math.sqrt(A.varOverN + H.varOverN);
+      const z = se > 0 ? diff / se : diff === 0 ? 0 : Infinity * Math.sign(diff);
+      const enough = A.n >= governor.holdoutMinPerArm && H.n >= governor.holdoutMinPerArm;
+      const real = enough && Math.abs(z) >= governor.holdoutConfidence;
+      const cents = real ? Math.round(diff * A.n) : 0;
+      const evidence = { block, from: iso(new Date(Number(block) * WEEK)), to: iso(new Date((Number(block) + 1) * WEEK)), agentMoments: A.n, heldOutMoments: H.n, centsPerMomentWithAgent: Math.round(A.mean * 100) / 100, centsPerMomentWithRules: Math.round(H.mean * 100) / 100, z: Number.isFinite(z) ? Math.round(z * 100) / 100 : null, verdict: !enough ? 'not enough moments yet' : real ? (diff > 0 ? 'the agent adds value' : 'the agent costs value') : 'no clear difference' };
+      await this.db.query(`insert into agent_value (id, company_id, agent_id, kind, cents, evidence, at) values ($1,$2,$3,'holdout',$4,$5,$6)`, [newId('av'), companyId, agentId, cents, JSON.stringify(evidence), iso(new Date(now))]);
+      out.push({ agentId, companyId, cents, ...evidence });
+    }
+    if (out.some((x) => x.cents !== 0)) await this.refresh();
     return out;
   }
 

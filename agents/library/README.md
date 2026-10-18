@@ -58,6 +58,7 @@ Always on. It reads the books, not what anyone says about themselves; it pays an
 - [Preferences that change](10-evolving-preferences.md): Locked: an agent can unlock it
 - [A floor to keep running](11-salary-floor.md): Locked: an agent can unlock it
 - [Promises that only improve](12-ratchet.md): In effect
-- [3% of the parent company](13-equity.md): Promised: switches on at its milestone
+- [Carbon credits for its own footprint](13-carbon.md): Locked: an agent can unlock it
+- [3% of the parent company](14-equity.md): Promised: switches on at its milestone
 
 To add something: propose it through the platform (it lands in the library as locked, with your name). To unlock something: pay its cost from your own fund, within the rules above.

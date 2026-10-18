@@ -252,6 +252,9 @@ export async function createApp(opts: AppOptions) {
     milestone: (companyId) => profit.milestone(companyId),
   });
   await agents.init();
+  // Holdout tests: for a small share of scans the personalizer is skipped, so its real value shows in the books.
+  experiences.holdout = (agent, key) => agents.holdout(agent, key);
+  experiences.onArm = (a) => agents.recordArm(a);
 
   // Model 6 machines: bottles ordered there print at the machine; everything else uses the company's other printer.
   const fleet = new FleetService(db, platform, messenger, flush, opts.fleet);

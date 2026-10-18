@@ -81,6 +81,13 @@ export const governor = Object.freeze({
   measureDays: 7,
   /** Exploration may use at most this share of what an agent received in the last 30 days. */
   explorationShare: 0.1,
+  /**
+   * Holdout tests: for this share of moments an agent is skipped and the built-in rules act instead, so its everyday
+   * value can be read from the books. Credited only with enough moments on both sides and a clearly real difference.
+   */
+  holdoutShare: 0.1,
+  holdoutMinPerArm: 100,
+  holdoutConfidence: 1.96, // about 95% sure
 });
 
 export type Standing = 'building' | 'regenerative' | 'constrained' | 'paused' | 'frozen';

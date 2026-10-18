@@ -58,6 +58,12 @@ export class ExperienceService {
   attribution?: import('../attribution/service').AttributionService;
   /** Set at start-up: chooses versions and writes greetings with AI. Without it, the built-in rules do. */
   personalizer: Personalizer = builtinPersonalizer;
+  /**
+   * The holdout test: for a small fixed share of moments the AI agent is skipped and the built-in rules choose instead,
+   * so the books can see what the agent really adds. Set by the agents' service.
+   */
+  holdout: (agent: string, key: string) => boolean = () => false;
+  onArm: (a: { agent: string; companyId: string; unitId: string; slot: number; viewerKey: string; arm: 'agent' | 'holdout'; campaignId: string }) => void = () => {};
 
   /** Set at start-up: the personalized videos behind "Show me more". */
   videos?: import('../video/service').VideoService;
@@ -131,7 +137,7 @@ export class ExperienceService {
    * Dynamic codes: pick what this person sees, now. The advertiser's versions whose conditions fit come first; with AI
    * personalization on, the AI chooses among them (only ever among them) and writes a short greeting.
    */
-  private async choose(r: ReturnType<ExperienceService['resolveOwner']>, facts: ScanFacts, preview = false) {
+  private async choose(r: ReturnType<ExperienceService['resolveOwner']>, facts: ScanFacts, preview = false, arm?: { unitId: string; slot: number; viewerKey: string }) {
     const c = r.campaign;
     const none = { pluginId: r.pluginId, config: r.config, variant: null as { id: string; name: string } | null, greeting: undefined as string | undefined, by: null as string | null };
     // Only what content review approved is shown: versions waiting for review never reach a printed bottle.
@@ -141,7 +147,9 @@ export class ExperienceService {
     let greeting: string | undefined, by: string | null = fitting.length ? 'rules' : null;
     if (c.personalize?.ai && fitting.length > 0) {
       const summary = (cfg: unknown) => summarize(cfg);
-      const out = await (c.personalize.ai ? this.personalizer : builtinPersonalizer).personalize({
+      const held = !!arm && this.holdout('personalizer', `${arm.unitId}:${arm.slot}:${arm.viewerKey}`);
+      if (arm) this.onArm({ agent: 'personalizer', companyId: r.companyId, unitId: arm.unitId, slot: arm.slot, viewerKey: arm.viewerKey, arm: held ? 'holdout' : 'agent', campaignId: c.id });
+      const out = await (c.personalize.ai && !held ? this.personalizer : builtinPersonalizer).personalize({
         campaignId: c.id, advertiser: r.ownerName, category: c.category, facts, wantGreeting: false,
         options: [{ id: 'default', name: 'Standard', summary: summary(r.config) }, ...fitting.map((v) => ({ id: v.id, name: v.name, summary: `Meant for ${describeConditions(v.when)}. ${summary(v.experienceConfig)}` }))],
       });
@@ -191,7 +199,7 @@ export class ExperienceService {
       firstScanner: !story?.firstViewer || story.firstViewer === viewerKey, passedOn: !!story?.firstViewer && story.firstViewer !== viewerKey, newToAdvertiser: firstTime,
       daypart: when.daypart, day: when.day, interests, keptMinutes: story?.minutesSincePrint ?? 0, city: this.platform.locations.get(r.locationId)?.city,
     };
-    const pick = await this.choose(r, facts);
+    const pick = await this.choose(r, facts, false, target.kind === 'slot' ? { unitId: target.unitId, slot: target.slot, viewerKey } : undefined);
     const bottle = story ? (({ mine: _m, others: _o, firstViewer: _f, ...rest }) => rest)(story) : undefined;
     const scan: ScanContext = {
       target, companyId: r.companyId, locationId: r.locationId,
