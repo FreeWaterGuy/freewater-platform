@@ -4,9 +4,10 @@ import type { App } from '../app';
  * Two weeks of made-up activity, so dashboards have something to show: bottles printed at the machines,
  * some scanned, some opened in AR, a few sales. Uses the real pipeline, so every number lands in the books.
  */
-export async function simulateHistory(app: App, setNow: (ms: number) => void, opts: { days?: number; bottlesPerDay?: number; endMs?: number } = {}) {
+export async function simulateHistory(app: App, setNow: (ms: number) => void, opts: { days?: number; bottlesPerDay?: number; endMs?: number; idPrefix?: string } = {}) {
   const days = opts.days ?? 14, perDay = opts.bottlesPerDay ?? 30, end = opts.endMs ?? Date.now();
   let seq = 0;
+  const prefix = opts.idPrefix ?? 'hist';
   for (let d = days - 1; d >= 0; d--) {
     const dayStart = end - d * 86_400_000 - 12 * 3600_000; // each day's bottles run up to this time of day, d days ago
     // Bid budgets reset each day.
@@ -14,7 +15,7 @@ export async function simulateHistory(app: App, setNow: (ms: number) => void, op
     const n = Math.round(perDay * (0.7 + 0.6 * ((Math.sin(d * 1.7) + 1) / 2)));
     for (let i = 0; i < n; i++) {
       setNow(dayStart + (i * 12 * 3600_000) / n);
-      const r = await app.platform.order({ companyId: 'freewater', orderId: `hist-${seq++}`, locationId: i % 3 ? 'ATX-014' : 'ATX-022', productId: 'bottle-16oz' });
+      const r = await app.platform.order({ companyId: 'freewater', orderId: `${prefix}-${seq++}`, locationId: i % 3 ? 'ATX-014' : 'ATX-022', productId: 'bottle-16oz' });
       if (!r.ok) continue;
       for (const p of r.unit.placements) {
         if (p.isHouse) continue;

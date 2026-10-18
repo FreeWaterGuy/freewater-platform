@@ -174,14 +174,36 @@
 
   // ---------- books ----------
   async function booksPage() {
-    const [totals, lines] = await Promise.all([api('GET', `/v1/public/companies/${S.config.companyId}/totals`), api('GET', '/v1/ledger?limit=500').catch(() => [])]);
+    const [totals, lines, preview, transfers] = await Promise.all([api('GET', `/v1/public/companies/${S.config.companyId}/totals`), api('GET', '/v1/ledger?limit=500').catch(() => []), api('GET', '/v1/payouts/preview').catch(() => null), api('GET', '/v1/payouts').catch(() => null)]);
     const recent = lines.slice(-40).reverse();
-    shell('books', head('Books', 'Every line is final. Corrections are new lines, never edits. These totals are public.'),
+    const send = h('button', { class: 'btn', type: 'button', onclick: async () => {
+      send.disabled = true; send.textContent = 'Sending…';
+      try { const r = await api('POST', '/v1/payouts/run'); toast(r.sent.length ? `${r.sent.length} transfer${r.sent.length === 1 ? '' : 's'} sent${r.failed.length ? `, ${r.failed.length} returned by the bank` : ''}` : r.failed.length ? 'The bank returned the transfer' : 'Nothing to send yet'); } catch (x) { toast(x.message); }
+      render();
+    } }, 'Send transfers now');
+    const cat = h('select', { class: 'input', id: 'x-cat' }, [['water', 'Water'], ['bottles', 'Bottles and caps'], ['labels-ink', 'Labels and ink'], ['machines', 'Machines'], ['delivery', 'Delivery'], ['people', 'People'], ['rent', 'Rent'], ['other', 'Other']].map(([v, l]) => h('option', { value: v, text: l })));
+    const amt = h('input', { class: 'input', id: 'x-amt', inputmode: 'decimal', placeholder: '1250.00' });
+    const memo = h('input', { class: 'input', id: 'x-memo', placeholder: 'October spring water, RAIN Bottling' });
+    const date = h('input', { class: 'input', id: 'x-date', type: 'date', value: new Date().toISOString().slice(0, 10) });
+    shell('books', head('Books', 'Every line is final. Corrections are new lines, never edits. Everything on the public open-books site comes from here.', h('a', { class: 'btn secondary', href: fixture ? '#' : '/books', target: '_blank', rel: 'noopener' }, 'Open the public site')),
       h('div', { class: 'kpis', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' },
         h('div', { class: 'kpi dark' }, h('span', { text: 'Bottles, all time' }), h('b', { text: totals.bottles.toLocaleString() })),
         h('div', { class: 'kpi' }, h('span', { text: 'Earned, all time' }), h('b', { text: dollars(totals.revenueCents) })),
         h('div', { class: 'kpi' }, h('span', { text: 'Given, all time' }), h('b', { text: dollars(totals.donatedCents) }))),
-      lines.length ? h('section', { class: 'panel-box' }, h('h2', { text: 'Latest lines' }), h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['When', 'What', 'From', 'To', 'Amount'].map((x) => h('th', { text: x })))),
+      preview ? h('div', { class: 'grid2' },
+        h('section', { class: 'panel-box' }, h('h2', {}, 'Charity transfers', send),
+          h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Charity', 'Owed now', ''].map((x) => h('th', { text: x })))),
+            h('tbody', {}, preview.map((p) => h('tr', {}, h('td', { text: p.charity }), h('td', { text: dollars(p.owedCents) }), h('td', {}, p.willSend ? h('span', { class: 'pill ok', text: 'Will send' }) : h('span', { class: 'pill', text: p.why }))))))),
+          transfers?.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Transfer', 'Charity', 'Amount', 'Status'].map((x) => h('th', { text: x })))),
+            h('tbody', {}, transfers.slice(0, 10).map((t) => h('tr', {}, h('td', { text: `${t.number} · ${new Date(t.sentAt).toLocaleDateString()}` }), h('td', { text: t.charity }), h('td', { text: dollars(t.amountCents) }), h('td', {}, h('span', { class: `pill ${t.status === 'failed' ? 'bad' : t.status === 'confirmed' ? 'ok' : ''}`, text: t.status === 'failed' ? `Returned: ${t.failure}` : t.status === 'confirmed' ? 'Charity confirmed' : `Sent · ${t.bankReference}` }))))))) : null),
+        h('section', { class: 'panel-box' }, h('h2', { text: 'Record a cost' }), h('p', { style: 'margin:0;color:var(--muted);font-size:14px', text: 'Costs are published as money out, by category.' }),
+          h('form', { style: 'display:grid;grid-template-columns:1fr 1fr;gap:10px', onsubmit: async (e) => {
+            e.preventDefault();
+            const cents = Math.round(parseFloat(amt.value.replace(/[$,]/g, '')) * 100);
+            if (!(cents > 0)) return toast('Enter an amount');
+            try { await api('POST', '/v1/books/expenses', { category: cat.value, amountCents: cents, memo: memo.value.trim(), date: date.value }); toast('Recorded'); render(); } catch (x) { toast(x.message); }
+          } }, h('div', { class: 'field' }, h('label', { for: 'x-cat', text: 'What for' }), cat), h('div', { class: 'field' }, h('label', { for: 'x-amt', text: 'Amount ($)' }), amt), h('div', { class: 'field', style: 'grid-column:1/-1' }, h('label', { for: 'x-memo', text: 'Description (public)' }), memo), h('div', { class: 'field' }, h('label', { for: 'x-date', text: 'Date' }), date), h('div', { style: 'display:flex;align-items:flex-end' }, h('button', { class: 'btn', type: 'submit' }, 'Record it'))))) : null,
+      lines.length ? h('section', { class: 'panel-box', style: 'margin-top:18px' }, h('h2', { text: 'Latest lines' }), h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['When', 'What', 'From', 'To', 'Amount'].map((x) => h('th', { text: x })))),
         h('tbody', {}, recent.map((l) => h('tr', {}, h('td', { text: new Date(l.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) }), h('td', { text: l.memo }), h('td', { style: 'font-size:12px;color:var(--muted)', text: l.debit }), h('td', { style: 'font-size:12px;color:var(--muted)', text: l.credit }), h('td', { text: dollars(l.amountCents) })))))))
         : h('div', { class: 'empty', text: 'Your role can’t see ledger lines. Finance and owners can.' }));
   }

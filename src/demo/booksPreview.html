@@ -1,0 +1,43 @@
+<meta charset="utf-8">
+<title>Open Books</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@600;700&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+/*CSS*/
+.preview-note { background: #FFF4D6; color: #5C3F00; padding: 8px 16px; font-size: 13px; line-height: 1.5; }
+.preview-note code { background: rgba(0,0,0,.06); padding: 1px 5px; border-radius: 4px; cursor: pointer; }
+</style>
+<div class="preview-note" id="pnote"></div>
+<div id="root"></div>
+<script>
+(() => {
+  const R = /*REC*/;
+  const note = document.getElementById('pnote');
+  note.innerHTML = '<b>Preview.</b> The real open-books site on a saved copy of six months of sample books (made-up numbers). Bottle codes to try: '
+    + R.samples.map((s) => `<code title="Copy">${s}</code>`).join(' ') + '. Daily proof includes the last ' + R.keepDays + ' days.';
+  note.querySelectorAll('code').forEach((c) => c.addEventListener('click', () => { try { navigator.clipboard.writeText(c.textContent); } catch (e) {} }));
+  const fail = (m) => { throw new Error(m); };
+  // Make "Happening now" times relative to when the preview was saved, not now.
+  const shift = Date.now() - Date.parse(R.summary.activity?.[0]?.at || new Date().toISOString());
+  const summary = { ...R.summary, activity: (R.summary.activity || []).map((a) => ({ ...a, at: new Date(Date.parse(a.at) + shift).toISOString() })) };
+  window.__FW_BOOKS_FIXTURE__ = {
+    start: '/books',
+    api: async (url, opts) => {
+      await new Promise((r) => setTimeout(r, 60));
+      const path = url.split('?')[0];
+      if (path === '/v1/public/app-config') return R.config;
+      if (path === '/v1/public/books') return R.companies;
+      if (path === `/v1/public/books/${R.config.companyId}`) return summary;
+      if (path === `/v1/public/books/${R.config.companyId}/days`) return R.days;
+      let m = /\/days\/([\d-]+)$/.exec(path);
+      if (m) return R.lines[m[1]] || fail(`This preview only includes the last ${R.keepDays} days. The real site has every day.`);
+      m = /^\/v1\/public\/bottles\/(.+)$/.exec(path);
+      if (m) return R.bottles[decodeURIComponent(m[1])] || fail('No bottle has that code.');
+      if (path.startsWith('/v1/public/books/')) fail('Only FreeWater’s books are in this preview. On the real site every Open Books company has its own page.');
+      fail('Not part of this preview.');
+    },
+  };
+})();
+</script>
+<script>
+/*APP_JS*/
+</script>

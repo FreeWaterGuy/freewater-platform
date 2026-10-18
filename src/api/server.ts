@@ -3,6 +3,8 @@ import { ApiError, notFound, obj, S, type Handler, type RouteDef } from './http'
 import { consumerRoutes } from './consumer';
 import { adsRoutes } from './ads';
 import { deliveryRoutes } from './delivery';
+import { booksRoutes } from './books';
+import { BooksError } from '../modules/books/service';
 import { DeliveryError } from '../modules/delivery/service';
 import { AdsError } from '../modules/ads/service';
 import { DesignError } from '../modules/custom/service';
@@ -493,6 +495,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   consumerRoutes(app, route, { me, checkExperience });
   adsRoutes(app, route, { me });
   deliveryRoutes(app, route, { me });
+  booksRoutes(app, route);
 
   // ---------- wiring ----------
 
@@ -545,12 +548,14 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     'driver.css': { type: 'text/css', path: join(webDir, 'driver.css') },
     'ops.js': { type: 'text/javascript', path: join(webDir, 'ops.js') },
     'ops.css': { type: 'text/css', path: join(webDir, 'ops.css') },
+    'books.js': { type: 'text/javascript', path: join(webDir, 'books.js') },
+    'books.css': { type: 'text/css', path: join(webDir, 'books.css') },
     'jsqr.js': { type: 'text/javascript', path: createRequire(import.meta.url).resolve('jsqr/dist/jsQR.js') },
   };
   const cache = new Map<string, Buffer>();
   const file = (p: string) => { let b = cache.get(p); if (!b || process.env.NODE_ENV !== 'production') cache.set(p, (b = readFileSync(p))); return b; };
   const page = async (_req: FastifyRequest, reply: FastifyReply) => reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', "default-src 'self'; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' blob: data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; frame-ancestors 'none'").send(file(join(webDir, 'scan.html')));
-  for (const u of ['/s/:unitId/:slot', '/r/:unitId', '/p/:packId', '/b/:packId/:face']) server.get(u, page);
+  for (const u of ['/s/:unitId/:slot', '/p/:packId', '/b/:packId/:face']) server.get(u, page);
   // The same page inside the advertiser portal, showing a draft before it exists. Only this site may frame it.
   server.get('/preview/scan', async (_req, reply) => reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', "default-src 'self'; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' blob: data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; frame-ancestors 'self'").send(file(join(webDir, 'scan.html'))));
 
@@ -564,6 +569,11 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   server.get('/ops', opsPage);
   server.get('/ops/*', opsPage);
   const driverPage = async (_req: FastifyRequest, reply: FastifyReply) => reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; frame-ancestors 'none'").header('permissions-policy', 'camera=(self), geolocation=(self)').send(file(join(webDir, 'driver.html')));
+  // The public open-books site.
+  const booksPage = async (_req: FastifyRequest, reply: FastifyReply) => reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', "default-src 'self'; img-src 'self' data:; connect-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; frame-ancestors 'none'").send(file(join(webDir, 'books.html')));
+  server.get('/books', booksPage);
+  server.get('/r/:unitId', booksPage); // the QR on every bottle's black panel opens its open-books receipt
+  server.get('/books/*', booksPage);
   server.get('/driver', driverPage);
   server.get('/driver/*', driverPage);
 
@@ -597,7 +607,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   server.setErrorHandler((err: any, _req, reply) => {
     if (err instanceof ApiError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
-    if (err instanceof AccountsError || err instanceof PaymentError || err instanceof ExperienceError || err instanceof AssetError || err instanceof AdsError || err instanceof DesignError || err instanceof DeliveryError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
+    if (err instanceof AccountsError || err instanceof PaymentError || err instanceof ExperienceError || err instanceof AssetError || err instanceof AdsError || err instanceof DesignError || err instanceof DeliveryError || err instanceof BooksError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
     if (err.code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE') return reply.code(415).send({ error: { code: 'unsupported_type', message: 'Send JSON, or for uploads a .glb, PNG, JPEG, WebP or MP4 file.' } });
     if (err.code === 'FST_ERR_CTP_BODY_TOO_LARGE') return reply.code(413).send({ error: { code: 'too_large', message: 'That is too big to upload.' } });
     if (err.validation) return reply.code(400).send({ error: { code: 'invalid_request', message: err.message } });

@@ -142,6 +142,27 @@ npm run demo:ops-preview   # builds out/ops-preview/ and out/driver-preview/, cl
 - **Deliveries:** everyone getting packs.
 - **Books:** the public totals and the latest ledger lines.
 
+## Open books and charity transfers
+
+```
+npm run demo:books           # six months of sample books; open http://localhost:8787/books
+npm run demo:books-preview   # builds out/books-preview/, a clickable copy that needs no server
+```
+
+**The public site (`/books`).** Anyone can see, with no personal data:
+- **Live totals:** free bottles given, money given to charity, money in (ads, scans, AR, commission, custom bottles), money out (costs plus transfers to charity), and corrections. Updates every few seconds, with a "happening now" feed.
+- **Where one bottle's money goes:** average earnings per bottle against standard costs (water, bottle, label, machine or delivery) and the charity share.
+- **Look up a bottle (`/r/<bottle code>`):** what that exact bottle earned, what it cost, and which charity got its 10¢, with the transfer that sent it.
+- **By month, Donations, Daily proof, Open Books companies, How we count.**
+
+**Daily proof.** Each day of the books gets a fingerprint made from every line that day plus the day before's fingerprint. Change one past line and every later fingerprint changes. "Check" makes the visitor's own browser recompute it.
+
+**Charity transfers.** A bottle's donation is owed the moment it prints. Ops sees what's owed per charity (Ops console → Books), and "Send transfers now" pays every charity over the minimum ($25, set per company) through a `PayoutProvider` (the test one stands in until a bank or payout service is chosen). Each transfer gets a number (T-1001…), the charity gets an email with a "Yes, it arrived" link, and the public site shows it as sent, then confirmed. A transfer can't be sent twice for the same day.
+
+**Costs.** Ops records real costs (water, bottles, labels and ink, machines, delivery, people, other) and they show as money out. Standard per-bottle costs (`unitCosts`) are placeholders.
+
+**Per company.** Giving is set per company and can be off. `openBooks: false` keeps a company's books private.
+
 ## Designing your own bottle by chatting
 
 The paid, ad-free bottles people design themselves: birthdays, weddings, teams, thank-yous.
@@ -192,6 +213,8 @@ The server keeps working state in memory and writes through to the database, so 
 | `src/modules/ads` | Ads and slots: `freewater-ads` (default) and `house-only` |
 | `src/modules/print` | Label renderer (`svg-label`) and QR drawing |
 | `src/modules/ledger` | Billing rules and the open-books receipt |
+| `src/modules/books` | Public books, daily fingerprints, charity transfers and costs |
+| `src/adapters/payouts` | Payout contract (sending money to charities) and the test version |
 | `src/modules/packs` | Packs, box faces, packing check, van loading and delivery |
 | `src/adapters/printers` | Printer contract and the virtual printer |
 | `src/db` | Database contract, PGlite and Postgres adapters, migrations, storage |
@@ -211,5 +234,4 @@ All prices in `src/demo/seed.ts` are placeholders.
 ## Next
 
 - A real printer adapter for the Model 6 and the micro-factory lines, once the printers are chosen (the virtual printer shows the contract any printer must follow)
-- Webhooks, so partners hear about events without polling
-- The public open-books site and charity transfers (step 7), then the white-label console, developer portal and webhooks (step 8)
+- The white-label console, developer portal and webhooks (step 8)

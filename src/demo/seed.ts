@@ -31,10 +31,12 @@ export const freewater: CompanyConfig = {
   receiptBaseUrl: 'https://go.freewater.io',
   brand: { logoTop: 'free', logoBottom: 'water', tagline: "Put your brand in everyone's hand!", panelColor: '#000000', accentColor: '#7FC6EA', textColor: '#FFFFFF', fontFamily: "Comfortaa, 'DM Sans', Arial, sans-serif" },
   productFacts: ['SPRING WATER', '16 fl oz (473 ml)', 'Source: Natural Spring Water, Tiger, GA', 'Manufactured by RAIN Bottling Co for FreeWater Inc, Austin, TX', 'Processed by ozonation'],
-  giving: { mode: 'per_unit', centsPerUnit: 10, defaultCharity: 'Austin Parks Foundation', charityByLocation: { 'route-3': 'Central Texas Food Bank' } },
+  giving: { mode: 'per_unit', centsPerUnit: 10, defaultCharity: 'Austin Parks Foundation', charityByLocation: { 'route-3': 'Central Texas Food Bank', 'route-5': 'Central Texas Food Bank' }, minimumTransferCents: 2500 },
   consumerPricing: 'free',
   timezone: 'America/Chicago',
   consumer: { freeBottlesPerDay: 3, retailValueCents: 100 },
+  openBooks: true,
+  unitCosts: { water: 4, bottle: 18, label: 3, machine: 6 }, // placeholders until real costs are known
   adRules: { minAdsPerUnit: 1, maxAdsPerUnit: 6, blockedCategories: ['alcohol', 'tobacco', 'gambling', 'weapons'], competitorSeparation: true, repeatScanWindowSec: 600, maxPackShare: 0.5 },
   prices: placeholderPrices,
   modules: { ads: 'freewater-ads', renderer: 'svg-label', printer: 'virtual-printer' },

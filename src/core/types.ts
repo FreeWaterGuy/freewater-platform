@@ -60,7 +60,13 @@ export interface CompanyConfig {
     percentOfRevenue?: number; // for percent_of_revenue, 0–100
     defaultCharity?: string;
     charityByLocation?: Record<string, string>;
+    /** Donations are sent to charities in transfers once they reach this amount. */
+    minimumTransferCents?: number;
   };
+  /** Publish the books on the open-books site. A company can choose not to. */
+  openBooks?: boolean;
+  /** Standard cost of one bottle, by part, for the bottle receipt and "where the money goes". */
+  unitCosts?: { water: Cents; bottle: Cents; label: Cents; machine: Cents };
   consumerPricing: 'free' | 'discounted' | 'full';
   /** Where the company runs, for dates like "tonight" and "Tuesday". */
   timezone?: string;

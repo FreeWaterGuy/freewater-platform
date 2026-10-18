@@ -26,6 +26,8 @@ import { DeliveryService } from './modules/delivery/service';
 import { SimpleRoutePlanner, type RoutePlanner } from './modules/delivery/planner';
 import { TestGeocoder, type Geocoder } from './adapters/geocoding/contract';
 import { OpsService } from './modules/ops/service';
+import { BooksService } from './modules/books/service';
+import { TestPayoutProvider, type PayoutProvider } from './adapters/payouts/contract';
 import { bottle16oz, boxes, builtinCreatives, freewater, locations, peakSpring, sampleCampaigns } from './demo/seed';
 
 export interface AppOptions {
@@ -42,7 +44,8 @@ export interface AppOptions {
   assistant?: AdAssistant;
   designer?: DesignAssistant;
   geocoder?: Geocoder; // defaults to the test geocoder
-  planner?: RoutePlanner; // defaults to the simple route planner // the AI that helps people design their own bottles; same defaults as the ad assistant // the AI that helps make ads; defaults to Claude when ANTHROPIC_API_KEY is set, else the built-in helper
+  planner?: RoutePlanner; // defaults to the simple route planner
+  payouts?: PayoutProvider; // sends money to charities; defaults to the test provider (no real money) // the AI that helps people design their own bottles; same defaults as the ad assistant // the AI that helps make ads; defaults to Claude when ANTHROPIC_API_KEY is set, else the built-in helper
 }
 
 /** Start the platform on a database: migrate, load everything, and keep writing every change back. */
@@ -64,6 +67,10 @@ export async function createApp(opts: AppOptions) {
     await make('advertiser-joes', 'freewater', ['campaigns', 'purchases', 'invoices'], 'adv-joes');
     for (const c of sampleCampaigns().filter((x) => !x.isHouse)) {
       await db.query(`insert into advertisers (id, company_id, name, category) values ($1,$2,$3,$4) on conflict do nothing`, [c.advertiserId, c.companyId, c.advertiserName, c.category]);
+    }
+    // The charities FreeWater's sample bottles give to. Contact details are placeholders.
+    for (const [id, name, website] of [['ch_apf', 'Austin Parks Foundation', 'https://austinparks.org'], ['ch_ctfb', 'Central Texas Food Bank', 'https://www.centraltexasfoodbank.org']]) {
+      await db.query(`insert into charities (id, company_id, name, website, email, payout_label) values ($1,'freewater',$2,$3,$4,'Bank account (test)') on conflict do nothing`, [id, name, website, `giving@${id}.example.org`]);
     }
     await make('peak-spring-admin', 'peak-spring', ['orders', 'packs', 'campaigns', 'purchases', 'ledger', 'events', 'admin']);
   }
@@ -111,7 +118,9 @@ export async function createApp(opts: AppOptions) {
   const delivery = new DeliveryService(db, platform, packs, accounts, messenger, geocoder, opts.planner ?? new SimpleRoutePlanner(), () => persistence.flush());
   const ops = new OpsService(db, platform, delivery, host);
 
-  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops };
+  const books = new BooksService(db, platform, packs, messenger, opts.payouts ?? new TestPayoutProvider(), (c, at) => delivery.today(c, at), () => persistence.flush());
+
+  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

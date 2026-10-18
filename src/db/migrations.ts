@@ -368,6 +368,43 @@ create table route_runs (
 create index route_runs_date on route_runs(company_id, run_date);
 `,
   },
+  {
+    id: '008_open_books',
+    sql: `
+-- The charities a company gives to. The name is what appears on bottles and in the books.
+create table charities (
+  id text primary key,
+  company_id text not null,
+  name text not null,
+  website text,
+  registration text, -- e.g. a US EIN
+  email text,
+  payout_label text, -- "Bank account •••• 6789"; the account itself lives with the payout provider
+  created_at timestamptz not null default now(),
+  unique (company_id, name)
+);
+
+-- Money sent to a charity: one row per transfer, with the bank's reference and the charity's confirmation.
+create table charity_transfers (
+  id text primary key,
+  company_id text not null,
+  number text not null, -- "T-1042"
+  charity_id text not null references charities(id),
+  amount_cents bigint not null,
+  covers_until timestamptz not null, -- every donation up to here is in this transfer
+  bottles integer not null,
+  status text not null check (status in ('sent', 'failed', 'confirmed')),
+  provider text not null,
+  provider_ref text,
+  failure text,
+  confirm_token_hash text,
+  confirmed_at timestamptz,
+  created_at timestamptz not null default now(),
+  unique (company_id, number)
+);
+create index charity_transfers_company on charity_transfers(company_id, created_at);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {
