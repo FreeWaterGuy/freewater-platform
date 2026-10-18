@@ -1,6 +1,8 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { ApiError, notFound, obj, S, type Handler, type RouteDef } from './http';
 import { consumerRoutes } from './consumer';
+import { adsRoutes } from './ads';
+import { AdsError } from '../modules/ads/service';
 import type { App } from '../app';
 import { findApiKey, type ApiKey, type Scope } from '../db/store';
 import type { Campaign, Sixths } from '../core/types';
@@ -156,7 +158,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   route({ method: 'POST', url: '/v1/public/engagements', scope: 'public', summary: 'Something a viewer did on the page (saved it, opened a link, picked a side). Counted for the advertiser; never billed.', body: obj({ target: { type: 'string', maxLength: 120 }, viewerKey: viewerKeyProp, action: { type: 'string', enum: ['save', 'link', 'call', 'addon', 'room', 'slot', 'video'] }, detail: { type: 'string', maxLength: 120 }, engagementId: S.str }, ['target', 'viewerKey', 'action']), handler: async (req) => {
     const b = req.body as any;
     const owner = experiences.ownerOf(parseTarget(b.target));
-    const e = platform.engaged(owner.companyId, { target: b.target, viewerKey: b.viewerKey, action: b.action, detail: b.detail, advertiserId: owner.advertiserId }, b.engagementId ?? newId('eng'));
+    const e = platform.engaged(owner.companyId, { target: b.target, viewerKey: b.viewerKey, action: b.action, detail: b.detail, advertiserId: owner.advertiserId, campaignId: owner.campaignId }, b.engagementId ?? newId('eng'));
     return { status: 202, body: { recorded: !!e } };
   } });
 
@@ -266,7 +268,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const c = campaignFor(key!, (req.params as any).id);
     const b = req.body as any;
     const reviewer = !key!.advertiserId || key!.scopes.includes('admin');
-    if (b.active === true && !reviewer) throw new ApiError(403, 'review_required', 'Content review turns campaigns on. You can pause yours any time.');
+    const approved = c.review ? c.review.status === 'approved' : false;
+    if (b.active === true && !reviewer && !approved) throw new ApiError(403, 'review_required', 'Content review turns campaigns on. You can pause yours any time.');
     const changesPage = b.experienceId !== undefined || b.experienceConfig !== undefined || b.theme !== undefined;
     if (changesPage) {
       const id = b.experienceId ?? c.experienceId;
@@ -278,7 +281,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       if (b.theme !== undefined) c.theme = b.theme;
       if (!reviewer) c.active = false;
     }
-    if (b.active !== undefined && (reviewer || b.active === false)) c.active = b.active;
+    if (b.active !== undefined && (reviewer || b.active === false || (approved && !changesPage))) c.active = b.active;
+    if (reviewer && b.active === true) c.review = { status: 'approved', at: platform.bus.now().toISOString() };
+    if (changesPage && !reviewer) c.review = { status: 'submitted', at: platform.bus.now().toISOString() };
     platform.persist.campaign(c);
     return { body: campaignView(c) };
   } });
@@ -430,7 +435,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const data = { owner: opened.doc.owner.name, pluginId: opened.doc.pluginId, url: target.kind === 'slot' ? `/s/${target.unitId}/${target.slot}` : `/b/${target.packId}/${target.face}`, code: offer?.code ?? null, theme: opened.doc.owner.theme, kind: opened.doc.pluginId };
     const id = newId('sv');
     const r = (await db.query<any>(`insert into saved_items (id, user_id, company_id, target, title, data) values ($1,$2,$3,$4,$5,$6) on conflict (user_id, target) do update set title = excluded.title, data = excluded.data returning id`, [id, userId, key!.companyId, targetKey(target), title, JSON.stringify(data)])).rows[0];
-    platform.engaged(user.companyId, { target: targetKey(target), viewerKey: user.viewerKey, action: 'save', advertiserId: experiences.ownerOf(target).advertiserId }, `save:${userId}:${targetKey(target)}`);
+    platform.engaged(user.companyId, { target: targetKey(target), viewerKey: user.viewerKey, action: 'save', advertiserId: experiences.ownerOf(target).advertiserId, campaignId: experiences.ownerOf(target).campaignId }, `save:${userId}:${targetKey(target)}`);
     return { status: 201, body: { id: r.id, target: targetKey(target), title, ...data } };
   } });
   route({ method: 'DELETE', url: '/v1/me/saved/:id', scope: 'me', summary: 'Remove something you saved.', handler: async (req, key) => {
@@ -451,6 +456,11 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   const advertiserScope = (key: ApiKey, advertiserId: string) => {
     if (key.advertiserId && key.advertiserId !== advertiserId) throw notFound('Advertiser');
   };
+  route({ method: 'GET', url: '/v1/advertisers/:advertiserId/cards', scope: 'invoices', summary: "An advertiser's saved cards (brand and last 4 digits only).", handler: async (req, key) => {
+    const id = (req.params as any).advertiserId;
+    advertiserScope(key!, id);
+    return { body: await app.payments.methods(key!.companyId, 'advertiser', id) };
+  } });
   route({ method: 'POST', url: '/v1/advertisers/:advertiserId/cards', scope: 'invoices', summary: "Save an advertiser's card for paying invoices.", body: obj({ token: S.str }, ['token']), handler: async (req, key) => {
     const id = (req.params as any).advertiserId;
     advertiserScope(key!, id);
@@ -478,6 +488,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   // ---------- the FreeWater app ----------
 
   consumerRoutes(app, route, { me, checkExperience });
+  adsRoutes(app, route, { me });
 
   // ---------- wiring ----------
 
@@ -524,12 +535,21 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     'app.js': { type: 'text/javascript', path: join(webDir, 'app.js') },
     'app.css': { type: 'text/css', path: join(webDir, 'app.css') },
     'icon.svg': { type: 'image/svg+xml', path: join(webDir, 'icon.svg') },
+    'ads.js': { type: 'text/javascript', path: join(webDir, 'ads.js') },
+    'ads.css': { type: 'text/css', path: join(webDir, 'ads.css') },
     'jsqr.js': { type: 'text/javascript', path: createRequire(import.meta.url).resolve('jsqr/dist/jsQR.js') },
   };
   const cache = new Map<string, Buffer>();
   const file = (p: string) => { let b = cache.get(p); if (!b || process.env.NODE_ENV !== 'production') cache.set(p, (b = readFileSync(p))); return b; };
   const page = async (_req: FastifyRequest, reply: FastifyReply) => reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', "default-src 'self'; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' blob: data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; frame-ancestors 'none'").send(file(join(webDir, 'scan.html')));
   for (const u of ['/s/:unitId/:slot', '/r/:unitId', '/p/:packId', '/b/:packId/:face']) server.get(u, page);
+  // The same page inside the advertiser portal, showing a draft before it exists. Only this site may frame it.
+  server.get('/preview/scan', async (_req, reply) => reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', "default-src 'self'; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' blob: data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; frame-ancestors 'self'").send(file(join(webDir, 'scan.html'))));
+
+  // The advertiser portal.
+  const adsPage = async (_req: FastifyRequest, reply: FastifyReply) => reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', "default-src 'self'; img-src 'self' data: blob:; connect-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; frame-src 'self'; frame-ancestors 'none'").send(file(join(webDir, 'ads.html')));
+  server.get('/ads', adsPage);
+  server.get('/ads/*', adsPage);
 
   // The FreeWater app: one page that handles every /app address itself.
   const appPage = async (_req: FastifyRequest, reply: FastifyReply) => reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; frame-ancestors 'none'").header('permissions-policy', 'camera=(self), geolocation=(self)').send(file(join(webDir, 'app.html')));
@@ -561,7 +581,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   server.setErrorHandler((err: any, _req, reply) => {
     if (err instanceof ApiError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
-    if (err instanceof AccountsError || err instanceof PaymentError || err instanceof ExperienceError || err instanceof AssetError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
+    if (err instanceof AccountsError || err instanceof PaymentError || err instanceof ExperienceError || err instanceof AssetError || err instanceof AdsError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
     if (err.code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE') return reply.code(415).send({ error: { code: 'unsupported_type', message: 'Send JSON, or for uploads a .glb, PNG, JPEG, WebP or MP4 file.' } });
     if (err.code === 'FST_ERR_CTP_BODY_TOO_LARGE') return reply.code(413).send({ error: { code: 'too_large', message: 'That is too big to upload.' } });
     if (err.validation) return reply.code(400).send({ error: { code: 'invalid_request', message: err.message } });

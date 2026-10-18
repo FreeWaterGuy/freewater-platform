@@ -1,0 +1,143 @@
+<meta charset="utf-8">
+<title>FreeWater Ads</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@600;700&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&display=swap">
+<style>
+/*ADS_CSS*/
+.preview-note { background: #FFF4D6; color: #5C3F00; padding: 8px max(16px, env(safe-area-inset-right, 0px)) 8px max(16px, env(safe-area-inset-left, 0px)); font-size: 13px; }
+.preview-note button { border: 0; background: none; color: inherit; font-weight: 700; cursor: pointer; padding: 0; margin-left: 6px; text-decoration: underline; }
+.side { top: 0; }
+</style>
+<div class="preview-note" id="pnote"><b>Preview.</b> Sign in as <b>joe@joesburgers.example</b> to see two weeks of results, or any other email to start a new business and make an ad with the assistant. Any 6 digits work. <button type="button" onclick="this.parentElement.remove()">Hide</button></div>
+<div id="root"></div>
+<script>/*LOCAL*/</script>
+<script>
+(() => {
+  const R = /*REC*/;
+  const L = FWLocal.makeLocal();
+  const SCAN_CSS = /*SCAN_CSS*/, SCAN_JS = /*SCAN_JS*/;
+  const S = { me: null, business: null, drafts: new Map(), campaigns: [], cards: [], seq: 0 };
+  const fail = (status, code, message) => { const e = new Error(message); e.status = status; e.code = code; throw e; };
+  const nowIso = () => new Date().toISOString();
+  const id = (p) => `${p}_${(++S.seq).toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+  const isJoe = () => S.me && S.me.advertiserId === 'adv-joes';
+  const missing = (d) => L.missing(d, L.host);
+  const view = (r) => {
+    const left = missing(r.draft);
+    const { poster, ...rest } = r.draft;
+    return { id: r.id, status: r.status, campaignId: r.campaignId, updatedAt: r.updatedAt, draft: { ...rest, poster: poster ? { ...poster, image: poster.image ? { role: poster.image.role, attached: true } : undefined } : undefined },
+      messages: [...r.messages], missing: left.map((m) => ({ id: m, label: L.missingLabels[m] })), ready: left.length === 0, estimate: L.estimate(r.draft, L.company), assistant: 'built-in helper' };
+  };
+  const svgWrap = (spec, w, h) => `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(w)}" height="${h}" viewBox="0 0 ${w.toFixed(1)} ${h}">${L.renderPoster(spec, w, h)}</svg>`;
+  const sixthPx = ((L.product.label.widthIn - L.product.label.seamIn - L.product.label.panelWidthIn) * 100) / 6;
+  async function preview(r) {
+    const d = r.draft;
+    const spec = { brand: S.business.name, headline: 'Your headline', colors: { bg: '#EEF6FB', fg: '#0B0B0B', accent: '#1E7DB8' }, ...(d.poster || {}) };
+    const sizes = (d.sizes && d.sizes.length ? d.sizes : [1, 2, 3]).map((s) => ({ sixths: s, svg: svgWrap(spec, s * sixthPx, 450) }));
+    const biggest = Math.max(...sizes.map((s) => s.sixths));
+    const house = L.campaigns.find((c) => c.isHouse && c.companyId === 'freewater');
+    const campaigns = new Map(L.campaigns.map((c) => [c.id, c]));
+    campaigns.set('preview', { id: 'preview', creative: { svg: (w, h) => L.renderPoster(spec, w, h) } });
+    const layout = [biggest, ...(6 - biggest ? [6 - biggest] : [])];
+    const placements = layout.map((s, i) => i === 0 ? { slotIndex: 0, sixths: s, campaignId: 'preview', advertiserName: S.business.name, isHouse: false } : { slotIndex: i, sixths: s, campaignId: house.id, advertiserName: house.advertiserName, isHouse: true });
+    const label = await L.renderer.render({ unit: { id: 'preview', companyId: 'freewater', locationId: 'preview', kind: 'ad_supported', placements, layout }, product: L.product, company: L.company, campaigns });
+    const theme = L.themeFor(L.company.brand, L.themeFromPoster(d));
+    const scan = d.experienceId && L.host.checkConfig(d.experienceId, d.experienceConfig || {}) === null
+      ? await L.host.open({ pluginId: d.experienceId, config: d.experienceConfig, theme, scan: { target: { kind: 'slot', unitId: 'preview', slot: 0 }, companyId: 'freewater', locationId: 'preview', owner: { name: S.business.name, advertiserId: 'x', campaignId: 'preview' }, viewer: { key: 'preview', signedIn: false, interests: [], firstTimeWithAdvertiser: true }, now: new Date() } }) : null;
+    return { sizes, labelSvg: label.svg, boxFaceSvg: (d.formats || []).includes('box-face') ? svgWrap(spec, 424, 312) : null, scan: scan ? { doc: scan, footer: { company: 'FreeWater', brand: L.company.brand, ads: 3, giving: L.givingLine(L.company, 'preview'), receiptUrl: null, packUrl: null } } : null };
+  }
+  const blank = () => ({ spendCents: 0, prints: 0, scans: 0, arLaunches: 0, sales: 0, salesCents: 0, boxFaces: 0, saves: 0, linkTaps: 0 });
+  const statusOf = (c) => c.review.status === 'submitted' ? 'in_review' : c.active ? 'running' : 'paused';
+  function overview() {
+    const local = S.campaigns.map((c) => ({ id: c.id, name: c.name, status: statusOf(c), review: c.review, sizes: c.sizes, formats: c.formats, where: c.where, experienceId: c.experienceId, budget: c.budget, editable: true, thumbSvg: svgWrap(c.spec, sixthPx * 2, 450), results: blank() }));
+    const drafts = [...S.drafts.values()].filter((r) => r.status === 'open').map((r) => ({ id: r.id, campaignId: r.campaignId, headline: r.draft.poster?.headline ?? null, updatedAt: r.updatedAt }));
+    if (isJoe()) return { ...R.joeOverview, campaigns: [...local, ...R.joeOverview.campaigns], drafts };
+    const days = Array.from({ length: 14 }, (_, i) => ({ day: new Date(Date.now() - (13 - i) * 864e5).toISOString().slice(0, 10), ...blank() }));
+    return { advertiser: S.business, days: 14, total: blank(), period: blank(), daily: days, campaigns: local, drafts, prices: R.joeOverview.prices };
+  }
+  const scanFrame = () => {
+    const f = document.createElement('iframe');
+    f.title = 'Your scan page';
+    f.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@600;700&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&display=swap"><style>${SCAN_CSS}</style></head><body><main id="app"></main><script>window.__FW_FIXTURE__={path:'/preview/scan',api:async()=>({})};<\/script><script>${SCAN_JS.replace(/<\/script/g, '<\\/script')}<\/script></body></html>`;
+    return f;
+  };
+
+  window.__FW_ADS_FIXTURE__ = {
+    start: '/ads',
+    scanFrame,
+    async api(method, url, body) {
+      await new Promise((r) => setTimeout(r, 90));
+      const path = url.split('?')[0];
+      const key = `${method} ${path}`;
+      if (key === 'GET /v1/public/app-config') return R.config;
+      if (key === 'POST /v1/auth/start') return { sent: true, expiresInMinutes: 10 };
+      if (key === 'POST /v1/auth/verify') {
+        if (!/^\d{6}$/.test(String(body.code).trim())) fail(400, 'bad_code', 'That code isn’t right.');
+        const joe = /^joe@joesburgers\.example$/i.test(body.to.trim());
+        S.me = joe ? R.joeMe : { id: 'u_preview', email: body.to.trim(), role: 'consumer', advertiserId: null, consents: {}, interests: [] };
+        S.business = joe ? R.joe : null; S.cards = joe ? R.joeCards : []; S.campaigns = []; S.drafts = new Map();
+        return { token: 'fws_preview', isNew: !joe, user: S.me };
+      }
+      if (!S.me) fail(401, 'signed_out', 'Sign in again.');
+      if (key === 'GET /v1/me') return S.me;
+      if (key === 'POST /v1/auth/sign-out') { S.me = null; return null; }
+      if (key === 'POST /v1/advertisers') { S.business = { id: 'adv_preview', name: body.businessName, category: body.category, website: body.website ?? null }; S.me = { ...S.me, role: 'advertiser', advertiserId: 'adv_preview' }; return S.business; }
+      if (key === 'GET /v1/ads/advertiser') return S.business;
+      if (key === 'GET /v1/ads/overview') return overview();
+      if (key === 'POST /v1/ads/drafts') {
+        let draft = { category: S.business.category }, greeting = `Hi! Tell me about the ad you want for ${S.business.name}. What are you offering? You can attach your logo or a photo too.`;
+        if (body.fromCampaignId) {
+          const c = S.campaigns.find((x) => x.id === body.fromCampaignId);
+          if (!c) fail(422, 'not_editable_here', 'This sample ad’s artwork was uploaded as a file. Make a new ad to try the chat.');
+          draft = structuredClone(c.draft); greeting = 'What would you like to change? Changes go back to review before they print.';
+        }
+        const r = { id: id('dr'), status: 'open', campaignId: body.fromCampaignId ?? null, draft, messages: [{ role: 'assistant', text: greeting, at: nowIso() }], updatedAt: nowIso() };
+        S.drafts.set(r.id, r); return view(r);
+      }
+      let m = /^\/v1\/ads\/drafts\/([\w-]+)(\/messages|\/preview|\/submit)?$/.exec(path);
+      if (m) {
+        const r = S.drafts.get(m[1]); if (!r) fail(404, 'not_found', 'Draft not found.');
+        if (!m[2]) return view(r);
+        if (m[2] === '/preview') return preview(r);
+        if (m[2] === '/messages') {
+          const locs = L.locations;
+          const out = await L.assistant.respond({ draft: r.draft, history: r.messages, message: body.text, attachments: body.attachments || [], context: {
+            business: { name: S.business.name, category: S.business.category }, company: { name: 'FreeWater', blockedCategories: L.company.adRules.blockedCategories, giving: null },
+            machines: locs.map((l) => ({ id: l.id, name: l.name, kind: l.kind })), plugins: [], icons: L.posterIcons, fonts: Object.keys(L.posterFonts), sizes: L.allowedSizes,
+            prices: { perPrintBySixths: L.company.prices.perPrintBySixths, perScan: L.company.prices.perScan, perArLaunch: L.company.prices.perArLaunch, commissionPercent: L.company.prices.commissionPercent }, missing: missing(r.draft) } });
+          const { draft, problems } = L.applyPatch(r.draft, out.patch || {}, { company: L.company, locations: locs, host: L.host, attachments: body.attachments || [] });
+          let reply = out.reply; if (problems.length) reply += `\n\nI couldn’t use part of that: ${problems.join(' ')}`;
+          r.messages.push({ role: 'user', text: body.text, ...(body.attachments?.length ? { attachments: body.attachments.map((a) => a.name || 'picture') } : {}), at: nowIso() }, { role: 'assistant', text: reply, at: nowIso() });
+          r.draft = draft; r.updatedAt = nowIso();
+          const left = missing(draft);
+          return { ...view(r), suggestions: left.length || out.suggestions.length ? out.suggestions : ['Review and submit'] };
+        }
+        if (m[2] === '/submit') {
+          const left = missing(r.draft); if (left.length) fail(422, 'not_ready', `Before submitting, add ${left.map((x) => L.missingLabels[x]).join(', ')}.`);
+          const d = r.draft;
+          const c = { id: r.campaignId ?? id('cmp'), name: d.name ?? d.poster.headline, spec: d.poster, draft: structuredClone(d), sizes: d.sizes, formats: d.formats ?? ['label'], where: d.locations === 'all' ? 'all' : d.locations, experienceId: d.experienceId,
+            budget: d.buy.type === 'guaranteed' ? { type: 'guaranteed', bottlesLeft: d.buy.prints } : { type: 'bid', dailyCapCents: d.buy.dailyCapCents, spentTodayCents: 0 }, active: false, review: { status: 'submitted', at: nowIso() } };
+          S.campaigns = [c, ...S.campaigns.filter((x) => x.id !== c.id)];
+          r.status = 'submitted'; r.campaignId = c.id;
+          // In the preview, FreeWater's review approves it after a few seconds.
+          setTimeout(() => { c.review = { status: 'approved', at: nowIso() }; c.active = true; }, 6000);
+          return { campaignId: c.id, status: 'in_review' };
+        }
+      }
+      m = /^\/v1\/campaigns\/([\w-]+)$/.exec(path);
+      if (m && method === 'PATCH') {
+        const c = S.campaigns.find((x) => x.id === m[1]);
+        if (!c) return { ...(R.joeOverview.campaigns.find((x) => x.id === m[1]) || {}), active: body.active };
+        if (body.active && c.review.status !== 'approved') fail(403, 'review_required', 'Content review turns campaigns on.');
+        c.active = !!body.active; return { id: c.id, active: c.active };
+      }
+      if (key === 'GET /v1/invoices') return isJoe() ? R.joeInvoices : [];
+      if (/^\/v1\/advertisers\/[\w-]+\/cards$/.test(path)) { if (method === 'POST') S.cards = [{ id: 'pm_preview', brand: body.token === 'tok_amex' ? 'amex' : 'visa', last4: body.token === 'tok_amex' ? '0005' : '4242', expMonth: 12, expYear: 2029 }]; return method === 'POST' ? S.cards[0] : S.cards; }
+      if (/^\/v1\/invoices\/[\w-]+\/pay$/.test(path)) return { status: 'paid' };
+      fail(404, 'not_found', 'Not in this preview.');
+    },
+  };
+})();
+</script>
+<script>
+/*ADS_JS*/
+</script>

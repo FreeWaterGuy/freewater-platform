@@ -73,7 +73,7 @@ export class ExperienceService {
 
   ownerOf(target: Target) {
     const r = this.resolveOwner(target);
-    return { companyId: r.companyId, advertiserId: r.advertiserId, name: r.ownerName };
+    return { companyId: r.companyId, advertiserId: r.advertiserId, campaignId: r.campaign?.id, name: r.ownerName };
   }
 
   private async seenBefore(companyId: string, viewerKey: string, advertiserId: string) {

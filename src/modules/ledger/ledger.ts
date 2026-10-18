@@ -13,6 +13,8 @@ export interface LedgerEntry {
   companyId: string;
   unitId?: string;
   packId?: string;
+  /** Which campaign this line is for, so each advertiser sees results per ad. */
+  campaignId?: string;
   debit: string;
   credit: string;
   amountCents: Cents;
@@ -83,7 +85,7 @@ export class Ledger {
     for (const p of placements) {
       if (p.isHouse) continue;
       revenue += p.priceCents;
-      this.add(e, { unitId, debit: `receivable:advertiser:${p.advertiserId}`, credit: 'revenue:print', amountCents: p.priceCents, kind: 'print', memo: `${p.advertiserName}, ${p.sixths}/6 slot, printed` });
+      this.add(e, { unitId, campaignId: p.campaignId, debit: `receivable:advertiser:${p.advertiserId}`, credit: 'revenue:print', amountCents: p.priceCents, kind: 'print', memo: `${p.advertiserName}, ${p.sixths}/6 slot, printed` });
     }
 
     const g = company.giving;
@@ -98,7 +100,7 @@ export class Ledger {
     this.printedBoxes.set(e.payload.packId, e.payload.faces);
     for (const f of e.payload.faces) {
       if (f.isHouse) continue;
-      this.add(e, { packId: e.payload.packId, debit: `receivable:advertiser:${f.advertiserId}`, credit: 'revenue:box', amountCents: f.priceCents, kind: 'box_face', memo: `${f.advertiserName}, ${f.face} of the box, printed` });
+      this.add(e, { packId: e.payload.packId, campaignId: f.campaignId, debit: `receivable:advertiser:${f.advertiserId}`, credit: 'revenue:box', amountCents: f.priceCents, kind: 'box_face', memo: `${f.advertiserName}, ${f.face} of the box, printed` });
     }
   }
 
@@ -119,7 +121,7 @@ export class Ledger {
     if (last !== undefined && t - last < company.adRules.repeatScanWindowSec * 1000) return; // repeat, free
 
     const amount = kind === 'scan' ? company.prices.perScan : company.prices.perArLaunch;
-    this.add(e, { unitId: p.unitId, debit: `receivable:advertiser:${placement.advertiserId}`, credit: `revenue:${kind}`, amountCents: amount, kind, memo: `${placement.advertiserName}, ${kind === 'scan' ? 'scan' : 'AR launch'}` });
+    this.add(e, { unitId: p.unitId, campaignId: placement.campaignId, debit: `receivable:advertiser:${placement.advertiserId}`, credit: `revenue:${kind}`, amountCents: amount, kind, memo: `${placement.advertiserName}, ${kind === 'scan' ? 'scan' : 'AR launch'}` });
   }
 
   /** Scans and AR launches from a box face are billed to that face's advertiser, with the same rules as bottles. */
@@ -132,7 +134,7 @@ export class Ledger {
     if (!face || face.isHouse) return;
     if (this.isRepeat(`box-${kind}:${p.packId}:${p.face}:${p.viewerKey}`, e.at.getTime(), company)) return;
     const amount = kind === 'scan' ? company.prices.perScan : company.prices.perArLaunch;
-    this.add(e, { packId: p.packId, debit: `receivable:advertiser:${face.advertiserId}`, credit: `revenue:${kind}`, amountCents: amount, kind, memo: `${face.advertiserName}, ${kind === 'scan' ? 'scan' : 'AR launch'} from the ${p.face} of a box` });
+    this.add(e, { packId: p.packId, campaignId: face.campaignId, debit: `receivable:advertiser:${face.advertiserId}`, credit: `revenue:${kind}`, amountCents: amount, kind, memo: `${face.advertiserName}, ${kind === 'scan' ? 'scan' : 'AR launch'} from the ${p.face} of a box` });
   }
 
   private isRepeat(key: string, t: number, company: CompanyConfig) {
@@ -148,8 +150,8 @@ export class Ledger {
     if (!placement || placement.isHouse) return;
     const amount = Math.round((e.payload.amountCents * company.prices.commissionPercent) / 100);
     const adv = `receivable:advertiser:${placement.advertiserId}`;
-    if (refund) this.add(e, { unitId: e.payload.unitId, debit: 'revenue:commission', credit: adv, amountCents: amount, kind: 'commission_reversal', memo: `Refund on order ${e.payload.orderId}, commission returned` });
-    else this.add(e, { unitId: e.payload.unitId, debit: adv, credit: 'revenue:commission', amountCents: amount, kind: 'commission', memo: `Commission on order ${e.payload.orderId}` });
+    if (refund) this.add(e, { unitId: e.payload.unitId, campaignId: placement.campaignId, debit: 'revenue:commission', credit: adv, amountCents: amount, kind: 'commission_reversal', memo: `Refund on order ${e.payload.orderId}, commission returned` });
+    else this.add(e, { unitId: e.payload.unitId, campaignId: placement.campaignId, debit: adv, credit: 'revenue:commission', amountCents: amount, kind: 'commission', memo: `Commission on order ${e.payload.orderId}` });
   }
 
   /** After a restart: reload past lines and what the billing rules need to remember. Nothing is billed again. */

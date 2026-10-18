@@ -1,0 +1,35 @@
+import type { AdDraft, DraftPatch, Missing } from '../ads/draft';
+
+// Contract for the ad-making assistant. Any AI (or none) can sit behind it.
+// It reads the conversation and the draft and proposes a change; it never saves anything itself.
+
+export interface ChatMessage { role: 'user' | 'assistant'; text: string; attachments?: string[] }
+
+export interface AdAssistantInput {
+  draft: AdDraft;
+  history: ChatMessage[]; // earlier turns, oldest first
+  message: string;
+  attachments: { dataUrl: string; name?: string }[];
+  context: {
+    business: { name: string; category: string };
+    company: { name: string; blockedCategories: string[]; giving: string | null };
+    machines: { id: string; name: string; kind: string }[];
+    plugins: { id: string; name: string; description: string; example: unknown; configSchema: unknown }[];
+    icons: readonly string[];
+    fonts: string[];
+    sizes: number[];
+    prices: { perPrintBySixths: Record<string, number>; perScan: number; perArLaunch: number; commissionPercent: number };
+    missing: Missing[];
+  };
+}
+
+export interface AdAssistantOutput {
+  reply: string; // what the assistant says back, in plain words
+  patch: DraftPatch; // the changes it proposes
+  suggestions: string[]; // short replies the person can tap
+}
+
+export interface AdAssistant {
+  readonly name: string;
+  respond(input: AdAssistantInput): Promise<AdAssistantOutput>;
+}

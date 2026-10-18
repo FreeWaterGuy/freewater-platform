@@ -17,19 +17,20 @@ export interface OpenInput {
  */
 export class ExperienceHost {
   private plugins = new Map<string, ExperiencePlugin<any>>();
-  private validators = new Map<string, ValidateFunction>();
-  private ajv = new Ajv({ allErrors: false, strict: false });
+  private validators = new Map<string, (data: unknown) => string | null>();
+  private compile: (schema: Record<string, unknown>) => (data: unknown) => string | null;
   readonly timeoutMs: number;
   /** The last few failures, so the ops console can show which plug-in is misbehaving. */
   readonly failures: { pluginId: string; at: Date; reason: string }[] = [];
 
-  constructor(readonly tools: PluginTools, opts: { timeoutMs?: number } = {}) {
+  constructor(readonly tools: PluginTools, opts: { timeoutMs?: number; compile?: (schema: Record<string, unknown>) => (data: unknown) => string | null } = {}) {
     this.timeoutMs = opts.timeoutMs ?? 300;
+    this.compile = opts.compile ?? ajvCompiler();
   }
 
   register(plugin: ExperiencePlugin<any>) {
     if (!/^[a-z0-9][a-z0-9-]{1,40}$/.test(plugin.id)) throw new Error(`Plug-in id "${plugin.id}" must be lowercase letters, numbers and dashes`);
-    this.validators.set(plugin.id, this.ajv.compile(plugin.configSchema));
+    this.validators.set(plugin.id, this.compile(plugin.configSchema));
     this.plugins.set(plugin.id, plugin);
     const err = this.checkConfig(plugin.id, plugin.example);
     if (err) throw new Error(`Plug-in ${plugin.id}'s own example is invalid: ${err}`);
@@ -57,9 +58,7 @@ export class ExperienceHost {
   checkConfig(pluginId: string, config: unknown): string | null {
     const v = this.validators.get(pluginId);
     if (!v) return `There is no experience called "${pluginId}".`;
-    if (v(config)) return null;
-    const e = v.errors?.[0];
-    return `Settings ${e?.instancePath || '(top level)'} ${e?.message ?? 'are not valid'}`.replace(/\s+/g, ' ').trim();
+    return v(config);
   }
 
   checkTheme(theme: unknown) {
@@ -94,6 +93,19 @@ export class ExperienceHost {
       clearTimeout(timer);
     }
   }
+}
+
+/** Checks settings against a plug-in's JSON Schema with Ajv. */
+export function ajvCompiler() {
+  const ajv = new Ajv({ allErrors: false, strict: false });
+  return (schema: Record<string, unknown>) => {
+    const v: ValidateFunction = ajv.compile(schema);
+    return (data: unknown) => {
+      if (v(data)) return null;
+      const e = v.errors?.[0];
+      return `Settings ${e?.instancePath || '(top level)'} ${e?.message ?? 'are not valid'}`.replace(/\s+/g, ' ').trim();
+    };
+  };
 }
 
 /** What a viewer sees when a plug-in can't answer: still on brand, still useful. */

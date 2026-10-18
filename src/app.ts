@@ -14,6 +14,10 @@ import { ExperienceService } from './modules/experiences/service';
 import type { ExperiencePlugin } from './modules/experiences/contract';
 import { SqlAssetStore, type AssetStore } from './modules/assets/store';
 import { builtinModelIds } from './modules/models/builtin';
+import { AdsService } from './modules/ads/service';
+import { BuiltinAdAssistant } from './modules/ai/builtinAssistant';
+import { ClaudeAdAssistant } from './modules/ai/claudeAssistant';
+import type { AdAssistant } from './modules/ai/contract';
 import { bottle16oz, boxes, builtinCreatives, freewater, locations, peakSpring, sampleCampaigns } from './demo/seed';
 
 export interface AppOptions {
@@ -27,6 +31,7 @@ export interface AppOptions {
   plugins?: ExperiencePlugin<any>[]; // extra experience plug-ins (partners'); FreeWater's built-ins are always installed
   assets?: AssetStore; // defaults to storing files in the database
   pluginTimeoutMs?: number;
+  assistant?: AdAssistant; // the AI that helps make ads; defaults to Claude when ANTHROPIC_API_KEY is set, else the built-in helper
 }
 
 /** Start the platform on a database: migrate, load everything, and keep writing every change back. */
@@ -46,6 +51,9 @@ export async function createApp(opts: AppOptions) {
     await make('freewater-admin', 'freewater', ['orders', 'packs', 'campaigns', 'purchases', 'ledger', 'events', 'admin']);
     await make('machine-ATX-014', 'freewater', ['orders']);
     await make('advertiser-joes', 'freewater', ['campaigns', 'purchases', 'invoices'], 'adv-joes');
+    for (const c of sampleCampaigns().filter((x) => !x.isHouse)) {
+      await db.query(`insert into advertisers (id, company_id, name, category) values ($1,$2,$3,$4) on conflict do nothing`, [c.advertiserId, c.companyId, c.advertiserName, c.category]);
+    }
     await make('peak-spring-admin', 'peak-spring', ['orders', 'packs', 'campaigns', 'purchases', 'ledger', 'events', 'admin']);
   }
 
@@ -80,7 +88,11 @@ export async function createApp(opts: AppOptions) {
   const experiences = new ExperienceService(platform, packs, host, db, accounts);
   const assets = opts.assets ?? new SqlAssetStore(db);
 
-  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets };
+  const builtinAssistant = new BuiltinAdAssistant();
+  const assistant = opts.assistant ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeAdAssistant({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL, fallback: builtinAssistant }) : builtinAssistant);
+  const ads = new AdsService(db, platform, made.registry, host, assistant, () => persistence.flush());
+
+  return { ...made, db, persistence, demoKeys, accounts, payments, messenger, experiences, assets, ads };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

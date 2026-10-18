@@ -266,6 +266,40 @@ create table proofs (
 create index proofs_user on proofs(user_id);
 `,
   },
+  {
+    id: '005_advertisers',
+    sql: `
+-- Results per ad: every ledger line says which campaign it is for.
+alter table ledger_entries add column campaign_id text;
+create index ledger_campaign on ledger_entries(company_id, campaign_id);
+
+-- Businesses that advertise. Their staff sign in as people with the advertiser role.
+create table advertisers (
+  id text primary key,
+  company_id text not null,
+  name text not null,
+  category text not null,
+  website text,
+  created_at timestamptz not null default now()
+);
+create index advertisers_company on advertisers(company_id);
+
+-- An ad being made in the chat: the draft so far and the conversation that made it.
+create table ad_drafts (
+  id text primary key,
+  company_id text not null,
+  advertiser_id text not null,
+  created_by text,
+  status text not null check (status in ('open', 'submitted')),
+  data jsonb not null,
+  messages jsonb not null,
+  campaign_id text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index ad_drafts_adv on ad_drafts(company_id, advertiser_id);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

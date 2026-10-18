@@ -112,6 +112,25 @@ npm run demo:app-preview   # builds out/app-preview/, a clickable copy that need
 - **Saved, Machines, Scan, Me.** Saved offers from your scans. A list of machines. A scanner that reads FreeWater codes with the camera and ignores everyone else's. Your name, privacy switches (all off to start), interests, saved card, download your data, sign out, delete your account.
 - **Design my own bottle.** Words, a photo, colors and lettering for the label, and what opens when someone scans it (a message, confetti). Then a proof (`POST /v1/me/proofs`) shows the exact label that will print, panel and all, with the price. Only an approved proof can be printed (`POST /v1/me/custom-orders` takes the proof's id), within a day, at the proof's price, with the code from the machine's screen. The card is held, charged only once it prints, and released if it doesn't. The AI chat for designing comes in step 5.
 
+## FreeWater Ads: the advertiser portal
+
+Where businesses make ads by chatting, watch their results, and pay.
+
+```
+npm run demo:ads           # the portal at http://localhost:8787/ads, with two weeks of sample results for joe@joesburgers.example
+npm run demo:ads-preview   # builds out/ads-preview/, a clickable copy that needs no server
+```
+
+- **Sign up in a minute.** Email code, then business name and type (`POST /v1/advertisers`). Categories a company doesn't allow are refused here, before any work is done.
+- **Make the ad by chatting** (`POST /v1/ads/drafts`, then `POST /v1/ads/drafts/:id/messages` with text and up to 4 pictures). The assistant fills in a draft: the artwork (business name, headline, small line, colors, icon or their logo or photo, lettering), sizes, where it runs, the budget, and what opens when people scan it. It asks for whatever is still missing, one thing at a time, and offers quick replies.
+- **The AI can't break anything.** It only proposes changes; every change is checked before it's kept (`src/modules/ads/draft.ts`). Colors that would be hard to read are fixed, sizes that aren't sold are dropped, unknown machines and unfinished scan pages are explained back in plain words.
+- **Swappable AI.** `AdAssistant` is a contract (`src/modules/ai/contract.ts`). With `ANTHROPIC_API_KEY` set, Claude does the talking (`ANTHROPIC_MODEL` picks the model) through one tool, `update_ad`, and sees attached pictures. Without a key, or if Claude can't be reached, the built-in helper answers: it reads offers, prices, colors, places, links and codes out of what people type. Any other AI can plug in the same way.
+- **Artwork that works at every size.** The assistant designs with a template (`src/modules/creative/poster.ts`) that lays the ad out for a thin 1/6 slot, a half label, the full wrap and the side of a box, with text always escaped and contrast always readable.
+- **See it before submitting** (`GET /v1/ads/drafts/:id/preview`): every size, a real sample label with the company panel, the side of a box, the real scan page in a phone frame, and what it costs.
+- **Review twice.** The advertiser confirms the preview (`submit` needs `approved: true`), then the company approves or sends it back with a note (`GET /v1/review/campaigns`, `POST /v1/review/campaigns/:id`). Nothing prints before that. Once approved, the advertiser can pause and resume; changing the artwork or scan page sends it back to review. Changes are made the same way, by chatting (`POST /v1/ads/drafts` with `fromCampaignId`).
+- **Results from the books** (`GET /v1/ads/overview`): spend, bottles printed, box sides, scans, AR launches, sales, saves and link taps, day by day and per ad. Every ledger line now carries its campaign, so each number traces to the lines it adds up.
+- **Billing**: invoices made from those ledger lines, a saved card charged automatically, and pay-now for open ones.
+
 ## The database
 
 `src/db` holds the database contract (`SqlClient`) and two adapters:
@@ -151,4 +170,4 @@ All prices in `src/demo/seed.ts` are placeholders.
 
 - A real printer adapter for the Model 6 and the micro-factory lines, once the printers are chosen (the virtual printer shows the contract any printer must follow)
 - Webhooks, so partners hear about events without polling
-- The advertiser portal with its AI chat (step 4), then the AI design assistant (step 5)
+- The AI design assistant for people designing their own bottles (step 5), then the ops console, driver app and delivery subscriptions (step 6)

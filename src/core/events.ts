@@ -26,7 +26,7 @@ export interface EventPayloads {
   'box.scanned': { packId: string; face: string; viewerKey: string; experienceLoaded: boolean };
   'box.ar_launched': { packId: string; face: string; viewerKey: string; loaded: boolean };
   /** Something a viewer did inside an experience (saved it, opened a link, picked a side). Counted, never billed. */
-  'experience.engaged': { target: string; viewerKey: string; action: 'save' | 'link' | 'call' | 'addon' | 'room' | 'slot' | 'video'; detail?: string; advertiserId?: string };
+  'experience.engaged': { target: string; viewerKey: string; action: 'save' | 'link' | 'call' | 'addon' | 'room' | 'slot' | 'video'; detail?: string; advertiserId?: string; campaignId?: string };
   'unit.failed': { unitId: string; orderId?: string; reason: string };
   'payment.authorized': { paymentId: string; payerType: 'user' | 'advertiser'; payerId: string; amountCents: Cents; purpose: 'custom_order' | 'invoice'; ref: string };
   'payment.captured': { paymentId: string; payerType: 'user' | 'advertiser'; payerId: string; amountCents: Cents; purpose: 'custom_order' | 'invoice'; ref: string; provider: string };

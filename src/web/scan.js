@@ -76,6 +76,10 @@
     try { opened = await api('GET', `${url}?viewer=${encodeURIComponent(viewerKey)}`); }
     catch (e) { return fail(e.status === 404 ? 'We couldn’t find that' : 'That didn’t open', e.status === 404 ? 'This code may be from a bottle that was never printed.' : 'Check your connection and scan again.'); }
     viewerKey = opened.viewerKey; // a signed-in person uses their own key
+    renderExperience(opened, target, true);
+  }
+
+  function renderExperience(opened, target, record) {
     const { doc, footer } = opened;
     applyTheme(doc.owner.theme, footer.brand);
     document.title = `${doc.owner.name} · ${footer.company}`;
@@ -89,7 +93,7 @@
     app.replaceChildren(top, body, panel(footer, target));
 
     // The scan counts once the page has actually shown. If the experience failed, it isn't billed.
-    requestAnimationFrame(() => setTimeout(() => {
+    if (record) requestAnimationFrame(() => setTimeout(() => {
       const loaded = !doc.fallback;
       const rec = target.kind === 'slot'
         ? api('POST', '/v1/public/scans', { unitId: target.unitId, slot: target.slot, viewerKey, experienceLoaded: loaded })
@@ -98,7 +102,8 @@
     }, 0));
   }
 
-  const engage = (ctx, action, detail) => api('POST', '/v1/public/engagements', { target: ctx.targetKey, viewerKey, action, ...(detail ? { detail: String(detail).slice(0, 120) } : {}) }).catch(() => {});
+  let previewMode = false;
+  const engage = (ctx, action, detail) => previewMode ? Promise.resolve() : api('POST', '/v1/public/engagements', { target: ctx.targetKey, viewerKey, action, ...(detail ? { detail: String(detail).slice(0, 120) } : {}) }).catch(() => {});
   const withAttribution = (url, ctx) => {
     try {
       const u = new URL(url, location.href);
@@ -112,6 +117,7 @@
   async function save(ctx, btn) {
     const set = savedSet(); set.add(ctx.targetKey); store.set('fw_saved', JSON.stringify([...set]));
     markSaved(btn);
+    if (previewMode) { toast('Saving works once your ad is live'); return; }
     if (token) api('POST', '/v1/me/saved', { target: ctx.targetKey }).catch(() => {});
     else engage(ctx, 'save');
     toast(token ? 'Saved to your FreeWater app' : 'Saved on this phone');
@@ -239,7 +245,7 @@
     return h('footer', { class: 'panel' },
       h('div', { class: 'logo', 'aria-label': `${top}${bottom}` }, h('span', { text: top }), h('span', { text: bottom })),
       h('div', { class: 'facts' }, facts),
-      links.length && h('nav', {}, links),
+      links.length ? h('nav', {}, links) : null,
       f.brand.tagline && h('div', { class: 'tagline', text: f.brand.tagline }));
   }
 
@@ -279,6 +285,17 @@
     );
   }
 
+  // The advertiser portal shows a draft's scan page here before it exists. Nothing is recorded or billed.
+  if (path === '/preview/scan') {
+    previewMode = true;
+    window.addEventListener('message', (e) => {
+      if ((!fixture && e.origin !== location.origin) || !e.data || e.data.type !== 'fw-preview') return;
+      if (!e.data.doc) { app.replaceChildren(h('div', { class: 'error' }, h('h1', { text: 'Scan page' }), h('p', { text: 'Tell the assistant what should open when people scan your ad.' }))); return; }
+      renderExperience({ doc: e.data.doc, footer: e.data.footer, targetKey: 's:preview:0', viewerKey }, { kind: 'slot', unitId: 'preview', slot: 0 }, false);
+    });
+    window.parent?.postMessage({ type: 'fw-preview-ready' }, fixture ? '*' : location.origin);
+    return;
+  }
   if (m.slot) experiencePage({ kind: 'slot', unitId: m.slot[1], slot: Number(m.slot[2]) });
   else if (m.box) experiencePage({ kind: 'box-face', packId: m.box[1], face: m.box[2] });
   else if (m.receipt) receiptPage(m.receipt[1]);

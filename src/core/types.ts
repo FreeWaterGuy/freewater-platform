@@ -89,7 +89,7 @@ export interface CompanyConfig {
 }
 
 /** How a creative is stored: uploaded SVG artwork, or one of the built-in generated designs. */
-export type CreativeRef = { kind: 'svg'; markup: string } | { kind: 'builtin'; id: string };
+export type CreativeRef = { kind: 'svg'; markup: string } | { kind: 'builtin'; id: string } | { kind: 'poster'; spec: import('../modules/creative/poster').PosterSpec };
 
 export interface Creative {
   /** Artwork as SVG markup sized to any box; the renderer scales it to the slot. A real system stores an asset URL. */
@@ -121,6 +121,11 @@ export interface Campaign {
   buy: Buy;
   isHouse?: boolean; // the company's own filler, used when nothing else fits; never billed
   active: boolean;
+  /** Content review. A campaign only runs once the company has approved it. */
+  review?: { status: 'submitted' | 'approved' | 'rejected'; note?: string; at: string };
+  /** A short name the advertiser knows it by. */
+  name?: string;
+  createdAt?: string;
 }
 
 export interface Placement {

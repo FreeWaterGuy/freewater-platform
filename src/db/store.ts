@@ -7,6 +7,7 @@ import type { LedgerEntry } from '../modules/ledger/ledger';
 import type { Pack } from '../modules/packs/service';
 import type { RenderedLabel } from '../modules/print/contract';
 import { svgCreative } from '../modules/print/svgCreative';
+import { posterCreative } from '../modules/creative/poster';
 import type { SqlClient } from './client';
 
 /**
@@ -51,8 +52,8 @@ export class SqlPersistence implements Persistence {
   ledgerEntry(l: LedgerEntry) {
     this.enqueue(() =>
       this.db.query(
-        `insert into ledger_entries (id, event_id, company_id, at, unit_id, pack_id, debit, credit, amount_cents, kind, memo) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-        [l.id, l.eventId, l.companyId, l.at.toISOString(), l.unitId ?? null, l.packId ?? null, l.debit, l.credit, l.amountCents, l.kind, l.memo],
+        `insert into ledger_entries (id, event_id, company_id, at, unit_id, pack_id, debit, credit, amount_cents, kind, memo, campaign_id) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [l.id, l.eventId, l.companyId, l.at.toISOString(), l.unitId ?? null, l.packId ?? null, l.debit, l.credit, l.amountCents, l.kind, l.memo, l.campaignId ?? null],
       ),
     );
   }
@@ -105,8 +106,9 @@ export function campaignRecord(c: Campaign): CampaignRecord {
 }
 
 export function hydrateCampaign(r: CampaignRecord, builtins: Record<string, Creative>): Campaign {
-  const creative = r.creativeRef.kind === 'svg' ? svgCreative(r.creativeRef.markup) : builtins[r.creativeRef.id];
-  if (!creative) throw new Error(`Campaign ${r.id} uses built-in artwork "${r.creativeRef.kind === 'builtin' ? r.creativeRef.id : ''}" that this server doesn't have`);
+  const ref = r.creativeRef;
+  const creative = ref.kind === 'svg' ? svgCreative(ref.markup) : ref.kind === 'poster' ? posterCreative(ref.spec) : builtins[ref.id];
+  if (!creative) throw new Error(`Campaign ${r.id} uses built-in artwork "${ref.kind === 'builtin' ? ref.id : ''}" that this server doesn't have`);
   return { ...r, creative };
 }
 
@@ -139,7 +141,7 @@ export async function loadState(db: SqlClient, builtins: Record<string, Creative
   for (const r of await rows<{ unit_id: string; svg: string; meta: unknown }>(`select unit_id, svg, meta from labels`)) labels.set(r.unit_id, { ...json<Omit<RenderedLabel, 'svg'>>(r.meta), svg: r.svg });
   const packs = (await rows<{ data: unknown }>(`select data from packs`)).map((r) => json<Pack>(r.data));
   const ledger = (await rows<any>(`select * from ledger_entries order by seq`)).map(
-    (r): LedgerEntry => ({ id: r.id, eventId: r.event_id, companyId: r.company_id, at: new Date(r.at), unitId: r.unit_id ?? undefined, packId: r.pack_id ?? undefined, debit: r.debit, credit: r.credit, amountCents: Number(r.amount_cents), kind: r.kind, memo: r.memo }),
+    (r): LedgerEntry => ({ id: r.id, eventId: r.event_id, companyId: r.company_id, at: new Date(r.at), unitId: r.unit_id ?? undefined, packId: r.pack_id ?? undefined, campaignId: r.campaign_id ?? undefined, debit: r.debit, credit: r.credit, amountCents: Number(r.amount_cents), kind: r.kind, memo: r.memo }),
   );
   const seen = (await rows<{ company_id: string; type: EventType; idempotency_key: string }>(`select company_id, type, idempotency_key from events`)).map((r) => ({ companyId: r.company_id, type: r.type, idempotencyKey: r.idempotency_key }));
   // Only engagements recent enough to matter for the repeat window.
