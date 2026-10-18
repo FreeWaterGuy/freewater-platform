@@ -18,7 +18,7 @@ const SIZES: Record<string, number> = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MA
 export function parseGlb(bytes: Uint8Array): { json: Gltf; bin: Uint8Array } {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (dv.getUint32(0, true) !== 0x46546c67) throw new Error('Not a GLB file.');
-  let off = 12, json: Gltf | null = null, bin = new Uint8Array(0);
+  let off = 12, json: Gltf | null = null, bin: Uint8Array = new Uint8Array(0);
   while (off + 8 <= bytes.length) {
     const len = dv.getUint32(off, true), type = dv.getUint32(off + 4, true);
     const chunk = bytes.subarray(off + 8, off + 8 + len);
