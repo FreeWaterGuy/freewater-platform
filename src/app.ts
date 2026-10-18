@@ -67,6 +67,8 @@ export interface AppOptions {
   alerts?: Alerter;
   /** Where changes waiting for the database are kept on disk, so a restart doesn't lose them (FW_SPOOL_DIR). */
   spoolFile?: string;
+  /** This server's own id (its lease holder), written with every batch so recovery knows who wrote last. */
+  epoch?: string;
   builtins?: Record<string, Creative>;
   seedDemo?: boolean; // load FreeWater's sample catalog and print demo API keys when the database is empty
   clock?: () => Date;
@@ -135,6 +137,7 @@ export async function createApp(opts: AppOptions) {
   const runtime: Runtime = { alerts: opts.alerts ?? new Alerter(), startedAt: new Date() };
   const persistence = new SqlPersistence(db, {
     spoolFile: opts.spoolFile,
+    epoch: opts.epoch,
     onProblem: (p) => void runtime.alerts.alert('persistence', 'critical', 'The database is refusing changes; the platform has paused them', `${p.waiting} change(s) waiting since ${p.since}, tried ${p.tries} times. Last answer: ${p.message}. They'll go in by themselves once the database is back. If the database answers but one change keeps failing, see docs/RUNNING.md ("If changes are waiting").`),
     onRecovered: () => void runtime.alerts.alert('persistence', 'resolved', 'The database is taking changes again; everything waiting has been saved'),
   });
@@ -198,7 +201,7 @@ export async function createApp(opts: AppOptions) {
   const data = new DataService(db, platform, interactions, opts.clock);
   data.eraseAddresses = async (companyId, userIds) => {
     let n = 0;
-    for (const p of packs.packs.values()) if (p.companyId === companyId && p.customerId && userIds.includes(p.customerId) && p.address !== 'erased') { p.address = 'erased'; platform.persist.pack(p); n++; }
+    for (const p of packs.packs.values()) if (p.companyId === companyId && p.customerId && userIds.includes(p.customerId) && p.address !== 'erased' && (p.status === 'delivered' || p.status === 'returned')) { p.address = 'erased'; platform.persist.pack(p); n++; }
     await persistence.flush();
     return n;
   };

@@ -695,7 +695,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       },
       handler: async (req: FastifyRequest, reply: FastifyReply) => {
         const out = await r.handler(req, (req as any).apiKey as ApiKey | null);
-        await persistence.flush(); // answer only once the change is safely stored
+        // Answer only once the change is safely stored. Things recorded on the way past (a scan, what someone did on
+        // the page) don't wait while the database is refusing changes: they're queued in order and go in with the rest.
+        if (r.scope === 'public') await persistence.flushUnlessPaused(); else await persistence.flush();
         logActivity(r, req, (req as any).apiKey as ApiKey | null, out.status ?? 200);
         const what = sensitive[`${r.method} ${r.url}`];
         if (what) {

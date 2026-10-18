@@ -37,7 +37,7 @@ with a plain explanation.
 | `FILE_STORAGE` | `database` (default), `s3`, or `disk` (single server, backed-up disk only). |
 | `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_ENDPOINT`, `S3_REGION`, `S3_PREFIX` | For `FILE_STORAGE=s3`. `S3_ENDPOINT` for R2, B2 or MinIO (e.g. `https://<account>.r2.cloudflarestorage.com`); leave it out for Amazon S3 and set `S3_REGION`. Give the key read, write, delete **and list** on the bucket (without list, a missing file looks like "access denied"). |
 | `FW_SPOOL_DIR` | Where changes waiting for the database are also kept. Default in the image: `/var/lib/freewater/spool`. Mount a volume. |
-| `DATABASE_POOL_SIZE` | Database connections (default 10). Each statement may take at most 60 seconds. |
+| `DATABASE_POOL_SIZE` | Database connections (default 10). |
 | `BACKUP_KEY` | 32 random bytes, base64. Make with `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`. **Keep a copy away from the server; without it no backup can be read.** |
 | `BACKUP_S3_BUCKET`, `BACKUP_S3_ACCESS_KEY_ID`, `BACKUP_S3_SECRET_ACCESS_KEY`, `BACKUP_S3_ENDPOINT`, `BACKUP_S3_REGION` | Where backups go: a different bucket (ideally a different account) from the files. Turn on object lock / a 30-day retention rule so they can't be deleted early. |
 | `RESTORE_TEST_URL` | A spare, empty database the weekly restore check may wipe and fill. **Never the real one.** |
@@ -57,8 +57,12 @@ Never in production: `SEED_DEMO=1`, `ECHO_CODES=1`, `ALLOW_PRIVATE_WEBHOOKS=1`. 
 ```
 docker build -t freewater .
 docker run --env-file .env freewater npm run setup -- --owner you@freewater.io   # once, on the empty database
-docker run -d -p 8080:8080 --env-file .env --name freewater freewater
+docker volume create freewater-spool                                               # once: keeps waiting changes across restarts and deploys
+docker run -d -p 8080:8080 --env-file .env -v freewater-spool:/var/lib/freewater --name freewater freewater
 ```
+
+Always run the server with that same named volume (on hosting platforms: a persistent disk mounted at
+`/var/lib/freewater`), including the new copy during a deploy.
 
 `setup` creates FreeWater itself, its products, boxes, house ad and charity (bank details to add in the console),
 and its owner, and prints one platform key, once. Keep that key in a password manager. Then sign in to `/console`
@@ -82,18 +86,26 @@ to 30 seconds), until the database takes them. Nothing newer jumps ahead, so onc
 memory exactly. While changes wait:
 
 - a critical alert goes out, and another when everything is saved;
-- the platform is **paused**: pages, scans and the books still read, and scans are still counted (queued behind the
-  waiting changes); new orders, settings and sign-ups get a polite "paused, try again shortly";
+- the platform is **paused**: pages, scans and the books still read, and scans, QR opens, link clicks and what people
+  do on pages are still recorded (queued behind the waiting changes); new orders, settings and the like get a polite
+  "paused, try again shortly";
 - background jobs wait (no month closed and no fingerprint published from books that are behind), except the memory
   watch and backups;
-- the waiting changes are also written to the spool file in `FW_SPOOL_DIR` (in the image, `/var/lib/freewater/spool`;
+- every waiting change is also in the spool file in `FW_SPOOL_DIR` (in the image, `/var/lib/freewater/spool`;
   **mount a volume there**). If the server stops before the database is back, the next server writes them first,
-  before it reads anything.
+  before it reads anything: exactly the ones past what was already saved (every batch records how far it got). If a
+  different server has written since, the spool is not applied; it's renamed `….stale-<time>` for a person to look
+  at, and the server starts normally.
+- An outage longer than about 18 seconds also costs the server its claim to the data, so it stops; whichever server
+  starts next writes the spool. That's expected during a long database failover.
 
 Usually that's all: a database restart or failover fixes itself. If the database answers but one change keeps being
 refused (a bug), it holds the line. Then, as a person's decision, `POST /v1/platform/persistence/skip-stuck` moves
 that one change aside (kept word for word in `persistence_failures`) so the rest go in. Fix the bug, put the change
 back by hand, and restart the server so its memory is reloaded from the database.
+
+If a spool can't be applied at start-up (the server refuses to start and says why), fix the cause, or as a person's
+decision start once with `FW_SPOOL_SKIP=1` to set it aside unapplied (`….skipped-<time>`), and deal with it by hand.
 
 ## Background jobs
 
@@ -122,7 +134,8 @@ npm run books:check            # check the books of the database in DATABASE_URL
 ```
 
 The restore only ever wipes a spare: it refuses the database in `DATABASE_URL`, any database a server is running
-on, and any that holds companies without the mark a previous restore left.
+on, and any that holds companies without the mark a previous restore left. (A server removes that mark from its
+own database at start, so a restored database that's made the live one never looks like a spare again.)
 
 To recover the real database from our own copy (only if the host's own backups can't be used): restore into a new
 empty database with `RESTORE_TEST_URL` pointing at it, run `books:check` against it, then point `DATABASE_URL` at it

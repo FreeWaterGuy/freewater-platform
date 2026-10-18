@@ -937,6 +937,13 @@ alter table team_files alter column bytes drop not null;
 alter table team_files add column blob_key text;
 `,
   },
+  {
+    id: '025_persistence_watermark',
+    sql: `
+-- How far the server writing now has got: its id and the number of its last change written (see SqlPersistence).
+create table persistence_watermark (id int primary key, epoch text not null, seq bigint not null, at timestamptz not null);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

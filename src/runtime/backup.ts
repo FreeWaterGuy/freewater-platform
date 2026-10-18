@@ -99,7 +99,7 @@ export async function restore(o: { store: BlobStore; key: Buffer; targetUrl: str
     await run('sed', ['-i', '/^SET transaction_timeout = /d', sqlFile]);
     await run('psql', [o.targetUrl, '-v', 'ON_ERROR_STOP=1', '-q', '-f', sqlFile]);
     // Mark it as a spare, so it can be wiped again next time (and the real database, never marked, never can).
-    await run('psql', [o.targetUrl, '-v', 'ON_ERROR_STOP=1', '-q', '-c', `delete from instance_lease; create table restore_target (restored_at timestamptz not null default now(), backup text); insert into restore_target (backup) values ('${String(latest.name).replace(/'/g, "''")}');`]);
+    await run('psql', [o.targetUrl, '-v', 'ON_ERROR_STOP=1', '-q', '-c', `delete from instance_lease; create table if not exists restore_target (restored_at timestamptz not null default now(), backup text); insert into restore_target (backup) values ('${String(latest.name).replace(/'/g, "''")}');`]);
     log(`Restored ${latest.name} into the spare database.`);
     return { name: latest.name as string };
   } finally { await rm(dir, { recursive: true, force: true }); }

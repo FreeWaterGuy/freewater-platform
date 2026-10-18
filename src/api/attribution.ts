@@ -58,7 +58,7 @@ export function attributionRoutes(app: App, server: FastifyInstance, route: (r: 
     if (!row) return reply.code(404).type('text/html; charset=utf-8').send(notOurs(platform.companies.get(process.env.APP_COMPANY ?? 'freewater')?.name ?? 'FreeWater'));
     const { opens } = await codes.opened(row.code);
     platform.bus.publish('code.opened', row.companyId, { code: row.code, kind: row.kind, ...(row.unitId ? { unitId: row.unitId } : {}), ...(row.slot !== undefined ? { slot: row.slot } : {}), ...(row.packId ? { packId: row.packId } : {}), ...(row.face ? { face: row.face } : {}), opens }, `${row.code}:${opens}`);
-    await app.persistence.flush();
+    await app.persistence.flushUnlessPaused();
     const to = row.kind === 'slot' ? `/s/${row.unitId}/${row.slot}` : row.kind === 'receipt' ? `/r/${row.unitId}` : row.kind === 'box' ? `/b/${row.packId}/${row.face}` : `/p/${row.packId}`;
     return reply.header('cache-control', 'no-store').redirect(`${to}?c=${row.code}`, 302);
   };
@@ -78,7 +78,7 @@ export function attributionRoutes(app: App, server: FastifyInstance, route: (r: 
       // Anything the page added (like the booking time picked) goes along to the advertiser.
       const out = new URL(url);
       for (const [k, v] of Object.entries(q)) if (k !== 'v' && k !== 'from' && k !== 'fwclid' && typeof v === 'string') out.searchParams.set(k, v);
-      await app.persistence.flush();
+      await app.persistence.flushUnlessPaused();
       return reply.header('cache-control', 'no-store').header('referrer-policy', 'no-referrer').redirect(out.toString(), 302);
     } catch (e) { return fail(reply, e); }
   });
@@ -93,7 +93,7 @@ export function attributionRoutes(app: App, server: FastifyInstance, route: (r: 
       const b = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body as any);
       const origin = (req.headers.origin as string | undefined) ?? (req.headers.referer as string | undefined) ?? null;
       const r = await attribution.conversion({ source: 'tag', tagId: String(b?.tag ?? ''), origin, clickId: b?.fwclid ?? undefined, couponCode: b?.coupon ?? undefined, bottleCode: b?.fwb ?? undefined, orderId: String(b?.orderId ?? ''), valueCents: Number(b?.valueCents) });
-      await app.persistence.flush();
+      await app.persistence.flushUnlessPaused();
       return reply.code(r.duplicate ? 200 : 201).send({ ok: true, duplicate: r.duplicate });
     } catch (e) {
       if (e instanceof SyntaxError) return reply.code(400).send({ error: { code: 'bad_json', message: 'Send JSON.' } });

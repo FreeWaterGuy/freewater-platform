@@ -81,6 +81,7 @@ export function operationsRoutes(app: App, server: FastifyInstance, route: (r: R
     // waiting ones, in order, and go in with them, so the person scanning never sees an error.)
     if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return;
     if (url.startsWith('/v1/platform/persistence') || url.startsWith('/v1/auth/') || url.startsWith('/health')) return;
+    if (url.startsWith('/v1/public/')) return; // scans, what people did, consent: recorded, queued behind the rest
     throw new ApiError(503, 'paused_for_safety', 'FreeWater has paused changes for a moment to keep the books exact. Please try again shortly.');
   });
 }

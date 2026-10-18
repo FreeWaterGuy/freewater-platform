@@ -54,8 +54,11 @@ const lease = new InstanceLease(db, { onLost: (why) => {
 try { await lease.acquire(Number(process.env.LEASE_WAIT_MS ?? 120_000), (s) => console.log(s)); }
 catch (e) { console.error(`\n${(e as Error).message}\n`); await db.close(); process.exit(1); }
 await migrate(db);
+// A database restored from a backup and then made the live one still carries the restore check's "spare" mark;
+// the live database must never look like a spare.
+await db.query(`drop table if exists restore_target`);
 
-app = await createApp({ db, alerts, seedDemo: process.env.SEED_DEMO === '1', blobs: blobStoreFromEnv(), spoolFile });
+app = await createApp({ db, alerts, seedDemo: process.env.SEED_DEMO === '1', blobs: blobStoreFromEnv(), spoolFile, epoch: lease.holder });
 if (process.env.ALERT_EMAIL) alerts.addSink(new EmailSink(process.env.ALERT_EMAIL, (m) => app!.messenger.send(m)));
 app!.runtime.lease = lease;
 
@@ -128,6 +131,7 @@ const stop = async (code = 0) => {
     const still = await runner.stop(30_000);
     if (still.length) console.error(`Stopping while these jobs still run: ${still.join(', ')}. They'll be run again soon after the next start.`);
     await app!.persistence.flush(10_000).catch(() => console.error('The database is refusing changes; the waiting ones are in the spool file and the next server writes them first.'));
+    app!.persistence.spoolNow(); // anything still waiting (a job that kept running, say) goes to disk
     await lease.release();
     await db.close();
   } finally {

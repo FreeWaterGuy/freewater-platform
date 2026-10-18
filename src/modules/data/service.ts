@@ -174,7 +174,9 @@ export class DataService {
     const viewers = new Set<string>([subject, ...prof.links.filter((l: any) => l.kind === 'viewer').map((l: any) => l.value)]);
     for (const a of prof.accounts) viewers.add((await this.db.query<any>(`select viewer_key from users where id = $1`, [a.id])).rows[0]?.viewer_key);
     const v = [...viewers].filter((x) => x && !x.includes(':'));
-    const users = prof.accounts.map((a: any) => a.id as string);
+    // Only the person's own consumer accounts (and the account asking): a business account that happens to share an
+    // email (an advertiser's staff login, say) belongs to the business, and its cards and uploads aren't the person's.
+    const users = prof.accounts.filter((a: any) => a.role === 'consumer' || `user:${a.id}` === subject).map((a: any) => a.id as string);
     const erased = () => `erased_${randomBytes(9).toString('base64url')}`;
     const counts: Record<string, number> = {};
     const run = async (name: string, sql: string, params: unknown[]) => { const r: any = await this.db.query(sql, params); counts[name] = (counts[name] ?? 0) + Number(r.rowCount ?? r.affectedRows ?? 0); };

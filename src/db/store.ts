@@ -1,6 +1,6 @@
 import { shareFromSixths } from '../modules/ads/layouts';
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import type { PlatformEvent, EventType } from '../core/events';
 import { newId } from '../core/ids';
 import type { Persistence } from '../core/persistence';
@@ -19,13 +19,19 @@ import type { SqlClient } from './client';
  * API request answers only after its own changes are. Changes made together are written together, in one
  * transaction: all of a bottle's ledger lines land, or none do.
  *
+ * The first batch, and every batch while changes are spooled, also records in the same transaction how far this
+ * server has got (its epoch, the server's own id, and the number of its last change written): the watermark. That's
+ * what makes recovery exact.
+ *
  * If the database refuses (restarting, failing over, full), the changes stay queued, in order, and are tried again
  * and again (waiting a little longer each time, up to 30 seconds) until they go in. Nothing is skipped and nothing
- * newer jumps ahead, so when the database is back, it ends up exactly matching memory. While changes are waiting:
- *  - the platform is "paused": new changes are refused politely and background jobs wait (money is never counted,
- *    and no fingerprint published, from books that are behind);
- *  - the waiting changes are also written to a spool file (FW_SPOOL_DIR, on a disk that survives a restart), and a
- *    server starting up writes any spooled changes first, before it reads the database.
+ * newer jumps ahead, so when the database is back it matches memory exactly. While changes are waiting:
+ *  - the platform is "paused": new changes from people are refused politely and background jobs wait (money is
+ *    never counted, and no fingerprint published, from books that are behind); scans are still recorded;
+ *  - every waiting change is also in a spool file (FW_SPOOL_DIR, on a disk that survives a restart).
+ * A server starting up writes a spool first, before it reads the database, but only the changes past the watermark,
+ * and only if no other server has written since. Otherwise the spool is set aside for a person: those changes were
+ * made by a server that lost its claim to the data, and someone else has moved on.
  * A change the database will never accept (a bug) holds the line until a person looks: `skipStuck()` moves it to
  * `persistence_failures`, word for word, and the rest carry on.
  */
@@ -35,8 +41,10 @@ export class PersistencePaused extends Error {
   status = 503; code = 'paused_for_safety';
   constructor() { super('FreeWater has paused changes for a moment to keep the books exact. Please try again shortly.'); }
 }
+const WATERMARK = `insert into persistence_watermark (id, epoch, seq, at) values (1, $1, $2, now()) on conflict (id) do update set epoch = excluded.epoch, seq = excluded.seq, at = excluded.at`;
 
 export class SqlPersistence implements Persistence {
+  readonly epoch: string;
   private pending: Op[] = [];
   private running: Promise<void> | null = null;
   private nextSeq = 1;
@@ -46,9 +54,16 @@ export class SqlPersistence implements Persistence {
   private tries = 0;
   private lastError = '';
   private fenced = false;
+  private oneAtATime = false; // after a failure while the database answers: find exactly which change it refuses
+  private spooled = false;
+  private claimed = false;
+  private skipRequest: { seq: number; done: (r: { skipped: string | null; reason?: string }) => void } | null = null;
+  private wakeRetry: (() => void) | null = null;
   stats = { written: 0, batches: 0, retries: 0, skipped: 0 };
 
-  constructor(private db: SqlClient, private opts: { maxBatch?: number; retryDelayMs?: number; maxRetryDelayMs?: number; pauseAfterMs?: number; flushTimeoutMs?: number; spoolFile?: string; onProblem?: (p: PersistenceProblem) => void; onRecovered?: () => void } = {}) {}
+  constructor(private db: SqlClient, private opts: { epoch?: string; maxBatch?: number; retryDelayMs?: number; maxRetryDelayMs?: number; pauseAfterMs?: number; flushTimeoutMs?: number; spoolFile?: string; onProblem?: (p: PersistenceProblem) => void; onRecovered?: () => void } = {}) {
+    this.epoch = opts.epoch ?? `p_${randomBytes(8).toString('hex')}`;
+  }
 
   /** Paused: changes have been waiting for the database longer than a moment. */
   get problem(): PersistenceProblem | null {
@@ -58,7 +73,9 @@ export class SqlPersistence implements Persistence {
 
   private enqueue(kind: string, sql: string, params: unknown[]) {
     if (this.fenced) return; // this server no longer owns the data: it must not write
-    this.pending.push({ seq: this.nextSeq++, kind, sql, params });
+    const op = { seq: this.nextSeq++, kind, sql, params };
+    this.pending.push(op);
+    if (this.spooled) this.spoolAppend([op]); // while waiting, every new change goes to disk at once
     this.schedule();
   }
 
@@ -68,16 +85,28 @@ export class SqlPersistence implements Persistence {
       await null; // let changes made in the same moment gather into one batch
       try {
         while (this.pending.length && !this.fenced) {
-          const batch = this.pending.slice(0, this.opts.maxBatch ?? 500);
+          if (this.skipRequest) await this.doSkip();
+          if (!this.pending.length) break;
+          const batch = this.pending.slice(0, this.oneAtATime ? 1 : this.opts.maxBatch ?? 500);
+          const last = batch[batch.length - 1]!.seq;
+          // The watermark only matters for recovering a spool, so it's written with the first batch (claiming the
+          // data for this server) and with every batch while changes are spooled; otherwise it'd cost a round trip
+          // on every write for nothing.
+          const mark = !this.claimed || this.spooled;
           try {
-            if (batch.length === 1) await this.db.query(batch[0]!.sql, batch[0]!.params);
-            else await this.db.transaction(async (tx) => { for (const op of batch) await tx.query(op.sql, op.params); });
+            if (batch.length === 1 && !mark) await this.db.query(batch[0]!.sql, batch[0]!.params);
+            else await this.db.transaction(async (tx) => {
+              for (const op of batch) await tx.query(op.sql, op.params);
+              if (mark) await tx.query(WATERMARK, [this.epoch, last]);
+            });
+            if (mark) this.claimed = true;
           } catch (e) {
-            await this.failed(e);
+            await this.failed(e, batch.length);
             continue;
           }
-          this.pending.splice(0, batch.length);
-          this.written = batch[batch.length - 1]!.seq;
+          // Remove by number, not position: nothing else may have moved in the meantime, but be sure.
+          while (this.pending.length && this.pending[0]!.seq <= last) this.pending.shift();
+          this.written = last;
           this.stats.written += batch.length; this.stats.batches++;
           this.wake();
           if (this.failingSince !== null && !this.pending.length) this.recovered();
@@ -88,20 +117,23 @@ export class SqlPersistence implements Persistence {
     })();
   }
 
-  private async failed(e: unknown) {
+  private async failed(e: unknown, batchSize: number) {
     const first = this.failingSince === null;
     this.failingSince ??= Date.now();
     this.tries++; this.stats.retries++;
     this.lastError = String((e as any)?.message ?? e).slice(0, 500);
-    this.spool();
+    if (!this.spooled) this.spoolAll();
+    // If the database itself answers, it's a change it refuses: go one at a time to find exactly which.
+    if (batchSize > 1) { try { await this.db.query('select 1'); this.oneAtATime = true; } catch {} }
     if (first || this.tries === 5) setTimeout(() => { const p = this.problem; if (p) this.opts.onProblem?.(p); }, (this.opts.pauseAfterMs ?? 1500) + 10).unref?.();
     const delay = Math.min(this.opts.maxRetryDelayMs ?? 30_000, (this.opts.retryDelayMs ?? 100) * 2 ** Math.min(this.tries - 1, 12));
-    await new Promise((r) => setTimeout(r, delay));
+    await new Promise<void>((r) => { const t = setTimeout(r, delay); t.unref?.(); this.wakeRetry = () => { clearTimeout(t); r(); }; });
+    this.wakeRetry = null;
   }
 
   private recovered() {
     const was = this.failingSince !== null && Date.now() - this.failingSince >= (this.opts.pauseAfterMs ?? 1500);
-    this.failingSince = null; this.tries = 0; this.lastError = '';
+    this.failingSince = null; this.tries = 0; this.lastError = ''; this.oneAtATime = false;
     this.unspool();
     if (was) this.opts.onRecovered?.();
   }
@@ -128,35 +160,68 @@ export class SqlPersistence implements Persistence {
     });
   }
 
-  // ---------- the spool: waiting changes, on disk, so a restart doesn't lose them ----------
+  /** For things recorded on the way past (a scan, a QR opened): wait for saving normally, but not while paused. */
+  async flushUnlessPaused() { if (!this.problem) await this.flush().catch((e) => { if (!(e instanceof PersistencePaused)) throw e; }); }
 
-  private spool() {
-    if (!this.opts.spoolFile || !this.pending.length) return;
+  // ---------- the spool: every waiting change, on disk, so a restart doesn't lose them ----------
+
+  private spoolAll() {
+    if (!this.opts.spoolFile) return;
     try {
       const tmp = `${this.opts.spoolFile}.tmp`;
-      writeFileSync(tmp, this.pending.map((o) => JSON.stringify({ kind: o.kind, sql: o.sql, params: o.params })).join('\n') + '\n');
+      writeFileSync(tmp, [JSON.stringify({ epoch: this.epoch, v: 1 }), ...this.pending.map((o) => JSON.stringify(o))].join('\n') + '\n');
       renameSync(tmp, this.opts.spoolFile);
+      this.spooled = true;
     } catch (e) { this.lastError += ` (and the spool file couldn't be written: ${(e as Error).message})`; }
   }
+  private spoolAppend(ops: Op[]) {
+    if (!this.opts.spoolFile) return;
+    try { appendFileSync(this.opts.spoolFile, ops.map((o) => JSON.stringify(o)).join('\n') + '\n'); } catch {}
+  }
   private unspool() {
+    this.spooled = false;
     if (!this.opts.spoolFile) return;
     try { rmSync(this.opts.spoolFile, { force: true }); } catch {}
   }
+  /** On the way out: whatever is still waiting goes to disk. */
+  spoolNow() { if (this.pending.length) this.spoolAll(); }
 
-  /** At start-up, before reading the database: write any changes a stopped server left waiting. */
-  static async recoverSpool(db: SqlClient, spoolFile: string | undefined, log: (s: string) => void = console.log) {
-    if (!spoolFile || !existsSync(spoolFile)) return 0;
-    const ops = readFileSync(spoolFile, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l) as Omit<Op, 'seq'>);
-    if (ops.length) {
-      await db.transaction(async (tx) => { for (const op of ops) await tx.query(op.sql, op.params); });
-      log(`Wrote ${ops.length} change(s) a previous server had waiting.`);
+  /**
+   * At start-up, before reading the database: write the changes a stopped server left waiting, past its watermark.
+   * If another server has written since, they're set aside (renamed .stale) for a person, not applied.
+   * FW_SPOOL_SKIP=1 sets a spool aside without applying it (a person's decision, when it can't be applied).
+   */
+  static async recoverSpool(db: SqlClient, spoolFile: string | undefined, log: (s: string) => void = console.log): Promise<{ applied: number; setAside?: string }> {
+    if (!spoolFile || !existsSync(spoolFile)) return { applied: 0 };
+    const lines = readFileSync(spoolFile, 'utf8').split('\n').filter(Boolean);
+    const aside = (why: string) => { const to = `${spoolFile}.${why}-${Date.now()}`; renameSync(spoolFile, to); return to; };
+    if (process.env.FW_SPOOL_SKIP === '1') { const to = aside('skipped'); log(`Set the spool aside without applying it (FW_SPOOL_SKIP=1): ${to}`); return { applied: 0, setAside: to }; }
+    let header: { epoch?: string } = {};
+    try { header = JSON.parse(lines[0] ?? '{}'); } catch {}
+    const ops: Op[] = lines.slice(1).map((l) => { try { return JSON.parse(l) as Op; } catch { return null; } }).filter((o): o is Op => !!o && typeof o.seq === 'number');
+    const mark = (await db.query<{ epoch: string; seq: string }>(`select epoch, seq from persistence_watermark where id = 1`)).rows[0];
+    if (mark && header.epoch && mark.epoch !== header.epoch) {
+      const to = aside('stale');
+      log(`A spool from server ${header.epoch} was set aside, not applied: another server (${mark.epoch}) has written since. A person should look at ${to}.`);
+      return { applied: 0, setAside: to };
+    }
+    const after = mark ? Number(mark.seq) : 0;
+    const todo = ops.filter((o) => o.seq > after).sort((x, y) => x.seq - y.seq);
+    const seen = new Set<number>();
+    const unique = todo.filter((o) => (seen.has(o.seq) ? false : (seen.add(o.seq), true)));
+    if (unique.length) {
+      await db.transaction(async (tx) => {
+        for (const op of unique) await tx.query(op.sql, op.params);
+        await tx.query(WATERMARK, [header.epoch ?? 'spool', unique[unique.length - 1]!.seq]);
+      });
+      log(`Wrote ${unique.length} change(s) a previous server had waiting.`);
     }
     renameSync(spoolFile, `${spoolFile}.done-${Date.now()}`);
-    return ops.length;
+    return { applied: unique.length };
   }
 
-  /** This server no longer owns the data: drop what's waiting and write nothing more. */
-  fence() { this.fenced = true; this.pending = []; }
+  /** This server no longer owns the data: keep what's waiting on disk (for a person) and write nothing more. */
+  fence() { this.spoolNow(); this.fenced = true; this.pending = []; this.wakeRetry?.(); }
 
   /** Changes a person moved aside. */
   async failures() {
@@ -166,18 +231,29 @@ export class SqlPersistence implements Persistence {
   /**
    * A person's decision, for a change the database will never accept: move the first waiting change aside (kept word
    * for word in persistence_failures) so the rest can go in. Only while paused, and only once the database itself
-   * answers, so it's clear it's this change, not the database, that's the problem.
+   * answers and the failing change has been found exactly (changes are being tried one at a time).
    */
   async skipStuck(): Promise<{ skipped: string | null; reason?: string }> {
     const head = this.pending[0];
     if (!head || this.failingSince === null) return { skipped: null, reason: 'Nothing is stuck.' };
     try { await this.db.query('select 1'); } catch { return { skipped: null, reason: 'The database isn’t answering at all; fix that first, and the waiting changes will go in by themselves.' }; }
-    await this.db.query(`insert into persistence_failures (kind, sql, params, error) values ($1,$2,$3,$4)`, [head.kind, head.sql, JSON.stringify(head.params), this.lastError]);
-    if (this.pending[0] === head) this.pending.shift();
+    if (!this.oneAtATime) return { skipped: null, reason: 'Still finding exactly which change is refused; try again in a minute.' };
+    // The writing loop does the moving, between tries, so it never races a write in progress.
+    return new Promise((done) => { this.skipRequest = { seq: head.seq, done }; this.wakeRetry?.(); this.schedule(); });
+  }
+
+  private async doSkip() {
+    const req = this.skipRequest!;
+    this.skipRequest = null;
+    const head = this.pending[0];
+    if (!head || head.seq !== req.seq) return req.done({ skipped: null, reason: 'That change went in after all.' });
+    try {
+      await this.db.query(`insert into persistence_failures (kind, sql, params, error) values ($1,$2,$3,$4)`, [head.kind, head.sql, JSON.stringify(head.params), this.lastError]);
+    } catch (e) { return req.done({ skipped: null, reason: `Couldn’t keep it aside: ${(e as Error).message}` }); }
+    this.pending.shift();
     this.stats.skipped++;
-    this.spool();
-    this.schedule();
-    return { skipped: head.kind };
+    if (this.spooled) this.spoolAll(); // the spool must no longer hold it
+    req.done({ skipped: head.kind });
   }
 
   code(c: import('../modules/codes/service').CodeRow) {

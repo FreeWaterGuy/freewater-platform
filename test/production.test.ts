@@ -82,24 +82,66 @@ describe('saving changes', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('a server starting up writes the changes a stopped one left waiting, before reading anything', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'fw-spool-'));
-    const spoolFile = join(dir, 'waiting.jsonl');
-    const p = new SqlPersistence(flaky(db, () => true), { retryDelayMs: 5, maxRetryDelayMs: 20, spoolFile });
-    p.ledgerEntry(entry('le_spooled'));
-    await new Promise((r) => setTimeout(r, 50));
-    p.fence(); // the old server is gone
-    expect(await SqlPersistence.recoverSpool(db, spoolFile, () => {})).toBe(1);
-    expect((await db.query(`select 1 from ledger_entries where id = 'le_spooled'`)).rows).toHaveLength(1);
-    expect(existsSync(spoolFile)).toBe(false);
-    rmSync(dir, { recursive: true, force: true });
+  describe('starting up after a server stopped with changes waiting', () => {
+    const fresh = async () => { const d = await createPgliteClient(); await migrate(d); await d.query(`insert into companies (id, config) values ('c1', '{}')`); return d; };
+    const unit = (status: string) => ({ id: 'u_sp', companyId: 'c1', status, createdAt: '2026-10-18T00:00:00Z' }) as any;
+    const statusOf = async (d: SqlClient) => (await d.query<any>(`select status from units where id = 'u_sp'`)).rows[0]?.status;
+
+    it('writes exactly the changes past what was saved, including ones made while it was waiting', async () => {
+      const d = await fresh(); let down = false;
+      const dir = mkdtempSync(join(tmpdir(), 'fw-spool-')); const spoolFile = join(dir, 'w.jsonl');
+      const p = new SqlPersistence(flaky(d, () => down), { epoch: 'server-a', retryDelayMs: 5, maxRetryDelayMs: 30, spoolFile });
+      p.unit(unit('rendered')); await p.flush();
+      down = true;
+      p.unit(unit('printed'));
+      await new Promise((r) => setTimeout(r, 40)); // a failed try: everything waiting is now on disk
+      p.ledgerEntry(entry('le_made_while_waiting')); // made between tries: straight to disk too
+      p.fence(); // the server is gone
+      expect(await SqlPersistence.recoverSpool(d, spoolFile, () => {})).toEqual({ applied: 2 });
+      expect(await statusOf(d)).toBe('printed');
+      expect((await d.query(`select 1 from ledger_entries where id = 'le_made_while_waiting'`)).rows).toHaveLength(1);
+      await d.close(); rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('never writes an old spooled change over a newer one already saved', async () => {
+      const d = await fresh(); let down = true;
+      const dir = mkdtempSync(join(tmpdir(), 'fw-spool-')); const spoolFile = join(dir, 'w.jsonl');
+      const p = new SqlPersistence(flaky(d, () => down), { epoch: 'server-b', retryDelayMs: 5, maxRetryDelayMs: 20, spoolFile });
+      p.unit(unit('rendered'));
+      await new Promise((r) => setTimeout(r, 30));
+      const copy = readFileSync(spoolFile); // the spool as it was when the server "died"
+      down = false; await p.flush(2000);
+      p.unit(unit('dispensed')); await p.flush(); // newer, saved
+      writeFileSync(spoolFile, copy);
+      expect(await SqlPersistence.recoverSpool(d, spoolFile, () => {})).toEqual({ applied: 0 });
+      expect(await statusOf(d)).toBe('dispensed');
+      await d.close(); rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('sets a spool aside for a person when another server has written since', async () => {
+      const d = await fresh(); let down = true;
+      const dir = mkdtempSync(join(tmpdir(), 'fw-spool-')); const spoolFile = join(dir, 'w.jsonl');
+      const old = new SqlPersistence(flaky(d, () => down), { epoch: 'server-old', retryDelayMs: 5, maxRetryDelayMs: 20, spoolFile });
+      old.unit(unit('rendered'));
+      await new Promise((r) => setTimeout(r, 30));
+      old.fence();
+      const next = new SqlPersistence(d, { epoch: 'server-new' });
+      next.unit(unit('dispensed')); await next.flush();
+      const r = await SqlPersistence.recoverSpool(d, spoolFile, () => {});
+      expect(r.applied).toBe(0);
+      expect(r.setAside).toMatch(/stale/);
+      expect(await statusOf(d)).toBe('dispensed');
+      await d.close(); rmSync(dir, { recursive: true, force: true });
+    });
   });
 
   it('a change the database will never take holds the line until a person moves it aside', async () => {
     const p = new SqlPersistence(flaky(db, (sql) => sql.startsWith('insert into units')), { retryDelayMs: 5, maxRetryDelayMs: 20, pauseAfterMs: 10, flushTimeoutMs: 80 });
+    p.ledgerEntry(entry('le_before_stuck')); // a good change in the same batch, ahead of the bad one
     p.unit({ id: 'u_never', companyId: 'c1', status: 'printed', createdAt: '2026-10-18T00:00:00Z' } as any);
     p.ledgerEntry(entry('le_after_stuck'));
     await expect(p.flush()).rejects.toThrow(/paused/);
+    expect((await db.query(`select 1 from ledger_entries where id = 'le_before_stuck'`)).rows).toHaveLength(1); // found one at a time: the good one went in
     expect((await db.query(`select 1 from ledger_entries where id = 'le_after_stuck'`)).rows).toHaveLength(0); // nothing jumps ahead
     expect(await p.skipStuck()).toEqual({ skipped: 'unit' });
     await p.flush(5000);

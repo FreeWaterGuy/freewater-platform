@@ -90,7 +90,7 @@ export class S3BlobStore implements BlobStore {
     return this.o.endpoint ? new URL(`${this.o.endpoint.replace(/\/$/, '')}/${enc(this.o.bucket)}/${k}`) : new URL(`https://${this.o.bucket}.s3.${this.o.region}.amazonaws.com/${k}`);
   }
 
-  private async send(method: string, key: string, body?: Uint8Array, contentType?: string, file?: { path: string; size: number; sha256: string }) {
+  private async send(method: string, key: string, body?: Uint8Array, contentType?: string, file?: { path: string; size: number; sha256: string }, longMs?: number) {
     const url = this.url(key);
     const payloadHash = file ? file.sha256 : sha256hex(body ?? '');
     const extra: Record<string, string> = { ...(contentType ? { 'content-type': contentType } : {}), ...(file ? { 'content-length': String(file.size) } : {}) };
@@ -100,7 +100,7 @@ export class S3BlobStore implements BlobStore {
     for (let attempt = 0; ; attempt++) {
       try {
         const streamBody = file ? (Readable.toWeb(createReadStream(file.path)) as any) : (body as any);
-        const r = await (this.o.fetcher ?? fetch)(url, { method, headers: sendHeaders, body: streamBody, ...(file ? { duplex: 'half' } : {}), signal: AbortSignal.timeout(file ? 3600_000 : 60_000) } as any);
+        const r = await (this.o.fetcher ?? fetch)(url, { method, headers: sendHeaders, body: streamBody, ...(file ? { duplex: 'half' } : {}), signal: AbortSignal.timeout(file || longMs ? longMs ?? 3600_000 : 60_000) } as any);
         if (r.status >= 500 && attempt < 2) { await new Promise((res) => setTimeout(res, 300 * 3 ** attempt)); continue; }
         return r;
       } catch (e) {
@@ -128,7 +128,7 @@ export class S3BlobStore implements BlobStore {
     if (!r.ok) throw new Error(`File storage refused the upload (${r.status}): ${(await r.text()).slice(0, 300)}`);
   }
   async getToFile(key: string, path: string) {
-    const r = await this.send('GET', key);
+    const r = await this.send('GET', key, undefined, undefined, undefined, 3600_000); // a big backup takes a while
     if (r.status === 404) return false;
     if (!r.ok || !r.body) throw new Error(`File storage didn't return the file (${r.status})`);
     await pipeline(Readable.fromWeb(r.body as any), createWriteStream(path));
