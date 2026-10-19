@@ -176,7 +176,7 @@ Without keys, each uses a stand-in that says it's a stand-in, so everything can 
 | --- | --- |
 | `UNSPLASH_ACCESS_KEY` | The Unsplash photo library (credited to photographers, as their rules ask). |
 | `PEXELS_API_KEY` | The Pexels photo library. |
-| `GOOGLE_API_KEY` | Google Imagen for photos made to order (`IMAGEN_MODEL` picks the model; Google renames them). |
+| `GEMINI_API_KEY` | Google Imagen for photos made to order, with the same key as Veo (`IMAGEN_MODEL` picks the model; Google renames them). |
 | `ANTHROPIC_API_KEY` | Claude as the art director, writing and choosing the designs (otherwise built-in rules). |
 
 Photos are kept once, shrunk to print size, and stripped of hidden data. Labels point at them; a label sent to a

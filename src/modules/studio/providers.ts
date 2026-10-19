@@ -210,7 +210,9 @@ export function studioProviders(env: NodeJS.ProcessEnv, standInDir: string, abou
   if (env.UNSPLASH_ACCESS_KEY) libraries.push(new UnsplashLibrary(env.UNSPLASH_ACCESS_KEY));
   if (env.PEXELS_API_KEY) libraries.push(new PexelsLibrary(env.PEXELS_API_KEY));
   if (!libraries.length) libraries.push(new FolderLibrary(standInDir, about));
-  const images: ImageMaker = env.GOOGLE_API_KEY ? new ImagenMaker(env.GOOGLE_API_KEY, env.IMAGEN_MODEL || undefined) : new StandInImageMaker();
+  // One Google key serves both video (Veo) and photos (Imagen); either name works.
+  const google = env.GEMINI_API_KEY || env.GOOGLE_API_KEY;
+  const images: ImageMaker = google ? new ImagenMaker(google, env.IMAGEN_MODEL || undefined) : new StandInImageMaker();
   const models: ModelMaker = new StandInModelMaker(); // a photo-to-3D service plugs in here once one is chosen
   return { libraries, images, models };
 }
