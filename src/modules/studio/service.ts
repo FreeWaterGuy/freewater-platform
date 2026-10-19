@@ -171,7 +171,7 @@ export class StudioService {
     if (problem) throw new StudioError(422, 'invalid_design', `That design can't be drawn: ${problem}.`);
     await this.owns(companyId, advertiserId, spec);
     const adv = await this.advertiser(companyId, advertiserId);
-    return this.ads.previewArt({ companyId, advertiserId, advertiserName: adv.name, category: adv.category, draw: (w, h) => renderStudio(spec, w, h) });
+    return this.ads.previewArt({ companyId, advertiserId, advertiserName: adv.name, category: adv.category, draw: (w, h, ctx) => renderStudio(spec, w, h, ctx) });
   }
 
   /** Put a design into an ad being made (then it's sized, budgeted and submitted as usual). */

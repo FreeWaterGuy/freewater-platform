@@ -231,7 +231,7 @@ export function renderStudio(s: StudioSpec, w: number, h: number, ctx?: Creative
     const head = fit(s.headline, colW, room, 4, Math.min(56, h * 0.2), 12, t.w);
     parts.push(textLines(head.lines, pad, y, head.size, { font: t.display, weight: t.weight, fill: ink, tracking: t.tracking }));
     y += head.height + 10;
-    if (sub) { parts.push(textLines(sub.lines, pad, y, sub.size, { font: t.text, weight: 500, fill: ink, lead: 1.28 })); y += sub.height + 10; }
+    if (sub && y + sub.height <= h - pad + 2) { parts.push(textLines(sub.lines, pad, y, sub.size, { font: t.text, weight: 500, fill: ink, lead: 1.28 })); y += sub.height + 10; }
     if (s.offer && y + 24 <= h - pad && (y + 24 <= qr.y || pad + Math.min(colW, s.offer.length * 11 * 0.62 + 22) <= qr.x - 4)) {
       const os = Math.min(11, (colW - 22) / Math.max(1, s.offer.length * 0.62)), ow = Math.min(colW, s.offer.length * os * 0.62 + 22);
       parts.push(`<rect x="${f1(pad)}" y="${f1(y)}" width="${f1(ow)}" height="24" rx="12" fill="${s.colors.accent}"/><text x="${f1(pad + 11)}" y="${f1(y + 16)}" font-family="${esc(t.text)}" font-weight="800" font-size="${f1(os)}" fill="${readableOn(s.colors.accent)}">${esc(s.offer)}</text>`);
@@ -295,9 +295,9 @@ export function renderStudio(s: StudioSpec, w: number, h: number, ctx?: Creative
     const head = above && above.height <= qr.y - y - 8 && above.size >= 12 ? above : fit(s.headline, Math.min(colW, besideQr), Math.max(14, h - pad - y), 5, maxSize, 9, t.w, 1.0);
     parts.push(textLines(head.lines, pad, y, head.size, { font: t.display, weight: t.weight, fill: ink, tracking: t.tracking, lead: 1.0 }));
     y += head.height + 8;
-    if (s.sub && !small) {
+    if (s.sub && !small && h - pad - y >= 12) {
       const sub = fit(s.sub, w - pad - qr.w, h - pad - y, 3, 12, 9, 0.5, 1.25);
-      parts.push(textLines(sub.lines, pad, y, sub.size, { font: t.text, weight: 500, fill: ink, lead: 1.25 }));
+      if (y + sub.height <= h - pad + 2) parts.push(textLines(sub.lines, pad, y, sub.size, { font: t.text, weight: 500, fill: ink, lead: 1.25 }));
     }
     if (!small && s.offer && !s.icon) parts.push(badge(s, w - pad - Math.min(40, w * 0.15), pad + Math.min(40, w * 0.15), Math.min(40, w * 0.15)));
   }

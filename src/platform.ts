@@ -312,6 +312,8 @@ export class Platform {
    * size, so a machine prints it whole even offline. Set by the app; labels without photos are unchanged.
    */
   forPrint: (svg: string) => Promise<string> = async (svg) => svg;
+  /** The same for a label shown on a screen (an <img> can't fetch the photos it points at): preview-sized photos. */
+  forView: (svg: string) => Promise<string> = async (svg) => svg;
   /** Packs live in the pack service; it tells the core which company each belongs to. */
   packCompany: (packId: string) => string = (id) => { throw new Error(`Unknown pack "${id}"`); };
   purchase(unitId: string, slotIndex: number, orderId: string, amountCents: number, buyer?: string) {

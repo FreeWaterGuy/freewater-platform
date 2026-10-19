@@ -158,7 +158,7 @@ export class AdsService {
     const d = r.draft;
     const spec = { brand: adv.name, headline: 'Your headline', colors: { bg: '#EEF6FB', fg: '#0B0B0B', accent: '#1E7DB8' }, ...(d.poster ?? {}) } as PosterSpec;
     const ready = !!d.experienceId && this.host.checkConfig(d.experienceId, d.experienceConfig ?? {}) === null;
-    return this.render({ companyId, advertiserId, advertiserName: adv.name, category: d.category ?? adv.category, draw: (w, h) => (d.studio ? renderStudio(d.studio, w, h) : renderPoster(spec, w, h)), sizes: d.sizes?.length ? d.sizes : ([2, 4, 6] as Share[]), formats: d.formats ?? ['label'], experience: ready ? { id: d.experienceId!, config: d.experienceConfig ?? {} } : null, theme: themeFromPoster(d) });
+    return this.render({ companyId, advertiserId, advertiserName: adv.name, category: d.category ?? adv.category, draw: (w, h, ctx) => (d.studio ? renderStudio(d.studio, w, h, ctx) : renderPoster(spec, w, h)), sizes: d.sizes?.length ? d.sizes : ([2, 4, 6] as Share[]), formats: d.formats ?? ['label'], experience: ready ? { id: d.experienceId!, config: d.experienceConfig ?? {} } : null, theme: themeFromPoster(d) });
   }
 
   /** Puts the photos an ad points at inside its preview (set by the app; previews without photos need nothing). */
@@ -195,7 +195,7 @@ export class AdsService {
   }
 
   /** Any artwork, at every size, on a real label and a box side: for the studio's previews before a draft exists. */
-  async previewArt(o: { companyId: string; advertiserId: string; advertiserName: string; category: string; draw: (w: number, h: number) => string; sizes?: Share[] }) {
+  async previewArt(o: { companyId: string; advertiserId: string; advertiserName: string; category: string; draw: (w: number, h: number, ctx?: import('../../core/types').CreativeContext) => string; sizes?: Share[] }) {
     return this.render({ ...o, sizes: o.sizes ?? ([1, 2, 3, 4, 6] as Share[]), formats: ['label', 'box-face'], experience: null, theme: {} });
   }
 
@@ -204,10 +204,10 @@ export class AdsService {
     const c = this.platform.campaigns.get(campaignId);
     if (!c || c.companyId !== companyId) throw new AdsError(404, 'not_found', 'Campaign not found.');
     return { campaign: { id: c.id, name: c.name ?? null, advertiser: c.advertiserName, category: c.category, where: c.targeting.locations ?? 'all', buy: c.buy, review: c.review ?? null, experienceId: c.experienceId },
-      ...(await this.render({ companyId, advertiserId: c.advertiserId, advertiserName: c.advertiserName, category: c.category, draw: (w, h) => c.creative.svg(w, h), sizes: c.sizes, formats: c.formats ?? ['label'], experience: { id: c.experienceId, config: c.experienceConfig ?? {} }, theme: c.theme ?? {} })) };
+      ...(await this.render({ companyId, advertiserId: c.advertiserId, advertiserName: c.advertiserName, category: c.category, draw: (w, h, ctx) => c.creative.svg(w, h, ctx), sizes: c.sizes, formats: c.formats ?? ['label'], experience: { id: c.experienceId, config: c.experienceConfig ?? {} }, theme: c.theme ?? {} })) };
   }
 
-  private async render(o: { companyId: string; advertiserId: string; advertiserName: string; category: string; draw: (w: number, h: number) => string; sizes: Share[]; formats: string[]; experience: { id: string; config: unknown } | null; theme: Partial<import('../experiences/blocks').Theme> }) {
+  private async render(o: { companyId: string; advertiserId: string; advertiserName: string; category: string; draw: (w: number, h: number, ctx?: import('../../core/types').CreativeContext) => string; sizes: Share[]; formats: string[]; experience: { id: string; config: unknown } | null; theme: Partial<import('../experiences/blocks').Theme> }) {
     const company = this.platform.companies.get(o.companyId)!;
     const product = this.platform.standardProduct(o.companyId);
     const area = adArea(product);

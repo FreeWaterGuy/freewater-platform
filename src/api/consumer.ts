@@ -113,8 +113,9 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     const fill = registry.adsFor(company).fill({ company, product, location, campaigns: [...platform.campaigns.values()], random: platform.random });
     const unit: Unit = { id: 'sample', companyId, productId: product.id, locationId: location.id, kind: 'ad_supported', placements: fill.placements, layout: fill.layout, status: 'rendered', createdAt: platform.bus.now().toISOString() };
     const label = await registry.rendererFor(company).render({ unit, product, company, campaigns: platform.campaigns });
-    samples.set(location.id, { at: platform.bus.now().getTime(), svg: label.svg });
-    return { type: 'image/svg+xml', raw: label.svg };
+    const shown = await platform.forView(label.svg);
+    samples.set(location.id, { at: platform.bus.now().getTime(), svg: shown });
+    return { type: 'image/svg+xml', raw: shown };
   } });
 
   route({ method: 'GET', url: '/v1/public/products/:productId', scope: 'public', summary: 'A product and the size of the area a custom design fills.', handler: async (req) => {
@@ -206,7 +207,7 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
   route({ method: 'GET', url: '/v1/me/bottles/:id/label.svg', scope: 'me', summary: "Your bottle's label, as printed.", handler: async (req, key) => {
     const svg = await platform.labelSvg(myBottle(key, (req.params as any).id).id);
     if (!svg) throw notFound('Label');
-    return { type: 'image/svg+xml', raw: svg };
+    return { type: 'image/svg+xml', raw: await platform.forView(svg) };
   } });
 
   // ---------- design your own: approve the proof, then pay and print ----------

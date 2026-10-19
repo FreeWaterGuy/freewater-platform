@@ -83,6 +83,7 @@ export function applyPatch(d: AdDraft, patch: DraftPatch, ctx: DraftContext): { 
     if (pp.headline !== undefined) st.headline = String(pp.headline).trim().slice(0, 60) || st.headline;
     if (pp.sub !== undefined) { const v = String(pp.sub).trim().slice(0, 90); if (v) st.sub = v; else delete st.sub; }
     if (pp.colors) for (const [from, to] of [['bg', 'paper'], ['fg', 'ink'], ['accent', 'accent']] as const) { const v = pp.colors[from]; if (v !== undefined) { if (HEX.test(v)) st.colors[to] = v.toUpperCase(); else problems.push(`"${v}" isn't a color I can print.`); } }
+    if (pp.icon !== undefined || pp.font !== undefined) problems.push('This ad uses a studio design: change its drawing or lettering in the Ad studio.');
     if (contrast(st.colors.paper, st.colors.ink) < 4.5) st.colors.ink = readableOn(st.colors.paper);
     const bad = checkStudioSpec(st);
     if (bad) problems.push(`That change can't be made to the design: ${bad}.`); else next.studio = st;
