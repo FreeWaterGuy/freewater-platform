@@ -944,6 +944,44 @@ alter table team_files add column blob_key text;
 create table persistence_watermark (id int primary key, epoch text not null, seq bigint not null, at timestamptz not null);
 `,
   },
+  {
+    id: '026_books_exams_participants',
+    sql: `
+-- The passages from the books a proposal relies on.
+alter table agent_proposals add column citations jsonb;
+-- The test an agent's mind must pass before its proposals can be put into effect: per agent, per model, per version.
+create table agent_exams (id text primary key, agent_id text not null, model text not null, exam_version int not null, score numeric not null, passed boolean not null, critical_missed jsonb not null, answers jsonb not null, cost_millicents bigint not null default 0, at timestamptz not null);
+create index agent_exams_agent on agent_exams(agent_id, model, exam_version, at desc);
+-- How good each product is, as a person on the team recorded it (a quality drop counts as a cost to the drinker).
+create table product_quality (id text primary key, company_id text not null, product_id text not null, score int not null check (score between 0 and 100), basis text not null, by text not null, at timestamptz not null);
+create index product_quality_product on product_quality(company_id, product_id, at desc);
+`,
+  },
+  {
+    id: '027_data_environment',
+    sql: `
+-- A set of options shown to someone to choose from: in what (random) order, and what they'd been shown before.
+create table choice_sets (id text primary key, company_id text not null, person text not null, context text not null, options jsonb not null, exposure jsonb not null, chosen text, created_at timestamptz not null, chosen_at timestamptz);
+create index choice_sets_person on choice_sets(company_id, person, created_at desc);
+-- Where a person sent a bottle's gift (they chose the cause).
+create table giving_directions (unit_id text primary key, company_id text not null, person text not null, from_cause text not null, to_cause text not null, cents int not null, at timestamptz not null);
+-- Kinds of ads a person never wants on their bottles.
+create table ad_preferences (company_id text not null, person text not null, avoid text[] not null default '{}', updated_at timestamptz not null, primary key (company_id, person));
+-- People who said yes to taking part in measurements (offers whose value-back varies).
+create table research_panel (company_id text not null, person text not null, joined_at timestamptz not null, left_at timestamptz, primary key (company_id, person));
+-- An advertiser's offer tested at stepped value-back amounts, approved by a person before it runs.
+create table value_experiments (id text primary key, company_id text not null, campaign_id text not null, steps int[] not null, cause text, status text not null, proposed_by text not null, approved_by text, created_at timestamptz not null, approved_at timestamptz, stopped_at timestamptz);
+create index value_experiments_running on value_experiments(company_id, campaign_id, status);
+-- One arm per bottle slot in a test: the panel member who first opened it, and the step they were shown (and keep).
+create table value_arms (experiment_id text not null, company_id text not null, person text not null, unit_id text not null, slot int not null, step int not null, at timestamptz not null, primary key (experiment_id, unit_id, slot));
+create index value_arms_unit on value_arms(unit_id, slot);
+-- Each sale through a test arm, and whether it was refunded (the value-back is reversed with it).
+create table value_sales (order_id text primary key, experiment_id text not null, company_id text not null, unit_id text not null, slot int not null, step int not null, cause text not null, sale_cents int not null default 0, at timestamptz not null, refunded_at timestamptz);
+create index value_sales_experiment on value_sales(experiment_id);
+-- Who first scanned each bottle: the person holding it, who may choose where its gift goes.
+create table bottle_holders (unit_id text primary key, company_id text not null, person text not null, at timestamptz not null);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

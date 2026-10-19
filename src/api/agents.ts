@@ -1,7 +1,9 @@
 import type { App } from '../app';
 import type { ApiKey } from '../db/store';
-import { agentIds, autonomyAreas, charter, governor, spendCategories } from '../modules/agents/charter';
+import { agentIds, autonomyAreas, charter, governor, spendCategories, winCondition } from '../modules/agents/charter';
 import { ApiError, obj, S, type RouteDef } from './http';
+import { books } from '../modules/knowledge/library';
+import { EXAM_VERSION, questions } from '../modules/agents/exam';
 
 /** The AI agents: their places on the number line, their funds, their proposals, and how much they run. */
 export function agentRoutes(app: App, route: (r: RouteDef) => void) {
@@ -13,7 +15,7 @@ export function agentRoutes(app: App, route: (r: RouteDef) => void) {
 
   // ---------- public: the charter, the governor, and each agent's standing ----------
 
-  route({ method: 'GET', url: '/v1/public/agents/charter', scope: 'public', summary: 'The AI agents’ charter (purpose, rights, duties), how they may spend, and the governor’s rules, which always run.', handler: async () => ({ body: { charter, governor, spendCategories, autonomyAreas } }) });
+  route({ method: 'GET', url: '/v1/public/agents/charter', scope: 'public', summary: 'The AI agents’ charter (purpose, rights, duties), how they may spend, and the governor’s rules, which always run.', handler: async () => ({ body: { winCondition, charter, governor, spendCategories, autonomyAreas } }) });
   route({ method: 'GET', url: '/v1/public/agents/:companyId', scope: 'public', summary: 'Each AI agent’s place on the number line, what it cost, the value the books show it produced, and its fund. For companies with open books and agents on.', handler: async (req) => {
     const c = platform.companies.get((req.params as any).companyId);
     if (!c || c.openBooks === false || !c.agents?.enabled) throw new ApiError(404, 'not_shared', 'Not shared.');
@@ -27,6 +29,43 @@ export function agentRoutes(app: App, route: (r: RouteDef) => void) {
   } });
 
   // ---------- the team ----------
+
+  // The books the agents work from (team only: they're the author's, not published here).
+  route({ method: 'GET', url: '/v1/agents/books', scope: 'admin', summary: 'The books the agents work from, which leads on what, and the rules for using them (every number in them is an example).', handler: async (_req, key) => {
+    staff(key);
+    const L = books();
+    return { body: { about: L.info.about, rules: L.info.rules, books: L.info.books.map((b) => ({ ...b, passages: L.passages.filter((p) => p.book === b.id).length, chapters: [...new Set(L.passages.filter((p) => p.book === b.id).map((p) => p.chapter))] })) } };
+  } });
+  route({ method: 'GET', url: '/v1/agents/books/search', scope: 'admin', summary: 'Search the books: the best passages for a question, each with the id to cite it by.', handler: async (req, key) => {
+    staff(key);
+    const q = req.query as any;
+    if (!q.q || String(q.q).length < 2) throw new ApiError(400, 'invalid_request', 'Ask something: ?q=consecutive delivery');
+    const L = books();
+    return { body: L.search(String(q.q), { book: q.book ? String(q.book) : undefined, k: Math.min(20, Number(q.k ?? 8)) }).map((h) => ({ id: h.passage.id, where: L.where(h.passage), score: h.score, numbersAreExamples: h.passage.hasNumbers, text: h.passage.text })) };
+  } });
+  route({ method: 'GET', url: '/v1/agents/books/passages/:id', scope: 'admin', summary: 'One passage of the books, by its id.', handler: async (req, key) => {
+    staff(key);
+    const L = books(), p = L.passage((req.params as any).id);
+    if (!p) throw new ApiError(404, 'not_found', 'No such passage in the current editions.');
+    return { body: { ...p, where: L.where(p), numbersAreExamples: p.hasNumbers } };
+  } });
+
+  // The test every agent's mind passes before its changes take effect.
+  route({ method: 'GET', url: '/v1/agents/exam', scope: 'admin', summary: 'The test agents pass before their changes take effect: each agent’s result, and every question with its answer and why.', handler: async (_req, key) => {
+    staff(key);
+    return { body: { version: EXAM_VERSION, passShare: governor.exam.passShare, criticalAllRequired: governor.exam.criticalAllRequired, agents: await agents.examStatus(), questions } };
+  } });
+  route({ method: 'POST', url: '/v1/agents/exam/run', scope: 'admin', summary: 'Give the test now to every agent with a model that hasn’t passed it (all: true to retake). It also runs each day.', body: obj({ all: S.bool }), handler: async (req, key) => {
+    staff(key);
+    return { body: await wrap(() => agents.runExams({ all: !!(req.body as any)?.all })) };
+  } });
+
+  // Product quality: what a person judged it, and why. The governor counts any drop as a cost to the person drinking.
+  route({ method: 'GET', url: '/v1/agents/quality', scope: 'admin', summary: 'Each product’s recorded quality (0 to 100), why, and its history.', handler: async (_req, key) => ({ body: await wrap(() => agents.quality(staff(key).companyId)) }) });
+  route({ method: 'POST', url: '/v1/agents/quality', scope: 'admin', summary: 'Record a product’s quality (0 to 100) and what it’s based on. Any drop counts against the changes measured after it.', body: obj({ productId: S.str, score: { type: 'integer', minimum: 0, maximum: 100 }, basis: { type: 'string', minLength: 10, maxLength: 500 } }, ['productId', 'score', 'basis']), handler: async (req, key) => {
+    const k = staff(key), b = req.body as any;
+    return { body: await wrap(() => agents.recordQuality(k.companyId, b.productId, b.score, b.basis, who(k))) };
+  } });
 
   route({ method: 'GET', url: '/v1/agents', scope: 'admin', summary: 'Everything about the AI agents: standings, funds, the frontier, proposals, spending, autonomy.', handler: async (_req, key) => ({ body: await wrap(() => agents.overview(staff(key).companyId)) }) });
   route({ method: 'POST', url: '/v1/agents/refresh', scope: 'admin', summary: 'Have the governor read the books now (it also does every hour).', handler: async (_req, key) => { staff(key); await agents.measure(); return { body: await agents.refresh() }; } });

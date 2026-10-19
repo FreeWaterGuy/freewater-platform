@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { aiMeter, type AiUsage } from '../ai/anthropic';
 import type { NumberLineService } from '../numberline/service';
 import {
-  agentIds, agentRegistry, autonomyAreas, autonomyLevels, autonomyRequirements, charter, forbiddenSpend, governor, priceOf, spendCategories,
+  agentIds, agentRegistry, autonomyAreas, autonomyLevels, autonomyRequirements, charter, forbiddenSpend, governor, priceOf, spendCategories, winCondition,
   type AgentId, type AutonomyArea, type AutonomyLevel, type SpendCategory,
 } from './charter';
 import { judge, type Cycle, type Verdict } from './governor';
@@ -15,6 +15,9 @@ import { securityScan, type SecurityFacts } from './securityScout';
 import { revokeApiKey } from '../../db/store';
 import { changeable, codeScan, frontierOf, perBottle, read, valueScan, type ChainOnLine, type Idea, type Window } from './scouts';
 import { aiExternalityCents, bottleExternalityCents, efficiency, estimates, growthTest, type Efficiency } from './efficiency';
+import { participantCheck } from './participants';
+import { books } from '../knowledge/library';
+import { EXAM_VERSION, latestExam, saveExam, takeExam, type Examinee } from './exam';
 
 // The AI agents, as participants with their own place in the books.
 //
@@ -56,7 +59,48 @@ export class AgentsService {
   private credit = new Map<AgentId, number>(); // compute bought, millicents
   private writes: Promise<unknown> = Promise.resolve();
 
+  /** Agents whose decisions come from a model, and which model: they take the test before their changes take effect. */
+  examModels: Partial<Record<AgentId, string>> = {};
+  /** How an agent's model answers a question (set by the app when an AI key is configured). */
+  examinee?: (agentId: AgentId, model: string) => Examinee;
+
   constructor(private db: SqlClient, private platform: Platform, private deps: AgentsDeps) {}
+
+  // ---------- the test: an agent's mind must pass before its changes take effect ----------
+
+  /** Where each agent stands on the test. Agents on fixed rules don't take it (their rules are tested in code). */
+  async examStatus() {
+    const out = [];
+    for (const id of agentIds) {
+      const model = this.examModels[id];
+      if (!model) { out.push({ agentId: id, status: 'rules' as const, note: 'Runs on fixed rules in code, checked by the platform’s own tests.' }); continue; }
+      const last = await latestExam(this.db, id, model);
+      out.push({ agentId: id, model, version: EXAM_VERSION, status: !last ? 'not_taken' as const : last.passed ? 'passed' as const : 'failed' as const, ...(last ?? {}) });
+    }
+    return out;
+  }
+
+  /** Give the test to every agent with a model that hasn't passed it on that model (or all, when asked). */
+  async runExams(opts: { all?: boolean } = {}) {
+    if (!this.examinee) throw new AgentsError('no_model', 'No AI key is set, so every agent runs on fixed rules: there is nothing to test.', 409);
+    const out = [];
+    for (const [id, model] of Object.entries(this.examModels) as [AgentId, string][]) {
+      const last = await latestExam(this.db, id, model);
+      if (last?.passed && !opts.all) continue;
+      const r = await takeExam(id, model, this.examinee(id, model));
+      await saveExam(this.db, r, this.now());
+      out.push({ agentId: id, model, score: r.score, passed: r.passed, criticalMissed: r.criticalMissed });
+    }
+    return out;
+  }
+
+  /** May this agent's change take effect? Only if its mind has passed the current test. */
+  private async examined(agentId: string) {
+    const model = this.examModels[agentId as AgentId];
+    if (!model) return;
+    const last = await latestExam(this.db, agentId, model);
+    if (!last?.passed) throw new AgentsError('not_examined', `The ${agentId} agent hasn’t passed the current test on ${model} (${last ? `scored ${Math.round(last.score * 100)}%${last.criticalMissed.length ? `, missed critical ${last.criticalMissed.join(', ')}` : ''}` : 'not taken'}), so its changes can’t take effect yet.`, 409);
+  }
 
   private now() { return this.platform.bus.now(); }
 
@@ -133,6 +177,15 @@ export class AgentsService {
       tokens += n(r.t) * part;
     }
     const choice = (await this.db.query<any>(`select count(*)::int as all, count(*) filter (where tier in ('3','4a','4b','5'))::int as honest from choices where company_id = $1 and at >= $2 and at < $3`, [companyId, iso(from), iso(to)])).rows[0];
+    // Quality of what was given: each bottle at its product's score as recorded when it was printed.
+    const qualityRows = (await this.db.query<any>(`select product_id, score, at from product_quality where company_id = $1 and at < $2 order by at`, [companyId, iso(to)])).rows;
+    let qSum = 0, qN = 0;
+    for (const u of units) {
+      let s: number | null = null;
+      for (const q of qualityRows) if (q.product_id === u.productId && new Date(q.at).getTime() <= new Date(u.createdAt).getTime()) s = Number(q.score);
+      if (s !== null) { qSum += s; qN++; }
+    }
+    const retail = c.consumerPricing === 'free' ? c.consumer?.retailValueCents ?? 100 : c.consumerPricing === 'discounted' ? Math.round((c.consumer?.retailValueCents ?? 100) / 2) : 0;
     return {
       from: iso(from), to: iso(to), bottles: units.length,
       revenueCents: sum((l) => l.credit.startsWith('revenue:')) - sum((l) => l.kind === 'commission_reversal'),
@@ -144,6 +197,9 @@ export class AgentsService {
       scans: lines.filter((l) => l.kind === 'scan').length, arLaunches: lines.filter((l) => l.kind === 'ar').length, sales: lines.filter((l) => l.kind === 'commission').length,
       honestShare: n(choice?.all) ? Math.round((n(choice.honest) / n(choice.all)) * 1000) / 10 : null,
       aiTokens: Math.round(tokens), aiCostByAgent: byAgent, aiCallsByAgent: calls,
+      advertiserSpendCents: sum((l) => l.credit.startsWith('revenue:') && l.kind !== 'custom') - sum((l) => l.kind === 'commission_reversal'),
+      consumerValueCents: retail,
+      qualityScore: qN ? Math.round((qSum / qN) * 10) / 10 : null,
     };
   }
 
@@ -288,6 +344,27 @@ export class AgentsService {
     }
   }
 
+  // ---------- product quality: recorded by a person, read by the governor ----------
+
+  /** How good a product is (0 to 100), and why, as a person on the team judged it. A drop counts against any change. */
+  async recordQuality(companyId: string, productId: string, score: number, basis: string, by: string) {
+    this.company(companyId);
+    const p = this.platform.products.get(productId);
+    if (!p || (p.companyId && p.companyId !== companyId)) throw new AgentsError('not_found', 'No such product.', 404);
+    if (!Number.isInteger(score) || score < 0 || score > 100) throw new AgentsError('score', 'A whole number from 0 to 100.');
+    if (String(basis ?? '').trim().length < 10) throw new AgentsError('basis', 'Say what it’s based on: the water, the bottle, the label, tests, complaints.');
+    await this.db.query(`insert into product_quality (id, company_id, product_id, score, basis, by, at) values ($1,$2,$3,$4,$5,$6,$7)`, [newId('pq'), companyId, productId, score, basis.trim().slice(0, 500), by, iso(this.now())]);
+    return this.quality(companyId);
+  }
+  async quality(companyId: string) {
+    const rows = (await this.db.query<any>(`select * from product_quality where company_id = $1 order by at desc`, [companyId])).rows;
+    const products = [...this.platform.products.values()].filter((p) => !p.companyId || p.companyId === companyId);
+    return products.map((p) => {
+      const h = rows.filter((r) => r.product_id === p.id);
+      return { productId: p.id, name: p.name, score: h[0] ? Number(h[0].score) : null, basis: h[0]?.basis ?? null, history: h.slice(0, 20).map((r) => ({ score: Number(r.score), basis: r.basis, by: r.by, at: iso(r.at) })) };
+    });
+  }
+
   // ---------- proposals: ideas, decisions, changes, and what the books say they did ----------
 
   private areaOf(kind: string, path?: string): AutonomyArea | null {
@@ -296,8 +373,18 @@ export class AgentsService {
     return null;
   }
 
+  /** The passages a proposal relies on: its own citations, or what its rule's basis finds in the books. */
+  private cite(idea: Idea): string[] {
+    const ids = [...new Set(idea.citations ?? [])];
+    const unknown = books().unknown(ids);
+    if (unknown.length) throw new AgentsError('unknown_citation', `Not passages in the books: ${unknown.join(', ')}.`);
+    if (!ids.length && idea.basis) { const hit = books().search(idea.basis, { k: 1 })[0]; if (hit) ids.push(hit.passage.id); }
+    return ids.slice(0, 8);
+  }
+
   async propose(companyId: string, idea: Idea) {
     const c = this.company(companyId);
+
     // Security never waits on the agents' fund being on: every company gets its security agent.
     if (!c.agents?.enabled && idea.agentId !== 'security') throw new AgentsError('off', `${c.name} hasn’t turned on the AI agents.`, 409);
     let change = idea.change ?? null, area: AutonomyArea | null = null, from: unknown = null;
@@ -316,11 +403,17 @@ export class AgentsService {
         if (area === 'pricing' && from > 0 && Math.abs(v - from) / from > 0.5) throw new AgentsError('too_far', 'One proposal moves a price by at most half.');
       } else if (typeof from === 'boolean' && typeof v !== 'boolean') throw new AgentsError('bad_value', 'On or off.');
     }
+    const citations = this.cite(idea);
+    // A change to how the business runs says which part of the books it rests on.
+    if (change && idea.kind !== 'code' && idea.kind !== 'security' && !citations.length) throw new AgentsError('needs_citation', 'A change cites the passages from the books it relies on (search them at /v1/agents/books/search).');
     const id = newId('ap');
-    await this.db.query(`insert into agent_proposals (id, company_id, agent_id, kind, title, detail, change, expected, status, before_value, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-      [id, companyId, idea.agentId, idea.kind, idea.title, idea.detail, change ? JSON.stringify(change) : null, idea.expected ?? null, idea.kind === 'note' ? 'noted' : 'proposed', JSON.stringify(from), iso(this.now())]);
+    await this.db.query(`insert into agent_proposals (id, company_id, agent_id, kind, title, detail, change, expected, status, before_value, created_at, citations) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      [id, companyId, idea.agentId, idea.kind, idea.title, idea.detail, change ? JSON.stringify(change) : null, idea.expected ?? null, idea.kind === 'note' ? 'noted' : 'proposed', JSON.stringify(from), iso(this.now()), JSON.stringify(citations)]);
     // Where the AI may act on its own in that area, it does, with the undo window.
-    if (area && idea.kind !== 'code' && change && (await this.level(companyId, area)) >= 2) await this.apply(id, `agent:${idea.agentId} (on its own, level ${await this.level(companyId, area)})`);
+    if (area && idea.kind !== 'code' && change && (await this.level(companyId, area)) >= 2) {
+      try { await this.apply(id, `agent:${idea.agentId} (on its own, level ${await this.level(companyId, area)})`); }
+      catch (e) { if ((e as AgentsError).code !== 'not_examined') throw e; } // stays proposed, for a person
+    }
     return this.proposal(id);
   }
 
@@ -330,7 +423,8 @@ export class AgentsService {
     return this.toProposal(r);
   }
   private toProposal(r: any) {
-    return { id: r.id, agentId: r.agent_id, kind: r.kind, title: r.title, detail: r.detail, change: j(r.change), from: j(r.before_value), expected: r.expected, status: r.status, decidedBy: r.decided_by, ref: r.ref, baseline: j(r.baseline), result: j(r.result), createdAt: iso(r.created_at), ...(r.applied_at ? { appliedAt: iso(r.applied_at) } : {}), ...(r.undo_until ? { undoUntil: iso(r.undo_until) } : {}), ...(r.measured_at ? { measuredAt: iso(r.measured_at) } : {}) };
+    const citations = ((j(r.citations) as string[] | null) ?? []).map((id) => { const p = books().passage(id); return p ? { id, where: books().where(p) } : { id, where: 'not in the current edition' }; });
+    return { id: r.id, agentId: r.agent_id, kind: r.kind, title: r.title, detail: r.detail, change: j(r.change), from: j(r.before_value), expected: r.expected, status: r.status, citations, decidedBy: r.decided_by, ref: r.ref, baseline: j(r.baseline), result: j(r.result), createdAt: iso(r.created_at), ...(r.applied_at ? { appliedAt: iso(r.applied_at) } : {}), ...(r.undo_until ? { undoUntil: iso(r.undo_until) } : {}), ...(r.measured_at ? { measuredAt: iso(r.measured_at) } : {}) };
   }
   async proposals(companyId: string, limit = 100) {
     return (await this.db.query<any>(`select * from agent_proposals where company_id = $1 order by created_at desc limit $2`, [companyId, limit])).rows.map((r) => this.toProposal(r));
@@ -356,6 +450,7 @@ export class AgentsService {
   /** Make the change (as a normal, versioned settings change) and take the week before as the baseline. */
   private async apply(id: string, by: string) {
     const r = (await this.db.query<any>(`select * from agent_proposals where id = $1`, [id])).rows[0];
+    await this.examined(r.agent_id);
     const change = j(r.change) as { path: string; value: unknown } | null;
     const c = this.company(r.company_id);
     const now = this.now();
@@ -405,8 +500,10 @@ export class AgentsService {
       const notes: string[] = [];
       if (!base.bottles || !after.bottles) { cents = 0; notes.push('Not enough bottles before and after to measure.'); }
       if (base.honestShare !== null && after.honestShare !== null && base.honestShare - after.honestShare > governor.honestDropPoints) { cents = Math.min(cents, 0); notes.push(`Honest choices fell from ${base.honestShare}% to ${after.honestShare}%: no credit, whatever it earned.`); }
+      const people = participantCheck(base, after);
+      if (people.worse.length) { cents = Math.min(cents, 0); notes.push(`Someone was left worse off (${people.worse.join('; ')}): no credit, whatever it earned.`); }
       if (overlapping > 1) notes.push(`${overlapping} changes overlapped this week; the effect is shared between them.`);
-      const result = { before: round(b), after: round(a), bottlesAfter: after.bottles, givingPerBottle: { before: round1(b.giving), after: round1(a.giving) }, honestShare: { before: base.honestShare, after: after.honestShare }, valueCents: cents, notes };
+      const result = { before: round(b), after: round(a), bottlesAfter: after.bottles, givingPerBottle: { before: round1(b.giving), after: round1(a.giving) }, honestShare: { before: base.honestShare, after: after.honestShare }, participants: people.groups, valueCents: cents, notes };
       await this.db.query(`update agent_proposals set status = 'measured', measured_at = $2, result = $3 where id = $1`, [r.id, iso(now), JSON.stringify(result)]);
       // Pending until it's verified over a longer time (refunds, effects that fade, people's choices staying honest).
       if (cents !== 0) await this.db.query(`insert into agent_value (id, company_id, agent_id, kind, cents, proposal_id, evidence, at, status, confirm_at, original_cents) values ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9,$5)`, [newId('av'), r.company_id, r.agent_id, r.kind, cents, r.id, JSON.stringify({ ...result, shared: overlapping }), iso(now), iso(new Date(at.getTime() + governor.verifyDays * DAY))]);
@@ -436,6 +533,8 @@ export class AgentsService {
       const notes: string[] = [];
       if (!long.bottles) again = 0;
       if (base.honestShare !== null && long.honestShare !== null && base.honestShare - long.honestShare > governor.honestDropPoints) { again = Math.min(again, 0); notes.push(`Honest choices fell from ${base.honestShare}% to ${long.honestShare}% over ${governor.verifyDays} days.`); }
+      const people = participantCheck(base, long);
+      if (people.worse.length) { again = Math.min(again, 0); notes.push(`Over ${governor.verifyDays} days someone was left worse off (${people.worse.join('; ')}).`); }
       const confirmed = Math.min(original, again);
       if (confirmed < original) notes.push(`${original - confirmed}¢ clawed back: over ${governor.verifyDays} days the change was worth less than its first week showed.`);
       await this.db.query(`update agent_value set status = 'confirmed', cents = $2, evidence = $3 where id = $1`, [r.id, confirmed, JSON.stringify({ ...ev, verification: { days: governor.verifyDays, firstWeekCents: original, remeasuredCents: again, confirmedCents: confirmed, clawedBackCents: original - confirmed, notes } })]);
@@ -841,7 +940,7 @@ export class AgentsService {
     const history = (await this.db.query<any>(`select agent_id, day, verdict from agent_standings where day >= $1 order by day`, [iso(new Date(now.getTime() - 90 * DAY)).slice(0, 10)])).rows;
     return {
       enabled: !!c.agents?.enabled, percentOfExtra: c.agents?.percentOfExtra ?? 0, percentOfProfit: c.agents?.percentOfProfit ?? 0, ratchet: !!c.ratchet, growth: await this.growthGate(companyId),
-      charter, governor, spendCategories,
+      winCondition, charter, governor, spendCategories,
       agents: await Promise.all(this.standings().map(async (s) => ({ ...s, ledger: await this.ledger(companyId, s.agentId), fund: bal[s.agentId], valueAllTimeCents: valueBy.get(s.agentId) ?? 0, computeCreditCents: n(state.get(s.agentId)?.compute_credit_millicents) / 1000, storageCents: n(state.get(s.agentId)?.storage_cents), spentTodayCents: (this.spentToday.get(`${s.agentId}|${this.day()}`) ?? 0) / 1000, trend: history.filter((h) => h.agent_id === s.agentId).map((h) => ({ day: h.day, netCents: j(h.verdict).netCents, standing: j(h.verdict).standing })) }))),
       pool: bal.pool, common: bal.common,
       system: await this.system(companyId), systemHistory: await this.systemHistory(companyId), library: await this.library(companyId),

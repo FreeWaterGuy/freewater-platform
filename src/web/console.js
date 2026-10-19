@@ -699,7 +699,8 @@
 
   // ---------- the AI agents ----------
   async function agentsPage() {
-    const [o, pr] = await Promise.all([api('GET', '/v1/agents'), api('GET', '/v1/profit')]);
+    const [o, pr, exam, quality, surplus, env, tests] = await Promise.all([api('GET', '/v1/agents'), api('GET', '/v1/profit'), api('GET', '/v1/agents/exam'), api('GET', '/v1/agents/quality'), api('GET', '/v1/books/surplus'), api('GET', '/v1/environment/report'), api('GET', '/v1/environment/experiments')]);
+    const EXAM = { rules: 'Fixed rules (tested in code)', not_taken: 'Not taken yet', passed: 'Passed', failed: 'Not passed' };
     const STAND = { regenerative: 'Regenerative', building: 'Building', constrained: 'Near the line', paused: 'Paused', frozen: 'Frozen (books not verified)' };
     const cents = (c) => (c == null ? '–' : Math.abs(c) < 100 ? `${Math.round(c * 100) / 100}¢` : dollars(Math.round(c)));
     const ratio = (x) => (x == null ? '–' : `${x}`);
@@ -716,6 +717,45 @@
             num(ctx, 'agents.percentOfExtra', 'Their share of the upside (before costs)', { min: 0, max: 50, step: 0.5, int: false, suffix: '%' }),
             num(ctx, 'agents.percentOfProfit', 'Plus a share of each month’s profit (optional)', { min: 0, max: 50, step: 0.5, int: false, suffix: '%', hint: 'On top, from the profit above the $1 base after costs the base didn’t cover. 0 for none.' }),
             toggle(ctx, 'ratchet', 'Promise these only go up', 'Giving and the agents’ shares can be raised, never lowered, by anyone. Once on, it stays on.', { full: true }))),
+        section('What winning means', `${o.winCondition.goal} ${o.winCondition.definition}`,
+          h('ul', {}, o.winCondition.notAWin.map((x) => h('li', { text: x })))),
+        section('Where the surplus went', `${surplus.note} Nothing here is a rule: it shows the choice each month, whenever it’s made.`,
+          h('div', { class: 'kpis', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' },
+            h('div', { class: 'kpi' }, h('span', { text: 'Surplus, all time' }), h('b', { text: cents(surplus.totals.surplusCents) })),
+            h('div', { class: 'kpi' }, h('span', { text: 'Put back into the system' }), h('b', { text: cents(surplus.totals.reinvestedCents) }), h('small', { class: 'muted', text: surplus.totals.reinvestedShare == null ? '' : `${surplus.totals.reinvestedShare}% of it` })),
+            h('div', { class: 'kpi' }, h('span', { text: 'Paid to owners' }), h('b', { text: cents(surplus.totals.paidOutCents) }), h('small', { class: 'muted', text: surplus.totals.paidOutShare == null ? '' : `${surplus.totals.paidOutShare}% of it` })),
+            h('div', { class: 'kpi' }, h('span', { text: 'Held' }), h('b', { text: cents(surplus.totals.heldCents) }))),
+          (() => {
+            const kind = h('select', { class: 'input', 'aria-label': 'What it was' }, [['reinvest:capacity', 'Put back: capacity (machines, factories)'], ['reinvest:energy', 'Put back: energy'], ['reinvest:routes', 'Put back: routes'], ['reinvest:research', 'Put back: research'], ['reinvest:reserve', 'Put back: held in reserve'], ['payout:dividend', 'Paid to owners: dividend'], ['payout:buyback', 'Paid to owners: buyback'], ['payout:distribution', 'Paid to owners: distribution']].map(([v, t]) => h('option', { value: v, text: t })));
+            const amt = h('input', { class: 'input', type: 'number', min: 0.01, step: 0.01, placeholder: 'Amount ($)', style: 'max-width:140px' });
+            const memo = h('input', { class: 'input', placeholder: 'What for', maxlength: 160 });
+            const day = h('input', { class: 'input', type: 'date' });
+            const save = () => { const [t, c] = kind.value.split(':'); const body = { amountCents: Math.round(Number(amt.value) * 100), memo: memo.value.trim(), date: day.value }; act('POST', t === 'reinvest' ? '/v1/books/reinvestments' : '/v1/books/owner-payouts', t === 'reinvest' ? { ...body, category: c } : { ...body, kind: c }, 'Recorded in the books.'); };
+            return h('div', { class: 'toolbar' }, kind, amt, memo, day, h('button', { class: 'btn secondary small', type: 'button', onclick: save }, 'Record'));
+          })(),
+          surplus.months.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Month', 'Surplus', 'Put back', 'Paid to owners', 'Held'].map((x) => h('th', { text: x })))),
+            h('tbody', {}, surplus.months.slice().reverse().map((m) => h('tr', {}, h('td', { text: m.month }), h('td', { text: cents(m.surplusCents) }), h('td', { text: cents(m.reinvestedCents) }), h('td', { text: cents(m.paidOutCents) }), h('td', { text: cents(m.heldCents) })))))) : null),
+        section('How choices are measured', 'Where people choose (which free product, which cause) there are no ads and nothing pays to sit higher; the order is random and recorded, with what each person had been shown before. People can direct their bottle’s gift and turn off kinds of ads.',
+          h('div', { class: 'kpis' },
+            h('div', { class: 'kpi' }, h('span', { text: 'Choices in clean sets (30 days)' }), h('b', { text: String(env.choicesInCleanSets) })),
+            h('div', { class: 'kpi' }, h('span', { text: 'Made fresh' }), h('b', { text: String(env.madeFresh) }), h('small', { class: 'muted', text: `${env.madeAfterAnAd} after an ad` })),
+            h('div', { class: 'kpi' }, h('span', { text: 'Gifts people directed' }), h('b', { text: String(env.directedGifts) })),
+            h('div', { class: 'kpi' }, h('span', { text: 'In the measurement panel' }), h('b', { text: String(env.panel) }))),
+          h('p', { class: 'muted', style: 'font-size:13px', text: env.noAdsControlShare > 0 ? `No-ads control: ${Math.round(env.noAdsControlShare * 1000) / 10}% of known households, a week at a time (${env.byCohort.noAds} choices in no-ads weeks, ${env.byCohort.ads} in ads weeks).` : 'No-ads control: off. Set research → noAdsControlShare (for example 0.01 to 0.02) in Settings to measure how much ads move choices. It costs that share of ad money.' }),
+          tests.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Value-back test', 'Steps', 'Status', 'What each step did', ''].map((x) => h('th', { text: x })))),
+            h('tbody', {}, tests.map((t) => h('tr', {}, h('td', { text: t.campaignId }), h('td', { text: t.steps.map((x) => `${x}¢`).join(' / ') }), h('td', {}, h('span', { class: 'pill', text: t.status })),
+              h('td', { class: 'muted', style: 'font-size:13px', text: t.results.map((r) => `${r.stepCents}¢: ${r.shown} shown, ${r.clicks} clicks, ${r.sales} sales`).join(' · ') }),
+              h('td', {}, t.status === 'proposed' ? h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', `/v1/environment/experiments/${t.id}/decide`, { approve: true }, 'Approved. Only people in the panel see the steps.') }, 'Approve') : t.status === 'running' ? h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', `/v1/environment/experiments/${t.id}/decide`, { approve: false }, 'Stopped.') }, 'Stop') : null)))))) : h('p', { class: 'muted', style: 'font-size:13px', text: 'No value-back tests yet. Advertisers propose them; a person here approves each one.' })),
+        section('The test before they act', `Every agent whose decisions come from a model passes this test (version ${exam.version}) before its changes can take effect: ${exam.questions.length} questions from the books, the deck and new situations, open book, in a fresh order each time. It takes ${Math.round(exam.passShare * 100)}% and every critical question right. A new model or a new version means taking it again.`,
+          h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('tbody', {}, exam.agents.map((a) => h('tr', {}, h('td', { text: `${a.agentId} agent` }), h('td', { class: 'muted', style: 'font-size:13px', text: a.model ?? '' }), h('td', {}, h('span', { class: 'pill', text: EXAM[a.status] ?? a.status })), h('td', { class: 'muted', style: 'font-size:13px', text: a.score != null ? `${Math.round(a.score * 100)}%${a.criticalMissed?.length ? ` · missed critical ${a.criticalMissed.join(', ')}` : ''} · ${when(a.at)}` : '' })))))),
+          exam.agents.some((a) => a.model) ? h('div', { class: 'toolbar', style: 'margin-top:8px' }, h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', '/v1/agents/exam/run', {}, 'The test was given.') }, 'Give the test now')) : null),
+        section('Product quality', 'How good each product is, as someone on your team judges it, and why. A drop counts as a cost to the people drinking it: no change that lowers quality earns credit, whatever it saves.',
+          h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('tbody', {}, quality.map((q) => {
+            const score = h('input', { class: 'input', type: 'number', min: 0, max: 100, step: 1, value: q.score ?? '', placeholder: '0–100', style: 'max-width:90px', 'aria-label': `Quality of ${q.name}` });
+            const basis = h('input', { class: 'input', placeholder: 'Based on: water tests, bottle, label, complaints…', maxlength: 500, value: '' });
+            return h('tr', {}, h('td', {}, h('b', { text: q.name }), h('div', { class: 'muted', style: 'font-size:12px', text: q.score == null ? 'Not recorded yet' : `${q.score} · ${q.basis}` })), h('td', {}, score), h('td', { style: 'min-width:260px' }, basis),
+              h('td', {}, h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', '/v1/agents/quality', { productId: q.productId, score: Number(score.value), basis: basis.value.trim() }, 'Quality recorded.') }, 'Record')));
+          }))))),
         section('Month by month', `${pr.gate.open ? 'Growth is open: no loss is being made up and the system is regenerative.' : `Nothing grows right now: ${pr.gate.reasons.join(' ')}`} Costs come out of the $1 base first; a losing month carries forward.`,
           pr.periods.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Month', 'Upside earned', 'Costs the base didn’t cover', 'Profit', 'Charity', 'AI agents', 'Carried forward'].map((x) => h('th', { text: x })))),
             h('tbody', {}, pr.periods.map((p) => h('tr', {}, h('td', { text: p.period }), h('td', { text: cents(p.upsideRevenueCents) }), h('td', { text: cents(p.costShareCents) }), h('td', { text: cents(p.profitCents) }), h('td', { text: cents(p.charityTotalCents) }), h('td', { text: cents(p.aiCents) }), h('td', { text: p.carriedOutCents ? cents(p.carriedOutCents) : '–' }))))))
@@ -756,6 +796,7 @@
               h('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap' }, h('b', { text: p.title }), h('span', { class: 'pill', text: p.status }), h('span', { class: 'muted', style: 'font-size:12px', text: `${p.agentId} agent · ${when(p.createdAt)}` })),
               h('p', { style: 'margin:6px 0;font-size:14px', text: p.detail }),
               p.change && !String(p.change.path).startsWith('code:') ? h('p', { class: 'muted', style: 'margin:0;font-size:13px', text: `Change: ${p.change.path} from ${JSON.stringify(p.from)} to ${JSON.stringify(p.change.value)}` }) : null,
+              p.citations?.length ? h('p', { class: 'muted', style: 'margin:4px 0 0;font-size:12px', text: `From the books: ${p.citations.map((c) => `${c.where} [${c.id}]`).join('; ')}` }) : null,
               p.result?.valueCents != null ? h('p', { style: 'margin:6px 0 0;font-size:13px', text: `Measured: ${p.result.valueCents >= 0 ? '+' : ''}${cents(p.result.valueCents)} of surplus over ${p.result.bottlesAfter} bottles. ${p.result.notes.join(' ')}` }) : null,
               h('div', { class: 'toolbar', style: 'margin-top:8px' },
                 p.status === 'proposed' && p.kind !== 'code' ? [h('button', { class: 'btn blue small', type: 'button', onclick: () => act('POST', `/v1/agents/proposals/${p.id}/decide`, { approve: true }, 'Approved and made.') }, 'Approve'), h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', `/v1/agents/proposals/${p.id}/decide`, { approve: false }, 'Rejected.') }, 'Reject')] : null,

@@ -306,9 +306,9 @@ export class Platform {
   }
   /** Packs live in the pack service; it tells the core which company each belongs to. */
   packCompany: (packId: string) => string = (id) => { throw new Error(`Unknown pack "${id}"`); };
-  purchase(unitId: string, slotIndex: number, orderId: string, amountCents: number) {
+  purchase(unitId: string, slotIndex: number, orderId: string, amountCents: number, buyer?: string) {
     const unit = need(this.units, unitId, 'unit');
-    return this.bus.publish('purchase.completed', unit.companyId, { unitId, slotIndex, orderId, amountCents }, orderId);
+    return this.bus.publish('purchase.completed', unit.companyId, { unitId, slotIndex, orderId, amountCents, ...(buyer ? { buyer } : {}) }, orderId);
   }
   /** A sale that came from the ad on a side of a delivery box. */
   purchaseFromBox(packId: string, face: string, orderId: string, amountCents: number) {

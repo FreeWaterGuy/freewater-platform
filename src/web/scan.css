@@ -202,3 +202,12 @@ video { width: 100%; border-radius: var(--radius); background: #000; display: bl
 
 .your-data{margin:18px 16px 28px;text-align:center;font-size:12px;opacity:.7}
 .your-data .linkish{background:none;border:0;padding:4px;color:inherit;font:inherit;text-decoration:underline;cursor:pointer}
+
+/* Your choices on this bottle (gift, kinds of ads, the panel). No ads here. */
+.your-choices { margin: 24px 16px; padding: 16px; border-radius: 12px; background: rgba(0,0,0,.04); }
+.your-choices h3 { margin: 0 0 8px; font-size: 1rem; }
+.your-choices .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+.your-choices select { min-height: 40px; max-width: 100%; }
+.your-choices .checks { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 8px 0; }
+.your-choices .check { display: block; margin: 8px 0; }
+.value-back { margin: 12px 16px; padding: 10px 12px; border-radius: 10px; background: var(--accent); color: var(--accent-ink); font-weight: 600; }

@@ -88,6 +88,8 @@ export function labelSignature(placements: Placement[]): string {
 export function isEligible(c: Campaign, company: CompanyConfig, locationId: string, ctx: { product?: Product; audience?: PrintAudience | null } = {}): boolean {
   if (!c.active || c.isHouse || c.companyId !== company.id) return false;
   if (company.adRules.blockedCategories.includes(c.category)) return false;
+  if (ctx.audience?.noAds) return false;
+  if (ctx.audience?.avoid?.includes(c.category.toLowerCase())) return false;
   if (c.targeting.locations && !c.targeting.locations.includes(locationId)) return false;
   const p = ctx.product;
   if (p?.blockedAdCategories?.includes(c.category)) return false;

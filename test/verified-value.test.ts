@@ -36,7 +36,7 @@ describe('value is verified before it’s paid, and every agent keeps the same l
   it('claws back value that faded: a change confirmed at what it was worth over 30 days, not its first week', async () => {
     await bottles(10);
     now += 3600_000;
-    const p = await app.agents.propose('freewater', { agentId: 'value', kind: 'pricing', title: 'Scans are worth 35¢', detail: 'Price the scan for a held, gifted bottle.', change: { path: 'prices.perScan', value: 35 } });
+    const p = await app.agents.propose('freewater', { agentId: 'value', kind: 'pricing', title: 'Scans are worth 27¢', detail: 'Price the scan for a held, gifted bottle.', change: { path: 'prices.perScan', value: 27 } , citations: ['AE.3.2.1'] });
     await app.agents.decide(p.id, true, 'Josh', 'freewater');
     await bottles(10); // the first week, at the higher price
     now += 8 * DAY;

@@ -12,7 +12,7 @@ export interface EventPayloads {
   'unit.dispensed': { unitId: string; locationId: string };
   'unit.scanned': { unitId: string; slotIndex: number; viewerKey: string; experienceLoaded: boolean; variant?: string };
   'ar.launched': { unitId: string; slotIndex: number; viewerKey: string; loaded: boolean };
-  'purchase.completed': { unitId?: string; slotIndex?: number; packId?: string; face?: string; orderId: string; amountCents: Cents };
+  'purchase.completed': { unitId?: string; slotIndex?: number; packId?: string; face?: string; orderId: string; amountCents: Cents; /** The buyer's viewer key, when the sale came through their click or coupon. */ buyer?: string };
   'purchase.refunded': { unitId?: string; slotIndex?: number; packId?: string; face?: string; orderId: string; amountCents: Cents };
   /** Someone scanned a printed QR code (counted before the page even loads). */
   'code.opened': { code: string; kind: string; unitId?: string; slot?: number; packId?: string; face?: string; opens: number };
@@ -43,6 +43,15 @@ export interface EventPayloads {
   /** An agent spent from its own fund (on compute, storage, knowledge, growth, exploration, or a cause it chose). */
   'ai_fund.spent': { spendId: string; agentId: string; category: string; amountCents: Cents; memo: string; cause?: string };
   'expense.recorded': { expenseId: string; category: string; amountCents: Cents; memo: string; date: string };
+  /** Surplus put back into the system: new capacity, energy, routes, research, or held in reserve. Not a cost. */
+  'reinvestment.recorded': { reinvestmentId: string; category: string; amountCents: Cents; memo: string; date: string };
+  /** A person chose which cause a bottle's gift goes to. */
+  'giving.directed': { unitId: string; from: string; to: string; cents: Cents; person: string };
+  /** The value an offer returned to a cause in a measured test, paid by the advertiser. */
+  'value_back.given': { experimentId: string; unitId: string; campaignId: string; advertiserId: string; advertiserName: string; cause: string; cents: Cents; person: string };
+  'value_back.reversed': { experimentId: string; unitId: string; campaignId: string; advertiserId: string; advertiserName: string; cause: string; cents: number; orderId: string };
+  /** Money paid out to the company's owners (a dividend, a buyback, a distribution). */
+  'owner_payout.recorded': { payoutId: string; kind: string; amountCents: Cents; memo: string; date: string };
   'machine.incident_opened': { incidentId: string; locationId: string; kind: string; severity: 'warning' | 'critical'; message: string };
   'machine.incident_resolved': { incidentId: string; locationId: string; kind: string; minutes: number };
   'unit.failed': { unitId: string; orderId?: string; reason: string };

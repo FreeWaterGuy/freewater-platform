@@ -148,7 +148,7 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     return { status: state, ...(state === 'failed' ? { message: "The machine couldn't print your bottle. Nothing was used up; try again." } : {}), bottle: bottleView(u), countdown: { seconds: loc.printSeconds ?? 30, ad: countdownAd(u) }, freeLeftToday: freeLeft(userId, u.companyId) };
   };
 
-  route({ method: 'POST', url: '/v1/me/vends', scope: 'me', summary: 'Get my free water: one tap at a machine. Send the code from its screen. At a Model 6 the answer comes straight away with status "printing"; check GET /v1/me/vends/{vendId} until it is "ready".', body: obj({ vendId: S.str, locationId: S.str, presenceCode: S.str, productId: S.str }, ['vendId', 'locationId', 'presenceCode']), handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/me/vends', scope: 'me', summary: 'Get my free water: one tap at a machine. Send the code from its screen. At a Model 6 the answer comes straight away with status "printing"; check GET /v1/me/vends/{vendId} until it is "ready".', body: obj({ vendId: S.str, locationId: S.str, presenceCode: S.str, productId: S.str, choiceSetId: S.str }, ['vendId', 'locationId', 'presenceCode']), handler: async (req, key) => {
     const userId = h.me(key);
     const b = req.body as any;
     const orderId = `vend:${userId}:${b.vendId}`;
@@ -165,11 +165,22 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     // The bottle is printed for this person: ads that target people can be chosen, and their first scan confirms it reached them.
     const audience = await app.accounts.audienceFor(userId, key!.companyId);
     const running = platform.order({ companyId: key!.companyId, orderId, locationId: b.locationId, productId, consumerId: userId, audience });
+    // Chosen from this machine's options (shown in a random order, no ads on the choosing): recorded as that choice,
+    // once the bottle is actually printed.
+    if (b.choiceSetId && audience) void running.then((o) => (o.ok ? app.environment.choose(b.choiceSetId, `bottle:${productId}`, audience.personKey, orderId, `machine:${b.locationId}`) : null)).catch(() => {});
     // A Model 6 takes a while to print: answer now and let the app watch the countdown.
     const r = await Promise.race([running, new Promise<null>((res) => setTimeout(() => res(null), app.fleet.isModel6(b.locationId) ? 1500 : 60_000))]);
     if (r && !r.ok) return { status: 422, body: { error: { code: 'print_failed', message: "The machine couldn't print your bottle. Nothing was used up; try again." } } };
     const unit = r?.unit ?? [...platform.units.values()].find((u) => u.companyId === key!.companyId && u.orderId === orderId)!;
     return { status: r ? 201 : 202, body: vendView(unit, userId) };
+  } });
+
+  route({ method: 'GET', url: '/v1/me/machines/:locationId/choice', scope: 'me', summary: 'What this machine has to choose from, in a random order with no ads or paid places. Send the choiceSetId with the vend. Null when it has one product.', handler: async (req, key) => {
+    const userId = h.me(key);
+    const audience = await app.accounts.audienceFor(userId, key!.companyId);
+    if (!audience) throw new ApiError(404, 'not_found', 'No such account.');
+    try { return { body: await app.environment.machineChoice(key!.companyId, audience.personKey, (req.params as any).locationId) }; }
+    catch (e: any) { if (e?.status && e?.code) throw new ApiError(e.status, e.code, e.message); throw e; }
   } });
 
   route({ method: 'GET', url: '/v1/me/vends/:vendId', scope: 'me', summary: 'How a bottle you asked for is going: printing, ready (in the tray) or failed (nothing was used up).', handler: async (req, key) => {

@@ -47,6 +47,7 @@ import { DataService } from './modules/data/service';
 import { TransparencyService } from './modules/transparency/service';
 import { AnchorService, GitHubPublisher, OpenTimestampsPublisher, type AnchorPublisher } from './modules/transparency/anchors';
 import { NumberLineService } from './modules/numberline/service';
+import { EnvironmentService } from './modules/environment/service';
 import { ClaudeNumberLineAgent, rulesAgent, type NumberLineAgent } from './modules/numberline/agent';
 import { AgentsService } from './modules/agents/service';
 import { ProfitService } from './modules/profit/service';
@@ -54,6 +55,8 @@ import { DistributionService } from './modules/distributions/service';
 import { TeamService } from './modules/team/service';
 import { builtinIntake, ClaudeIntake, type IntakeAssistant } from './modules/team/intake';
 import { Alerter } from './runtime/alerts';
+import { charter as agentCharter, winCondition } from './modules/agents/charter';
+import { claudeExaminee } from './modules/agents/exam';
 import type { BlobStore } from './modules/assets/blobs';
 import type { InstanceLease } from './runtime/lease';
 import type { JobRunner } from './runtime/jobs';
@@ -65,6 +68,9 @@ export interface Runtime { alerts: Alerter; startedAt: Date; lease?: InstanceLea
 export interface AppOptions {
   db: SqlClient;
   alerts?: Alerter;
+  /** Which agents run on which model, and how a model answers the test (tests pass their own). */
+  examModels?: Partial<Record<import('./modules/agents/charter').AgentId, string>>;
+  examinee?: (agentId: import('./modules/agents/charter').AgentId, model: string) => import('./modules/agents/exam').Examinee;
   /** Where changes waiting for the database are kept on disk, so a restart doesn't lose them (FW_SPOOL_DIR). */
   spoolFile?: string;
   /** This server's own id (its lease holder), written with every batch so recovery knows who wrote last. */
@@ -215,6 +221,20 @@ export async function createApp(opts: AppOptions) {
     return c && (c.causeStance || c.adsStance) ? { ...(c.causeStance ? { cause: c.causeStance } : {}), ...(c.adsStance ? { ads: c.adsStance } : {}) } : undefined;
   };
 
+  // The data environment: choices made in a clean setting, exposure recorded, people directing gifts and choosing ads.
+  const environment = new EnvironmentService(db, platform, numberline, opts.clock);
+  numberline.environmentOf = (companyId, person, subject, unitId) => environment.environmentOf(companyId, person, subject, unitId);
+  accounts.audienceExtras = (companyId, personKey) => environment.audienceExtras(companyId, personKey);
+  environment.watchScans();
+  platform.bus.on('purchase.completed', (e) => {
+    const u = e.payload.unitId ? platform.units.get(e.payload.unitId) : undefined;
+    const pl = u?.placements.find((x) => x.slotIndex === e.payload.slotIndex);
+    if (u && pl && !pl.isHouse) environment.onSale(e.companyId, u.id, pl.slotIndex, pl.campaignId, e.payload.orderId, e.payload.buyer, e.payload.amountCents).catch(() => {});
+  });
+  platform.bus.on('purchase.refunded', (e) => {
+    environment.onRefund(e.companyId, e.payload.orderId, e.payload.amountCents).catch(() => {});
+  });
+
   const builtinAssistant = new BuiltinAdAssistant();
   const assistant = opts.assistant ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeAdAssistant({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL, fallback: builtinAssistant }) : builtinAssistant);
   const ads = new AdsService(db, platform, made.registry, host, assistant, () => persistence.flush());
@@ -280,7 +300,19 @@ export async function createApp(opts: AppOptions) {
     numberline,
     gate: (companyId) => profit.gate(companyId),
     milestone: (companyId) => profit.milestone(companyId),
-  });
+  })
+  // The agents whose decisions come from a model take the test before their changes take effect.
+  if (opts.examModels) agents.examModels = opts.examModels;
+  else if (process.env.ANTHROPIC_API_KEY) {
+    const m = process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-5-5';
+    agents.examModels = { numberline: m, 'ad-assistant': m, designer: m, 'video-writer': m, 'team-assistant': m, personalizer: process.env.ANTHROPIC_PERSONALIZE_MODEL ?? 'claude-haiku-5-5' };
+  }
+  if (opts.examinee) agents.examinee = opts.examinee;
+  else if (process.env.ANTHROPIC_API_KEY) {
+    const key = process.env.ANTHROPIC_API_KEY;
+    const system = [`Purpose: ${agentCharter.purpose}`, `Win condition: ${winCondition.goal} ${winCondition.definition}`, `Not a win: ${winCondition.notAWin.join(' ')}`, `Duties: ${agentCharter.duties.join(' ')}`].join('\n');
+    agents.examinee = (agentId, model) => claudeExaminee({ apiKey: key, agentId, model, system });
+  };
   await agents.init();
   // Holdout tests: for a small share of scans the personalizer is skipped, so its real value shows in the books.
   experiences.holdout = (agent, key) => agents.holdout(agent, key);
@@ -291,7 +323,7 @@ export async function createApp(opts: AppOptions) {
   await fleet.load();
   made.registry.registerPrinter('model6-fleet', new MachineFleetPrinter(() => fleet, made.printer));
 
-  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, transparency, anchors, agents, profit, distributions, team, secondStep };
+  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, transparency, anchors, agents, profit, distributions, team, secondStep };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;
