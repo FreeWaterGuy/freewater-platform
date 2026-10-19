@@ -110,19 +110,19 @@ export class AttributionService {
     const done = (await this.db.query<any>(`select * from conversions where advertiser_id = $1 and order_id = $2`, [advertiserId, input.orderId])).rows[0];
     if (done) return { conversion: this.view(done), duplicate: true };
 
-    let spot: AdSpot | null = null, companyId: string | null = null, clickId: string | null = null, coupon: string | null = null, bottle: string | null = null;
+    let spot: AdSpot | null = null, companyId: string | null = null, clickId: string | null = null, coupon: string | null = null, bottle: string | null = null, buyer: string | undefined;
     if (input.clickId) {
       const c = (await this.db.query<any>(`select * from clicks where id = $1`, [input.clickId.toUpperCase()])).rows[0];
       if (!c || c.advertiser_id !== advertiserId) throw new AttributionError('unknown_click', 'That click id isn’t one of this advertiser’s clicks.', 404);
       if (this.now().getTime() - new Date(c.created_at).getTime() > CLICK_WINDOW_DAYS * 86_400_000) throw new AttributionError('click_too_old', `Sales count for ${CLICK_WINDOW_DAYS} days after the click.`, 422);
       const used = Number((await this.db.query<{ n: number }>(`select count(*)::int as n from conversions where click_id = $1`, [c.id])).rows[0]!.n);
       if (used >= MAX_SALES_PER_CLICK) throw new AttributionError('click_used_up', `One click can lead to at most ${MAX_SALES_PER_CLICK} sales.`, 422);
-      spot = spotOf(c); companyId = c.company_id; clickId = c.id;
+      spot = spotOf(c); companyId = c.company_id; clickId = c.id; buyer = c.viewer_key ?? undefined;
     } else if (input.couponCode) {
       const c = (await this.db.query<any>(`select * from coupon_codes where code = $1`, [input.couponCode.toUpperCase()])).rows[0];
       if (!c || c.advertiser_id !== advertiserId) throw new AttributionError('unknown_coupon', 'That coupon isn’t one of this advertiser’s.', 404);
       if (c.redeemed_at && c.order_id !== input.orderId) throw new AttributionError('coupon_used', `That coupon was already used${c.order_id ? ` on order ${c.order_id}` : ''}.`, 409);
-      spot = spotOf(c); companyId = c.company_id; coupon = c.code;
+      spot = spotOf(c); companyId = c.company_id; coupon = c.code; buyer = c.viewer_key ?? undefined;
       await this.db.query(`update coupon_codes set redeemed_at = coalesce(redeemed_at, $2), redeemed_by = coalesce(redeemed_by, $3), order_id = $4, value_cents = $5 where code = $1`, [c.code, this.now().toISOString(), input.source, input.orderId, input.valueCents]);
     } else if (input.bottleCode && this.codes) {
       // A static code opened the advertiser's site directly, carrying the bottle's own signed reference (fwb).
@@ -147,7 +147,7 @@ export class AttributionService {
     // The sale goes into the books like any other: commission billed to the advertiser, once per order.
     if (input.valueCents > 0) {
       const key = `${advertiserId}:${input.orderId}`;
-      if ('unitId' in spot) this.platform.purchase(spot.unitId, spot.slot, key, input.valueCents);
+      if ('unitId' in spot) this.platform.purchase(spot.unitId, spot.slot, key, input.valueCents, buyer);
       else this.platform.purchaseFromBox(spot.packId, spot.face, key, input.valueCents);
     }
     return { conversion: this.view((await this.db.query<any>(`select * from conversions where id = $1`, [id])).rows[0]), duplicate: false };

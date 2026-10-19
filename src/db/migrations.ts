@@ -976,7 +976,7 @@ create index value_experiments_running on value_experiments(company_id, campaign
 create table value_arms (experiment_id text not null, company_id text not null, person text not null, unit_id text not null, slot int not null, step int not null, at timestamptz not null, primary key (experiment_id, unit_id, slot));
 create index value_arms_unit on value_arms(unit_id, slot);
 -- Each sale through a test arm, and whether it was refunded (the value-back is reversed with it).
-create table value_sales (order_id text primary key, experiment_id text not null, company_id text not null, unit_id text not null, slot int not null, step int not null, cause text not null, at timestamptz not null, refunded_at timestamptz);
+create table value_sales (order_id text primary key, experiment_id text not null, company_id text not null, unit_id text not null, slot int not null, step int not null, cause text not null, sale_cents int not null default 0, at timestamptz not null, refunded_at timestamptz);
 create index value_sales_experiment on value_sales(experiment_id);
 -- Who first scanned each bottle: the person holding it, who may choose where its gift goes.
 create table bottle_holders (unit_id text primary key, company_id text not null, person text not null, at timestamptz not null);

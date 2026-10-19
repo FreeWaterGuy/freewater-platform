@@ -12,7 +12,7 @@ export interface EventPayloads {
   'unit.dispensed': { unitId: string; locationId: string };
   'unit.scanned': { unitId: string; slotIndex: number; viewerKey: string; experienceLoaded: boolean; variant?: string };
   'ar.launched': { unitId: string; slotIndex: number; viewerKey: string; loaded: boolean };
-  'purchase.completed': { unitId?: string; slotIndex?: number; packId?: string; face?: string; orderId: string; amountCents: Cents };
+  'purchase.completed': { unitId?: string; slotIndex?: number; packId?: string; face?: string; orderId: string; amountCents: Cents; /** The buyer's viewer key, when the sale came through their click or coupon. */ buyer?: string };
   'purchase.refunded': { unitId?: string; slotIndex?: number; packId?: string; face?: string; orderId: string; amountCents: Cents };
   /** Someone scanned a printed QR code (counted before the page even loads). */
   'code.opened': { code: string; kind: string; unitId?: string; slot?: number; packId?: string; face?: string; opens: number };

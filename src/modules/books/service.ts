@@ -285,6 +285,7 @@ export class BooksService {
     const net = new Map<string, number>();
     for (const l of receipt.lines) {
       if (l.kind !== 'donation' && l.kind !== 'giving_redirect') continue;
+      if (l.debit.startsWith('receivable:advertiser:') || l.credit.startsWith('receivable:advertiser:')) continue; // an advertiser's value-back, not the bottle's gift
       if (l.credit.startsWith('payable:charity:')) net.set(l.credit.slice(16), (net.get(l.credit.slice(16)) ?? 0) + l.amountCents);
       if (l.debit.startsWith('payable:charity:')) net.set(l.debit.slice(16), (net.get(l.debit.slice(16)) ?? 0) - l.amountCents);
     }

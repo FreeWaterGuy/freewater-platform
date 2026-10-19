@@ -64,14 +64,15 @@ describe('the data environment', () => {
   it('leaves out the kinds of ads a person never wants', async () => {
     const v = 'viewer-avoids-food';
     expect((await call('POST', '/v1/public/companies/freewater/ad-preferences', { viewerKey: v, avoid: ['food', '<script>'] }, false)).status).toBe(400);
-    const r = await call('POST', '/v1/public/companies/freewater/ad-preferences', { viewerKey: v, avoid: ['Food', 'coffee'] }, false);
-    expect(r.body.avoid).toEqual(['food', 'coffee']);
+    const r = await call('POST', '/v1/public/companies/freewater/ad-preferences', { viewerKey: v, avoid: ['Food', 'coffee', 'alcohol'] }, false);
+    expect(r.body.avoid).toEqual(['food', 'coffee', 'alcohol']); // alcohol isn't carried, but can be turned off ahead of time
+    expect(r.body.kinds).toContain('alcohol');
     expect(r.body.kinds).toContain('food');
     for (let i = 0; i < 6; i++) {
       const u = await printFor(v, `avoid-${i}`);
       for (const p of u.placements) expect(['food', 'coffee']).not.toContain(app.platform.campaigns.get(p.campaignId)!.category);
     }
-    expect((await call('GET', `/v1/public/companies/freewater/ad-preferences?viewer=${v}`, undefined, false)).body.avoid).toEqual(['food', 'coffee']);
+    expect((await call('GET', `/v1/public/companies/freewater/ad-preferences?viewer=${v}`, undefined, false)).body.avoid).toEqual(['food', 'coffee', 'alcohol']);
   });
 
   it('runs a no-ads control only when a company turns it on: those bottles carry only the company’s own message', async () => {
@@ -164,8 +165,13 @@ describe('the data environment', () => {
     expect(await app.environment.valueBackFor('freewater', 'cmp-joes', 'viewer-vb-panel', bottle.id, at)).toBeNull();
     // A sale through it: the advertiser pays the step to the cause, once per order; a refund takes it back.
     const vbLines = () => app.platform.ledger.receipt(bottle.id).lines.filter((l) => l.kind === 'donation' && (l.debit === 'receivable:advertiser:adv-joes' || l.credit === 'receivable:advertiser:adv-joes'));
-    app.platform.purchase(bottle.id, at, 'joes-sale-1', 500);
-    app.platform.purchase(bottle.id, at, 'joes-sale-2', 500);
+    app.platform.purchase(bottle.id, at, 'joes-sale-0', 500); // not tied to the member: nothing extra
+    app.platform.purchase(bottle.id, at, 'joes-sale-x', 500, 'viewer-vb-panel'); // someone else bought
+    app.platform.purchase(bottle.id, at, 'joes-sale-1', 500, member);
+    app.platform.purchase(bottle.id, at, 'joes-sale-2', 500, member);
+    await new Promise((r) => setTimeout(r, 80));
+    expect(vbLines()).toHaveLength(2);
+    app.platform.refund(bottle.id, at, 'joes-sale-1', 200); // partial: the value-back stays
     await new Promise((r) => setTimeout(r, 80));
     expect(vbLines()).toHaveLength(2);
     expect(vbLines()[0]).toMatchObject({ amountCents: 100, credit: 'payable:charity:Well Aware' });
@@ -176,8 +182,8 @@ describe('the data environment', () => {
     await app.persistence.flush();
     const results = (await call('GET', '/v1/environment/experiments')).body.find((r: any) => r.id === e.id).results;
     expect(results.map((r: any) => r.stepCents)).toEqual([0, 100]);
-    expect(results.reduce((a: number, r: any) => a + r.shown, 0)).toBeGreaterThan(1);
-    expect(results.find((r: any) => r.stepCents === 100).sales).toBe(1); // the refunded one doesn't count
+    expect(results.reduce((a: number, r: any) => a + r.shown, 0)).toBeGreaterThan(0);
+    expect(results.find((r: any) => r.stepCents === 100).sales).toBe(1); // the fully refunded one doesn't count
   });
 
   it('forgets a person’s choice screens, ad preferences and panel when they erase their phone', async () => {

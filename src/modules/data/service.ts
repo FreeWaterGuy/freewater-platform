@@ -237,9 +237,10 @@ export class DataService {
     await run('choice screens', `delete from choice_sets where company_id = $1 and person = any($2)`, [companyId, keys]);
     await run('ad preferences', `delete from ad_preferences where company_id = $1 and person = any($2)`, [companyId, keys]);
     await run('measurement panel', `delete from research_panel where company_id = $1 and person = any($2)`, [companyId, keys]);
-    await run('bottles held', `delete from bottle_holders where company_id = $1 and person = any($2)`, [companyId, keys]);
     for (const k of keys) {
       const c = code();
+      // The bottle stays held (by a code that leads nowhere), so nobody else can take over its gift.
+      await run('bottles held', `update bottle_holders set person = $3 where company_id = $1 and person = $2`, [companyId, k, c]);
       await run('gifts directed', `update giving_directions set person = $3 where company_id = $1 and person = $2`, [companyId, k, c]);
       await run('value-back tests', `update value_arms set person = $3 where company_id = $1 and person = $2`, [companyId, k, c]);
     }

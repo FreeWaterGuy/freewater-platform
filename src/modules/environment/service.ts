@@ -186,12 +186,22 @@ export class EnvironmentService {
   watchScans() {
     this.platform.bus.on('unit.scanned', (e) => {
       if (!e.payload.viewerKey || !e.payload.experienceLoaded) return;
-      this.holderWrites = this.holderWrites.then(() => this.db.query(`insert into bottle_holders (unit_id, company_id, person, at) values ($1,$2,$3,$4) on conflict do nothing`, [e.payload.unitId, e.companyId, e.payload.viewerKey, e.at.toISOString()])).catch(() => {});
+      const id = e.payload.unitId;
+      const write = (this.holderWrites.get(id) ?? Promise.resolve()).then(() => this.writeHolder(id, e.companyId, e.payload.viewerKey, e.at.toISOString()));
+      this.holderWrites.set(id, write);
+      void write.finally(() => { if (this.holderWrites.get(id) === write) this.holderWrites.delete(id); });
     });
   }
-  private holderWrites: Promise<unknown> = Promise.resolve();
+  /** Pending holder writes, per bottle (a page view waits only for its own bottle's). */
+  private holderWrites = new Map<string, Promise<unknown>>();
+  private async writeHolder(unitId: string, companyId: string, person: string, at: string) {
+    for (let i = 0; i < 3; i++) {
+      try { await this.db.query(`insert into bottle_holders (unit_id, company_id, person, at) values ($1,$2,$3,$4) on conflict do nothing`, [unitId, companyId, person, at]); return; }
+      catch { await new Promise((r) => setTimeout(r, 200 * (i + 1))); }
+    }
+  }
   async holderOf(unitId: string) {
-    await this.holderWrites;
+    await this.holderWrites.get(unitId)?.catch(() => {});
     return ((await this.db.query<any>(`select person from bottle_holders where unit_id = $1`, [unitId])).rows[0]?.person as string | undefined) ?? this.platform.units.get(unitId)?.intendedFor;
   }
 
@@ -225,7 +235,7 @@ export class EnvironmentService {
   async adPreferences(companyId: string, person: string) {
     const r = (await this.db.query<any>(`select avoid from ad_preferences where company_id = $1 and person = $2`, [companyId, person])).rows[0];
     const avoid = (r?.avoid ?? []) as string[];
-    return { avoid, kinds: this.adKinds(companyId) };
+    return { avoid, kinds: [...new Set([...this.adKinds(companyId), ...avoid])].sort() };
   }
   /** The kinds of ads a company carries, in the one form preferences and the ad engine both use (lowercase). */
   private adKinds(companyId: string) {
@@ -233,10 +243,10 @@ export class EnvironmentService {
   }
   async setAdPreferences(companyId: string, person: string, avoid: string[]) {
     this.company(companyId);
-    const kinds = new Set(this.adKinds(companyId));
     const asked = [...new Set(avoid.map((a) => String(a).toLowerCase().trim()))];
-    const unknown = asked.filter((a) => !kinds.has(a));
-    if (unknown.length) throw new EnvironmentError('unknown_kind', `Not a kind of ad here: ${unknown.slice(0, 3).join(', ')}. Choose from the list.`);
+    const bad = asked.filter((a) => a.length < 2 || a.length > 40 || /[<>"`]/.test(a));
+    if (bad.length) throw new EnvironmentError('unknown_kind', 'Each kind of ad is 2 to 40 letters, like “alcohol” or “fast food”.');
+    // A kind not carried right now can still be turned off ahead of time; it stays off if it comes back.
     const clean = asked.slice(0, 30);
     await this.db.query(`insert into ad_preferences (company_id, person, avoid, updated_at) values ($1,$2,$3,$4) on conflict (company_id, person) do update set avoid = excluded.avoid, updated_at = excluded.updated_at`, [companyId, person, clean, iso(this.now())]);
     return this.adPreferences(companyId, person);
@@ -319,21 +329,27 @@ export class EnvironmentService {
     return { experimentId: e.id as string, cents: cause ? n(arm.step) : 0, cause };
   }
 
-  /** A sale through a test arm: the advertiser pays the step that was shown, to the cause, once per order. */
-  async onSale(companyId: string, unitId: string, slot: number, campaignId: string, orderId: string) {
+  /**
+   * A sale through a test arm, by the person who was shown the step (known from their click or coupon): the advertiser
+   * pays that step to the cause, once per order. A sale we can't tie to that person pays nothing extra and isn't counted.
+   */
+  async onSale(companyId: string, unitId: string, slot: number, campaignId: string, orderId: string, buyer?: string, saleCents = 0) {
+    if (!buyer) return;
     const arm = (await this.db.query<any>(`select a.*, e.cause from value_arms a join value_experiments e on e.id = a.experiment_id where a.company_id = $1 and a.unit_id = $2 and a.slot = $3 and e.campaign_id = $4 order by a.at desc limit 1`, [companyId, unitId, slot, campaignId])).rows[0];
-    if (!arm) return;
+    if (!arm || arm.person !== buyer) return;
     const cause = arm.cause ?? this.platform.companies.get(companyId)?.giving.defaultCharity;
     if (!cause) return;
-    const fresh = (await this.db.query<any>(`insert into value_sales (order_id, experiment_id, company_id, unit_id, slot, step, cause, at) values ($1,$2,$3,$4,$5,$6,$7,$8) on conflict do nothing returning order_id`, [orderId, arm.experiment_id, companyId, unitId, slot, n(arm.step), cause, iso(this.now())])).rows.length;
-    if (!fresh || !(n(arm.step) > 0)) return;
+    if ((await this.db.query<any>(`select 1 from value_sales where order_id = $1`, [orderId])).rows.length) return;
     const camp = this.platform.campaigns.get(campaignId)!;
-    this.platform.bus.publish('value_back.given', companyId, { experimentId: arm.experiment_id, unitId, campaignId, advertiserId: camp.advertiserId, advertiserName: camp.advertiserName, cause, cents: n(arm.step), person: arm.person }, `vb:${orderId}`);
+    // The books first (publishing is idempotent per order), then the sale's record: a crash between them can't lose it.
+    if (n(arm.step) > 0) this.platform.bus.publish('value_back.given', companyId, { experimentId: arm.experiment_id, unitId, campaignId, advertiserId: camp.advertiserId, advertiserName: camp.advertiserName, cause, cents: n(arm.step), person: arm.person }, `vb:${orderId}`);
+    await this.db.query(`insert into value_sales (order_id, experiment_id, company_id, unit_id, slot, step, cause, sale_cents, at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict do nothing`, [orderId, arm.experiment_id, companyId, unitId, slot, n(arm.step), cause, saleCents, iso(this.now())]);
   }
 
   /** A refunded sale: its value-back is taken back too (from the cause, back to the advertiser). */
-  async onRefund(companyId: string, orderId: string) {
-    const r = (await this.db.query<any>(`update value_sales set refunded_at = $3 where order_id = $1 and company_id = $2 and refunded_at is null returning *`, [orderId, companyId, iso(this.now())])).rows[0];
+  async onRefund(companyId: string, orderId: string, refundedCents?: number) {
+    // A partial refund keeps the sale (and its value-back): only a full refund takes it back.
+    const r = (await this.db.query<any>(`update value_sales set refunded_at = $3 where order_id = $1 and company_id = $2 and refunded_at is null and ($4::int is null or $4::int >= sale_cents) returning *`, [orderId, companyId, iso(this.now()), refundedCents ?? null])).rows[0];
     if (!r || !(n(r.step) > 0)) return;
     const e = await this.experiment(r.experiment_id);
     const camp = this.platform.campaigns.get(e.campaignId)!;
@@ -363,12 +379,13 @@ export class EnvironmentService {
     const by = giving?.directed ? (await this.db.query<any>(`select person from giving_directions where unit_id = $1`, [unitId])).rows[0]?.person : null;
     // The holder is set by their first scan, which the page reports after it shows: a phone opening a bottle nobody
     // has scanned yet will hold it.
-    const holder = giving && !giving.directed ? await this.holderOf(unitId) : null;
+    const scanned = giving && !giving.directed ? (await this.holderWrites.get(unitId)?.catch(() => {}), (await this.db.query<any>(`select person from bottle_holders where unit_id = $1`, [unitId])).rows[0]?.person as string | undefined) : undefined;
+    const holder = scanned ?? null; // nobody has scanned it yet: whoever is looking now becomes its holder with their scan
     return {
       giving: giving ? { cents: giving.cents, current: giving.current, directed: giving.directed, chosenByYou: !!by && by === person, canChoose: !giving.directed && (!holder || holder === person), causes: giving.causes } : null,
       adPreferences: await this.adPreferences(u.companyId, person),
       panel: { inPanel: await this.inPanel(u.companyId, person), about: 'Take part in measurements: some offers you see will return a different amount (never less than the offer as it is), so we can learn what people really value.' },
-      ...(valueBack && valueBack.cents > 0 ? { valueBack: { cents: valueBack.cents, cause: valueBack.cause, says: `Buy through this offer and ${valueBack.cents}¢ goes to ${valueBack.cause}, paid by the advertiser.` } } : {}),
+      ...(valueBack && valueBack.cents > 0 ? { valueBack: { cents: valueBack.cents, cause: valueBack.cause, says: `Buy through this offer’s link or code and ${valueBack.cents}¢ goes to ${valueBack.cause}, paid by the advertiser.` } } : {}),
     };
   }
 
@@ -384,8 +401,8 @@ export class EnvironmentService {
         count(*) filter (where (conditions->'environment'->>'randomizedOrder')::boolean) as clean,
         count(*) filter (where kind in ('choose','direct_giving','purchase') and conditions->'environment'->>'exposed' = 'false') as fresh,
         count(*) filter (where kind in ('choose','direct_giving','purchase') and conditions->'environment'->>'exposed' = 'true') as after_ad,
-        count(*) filter (where conditions->'environment'->>'cohort' = 'no_ads') as no_ads,
-        count(*) filter (where conditions->'environment'->>'cohort' = 'ads') as ads,
+        count(*) filter (where kind in ('choose','direct_giving','purchase') and conditions->'environment'->>'cohort' = 'no_ads') as no_ads,
+        count(*) filter (where kind in ('choose','direct_giving','purchase') and conditions->'environment'->>'cohort' = 'ads') as ads,
         count(*) filter (where kind = 'direct_giving') as directed
       from choices where company_id = $1 and at >= $2`, [companyId, iso(since)])).rows[0] ?? {};
     return {
