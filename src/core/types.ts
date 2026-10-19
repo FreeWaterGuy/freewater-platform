@@ -130,6 +130,8 @@ export interface CompanyConfig {
    * parts of Europe); a company can only raise it, never lower it below 13.
    */
   minimumAge?: number;
+  /** Which AI this company uses: the network’s (default), its own (key in host settings as AI_KEY_<ID>), or none. */
+  ai?: import('../modules/ai/routing').AiSettings;
   /** Points, credit and what can be done with them. Points are on by default; credit and exchanging are off. */
   wallet?: import('../modules/wallet/assets').WalletSettings;
   /** The games people can play for points. On by default; a company can replace the categories and brands. */

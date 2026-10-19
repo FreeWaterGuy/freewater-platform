@@ -12,6 +12,7 @@ import { themeFor } from '../experiences/host';
 import { givingLine } from '../print/renderer';
 import type { DesignAssistant } from '../ai/designContract';
 import { applyDesignPatch, designMissing, designMissingLabels, experienceOf, labelSpec, type CustomDesign, type DesignAttachment } from './design';
+import { withCompany } from '../ai/routing';
 
 export class DesignError extends Error {
   constructor(public status: number, public code: string, message: string) {
@@ -91,11 +92,11 @@ export class DesignService {
     if (r.status !== 'open') throw new DesignError(409, 'already_ordered', 'This design was already printed. Start a new one.');
     const company = this.platform.companies.get(r.companyId)!;
     const files = await this.files(r.companyId, r.userId, input.attachments);
-    const out = await this.assistant.respond({
+    const out = await withCompany(r.companyId, async () => this.assistant.respond({
       design: r.design, history: r.messages.map(({ role, text }) => ({ role, text })), message: input.text,
       attachments: files.map((f) => ({ kind: f.kind, name: f.name, dataUrl: f.dataUrl })),
       context: { company: company.name, priceCents: company.prices.customUnit, maxBottles: 24, fonts: Object.keys(keepsakeFonts), decorations: keepsakeDecorations, missing: designMissing(r.design), hasPhoto: !!r.design.label?.photo, hasVideo: !!r.design.scan?.videoUrl },
-    });
+    }));
     const { design, problems } = applyDesignPatch(r.design, out.patch ?? {}, files);
     let reply = out.reply;
     if (problems.length) reply += `\n\nI couldn’t do part of that: ${problems.join(' ')}`;

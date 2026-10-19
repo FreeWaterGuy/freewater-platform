@@ -12,6 +12,7 @@ import { themeFor } from '../experiences/host';
 import { givingLine } from '../print/renderer';
 import type { AdAssistant, ChatMessage } from '../ai/contract';
 import { allowedSizes, applyPatch, estimate, missing, missingLabels, themeFromPoster, type AdDraft } from './draft';
+import { withCompany } from '../ai/routing';
 
 export class AdsError extends Error {
   constructor(public status: number, public code: string, message: string) {
@@ -128,7 +129,7 @@ export class AdsService {
     // doesn't fill in a poster of its own.
     const st = r.draft.studio;
     const seen: AdDraft = st ? { ...r.draft, poster: { brand: st.brand, headline: st.headline, ...(st.sub ? { sub: st.sub } : {}), colors: { bg: st.colors.paper, fg: st.colors.ink, accent: st.colors.accent } } } : r.draft;
-    const out = await this.assistant.respond({
+    const out = await withCompany(r.companyId, async () => this.assistant.respond({
       draft: seen,
       history: r.messages.map(({ role, text, attachments }) => ({ role, text, attachments })),
       message: input.text,
@@ -142,7 +143,7 @@ export class AdsService {
         prices: { perPrintByShare: company.prices.perPrintByShare as any, bidStartsAt: bidFloor(company), perScan: company.prices.perScan, perArLaunch: company.prices.perArLaunch, commissionPercent: company.prices.commissionPercent },
         missing: missing(r.draft, this.host),
       },
-    });
+    }));
     // With a studio design, its words and colors change only when the message asks about them (an offer named for
     // the scan page isn't a new headline).
     const patch = { ...(out.patch ?? {}) };
@@ -151,6 +152,7 @@ export class AdsService {
     const now = this.platform.bus.now().toISOString();
     const left = missing(draft, this.host);
     let reply = out.reply;
+    if (out.objection) await this.db.query(`insert into ai_objections (id, company_id, agent, subject, reason, at) values ($1,$2,$3,$4,$5,$6)`, [newId('obj'), r.companyId, out.objection.agent, `draft:${r.id}`, out.objection.reason, this.platform.bus.now().toISOString()]);
     if (problems.length) reply += `\n\nI couldn’t use part of that: ${problems.join(' ')}`;
     r.messages.push({ role: 'user', text: input.text, ...(input.attachments.length ? { attachments: input.attachments.map((a) => a.name ?? 'picture') } : {}), at: now });
     r.messages.push({ role: 'assistant', text: reply, at: now });
@@ -354,6 +356,12 @@ export class AdsService {
   }
 
   // ---------- content review (the company) ----------
+
+  /** What AI agents objected to while this ad was being made: their reasons, for the people who review it. */
+  async objections(companyId: string, campaignId: string) {
+    return (await this.db.query<any>(`select o.agent, o.reason, o.at from ai_objections o join ad_drafts d on o.subject = 'draft:' || d.id where o.company_id = $1 and d.campaign_id = $2 order by o.at`, [companyId, campaignId])).rows
+      .map((r) => ({ agent: r.agent, reason: r.reason, at: new Date(r.at).toISOString() }));
+  }
 
   reviewQueue(companyId: string) {
     return [...this.platform.campaigns.values()].filter((c) => c.companyId === companyId && c.review?.status === 'submitted');

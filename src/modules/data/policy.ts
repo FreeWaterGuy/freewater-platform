@@ -29,6 +29,31 @@ export interface DataPolicy {
   shareWithPlatform: boolean;
 }
 
+/**
+ * How much each person shares, chosen once and changeable any time. Everything works the same at every level: the
+ * free bottle, AR, the games and every feature. Every choice in the games earns the same. Only full earns points, once,
+ * and only where the law allows paying for data. Each level is just the person's own yes or no for each kind of data:
+ * their law and the company's rules still apply on top, so a level can never collect more than the law allows.
+ */
+export const dataLevels = ['full', 'medium', 'lite'] as const;
+export type DataLevel = (typeof dataLevels)[number];
+export const levelChoices: Record<DataLevel, Partial<Record<DataCategory, boolean>>> = {
+  full: { interactions: true, choices: true, preciseLocation: true, device: true, identityLinking: true },
+  medium: { interactions: true, choices: true, preciseLocation: true, device: true, identityLinking: false },
+  lite: { interactions: false, choices: false, preciseLocation: false, device: false, identityLinking: false },
+};
+export const dataLevelInfo: Record<DataLevel, { label: string; what: string }> = {
+  full: { label: 'Full', what: 'Everything the law allows where you are: your choices, how you use pages, your exact location when you scan, your device, and one profile across your phones and accounts.' },
+  medium: { label: 'Medium', what: 'Your choices, how you use pages, your exact location when you scan, and your device. Your phones and accounts are not joined into one profile.' },
+  lite: { label: 'Lite', what: 'Only what’s needed to run things and keep them fair. You’re counted, not profiled, and no exact location.' },
+};
+/** The notice shown before choosing (the kind California asks for when anything is given for data). */
+export function dataLevelNotice(pays: boolean) {
+  return pays
+    ? 'Choosing Full earns a one-time points bonus. We give it because your data helps us train our AI and plan free and negatively priced products; we never sell it. You can change your level, or erase your data, at any time and keep the points. Nothing works differently at any level.'
+    : 'Full doesn’t earn points where you are. You can change your level, or erase your data, at any time. Nothing works differently at any level.';
+}
+
 /** What data is for, said the same way everywhere it's asked for. */
 export const dataUse = 'We use this to train our AI and to plan future free and negatively priced products. We never sell your personal data. We may share findings that can’t be traced to anyone.';
 

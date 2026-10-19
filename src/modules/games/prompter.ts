@@ -16,7 +16,7 @@ export class ClaudePrompter implements Prompter {
     try {
       const r = await claudeWithTool({
         apiKey: this.o.apiKey, model: this.o.model ?? 'claude-haiku-5-5', fetch: this.o.fetch, agent: 'prompt-helper', companyId, timeoutMs: 20_000,
-        system: 'You answer questions people type into a box inside FreeWater, a free bottled-water company that gives to charity. Answer anything helpfully, briefly (under 120 words) and kindly, in the person’s language. Don’t ask for personal information. Call the answer tool with your reply.',
+        system: 'You answer questions people type into a box inside FreeWater, a company that gives people free products paid for by ads. Answer anything helpfully, briefly (under 120 words) and kindly, in the person’s language. Don’t ask for personal information. Call the answer tool with your reply.',
         tool: { name: 'answer', description: 'Your reply to the person.', input_schema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } },
         history: [], message: text, images: [],
       });

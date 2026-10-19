@@ -10,6 +10,7 @@ import { themeFor, type ExperienceHost } from './host';
 import { safeUrl } from './blocks';
 import { builtinPersonalizer, type Personalizer } from '../ai/personalizer';
 import { daypart, describeConditions, fittingVariants, type ScanFacts } from './dynamic';
+import { withCompany } from '../ai/routing';
 
 export type Target = { kind: 'slot'; unitId: string; slot: number } | { kind: 'box-face'; packId: string; face: string };
 
@@ -149,10 +150,10 @@ export class ExperienceService {
       const summary = (cfg: unknown) => summarize(cfg);
       const held = !!arm && this.holdout('personalizer', `${arm.unitId}:${arm.slot}:${arm.viewerKey}`);
       if (arm) this.onArm({ agent: 'personalizer', companyId: r.companyId, unitId: arm.unitId, slot: arm.slot, viewerKey: arm.viewerKey, arm: held ? 'holdout' : 'agent', campaignId: c.id });
-      const out = await (c.personalize.ai && !held ? this.personalizer : builtinPersonalizer).personalize({
+      const out = await withCompany(r.companyId, async () => (c.personalize!.ai && !held ? this.personalizer : builtinPersonalizer).personalize({
         campaignId: c.id, advertiser: r.ownerName, category: c.category, facts, wantGreeting: false,
         options: [{ id: 'default', name: 'Standard', summary: summary(r.config) }, ...fitting.map((v) => ({ id: v.id, name: v.name, summary: `Meant for ${describeConditions(v.when)}. ${summary(v.experienceConfig)}` }))],
-      });
+      }));
       choice = out.choice; by = out.by;
     }
     const v = fitting.find((x) => x.id === choice);

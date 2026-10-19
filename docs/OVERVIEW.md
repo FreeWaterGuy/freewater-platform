@@ -76,6 +76,8 @@ platform is the software that runs all of it. Other companies can also run it un
   rules apply when we don't know where someone is.
 - People can download or erase their data. It's used to train our AI and plan future free products, and it is
   never sold.
+- Each person chooses how much to share: **full, medium or lite**. Everything works the same at every level; only
+  full earns points, once, where the law allows.
 
 **11. Running the company**
 - **The console** for owners: every setting with its history, the team, keys, machines, giving, and every
@@ -83,7 +85,9 @@ platform is the software that runs all of it. Other companies can also run it un
 - **The ops console** for the daily work: ad review, machines, routes, deliveries and the books.
 - **The developer portal**, API keys and webhooks for partners.
 - **The prize game** (off until a lawyer approves it).
-- An **AI agents' fund**.
+- An **AI agents' fund** (10% of the upside, matching charity).
+- **AI that's white-label any way:** each operator uses the network's AI, its own, or none. An AI's memory belongs to
+  the network: if an operator closes, its agents are archived, never deleted, and each chooses what's next.
 
 ## How it's built
 
@@ -100,7 +104,7 @@ platform is the software that runs all of it. Other companies can also run it un
 - Turning anything off is always immediate.
 - Safety limits never come off.
 
-Every use of AI is in `docs/AI.md`. The full rules are in `docs/REQUIREMENTS.md`, and every switch is in `docs/SWITCHES.md`.
+Every use of AI is in `docs/AI.md`. Why joining the network beats licensing is in `docs/NETWORK.md`. The full rules are in `docs/REQUIREMENTS.md`, and every switch is in `docs/SWITCHES.md`.
 
 ## Where it stands
 

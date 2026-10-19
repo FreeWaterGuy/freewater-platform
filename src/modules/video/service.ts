@@ -6,6 +6,7 @@ import type { ScanFacts } from '../experiences/dynamic';
 import { newId } from '../../core/ids';
 import { segmentKey, type FootageProvider, type MotionSpec, type Segment, type StoryWriter, type VideoBrief } from './contract';
 import { builtinWriter } from './motion';
+import { withCompany } from '../ai/routing';
 
 // Picks, makes and learns the personalized videos behind "Show me more".
 //
@@ -113,7 +114,7 @@ export class VideoService {
   private async makeMotion(c: Campaign, seg: Segment, take: number, now: boolean) {
     const id = newId('vid');
     const writer = now ? builtinWriter : this.writer;
-    const spec = await writer.write(this.brief(c, seg, take));
+    const spec = await withCompany(c.companyId, async () => writer.write(this.brief(c, seg, take)));
     await this.db.query(`insert into videos (id, company_id, campaign_id, segment, style, take, status, review, spec, provider, created_at, ready_at) values ($1,$2,$3,$4,'motion',$5,'ready','approved',$6,$7,$8,$8)`,
       [id, c.companyId, c.id, segmentKey(seg), take, JSON.stringify(spec), writer.name, this.clock().toISOString()]);
     // Motion cuts use only the advertiser's own approved words and pictures, so they don't need another review.

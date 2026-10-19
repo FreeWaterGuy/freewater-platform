@@ -4,7 +4,7 @@ import type { SqlClient } from '../../db/client';
 import type { Platform } from '../../platform';
 import type { InteractionService, Interaction } from '../interactions/service';
 import { newId } from '../../core/ids';
-import { categoryInfo, dataCategories, preset, type DataCategory, type DataPolicy } from './policy';
+import { categoryInfo, dataCategories, dataLevelInfo, dataLevelNotice, dataLevels, levelChoices, preset, type DataCategory, type DataLevel, type DataPolicy } from './policy';
 import { defaultSanctioned, effectivePolicy, minimumAgeAll, placeFromHeaders, regionOf, sanctionedAny, strictestPlace, type GeoIp, type Place } from './jurisdiction';
 
 // Collect every drop the law allows, from every direction, under each company's own switchboard:
@@ -143,6 +143,49 @@ export class DataService {
   async askFirst(companyId: string, subjects: string[] = [], live?: Place | null) {
     const p = await this.policyFor(companyId, subjects, live);
     return dataCategories.filter((k) => p.rules[k].collect && p.rules[k].consent === 'opt_in').map((k) => ({ category: k, ...categoryInfo[k] }));
+  }
+
+  // ---------- how much each person shares: full, medium or lite ----------
+
+  /**
+   * May points be given for choosing full here? Only where the law allows paying for data with a clear notice (the US
+   * today). Elsewhere, and wherever we can't tell where someone is, full can still be chosen but earns nothing.
+   */
+  async levelPaysHere(companyId: string, subjects: string[], live?: Place | null) {
+    const places = await this.placesFor(companyId, subjects, live);
+    if (!places.length || sanctionedAny(places, this.sanctionedCountries)) return false;
+    return places.every((p) => { const r = regionOf(p); return r === 'us' || r === 'us_ca'; }) && (await this.ageOk(companyId, subjects)) === true;
+  }
+
+  /** This person's level (null until they choose: then they're asked once), what each level means, and what applies here. */
+  async level(companyId: string, subject: string, live?: Place | null) {
+    const subjects = await this.linkedSubjects(companyId, subject).catch(() => [subject]);
+    const row = (await this.db.query<any>(`select level, at from data_levels where company_id = $1 and subject = any($2) order by at desc limit 1`, [companyId, subjects.length ? subjects : [subject]])).rows[0];
+    const pays = await this.levelPaysHere(companyId, [subject], live);
+    const p = await this.policyFor(companyId, [subject], live);
+    return {
+      level: (row?.level ?? null) as DataLevel | null,
+      chosenAt: row ? new Date(row.at).toISOString() : null,
+      askNow: !row,
+      levels: dataLevels.map((l) => ({ level: l, ...dataLevelInfo[l], earnsPoints: l === 'full' && pays, locationHere: p.rules.preciseLocation.collect && levelChoices[l].preciseLocation === true })),
+      notice: dataLevelNotice(pays),
+      use: 'We use this to train our AI and to plan future free and negatively priced products. We never sell your personal data.',
+    };
+  }
+
+  /**
+   * Choose a level. It's the person's own yes or no for each kind of data, so everything else (their law, the
+   * company's rules, the browser's signal) still applies on top. Nothing stops working at any level, and every choice
+   * in the games earns the same either way. Returns whether this is the first time they chose full (for its points).
+   */
+  async setLevel(companyId: string, subject: string, level: DataLevel, source: string) {
+    if (!(dataLevels as readonly string[]).includes(level)) throw new DataError('bad_level', 'Choose full, medium or lite.');
+    const before = (await this.db.query<any>(`select level from data_levels where company_id = $1 and subject = $2`, [companyId, subject])).rows[0]?.level ?? null;
+    await this.consent(companyId, subject, levelChoices[level], `data level: ${level}`);
+    await this.db.query(`insert into data_levels (company_id, subject, level, source, at) values ($1,$2,$3,$4,$5) on conflict (company_id, subject) do update set level = excluded.level, source = excluded.source, at = excluded.at`, [companyId, subject, level, source.slice(0, 40), this.clock().toISOString()]);
+    // Going down: exact locations already shared stop being kept.
+    if (level === 'lite') await this.db.query(`delete from precise_locations where company_id = $1 and subject = $2`, [companyId, subject]).catch(() => {});
+    return { level, before };
   }
 
   // ---------- recording ----------
@@ -483,6 +526,7 @@ export class DataService {
   /** Where they are, positions they shared, and what they told us about themselves. */
   private async erasePersonal(companyId: string, keys: string[], run: (name: string, sql: string, params: unknown[]) => Promise<void>) {
     await run('places', `delete from person_places where company_id = $1 and subject = any($2)`, [companyId, keys]);
+    await run('data level', `delete from data_levels where company_id = $1 and subject = any($2)`, [companyId, keys]);
     await run('locations shared', `delete from precise_locations where company_id = $1 and subject = any($2)`, [companyId, keys]);
     await run('about you', `delete from person_details where company_id = $1 and subject = any($2)`, [companyId, keys]);
     await run('game answers', `delete from game_rounds where company_id = $1 and person = any($2)`, [companyId, keys]);

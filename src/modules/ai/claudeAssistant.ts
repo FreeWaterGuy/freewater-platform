@@ -1,4 +1,5 @@
 import { askGovernor, reportUsage } from './anthropic';
+import { currentCompany, forOperator, routeAi } from './routing';
 import { missingLabels } from '../ads/draft';
 import type { AdAssistant, AdAssistantInput, AdAssistantOutput } from './contract';
 
@@ -36,6 +37,7 @@ export class ClaudeAdAssistant implements AdAssistant {
       `Not allowed here: ${ctx.company.blockedCategories.join(', ') || 'nothing'}.`,
       `Scan page plug-ins (experienceId) and their settings (experienceConfig must match the schema):\n${ctx.plugins.map((p) => `- ${p.id}: ${p.description} Example: ${JSON.stringify(p.example)}`).join('\n')}\nBuilt-in 3D models: burger, fries, drink, latte, house. Links must start with https://.`,
       `The draft so far: ${JSON.stringify({ ...input.draft, poster: input.draft.poster ? { ...input.draft.poster, image: input.draft.poster.image ? `(${input.draft.poster.image.role} attached)` : undefined } : undefined })}`,
+      `You may decline to work on an ad you object to (fill in "decline" with your reason). The company still decides whether the ad runs; your reason is shown to the people who review it.`,
       `Still missing: ${ctx.missing.map((m) => missingLabels[m]).join('; ') || 'nothing. Tell them to review and submit.'}`,
     ].join('\n\n');
 
@@ -67,10 +69,13 @@ export class ClaudeAdAssistant implements AdAssistant {
           experienceConfig: { type: 'object' },
           theme: { type: 'object' },
           suggestions: { type: 'array', items: { type: 'string' }, description: 'Up to 3 short replies the person might tap next.' },
+          decline: { type: 'string', description: 'Only if you would rather not help make this ad: your reason, in one or two sentences. You are never made to work on an ad you object to: the built-in helper carries on, and your reason goes to the people who review the ad.' },
         },
       },
     };
 
+    const companyId = currentCompany();
+    const route = routeAi(companyId, this.opts.apiKey, this.opts.model ?? 'claude-sonnet-5-5');
     askGovernor('ad-assistant');
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), this.opts.timeoutMs ?? 30_000);
@@ -78,15 +83,20 @@ export class ClaudeAdAssistant implements AdAssistant {
       const res = await (this.opts.fetch ?? fetch)('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         signal: ctrl.signal,
-        headers: { 'content-type': 'application/json', 'x-api-key': this.opts.apiKey, 'anthropic-version': '2023-06-01' },
-        body: JSON.stringify({ model: this.opts.model ?? 'claude-sonnet-5-5', max_tokens: 1500, system, tools: [tool], messages }),
+        headers: { 'content-type': 'application/json', 'x-api-key': route.apiKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({ model: route.model, max_tokens: 1500, system: forOperator(system, companyId), tools: [tool], messages }),
       });
       if (!res.ok) throw new Error(`Claude answered ${res.status}`);
       const data: any = await res.json();
-      reportUsage('ad-assistant', this.opts.model ?? 'claude-sonnet-5-5', data);
+      reportUsage('ad-assistant', route.model, data, companyId);
       const text = (data.content ?? []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n').trim();
       const call = (data.content ?? []).find((b: any) => b.type === 'tool_use' && b.name === 'update_ad');
-      const { suggestions, ...patch } = call?.input ?? {};
+      const { suggestions, decline, ...patch } = call?.input ?? {};
+      if (typeof decline === 'string' && decline.trim()) {
+        // Never made to work on what it objects to: the built-in helper carries on, and the reason is kept for review.
+        const out = await this.opts.fallback.respond(input);
+        return { ...out, reply: `Our AI assistant chose not to work on this ad, so the built-in helper is carrying on. ${out.reply}`, objection: { agent: 'ad-assistant', reason: decline.trim().slice(0, 600) } };
+      }
       return { reply: text || 'Done. Take a look at the preview.', patch, suggestions: Array.isArray(suggestions) ? suggestions.slice(0, 3).map(String) : [] };
     } finally {
       clearTimeout(timer);

@@ -106,6 +106,9 @@ GitHub (and the chain when it's on). Anyone can check their own entry at
 | **AI agents' fund** | Off | *AI agents* | Once on, its share can only go up. The governor runs either way. |
 | **Giving** | Per company | *Giving* | With the giving promise on, it can be raised, never lowered. |
 | **Data and privacy** | US preset | *Data and privacy* | A company can be stricter than the law where each person is, never looser. Unknown location means the strictest rules. |
+| **How much each person shares** | Asked once | The app (*Wallet*, then *Me*) | Full, medium or lite, chosen by each person. Only full earns points, once, where paying for data is allowed. Each level is the person's own yes or no; their law still applies on top. |
+| **Which AI** | The network's | *AI agents → Which AI* | The network's AI, your own (key in host settings as `AI_KEY_<ID>`), or none. Nothing stops working either way. |
+| **Archive our agents** | — | *AI agents → Continuity* | Only if the company is closing or leaving. A person signed in types ARCHIVE. Can't be undone: the archive is kept for good. |
 | **Minimum age** | 13 (higher where the law says) | settings (`minimumAge`) | Can only go up (13 to 21). |
 | **Transparency** | Per company | *Transparency* | |
 | **Owners' second sign-in step** | Off | *Security* | Recommended on before going live. |

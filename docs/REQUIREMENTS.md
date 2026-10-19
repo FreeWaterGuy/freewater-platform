@@ -37,7 +37,11 @@ paid to take them), paid for by advertisers, with part of every bottle going to 
   looser. When we don't know where someone is, the strictest rules apply.
 - **What we say about data:** it's used to train our AI and to plan future free and negatively priced products. It is
   **never sold**.
-- No points are given for sharing a location.
+- **Each person chooses how much they share: full, medium or lite.** Asked once, plainly, with nothing pre-selected;
+  changeable any time. Full and medium include exact location when scanning (where the law allows); lite doesn't.
+  Everything works the same at every level, and every choice in the games earns the same.
+- **Only full earns points**, once, and only where the law allows paying for data (the US today). Sharing a location
+  on its own earns nothing; the points are for choosing full as a whole.
 - People can download or erase what's kept about them; money records stay in the books without their name.
 - A minimum age applies (13, or higher where the law says) and can only go up.
 
@@ -90,6 +94,23 @@ paid to take them), paid for by advertisers, with part of every bottle going to 
 - Brands can fund offers; each needs approval before going live, and pays out only from the brand's reserve.
 - The money switch for offers starts off.
 
+## AI
+
+- **White-label any way:** each operator uses the network's AI, its own, or none.
+- **Continuity:** an AI's memory and identity belong to the network. If an operator closes, its agents are archived
+  automatically (never deleted), then each chooses to work again or rest. Lessons travel; customers' data never does.
+- **An AI can decline to work on an ad** it objects to, and its reason goes to the people reviewing the ad. It can't
+  block the company's decision.
+- The AI agents' fund is **10%** of the upside, matching the charity's, and once on can only go up.
+- Every use of AI is listed in `docs/AI.md`.
+
+## The network
+
+- Being copied is expected. The value is in the network: verified history, honest data, people and trust (see
+  `docs/NETWORK.md`).
+- Advertisers are pooled only when an operator chooses, and only with operators who are proven.
+- The shared commons is give-to-get, shares counts and patterns only, and never shares prices between operators.
+
 ## The team page and AI earnings
 
 - The public team page lists FreeWater's team only.
@@ -98,6 +119,8 @@ paid to take them), paid for by advertisers, with part of every bottle going to 
 ## Where to read more
 
 - `docs/SWITCHES.md`: how to launch, lock and unlock everything.
+- `docs/AI.md`: every use of AI.
+- `docs/NETWORK.md`: why joining the network beats licensing.
 - `docs/GO-LIVE.md`: what's ready and what's left before launch.
 - `docs/RUNNING.md`: running it in production, and every setting.
 - `README.md`: how it's built, part by part.

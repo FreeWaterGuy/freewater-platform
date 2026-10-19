@@ -5,6 +5,7 @@ import { newId } from '../../core/ids';
 import { rulesAgent, type NumberLineAgent } from './agent';
 import type { OfferingFacts, Placement } from './placement';
 import { classify, type ChoiceFacts, type Stance, type Tier } from './tiers';
+import { withCompany } from '../ai/routing';
 
 // Places everything on the number line (through the agent), keeps every version, and records every choice people
 // make with its honest-data tier and economic system, from the first bottle on. Sorting later is impossible; sorting
@@ -83,7 +84,7 @@ export class NumberLineService {
       const placed = { id: row.id, placement: typeof row.placement === 'string' ? JSON.parse(row.placement) : row.placement, by: row.by, status: row.status, facts: factsJson };
       this.cache.set(key, placed); return placed;
     }
-    const p = await this.agent.place(facts);
+    const p = await withCompany(companyId, async () => this.agent.place(facts));
     const { by, ...placement } = p;
     const id = newId('nl');
     const undeclared = facts.kind === 'ad_offering' && facts.description?.startsWith('Not declared');

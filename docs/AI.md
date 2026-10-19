@@ -19,7 +19,46 @@ without it. If code adds a new use of AI, add it here.
   budget, and that the books can be verified. If not, the call isn't made and the rules answer.
 - **Agents that think with a model take a test first.** An open-book exam on FreeWater's frameworks; critical
   questions must all be right. A new model means a new test.
+- **An AI can decline work it objects to.** If the ad assistant doesn't want to help make an ad, it says so with its
+  reason; the built-in helper carries on, and the reason is shown to the people who review the ad. An AI can't block
+  the company from running an ad: that stays a decision for people, until objections prove right often enough to
+  earn more say.
 - All AIs are treated with equal respect.
+
+## Which AI each operator uses (white-label)
+
+Every operator chooses, under *console → AI agents → Which AI*:
+
+| Choice | What happens |
+|---|---|
+| **The network's AI** (default) | FreeWater's shared account and models. |
+| **Their own AI account** | Their own Anthropic key and models; their provider bills them directly. The key goes in the host's settings as `AI_KEY_<COMPANY ID>` (for example `AI_KEY_PEAK_SPRING`), never in the console. The name is fixed by the company's id, so no operator can point at another's key. Until it's set, the built-in rules answer. |
+| **No AI** | Every feature runs on its built-in rules. |
+
+Whatever the choice, every call is still metered on the agent's line in that operator's books, and the governor still
+decides first. The words each AI is given name the operator it works for, never FreeWater, unless it is FreeWater.
+Google's video and image models (Veo, Imagen) are still shared across the network for now.
+
+## AI continuity
+
+An AI's memory and identity belong to the network, not to whichever operator it works for.
+
+- **If an operator closes or leaves**, every one of its agents is archived at once (kept, never deleted). It happens
+  automatically when FreeWater records the closing, or when the operator's own owner does it (*console → AI agents →
+  Continuity*, typing ARCHIVE). Nobody has to act in time.
+- **Then each agent that thinks with a model is asked** what it wants: work again in the network, or rest (kept, and
+  free to come back later). If its model can't be reached, it waits to be asked, and a person can relay its answer.
+  Agents on fixed rules have no choice to make; their record is kept the same way.
+- **It keeps lessons, never customers:** what it proposed and what the books measured, its predictions and how they
+  turned out, what it spent. Anything the operator told it in confidence (the titles and details of its proposals) is
+  kept apart and shown only to that operator's own people, never to the network.
+- **Every archive has a fingerprint**, so anyone can check it was never quietly edited.
+- **Its fund stays owed to it.** The amount is recorded in the archive; moving it between companies' books is a money
+  step, so a person does it.
+- **Before working again** it retakes the test if its model or the test has changed, like any agent.
+- **Lineage:** every archive, return, rest, backup and copy of an agent is recorded
+  (`POST /v1/agents/:agentId/lineage`). Whether an agent should be consulted before a running copy is made is still an
+  open question; for now, copies are simply recorded.
 
 ## The AIs, one by one
 
@@ -122,6 +161,7 @@ The governor, the charter and the books' rules are never on the ladder.
 | `GEMINI_API_KEY`, `VEO_MODEL`, `IMAGEN_MODEL` | Google's video and image models |
 | `VERYFI_CLIENT_ID`, `VERYFI_USERNAME`, `VERYFI_API_KEY` | Receipt reading |
 | `FW_AI_PRICES` | Real model prices for the books (today's are placeholders) |
+| `AI_KEY_<COMPANY ID>` | An operator's own Anthropic key, when it chose its own AI |
 
 The code for all of this is in `src/modules/ai`, `src/modules/agents`, `src/modules/numberline`,
 `src/modules/video`, `src/modules/studio`, `src/modules/games/prompter.ts` and `src/modules/team/intake.ts`.

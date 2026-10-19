@@ -5,6 +5,7 @@ import { newId } from '../../core/ids';
 import type { DistributionService, BatchInput } from '../distributions/service';
 import type { IntakeAssistant } from './intake';
 import { getChecked, type BlobStore } from '../assets/blobs';
+import { withCompany } from '../ai/routing';
 
 // The FreeWater team's page: type what happened, attach receipts and documents, check the drafts, record them.
 // Files are kept with what they prove (a batch or an expense), and only FreeWater's team can open them.
@@ -53,11 +54,11 @@ export class TeamService {
 
   /** Words and files in; drafts out. Pictures (receipts, photos) are read by the assistant; the rest are kept. */
   async intake(companyId: string, input: { message: string; files?: { name: string; contentType: string; dataBase64: string }[]; history?: { role: 'user' | 'assistant'; text: string }[] }, by: string) {
-    const files = [];
+    const files: Awaited<ReturnType<TeamService["upload"]>>[] = [];
     for (const f of (input.files ?? []).slice(0, 8)) files.push(await this.upload(companyId, f, by));
     const images = (input.files ?? []).filter((f) => /^image\/(png|jpeg|webp)$/.test(f.contentType)).slice(0, 4).map((f) => `data:${f.contentType};base64,${f.dataBase64}`);
     const cities = [...new Set([...this.platform.locations.values()].filter((l) => l.companyId === companyId).map((l) => l.city))];
-    const out = await this.assistant.respond({ message: String(input.message ?? '').slice(0, 4000), images, fileNames: files.map((f) => f.name), today: this.deps.today(companyId), charities: await this.deps.charities(companyId), cities, history: (input.history ?? []).slice(-12) });
+    const out = await withCompany(companyId, async () => this.assistant.respond({ message: String(input.message ?? '').slice(0, 4000), images, fileNames: files.map((f) => f.name), today: this.deps.today(companyId), charities: await this.deps.charities(companyId), cities, history: (input.history ?? []).slice(-12) }));
     return { ...out, files };
   }
 

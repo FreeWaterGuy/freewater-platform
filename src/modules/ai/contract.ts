@@ -27,6 +27,8 @@ export interface AdAssistantOutput {
   reply: string; // what the assistant says back, in plain words
   patch: DraftPatch; // the changes it proposes
   suggestions: string[]; // short replies the person can tap
+  /** The AI chose not to work on this ad, and why. The built-in helper carried on; people see the reason at review. */
+  objection?: { agent: string; reason: string };
 }
 
 export interface AdAssistant {
