@@ -1,6 +1,8 @@
 # FreeWater platform
 
-The FreeWater platform: it takes an order, picks the ads, lays out a print-ready label with a unique QR for every ad, prints it, and bills only what really happened. It runs as an API server on a Postgres database, and every part, including the database and the printer, can be swapped.
+FreeWater gives people free, high-quality water, paid for by the ads on the bottle. This platform runs all of it: it prints each bottle with its own ads and QR codes, runs the vending machines and home delivery, the app, the advertiser portal, the game, points and the token, and open books that give part of every bottle to clean water. Advertisers pay only for what really happened, and other companies can run it under their own brand.
+
+**New here? Read [`docs/OVERVIEW.md`](docs/OVERVIEW.md): what the platform does, in plain words.**
 
 ## Running it for real
 
@@ -8,6 +10,7 @@ Start here:
 
 | Guide | What's in it |
 |---|---|
+| [`docs/OVERVIEW.md`](docs/OVERVIEW.md) | What the platform does, in plain words |
 | [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) | What FreeWater must do, and the rules that never change |
 | [`docs/SWITCHES.md`](docs/SWITCHES.md) | **How to launch, lock and unlock everything**: every switch, who can flip it, the waits, and what to do if something goes wrong |
 | [`docs/GO-LIVE.md`](docs/GO-LIVE.md) | What's ready, what's left, and the order to launch in |
