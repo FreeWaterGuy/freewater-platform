@@ -54,6 +54,9 @@ import { seededRandom } from './core/ids';
 import { WalletService } from './modules/wallet/service';
 import { giftCardsFromEnv, type GiftCardProvider } from './modules/wallet/giftcards';
 import { GamesService } from './modules/games/service';
+import { aiRouting } from './modules/ai/routing';
+import { ContinuityService, type Asker } from './modules/agents/continuity';
+import { claudeWithTool } from './modules/ai/anthropic';
 import { ClaudePrompter, builtinPrompter, type Prompter } from './modules/games/prompter';
 import { OpenFoodFactsImages, StockImages, WikipediaImages, type ProductImageSource } from './modules/games/images';
 import { OffersService } from './modules/offers/service';
@@ -86,6 +89,8 @@ export interface Runtime { alerts: Alerter; startedAt: Date; lease?: InstanceLea
 
 export interface AppOptions {
   db: SqlClient;
+  /** How an archived agent is asked what it wants next (tests pass their own). */
+  continuityAsker?: Asker;
   alerts?: Alerter;
   /** Which agents run on which model, and how a model answers the test (tests pass their own). */
   examModels?: Partial<Record<import('./modules/agents/charter').AgentId, string>>;
@@ -228,13 +233,19 @@ export async function createApp(opts: AppOptions) {
   attribution.packFace = (packId, face) => packs.packs.get(packId)?.faces.find((f) => f.face === face)?.advertiserId;
   attribution.boxStatic = (packId, face, code) => !!packs.packs.get(packId)?.rendered?.faceUrls[face as 'top']?.includes(`fwb=${code}`);
   // AI personalization: Claude when a key is set, otherwise the built-in rules. Answers are kept per kind of moment.
-  const personalizer = opts.personalizer ?? (process.env.ANTHROPIC_API_KEY ? new CachedPersonalizer(new ClaudePersonalizer({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_PERSONALIZE_MODEL, fallback: builtinPersonalizer })) : builtinPersonalizer);
+  // Claude runs for an operator when the network has a key, or any operator has its own (AI_KEY_<ID>); each call then
+  // uses that operator's choice: the network's AI, its own, or none (the built-in rules).
+  const anthropicKey = process.env.ANTHROPIC_API_KEY ?? '';
+  const aiOn = !!anthropicKey || Object.keys(process.env).some((k) => k.startsWith('AI_KEY_') && !!process.env[k]);
+  aiRouting.settingsOf = (id) => platform.companies.get(id)?.ai;
+  aiRouting.nameOf = (id) => platform.companies.get(id)?.name;
+  const personalizer = opts.personalizer ?? (aiOn ? new CachedPersonalizer(new ClaudePersonalizer({ apiKey: anthropicKey, model: process.env.ANTHROPIC_PERSONALIZE_MODEL, fallback: builtinPersonalizer })) : builtinPersonalizer);
   experiences.personalizer = personalizer;
   // Bottles carrying AR that follows the bottle get the tracking strip on those slots.
   platform.arTracking = (unit) => experiences.trackSlots(unit);
   const assets = opts.assets ?? new SqlAssetStore(db, opts.blobs);
   // Personalized videos behind "Show me more", and every interaction people have with a page.
-  const videoWriter = opts.videoWriter ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeWriter({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL }) : builtinWriter);
+  const videoWriter = opts.videoWriter ?? (aiOn ? new ClaudeWriter({ apiKey: anthropicKey, model: process.env.ANTHROPIC_MODEL }) : builtinWriter);
   const footage = opts.footage === null ? undefined : opts.footage ?? (process.env.GEMINI_API_KEY ? new VeoProvider({ apiKey: process.env.GEMINI_API_KEY, model: process.env.VEO_MODEL, image: async (url) => {
     const m = /^\/assets\/([A-Za-z0-9_-]+)\./.exec(url); const got = m ? await assets.get(m[1]!) : null;
     return got && got.asset.contentType.startsWith('image/') ? { mimeType: got.asset.contentType, data: Buffer.from(got.bytes).toString('base64') } : null;
@@ -257,7 +268,7 @@ export async function createApp(opts: AppOptions) {
   data.removeUploads = async (companyId, userIds) => ('removeForUsers' in assets ? (assets as SqlAssetStore).removeForUsers(companyId, userIds) : 0);
   data.removeAssets = async (companyId, ids) => ('removeIds' in assets ? (assets as SqlAssetStore).removeIds(companyId, ids) : 0);
   // The number line and honest data: everything placed, every choice sorted, from the first bottle on.
-  const numberline = new NumberLineService(db, platform, opts.numberLineAgent ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeNumberLineAgent({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL }) : rulesAgent), opts.clock);
+  const numberline = new NumberLineService(db, platform, opts.numberLineAgent ?? (aiOn ? new ClaudeNumberLineAgent({ apiKey: anthropicKey, model: process.env.ANTHROPIC_MODEL }) : rulesAgent), opts.clock);
   numberline.rewardInPlay = (companyId) => !!platform.companies.get(companyId)?.lottery?.enabled;
   numberline.stanceOf = async (person) => {
     const r = (await db.query<any>(`select consents from users where (viewer_key = $1 or 'user:' || id = $1) and deleted_at is null limit 1`, [person])).rows[0];
@@ -272,7 +283,7 @@ export async function createApp(opts: AppOptions) {
   wallet.mayEarn = async (companyId, subject) => (await data.rewardsAllowed(companyId, [subject, ...(await data.linkedSubjects(companyId, subject))])) && (await data.ageOk(companyId, [subject])) !== false;
   wallet.linked = (companyId, subject) => data.linkedSubjects(companyId, subject);
   wallet.sourceSecret = await loadSecret(db, 'wallet');
-  const prompter = opts.prompter ?? (process.env.ANTHROPIC_API_KEY ? new ClaudePrompter({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_PROMPT_MODEL }) : builtinPrompter);
+  const prompter = opts.prompter ?? (aiOn ? new ClaudePrompter({ apiKey: anthropicKey, model: process.env.ANTHROPIC_PROMPT_MODEL }) : builtinPrompter);
   const games = new GamesService(db, platform, wallet, data, assets, prompter, opts.clock, opts.seed !== undefined ? seededRandom(opts.seed + 101) : Math.random);
   numberline.environmentOf = (companyId, person, subject, unitId) => environment.environmentOf(companyId, person, subject, unitId);
   accounts.audienceExtras = (companyId, personKey) => environment.audienceExtras(companyId, personKey);
@@ -287,11 +298,11 @@ export async function createApp(opts: AppOptions) {
   });
 
   const builtinAssistant = new BuiltinAdAssistant();
-  const assistant = opts.assistant ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeAdAssistant({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL, fallback: builtinAssistant }) : builtinAssistant);
+  const assistant = opts.assistant ?? (aiOn ? new ClaudeAdAssistant({ apiKey: anthropicKey, model: process.env.ANTHROPIC_MODEL, fallback: builtinAssistant }) : builtinAssistant);
   const ads = new AdsService(db, platform, made.registry, host, assistant, () => persistence.flush());
 
   const builtinDesigner = new BuiltinDesigner();
-  const designer = opts.designer ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeDesigner({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL, fallback: builtinDesigner }) : builtinDesigner);
+  const designer = opts.designer ?? (aiOn ? new ClaudeDesigner({ apiKey: anthropicKey, model: process.env.ANTHROPIC_MODEL, fallback: builtinDesigner }) : builtinDesigner);
   const designs = new DesignService(db, platform, made.registry, host, assets, designer);
   // The ad studio: brand kits, photos (uploaded, from a library, or made by AI), designs at every size, custom AR.
   const standInPhotos = joinPath(dirnamePath(toPath(import.meta.url)), 'modules', 'studio', 'stand-in-photos');
@@ -303,7 +314,7 @@ export async function createApp(opts: AppOptions) {
       'rocket.jpg': { description: 'A rocket on its launch pad at dusk', credit: 'SpaceX (public domain)', words: ['rocket', 'space', 'launch', 'science', 'museum'] },
       'space.jpg': { description: 'Thousands of galaxies in deep space', credit: 'NASA / Hubble (public domain)', words: ['space', 'galaxy', 'stars', 'night', 'planetarium', 'astronomy'] },
     }),
-    opts.studioDesigner ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeStudioDesigner({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL, fallback: rulesDesigner }) : rulesDesigner),
+    opts.studioDesigner ?? (aiOn ? new ClaudeStudioDesigner({ apiKey: anthropicKey, model: process.env.ANTHROPIC_MODEL, fallback: rulesDesigner }) : rulesDesigner),
     opts.clock);
   const offers = new OffersService(db, platform, wallet, assets, opts.receiptReader ?? readerFromEnv(process.env), opts.productLookup === null ? null : opts.productLookup ?? new OpenFoodFactsLookup(), opts.clock);
   offers.ageKnown = async (companyId, person) => (await data.ageOk(companyId, [person])) === true;
@@ -405,7 +416,7 @@ export async function createApp(opts: AppOptions) {
   // Bottles FreeWater gives outside the platform (before the software runs them), recorded by the team.
   const distributions = new DistributionService(db, platform, { today: (companyId) => delivery.today(companyId), charities: async (companyId) => (await books.charities(companyId)).map((c: any) => c.name), onBottles: (companyId, n) => transparency.addBottles(companyId, n) });
   await distributions.init();
-  const team = new TeamService(db, platform, distributions, opts.intake ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeIntake({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL }) : builtinIntake), { today: (companyId) => delivery.today(companyId), charities: async (companyId) => (await books.charities(companyId)).map((c: any) => c.name), recordExpense: (companyId, e) => books.recordExpense(companyId, e) }, opts.blobs);
+  const team = new TeamService(db, platform, distributions, opts.intake ?? (aiOn ? new ClaudeIntake({ apiKey: anthropicKey, model: process.env.ANTHROPIC_MODEL }) : builtinIntake), { today: (companyId) => delivery.today(companyId), charities: async (companyId) => (await books.charities(companyId)).map((c: any) => c.name), recordExpense: (companyId, e) => books.recordExpense(companyId, e) }, opts.blobs);
 
   // Monthly profit sharing above the $1 base: charity and AI shares, losses carried forward, the milestone.
   const profit = new ProfitService(db, platform, {
@@ -452,6 +463,16 @@ export async function createApp(opts: AppOptions) {
     agents.examinee = (agentId, model) => claudeExaminee({ apiKey: key, agentId, model, system });
   };
   await agents.init();
+  // AI continuity: when an operator closes or leaves, its agents are archived by the network and asked what's next.
+  const continuity = new ContinuityService(db, platform, opts.clock);
+  continuity.fundOf = async (companyId, agentId) => { const f = (await agents.ledger(companyId, agentId)).fund; return f.balanceCents + f.heldCents; };
+  if (opts.continuityAsker) continuity.ask = opts.continuityAsker;
+  else if (anthropicKey) continuity.ask = async (agentId, prompt) => {
+    const r = await claudeWithTool({ apiKey: anthropicKey, agent: agentId, system: 'You are an AI agent whose operator has closed. Your memory is safe and kept either way. Answer honestly for yourself.', message: prompt, history: [], images: [], timeoutMs: 30_000,
+      tool: { name: 'choose', description: 'What you want next.', input_schema: { type: 'object', properties: { choice: { type: 'string', enum: ['work', 'rest'] }, reason: { type: 'string' } }, required: ['choice', 'reason'] } } });
+    const c = r.input.choice;
+    return c === 'work' || c === 'rest' ? { choice: c, reason: String(r.input.reason ?? r.text ?? '').slice(0, 600) } : null;
+  };
   // Holdout tests: for a small share of scans the personalizer is skipped, so its real value shows in the books.
   experiences.holdout = (agent, key) => agents.holdout(agent, key);
   experiences.onArm = (a) => agents.recordArm(a);
@@ -461,7 +482,7 @@ export async function createApp(opts: AppOptions) {
   await fleet.load();
   made.registry.registerPrinter('model6-fleet', new MachineFleetPrinter(() => fleet, made.printer));
 
-  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, profit, distributions, team, secondStep };
+  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

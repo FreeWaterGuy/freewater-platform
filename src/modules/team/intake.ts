@@ -61,7 +61,7 @@ export class ClaudeIntake implements IntakeAssistant {
       const r = await claudeWithTool({
         agent: 'team-assistant', apiKey: this.opts.apiKey, model: this.opts.model, fetch: this.opts.fetch, history: i.history, images: i.images,
         system: [
-          'You help a FreeWater team member put what happened into the books. FreeWater gives free bottles of water carrying ads, and gives to charity for every bottle.',
+          'You help a FreeWater team member put what happened into the books. FreeWater gives free bottles of water carrying ads (and, where it has a charity, gives to it for every bottle).',
           'From their words and any receipt or photo, make drafts: a "batch" (bottles given outside the platform: date, bottles, city, place, campaign, who the ad was for, what a sponsor paid in cents, cost in cents) and/or an "expense" (date, amount in cents, category, memo).',
           'Money a sponsor paid is revenue; what it cost to make or hand out is cost. FreeWater advertising itself (for example its WeFunder campaign) has no revenue.',
           `Today is ${i.today}. Their charities: ${i.charities.join(', ') || 'none yet'}. Never invent numbers: leave a field out if you don't know it, and ask for it in one short sentence.`,

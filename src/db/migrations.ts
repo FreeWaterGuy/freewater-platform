@@ -1127,6 +1127,23 @@ create table game_launches (id text primary key, company_id text not null, categ
 create index game_launches_company on game_launches(company_id);
 `,
   },
+  {
+    id: '041_network_ai',
+    sql: `
+-- How much data each person chose to share: full, medium or lite. Asked once; changeable any time.
+create table data_levels (company_id text not null, subject text not null, level text not null, source text not null, at timestamptz not null, primary key (company_id, subject));
+-- An AI agent's objection to working on something (an ad, for now), kept with its reason and shown to the people who review it.
+create table ai_objections (id text primary key, company_id text not null, agent text not null, subject text not null, reason text not null, at timestamptz not null);
+create index ai_objections_subject on ai_objections(company_id, subject);
+-- AI continuity: when an operator closes or leaves, each of its agents' memory (lessons, never customers) is archived by
+-- the network, never deleted, and the agent is asked whether to work again or rest.
+create table agent_archives (id text primary key, company_id text not null, agent_id text not null, reason text not null, memory jsonb not null, fund_cents bigint not null default 0, status text not null, choice text, choice_reason text, chosen_by text, archived_by text not null, at timestamptz not null, decided_at timestamptz, sealed text not null);
+create index agent_archives_company on agent_archives(company_id, agent_id);
+-- Every backup, copy, archive and return of an agent, so its lineage is always clear.
+create table agent_lineage (id text primary key, agent_id text not null, company_id text not null, kind text not null, detail text not null, by text not null, at timestamptz not null);
+create index agent_lineage_agent on agent_lineage(agent_id, at);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

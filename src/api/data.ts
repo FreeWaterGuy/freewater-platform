@@ -38,6 +38,32 @@ export function dataRoutes(app: App, route: (r: RouteDef) => void) {
     return { body: await data.consent(id, b.viewerKey, b.choices, 'scan page') };
   } });
 
+  // ---------- how much each person shares: full, medium or lite ----------
+  const levelProp = { type: 'string', enum: ['full', 'medium', 'lite'] };
+  /** Choose a level; full earns its one-time points where that's allowed (once per person, across their phones). */
+  const chooseLevel = async (companyId: string, subject: string, level: any, live: any) => {
+    const r = await wrap(() => data.setLevel(companyId, subject, level, 'chosen'));
+    let points = 0;
+    if (level === 'full' && !subject.startsWith('bot_') && (await data.levelPaysHere(companyId, [subject], live))) {
+      const person = (await data.personFor(companyId, subject).catch(() => null)) ?? subject;
+      points = (await app.wallet.earn(companyId, subject, 'data_full', `data_full:${app.wallet.hidden(companyId, person)}`)).points;
+    }
+    return { ...(await data.level(companyId, subject, live)), points };
+  };
+  route({ method: 'GET', url: '/v1/public/data/:companyId/level', scope: 'public', summary: 'How much this phone shares (full, medium or lite), what each means here, and whether to ask now (asked once). Send ?viewer=.', handler: async (req) => {
+    const id = (req.params as any).companyId; const viewer = String((req.query as any).viewer ?? '');
+    if (!platform.companies.has(id)) throw new ApiError(404, 'not_found', 'Company not found.');
+    if (!/^[A-Za-z0-9_-]{8,64}$/.test(viewer)) throw new ApiError(400, 'viewer', 'Send ?viewer=.');
+    return { body: await data.level(id, viewer, data.placeOf(req)) };
+  } });
+  route({ method: 'POST', url: '/v1/public/data/:companyId/level', scope: 'public', summary: 'Choose how much this phone shares: full, medium or lite. Nothing works differently at any level; full earns a one-time points bonus where that’s allowed.', body: obj({ viewerKey: viewerKeyProp, level: levelProp }, ['viewerKey', 'level']), handler: async (req) => {
+    const id = (req.params as any).companyId; const b = req.body as any;
+    if (!platform.companies.has(id)) throw new ApiError(404, 'not_found', 'Company not found.');
+    return { body: await chooseLevel(id, b.viewerKey, b.level, data.placeOf(req)) };
+  } });
+  route({ method: 'GET', url: '/v1/me/data/level', scope: 'me', summary: 'How much you share: full, medium or lite.', handler: async (req, key) => ({ body: await data.level(key!.companyId, `user:${key!.userId}`, data.placeOf(req)) }) });
+  route({ method: 'POST', url: '/v1/me/data/level', scope: 'me', summary: 'Choose how much you share: full, medium or lite.', body: obj({ level: levelProp }, ['level']), handler: async (req, key) => ({ body: await chooseLevel(key!.companyId, `user:${key!.userId}`, (req.body as any).level, data.placeOf(req)) }) });
+
   const company = (req: { params: unknown }) => { const id = (req.params as any).companyId as string; if (!platform.companies.has(id)) throw new ApiError(404, 'not_found', 'Company not found.'); return id; };
   const placeProp = obj({ country: { type: 'string', pattern: '^[A-Za-z]{2}$' }, state: { type: 'string', pattern: '^[A-Za-z]{2,3}$' } }, ['country']);
   const ageProp = { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' };
@@ -50,7 +76,7 @@ export function dataRoutes(app: App, route: (r: RouteDef) => void) {
     const r = await data.rulesFor(id, [b.viewerKey], data.placeOf(req));
     return { body: { region: r.region, askFirst: r.askFirst, minimumAge: r.minimumAge, rewards: r.rewards } };
   } });
-  route({ method: 'POST', url: '/v1/public/data/:companyId/location', scope: 'public', summary: 'This phone’s exact position, shared by the person to see deals and machines near them. Optional; nothing is earned for it. Kept to about 10 meters, and only as long as the rules allow.', body: obj({ viewerKey: viewerKeyProp, lat: { type: 'number', minimum: -90, maximum: 90 }, lng: { type: 'number', minimum: -180, maximum: 180 }, accuracyM: { type: 'number', minimum: 0, maximum: 100000 } }, ['viewerKey', 'lat', 'lng']), handler: async (req) => {
+  route({ method: 'POST', url: '/v1/public/data/:companyId/location', scope: 'public', summary: 'This phone’s exact position, shared by the person to see deals and machines near them. Optional; nothing is earned for sharing it (only choosing Full as a whole earns, once). Kept to about 10 meters, and only as long as the rules allow.', body: obj({ viewerKey: viewerKeyProp, lat: { type: 'number', minimum: -90, maximum: 90 }, lng: { type: 'number', minimum: -180, maximum: 180 }, accuracyM: { type: 'number', minimum: 0, maximum: 100000 } }, ['viewerKey', 'lat', 'lng']), handler: async (req) => {
     const id = company(req); const b = req.body as any;
     return { body: await data.sharePreciseLocation(id, b.viewerKey, { lat: b.lat, lng: b.lng, accuracyM: b.accuracyM }, req) };
   } });

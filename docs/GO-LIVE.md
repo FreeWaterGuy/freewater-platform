@@ -79,7 +79,7 @@ Expect roughly a day each, with tests, once the account exists.
 ## Also before real money flows
 
 - **A lawyer**: the token (before going live with it), gift cards and points rules, terms of service, privacy policy, advertising rules, the prize game's rules, and the trust that would
-  hold the AI agents' 3%.
+  hold the AI agents' 10%.
 - **Insurance** (general liability, cyber).
 - **An outside security test** (a "pen test") of the live setup.
 - **Real numbers** in the console: the costs per bottle (water, bottle, label, machine) are placeholders today, as

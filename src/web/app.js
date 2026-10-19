@@ -487,6 +487,31 @@
     box.append(open);
     return box;
   }
+  // ---------- how much you share: full, medium or lite (asked once, change any time) ----------
+  async function levelInfo(me) {
+    const cid = encodeURIComponent(state.config.companyId);
+    return me ? api('GET', '/v1/me/data/level') : api('GET', `/v1/public/data/${cid}/level?viewer=${encodeURIComponent(viewerKey())}`);
+  }
+  function levelPicker(me, info, opts = {}) {
+    const cid = encodeURIComponent(state.config.companyId);
+    const choose = async (level) => {
+      try {
+        const r = me ? await api('POST', '/v1/me/data/level', { level }) : await api('POST', `/v1/public/data/${cid}/level`, { viewerKey: viewerKey(), level });
+        toast(r.points ? `Set to ${level}. +${r.points} points` : `Set to ${level}`);
+        // Full and medium include your exact location when you scan: your phone asks first.
+        if (level !== 'lite' && !fixture && navigator.geolocation) navigator.geolocation.getCurrentPosition((p) => api('POST', `/v1/public/data/${cid}/location`, { viewerKey: viewerKey(), lat: p.coords.latitude, lng: p.coords.longitude, accuracyM: Math.round(p.coords.accuracy) }).catch(() => {}), () => {}, { maximumAge: 600000, timeout: 10000 });
+        render();
+      } catch (e) { toast(e.message); }
+    };
+    return h('section', { class: opts.card ? 'card' : '', 'aria-label': 'How much you share' },
+      opts.card ? h('h2', { class: 'section', style: 'margin-top:0' }, 'How much do you want to share?') : null,
+      h('p', { class: 'small muted', style: 'margin:0 0 8px', text: 'Everything works the same at every level. Change it any time.' }),
+      h('div', { role: 'radiogroup', 'aria-label': 'Data level' }, info.levels.map((l) => h('button', { type: 'button', role: 'radio', class: 'list-row', 'aria-checked': String(info.level === l.level), style: `width:100%;text-align:left;display:flex;gap:12px;align-items:flex-start;padding:14px 16px;margin:0 0 8px;border-radius:16px;background:#fff;font:inherit;color:inherit;cursor:pointer;border:${info.level === l.level ? '2px solid #111' : '1px solid rgba(0,0,0,.12)'}`, onclick: () => choose(l.level) },
+        h('span', { 'aria-hidden': 'true', style: `flex:none;width:18px;height:18px;margin-top:2px;border-radius:50%;border:2px solid #111;box-shadow:inset 0 0 0 3px #fff;background:${info.level === l.level ? '#111' : '#fff'}` }),
+        h('span', { class: 'grow', style: 'display:flex;flex-direction:column;gap:4px' }, h('b', { text: `${l.label}${l.earnsPoints ? ' · earns points' : ''}` }), h('span', { class: 'small muted', style: 'line-height:1.4', text: l.what }))))),
+      h('p', { class: 'small muted', style: 'margin:8px 0 0', text: `${info.notice} ${info.use}` }));
+  }
+
   async function walletScreen() {
     const me = await loadMe();
     const cid = encodeURIComponent(state.config.companyId);
@@ -511,6 +536,7 @@
       });
       return h('label', { class: 'field' }, h('span', { class: 'small muted', text: 'Bought it? Add a photo of the receipt' }), f);
     };
+    const lvl = await levelInfo(me).catch(() => null);
     const said = { claimed: 'Buy it, then add the receipt', receipt_sent: 'Checking your receipt', verified: 'Approved', paid: 'Paid', rejected: 'Receipt not accepted (points returned)', expired: 'Ran out (points returned)', void: 'Closed' };
     screen({ nav: 'wallet' },
       h('h1', { class: 'display', style: 'font-size:26px', text: 'Wallet' }),
@@ -521,6 +547,7 @@
           (w.credit.enabled || w.credit.balanceCents) ? h('div', {}, h('b', { text: money(w.credit.balanceCents) }), h('span', { text: 'credit' })) : null,
           (w.token.live || w.token.balance) ? h('div', {}, h('b', { text: tok(w.token.balance) }), h('span', { text: 'tokens' })) : null),
         w.token.live ? h('p', { style: 'margin:8px 0 0;opacity:.85;font-size:14px', text: w.token.held }) : null),
+      lvl?.askNow ? levelPicker(me, lvl, { card: true }) : null,
       me && w.exchange.enabled && w.credit.balanceCents >= 500 ? giftCardTile(w) : null,
       link('/play', { class: 'tile blue' }, h('span', { class: 'tile-ico' }, icon(I.scan)), h('span', { class: 'grow' }, h('b', { text: 'Play for points' }), h('span', { text: 'Pick what you’d really choose. Same points whichever you pick.' }))),
       offers.offers.length || offers.mine.length ? h('h2', { class: 'section' }, 'Offers') : null,
@@ -531,7 +558,7 @@
       h('h2', { class: 'section' }, 'Saved from your scans', me ? link('/app/saved', {}, 'See all') : null),
       w.saved.length ? h('div', { class: 'rail' }, w.saved.slice(0, 10).map(savedCard)) : h('div', { class: 'empty', text: me ? 'Tap “Save” on any ad you scan and it waits for you here.' : 'Sign in, then tap “Save” on any ad you scan.' }),
       w.history.length ? h('h2', { class: 'section' }, 'Recent') : null,
-      ...w.history.slice(0, 12).map((x) => h('div', { class: 'list-row' }, h('span', { class: 'grow' }, h('b', { text: { 'earn:scan': 'Scanned a bottle', 'earn:game_round': 'Played a screen', 'earn:ad_feedback': 'Picked an ad', 'earn:feedback': 'Sent feedback', 'earn:prompt': 'Asked a question', 'earn:upload': 'Added a picture', 'earn:streak_bonus': 'Streak bonus', spend: 'Claimed an offer', correction: 'Corrected', offer: 'Offer paid', convert: 'Became tokens', mint: 'Tokens' }[x.kind] ?? x.kind }), h('span', { class: 'small muted', text: new Date(x.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) })), h('b', { text: `${x.amount > 0 ? '+' : ''}${x.what === 'credit' ? money(x.amount) : x.what === 'token' ? tok(x.amount) : x.amount.toLocaleString()}` }))),
+      ...w.history.slice(0, 12).map((x) => h('div', { class: 'list-row' }, h('span', { class: 'grow' }, h('b', { text: { 'earn:scan': 'Scanned a bottle', 'earn:game_round': 'Played a screen', 'earn:ad_feedback': 'Picked an ad', 'earn:feedback': 'Sent feedback', 'earn:data_full': 'Chose Full sharing', 'earn:prompt': 'Asked a question', 'earn:upload': 'Added a picture', 'earn:streak_bonus': 'Streak bonus', spend: 'Claimed an offer', correction: 'Corrected', offer: 'Offer paid', convert: 'Became tokens', mint: 'Tokens' }[x.kind] ?? x.kind }), h('span', { class: 'small muted', text: new Date(x.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) })), h('b', { text: `${x.amount > 0 ? '+' : ''}${x.what === 'credit' ? money(x.amount) : x.what === 'token' ? tok(x.amount) : x.amount.toLocaleString()}` }))),
       h('p', { class: 'small muted', style: 'margin-top:18px', text: w.points.terms }),
       !me ? h('button', { class: 'btn secondary', type: 'button', onclick: async () => { if (await signIn('Keep your points on every phone.')) render(); } }, 'Sign in to keep your points') : null);
   }
@@ -559,7 +586,7 @@
       screen({ nav: 'me' }, h('h1', { class: 'display', style: 'font-size:26px', text: 'Me' }), h('p', { class: 'muted', text: 'Sign in to keep your bottles, saved offers and your own designs in one place.' }), h('button', { class: 'btn', type: 'button', onclick: async () => { if (await signIn()) render(); } }, 'Sign in'));
       return;
     }
-    const cards = await api('GET', '/v1/me/cards').catch(() => []);
+    const [cards, lvl] = await Promise.all([api('GET', '/v1/me/cards').catch(() => []), levelInfo(me).catch(() => null)]);
     const name = h('input', { class: 'input', id: 'me-name', value: me.displayName || '', placeholder: 'What should we call you?', autocomplete: 'name' });
     const consent = (key, title, text) => {
       const input = h('input', { type: 'checkbox', id: `c-${key}`, role: 'switch', onchange: async () => {
@@ -577,6 +604,8 @@
       h('p', { class: 'muted', style: 'margin:-8px 0 0', text: me.email || me.phone }),
       h('form', { class: 'field', onsubmit: async (e) => { e.preventDefault(); state.me = await api('PATCH', '/v1/me', { displayName: name.value.trim() || null }); toast('Saved'); } },
         h('label', { for: 'me-name', text: 'Your name' }), h('div', { style: 'display:flex;gap:8px' }, name, h('button', { class: 'btn small', type: 'submit' }, 'Save'))),
+      h('h2', { class: 'section' }, 'How much you share'),
+      lvl ? levelPicker(me, lvl) : null,
       h('h2', { class: 'section' }, 'Your privacy'),
       h('p', { class: 'small muted', style: 'margin:0', text: 'Everything starts off. Turn on only what you want.' }),
       h('div', {},

@@ -39,7 +39,7 @@ export function deliveryRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     return { status: 201, body: await Promise.all(runs.map((r) => delivery.view(r))) };
   } });
   route({ method: 'POST', url: '/v1/ops/runs/:id/pack-check', scope: ['admin', 'packs'], summary: 'Check every bottle in every box of a route and seal them.', handler: async (req, key) => { staff(key); return { body: await delivery.packCheck((req.params as any).id, key!.companyId) }; } });
-  route({ method: 'GET', url: '/v1/review/campaigns/:id/preview', scope: 'campaigns', summary: 'An ad waiting for review: every size, on a label, on a box, and its scan page.', handler: async (req, key) => { staff(key); return { body: await app.ads.campaignPreview((req.params as any).id, key!.companyId) }; } });
+  route({ method: 'GET', url: '/v1/review/campaigns/:id/preview', scope: 'campaigns', summary: 'An ad waiting for review: every size, on a label, on a box, and its scan page.', handler: async (req, key) => { staff(key); const id = (req.params as any).id; return { body: { ...(await app.ads.campaignPreview(id, key!.companyId)), objections: await app.ads.objections(key!.companyId, id) } }; } });
 
   // ---------- drivers ----------
   route({ method: 'GET', url: '/v1/driver/runs', scope: 'packs', summary: 'Today’s routes, and which ones are ready to drive.', handler: async (_req, key) => {

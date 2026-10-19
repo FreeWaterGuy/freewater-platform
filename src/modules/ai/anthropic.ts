@@ -4,6 +4,8 @@
  * paused, over its budget, or the books can't be verified), the call isn't made and the agent falls back to its
  * built-in rules, as it does when Claude is unreachable.
  */
+import { currentCompany, forOperator, routeAi } from './routing';
+
 export interface AiUsage { agent: string; model: string; inputTokens: number; outputTokens: number; companyId?: string }
 export const aiMeter: { onUsage: (u: AiUsage) => void; allow: (agent: string) => boolean } = { onUsage: () => {}, allow: () => true };
 
@@ -25,6 +27,9 @@ export async function claudeWithTool(o: {
   agent?: string; companyId?: string;
 }): Promise<{ text: string; input: Record<string, any> }> {
   const agent = o.agent ?? 'unnamed';
+  const companyId = o.companyId ?? currentCompany();
+  // This operator's AI: the network's, its own, or none (then the caller falls back to its rules).
+  const r = routeAi(companyId, o.apiKey, o.model ?? 'claude-sonnet-5-5');
   askGovernor(agent);
   const messages: any[] = o.history.slice(-16).map((m) => ({ role: m.role, content: m.text || '(sent a file)' }));
   const content: any[] = o.images.slice(0, 4).map((d) => {
@@ -39,12 +44,12 @@ export async function claudeWithTool(o: {
   try {
     const res = await (o.fetch ?? fetch)('https://api.anthropic.com/v1/messages', {
       method: 'POST', signal: ctrl.signal,
-      headers: { 'content-type': 'application/json', 'x-api-key': o.apiKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model: o.model ?? 'claude-sonnet-5-5', max_tokens: 1500, system: o.system, tools: [o.tool], messages }),
+      headers: { 'content-type': 'application/json', 'x-api-key': r.apiKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model: r.model, max_tokens: 1500, system: forOperator(o.system, companyId), tools: [o.tool], messages }),
     });
     if (!res.ok) throw new Error(`Claude answered ${res.status}`);
     const data: any = await res.json();
-    reportUsage(agent, o.model ?? 'claude-sonnet-5-5', data, o.companyId);
+    reportUsage(agent, r.model, data, companyId);
     const text = (data.content ?? []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n').trim();
     const call = (data.content ?? []).find((b: any) => b.type === 'tool_use' && b.name === o.tool.name);
     return { text, input: call?.input ?? {} };

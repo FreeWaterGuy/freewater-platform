@@ -76,7 +76,8 @@ export class WalletService {
   private async earnOnce(companyId: string, subject: string, action: string, ref: string, opts: { source?: string; about?: string; perAbout?: number }): Promise<Earned> {
     const s = this.settings(companyId).points;
     if (!s.enabled) return { points: 0, balance: 0, reason: 'off' };
-    const base = s.perAction[action] ?? 0;
+    // A company that set its points before an action existed gets that action's starting amount.
+    const base = s.perAction[action] ?? defaultWallet().points.perAction[action] ?? 0;
     if (base <= 0) return { points: 0, balance: await this.pointsOf(companyId, subject), reason: 'not_rewarded' };
     if (this.mayEarn && !(await this.mayEarn(companyId, subject))) return { points: 0, balance: await this.pointsOf(companyId, subject), reason: 'not_available_here' };
     const asset = this.pointsAsset(companyId);

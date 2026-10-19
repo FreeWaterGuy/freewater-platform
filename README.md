@@ -11,7 +11,8 @@ Start here:
 | Guide | What's in it |
 |---|---|
 | [`docs/OVERVIEW.md`](docs/OVERVIEW.md) | What the platform does, in plain words |
-| [`docs/AI.md`](docs/AI.md) | Every use of AI: what it does, its limits, and what happens without it |
+| [`docs/AI.md`](docs/AI.md) | Every use of AI: what it does, its limits, which AI each operator uses, and AI continuity |
+| [`docs/NETWORK.md`](docs/NETWORK.md) | Why joining the network beats licensing: what's decided, what's design, what needs a lawyer |
 | [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) | What FreeWater must do, and the rules that never change |
 | [`docs/SWITCHES.md`](docs/SWITCHES.md) | **How to launch, lock and unlock everything**: every switch, who can flip it, the waits, and what to do if something goes wrong |
 | [`docs/GO-LIVE.md`](docs/GO-LIVE.md) | What's ready, what's left, and the order to launch in |
@@ -450,6 +451,13 @@ A visual game of real products, name-brand food first. Screens: pick one, ads, q
 
 Three stages, in order, never back: **testing** (bots up to 200 at a time, and a full reset), **live with points**, **live with the token**. See `docs/SWITCHES.md`.
 
+## How much each person shares, and which AI (`src/modules/data`, `src/modules/ai/routing.ts`, `src/modules/agents/continuity.ts`)
+
+- **Full, medium or lite:** each person chooses once and can change any time (`/v1/public/data/:companyId/level`, `/v1/me/data/level`). Each level is the person's own yes or no for each kind of data; their law still applies on top. Only full earns points, once, where paying for data is allowed.
+- **Which AI:** each operator uses the network's AI, its own (`AI_KEY_<ID>` in host settings) or none (`ai` in company settings). Every call is still metered and governed.
+- **AI continuity:** when an operator closes or leaves, its agents are archived by the network (lessons, never customers; fingerprinted) and asked to work again or rest. Backups and copies are recorded in each agent's lineage.
+- **AI objections:** an AI can decline to work on an ad; its reason is shown at review (`ai_objections`).
+
 ## The database
 
 `src/db` holds the database contract (`SqlClient`) and two adapters:
@@ -512,3 +520,5 @@ All prices in `src/demo/seed.ts` are placeholders.
 - Signed software updates for machines
 - Withdrawals to people's own wallets (the switch exists; the sending isn't built yet and answers "not built yet")
 - Approvers: invite at least 2 other owners or finance people before any token step
+- The network (`docs/NETWORK.md`): cross-checking seals, federated learning, open-sourcing, a membership that pays operators
+- The token on Solana's free test network, end to end (the token itself hasn't been created yet)

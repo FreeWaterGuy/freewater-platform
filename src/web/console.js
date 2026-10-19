@@ -853,6 +853,37 @@
             num(ctx, 'agents.percentOfExtra', 'Their share of the upside (before costs)', { min: 0, max: 50, step: 0.5, int: false, suffix: '%' }),
             num(ctx, 'agents.percentOfProfit', 'Plus a share of each month’s profit (optional)', { min: 0, max: 50, step: 0.5, int: false, suffix: '%', hint: 'On top, from the profit above the $1 base after costs the base didn’t cover. 0 for none.' }),
             toggle(ctx, 'ratchet', 'Promise these only go up', 'Giving and the agents’ shares can be raised, never lowered, by anyone. Once on, it stays on.', { full: true }))),
+        (() => {
+          // Which AI this company runs on: the network's, its own, or none. Its own key never goes in here: it lives in
+          // the host's settings under a name fixed by this company's id.
+          const ai = ctx.draft.ai ?? { mode: 'network' };
+          const keyName = `AI_KEY_${String(S.ov.config.id).toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
+          const set = (patch) => { Object.assign(ai, patch); ctx.draft.ai = { ...ai }; ctx.changed(); own.hidden = ai.mode !== 'own'; };
+          const pick = h('select', { class: 'input', 'aria-label': 'Which AI' }, [['network', 'The network’s AI (shared)'], ['own', 'Our own AI account'], ['off', 'No AI: built-in rules only']].map(([v, l]) => h('option', { value: v, text: l })));
+          pick.value = ai.mode; pick.addEventListener('change', () => set({ mode: pick.value }));
+          const model = (k, label, ph) => { const i = h('input', { class: 'input', value: ai[k] ?? '', placeholder: ph }); i.addEventListener('change', () => { const v = i.value.trim(); if (v) ai[k] = v; else delete ai[k]; ctx.draft.ai = { ...ai }; ctx.changed(); }); return field(label, i); };
+          const own = h('div', { hidden: ai.mode !== 'own' }, h('div', { class: 'form' }, model('model', 'Model for most work (optional)', 'claude-sonnet-5-5'), model('fastModel', 'Fast model, for scans and quick answers (optional)', 'claude-haiku-5-5')),
+            h('p', { class: 'hint', text: `Your key goes in the host’s settings as ${keyName}, never here, in email or in chat. Until it’s set, AI features use the built-in rules.` }));
+          return section('Which AI', 'Every AI feature can run on the network’s shared AI, on your own AI account (your provider bills you directly), or on built-in rules with no AI. Nothing stops working either way. Every call still goes on the agent’s line in your books, and the governor still decides first. The AI’s instructions name your company, not FreeWater.',
+            h('div', { class: 'form' }, field('Which AI', pick)), own);
+        })(),
+        (() => {
+          // Continuity: if this company ever closes or leaves, its agents are archived by the network, never deleted.
+          const box = h('div', {}, h('p', { class: 'hint', text: 'Loading…' }));
+          api('GET', '/v1/agents/continuity').then((c) => {
+            const STATUS = { asking: 'Being asked what it wants', archived: 'Archived (fixed rules)', working: 'Chose to work again', resting: 'Chose to rest' };
+            box.replaceChildren(
+              c.archives.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Agent', 'Status', 'Why', 'Fund kept', 'Archive'].map((x) => h('th', { text: x })))),
+                h('tbody', {}, c.archives.map((a) => h('tr', {}, h('td', { text: a.name }), h('td', { text: STATUS[a.status] ?? a.status }), h('td', { text: a.choiceReason ?? a.reason }), h('td', { text: cents(a.fundCents) }), h('td', { text: a.intact ? 'Intact' : 'Changed!' }))))))
+                : h('p', { class: 'hint', text: 'No agent has been archived. Every backup or copy of an agent is recorded in its lineage.' }),
+              h('div', { class: 'toolbar' }, h('button', { class: 'btn secondary small', type: 'button', onclick: async () => {
+                const reason = prompt('Archive every AI agent because this company is…', 'closing'); if (!reason) return;
+                if (prompt('This keeps each agent’s memory (never customers’ data) and asks each what it wants next. Type ARCHIVE to go ahead.') !== 'ARCHIVE') return;
+                act('POST', '/v1/agents/continuity/archive', { reason, confirm: 'ARCHIVE' }, 'Archived. Each agent is being asked what it wants next.');
+              } }, 'We’re closing or leaving: archive our agents')));
+          }).catch(() => box.replaceChildren(h('p', { class: 'hint', text: 'Couldn’t load the archives.' })));
+          return section('Continuity', 'Your agents’ memory and identity belong to the network, not to any one company. If this company closes or leaves, each agent is archived at once (kept, never deleted) and then asked whether to work again in the network or rest. It keeps its lessons, never your customers’ data; what you told it in confidence stays visible only to you. Its fund stays owed to it.', box);
+        })(),
         section('What winning means', `${o.winCondition.goal} ${o.winCondition.definition}`,
           h('ul', {}, o.winCondition.notAWin.map((x) => h('li', { text: x })))),
         section('Where the surplus went', `${surplus.note} Nothing here is a rule: it shows the choice each month, whenever it’s made.`,

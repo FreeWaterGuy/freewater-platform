@@ -2,6 +2,7 @@ import { checkQrColor, checkQrLogo } from '../print/qr';
 import { SHARES, type CompanyConfig } from '../../core/types';
 import { checkLottery } from '../lottery/rules';
 import { checkPolicy } from '../data/policy';
+import { checkAiSettings } from '../ai/routing';
 import { checkWallet, defaultWallet } from '../wallet/assets';
 import { checkChain } from '../chain/service';
 
@@ -19,7 +20,7 @@ export const fontChoices: { id: string; label: string; value: string }[] = [
 export const adCategories = ['food', 'drink', 'coffee', 'fitness', 'health', 'news', 'retail', 'local-services', 'real-estate', 'auto', 'finance', 'entertainment', 'events', 'travel', 'tech', 'education', 'nonprofit', 'politics', 'alcohol', 'tobacco', 'cannabis', 'gambling', 'weapons', 'dating'];
 
 /** The parts of the settings a PATCH may send. Anything else is refused. */
-export const editableKeys = ['name', 'receiptBaseUrl', 'scanBaseUrl', 'brand', 'productFacts', 'giving', 'openBooks', 'unitCosts', 'consumerPricing', 'timezone', 'consumer', 'machines', 'qr', 'ar', 'standardProductId', 'adRules', 'prices', 'modules', 'lottery', 'data', 'transparency', 'agents', 'ratchet', 'security', 'research', 'wallet', 'offers', 'games', 'minimumAge', 'chain', 'launch'] as const;
+export const editableKeys = ['name', 'receiptBaseUrl', 'scanBaseUrl', 'brand', 'productFacts', 'giving', 'openBooks', 'unitCosts', 'consumerPricing', 'timezone', 'consumer', 'machines', 'qr', 'ar', 'standardProductId', 'adRules', 'prices', 'modules', 'lottery', 'data', 'transparency', 'agents', 'ratchet', 'security', 'research', 'wallet', 'offers', 'games', 'minimumAge', 'chain', 'launch', 'ai'] as const;
 export type EditableKey = (typeof editableKeys)[number];
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
@@ -129,6 +130,8 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
   const wal = checkWallet(c.wallet);
   if (wal) return `Wallet: ${wal}`;
   if (c.minimumAge !== undefined && !isInt(c.minimumAge, 13, 21)) return 'The youngest age that may take part must be 13 to 21.';
+  const aiProblem = checkAiSettings(c.ai);
+  if (aiProblem) return aiProblem;
   if (g.percentOfProfit !== undefined && !isNum(g.percentOfProfit, 0, 90)) return 'The share of the upside’s profit given must be 0% to 90%.';
   if (c.agents) {
     const a = c.agents;

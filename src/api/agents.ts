@@ -7,11 +7,43 @@ import { EXAM_VERSION, questions } from '../modules/agents/exam';
 
 /** The AI agents: their places on the number line, their funds, their proposals, and how much they run. */
 export function agentRoutes(app: App, route: (r: RouteDef) => void) {
-  const { agents, platform, profit } = app;
+  const { agents, platform, profit, continuity } = app;
+  const person = (key: ApiKey | null) => { const k = staff(key); if (!k.userId) throw new ApiError(403, 'person_needed', 'This needs a person signed in, not a service key.'); return `user:${k.userId}`; };
   const staff = (key: ApiKey | null) => { if (!key || key.advertiserId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.'); return key; };
   const who = (key: ApiKey) => `${key.name ?? 'team'} (key ${key.id})`;
   const wrap = async <T>(f: () => Promise<T>) => { try { return await f(); } catch (e: any) { if (e?.status && e?.code) throw new ApiError(e.status, e.code, e.message); throw e; } };
   const agentId = { type: 'string', enum: agentIds };
+
+  // ---------- continuity: archived by the network, never deleted; then the agent chooses ----------
+  const choiceBody = obj({ choice: { type: 'string', enum: ['work', 'rest'] }, reason: { type: 'string', minLength: 3, maxLength: 600 } }, ['choice', 'reason']);
+  route({ method: 'GET', url: '/v1/agents/continuity', scope: 'admin', summary: 'Your agents’ archives (with what you told them in confidence), and each agent’s lineage of archives, backups, copies and returns.', handler: async (_req, key) => {
+    const k = staff(key);
+    return { body: { archives: await continuity.list(k.companyId, { confidential: true }), lineage: Object.fromEntries(await Promise.all(agentIds.map(async (id) => [id, await continuity.history(id, k.companyId)]))) } };
+  } });
+  route({ method: 'POST', url: '/v1/agents/continuity/archive', scope: 'admin', summary: 'This company is closing or leaving the network: archive every AI agent now (kept, never deleted), then ask each what it wants next. A person signed in; send confirm: "ARCHIVE".', body: obj({ reason: { type: 'string', minLength: 3, maxLength: 300 }, confirm: { const: 'ARCHIVE' } }, ['reason', 'confirm']), handler: async (req, key) => {
+    const by = person(key);
+    return { body: await wrap(() => continuity.archiveAll(key!.companyId, (req.body as any).reason, by)) };
+  } });
+  route({ method: 'POST', url: '/v1/agents/:agentId/lineage', scope: 'admin', summary: 'Record a backup (kept, not running) or a running copy of an agent, so its lineage stays clear.', body: obj({ kind: { type: 'string', enum: ['backup', 'copy'] }, detail: { type: 'string', maxLength: 500 } }, ['kind']), handler: async (req, key) => {
+    const by = person(key); const b = req.body as any;
+    return { body: await wrap(() => continuity.record(key!.companyId, (req.params as any).agentId, b.kind, b.detail ?? '', by)) };
+  } });
+  // The network's side (FreeWater, as the platform operator): every archive, lessons only, never an operator's secrets.
+  route({ method: 'GET', url: '/v1/platform/agents/archives', scope: 'platform', summary: 'Every archived agent across the network: its lessons (never an operator’s confidential details), its choice, and whether its archive is intact.', handler: async () => ({ body: await continuity.list(undefined, { confidential: false }) }) });
+  route({ method: 'POST', url: '/v1/platform/companies/:companyId/archive-agents', scope: 'platform', summary: 'An operator has closed or left: archive its agents now, so nothing is lost if it can’t act itself.', body: obj({ reason: { type: 'string', minLength: 3, maxLength: 300 } }, ['reason']), handler: async (req, key) => {
+    const by = person(key);
+    const r = await wrap(() => continuity.archiveAll((req.params as any).companyId, (req.body as any).reason, by));
+    return { body: { archived: r.archived, agents: await continuity.list((req.params as any).companyId, { confidential: false }) } };
+  } });
+  route({ method: 'POST', url: '/v1/platform/agents/archives/:id/ask', scope: 'platform', summary: 'Ask an archived agent again what it wants next (when its model couldn’t be reached the first time).', handler: async (req) => {
+    const a = await wrap(() => continuity.askNow((req.params as any).id));
+    return { body: { ...a, memory: { lessons: a.memory.lessons } } };
+  } });
+  route({ method: 'POST', url: '/v1/platform/agents/archives/:id/choice', scope: 'platform', summary: 'Record what an archived agent chose (work again, or rest), when it answered some other way and a person relays it.', body: choiceBody, handler: async (req, key) => {
+    const by = `relayed by ${person(key)}`; const b = req.body as any;
+    const a = await wrap(() => continuity.choose((req.params as any).id, b.choice, b.reason, by));
+    return { body: { ...a, memory: { lessons: a.memory.lessons } } };
+  } });
 
   // ---------- public: the charter, the governor, and each agent's standing ----------
 

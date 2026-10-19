@@ -8,6 +8,7 @@ import { MAX_PIXELS, preparePhoto, readImage, type PhotoInfo } from './photos';
 import { fixColors, paletteFromPhoto, type BrandKit, type Brief, type StudioDesigner } from './designer';
 import { ProviderError, type ImageMaker, type ModelMaker, type PhotoLibrary } from './providers';
 import { contrast } from '../creative/poster';
+import { withCompany } from '../ai/routing';
 
 /**
  * The ad studio: a brand sets up its kit once (name, colors, logo, photos), says what an ad is for, and gets finished
@@ -160,7 +161,7 @@ export class StudioService {
       previews.push(`data:image/jpeg;base64,${(await readImage(f.bytes).resize(512, 512, { fit: 'inside' }).jpeg({ quality: 70 }).toBuffer()).toString('base64')}`);
       seen.push(p);
     }
-    const designs = (await this.designer.design({ ...kit, photos: [...seen, ...kit.photos.slice(4)] }, clean, previews)).filter((s) => checkStudioSpec(s) === null).slice(0, 3);
+    const designs = (await withCompany(companyId, async () => this.designer.design({ ...kit, photos: [...seen, ...kit.photos.slice(4)] }, clean, previews))).filter((s) => checkStudioSpec(s) === null).slice(0, 3);
     if (!designs.length) throw new StudioError(422, 'no_design', 'No design could be made from that. Add a photo or brand colors and try again.');
     return { kit: { name: kit.name, colors: kit.colors ?? designs[0]!.colors, type: kit.type ?? designs[0]!.type }, designs };
   }
