@@ -58,6 +58,13 @@ export function strictestPlace(places: Place[]): Place | null {
 export function sanctioned(place: Place | null, list = defaultSanctioned) {
   return !!place && list.includes(place.country.toUpperCase());
 }
+/** Across every place we know for someone: the oldest minimum age, and blocked if any of them is sanctioned. */
+export function minimumAgeAll(places: Place[], companyMin = 13) {
+  return places.length ? Math.max(...places.map((p) => minimumAge(p, companyMin))) : minimumAge(null, companyMin);
+}
+export function sanctionedAny(places: Place[], list = defaultSanctioned) {
+  return places.some((p) => sanctioned(p, list));
+}
 
 const ORDER: Record<ConsentMode, number> = { none: 0, opt_out: 1, opt_in: 2 };
 

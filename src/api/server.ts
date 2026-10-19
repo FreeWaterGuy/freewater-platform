@@ -680,7 +680,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const body: any = req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body) ? req.body : undefined;
     const companyId = key?.companyId ?? companyOfPublic(body);
     if (!companyId || !platform.companies.has(companyId)) return;
-    const masked = body ? Object.fromEntries(Object.entries(body).map(([k, v]) => [k, /^(to|email|phone|address|code|password|token|dataBase64)$/i.test(k) ? (k === 'to' || k === 'email' || k === 'phone' ? mask(v) : '[kept out]') : v])) : undefined;
+    const masked = body ? Object.fromEntries(Object.entries(body).map(([k, v]) => [k, /^(to|email|phone|address|code|password|token|dataBase64|birthDate|zip|household|language|lat|lng|accuracyM|context|place)$/i.test(k) ? (k === 'to' || k === 'email' || k === 'phone' ? mask(v) : '[kept out]') : v])) : undefined;
     app.data.activity(companyId, actorOf(key, masked), `${r.method} ${r.url}`, { target: JSON.stringify(req.params ?? {}).slice(0, 200), detail: { status, ...(masked ? { body: masked } : {}) }, ip: req.ip, headers: req.headers, device: String(req.headers['user-agent'] ?? ''), gpc: String(req.headers['sec-gpc'] ?? '') === '1' }).catch(() => {});
   };
 

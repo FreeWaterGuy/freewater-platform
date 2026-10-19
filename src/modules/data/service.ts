@@ -5,7 +5,7 @@ import type { Platform } from '../../platform';
 import type { InteractionService, Interaction } from '../interactions/service';
 import { newId } from '../../core/ids';
 import { categoryInfo, dataCategories, preset, type DataCategory, type DataPolicy } from './policy';
-import { defaultSanctioned, effectivePolicy, minimumAge, placeFromHeaders, regionOf, sanctioned, strictestPlace, type GeoIp, type Place } from './jurisdiction';
+import { defaultSanctioned, effectivePolicy, minimumAgeAll, placeFromHeaders, regionOf, sanctionedAny, strictestPlace, type GeoIp, type Place } from './jurisdiction';
 
 // Collect every drop the law allows, from every direction, under each company's own switchboard:
 // - every action anyone takes (consumers, advertisers, the team, machines, drivers): the activity log;
@@ -51,16 +51,28 @@ export class DataService {
   /** Remembers where a person is: the country and state always (needed to follow their law), the city only as allowed. */
   async notePlace(companyId: string, subject: string, place: Place | null, source: 'ip' | 'declared' = 'ip') {
     if (!place?.country || !subject) return;
-    const city = place.city && (await this.allowed(companyId, 'ipAddress', [subject], { place })) ? place.city.slice(0, 80) : null;
+    const city = place.city && (await this.allowed(companyId, 'ipAddress', [subject], { place })) && (await this.ageOk(companyId, [subject])) !== false ? place.city.slice(0, 80) : null;
     await this.db.query(`insert into person_places (company_id, subject, source, country, state, city, at) values ($1,$2,$3,$4,$5,$6,$7) on conflict (company_id, subject, source) do update set country = excluded.country, state = excluded.state, city = excluded.city, at = excluded.at`,
       [companyId, subject, source, place.country.toUpperCase().slice(0, 2), place.state?.toUpperCase().slice(0, 3) ?? null, city, this.clock().toISOString()]);
   }
 
-  /** Where we know someone to be: of where they last came from and what they told us, whichever law is stricter. */
-  async placeFor(companyId: string, subjects: string[], live?: Place | null): Promise<Place | null> {
+  /**
+   * Every place we know for someone: where they're connecting from now (or last did) and what they told us. What they
+   * tell us can only make things stricter: without a place for their connection, they're treated as unknown (strictest).
+   * An empty list means unknown.
+   */
+  async placesFor(companyId: string, subjects: string[], live?: Place | null): Promise<Place[]> {
     const rows = subjects.length ? (await this.db.query<any>(`select source, country, state, city from person_places where company_id = $1 and subject = any($2) order by at desc`, [companyId, subjects])).rows : [];
     const known: Place[] = rows.filter((r) => !(live && r.source === 'ip')).map((r) => ({ country: r.country, ...(r.state ? { state: r.state } : {}), ...(r.city ? { city: r.city } : {}), source: r.source }));
-    return strictestPlace([...(live ? [live] : []), ...known]) ?? this.assumedPlace ?? null;
+    const all = [...(live ? [live] : []), ...known];
+    const network = all.some((p) => p.source === 'ip' || p.source === 'header');
+    if (network) return all;
+    // No place for their connection: unknown, unless a test or local run assumes one.
+    return this.assumedPlace ? [this.assumedPlace, ...all] : [];
+  }
+  /** Of the places we know for someone, the one whose law is strictest; null (strictest of all) when unknown. */
+  async placeFor(companyId: string, subjects: string[], live?: Place | null): Promise<Place | null> {
+    return strictestPlace(await this.placesFor(companyId, subjects, live));
   }
 
   /** The rules for one person: the company's own, made stricter wherever the person's law requires. Unknown: strictest. */
@@ -73,21 +85,22 @@ export class DataService {
    * whether rewards are allowed where they are.
    */
   async rulesFor(companyId: string, subjects: string[], live?: Place | null) {
-    const place = await this.placeFor(companyId, subjects, live);
+    const places = await this.placesFor(companyId, subjects, live);
+    const place = strictestPlace(places);
     const p = effectivePolicy(this.policy(companyId), place);
     const companyMin = this.platform.companies.get(companyId)?.minimumAge ?? 13;
     return {
       region: regionOf(place), known: !!place, country: place?.country ?? null,
       askFirst: dataCategories.filter((k) => p.rules[k].collect && p.rules[k].consent === 'opt_in').map((k) => ({ category: k, ...categoryInfo[k] })),
-      minimumAge: minimumAge(place, companyMin),
-      rewards: !sanctioned(place, this.sanctionedCountries),
+      minimumAge: minimumAgeAll(places, companyMin),
+      rewards: !sanctionedAny(places, this.sanctionedCountries),
       policy: p,
     };
   }
 
   /** Points, prizes and rewards aren't offered where sanctions forbid it. */
   async rewardsAllowed(companyId: string, subjects: string[], live?: Place | null) {
-    return !sanctioned(await this.placeFor(companyId, subjects, live), this.sanctionedCountries);
+    return !sanctionedAny(await this.placesFor(companyId, subjects, live), this.sanctionedCountries);
   }
 
   /** May this kind of data be kept for this person? Their own yes or no, their law and the company's rule, and the browser's signal. */
@@ -165,7 +178,7 @@ export class DataService {
     const subjects = [viewerKey, ...(await this.linkedSubjects(companyId, viewerKey))];
     const place = this.placeOf(req);
     const p = await this.policyFor(companyId, subjects, place);
-    if (!p.rules.preciseLocation.collect) return { kept: false, nearby: this.nearby(companyId, at) };
+    if (!p.rules.preciseLocation.collect || (await this.ageOk(companyId, subjects)) === false) return { kept: false, nearby: this.nearby(companyId, at) };
     await this.consent(companyId, viewerKey, { preciseLocation: true }, 'shared location for nearby deals');
     // Kept to about 10 meters (4 decimal places): enough for "the machine around the corner", no finer.
     const round = (x: number) => Math.round(x * 10_000) / 10_000;
@@ -204,8 +217,12 @@ export class DataService {
     if (!ok) await this.db.query(`update person_details set zip = null, household = null, language = null where company_id = $1 and subject = $2`, [companyId, subject]);
     return { ok, minimumAge: min };
   }
+  /** Has this person (any of their linked phones and accounts) told us their age? false: under the minimum. */
   async ageOk(companyId: string, subjects: string[]) {
     if (!subjects.length) return null;
+    subjects = [...new Set([...subjects, ...(await Promise.all(subjects.map((s) => this.linkedSubjects(companyId, s)))).flat()])];
+    const young = (await this.db.query<any>(`select 1 from person_details where company_id = $1 and subject = any($2) and age_ok = false limit 1`, [companyId, subjects])).rows[0];
+    if (young) return false;
     const r = (await this.db.query<any>(`select age_ok from person_details where company_id = $1 and subject = any($2) and age_ok is not null order by updated_at desc limit 1`, [companyId, subjects])).rows[0];
     return r ? (r.age_ok as boolean) : null;
   }
@@ -238,7 +255,7 @@ export class DataService {
     const place = this.placeOf(req);
     await this.notePlace(companyId, viewerKey, place);
     const subjects = [viewerKey, ...(await this.linkedSubjects(companyId, viewerKey))];
-    if (!(await this.allowed(companyId, 'device', subjects, { gpc, place }))) return false;
+    if (!(await this.allowed(companyId, 'device', subjects, { gpc, place })) || (await this.ageOk(companyId, subjects)) === false) return false;
     let referrer: string | undefined;
     try { referrer = ctx.referrer ? new URL(ctx.referrer).hostname : undefined; } catch { referrer = undefined; } // the site only, never the full address
     return this.activity(companyId, { type: 'viewer', viewerKey }, 'scan.context', {
@@ -456,6 +473,18 @@ export class DataService {
       const strict = preset('eu').rules;
       const short = (k: DataCategory) => Math.min(p.rules[k].keepDays, strict[k].keepDays);
       const lax = `(select subject from person_places where company_id = $1 group by subject having bool_and(country in ('US','CA')))`;
+      // Within those: the US law's keep for people only in the US, Canada's (shorter) for anyone in Canada.
+      const usOnly = `(select subject from person_places where company_id = $1 group by subject having bool_and(country = 'US'))`;
+      const withCa = `(select subject from person_places where company_id = $1 group by subject having bool_and(country in ('US','CA')) and bool_or(country = 'CA'))`;
+      const us = preset('us_ca').rules, ca = preset('ca').rules;
+      const keepIn = async (table: string, col: string, at: string, k: DataCategory, extra = '') => {
+        await del(`delete from ${table} where company_id = $1 and ${at} < $2 ${extra} and ${col} in ${usOnly}`, Math.min(p.rules[k].keepDays, us[k].keepDays));
+        await del(`delete from ${table} where company_id = $1 and ${at} < $2 ${extra} and ${col} in ${withCa}`, Math.min(p.rules[k].keepDays, ca[k].keepDays));
+      };
+      await keepIn('interactions', 'viewer_key', 'at', 'interactions');
+      await keepIn('activity', 'actor_id', 'at', 'activity', `and actor_type in ('viewer','consumer','public')`);
+      await keepIn('choices', 'person', 'at', 'choices');
+      await keepIn('choice_sets', 'person', 'created_at', 'choices');
       await del(`delete from interactions where company_id = $1 and at < $2`, p.rules.interactions.keepDays);
       await del(`delete from interactions where company_id = $1 and at < $2 and viewer_key not in ${lax}`, short('interactions'));
       await del(`delete from activity where company_id = $1 and at < $2`, p.rules.activity.keepDays);

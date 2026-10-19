@@ -98,6 +98,18 @@ describe('the law follows the person', () => {
     expect(r.use).toMatch(/never sell/i);
   });
 
+  it('saying where you live can only make things stricter', async () => {
+    // No place for the connection: telling us "Wyoming" doesn't loosen anything.
+    await call('POST', '/v1/public/data/freewater/place', { viewerKey: 'viewer-claims-1', place: { country: 'US', state: 'WY' } });
+    expect((await call('GET', '/v1/public/data/freewater?viewer=viewer-claims-1')).body.region).toBe('eu');
+    // Connecting from the UK and saying Germany: Germany's older age applies.
+    await call('POST', '/v1/public/data/freewater/place', { viewerKey: 'viewer-gbde-1', place: { country: 'DE' } }, 'GB');
+    expect((await call('GET', '/v1/public/data/freewater?viewer=viewer-gbde-1', undefined, 'GB')).body.minimumAge).toBe(16);
+    // Any sanctioned place blocks rewards.
+    await call('POST', '/v1/public/data/freewater/place', { viewerKey: 'viewer-deir-1', place: { country: 'IR' } }, 'DE');
+    expect((await call('GET', '/v1/public/data/freewater?viewer=viewer-deir-1', undefined, 'DE')).body.rewards).toBe(false);
+  });
+
   it('no prizes or rewards where sanctions forbid them', async () => {
     const unit = (await app.platform.order({ companyId: 'freewater', orderId: 'j-3', locationId: 'ATX-014', productId: 'bottle-16oz' })).unit;
     const r = (await call('GET', `/v1/public/experience/${unit.id}/0?viewer=viewer-sanction-1`, undefined, 'IR')).body;
@@ -118,6 +130,15 @@ describe('what people choose to tell us', () => {
     expect(adult).toEqual({ ok: true, minimumAge: 16 });
     const fifteen = (await call('POST', '/v1/public/data/freewater/age', { viewerKey: 'viewer-fifteen-1', birthDate: '2011-01-01' }, 'DE')).body;
     expect(fifteen.ok).toBe(false); // 15 is old enough in the US, not in Germany
+  });
+
+  it('nothing more is kept for someone under the minimum age, on any of their phones or accounts', async () => {
+    await call('POST', '/v1/public/data/freewater/age', { viewerKey: 'viewer-kid-1', birthDate: '2016-03-03' }, 'US-TX');
+    const r = (await call('POST', '/v1/public/data/freewater/location', { viewerKey: 'viewer-kid-1', lat: 30.27, lng: -97.74 }, 'US-TX')).body;
+    expect(r.kept).toBe(false);
+    expect(await count(`select count(*) as n from precise_locations where subject = $1`, ['viewer-kid-1'])).toBe(0);
+    const logged = (await db.query<any>(`select detail::text as d from activity`)).rows.map((x) => x.d).join('\n');
+    expect(logged).not.toContain('2016-03-03');
   });
 
   it('sharing a location shows machines nearby, rounded to about 10 meters, and only with a yes from places that need one', async () => {
