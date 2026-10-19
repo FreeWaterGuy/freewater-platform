@@ -52,11 +52,12 @@ export const svgLabelRenderer: LabelRenderer = {
         const x = adX + r.x * adW, y = r.y * H, w = r.w * adW, h = r.h * H;
         const campaign = campaigns.get(p.campaignId);
         if (!campaign) throw new Error(`Unit ${unit.id} slot ${p.slotIndex} points at unknown campaign ${p.campaignId}.`);
-        parts.push(nested(x, y, w, h, campaign.creative.svg(w, h)));
+        const q = Math.min(qrFor(Math.min(w, h * 1.4)), h - 16);
+        // The artwork is told where its QR code goes, so it can keep words out of that corner.
+        parts.push(nested(x, y, w, h, campaign.creative.svg(w, h, { qr: { x: w - q - 10 * k, y: h - q - 10 * k, size: q } })));
         const mode = qrMode(company, campaign);
         const smart = req.codes ? req.codes.slot(company, unit.id, p.slotIndex) : `${base}/s/${unit.id}/${p.slotIndex}`;
         const url = mode === 'static' ? staticTarget(campaign, req.codes ? smart : null) : smart;
-        const q = Math.min(qrFor(Math.min(w, h * 1.4)), h - 16);
         draw(url, x + w - q - 10 * k, y + h - q - 10 * k, q, campaignQrStyle(company, campaign), 'slot', p.slotIndex);
         slots.push({ slotIndex: p.slotIndex, xIn: x / PX_PER_IN, yIn: y / PX_PER_IN, widthIn: w / PX_PER_IN, heightIn: h / PX_PER_IN, advertiserName: p.advertiserName, qrUrl: url, qrMode: mode });
       }

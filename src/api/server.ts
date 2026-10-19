@@ -255,7 +255,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const u = unitFor(key!, (req.params as any).id);
     const svg = await platform.labelSvg(u.id);
     if (!svg) throw notFound('Label');
-    return { type: 'image/svg+xml', raw: svg };
+    return { type: 'image/svg+xml', raw: await platform.forPrint(svg) }; // with its photos inside, ready to print
   } });
 
   // ---------- purchases: advertisers' point-of-sale systems ----------

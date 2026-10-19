@@ -213,7 +213,11 @@ export type CreativeRef = { kind: 'svg'; markup: string } | { kind: 'builtin'; i
 
 export interface Creative {
   /** Artwork as SVG markup sized to any box; the renderer scales it to the slot. A real system stores an asset URL. */
-  svg: (widthPx: number, heightPx: number) => string;
+  svg: (widthPx: number, heightPx: number, ctx?: CreativeContext) => string;
+}
+/** What the renderer tells artwork about its slot: where the QR code will print, in the slot's own coordinates. */
+export interface CreativeContext {
+  qr?: { x: number; y: number; size: number };
 }
 
 export type Buy =

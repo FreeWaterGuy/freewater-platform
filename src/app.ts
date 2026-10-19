@@ -262,36 +262,32 @@ export async function createApp(opts: AppOptions) {
     }),
     opts.studioDesigner ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeStudioDesigner({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL, fallback: rulesDesigner }) : rulesDesigner),
     opts.clock);
-  // Printed labels carry their photos inside them, at print size (kept in memory for the most used ones).
-  const printCopies = new Map<string, string>();
-  platform.forPrint = async (svg) => {
-    if (!svg.includes('/assets/as_')) return svg;
-    const ids = [...new Set([...svg.matchAll(/\/assets\/(as_[A-Za-z0-9_-]+)\.(?:jpg|png)/g)].map((m) => m[1]!))];
-    for (const id of ids) {
-      if (printCopies.has(id)) continue;
-      const f = await assets.get(id);
-      if (!f) throw new Error(`A label points at photo ${id}, which is missing.`);
-      if (printCopies.size > 100) printCopies.clear();
-      printCopies.set(id, `data:${f.asset.contentType};base64,${Buffer.from(f.bytes).toString('base64')}`);
-    }
-    return svg.replace(/\/assets\/(as_[A-Za-z0-9_-]+)\.(?:jpg|png)/g, (m, id) => printCopies.get(id) ?? m);
+  // Studio photos inside labels: printed labels carry them at print size (so a machine prints them whole, even
+  // offline), previews at a smaller size. Only the studio's own picture tags are filled in, only with pictures.
+  const photoCache = (maxBytes: number) => {
+    const m = new Map<string, string>(); let bytes = 0;
+    return {
+      get(k: string) { const v = m.get(k); if (v !== undefined) { m.delete(k); m.set(k, v); } return v; },
+      set(k: string, v: string) { m.set(k, v); bytes += v.length; for (const [old, ov] of m) { if (bytes <= maxBytes || old === k) break; m.delete(old); bytes -= ov.length; } },
+    };
   };
-  // Ad previews carry their photos inside them (a preview-sized copy of each, made once).
-  const previewCopies = new Map<string, string>();
-  ads.inlineAssets = async (svg) => {
-    const ids = [...new Set([...svg.matchAll(/\/assets\/(as_[A-Za-z0-9_-]+)\.(?:jpg|png)/g)].map((m) => m[1]!))];
-    for (const id of ids) {
-      if (previewCopies.has(id)) continue;
+  const STUDIO_IMAGE = /<image data-fw-photo="1" href="\/assets\/(as_[A-Za-z0-9_-]+)\.(?:jpg|png)"([^>]*)\/>/g;
+  const fillPhotos = async (svg: string, cache: ReturnType<typeof photoCache>, size: number | null) => {
+    if (!svg.includes('data-fw-photo')) return svg;
+    for (const id of new Set([...svg.matchAll(STUDIO_IMAGE)].map((m) => m[1]!))) {
+      if (cache.get(id) !== undefined) continue;
       const f = await assets.get(id).catch(() => null);
-      if (!f) continue;
+      if (!f || !['image/jpeg', 'image/png'].includes(f.asset.contentType)) { cache.set(id, ''); console.error(`A label points at photo ${id}, which is missing or not a picture; it prints without it.`); continue; }
       const png = f.asset.contentType === 'image/png';
-      const img = (await import('sharp')).default(f.bytes).resize(900, 900, { fit: 'inside', withoutEnlargement: true });
-      const out = png ? await img.png().toBuffer() : await img.jpeg({ quality: 80 }).toBuffer();
-      if (previewCopies.size > 300) previewCopies.clear();
-      previewCopies.set(id, `data:${png ? 'image/png' : 'image/jpeg'};base64,${out.toString('base64')}`);
+      const bytes = size ? await (await import('sharp')).default(f.bytes, { limitInputPixels: 40_000_000 }).resize(size, size, { fit: 'inside', withoutEnlargement: true })[png ? 'png' : 'jpeg']().toBuffer() : Buffer.from(f.bytes);
+      cache.set(id, `data:${f.asset.contentType};base64,${bytes.toString('base64')}`);
     }
-    return svg.replace(/\/assets\/(as_[A-Za-z0-9_-]+)\.(?:jpg|png)/g, (m, id) => previewCopies.get(id) ?? m);
+    // A picture that can't be found is left out; the rest of the label prints.
+    return svg.replace(STUDIO_IMAGE, (m, id, rest) => { const d = cache.get(id); return d ? `<image href="${d}"${rest}/>` : ''; });
   };
+  const printCopies = photoCache(256 * 1024 * 1024), previewCopies = photoCache(64 * 1024 * 1024);
+  platform.forPrint = (svg) => fillPhotos(svg, printCopies, null);
+  ads.inlineAssets = (svg) => fillPhotos(svg, previewCopies, 900);
 
   const geocoder = opts.geocoder ?? new TestGeocoder({ Austin: { lat: 30.2672, lng: -97.7431, radiusKm: 6 }, Denver: { lat: 39.7392, lng: -104.9903, radiusKm: 6 } });
   const delivery = new DeliveryService(db, platform, packs, accounts, messenger, geocoder, opts.planner ?? new SimpleRoutePlanner(), () => persistence.flush());

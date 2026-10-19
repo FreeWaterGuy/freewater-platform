@@ -1,4 +1,4 @@
-import type { Creative } from '../../core/types';
+import type { Creative, CreativeContext } from '../../core/types';
 import { contrast, iconDrawing, posterIcons, readableOn, type PosterIcon } from '../creative/poster';
 import type { PhotoInfo } from './photos';
 
@@ -38,7 +38,7 @@ export interface StudioSpec {
   type: StudioType;
   look?: StudioLook;
   photo?: PhotoInfo;
-  logo?: { asset: string; w: number; h: number; ext?: 'png' | 'jpg' | 'webp' };
+  logo?: { asset: string; w: number; h: number; ext?: 'png' | 'jpg' };
   /** Without a photo: a simple drawing instead. */
   icon?: PosterIcon;
 }
@@ -53,14 +53,15 @@ export function checkStudioSpec(s: any): string | null {
   if (!str(s.headline, 60)) return 'the headline must be 1 to 60 characters';
   for (const [k, max] of [['kicker', 40], ['sub', 90], ['offer', 32]] as const) if (s[k] !== undefined && !str(s[k], max)) return `the ${k === 'sub' ? 'detail line' : k} must be under ${max} characters`;
   if (!s.colors || !HEX.test(s.colors.paper) || !HEX.test(s.colors.ink) || !HEX.test(s.colors.accent)) return 'colors must look like #D7262E';
-  if (!(s.type in studioTypes)) return `the type style must be one of ${Object.keys(studioTypes).join(', ')}`;
+  if (typeof s.type !== 'string' || !Object.hasOwn(studioTypes, s.type)) return `the type style must be one of ${Object.keys(studioTypes).join(', ')}`;
   if (s.look !== undefined && !studioLooks.includes(s.look)) return `the layout must be one of ${studioLooks.join(', ')}`;
   if (s.icon !== undefined && !posterIcons.includes(s.icon)) return `the drawing must be one of ${posterIcons.join(', ')}`;
   if (s.photo !== undefined) {
     const p = s.photo;
     if (!p || !ASSET.test(p.asset ?? '') || !(p.w > 0) || !(p.h > 0) || !p.focus || !p.tone) return 'the photo must be one uploaded to the studio';
   }
-  if (s.logo !== undefined && (!s.logo || !ASSET.test(s.logo.asset ?? '') || !(s.logo.w > 0) || !(s.logo.h > 0))) return 'the logo must be one uploaded to the studio';
+  if (s.logo !== undefined && (!s.logo || !ASSET.test(s.logo.asset ?? '') || !(s.logo.w > 0) || !(s.logo.h > 0) || (s.logo.ext !== undefined && s.logo.ext !== 'png' && s.logo.ext !== 'jpg'))) return 'the logo must be the one in your brand kit';
+  if (s.photo !== undefined && !(Number.isFinite(s.photo.focus?.x) && Number.isFinite(s.photo.focus?.y))) return 'the photo must be one uploaded to the studio';
   if (contrast(s.colors.paper, s.colors.ink) < 4.5) return 'the words would be hard to read on that background; pick an ink color with more contrast';
   if ((s.look === 'cover' || s.look === 'split' || s.look === 'band' || s.look === 'frame') && !s.photo) return 'that layout needs a photo';
   return null;
@@ -74,8 +75,11 @@ const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&
 const f1 = (n: number) => (Math.round(n * 10) / 10).toString();
 let uid = 0;
 
-/** The QR code's corner, as the label renderer will place it (kept in step with print/renderer.ts). */
-export function qrCorner(w: number, h: number) {
+/**
+ * The QR code's corner. The renderer says where it is; without that (previews), the standard 4.5 in label's rule.
+ */
+export function qrCorner(w: number, h: number, ctx?: CreativeContext) {
+  if (ctx?.qr && Number.isFinite(ctx.qr.x) && Number.isFinite(ctx.qr.y) && ctx.qr.size > 0) return { x: ctx.qr.x, y: ctx.qr.y, size: ctx.qr.size, w: w - ctx.qr.x + 8, h: h - ctx.qr.y + 8 };
   const q = Math.min(Math.max(Math.min(78, Math.min(w, h * 1.4) * 0.42), Math.min(60, w - 16)), h - 16);
   return { x: w - q - 10, y: h - q - 10, size: q, w: q + 18, h: q + 18 };
 }
@@ -124,14 +128,14 @@ function photoIn(p: PhotoInfo, x: number, y: number, bw: number, bh: number) {
   const s = Math.max(bw / p.w, bh / p.h), vw = bw / s, vh = bh / s;
   const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
   const vx = clamp(p.focus.x * p.w - vw / 2, 0, p.w - vw), vy = clamp(p.focus.y * p.h - vh * 0.45, 0, p.h - vh);
-  return `<svg x="${f1(x)}" y="${f1(y)}" width="${f1(bw)}" height="${f1(bh)}" viewBox="${f1(vx)} ${f1(vy)} ${f1(vw)} ${f1(vh)}" preserveAspectRatio="none"><image href="${esc(assetUrl(p.asset, 'jpg'))}" width="${p.w}" height="${p.h}"/></svg>`;
+  return `<svg x="${f1(x)}" y="${f1(y)}" width="${f1(bw)}" height="${f1(bh)}" viewBox="${f1(vx)} ${f1(vy)} ${f1(vw)} ${f1(vh)}" preserveAspectRatio="none"><image data-fw-photo="1" href="${esc(assetUrl(p.asset, 'jpg'))}" width="${p.w}" height="${p.h}"/></svg>`;
 }
 
 function wordmark(s: StudioSpec, x: number, y: number, maxW: number, size: number, fill: string, plate?: string) {
   if (s.logo) {
     const h = size * 1.5, w = Math.min(maxW, (s.logo.w / s.logo.h) * h);
     const lh = w / (s.logo.w / s.logo.h);
-    const img = `<image href="${esc(assetUrl(s.logo.asset, s.logo.ext ?? 'png'))}" x="${f1(x)}" y="${f1(y)}" width="${f1(w)}" height="${f1(lh)}" preserveAspectRatio="xMinYMid meet"/>`;
+    const img = `<image data-fw-photo="1" href="${esc(assetUrl(s.logo.asset, s.logo.ext ?? 'png'))}" x="${f1(x)}" y="${f1(y)}" width="${f1(w)}" height="${f1(lh)}" preserveAspectRatio="xMinYMid meet"/>`;
     return { svg: plate ? `<rect x="${f1(x - 6)}" y="${f1(y - 5)}" width="${f1(w + 12)}" height="${f1(lh + 10)}" rx="4" fill="${plate}"/>${img}` : img, h: lh };
   }
   const t = studioTypes[s.type];
@@ -175,11 +179,11 @@ export function chooseLook(s: StudioSpec, w: number, h: number): Exclude<StudioL
   return 'cover';
 }
 
-export function renderStudio(s: StudioSpec, w: number, h: number): string {
+export function renderStudio(s: StudioSpec, w: number, h: number, ctx?: CreativeContext): string {
   const look = chooseLook(s, w, h);
   const t = studioTypes[s.type];
   const id = `st${(++uid).toString(36)}`;
-  const qr = qrCorner(w, h);
+  const qr = qrCorner(w, h, ctx);
   const pad = Math.max(10, Math.min(26, Math.min(w, h) * 0.07));
   const small = w < 170 || h < 170 || (w < 230 && h < 300);
   const parts: string[] = [];
@@ -228,9 +232,9 @@ export function renderStudio(s: StudioSpec, w: number, h: number): string {
     parts.push(textLines(head.lines, pad, y, head.size, { font: t.display, weight: t.weight, fill: ink, tracking: t.tracking }));
     y += head.height + 10;
     if (sub) { parts.push(textLines(sub.lines, pad, y, sub.size, { font: t.text, weight: 500, fill: ink, lead: 1.28 })); y += sub.height + 10; }
-    if (s.offer) {
-      const os = 11, ow = Math.min(colW, s.offer.length * os * 0.62 + 22);
-      parts.push(`<rect x="${f1(pad)}" y="${f1(y)}" width="${f1(ow)}" height="24" rx="12" fill="${s.colors.accent}"/><text x="${f1(pad + 11)}" y="${f1(y + 16)}" font-family="${esc(t.text)}" font-weight="800" font-size="${os}" fill="${readableOn(s.colors.accent)}">${esc(s.offer)}</text>`);
+    if (s.offer && y + 24 <= h - pad && (y + 24 <= qr.y || pad + Math.min(colW, s.offer.length * 11 * 0.62 + 22) <= qr.x - 4)) {
+      const os = Math.min(11, (colW - 22) / Math.max(1, s.offer.length * 0.62)), ow = Math.min(colW, s.offer.length * os * 0.62 + 22);
+      parts.push(`<rect x="${f1(pad)}" y="${f1(y)}" width="${f1(ow)}" height="24" rx="12" fill="${s.colors.accent}"/><text x="${f1(pad + 11)}" y="${f1(y + 16)}" font-family="${esc(t.text)}" font-weight="800" font-size="${f1(os)}" fill="${readableOn(s.colors.accent)}">${esc(s.offer)}</text>`);
     }
   } else if (look === 'band') {
     const p = s.photo!;
@@ -242,7 +246,7 @@ export function renderStudio(s: StudioSpec, w: number, h: number): string {
     parts.push(`<rect y="${f1(photoH)}" width="${f1(w)}" height="3" fill="${s.colors.accent}"/>`);
     let y = photoH + pad * 0.8;
     const fullW = w - pad * 2;
-    const wm = wordmark(s, pad, y, fullW, small ? 12 : 14, accentOnPaper); parts.push(wm.svg); y += wm.h + 6;
+    const wm = wordmark(s, pad, y, y + 16 > qr.y ? w - pad - qr.w : fullW, small ? 12 : 14, accentOnPaper); parts.push(wm.svg); y += wm.h + 6;
     // Words go above the QR corner at full width when they fit there; otherwise beside it, down to the bottom.
     const above = fit(s.headline, fullW, qr.y - y - 4, 4, small ? 20 : 30, 10, t.w);
     const besideW = w - pad - qr.w;
@@ -281,12 +285,14 @@ export function renderStudio(s: StudioSpec, w: number, h: number): string {
       const sz = Math.min(w * 0.3, h * 0.28, 110);
       parts.push(`<g transform="translate(${f1(w - pad - sz)} ${f1(pad)}) scale(${(sz / 100).toFixed(3)})" opacity=".95">${iconDrawing(s.icon, s.colors.accent, paper)}</g>`);
     }
-    const kick = kickerText(s, pad, y, w - pad * 2, 10.5, accentOnPaper); parts.push(kick.svg); if (kick.h) y += kick.h + 8;
-    // Beside the drawing, the words stop short of it.
+    const besideQr = w - pad - qr.w;
+    if (y + 12 <= qr.y || besideQr > 60) { const kick = kickerText(s, pad, y, y + 12 > qr.y ? besideQr : w - pad * 2, 10.5, accentOnPaper); parts.push(kick.svg); if (kick.h) y += kick.h + 8; }
+    // Beside the drawing, the words stop short of it; above the QR corner they use the width, otherwise they stop beside it.
     const iconSz = s.icon && !small ? Math.min(w * 0.3, h * 0.28, 110) : 0;
     const colW = w - pad * 2 - (iconSz ? iconSz + 12 : 0);
-    const room = Math.max(24, qr.y - y - 8);
-    const head = fit(s.headline, colW, room, small ? 5 : 4, small ? 28 : Math.min(120, h * 0.3), 11, t.w, 1.0);
+    const maxSize = small ? 28 : Math.min(120, h * 0.3);
+    const above = qr.y - y - 8 >= 20 ? fit(s.headline, colW, qr.y - y - 8, small ? 5 : 4, maxSize, 11, t.w, 1.0) : null;
+    const head = above && above.height <= qr.y - y - 8 && above.size >= 12 ? above : fit(s.headline, Math.min(colW, besideQr), Math.max(14, h - pad - y), 5, maxSize, 9, t.w, 1.0);
     parts.push(textLines(head.lines, pad, y, head.size, { font: t.display, weight: t.weight, fill: ink, tracking: t.tracking, lead: 1.0 }));
     y += head.height + 8;
     if (s.sub && !small) {
@@ -301,5 +307,5 @@ export function renderStudio(s: StudioSpec, w: number, h: number): string {
 export function studioCreative(spec: StudioSpec): Creative {
   const problem = checkStudioSpec(spec);
   if (problem) throw new Error(`Artwork refused: ${problem}`);
-  return { svg: (w, h) => renderStudio(spec, w, h) };
+  return { svg: (w, h, ctx) => renderStudio(spec, w, h, ctx) };
 }

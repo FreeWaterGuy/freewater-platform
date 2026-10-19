@@ -73,6 +73,7 @@ export class UnsplashLibrary implements PhotoLibrary {
     u.searchParams.set('query', query); u.searchParams.set('per_page', String(opts.perPage ?? 12)); u.searchParams.set('content_filter', 'high');
     if (opts.orientation) u.searchParams.set('orientation', opts.orientation);
     const data = await json(await this.get(u.toString()), 'Unsplash');
+    if (this.seen.size > 500) this.seen.clear();
     return (data.results ?? []).map((p: any) => { this.seen.set(String(p.id), p); return this.view(p); });
   }
   async download(id: string) {
@@ -100,6 +101,7 @@ export class PexelsLibrary implements PhotoLibrary {
     u.searchParams.set('query', query); u.searchParams.set('per_page', String(opts.perPage ?? 12));
     if (opts.orientation) u.searchParams.set('orientation', opts.orientation === 'squarish' ? 'square' : opts.orientation);
     const data = await json(await this.get(u.toString()), 'Pexels');
+    if (this.seen.size > 500) this.seen.clear();
     return (data.photos ?? []).map((p: any) => { this.seen.set(String(p.id), p); return this.view(p); });
   }
   async download(id: string) {
@@ -191,7 +193,7 @@ export class StandInImageMaker implements ImageMaker {
 export class StandInModelMaker implements ModelMaker {
   readonly name = 'stand-in';
   async fromPhoto(photo: Uint8Array, hint: { name: string; widthCm?: number; heightCm?: number }) {
-    const img = await sharp(photo).rotate().resize(1024, 1024, { fit: 'inside' }).jpeg({ quality: 85 }).toBuffer({ resolveWithObject: true });
+    const img = await sharp(photo, { limitInputPixels: 40_000_000 }).rotate().resize(1024, 1024, { fit: 'inside' }).jpeg({ quality: 85 }).toBuffer({ resolveWithObject: true });
     const ratio = img.info.width / img.info.height;
     const hCm = hint.heightCm ?? (hint.widthCm ? hint.widthCm / ratio : 16), wCm = hint.widthCm ?? hCm * ratio;
     return toGlb([

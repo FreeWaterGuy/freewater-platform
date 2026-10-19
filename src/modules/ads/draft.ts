@@ -75,14 +75,31 @@ export function applyPatch(d: AdDraft, patch: DraftPatch, ctx: DraftContext): { 
     else next.category = cat;
   }
 
-  if (p.poster || p.useImage || p.removeImage) {
+  // With a studio design, the chat edits its words and colors; a new picture from the chat replaces it with a poster.
+  if (next.studio && p.poster && !p.useImage && !p.removeImage) {
+    const st = { ...next.studio, colors: { ...next.studio.colors } };
+    const pp = p.poster;
+    if (pp.brand !== undefined) st.brand = String(pp.brand).trim().slice(0, 40) || st.brand;
+    if (pp.headline !== undefined) st.headline = String(pp.headline).trim().slice(0, 60) || st.headline;
+    if (pp.sub !== undefined) { const v = String(pp.sub).trim().slice(0, 90); if (v) st.sub = v; else delete st.sub; }
+    if (pp.colors) for (const [from, to] of [['bg', 'paper'], ['fg', 'ink'], ['accent', 'accent']] as const) { const v = pp.colors[from]; if (v !== undefined) { if (HEX.test(v)) st.colors[to] = v.toUpperCase(); else problems.push(`"${v}" isn't a color I can print.`); } }
+    if (contrast(st.colors.paper, st.colors.ink) < 4.5) st.colors.ink = readableOn(st.colors.paper);
+    const bad = checkStudioSpec(st);
+    if (bad) problems.push(`That change can't be made to the design: ${bad}.`); else next.studio = st;
+  } else if (p.poster || p.useImage || p.removeImage) {
+    // A new picture in the chat means the chat's design: a studio design, if there was one, is set aside.
+    if (next.studio) {
+      const st = next.studio;
+      next.poster = { brand: st.brand, headline: st.headline, ...(st.sub ? { sub: st.sub } : {}), colors: { bg: st.colors.paper, fg: st.colors.ink, accent: st.colors.accent }, ...(next.poster?.image ? { image: next.poster.image } : {}) };
+      delete next.studio;
+    }
     const poster: Partial<PosterSpec> = { ...(next.poster ?? {}) };
     const pp = p.poster ?? {};
     if (pp.brand !== undefined) poster.brand = String(pp.brand).trim().slice(0, 40);
     if (pp.headline !== undefined) poster.headline = String(pp.headline).trim().slice(0, 60);
     if (pp.sub !== undefined) poster.sub = String(pp.sub).trim().slice(0, 80) || undefined;
     if (pp.icon !== undefined) { if ((posterIcons as readonly string[]).includes(pp.icon as string)) poster.icon = pp.icon; else problems.push(`There's no "${pp.icon}" icon.`); }
-    if (pp.font !== undefined) { if (pp.font in posterFonts) poster.font = pp.font; else problems.push(`There's no "${pp.font}" lettering.`); }
+    if (pp.font !== undefined) { if (typeof pp.font === 'string' && Object.hasOwn(posterFonts, pp.font)) poster.font = pp.font; else problems.push(`There's no "${pp.font}" lettering.`); }
     if (pp.colors) {
       const colors = { ...(poster.colors ?? { bg: '#FFFFFF', fg: '#0B0B0B', accent: '#1E7DB8' }) };
       for (const k of ['bg', 'fg', 'accent'] as const) {

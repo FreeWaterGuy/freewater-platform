@@ -140,7 +140,7 @@ export class ClaudeDesigner implements StudioDesigner {
         const photo = Number.isInteger(d.photo) ? photos[d.photo] : undefined;
         const c = !kit.colors && d.colors && [d.colors.paper, d.colors.ink, d.colors.accent].every((x: unknown) => typeof x === 'string' && /^#[0-9a-fA-F]{6}$/.test(x)) ? fixColors(d.colors) : colors;
         const spec: StudioSpec = {
-          brand: kit.name.slice(0, 40), headline: String(d.headline ?? '').slice(0, 60), colors: c, type: (d.type in studioTypes ? d.type : kit.type ?? 'serif') as StudioType,
+          brand: kit.name.slice(0, 40), headline: String(d.headline ?? '').slice(0, 60), colors: c, type: (typeof d.type === 'string' && Object.hasOwn(studioTypes, d.type) ? d.type : kit.type ?? 'serif') as StudioType,
           look: (studioLooks.includes(d.look) ? d.look : 'auto') as StudioLook,
           ...(d.kicker ? { kicker: String(d.kicker).slice(0, 40) } : {}), ...(d.sub ? { sub: String(d.sub).slice(0, 90) } : {}),
           ...(d.offer && brief.offer ? { offer: String(d.offer).slice(0, 32) } : {}),

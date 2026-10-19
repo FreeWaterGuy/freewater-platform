@@ -4,7 +4,7 @@ import type { Platform } from '../../platform';
 import type { AssetStore } from '../assets/store';
 import type { AdsService } from '../ads/service';
 import { checkStudioSpec, renderStudio, studioTypes, type StudioSpec, type StudioType } from './layout';
-import { preparePhoto, type PhotoInfo } from './photos';
+import { MAX_PIXELS, preparePhoto, readImage, type PhotoInfo } from './photos';
 import { fixColors, paletteFromPhoto, type BrandKit, type Brief, type StudioDesigner } from './designer';
 import { ProviderError, type ImageMaker, type ModelMaker, type PhotoLibrary } from './providers';
 import { contrast } from '../creative/poster';
@@ -17,7 +17,7 @@ import { contrast } from '../creative/poster';
 export class StudioError extends Error { constructor(public status: number, public code: string, message: string) { super(message); } }
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
-const MAX_PHOTOS = 40;
+const MAX_PHOTOS = 200;
 
 export class StudioService {
   constructor(
@@ -70,7 +70,7 @@ export class StudioService {
       k.colors = fixColors(c);
     }
     if (input.type === null) delete k.type;
-    else if (input.type !== undefined) { if (!(input.type in studioTypes)) throw new StudioError(400, 'invalid', `The type style is one of ${Object.keys(studioTypes).join(', ')}.`); k.type = input.type; }
+    else if (input.type !== undefined) { if (typeof input.type !== 'string' || !Object.hasOwn(studioTypes, input.type)) throw new StudioError(400, 'invalid', `The type style is one of ${Object.keys(studioTypes).join(', ')}.`); k.type = input.type; }
     await this.db.query(`insert into brand_kits (company_id, advertiser_id, kit, updated_at) values ($1,$2,$3,$4) on conflict (company_id, advertiser_id) do update set kit = excluded.kit, updated_at = excluded.updated_at`, [companyId, advertiserId, JSON.stringify(k), this.clock().toISOString()]);
     return this.kit(companyId, advertiserId);
   }
@@ -79,7 +79,7 @@ export class StudioService {
   async setLogo(companyId: string, advertiserId: string, bytes: Uint8Array) {
     await this.advertiser(companyId, advertiserId);
     let out;
-    try { out = await sharp(bytes).rotate().resize(800, 400, { fit: 'inside', withoutEnlargement: true }).png().toBuffer({ resolveWithObject: true }); }
+    try { const m = await sharp(bytes).metadata(); if (!m.width || !m.height || m.width * m.height > MAX_PIXELS) throw new Error('size'); out = await readImage(bytes).rotate().resize(800, 400, { fit: 'inside', withoutEnlargement: true }).png().toBuffer({ resolveWithObject: true }); }
     catch { throw new StudioError(422, 'not_a_picture', 'That file isn’t a picture we can read. Use a PNG, JPEG or WebP.'); }
     const a = await this.assets.put({ companyId, advertiserId, contentType: 'image/png', bytes: new Uint8Array(out.data), name: 'logo' });
     const r = (await this.db.query<any>(`select kit from brand_kits where company_id = $1 and advertiser_id = $2`, [companyId, advertiserId])).rows[0];
@@ -92,24 +92,25 @@ export class StudioService {
   // ---------- photos ----------
 
   async photos(companyId: string, advertiserId: string): Promise<PhotoInfo[]> {
-    return (await this.db.query<any>(`select info from studio_photos where company_id = $1 and advertiser_id = $2 order by created_at desc limit ${MAX_PHOTOS}`, [companyId, advertiserId])).rows.map((r) => (typeof r.info === 'string' ? JSON.parse(r.info) : r.info));
+    return (await this.db.query<any>(`select info from studio_photos where company_id = $1 and advertiser_id = $2 and removed_at is null order by created_at desc limit ${MAX_PHOTOS}`, [companyId, advertiserId])).rows.map((r) => (typeof r.info === 'string' ? JSON.parse(r.info) : r.info));
   }
 
   /** A photo the brand uploaded, or one from a library or the image AI: prepared once, studied, and kept. */
   async addPhoto(companyId: string, advertiserId: string, bytes: Uint8Array, source: { kind: 'upload' | 'library' | 'ai'; credit?: PhotoInfo['credit'] }) {
     await this.advertiser(companyId, advertiserId);
-    const count = Number((await this.db.query<any>(`select count(*)::int as n from studio_photos where company_id = $1 and advertiser_id = $2`, [companyId, advertiserId])).rows[0]?.n ?? 0);
+    const count = Number((await this.db.query<any>(`select count(*)::int as n from studio_photos where company_id = $1 and advertiser_id = $2 and removed_at is null`, [companyId, advertiserId])).rows[0]?.n ?? 0);
     if (count >= 200) throw new StudioError(409, 'too_many', 'You have 200 photos in the studio. Remove some before adding more.');
     let prepared;
     try { prepared = await preparePhoto(bytes); } catch (e: any) { throw new StudioError(422, 'not_a_photo', e.message); }
     const a = await this.assets.put({ companyId, advertiserId, contentType: 'image/jpeg', bytes: prepared.bytes, name: `studio-${source.kind}` });
     const info: PhotoInfo = { asset: a.id, ...prepared.info, ...(source.credit ? { credit: source.credit } : {}) };
-    await this.db.query(`insert into studio_photos (asset_id, company_id, advertiser_id, info, source, created_at) values ($1,$2,$3,$4,$5,$6) on conflict (asset_id) do nothing`, [a.id, companyId, advertiserId, JSON.stringify(info), source.kind, this.clock().toISOString()]);
+    await this.db.query(`insert into studio_photos (asset_id, company_id, advertiser_id, info, source, created_at) values ($1,$2,$3,$4,$5,$6) on conflict (asset_id) do update set removed_at = null`, [a.id, companyId, advertiserId, JSON.stringify(info), source.kind, this.clock().toISOString()]);
     return info;
   }
 
   async removePhoto(companyId: string, advertiserId: string, asset: string) {
-    const r = await this.db.query(`delete from studio_photos where company_id = $1 and advertiser_id = $2 and asset_id = $3`, [companyId, advertiserId, asset]);
+    // Taken off the list; ads already made with it keep it (the file stays).
+    const r = await this.db.query(`update studio_photos set removed_at = $4 where company_id = $1 and advertiser_id = $2 and asset_id = $3 and removed_at is null`, [companyId, advertiserId, asset, this.clock().toISOString()]);
     if (!Number((r as any).rowCount ?? 0)) throw new StudioError(404, 'not_found', 'No such photo.');
     return { removed: true };
   }
@@ -152,12 +153,14 @@ export class StudioService {
     if (message.length < 3 || message.length > 120) throw new StudioError(400, 'invalid', 'Say what the ad is for in 3 to 120 characters, like “Our new cold brew is here”.');
     const clean: Brief = { message, ...(brief.offer?.trim() ? { offer: brief.offer.trim().slice(0, 60) } : {}), ...(brief.where?.trim() ? { where: brief.where.trim().slice(0, 60) } : {}) };
     // The AI sees small copies of the first few photos, so it can choose and write to them.
-    const previews: string[] = [];
+    const previews: string[] = [], seen: PhotoInfo[] = [];
     for (const p of kit.photos.slice(0, 4)) {
-      const f = await this.assets.get(p.asset);
-      if (f) previews.push(`data:image/jpeg;base64,${(await sharp(f.bytes).resize(512, 512, { fit: 'inside' }).jpeg({ quality: 70 }).toBuffer()).toString('base64')}`);
+      const f = await this.assets.get(p.asset).catch(() => null);
+      if (!f) continue; // kept in step: each preview matches the photo at the same place
+      previews.push(`data:image/jpeg;base64,${(await readImage(f.bytes).resize(512, 512, { fit: 'inside' }).jpeg({ quality: 70 }).toBuffer()).toString('base64')}`);
+      seen.push(p);
     }
-    const designs = (await this.designer.design(kit, clean, previews)).filter((s) => checkStudioSpec(s) === null).slice(0, 3);
+    const designs = (await this.designer.design({ ...kit, photos: [...seen, ...kit.photos.slice(4)] }, clean, previews)).filter((s) => checkStudioSpec(s) === null).slice(0, 3);
     if (!designs.length) throw new StudioError(422, 'no_design', 'No design could be made from that. Add a photo or brand colors and try again.');
     return { kit: { name: kit.name, colors: kit.colors ?? designs[0]!.colors, type: kit.type ?? designs[0]!.type }, designs };
   }
@@ -189,10 +192,17 @@ export class StudioService {
     const ids = [spec.photo?.asset, spec.logo?.asset].filter(Boolean) as string[];
     for (const id of ids) {
       const f = await this.assets.get(id);
-      if (!f || f.asset.companyId !== companyId || f.asset.advertiserId !== advertiserId) throw new StudioError(403, 'not_yours', 'A design can only use your own photos and logo.');
+      if (!f || f.asset.companyId !== companyId || f.asset.advertiserId !== advertiserId || !['image/jpeg', 'image/png'].includes(f.asset.contentType)) throw new StudioError(403, 'not_yours', 'A design can only use your own photos and logo.');
+    }
+    if (spec.logo) {
+      // The logo is the one in the brand kit, as stored (its size and file type come from there, not the request).
+      const k = (await this.db.query<any>(`select kit from brand_kits where company_id = $1 and advertiser_id = $2`, [companyId, advertiserId])).rows[0];
+      const logo = k ? (typeof k.kit === 'string' ? JSON.parse(k.kit) : k.kit).logo : undefined;
+      if (!logo || logo.asset !== spec.logo.asset) throw new StudioError(422, 'invalid_design', 'The logo in a design must be the one in your brand kit.');
+      spec.logo = logo;
     }
     if (spec.photo) {
-      const r = (await this.db.query<any>(`select info from studio_photos where asset_id = $1`, [spec.photo.asset])).rows[0];
+      const r = (await this.db.query<any>(`select info from studio_photos where asset_id = $1 and company_id = $2 and advertiser_id = $3`, [spec.photo.asset, companyId, advertiserId])).rows[0];
       if (!r) throw new StudioError(404, 'not_found', 'That photo isn’t in your studio.');
       // The photo's facts are the studio's, not whatever the request says (where its subject is, its size).
       spec.photo = typeof r.info === 'string' ? JSON.parse(r.info) : r.info;

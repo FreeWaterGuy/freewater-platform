@@ -49,7 +49,7 @@ describe('the layouts', () => {
     expect(chooseLook(spec, 217, 450)).toBe('band');
     expect(chooseLook(spec, 285, 225)).toBe('cover');
     expect(chooseLook({ ...spec, photo: undefined }, 285, 225)).toBe('type');
-    for (const [w, h] of [[190, 225], [285, 225], [217, 450], [325, 450], [650, 450], [650, 225], [130, 225], [600, 380]] as const) {
+    for (const [w, h] of [[190, 225], [285, 225], [217, 450], [325, 450], [650, 450], [650, 225], [130, 225], [600, 380], [218, 130], [194, 146], [370, 150], [242, 146], [303, 156]] as const) {
       for (const look of ['auto', 'type'] as const) {
         const s = look === 'type' ? { ...spec, photo: undefined, look } : spec;
         const svg = renderStudio(s, w, h);
@@ -63,6 +63,16 @@ describe('the layouts', () => {
           expect(y, `${w}×${h} ${look}: “${m[4]}” falls off the bottom`).toBeLessThanOrEqual(h + 1);
         }
       }
+    }
+  });
+
+  it('uses the QR corner the renderer gives it (a taller label has a bigger code)', () => {
+    const ctx = { qr: { x: 180, y: 300, size: 95 } };
+    const svg = renderStudio({ ...spec, photo: undefined, look: 'type' }, 300, 420, ctx);
+    for (const m of svg.matchAll(/<text x="([\d.]+)" y="([\d.]+)"[^>]*font-size="([\d.]+)"[^>]*>([^<]*)</g)) {
+      const x = Number(m[1]), y = Number(m[2]), size = Number(m[3]);
+      if (/text-anchor="middle"/.test(m[0])) continue;
+      expect(x + m[4]!.length * size * 0.5 > 182 && y > 302, `“${m[4]}” runs into the code`).toBe(false);
     }
   });
 
@@ -83,6 +93,8 @@ describe('the layouts', () => {
     expect(checkStudioSpec({ ...spec, photo: { ...photo, asset: 'https://evil.example/x.jpg' } })).toMatch(/uploaded to the studio/);
     expect(checkStudioSpec({ ...spec, photo: undefined, look: 'cover' })).toMatch(/needs a photo/);
     expect(renderStudio({ ...spec, headline: '<script>x</script>' }, 300, 300)).not.toContain('<script>');
+    for (const t of ['toString', 'constructor', '__proto__']) expect(checkStudioSpec({ ...spec, type: t as any })).toMatch(/type style/);
+    expect(checkStudioSpec({ ...spec, logo: { asset: 'as_logo1', w: 10, h: 10, ext: 'mp4' as any } })).toMatch(/logo/);
   });
 });
 
@@ -177,6 +189,44 @@ describe('the studio, as a brand uses it', () => {
     expect(usdz.headers['content-type']).toContain('usdz');
     // It works as a scan page's 3D model.
     expect((await call('POST', '/v1/studio/ar', { asset: 'as_notmine0000', name: 'x' })).status).toBe(404);
+  });
+
+  it('refuses tricks: odd type names, a logo that isn’t the kit’s, huge pictures; and keeps printing when a photo is gone', async () => {
+    expect((await call('PATCH', '/v1/studio/kit', { type: 'toString' })).status).toBe(400);
+    const p = (await call('POST', '/v1/studio/photos', photoFile('cat.jpg'), joes, 'image/jpeg')).body;
+    const base = { brand: 'Joe', headline: 'Hello there', colors: { paper: '#FFF7E6', ink: '#2B1A10', accent: '#D7262E' }, type: 'serif', photo: p };
+    expect((await call('POST', '/v1/studio/preview', { spec: { ...base, type: 'constructor' } })).status).toBe(422);
+    // A "logo" that is really another file of theirs (a 3D model) is refused.
+    const glb = (await call('POST', '/v1/studio/ar', { asset: p.asset, name: 'Cat' })).body;
+    expect((await call('POST', '/v1/studio/preview', { spec: { ...base, logo: { asset: glb.asset, w: 100, h: 100, ext: 'png' } } })).status).toBeGreaterThanOrEqual(403);
+    // Extra fields are dropped before anything sees them (the schema allows only a design's own fields).
+    const d0 = (await call('POST', '/v1/ads/drafts', {})).body;
+    await call('POST', '/v1/studio/use', { draftId: d0.id, spec: { ...base, extra: 'x'.repeat(1000) } });
+    expect(JSON.stringify((await call('GET', `/v1/ads/drafts/${d0.id}`)).body.draft.studio)).not.toContain('xxxx');
+    // A picture over 40 megapixels is refused before it's read.
+    const huge = await sharp({ create: { width: 7000, height: 7000, channels: 3, background: '#88aacc' } }).png({ compressionLevel: 9 }).toBuffer();
+    const r = await call('POST', '/v1/studio/photos', huge, joes, 'image/png');
+    expect(r.status).toBe(422);
+    expect(r.body.error.message).toMatch(/too big/);
+    // A removed photo stays usable in designs already made.
+    await call('DELETE', `/v1/studio/photos/${p.asset}`);
+    expect((await call('GET', '/v1/studio')).body.kit.photos.some((x: any) => x.asset === p.asset)).toBe(false);
+    expect((await call('POST', '/v1/studio/preview', { spec: base })).status).toBe(200);
+    // Text that looks like a photo address doesn't stop a print; a missing studio photo is left out, not fatal.
+    expect(await app.platform.forPrint('<svg><text>/assets/as_doesnotexist1.jpg</text></svg>')).toContain('as_doesnotexist1');
+    expect(await app.platform.forPrint('<svg><image data-fw-photo="1" href="/assets/as_doesnotexist2.jpg" width="1" height="1"/></svg>')).toBe('<svg></svg>');
+  });
+
+  it('lets the chat change a studio design’s words without losing the design', async () => {
+    const p = (await call('POST', '/v1/studio/photos', photoFile('space.jpg'), joes, 'image/jpeg')).body;
+    const draft = (await call('POST', '/v1/ads/drafts', {})).body;
+    await call('POST', '/v1/studio/use', { draftId: draft.id, spec: { brand: 'Joe', headline: 'Hello there', colors: { paper: '#FFF7E6', ink: '#2B1A10', accent: '#D7262E' }, type: 'serif', photo: p } });
+    const { applyPatch } = await import('../src/modules/ads/draft');
+    const d = (await call('GET', `/v1/ads/drafts/${draft.id}`)).body.draft;
+    const out = applyPatch(d, { poster: { headline: 'Burgers under the stars' } }, { company: app.platform.companies.get('freewater')!, locations: [], host: app.experiences as any, attachments: [] });
+    expect(out.draft.studio?.headline).toBe('Burgers under the stars');
+    expect(out.draft.studio?.photo?.asset).toBe(p.asset);
+    expect(out.draft.poster).toBeUndefined();
   });
 
   it('is for advertisers: the company team uses its own tools', async () => {

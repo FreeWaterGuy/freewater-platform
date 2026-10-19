@@ -22,18 +22,20 @@ export interface PhotoInfo {
 
 export interface PreparedPhoto { bytes: Uint8Array; contentType: 'image/jpeg'; info: Omit<PhotoInfo, 'asset'> }
 
+/** At most 40 megapixels in: a bigger picture would take too much memory to read (a phone photo is 12 to 50). */
+export const MAX_PIXELS = 40_000_000;
+export const readImage = (bytes: Uint8Array | Buffer) => sharp(bytes, { limitInputPixels: MAX_PIXELS, failOn: 'error' });
 const MAX_SIDE = 1600; // a full label's ad area at print resolution, with room to crop
 const hex = (r: number, g: number, b: number) => `#${[r, g, b].map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('')}`.toUpperCase();
 const lum = (r: number, g: number, b: number) => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
 
 export async function preparePhoto(input: Uint8Array): Promise<PreparedPhoto> {
-  let img: sharp.Sharp;
-  try { img = sharp(input, { failOn: 'error' }).rotate(); } catch { throw new Error('That file isn’t a picture we can read.'); }
-  const meta = await img.metadata().catch(() => null);
+  const meta = await sharp(input).metadata().catch(() => null);
   if (!meta?.width || !meta.height) throw new Error('That file isn’t a picture we can read.');
+  if (meta.width * meta.height > MAX_PIXELS) throw new Error('That picture is too big to use. Use one under 40 megapixels.');
   if (meta.width < 300 || meta.height < 300) throw new Error('That picture is too small for print. Use one at least 300 pixels on each side.');
   // Metadata (location, camera, owner) is dropped: sharp only keeps it when asked to.
-  const out = await sharp(input).rotate().resize(MAX_SIDE, MAX_SIDE, { fit: 'inside', withoutEnlargement: true }).flatten({ background: '#FFFFFF' }).jpeg({ quality: 84, mozjpeg: true }).toBuffer({ resolveWithObject: true });
+  const out = await readImage(input).rotate().resize(MAX_SIDE, MAX_SIDE, { fit: 'inside', withoutEnlargement: true }).flatten({ background: '#FFFFFF' }).jpeg({ quality: 84, mozjpeg: true }).toBuffer({ resolveWithObject: true });
   const { width: w, height: h } = out.info;
   return { bytes: new Uint8Array(out.data), contentType: 'image/jpeg', info: { w, h, ...(await study(out.data, w, h)) } };
 }
@@ -42,14 +44,14 @@ export async function preparePhoto(input: Uint8Array): Promise<PreparedPhoto> {
 export async function study(bytes: Uint8Array | Buffer, w: number, h: number) {
   // The subject: sharp's attention finder (skin, saturated color, detail), on a small copy cropped to a square.
   const side = 256, scale = side / Math.min(w, h);
-  const att = await sharp(bytes).resize(side, side, { fit: 'cover', position: sharp.strategy.attention }).toBuffer({ resolveWithObject: true });
+  const att = await readImage(bytes).resize(side, side, { fit: 'cover', position: sharp.strategy.attention }).toBuffer({ resolveWithObject: true });
   const ax = (att.info as any).attentionX, ay = (att.info as any).attentionY;
   const focus = typeof ax === 'number' && typeof ay === 'number'
     ? { x: round2(ax / (w * scale)), y: round2(ay / (h * scale)) }
     : { x: 0.5, y: 0.45 };
   // Tones and colors, from a 24×24 copy.
   const n = 24;
-  const { data } = await sharp(bytes).resize(n, n, { fit: 'fill' }).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const { data } = await readImage(bytes).resize(n, n, { fit: 'fill' }).removeAlpha().raw().toBuffer({ resolveWithObject: true });
   const px = (x: number, y: number) => { const i = (y * n + x) * 3; return [data[i]!, data[i + 1]!, data[i + 2]!] as const; };
   const avg = (x0: number, y0: number, x1: number, y1: number) => { let s = 0, c = 0; for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { s += lum(...px(x, y)); c++; } return round2(s / c); };
   const tone = { top: avg(0, 0, n, n / 3), bottom: avg(0, (2 * n) / 3, n, n), left: avg(0, 0, n / 3, n), right: avg((2 * n) / 3, 0, n, n), mean: avg(0, 0, n, n) };

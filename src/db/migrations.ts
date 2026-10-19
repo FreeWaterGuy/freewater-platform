@@ -988,7 +988,7 @@ create table bottle_holders (unit_id text primary key, company_id text not null,
 -- Each advertiser's brand kit for the ad studio: name, colors, type style, logo, what they're about.
 create table brand_kits (company_id text not null, advertiser_id text not null, kit jsonb not null, updated_at timestamptz not null, primary key (company_id, advertiser_id));
 -- Photos in the studio (the file is an asset), with what was learned about them and where they came from.
-create table studio_photos (asset_id text primary key, company_id text not null, advertiser_id text not null, info jsonb not null, source text not null, created_at timestamptz not null);
+create table studio_photos (asset_id text primary key, company_id text not null, advertiser_id text not null, info jsonb not null, source text not null, created_at timestamptz not null, removed_at timestamptz);
 create index studio_photos_owner on studio_photos(company_id, advertiser_id, created_at desc);
 `,
   },

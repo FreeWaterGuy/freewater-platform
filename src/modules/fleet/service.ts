@@ -387,8 +387,10 @@ export class FleetService {
     const expires = new Date(this.now().getTime() + (this.opts.bufferHours ?? 24) * 3600_000);
     for (let i = 0; i < n; i++) {
       const { unit, label } = await this.platform.prepare({ companyId: l.companyId!, locationId, productId: product, orderId: `buffer:${locationId}:${newId('b')}` });
+      let svg: string;
+      try { svg = await this.platform.forPrint(label.svg); } catch { this.platform.abandonPrepared(unit.id, 'artwork_missing'); continue; }
       await this.db.query(`insert into machine_buffer (unit_id, location_id, company_id, status, created_at, expires_at) values ($1,$2,$3,'held',$4,$5)`, [unit.id, locationId, l.companyId, this.now().toISOString(), expires.toISOString()]);
-      labels.push({ unitId: unit.id, svg: await this.platform.forPrint(label.svg), widthIn: label.widthIn, heightIn: label.heightIn, expiresAt: expires.toISOString(), countdownAd: this.countdownAd(unit.id) });
+      labels.push({ unitId: unit.id, svg, widthIn: label.widthIn, heightIn: label.heightIn, expiresAt: expires.toISOString(), countdownAd: this.countdownAd(unit.id) });
     }
     await this.flush();
     return { labels, target: s.bufferSize };

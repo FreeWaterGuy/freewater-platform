@@ -15,7 +15,18 @@ export function studioRoutes(app: App, route: (r: RouteDef) => void) {
     if (!Buffer.isBuffer(req.body) || !['image/png', 'image/jpeg', 'image/webp'].includes(type)) throw new ApiError(415, 'unsupported_type', 'Send a PNG, JPEG or WebP picture as the body, with its Content-Type.');
     return new Uint8Array(req.body);
   };
-  const spec = { type: 'object' };
+  const num = { type: 'number' };
+  const hex = { type: 'string', pattern: '^#[0-9a-fA-F]{6}$' };
+  const text = (max: number) => ({ type: 'string', maxLength: max });
+  const tones = { type: 'object', additionalProperties: false, properties: { top: num, bottom: num, left: num, right: num, mean: num } };
+  // A design, exactly: nothing else is stored with an ad.
+  const spec = { type: 'object', additionalProperties: false, required: ['brand', 'headline', 'colors', 'type'], properties: {
+    brand: text(40), kicker: text(40), headline: text(60), sub: text(90), offer: text(32),
+    colors: { type: 'object', additionalProperties: false, required: ['paper', 'ink', 'accent'], properties: { paper: hex, ink: hex, accent: hex } },
+    type: text(20), look: text(20), icon: text(20),
+    photo: { type: 'object', additionalProperties: false, required: ['asset', 'w', 'h', 'focus', 'tone'], properties: { asset: text(60), w: num, h: num, focus: { type: 'object', additionalProperties: false, properties: { x: num, y: num } }, tone: tones, palette: { type: 'array', maxItems: 8, items: hex }, credit: { type: 'object', additionalProperties: false, properties: { name: text(120), url: text(500), source: text(40) } } } },
+    logo: { type: 'object', additionalProperties: false, required: ['asset', 'w', 'h'], properties: { asset: text(60), w: num, h: num, ext: { type: 'string', enum: ['png', 'jpg'] } } },
+  } };
   const colors = { type: ['object', 'null'], additionalProperties: false, required: ['paper', 'ink', 'accent'], properties: { paper: S.str, ink: S.str, accent: S.str } };
 
   route({ method: 'GET', url: '/v1/studio', scope: 'campaigns', summary: 'Your brand kit and photos, and what the studio is connected to (photo library, image AI, photo-to-3D).', handler: async (_req, key) => wrap(async () => ({ body: { kit: await studio.kit(key!.companyId, advertiserOf(key)), connections: studio.connections() } })) });
