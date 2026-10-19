@@ -31,5 +31,11 @@ export function gamesRoutes(app: App, route: (r: RouteDef) => void) {
     const b = req.body as any;
     return { body: await wrap(() => games.prompt(company(req), b.viewerKey, b.text, req)) };
   } });
+  route({ method: 'GET', url: '/v1/games/catalog', scope: ['admin', 'ledger'], summary: 'Every item in the games with its photo, where the photo came from and its license, so the team can check and replace them.', handler: async (_req, key) => ({ body: await games.catalogImages(staff(key).companyId) }) });
+  route({ method: 'POST', url: '/v1/games/catalog/photos', scope: 'admin', summary: 'Look for photos of items that don’t have one yet (it also runs every few hours).', handler: async (_req, key) => ({ body: await games.fillImages(staff(key).companyId, 60) }) });
+  route({ method: 'POST', url: '/v1/games/catalog/:itemId/photo', scope: 'admin', summary: 'Use your own photo for an item (a brand’s official one, say). PNG, JPEG or WebP, up to 2 MB.', body: obj({ contentType: { type: 'string', enum: ['image/png', 'image/jpeg', 'image/webp'] }, dataBase64: { type: 'string', maxLength: 2_800_000 }, credit: { type: 'string', maxLength: 120 } }, ['contentType', 'dataBase64']), handler: async (req, key) => {
+    const b = req.body as any;
+    return { status: 201, body: await wrap(() => games.setImage(staff(key).companyId, (req.params as any).itemId, { contentType: b.contentType, bytes: new Uint8Array(Buffer.from(b.dataBase64, 'base64')) }, b.credit ?? 'Provided by the company')) };
+  } });
   route({ method: 'GET', url: '/v1/games/report', scope: ['admin', 'ledger'], summary: 'What the games learned, last ?days= (default 30): picks by price setup and by position on screen, how fast and how sure people were, the tiers, and answers marked as too fast or failing a check.', handler: async (req, key) => ({ body: await games.report(staff(key).companyId, Math.min(365, Math.max(1, Number((req.query as any).days ?? 30) || 30))) }) });
 }

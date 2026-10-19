@@ -5,8 +5,9 @@ import type { WalletService } from '../wallet/service';
 import type { AssetStore } from '../assets/store';
 import { newId } from '../../core/ids';
 import { renderStudio } from '../studio/layout';
-import { defaultCatalog, fictionalAds, frameNet, frameText, structuralTier, type Category, type Frame } from './catalog';
+import { defaultCatalog, fictionalAds, frameNet, frameText, structuralTier, type Category, type CatalogItem, type Frame } from './catalog';
 import { builtinPrompter, type Prompter } from './prompter';
+import { cardJpeg, type ProductImageSource } from './images';
 import { dataUse } from '../data/policy';
 
 // The games: screens of two to four choices (real brands as plain cards, each with a price setup), "which ad works"
@@ -42,6 +43,50 @@ export class GamesService {
     private db: SqlClient, private platform: Platform, private wallet: WalletService, private data: DataService, private assets: AssetStore,
     private prompter: Prompter = builtinPrompter, private clock: () => Date = () => new Date(), private random: () => number = Math.random,
   ) {}
+
+  /** Where product photos come from, tried in order. Set by the app. */
+  imageSources: ProductImageSource[] = [];
+
+  /**
+   * Find photos for items that don't have one yet (a few at a time; run in the background, daily). Items with no free
+   * photo are tried again after a week. Returns how many were found.
+   */
+  async fillImages(companyId: string, limit = 20) {
+    let found = 0, tried = 0;
+    const known = new Map((await this.db.query<any>(`select item_id, status, checked_at from catalog_images where company_id = $1`, [companyId])).rows.map((r) => [r.item_id as string, r]));
+    const weekAgo = this.clock().getTime() - 7 * 86_400_000;
+    for (const cat of this.catalog(companyId)) for (const item of cat.items) {
+      if (tried >= limit) return { found, tried };
+      if (item.image) continue;
+      const k = known.get(item.id);
+      if (k && (k.status !== 'none' || new Date(k.checked_at).getTime() > weekAgo)) continue;
+      tried++;
+      let img = null;
+      for (const src of this.imageSources) { img = await src.find(item, cat).catch(() => null); if (img) break; }
+      if (img) {
+        const a = await this.assets.put({ companyId, contentType: img.contentType, bytes: img.bytes, name: `catalog:${item.id}` });
+        await this.saveImage(companyId, item.id, { status: 'found', assetId: a.id, source: img.source, credit: img.credit, license: img.license, sourceUrl: img.sourceUrl });
+        found++;
+      } else await this.saveImage(companyId, item.id, { status: 'none' });
+    }
+    return { found, tried };
+  }
+  /** The company's own photo for an item (a brand's official one, say). Used before any other. */
+  async setImage(companyId: string, itemId: string, image: { contentType: string; bytes: Uint8Array }, credit: string) {
+    if (!this.catalog(companyId).some((c) => c.items.some((i) => i.id === itemId))) throw new GameError('not_found', 'No such item.', 404);
+    const a = await this.assets.put({ companyId, contentType: image.contentType, bytes: await cardJpeg(image.bytes), name: `catalog:${itemId}` });
+    await this.saveImage(companyId, itemId, { status: 'uploaded', assetId: a.id, source: 'company', credit: credit.slice(0, 120), license: 'Provided by the company', sourceUrl: '' });
+    return { item: itemId, image: `/assets/${a.id}.jpg` };
+  }
+  /** Every item and its photo, for the team to check and replace. */
+  async catalogImages(companyId: string) {
+    const rows = new Map((await this.db.query<any>(`select * from catalog_images where company_id = $1`, [companyId])).rows.map((r) => [r.item_id as string, r]));
+    return this.catalog(companyId).map((c) => ({ category: c.id, name: c.name, source: c.images ?? 'none', items: c.items.map((i) => { const r = rows.get(i.id); return { id: i.id, label: i.brand ? `${i.brand} ${i.name}` : i.name, status: i.image ? 'uploaded' : r?.status ?? 'not_tried', image: i.image ? `/assets/${i.image}.jpg` : r?.asset_id ? `/assets/${r.asset_id}.jpg` : null, credit: r?.credit ?? null, license: r?.license ?? null, sourceUrl: r?.source_url ?? null }; }) }));
+  }
+  private async saveImage(companyId: string, itemId: string, x: { status: string; assetId?: string; source?: string; credit?: string; license?: string; sourceUrl?: string }) {
+    await this.db.query(`insert into catalog_images (company_id, item_id, status, asset_id, source, credit, license, source_url, checked_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict (company_id, item_id) do update set status = excluded.status, asset_id = excluded.asset_id, source = excluded.source, credit = excluded.credit, license = excluded.license, source_url = excluded.source_url, checked_at = excluded.checked_at`,
+      [companyId, itemId, x.status, x.assetId ?? null, x.source ?? null, x.credit ?? null, x.license ?? null, x.sourceUrl ?? null, this.now()]);
+  }
 
   settings(companyId: string): GameSettings { return { ...defaultGames, ...(this.platform.companies.get(companyId)?.games ?? {}) }; }
   catalog(companyId: string) { return this.settings(companyId).catalog ?? defaultCatalog; }
@@ -86,12 +131,21 @@ export class GamesService {
     if (!st.canPlay) throw new GameError(st.needs ?? 'not_available', 'Join the game first.', 403);
     const s = this.settings(companyId);
     // An unanswered screen comes back as it was, so reloading can't be used to reshuffle or skip.
-    const open = (await this.db.query<any>(`select * from game_rounds where company_id = $1 and person = $2 and answered_at is null and served_at > $3 order by served_at desc limit 1`, [companyId, viewerKey, new Date(this.clock().getTime() - 10 * 60_000).toISOString()])).rows[0];
+    // A screen left for more than 10 minutes is closed; a quick check left that long counts as missed.
+    await this.db.query(`update game_rounds set answered_at = $3, flagged = case when kind = 'check' then 'failed_check' else 'expired' end where company_id = $1 and person = $2 and answered_at is null and served_at <= $4`, [companyId, viewerKey, this.now(), new Date(this.clock().getTime() - 10 * 60_000).toISOString()]);
+    const openRound = async () => (await this.db.query<any>(`select * from game_rounds where company_id = $1 and person = $2 and answered_at is null limit 1`, [companyId, viewerKey])).rows[0];
+    const open = await openRound();
     if (open) return this.view(open, companyId);
     const played = Number((await this.db.query<any>(`select count(*)::int as n from game_rounds where company_id = $1 and person = $2`, [companyId, viewerKey])).rows[0].n) + 1;
     const round = played % s.checkEvery === 0 ? this.checkRound(companyId) : played % s.adRoundEvery === 0 ? this.adRound(companyId) : this.choiceRound(companyId);
     const id = newId('gr');
-    await this.db.query(`insert into game_rounds (id, company_id, person, kind, category, realness, items, served_at) values ($1,$2,$3,$4,$5,$6,$7,$8)`, [id, companyId, viewerKey, round.kind, round.category, round.realness, JSON.stringify(round.items), this.now()]);
+    try {
+      await this.db.query(`insert into game_rounds (id, company_id, person, kind, category, realness, items, served_at) values ($1,$2,$3,$4,$5,$6,$7,$8)`, [id, companyId, viewerKey, round.kind, round.category, round.realness, JSON.stringify(round.items), this.now()]);
+    } catch (e: any) {
+      // Two requests at once: only one open screen per person, so the other one gets it.
+      if (e?.code === '23505') { const o = await openRound(); if (o) return this.view(o, companyId); }
+      throw e;
+    }
     return this.view({ id, kind: round.kind, category: round.category, realness: round.realness, items: round.items, ask: round.ask }, companyId);
   }
 
@@ -100,6 +154,7 @@ export class GamesService {
    * The server times it too; an answer faster than a person could read earns nothing and is marked.
    */
   async answer(companyId: string, viewerKey: string, roundId: string, a: { pick: string; why?: string; changes?: number; responseMs?: number; taps?: string[] }, req?: { ip?: string; headers: Record<string, unknown> }) {
+    if (!(await this.status(companyId, viewerKey, req)).canPlay) throw new GameError('not_playing', 'Join the game first.', 403);
     const r = (await this.db.query<any>(`select * from game_rounds where id = $1 and company_id = $2 and person = $3`, [roundId, companyId, viewerKey])).rows[0];
     if (!r) throw new GameError('not_found', 'No such screen.', 404);
     if (r.answered_at) throw new GameError('answered', 'Already answered.', 409);
@@ -109,8 +164,8 @@ export class GamesService {
     const elapsed = this.clock().getTime() - new Date(r.served_at).getTime();
     if (elapsed > 10 * 60_000) throw new GameError('expired', 'That screen expired. Here’s a new one.', 410);
     const s = this.settings(companyId);
-    const today = this.clock().toISOString().slice(0, 10);
-    const failedCheckToday = (await this.db.query<any>(`select 1 from game_rounds where company_id = $1 and person = $2 and kind = 'check' and flagged = 'failed_check' and substr(answered_at::text, 1, 10) = $3 limit 1`, [companyId, viewerKey, today])).rows.length > 0;
+    const dayStart = `${this.clock().toISOString().slice(0, 10)}T00:00:00.000Z`;
+    const failedCheckToday = (await this.db.query<any>(`select 1 from game_rounds where company_id = $1 and person = $2 and kind = 'check' and flagged = 'failed_check' and answered_at >= $3 limit 1`, [companyId, viewerKey, dayStart])).rows.length > 0;
     let flagged: string | null = elapsed < s.minAnswerMs ? 'too_fast' : null;
     if (r.kind === 'check' && !chosen.correct) flagged = 'failed_check';
     const tier = r.kind === 'choice' ? structuralTier(chosen.frame as Frame, items.filter((i) => i !== chosen).map((i) => i.frame as Frame)) : null;
@@ -133,14 +188,15 @@ export class GamesService {
   async feedback(companyId: string, viewerKey: string, f: { text: string; image?: { contentType: string; bytes: Uint8Array } }, req?: { ip?: string }) {
     const text = f.text.trim().slice(0, 2000);
     if (text.length < 3 && !f.image) throw new GameError('empty', 'Write something or add a picture.');
-    if (await this.tooYoung(companyId, viewerKey)) throw new GameError('too_young', 'Nothing more is kept for people under the minimum age.', 403);
-    const asset = f.image ? await this.assets.put({ companyId, contentType: f.image.contentType, bytes: f.image.bytes, name: 'feedback' }) : null;
+    if (!(await this.status(companyId, viewerKey, req as any)).canPlay) throw new GameError('not_playing', 'Join the game first.', 403);
+    // Kept under this phone, so erasing the phone erases the picture too.
+    const asset = f.image ? await this.assets.put({ companyId, userId: `viewer:${viewerKey}`, contentType: f.image.contentType, bytes: f.image.bytes, name: 'feedback' }) : null;
     const id = newId('gf');
     await this.db.query(`insert into game_notes (id, company_id, person, kind, text, asset_id, at) values ($1,$2,$3,'feedback',$4,$5,$6)`, [id, companyId, viewerKey, text, asset?.id ?? null, this.now()]);
     let points = 0;
     const source = this.wallet.sourceOf(req?.ip);
     if (await this.mayEarn(companyId, viewerKey) && text.length >= 20 && !(await this.repeated(companyId, viewerKey, 'feedback', text, id))) points += (await this.wallet.earn(companyId, viewerKey, 'feedback', `note:${id}`, { source })).points;
-    if (await this.mayEarn(companyId, viewerKey) && asset) points += (await this.wallet.earn(companyId, viewerKey, 'upload', `upload:${id}`, { source })).points;
+    if (await this.mayEarn(companyId, viewerKey) && asset) points += (await this.wallet.earn(companyId, viewerKey, 'upload', `upload:${asset.id}`, { source })).points;
     return { saved: true, points };
   }
 
@@ -148,7 +204,7 @@ export class GamesService {
   async prompt(companyId: string, viewerKey: string, text: string, req?: { ip?: string }) {
     const q = text.trim().slice(0, 1000);
     if (q.length < 2) throw new GameError('empty', 'Ask something.');
-    if (await this.tooYoung(companyId, viewerKey)) throw new GameError('too_young', 'Nothing more is kept for people under the minimum age.', 403);
+    if (!(await this.status(companyId, viewerKey, req as any)).canPlay) throw new GameError('not_playing', 'Join the game first.', 403);
     const answer = await this.prompter.answer(q, companyId);
     const id = newId('gp');
     await this.db.query(`insert into game_notes (id, company_id, person, kind, text, answer, at) values ($1,$2,$3,'prompt',$4,$5,$6)`, [id, companyId, viewerKey, q, answer, this.now()]);
@@ -190,7 +246,6 @@ export class GamesService {
 
   private now() { return this.clock().toISOString(); }
   private pick<T>(xs: T[], n: number): T[] { const a = [...xs]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(this.random() * (i + 1)); [a[i], a[j]] = [a[j]!, a[i]!]; } return a.slice(0, n); }
-  private async tooYoung(companyId: string, viewerKey: string) { return (await this.data.ageOk(companyId, [viewerKey])) === false; }
   private async mayEarn(companyId: string, viewerKey: string) { return (await this.status(companyId, viewerKey)).canPlay; }
   private async repeated(companyId: string, person: string, kind: string, text: string, except: string) {
     return (await this.db.query<any>(`select 1 from game_notes where company_id = $1 and person = $2 and kind = $3 and lower(text) = lower($4) and id <> $5 limit 1`, [companyId, person, kind, text, except])).rows.length > 0;
@@ -198,31 +253,38 @@ export class GamesService {
 
   /** Two to four real products, each with a price setup, in a random order. */
   private choiceRound(companyId: string) {
-    const cats = this.catalog(companyId).filter((c) => c.items.length >= 2);
+    let cats = this.catalog(companyId).filter((c) => c.items.length >= 2);
+    if (!cats.length) cats = defaultCatalog;
     const cat = this.pick(cats, 1)[0]!;
     const n = 2 + Math.floor(this.random() * Math.min(3, cat.items.length - 1));
     const chosen = this.pick(cat.items, n);
-    const frames = this.frames(cat, n);
-    const realness: Realness = this.settings(companyId).mayComeTrue?.includes(cat.id) ? 'may_come_true' : 'virtual';
+    const frames = this.frames(cat, chosen);
+    const realness = (this.settings(companyId).mayComeTrue?.includes(cat.id) ? 'may_come_true' : 'virtual') as Realness;
     const items = chosen.map((it, i) => ({ key: `k${i}`, id: it.id, label: it.brand ? `${it.brand} ${it.name}` : it.name, brand: it.brand ?? null, name: it.name, frame: frames[i]!, price: cat.priced ? frameText(frames[i]!) : null, position: i }));
     return { kind: 'choice', category: cat.id, ask: cat.ask, realness, items };
   }
-  /** Price setups for a screen: usually a mix, so a pick shows what a price is worth to people. */
-  private frames(cat: Category, n: number): Frame[] {
-    if (!cat.priced) return Array.from({ length: n }, () => ({ kind: 'free_ads' as const }));
-    const usual = cat.usualCents ?? 300;
-    const r = (lo: number, hi: number) => Math.round(usual * (lo + this.random() * (hi - lo)));
-    const options: (() => Frame)[] = [
-      () => ({ kind: 'for_sale', cents: r(0.85, 1.2) }),
-      () => ({ kind: 'discounted', cents: r(0.4, 0.75), usualCents: usual }),
-      () => ({ kind: 'free_ads' }),
-      () => ({ kind: 'free_sponsor' }),
-      () => ({ kind: 'negative', youGetCents: Math.max(5, Math.round(usual * 0.1 * (0.5 + this.random()))) }),
-      () => ({ kind: 'negative', causeCents: Math.max(5, Math.round(usual * 0.05 * (0.5 + this.random()))) }),
-    ];
-    // Sometimes every item has the same setup, so the pick is about the product alone.
-    if (this.random() < 0.3) { const f = this.pick(options, 1)[0]!(); return Array.from({ length: n }, () => ({ ...f })); }
-    return Array.from({ length: n }, () => this.pick(options, 1)[0]!());
+  /**
+   * Price setups for a screen: usually a mix, so a pick shows what a price is worth to people. Each item is priced from
+   * its own usual price. Sometimes every item gets the same kind of setup at the same share of its own price, so the
+   * pick is about the product itself.
+   */
+  private frames(cat: Category, chosen: CatalogItem[]): Frame[] {
+    if (!cat.priced) return chosen.map(() => ({ kind: 'free_ads' as const }));
+    const kinds = ['for_sale', 'discounted', 'free_ads', 'free_sponsor', 'neg_you', 'neg_cause'] as const;
+    const make = (kind: (typeof kinds)[number], usual: number, x: number): Frame => {
+      const at = (lo: number, hi: number) => Math.round(usual * (lo + x * (hi - lo)));
+      switch (kind) {
+        case 'for_sale': return { kind: 'for_sale', cents: at(0.9, 1.1) };
+        case 'discounted': return { kind: 'discounted', cents: at(0.4, 0.75), usualCents: usual };
+        case 'free_ads': return { kind: 'free_ads' };
+        case 'free_sponsor': return { kind: 'free_sponsor' };
+        case 'neg_you': return { kind: 'negative', youGetCents: Math.max(5, at(0.05, 0.15)) };
+        case 'neg_cause': return { kind: 'negative', causeCents: Math.max(5, at(0.03, 0.08)) };
+      }
+    };
+    const usualOf = (it: CatalogItem) => it.cents ?? cat.usualCents ?? 300;
+    if (this.random() < 0.3) { const k = this.pick([...kinds], 1)[0]!; const x = this.random(); return chosen.map((it) => make(k, usualOf(it), x)); }
+    return chosen.map((it) => make(this.pick([...kinds], 1)[0]!, usualOf(it), this.random()));
   }
   /** Ads to compare: made-up brands from the studio, and real ones running now. Nothing here is billed or scannable. */
   private adRound(companyId: string) {
@@ -235,8 +297,9 @@ export class GamesService {
     return { kind: 'ad', category: 'ads', ask: 'Which ad would make you scan the bottle?', realness: 'virtual' as Realness, items };
   }
   /** A quick check that a person is reading: pick the one named in the question. */
-  private checkRound(companyId: string) {
-    const cat = this.pick(this.catalog(companyId).filter((c) => c.items.length >= 3), 1)[0]!;
+  private checkRound(companyId: string): ReturnType<GamesService['choiceRound']> {
+    const cat = this.pick(this.catalog(companyId).filter((c) => c.items.length >= 3), 1)[0];
+    if (!cat) return this.choiceRound(companyId);
     const chosen = this.pick(cat.items, 3);
     const target = chosen[Math.floor(this.random() * 3)]!;
     const items = chosen.map((it, i) => ({ key: `k${i}`, id: it.id, label: it.brand ? `${it.brand} ${it.name}` : it.name, brand: it.brand ?? null, name: it.name, frame: { kind: 'free_ads' } as Frame, price: null, position: i, correct: it === target }));
@@ -250,11 +313,16 @@ export class GamesService {
       const whole = /^\s*<svg[\s>]/.test(i.svg) ? i.svg : `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 300 400" width="300" height="400">${i.svg}</svg>`;
       i.svg = sandbox(await this.platform.forView(whole).catch(() => whole));
     }
+    // Photos of the real products, where we have them (a name card otherwise).
+    const ids = items.filter((i) => !i.svg).map((i) => i.id as string);
+    const own = new Map(cat?.items.filter((i) => i.image).map((i) => [i.id, { url: `/assets/${i.image}.jpg`, credit: null as string | null, license: null as string | null }]) ?? []);
+    const photos = new Map<string, { url: string; credit: string | null; license: string | null }>(own);
+    if (ids.length) for (const p of (await this.db.query<any>(`select item_id, asset_id, credit, license from catalog_images where company_id = $1 and item_id = any($2) and asset_id is not null`, [companyId, ids])).rows) if (!photos.has(p.item_id)) photos.set(p.item_id, { url: `/assets/${p.asset_id}.jpg`, credit: p.credit, license: p.license });
     const ask = r.ask ?? (r.kind === 'ad' ? 'Which ad would make you scan the bottle?' : r.kind === 'check' ? `Quick check: tap “${items.find((i) => i.correct)?.label ?? ''}”` : cat?.ask ?? 'Which would you pick?');
     return {
       id: r.id, kind: r.kind, ask, category: cat?.name ?? (r.kind === 'ad' ? 'Ads' : r.category),
       realness: { kind: r.realness as Realness, text: realnessText[r.realness as Realness] },
-      items: items.map((i) => ({ key: i.key, label: i.label, brand: i.brand ?? null, name: i.name ?? i.label, price: i.price ?? null, ...(i.svg ? { svg: i.svg } : {}), ...(i.frame && r.kind === 'choice' ? { setup: i.frame.kind, net: frameNet(i.frame) } : {}) })),
+      items: items.map((i) => ({ key: i.key, label: i.label, brand: i.brand ?? null, name: i.name ?? i.label, price: i.price ?? null, ...(photos.get(i.id) ? { photo: photos.get(i.id) } : {}), ...(i.svg ? { svg: i.svg } : {}), ...(i.frame && r.kind === 'choice' ? { setup: i.frame.kind, net: frameNet(i.frame) } : {}) })),
       askWhy: r.kind === 'ad',
     };
   }

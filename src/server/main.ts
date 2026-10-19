@@ -81,6 +81,8 @@ const jobs: Job[] = [
   // Each day: any agent whose model hasn't passed the current test takes it (a new model or a new test version).
   { name: 'agent-exams', everyMs: 24 * 3600_000, timeoutMs: 30 * 60_000, run: async () => { if (app!.agents.examinee) await app!.agents.runExams(); } },
   // Each hour, publish any finished day's books fingerprint not yet published.
+  // Photos of the real products on the games' cards, a few at a time.
+  { name: 'game-photos', everyMs: 6 * 3600_000, timeoutMs: 20 * 60_000, run: saved(async () => { for (const c of app!.platform.companies.values()) await app!.games.fillImages(c.id, 40); }) },
   { name: 'fingerprints', everyMs: 3600_000, timeoutMs: 10 * 60_000, run: saved(() => app!.anchors.run()) },
   // Once a day, delete data older than each company keeps.
   // Each minute: how full memory is. The platform keeps its working state in memory (about 13 KB per bottle printed,

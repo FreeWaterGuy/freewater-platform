@@ -144,6 +144,35 @@ describe('playing', () => {
     expect(Number((await db.query<any>(`select count(*)::int as n from game_rounds where person = $1`, [v])).rows[0].n)).toBe(0);
   });
 
+  it('nothing is kept from the feedback or prompt boxes before a yes', async () => {
+    const v = 'viewer-game-8';
+    expect((await call('POST', `${G}/feedback`, { viewerKey: v, text: 'Hello there, here is my idea for you.' })).status).toBe(403);
+    expect((await call('POST', `${G}/prompt`, { viewerKey: v, text: 'What should I cook tonight with eggs?' })).status).toBe(403);
+    expect(Number((await db.query<any>(`select count(*)::int as n from game_notes where person = $1`, [v])).rows[0].n)).toBe(0);
+  });
+
+  it('a quick check left unanswered counts as missed', async () => {
+    const v = 'viewer-game-9';
+    await ready(v);
+    let check: any;
+    for (let i = 0; i < 12 && !check; i++) {
+      const r = (await call('POST', `${G}/next`, { viewerKey: v })).body;
+      if (r.kind === 'check') check = r; else { now += 1500; await call('POST', `${G}/answer`, { viewerKey: v, round: r.id, pick: r.items[0].key }); }
+    }
+    expect(check).toBeTruthy();
+    now += 11 * 60_000;
+    expect((await play(v)).answer.points).toBe(0);
+  });
+
+  it('a company with a tiny list of its own still gets screens', async () => {
+    const fw = app.platform.companies.get('freewater')!;
+    fw.games = { catalog: [{ id: 'one', name: 'One', ask: 'Pick', priced: false, items: [{ id: 'a', name: 'A', kind: 'product' }] }] };
+    const v = 'viewer-game-10';
+    await ready(v);
+    for (let i = 0; i < 10; i++) expect((await call('POST', `${G}/next`, { viewerKey: v })).status).toBe(200), now += 1500, await play(v);
+    fw.games = undefined;
+  });
+
   it('the team sees what the games learned', async () => {
     const r = (await call('GET', '/v1/games/report', undefined, keys['freewater-admin'])).body;
     expect(r.kept).toBeGreaterThan(0);

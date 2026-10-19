@@ -54,6 +54,7 @@ import { seededRandom } from './core/ids';
 import { WalletService } from './modules/wallet/service';
 import { GamesService } from './modules/games/service';
 import { ClaudePrompter, builtinPrompter, type Prompter } from './modules/games/prompter';
+import { OpenFoodFactsImages, StockImages, WikipediaImages, type ProductImageSource } from './modules/games/images';
 import { TransparencyService } from './modules/transparency/service';
 import { AnchorService, GitHubPublisher, OpenTimestampsPublisher, type AnchorPublisher } from './modules/transparency/anchors';
 import { NumberLineService } from './modules/numberline/service';
@@ -115,6 +116,8 @@ export interface AppOptions {
   geocoder?: Geocoder; // defaults to the test geocoder
   /** Answers the games' prompt box (Claude with a key, else a polite note). */
   prompter?: Prompter;
+  /** Where photos of real products come from (Wikipedia, Open Food Facts, photo libraries by default). */
+  productImages?: ProductImageSource[];
   /** Where each visitor is, so their own law applies (GEOIP_DB, a MaxMind file; without one, only trusted host headers). */
   geo?: import('./modules/data/jurisdiction').GeoIp | null;
   /** Tests and local runs: treat anyone we can't place as being here. Ignored in production (unknown means strictest). */
@@ -236,6 +239,7 @@ export async function createApp(opts: AppOptions) {
     return n;
   };
   data.removeUploads = async (companyId, userIds) => ('removeForUsers' in assets ? (assets as SqlAssetStore).removeForUsers(companyId, userIds) : 0);
+  data.removeAssets = async (companyId, ids) => ('removeIds' in assets ? (assets as SqlAssetStore).removeIds(companyId, ids) : 0);
   // The number line and honest data: everything placed, every choice sorted, from the first bottle on.
   const numberline = new NumberLineService(db, platform, opts.numberLineAgent ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeNumberLineAgent({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL }) : rulesAgent), opts.clock);
   numberline.rewardInPlay = (companyId) => !!platform.companies.get(companyId)?.lottery?.enabled;
@@ -285,6 +289,8 @@ export async function createApp(opts: AppOptions) {
     }),
     opts.studioDesigner ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeStudioDesigner({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL, fallback: rulesDesigner }) : rulesDesigner),
     opts.clock);
+  // Photos of real products for the games' cards: the company's own, Wikipedia, Open Food Facts, then photo libraries.
+  games.imageSources = opts.productImages ?? [new WikipediaImages(), new OpenFoodFactsImages(), new StockImages(studio.providers.libraries)];
   // Studio photos inside labels: printed labels carry them at print size (so a machine prints them whole, even
   // offline), previews at a smaller size. Only the studio's own picture tags are filled in, only with pictures.
   const photoCache = (maxBytes: number) => {

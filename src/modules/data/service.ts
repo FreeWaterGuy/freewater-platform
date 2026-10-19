@@ -364,6 +364,8 @@ export class DataService {
 
   /** Removes a person's own uploads (and their files in file storage). Set by the app. */
   removeUploads?: (companyId: string, userIds: string[]) => Promise<number>;
+  /** Removes particular files (and their bytes in file storage). Set by the app. */
+  removeAssets?: (companyId: string, ids: string[]) => Promise<number>;
   /** Takes a person's address off their delivery boxes. Set by the app. */
   eraseAddresses?: (companyId: string, userIds: string[]) => Promise<number>;
 
@@ -468,6 +470,8 @@ export class DataService {
     await run('locations shared', `delete from precise_locations where company_id = $1 and subject = any($2)`, [companyId, keys]);
     await run('about you', `delete from person_details where company_id = $1 and subject = any($2)`, [companyId, keys]);
     await run('game answers', `delete from game_rounds where company_id = $1 and person = any($2)`, [companyId, keys]);
+    // Pictures sent with feedback are kept under the phone that sent them.
+    if (this.removeUploads) await this.removeUploads(companyId, keys.filter((k) => !k.includes(':')).map((k) => `viewer:${k}`));
     await run('feedback and questions', `delete from game_notes where company_id = $1 and person = any($2)`, [companyId, keys]);
     await run('games joined', `delete from game_players where company_id = $1 and person = any($2)`, [companyId, keys]);
   }
@@ -508,6 +512,12 @@ export class DataService {
       await del(`delete from choice_sets where company_id = $1 and created_at < $2 and person not in ${lax}`, short('choices'));
       await del(`delete from game_rounds where company_id = $1 and served_at < $2`, p.rules.choices.keepDays);
       await del(`delete from game_rounds where company_id = $1 and served_at < $2 and person not in ${lax}`, short('choices'));
+      // Pictures sent with old feedback go with it (the shortest keep any law allows, for everyone).
+      if (this.removeAssets) {
+        const old = (await this.db.query<any>(`select asset_id from game_notes where company_id = $1 and at < $2 and asset_id is not null`, [c.id, before(short('designContent'))])).rows.map((r) => r.asset_id as string);
+        if (old.length) await this.removeAssets(c.id, old);
+        await this.db.query(`update game_notes set asset_id = null where company_id = $1 and at < $2`, [c.id, before(short('designContent'))]);
+      }
       await del(`delete from game_notes where company_id = $1 and at < $2`, p.rules.designContent.keepDays);
       await del(`delete from game_notes where company_id = $1 and at < $2 and person not in ${lax}`, short('designContent'));
       // IP addresses and device details: the strictest keep for everyone (they're worth little after a month).

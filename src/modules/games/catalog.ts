@@ -3,7 +3,15 @@ import type { StudioSpec } from '../studio/layout';
 // What the games ask about. Real brands and products appear as plain cards (names only, no logos or packaging), so a
 // pick says what people really prefer. Each company can replace or extend this list; it's data, not code.
 
-export interface CatalogItem { id: string; name: string; brand?: string; kind: 'product' | 'service' | 'genre' | 'place' | 'platform' }
+export interface CatalogItem {
+  id: string; name: string; brand?: string; kind: 'product' | 'service' | 'genre' | 'place' | 'platform';
+  /** Its own usual price in cents (a BMW isn't priced like a Chevy). Otherwise the category's. */
+  cents?: number;
+  /** The Wikipedia article whose photo shows it, when its name alone isn't the article's title. */
+  wiki?: string;
+  /** A photo the company uploaded for it (an asset id): used before any other. */
+  image?: string;
+}
 export interface Category {
   id: string;
   name: string;
@@ -14,37 +22,49 @@ export interface Category {
   priced: boolean;
   /** Usual price in cents, for the price setups (a rough shelf price). */
   usualCents?: number;
+  /**
+   * Where its photos come from: 'wiki' (Wikipedia's freely licensed photo of that exact model), 'food' (Open Food
+   * Facts' package photos), 'stock' (a photo library, for things like a banana or a beach town), or 'none' (a name
+   * card, for genres and app logos).
+   */
+  images?: 'wiki' | 'food' | 'stock' | 'none';
 }
 
+/** "Brand|Name", optionally "|cents|Wikipedia title". */
 const items = (kind: CatalogItem['kind'], list: string[]): CatalogItem[] =>
-  list.map((s) => { const [brand, name] = s.includes('|') ? s.split('|') as [string, string] : [undefined, s]; return { id: slug(`${brand ?? ''} ${name}`), name, ...(brand ? { brand } : {}), kind }; });
+  list.map((s) => {
+    const parts = s.split('|');
+    const [brand, name] = parts.length > 1 ? [parts[0] || undefined, parts[1]!] : [undefined, parts[0]!];
+    const cents = parts[2] ? Number(parts[2]) : undefined;
+    return { id: slug(`${brand ?? ''} ${name}`), name, ...(brand ? { brand } : {}), kind, ...(cents ? { cents } : {}), ...(parts[3] ? { wiki: parts[3] } : {}) };
+  });
 const slug = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50);
 
 export const defaultCatalog: Category[] = [
-  { id: 'cereal', name: 'Cereal', ask: 'Which cereal would you take?', priced: true, usualCents: 499, items: items('product', ['Kellogg’s|Frosted Flakes', 'General Mills|Cheerios', 'Post|Honey Bunches of Oats', 'General Mills|Cinnamon Toast Crunch', 'Kellogg’s|Froot Loops', 'Quaker|Oatmeal Squares', 'Kashi|GO Original', 'Nature’s Path|Flax Plus']) },
-  { id: 'snacks', name: 'Snacks', ask: 'Which snack would you take?', priced: true, usualCents: 399, items: items('product', ['Lay’s|Classic Chips', 'Doritos|Nacho Cheese', 'Cheetos|Crunchy', 'Pringles|Original', 'Goldfish|Cheddar', 'SkinnyPop|Popcorn', 'KIND|Dark Chocolate Nuts', 'RXBAR|Chocolate Sea Salt']) },
-  { id: 'candy', name: 'Candy', ask: 'Which would you grab?', priced: true, usualCents: 229, items: items('product', ['Snickers|King Size', 'Reese’s|Peanut Butter Cups', 'M&M’s|Peanut', 'Kit Kat|Bar', 'Skittles|Original', 'Twix|Bar', 'Hershey’s|Milk Chocolate', 'Sour Patch Kids|Bag']) },
-  { id: 'drinks', name: 'Drinks', ask: 'Which drink would you take?', priced: true, usualCents: 249, items: items('product', ['Coca-Cola|Classic', 'Pepsi|Cola', 'Dr Pepper|Original', 'Sprite|Lemon-Lime', 'Gatorade|Cool Blue', 'Red Bull|Energy Drink', 'LaCroix|Pamplemousse', 'Liquid Death|Mountain Water']) },
-  { id: 'coffee', name: 'Coffee', ask: 'Where would you get coffee?', priced: true, usualCents: 525, items: items('service', ['Starbucks|Latte', 'Dunkin’|Iced Coffee', 'McDonald’s|McCafé Latte', 'Peet’s|Cold Brew', 'Dutch Bros|Golden Eagle', 'Tim Hortons|Double-Double']) },
-  { id: 'fast_food', name: 'Fast food', ask: 'Which would you pick for lunch?', priced: true, usualCents: 699, items: items('product', ['McDonald’s|Cheeseburger', 'Chick-fil-A|Chicken Sandwich', 'Taco Bell|Crunchwrap Supreme', 'Wendy’s|Dave’s Single', 'Chipotle|Burrito Bowl', 'Subway|Turkey Footlong', 'Burger King|Whopper', 'Panda Express|Orange Chicken']) },
-  { id: 'fruit', name: 'Fruit and fresh food', ask: 'Which would you take?', priced: true, usualCents: 99, items: items('product', ['Banana', 'Apple', 'Orange', 'Grapes (a bag)', 'Baby carrots', 'Avocado', 'Strawberries (a box)', 'Blueberries (a box)']) },
-  { id: 'dairy', name: 'Dairy and alternatives', ask: 'Which would you take?', priced: true, usualCents: 449, items: items('product', ['Chobani|Greek Yogurt', 'Oatly|Oat Milk', 'Fairlife|Milk', 'Silk|Almond Milk', 'Tillamook|Cheddar', 'Babybel|Mini Cheese']) },
-  { id: 'frozen', name: 'Frozen food', ask: 'Which would you take?', priced: true, usualCents: 599, items: items('product', ['DiGiorno|Pepperoni Pizza', 'Amy’s|Bean Burrito', 'Lean Cuisine|Chicken Alfredo', 'Ben & Jerry’s|Half Baked', 'Häagen-Dazs|Vanilla', 'Eggo|Waffles']) },
-  { id: 'grocery', name: 'Where you shop', ask: 'Where would you shop for groceries?', priced: false, items: items('service', ['Walmart', 'Costco', 'Kroger', 'Target', 'Whole Foods', 'Trader Joe’s', 'Aldi', 'H-E-B']) },
-  { id: 'cars', name: 'Cars', ask: 'Which would you drive?', priced: true, usualCents: 3_500_000, items: items('product', ['Toyota|RAV4', 'Honda|Civic', 'Tesla|Model Y', 'Ford|F-150', 'Chevrolet|Equinox', 'Hyundai|Ioniq 5', 'Subaru|Outback', 'BMW|3 Series']) },
-  { id: 'phones', name: 'Phones', ask: 'Which phone would you take?', priced: true, usualCents: 79_900, items: items('product', ['Apple|iPhone', 'Samsung|Galaxy S', 'Google|Pixel', 'Motorola|Moto G', 'OnePlus|Nord']) },
-  { id: 'streaming', name: 'Streaming', ask: 'Which would you keep?', priced: true, usualCents: 1_599, items: items('service', ['Netflix', 'YouTube Premium', 'Disney+', 'Max', 'Prime Video', 'Hulu', 'Apple TV+', 'Peacock']) },
-  { id: 'music', name: 'Music', ask: 'What would you put on?', priced: false, items: items('genre', ['Hip-hop', 'Pop', 'Country', 'Rock', 'R&B', 'Latin', 'EDM', 'Jazz', 'Classical', 'K-pop']) },
-  { id: 'music_apps', name: 'Music apps', ask: 'Which would you use?', priced: true, usualCents: 1_199, items: items('service', ['Spotify', 'Apple Music', 'YouTube Music', 'Amazon Music', 'Pandora', 'SoundCloud']) },
-  { id: 'movies', name: 'Movies', ask: 'What would you watch tonight?', priced: false, items: items('genre', ['Comedy', 'Action', 'Horror', 'Romance', 'Documentary', 'Sci-fi', 'Animated', 'Drama']) },
-  { id: 'social', name: 'Social apps', ask: 'Which would you open first?', priced: false, items: items('platform', ['Instagram', 'TikTok', 'YouTube', 'Snapchat', 'X', 'Facebook', 'Reddit', 'Pinterest', 'Threads', 'Discord']) },
-  { id: 'creators', name: 'Creators', ask: 'Which kind of creator do you watch most?', priced: false, items: items('genre', ['Cooking', 'Gaming', 'Fitness', 'Comedy', 'Beauty', 'Tech reviews', 'Travel', 'Personal finance', 'DIY and home', 'Sports']) },
-  { id: 'travel', name: 'Travel', ask: 'Where would you go?', priced: true, usualCents: 120_000, items: items('place', ['Beach town', 'Big city', 'National park', 'Ski trip', 'Theme park', 'Road trip', 'Cruise', 'Abroad']) },
-  { id: 'hotels', name: 'Places to stay', ask: 'Where would you stay?', priced: true, usualCents: 18_900, items: items('service', ['Marriott', 'Hilton', 'Airbnb', 'Hyatt', 'Holiday Inn', 'Vrbo']) },
-  { id: 'rides', name: 'Getting around', ask: 'How would you get there?', priced: true, usualCents: 1_800, items: items('service', ['Uber', 'Lyft', 'Bus or train', 'Bike or scooter', 'Drive myself', 'Walk']) },
-  { id: 'delivery', name: 'Food delivery', ask: 'Which would you order with?', priced: true, usualCents: 2_500, items: items('service', ['DoorDash', 'Uber Eats', 'Grubhub', 'Instacart', 'Pick it up myself']) },
-  { id: 'fitness', name: 'Staying active', ask: 'Which would you do?', priced: true, usualCents: 4_000, items: items('service', ['Planet Fitness', 'Peloton', 'Orangetheory', 'Running outside', 'Yoga class', 'Home workout app']) },
-  { id: 'sports', name: 'Sports', ask: 'What would you watch?', priced: false, items: items('genre', ['NFL', 'NBA', 'Soccer', 'MLB', 'College football', 'UFC', 'F1', 'WNBA', 'NHL', 'Tennis']) },
+  { id: 'cereal', name: 'Cereal', ask: 'Which cereal would you take?', priced: true, usualCents: 499, images: 'food', items: items('product', ['Kellogg’s|Frosted Flakes', 'General Mills|Cheerios', 'Post|Honey Bunches of Oats', 'General Mills|Cinnamon Toast Crunch', 'Kellogg’s|Froot Loops', 'Quaker|Oatmeal Squares', 'Kashi|GO Original', 'Nature’s Path|Flax Plus']) },
+  { id: 'snacks', name: 'Snacks', ask: 'Which snack would you take?', priced: true, usualCents: 399, images: 'food', items: items('product', ['Lay’s|Classic Chips', 'Doritos|Nacho Cheese', 'Cheetos|Crunchy', 'Pringles|Original', 'Goldfish|Cheddar', 'SkinnyPop|Popcorn', 'KIND|Dark Chocolate Nuts', 'RXBAR|Chocolate Sea Salt']) },
+  { id: 'candy', name: 'Candy', ask: 'Which would you grab?', priced: true, usualCents: 229, images: 'food', items: items('product', ['Snickers|King Size', 'Reese’s|Peanut Butter Cups', 'M&M’s|Peanut', 'Kit Kat|Bar', 'Skittles|Original', 'Twix|Bar', 'Hershey’s|Milk Chocolate', 'Sour Patch Kids|Bag']) },
+  { id: 'drinks', name: 'Drinks', ask: 'Which drink would you take?', priced: true, usualCents: 249, images: 'food', items: items('product', ['Coca-Cola|Classic', 'Pepsi|Cola', 'Dr Pepper|Original', 'Sprite|Lemon-Lime', 'Gatorade|Cool Blue', 'Red Bull|Energy Drink', 'LaCroix|Pamplemousse', 'Liquid Death|Mountain Water']) },
+  { id: 'coffee', name: 'Coffee', ask: 'Where would you get coffee?', priced: true, usualCents: 525, images: 'stock', items: items('service', ['Starbucks|Latte', 'Dunkin’|Iced Coffee', 'McDonald’s|McCafé Latte', 'Peet’s|Cold Brew', 'Dutch Bros|Golden Eagle', 'Tim Hortons|Double-Double']) },
+  { id: 'fast_food', name: 'Fast food', ask: 'Which would you pick for lunch?', priced: true, usualCents: 699, images: 'wiki', items: items('product', ['McDonald’s|Cheeseburger|299|Cheeseburger', 'McDonald’s|Big Mac|599|Big Mac', 'Chick-fil-A|Chicken Sandwich|579|Chick-fil-A', 'Taco Bell|Crunchwrap Supreme|599|Crunchwrap Supreme', 'Wendy’s|Baconator|899|Baconator', 'Chipotle|Burrito Bowl|1095|Chipotle Mexican Grill', 'Burger King|Whopper|649|Whopper', 'Panda Express|Orange Chicken|899|Orange chicken']) },
+  { id: 'fruit', name: 'Fruit and fresh food', ask: 'Which would you take?', priced: true, usualCents: 99, images: 'stock', items: items('product', ['Banana', 'Apple', 'Orange', 'Grapes (a bag)', 'Baby carrots', 'Avocado', 'Strawberries (a box)', 'Blueberries (a box)']) },
+  { id: 'dairy', name: 'Dairy and alternatives', ask: 'Which would you take?', priced: true, usualCents: 449, images: 'food', items: items('product', ['Chobani|Greek Yogurt', 'Oatly|Oat Milk', 'Fairlife|Milk', 'Silk|Almond Milk', 'Tillamook|Cheddar', 'Babybel|Mini Cheese']) },
+  { id: 'frozen', name: 'Frozen food', ask: 'Which would you take?', priced: true, usualCents: 599, images: 'food', items: items('product', ['DiGiorno|Pepperoni Pizza', 'Amy’s|Bean Burrito', 'Lean Cuisine|Chicken Alfredo', 'Ben & Jerry’s|Half Baked', 'Häagen-Dazs|Vanilla', 'Eggo|Waffles']) },
+  { id: 'grocery', name: 'Where you shop', ask: 'Where would you shop for groceries?', priced: false, images: 'none', items: items('service', ['Walmart', 'Costco', 'Kroger', 'Target', 'Whole Foods', 'Trader Joe’s', 'Aldi', 'H-E-B']) },
+  { id: 'cars', name: 'Cars', ask: 'Which would you drive?', priced: true, usualCents: 3_500_000, images: 'wiki', items: items('product', ['Toyota|RAV4|3025000|Toyota RAV4', 'Honda|Civic|2495000|Honda Civic', 'Tesla|Model Y|4499000|Tesla Model Y', 'Ford|F-150|3910000|Ford F-Series', 'Chevrolet|Equinox|2860000|Chevrolet Equinox', 'Hyundai|Ioniq 5|4260000|Hyundai Ioniq 5', 'Subaru|Outback|2989500|Subaru Outback', 'BMW|3 Series|4570000|BMW 3 Series']) },
+  { id: 'phones', name: 'Phones', ask: 'Which phone would you take?', priced: true, usualCents: 79_900, images: 'wiki', items: items('product', ['Apple|iPhone|79900|iPhone', 'Samsung|Galaxy S|79999|Samsung Galaxy S series', 'Google|Pixel|79900|Google Pixel', 'Motorola|Moto G|19999|Moto G', 'OnePlus|Nord|29999|OnePlus Nord']) },
+  { id: 'streaming', name: 'Streaming', ask: 'Which would you keep?', priced: true, usualCents: 1_599, images: 'none', items: items('service', ['Netflix', 'YouTube Premium', 'Disney+', 'Max', 'Prime Video', 'Hulu', 'Apple TV+', 'Peacock']) },
+  { id: 'music', name: 'Music', ask: 'What would you put on?', priced: false, images: 'stock', items: items('genre', ['Hip-hop', 'Pop', 'Country', 'Rock', 'R&B', 'Latin', 'EDM', 'Jazz', 'Classical', 'K-pop']) },
+  { id: 'music_apps', name: 'Music apps', ask: 'Which would you use?', priced: true, usualCents: 1_199, images: 'none', items: items('service', ['Spotify', 'Apple Music', 'YouTube Music', 'Amazon Music', 'Pandora', 'SoundCloud']) },
+  { id: 'movies', name: 'Movies', ask: 'What would you watch tonight?', priced: false, images: 'stock', items: items('genre', ['Comedy', 'Action', 'Horror', 'Romance', 'Documentary', 'Sci-fi', 'Animated', 'Drama']) },
+  { id: 'social', name: 'Social apps', ask: 'Which would you open first?', priced: false, images: 'none', items: items('platform', ['Instagram', 'TikTok', 'YouTube', 'Snapchat', 'X', 'Facebook', 'Reddit', 'Pinterest', 'Threads', 'Discord']) },
+  { id: 'creators', name: 'Creators', ask: 'Which kind of creator do you watch most?', priced: false, images: 'stock', items: items('genre', ['Cooking', 'Gaming', 'Fitness', 'Comedy', 'Beauty', 'Tech reviews', 'Travel', 'Personal finance', 'DIY and home', 'Sports']) },
+  { id: 'travel', name: 'Travel', ask: 'Where would you go?', priced: true, usualCents: 120_000, images: 'stock', items: items('place', ['Beach town', 'Big city', 'National park', 'Ski trip', 'Theme park', 'Road trip', 'Cruise', 'Abroad']) },
+  { id: 'hotels', name: 'Places to stay', ask: 'Where would you stay?', priced: true, usualCents: 18_900, images: 'none', items: items('service', ['Marriott', 'Hilton', 'Airbnb', 'Hyatt', 'Holiday Inn', 'Vrbo']) },
+  { id: 'rides', name: 'Getting around', ask: 'How would you get there?', priced: true, usualCents: 1_800, images: 'stock', items: items('service', ['Uber', 'Lyft', 'Bus or train', 'Bike or scooter', 'Drive myself', 'Walk']) },
+  { id: 'delivery', name: 'Food delivery', ask: 'Which would you order with?', priced: true, usualCents: 2_500, images: 'none', items: items('service', ['DoorDash', 'Uber Eats', 'Grubhub', 'Instacart', 'Pick it up myself']) },
+  { id: 'fitness', name: 'Staying active', ask: 'Which would you do?', priced: true, usualCents: 4_000, images: 'stock', items: items('service', ['Planet Fitness', 'Peloton', 'Orangetheory', 'Running outside', 'Yoga class', 'Home workout app']) },
+  { id: 'sports', name: 'Sports', ask: 'What would you watch?', priced: false, images: 'stock', items: items('genre', ['NFL', 'NBA', 'Soccer', 'MLB', 'College football', 'UFC', 'F1', 'WNBA', 'NHL', 'Tennis']) },
 ];
 
 /**

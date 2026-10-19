@@ -44,6 +44,10 @@ h2 { font: 700 23px/1.2 var(--display); margin: 6px 0 14px; letter-spacing: -.00
 .card:active { transform: scale(.98); }
 .card.on { border-color: var(--text); background: var(--bg); box-shadow: 0 6px 22px rgba(0,0,0,.08); }
 .card.on::after { content: '✓'; position: absolute; top: 10px; right: 12px; width: 24px; height: 24px; border-radius: 50%; background: var(--text); color: var(--bg); font-size: 14px; display: grid; place-items: center; font-weight: 700; }
+.card.has-photo { padding-top: 10px; }
+.card .photo { margin: 0 0 2px; position: relative; }
+.card .photo img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 12px; display: block; background: #fff; }
+.card .photo figcaption { font-size: 9px; line-height: 1.2; color: var(--muted); margin-top: 4px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .card .brand { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
 .card .name { font: 700 19px/1.2 var(--display); overflow-wrap: anywhere; }
 .price { font-size: 14px; font-weight: 700; line-height: 1.3; }

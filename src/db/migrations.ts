@@ -1044,8 +1044,17 @@ create table game_rounds (id text primary key, company_id text not null, person 
   served_at timestamptz not null, answered_at timestamptz, pick text, why text, changes integer, response_ms integer, server_ms integer, tier text, flagged text, points integer);
 create index game_rounds_person on game_rounds(company_id, person, served_at);
 create index game_rounds_answered on game_rounds(company_id, served_at) where answered_at is not null;
+create unique index game_rounds_one_open on game_rounds(company_id, person) where answered_at is null;
 create table game_notes (id text primary key, company_id text not null, person text not null, kind text not null, text text not null, answer text, asset_id text, at timestamptz not null);
 create index game_notes_person on game_notes(company_id, person, kind);
+`,
+  },
+  {
+    id: '034_catalog_images',
+    sql: `
+-- Photos of the real products on the game's cards, with where each came from and its license. status: found (shown),
+-- none (no free photo yet; tried again after a week), uploaded (the company's own).
+create table catalog_images (company_id text not null, item_id text not null, status text not null, asset_id text, source text, credit text, license text, source_url text, checked_at timestamptz not null, primary key (company_id, item_id));
 `,
   },
 ];
