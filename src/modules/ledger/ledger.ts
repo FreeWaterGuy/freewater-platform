@@ -18,7 +18,7 @@ export interface LedgerEntry {
   debit: string;
   credit: string;
   amountCents: Cents;
-  kind: 'print' | 'scan' | 'ar' | 'commission' | 'commission_reversal' | 'custom' | 'donation' | 'box_face' | 'payment' | 'charity_transfer' | 'expense' | 'prize' | 'ai_fund' | 'ai_allocation' | 'ai_spend' | 'reinvestment' | 'owner_payout';
+  kind: 'print' | 'scan' | 'ar' | 'commission' | 'commission_reversal' | 'custom' | 'donation' | 'box_face' | 'payment' | 'charity_transfer' | 'expense' | 'prize' | 'ai_fund' | 'ai_allocation' | 'ai_spend' | 'reinvestment' | 'owner_payout' | 'giving_redirect';
   memo: string;
 }
 
@@ -94,9 +94,17 @@ export class Ledger {
     bus.on('expense.recorded', (e) => this.add(e, { debit: `expense:${e.payload.category}`, credit: 'cash:bank', amountCents: e.payload.amountCents, kind: 'expense', memo: e.payload.memo }));
     // Surplus put back into the system is an asset the system now owns, not a cost; money paid to owners leaves it.
     bus.on('reinvestment.recorded', (e) => this.add(e, { debit: `asset:${e.payload.category}`, credit: 'cash:bank', amountCents: e.payload.amountCents, kind: 'reinvestment', memo: e.payload.memo }));
+    // A person chose where their bottle's gift goes: it moves from the charity the bottle named to theirs.
+    bus.on('giving.directed', (e) => this.directedTo.set(e.payload.unitId, e.payload.to));
+    bus.on('giving.directed', (e) => this.add(e, { unitId: e.payload.unitId, debit: `payable:charity:${e.payload.from}`, credit: `payable:charity:${e.payload.to}`, amountCents: e.payload.cents, kind: 'giving_redirect', memo: `A person chose ${e.payload.to} for this bottle’s gift (instead of ${e.payload.from})` }));
+    // An advertiser's value-back test: what the offer returned, paid by the advertiser, to the cause.
+    bus.on('value_back.given', (e) => this.add(e, { unitId: e.payload.unitId, campaignId: e.payload.campaignId, debit: `receivable:advertiser:${e.payload.advertiserId}`, credit: `payable:charity:${e.payload.cause}`, amountCents: e.payload.cents, kind: 'donation', memo: `Value-back on ${e.payload.advertiserName}’s offer (a measured test, step ${e.payload.cents}¢), paid by the advertiser` }));
     bus.on('owner_payout.recorded', (e) => this.add(e, { debit: `equity:payout:${e.payload.kind}`, credit: 'cash:bank', amountCents: e.payload.amountCents, kind: 'owner_payout', memo: e.payload.memo }));
     // 'print.failed' is deliberately not subscribed: nothing to bill.
   }
+
+  /** Bottles whose gift a person directed to a cause of their choice. */
+  private directedTo = new Map<string, string>();
 
   private company(id: string): CompanyConfig {
     const c = this.companies.get(id);
@@ -180,7 +188,8 @@ export class Ledger {
   private give(e: PlatformEvent, company: CompanyConfig, where: { unitId?: string; packId?: string }, locationId: string | undefined, amount: number, memo: (charity: string) => string, reverse = false) {
     if (amount <= 0) return;
     const g = company.giving;
-    const own = locationId ? g.charityByLocation?.[locationId] : undefined;
+    // The person holding the bottle chose its cause: what the bottle gives from then on goes there too.
+    const own = (where.unitId ? this.directedTo.get(where.unitId) : undefined) ?? (locationId ? g.charityByLocation?.[locationId] : undefined);
     const split = !own && g.charitySplit ? Object.entries(g.charitySplit).filter(([, p]) => p > 0) : [];
     let parts: [string, number][];
     if (split.length > 1) {

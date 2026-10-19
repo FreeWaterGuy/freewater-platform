@@ -167,8 +167,12 @@ export class AccountsService {
     const consents = parse<Consents>(r.consents);
     // Without their yes to personalized offers, nothing about them is used to pick ads.
     const seen = consents.personalizedOffers ? (await this.db.query<any>(`select advertiser_id from viewer_advertisers where company_id = $1 and viewer_key = $2`, [companyId, r.viewer_key])).rows.map((x) => x.advertiser_id as string) : [];
-    return { personKey: r.viewer_key, interests: consents.personalizedOffers ? parse<string[]>(r.interests) : [], advertisersSeen: new Set(seen) };
+    // What they asked for themselves (kinds of ads never wanted) and the no-ads control apply with or without that yes.
+    const extra = this.audienceExtras ? await this.audienceExtras(companyId, r.viewer_key) : {};
+    return { personKey: r.viewer_key, interests: consents.personalizedOffers ? parse<string[]>(r.interests) : [], advertisersSeen: new Set(seen), ...extra };
   }
+  /** Set by the data environment: kinds of ads a person never wants, and whether they're in the no-ads control. */
+  audienceExtras?: (companyId: string, personKey: string) => Promise<{ avoid?: string[]; noAds?: boolean }>;
 
   /** Everything stored about a person, in one file they can keep. */
   async exportData(userId: string) {

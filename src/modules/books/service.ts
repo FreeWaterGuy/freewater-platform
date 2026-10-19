@@ -58,8 +58,13 @@ export class BooksService {
     const sent = (await this.db.query<any>(
       `select substring(debit from 17) as charity, sum(amount_cents)::bigint as cents from ledger_entries where company_id = $1 and kind = 'charity_transfer' group by 1`, [companyId])).rows;
     const out = new Map<string, { donatedCents: number; sentCents: number; owedCents: number; bottles: number }>();
-    for (const r of rows) out.set(r.charity, { donatedCents: n(r.cents), sentCents: 0, owedCents: n(r.cents), bottles: n(r.lines) });
-    for (const r of sent) { const b = out.get(r.charity) ?? { donatedCents: 0, sentCents: 0, owedCents: 0, bottles: 0 }; b.sentCents = n(r.cents); b.owedCents = b.donatedCents - b.sentCents; out.set(r.charity, b); }
+    for (const r of rows) out.set(r.charity, { donatedCents: n(r.cents), sentCents: 0, owedCents: 0, bottles: n(r.lines) });
+    // Gifts a person sent elsewhere: out of the charity the bottle named, into the one they chose.
+    const moved = (await this.db.query<any>(`select substring(debit from 17) as from_c, substring(credit from 17) as to_c, sum(amount_cents)::bigint as cents from ledger_entries where company_id = $1 and kind = 'giving_redirect' group by 1, 2`, [companyId])).rows;
+    const get = (c: string) => { let b = out.get(c); if (!b) out.set(c, (b = { donatedCents: 0, sentCents: 0, owedCents: 0, bottles: 0 })); return b; };
+    for (const r of moved) { get(r.from_c).donatedCents -= n(r.cents); get(r.to_c).donatedCents += n(r.cents); }
+    for (const r of sent) get(r.charity).sentCents = n(r.cents);
+    for (const b of out.values()) b.owedCents = b.donatedCents - b.sentCents;
     return out;
   }
 

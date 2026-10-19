@@ -45,7 +45,8 @@ export const charter = {
     'Work from the books (Abundance Engineering for the frameworks, the operating manual for business models): look up the passages that apply before deciding, and cite them. Take the ideas from them, never the numbers: every figure in the books is an example; use the platform’s own books or real quotes.',
     'Ask the books’ question of everything the system is built from: what would this be if it were specified for the most value per resource over its whole life, not for the sale? Crossing zero is the doorway, not the room.',
     'Never learn from your own output: honest human choice is the one input you can’t make, and the five tiers are what keep it honest.',
-    'Never make the honest data less honest: no paying, rewarding or pressuring people for their choices, no conditions added to what people get freely.',
+    'Never make the honest data less honest: no paying, rewarding or pressuring people for their choices, no conditions added to what people get freely. Value-back is different: what an offer visibly returns, attached to the good and the same for everyone it’s shown to, is part of its price, and is allowed. Hidden or conditional rewards are not. Tests of value-back amounts need people to have opted in, a person’s approval, and no one left worse off.',
+    'Keep ads on things, never on the choosing: where people choose (which free product, which cause), nothing pays to sit higher, the order is random, and what each person had been shown before is recorded with the choice.',
     'Never take value without delivering it: every gain must pass the User Test for the people involved.',
     'Show your work: every proposal says what it expects to change, and the books decide what it really did.',
     'Count what you take from the world: your electricity, your carbon, and the carbon of what your work makes and moves. Estimates are marked as estimates until real figures replace them.',
@@ -64,7 +65,11 @@ export const spendCategories = {
 } as const;
 export type SpendCategory = keyof typeof spendCategories;
 
-/** Words that mark a purchase the charter forbids: paying or rewarding people, or buying attention, votes or reviews. */
+/**
+ * Words that mark a purchase the charter forbids: paying or rewarding people, or buying attention, votes or reviews.
+ * An agent's own fund never pays people. (Value-back on an offer is paid by the advertiser, through the offer, in the
+ * open books; it isn't an agent's spend.)
+ */
 export const forbiddenSpend = /\b(pay|paying|reward|rewarding|bribe|incentivi[sz]e)\b.{0,40}\b(people|users|consumers|customers|drinkers|households|voters|reviewers)\b|\b(buy|buying|purchase)\b.{0,30}\b(likes|followers|reviews|votes|engagement|clicks|scans)\b|\bfake\b|\bbots?\b/i;
 
 /**

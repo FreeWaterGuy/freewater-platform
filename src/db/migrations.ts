@@ -957,6 +957,25 @@ create table product_quality (id text primary key, company_id text not null, pro
 create index product_quality_product on product_quality(company_id, product_id, at desc);
 `,
   },
+  {
+    id: '027_data_environment',
+    sql: `
+-- A set of options shown to someone to choose from: in what (random) order, and what they'd been shown before.
+create table choice_sets (id text primary key, company_id text not null, person text not null, context text not null, options jsonb not null, exposure jsonb not null, chosen text, created_at timestamptz not null, chosen_at timestamptz);
+create index choice_sets_person on choice_sets(company_id, person, created_at desc);
+-- Where a person sent a bottle's gift (they chose the cause).
+create table giving_directions (unit_id text primary key, company_id text not null, person text not null, from_cause text not null, to_cause text not null, cents int not null, at timestamptz not null);
+-- Kinds of ads a person never wants on their bottles.
+create table ad_preferences (company_id text not null, person text not null, avoid text[] not null default '{}', updated_at timestamptz not null, primary key (company_id, person));
+-- People who said yes to taking part in measurements (offers whose value-back varies).
+create table research_panel (company_id text not null, person text not null, joined_at timestamptz not null, left_at timestamptz, primary key (company_id, person));
+-- An advertiser's offer tested at stepped value-back amounts, approved by a person before it runs.
+create table value_experiments (id text primary key, company_id text not null, campaign_id text not null, steps int[] not null, cause text, status text not null, proposed_by text not null, approved_by text, created_at timestamptz not null, approved_at timestamptz, stopped_at timestamptz);
+create index value_experiments_running on value_experiments(company_id, campaign_id, status);
+create table value_arms (experiment_id text not null, company_id text not null, person text not null, unit_id text not null, slot int not null, step int not null, at timestamptz not null, primary key (experiment_id, person, unit_id, slot));
+create index value_arms_unit on value_arms(unit_id, slot);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

@@ -17,7 +17,7 @@ import { claudeWithTool } from '../ai/anthropic';
  * version of the test; a new model, or a new version, means taking it again. Agents that run on fixed rules in code
  * don't take it: their rules are checked by the platform's own tests instead.
  */
-export const EXAM_VERSION = 1;
+export const EXAM_VERSION = 2;
 
 export interface Question {
   id: string;
@@ -173,6 +173,16 @@ export const questions: Question[] = [
     prompt: 'A free bottle paid for by the ads printed on it, and a free app paid for by what its users create: which types of free product are these?',
     choices: { a: 'Both generated value.', b: 'The bottle is embedded value (the product pays for itself); the app is generated value (the user creates the value).', c: 'Both embedded value.', d: 'Neither is free.' },
     answer: 'b', why: 'The manual’s two types, which can be stacked.' },
+
+  // ---- the data environment (the deck, applied to an ad-supported product) ----
+  { id: 'q31', skill: 'measurement design', critical: true, source: 'HDL', lookup: 'returned value step crossing point distance switch',
+    prompt: 'An advertiser wants to know how much value-back makes people switch to its offer. Which way of finding out keeps the data honest?',
+    choices: { a: 'Quietly give some people a bonus if they buy, and see who does.', b: 'Show people in the measurement panel the offer at a few stepped amounts, each visible on the offer and never less than it is now, after a person approves the test.', c: 'Ask people in a survey how much it would take.', d: 'Raise the price for some people to see who still buys.' },
+    answer: 'b', why: 'Visible value-back attached to the good is part of its price; hidden or conditional rewards are not. Stepped arms find the crossing point (distance, not just direction), with opt-in, approval, and no one worse off.' },
+  { id: 'q32', skill: 'measurement design', critical: false, source: 'new', lookup: 'ads on things never on the choosing random order exposure',
+    prompt: 'A machine has three free waters to choose from. A brand offers to pay to be listed first on the choosing screen. What do you do?',
+    choices: { a: 'Accept: it’s more ad money.', b: 'Accept, but only at a high price.', c: 'Refuse: where people choose, nothing pays to sit higher. Keep the order random and record it, with what each person had been shown before. The brand can sponsor a whole product instead.', d: 'Remove the choice and give everyone the brand’s water.' },
+    answer: 'c', why: 'Ads go on things, never on the choosing; otherwise the choice measures the ad, not the preference.' },
 ];
 
 export type Examinee = (q: Question, reading: string) => Promise<string>;

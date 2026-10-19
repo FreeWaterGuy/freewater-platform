@@ -14,6 +14,7 @@ import { moreRoutes } from './more';
 import { dataRoutes } from './data';
 import { transparencyRoutes } from './transparency';
 import { agentRoutes } from './agents';
+import { environmentRoutes } from './environment';
 import { BadKeyGuard, classify, limits, RateLimiter, securityHeaders, SecurityLog } from './security';
 import { teamRoutes } from './team';
 import { operationsRoutes } from './operations';
@@ -168,7 +169,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const custom = target.kind === 'slot' && platform.units.get(target.unitId)?.kind === 'custom';
     const companyId = experiences.ownerOf(target).companyId;
     const game = custom ? null : app.lottery.settings(companyId);
-    return { body: { ...opened, companyId, lottery: game ? app.lottery.publicInfo(game) : null, privacy: { askFirst: app.data.askFirst(companyId) } } };
+    const environment = target.kind === 'slot' && !custom ? await app.environment.forScanPage(target.unitId, target.slot, viewer).catch(() => null) : null;
+    return { body: { ...opened, companyId, lottery: game ? app.lottery.publicInfo(game) : null, privacy: { askFirst: app.data.askFirst(companyId) }, ...(environment ? { environment } : {}) } };
   };
   route({ method: 'GET', url: '/v1/public/experience/:unitId/:slot', scope: 'public', summary: 'The page a bottle slot opens, as blocks. Opening it is free; the page then reports the scan once it has shown.', handler: async (req) => {
     const { unitId, slot } = req.params as any;
@@ -589,6 +591,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   dataRoutes(app, route);
   transparencyRoutes(app, server, route);
   agentRoutes(app, route);
+  environmentRoutes(app, route);
   teamRoutes(app, route);
 
   // ---------- wiring ----------

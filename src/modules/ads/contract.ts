@@ -30,6 +30,10 @@ export interface PrintAudience {
   advertisersSeen: Set<string>;
   /** How many bottles with each campaign this person already got today (for frequency caps). */
   campaignsToday?: Map<string, number>;
+  /** Kinds of ads (categories) this person said they never want. */
+  avoid?: string[];
+  /** This person is in the no-ads control this week: their bottle carries only the company's own message. */
+  noAds?: boolean;
 }
 
 export interface FillResult {

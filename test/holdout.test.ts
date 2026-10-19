@@ -11,7 +11,7 @@ beforeAll(async () => {
   db = await createPgliteClient();
   app = await createApp({ db, seedDemo: true, seed: 11, clock: () => new Date(now) });
 });
-afterAll(async () => { await app.persistence.flush(); await db.close(); });
+afterAll(async () => { await app.numberline.idle(); await app.persistence.flush(); await db.close(); });
 
 describe('holdout tests: an agent’s everyday value, read from the books', () => {
   it('skips the agent for a fixed tenth of moments, the same way every time', () => {

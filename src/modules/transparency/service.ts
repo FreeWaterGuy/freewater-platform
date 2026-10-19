@@ -71,6 +71,11 @@ export class TransparencyService {
       if (l.credit.startsWith('payable:charity:')) x.given.set(charityOf(l.credit), (x.given.get(charityOf(l.credit)) ?? 0) + l.amountCents);
       else if (l.debit.startsWith('payable:charity:')) x.given.set(charityOf(l.debit), (x.given.get(charityOf(l.debit)) ?? 0) - l.amountCents);
     }
+    // A person chose another cause for their bottle's gift: it moves from one charity to the other.
+    if (l.kind === 'giving_redirect') {
+      x.given.set(charityOf(l.debit), (x.given.get(charityOf(l.debit)) ?? 0) - l.amountCents);
+      x.given.set(charityOf(l.credit), (x.given.get(charityOf(l.credit)) ?? 0) + l.amountCents);
+    }
     if (l.kind === 'charity_transfer') x.sent.set(charityOf(l.debit), (x.sent.get(charityOf(l.debit)) ?? 0) + l.amountCents);
     if (l.kind === 'prize') x.prizes += l.amountCents;
     // What the AI agents earn, are paid, spend and give: always counted, so it's public wherever the books are open.

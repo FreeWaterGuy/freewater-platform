@@ -45,6 +45,10 @@ export interface EventPayloads {
   'expense.recorded': { expenseId: string; category: string; amountCents: Cents; memo: string; date: string };
   /** Surplus put back into the system: new capacity, energy, routes, research, or held in reserve. Not a cost. */
   'reinvestment.recorded': { reinvestmentId: string; category: string; amountCents: Cents; memo: string; date: string };
+  /** A person chose which cause a bottle's gift goes to. */
+  'giving.directed': { unitId: string; from: string; to: string; cents: Cents; person: string };
+  /** The value an offer returned to a cause in a measured test, paid by the advertiser. */
+  'value_back.given': { experimentId: string; unitId: string; campaignId: string; advertiserId: string; advertiserName: string; cause: string; cents: Cents; person: string };
   /** Money paid out to the company's owners (a dividend, a buyback, a distribution). */
   'owner_payout.recorded': { payoutId: string; kind: string; amountCents: Cents; memo: string; date: string };
   'machine.incident_opened': { incidentId: string; locationId: string; kind: string; severity: 'warning' | 'critical'; message: string };

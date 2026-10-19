@@ -40,6 +40,8 @@ export interface Product {
   companyId?: string;
   /** What's inside: water, soda, coffee, tea, juice, beer, snack... Ad rules can depend on it. */
   category?: string;
+  /** A brand that pays for this whole product to be free (a category sponsor). It never buys a higher place where people choose. */
+  sponsor?: { advertiserId: string; name?: string };
   /** The container's shape and size. Round containers (bottles, cans, cups) can have AR that follows the label. */
   container?: { shape: 'bottle' | 'can' | 'cup' | 'jar' | 'pouch' | 'box'; diameterIn?: number; heightIn?: number };
   label: {
@@ -82,6 +84,11 @@ export interface CompanyConfig {
     fontFamily: string;
   };
   productFacts: string[]; // lines printed on the locked panel
+  /**
+   * Measurement settings. `noAdsControlShare`: the share of known households (0 to 0.05) whose bottles carry only the
+   * company's own message some weeks, so how much ads move choices can be measured. Off (0) unless set: it costs ad money.
+   */
+  research?: { noAdsControlShare?: number };
   giving: {
     mode: GivingMode;
     centsPerUnit?: Cents; // for per_unit

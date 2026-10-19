@@ -47,6 +47,7 @@ import { DataService } from './modules/data/service';
 import { TransparencyService } from './modules/transparency/service';
 import { AnchorService, GitHubPublisher, OpenTimestampsPublisher, type AnchorPublisher } from './modules/transparency/anchors';
 import { NumberLineService } from './modules/numberline/service';
+import { EnvironmentService } from './modules/environment/service';
 import { ClaudeNumberLineAgent, rulesAgent, type NumberLineAgent } from './modules/numberline/agent';
 import { AgentsService } from './modules/agents/service';
 import { ProfitService } from './modules/profit/service';
@@ -220,6 +221,17 @@ export async function createApp(opts: AppOptions) {
     return c && (c.causeStance || c.adsStance) ? { ...(c.causeStance ? { cause: c.causeStance } : {}), ...(c.adsStance ? { ads: c.adsStance } : {}) } : undefined;
   };
 
+  // The data environment: choices made in a clean setting, exposure recorded, people directing gifts and choosing ads.
+  const environment = new EnvironmentService(db, platform, numberline, opts.clock);
+  numberline.environmentOf = (companyId, person, subject, unitId) => environment.environmentOf(companyId, person, subject, unitId);
+  accounts.audienceExtras = (companyId, personKey) => environment.audienceExtras(companyId, personKey);
+  environment.watchScans();
+  platform.bus.on('purchase.completed', (e) => {
+    const u = e.payload.unitId ? platform.units.get(e.payload.unitId) : undefined;
+    const pl = u?.placements.find((x) => x.slotIndex === e.payload.slotIndex);
+    if (u && pl && !pl.isHouse) environment.onSale(e.companyId, u.id, pl.slotIndex, pl.campaignId).catch(() => {});
+  });
+
   const builtinAssistant = new BuiltinAdAssistant();
   const assistant = opts.assistant ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeAdAssistant({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL, fallback: builtinAssistant }) : builtinAssistant);
   const ads = new AdsService(db, platform, made.registry, host, assistant, () => persistence.flush());
@@ -308,7 +320,7 @@ export async function createApp(opts: AppOptions) {
   await fleet.load();
   made.registry.registerPrinter('model6-fleet', new MachineFleetPrinter(() => fleet, made.printer));
 
-  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, transparency, anchors, agents, profit, distributions, team, secondStep };
+  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, transparency, anchors, agents, profit, distributions, team, secondStep };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

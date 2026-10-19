@@ -96,7 +96,9 @@
     game.info = custom ? null : opened.lottery || null;
     game.ctx = ctx;
     const consent = consentBar(opened);
-    app.replaceChildren(top, ...(game.info ? [gameNote(game.info)] : []), body, panel(footer, target), ...(fixture ? [] : [yourData(opened)]), ...(consent ? [consent] : []));
+    const env = opened.environment && !fixture ? yourChoices(opened, target) : null;
+    const vb = opened.environment?.valueBack ? h('p', { class: 'value-back', text: opened.environment.valueBack.says }) : null;
+    app.replaceChildren(top, ...(game.info ? [gameNote(game.info)] : []), ...(vb ? [vb] : []), body, panel(footer, target), ...(env ? [env] : []), ...(fixture ? [] : [yourData(opened)]), ...(consent ? [consent] : []));
     if (record) { pageCtx = ctx; pageStart = performance.now(); track(ctx, 'page_view'); }
     if (game.info && record) checkPending();
 
@@ -451,6 +453,47 @@
       h('p', { text: `May we keep anonymous notes on how you use this page (${ask.map((a) => a.label.toLowerCase()).join(', ')}) to make it better? Nothing is sold, and you can change your mind any time.` }),
       h('div', { class: 'row' }, h('button', { type: 'button', class: 'btn', onclick: () => answer(true) }, 'Yes, that’s fine'), h('button', { type: 'button', class: 'btn secondary', onclick: () => answer(false) }, 'No thanks')));
     return bar;
+  }
+
+  // Your choices on this bottle: where its gift goes, kinds of ads you never want, and the measurement panel.
+  // Nothing here is an ad, and nothing pays to sit higher in these lists.
+  function yourChoices(opened, target) {
+    const e = opened.environment, cid = encodeURIComponent(opened.companyId);
+    const parts = [h('h3', { text: 'Your choices' })];
+    const g = e.giving;
+    if (g && g.causes.length > 1) {
+      const money = (c) => (c >= 100 ? `$${(c / 100).toFixed(2)}` : `${c}¢`);
+      const note = h('p', { class: 'muted', text: g.directed ? `This bottle’s ${money(g.cents)} gift goes to ${g.current}. You chose it.` : `This bottle gives ${money(g.cents)} to ${g.current}. You can choose where it goes instead:` });
+      parts.push(note);
+      if (!g.directed) {
+        const sel = h('select', { 'aria-label': 'Choose a cause' }, g.causes.map((c) => h('option', { value: c, text: c, ...(c === g.current ? { selected: true } : {}) })));
+        const btn = h('button', { type: 'button', class: 'btn secondary' }, 'Send it there');
+        btn.addEventListener('click', () => {
+          btn.disabled = true;
+          api('POST', `/v1/public/bottles/${encodeURIComponent(target.unitId)}/giving`, { viewerKey, to: sel.value })
+            .then((r) => { note.textContent = `This bottle’s ${money(r.cents)} gift goes to ${r.to}. You chose it.`; sel.remove(); btn.remove(); })
+            .catch((err) => { btn.disabled = false; toast(err.message || 'That didn’t go through.'); });
+        });
+        parts.push(h('div', { class: 'row' }, sel, btn));
+      }
+    }
+    const ap = e.adPreferences;
+    if (ap && ap.kinds.length) {
+      const avoid = new Set(ap.avoid);
+      const boxes = ap.kinds.map((k) => { const c = h('input', { type: 'checkbox', value: k, ...(avoid.has(k) ? { checked: true } : {}) }); return h('label', { class: 'check' }, c, ` ${k}`); });
+      const save = h('button', { type: 'button', class: 'btn secondary' }, 'Save');
+      save.addEventListener('click', () => {
+        const list = boxes.map((b) => b.querySelector('input')).filter((i) => i.checked).map((i) => i.value);
+        api('POST', `/v1/public/companies/${cid}/ad-preferences`, { viewerKey, avoid: list }).then(() => toast('Saved. Bottles printed for you leave those out.')).catch(() => toast('That didn’t save.'));
+      });
+      parts.push(h('details', {}, h('summary', { text: 'Kinds of ads I never want' }), h('div', { class: 'checks' }, boxes), save));
+    }
+    if (e.panel) {
+      const t = h('input', { type: 'checkbox', ...(e.panel.inPanel ? { checked: true } : {}) });
+      t.addEventListener('change', () => api('POST', `/v1/public/companies/${cid}/panel`, { viewerKey, join: t.checked }).then((r) => toast(r.inPanel ? 'You’re in. Thank you.' : 'You’ve left the panel.')).catch(() => { t.checked = !t.checked; }));
+      parts.push(h('label', { class: 'check' }, t, ` Take part in measurements. ${e.panel.about.replace(/^Take part in measurements: /, '')}`));
+    }
+    return parts.length > 1 ? h('section', { class: 'your-choices' }, parts) : null;
   }
 
   // Anyone can erase what their phone did here, without an account. A second tap confirms (no pop-ups).

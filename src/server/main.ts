@@ -132,6 +132,8 @@ const stop = async (code = 0) => {
     await server.close(); // stop taking requests; wait for the ones in progress
     const still = await runner.stop(30_000);
     if (still.length) console.error(`Stopping while these jobs still run: ${still.join(', ')}. They'll be run again soon after the next start.`);
+    // Choices still being recorded (the number line's queue) finish first, briefly.
+    await Promise.race([app!.numberline.idle(), new Promise((r) => setTimeout(r, 5_000))]);
     await app!.persistence.flush(10_000).catch(() => console.error('The database is refusing changes; the waiting ones are in the spool file and the next server writes them first.'));
     app!.persistence.spoolNow(); // anything still waiting (a job that kept running, say) goes to disk
     await lease.release();

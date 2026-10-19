@@ -21,6 +21,11 @@ export class NumberLineService {
   rewardInPlay: (companyId: string) => boolean = () => false;
   /** What a signed-in person told us about the cause and ads, for the User Test. */
   stanceOf: (person: string) => Promise<Stance | undefined> = async () => undefined;
+  /**
+   * The setting a choice was made in (what the person had been shown before, and their cohort when a no-ads control
+   * runs). Set by the data environment; recorded with every choice so choices made fresh can be told from those after an ad.
+   */
+  environmentOf: (companyId: string, person: string, subject: string, unitId?: string) => Promise<Record<string, unknown> | undefined> = async () => undefined;
 
   constructor(private db: SqlClient, private platform: Platform, public agent: NumberLineAgent = rulesAgent, private clock: () => Date = () => new Date()) {
     const bus = platform.bus;
@@ -136,11 +141,12 @@ export class NumberLineService {
 
   // ---------- choices ----------
 
-  async record(companyId: string, person: string, kind: string, chosen: { subject: string; placed: Placed }, facts: Omit<ChoiceFacts, 'chosen' | 'alternatives' | 'stance'> & { alternatives: { subject: string; placed: Placed }[] }, ref: string) {
+  async record(companyId: string, person: string, kind: string, chosen: { subject: string; placed: Placed }, facts: Omit<ChoiceFacts, 'chosen' | 'alternatives' | 'stance'> & { alternatives: { subject: string; placed: Placed }[]; environment?: Record<string, unknown>; unitId?: string }, ref: string) {
     const stance = await this.stanceOf(person);
+    const environment = facts.environment ?? (await this.environmentOf(companyId, person, chosen.subject, facts.unitId).catch(() => undefined));
     const c = classify({ ...facts, chosen: { subject: chosen.subject, placement: chosen.placed.placement }, alternatives: facts.alternatives.map((a) => ({ subject: a.subject, placement: a.placed.placement })), ...(stance ? { stance } : {}) });
     const p = chosen.placed.placement;
-    const conditions = { gated: !!facts.gated || p.conditions.length > 0, rewardInPlay: !!facts.rewardInPlay, ...(facts.placementRank !== undefined ? { placementRank: facts.placementRank } : {}), ...(facts.effort !== undefined ? { effort: facts.effort } : {}), ...(facts.paidCents !== undefined ? { paidCents: facts.paidCents } : {}), ...(c.commitmentCents !== undefined ? { commitmentCents: c.commitmentCents } : {}), ...(stance ? { stance } : {}) };
+    const conditions = { gated: !!facts.gated || p.conditions.length > 0, rewardInPlay: !!facts.rewardInPlay, ...(facts.placementRank !== undefined ? { placementRank: facts.placementRank } : {}), ...(facts.effort !== undefined ? { effort: facts.effort } : {}), ...(facts.paidCents !== undefined ? { paidCents: facts.paidCents } : {}), ...(c.commitmentCents !== undefined ? { commitmentCents: c.commitmentCents } : {}), ...(stance ? { stance } : {}), ...(environment ? { environment } : {}) };
     const position = facts.act === 'engage' ? 'free' : c.netCents > 0 ? 'for_sale' : c.netCents < 0 ? 'negatively_priced' : 'free';
     await this.db.query(`insert into choices (id, company_id, person, kind, subject, placement_id, position, system, systems, tier, honest, net_cents, alternatives, conditions, reasons, ref, at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) on conflict do nothing`,
       [newId('ch'), companyId, person, kind, chosen.subject, chosen.placed.id, position, p.primary, JSON.stringify(p.systems), c.tier, c.honest, c.netCents, JSON.stringify(facts.alternatives.map((a) => ({ subject: a.subject, placementId: a.placed.id, position: a.placed.placement.position }))), JSON.stringify(conditions), JSON.stringify(c.reasons), ref, this.clock().toISOString()]);
@@ -161,7 +167,7 @@ export class NumberLineService {
     }
     const subject = `bottle:${u.productId}`;
     const placed = await this.placementOf(companyId, subject, this.bottleFacts(c, u.productId));
-    return this.record(companyId, this.personOf(unitId), 'take_bottle', { subject, placed }, { alternatives: [] }, ref ?? unitId);
+    return this.record(companyId, this.personOf(unitId), 'take_bottle', { subject, placed }, { alternatives: [], unitId }, ref ?? unitId);
   }
 
   private async offering(camp: Campaign) { return { subject: `offering:${camp.id}`, placed: await this.placementOf(camp.companyId, `offering:${camp.id}`, this.offeringFacts(camp)) }; }
@@ -173,7 +179,7 @@ export class NumberLineService {
     if (!u || !camp) return;
     const others = [];
     for (const q of u.placements) { const oc = q.slotIndex !== slot ? this.platform.campaigns.get(q.campaignId) : undefined; if (oc) others.push(await this.offering(oc)); }
-    await this.record(companyId, viewerKey, kind, await this.offering(camp), { act: 'engage', alternatives: others, rewardInPlay: this.rewardInPlay(companyId), placementRank: slot }, ref);
+    await this.record(companyId, viewerKey, kind, await this.offering(camp), { act: 'engage', alternatives: others, rewardInPlay: this.rewardInPlay(companyId), placementRank: slot, unitId }, ref);
   }
 
   private async onPurchase(companyId: string, p: { unitId?: string; slotIndex?: number; packId?: string; face?: string; orderId: string; amountCents: number }, ref: string) {
@@ -181,7 +187,7 @@ export class NumberLineService {
     const pl = u?.placements.find((x) => x.slotIndex === p.slotIndex);
     const camp = pl ? this.platform.campaigns.get(pl.campaignId) : undefined;
     if (!camp) return;
-    await this.record(companyId, p.unitId ? this.personOf(p.unitId) : `pack:${p.packId}`, 'purchase', await this.offering(camp), { alternatives: [], paidCents: p.amountCents }, ref);
+    await this.record(companyId, p.unitId ? this.personOf(p.unitId) : `pack:${p.packId}`, 'purchase', await this.offering(camp), { alternatives: [], paidCents: p.amountCents, ...(p.unitId ? { unitId: p.unitId } : {}) }, ref);
   }
 
   // ---------- reading the honest data ----------
