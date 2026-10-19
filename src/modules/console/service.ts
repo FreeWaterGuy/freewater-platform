@@ -9,7 +9,7 @@ import { posterCreative, type PosterSpec } from '../creative/poster';
 import { lotteryDefaults } from '../lottery/rules';
 import { quietTransparency } from '../transparency/service';
 import { preset } from '../data/policy';
-import { adCategories, applyChange, checkSettings, describeChange, editableKeys, fontChoices, ratchetProblem, type EditableKey } from './settings';
+import { adCategories, applyChange, checkSettings, describeChange, editableKeys, fontChoices, ratchetProblem, chainProblem, walletProblem, type EditableKey } from './settings';
 
 export class ConsoleError extends Error {
   constructor(public code: string, message: string, public status = 400) {
@@ -100,13 +100,13 @@ export class ConsoleService {
   }
 
   /** Save a change. Send the version you started from; if someone saved in between, nothing is overwritten. */
-  async save(companyId: string, change: Partial<Record<EditableKey, unknown>>, by: string, expectedVersion?: number) {
+  async save(companyId: string, change: Partial<Record<EditableKey, unknown>>, by: string, expectedVersion?: number, opts: { chainApproved?: boolean } = {}) {
     const cur = this.company(companyId);
     const version = await this.baseline(companyId);
     if (expectedVersion !== undefined && expectedVersion !== version) throw new ConsoleError('version_conflict', `Someone else saved changes (now version ${version}). Reload to see them, then make your change again.`, 409);
     let next: CompanyConfig;
     try { next = applyChange(cur, change); } catch (e: any) { throw new ConsoleError('not_editable', e.message); }
-    const problem = checkSettings(next, this.registry.names()) ?? ratchetProblem(cur, next);
+    const problem = checkSettings(next, this.registry.names()) ?? ratchetProblem(cur, next) ?? chainProblem(cur, next, opts.chainApproved) ?? walletProblem(cur, next);
     if (problem) throw new ConsoleError('invalid_settings', problem, 422);
     const changes = describeChange(cur, next);
     if (!changes.length) return { config: cur, version, changes };

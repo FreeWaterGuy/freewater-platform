@@ -3,6 +3,7 @@ import { SHARES, type CompanyConfig } from '../../core/types';
 import { checkLottery } from '../lottery/rules';
 import { checkPolicy } from '../data/policy';
 import { checkWallet } from '../wallet/assets';
+import { checkChain } from '../chain/service';
 
 // What a company may change about itself, the checks each change must pass, and plain words for what changed.
 
@@ -18,7 +19,7 @@ export const fontChoices: { id: string; label: string; value: string }[] = [
 export const adCategories = ['food', 'drink', 'coffee', 'fitness', 'health', 'news', 'retail', 'local-services', 'real-estate', 'auto', 'finance', 'entertainment', 'events', 'travel', 'tech', 'education', 'nonprofit', 'politics', 'alcohol', 'tobacco', 'cannabis', 'gambling', 'weapons', 'dating'];
 
 /** The parts of the settings a PATCH may send. Anything else is refused. */
-export const editableKeys = ['name', 'receiptBaseUrl', 'scanBaseUrl', 'brand', 'productFacts', 'giving', 'openBooks', 'unitCosts', 'consumerPricing', 'timezone', 'consumer', 'machines', 'qr', 'ar', 'standardProductId', 'adRules', 'prices', 'modules', 'lottery', 'data', 'transparency', 'agents', 'ratchet', 'security', 'research'] as const;
+export const editableKeys = ['name', 'receiptBaseUrl', 'scanBaseUrl', 'brand', 'productFacts', 'giving', 'openBooks', 'unitCosts', 'consumerPricing', 'timezone', 'consumer', 'machines', 'qr', 'ar', 'standardProductId', 'adRules', 'prices', 'modules', 'lottery', 'data', 'transparency', 'agents', 'ratchet', 'security', 'research', 'wallet', 'offers', 'games', 'minimumAge', 'chain'] as const;
 export type EditableKey = (typeof editableKeys)[number];
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
@@ -112,6 +113,13 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
   const pol = checkPolicy(c.data);
   if (pol) return `Data: ${pol}`;
   if (c.offers && typeof c.offers.enabled !== 'boolean') return 'Brand offers are on or off.';
+  if (c.games) {
+    const g = c.games;
+    if (g.enabled !== undefined && typeof g.enabled !== 'boolean') return 'The games are on or off.';
+    if (g.catalog !== undefined && (!Array.isArray(g.catalog) || g.catalog.length > 100 || g.catalog.some((k: any) => !k || typeof k.id !== 'string' || typeof k.name !== 'string' || typeof k.ask !== 'string' || !Array.isArray(k.items) || k.items.length > 50 || k.items.some((i: any) => !i || typeof i.id !== 'string' || typeof i.name !== 'string')))) return 'Each game category has an id, a name, a question and up to 50 items with ids and names.';
+  }
+  const ch = checkChain(c.chain);
+  if (ch) return `Chain: ${ch}`;
   const wal = checkWallet(c.wallet);
   if (wal) return `Wallet: ${wal}`;
   if (c.minimumAge !== undefined && !isInt(c.minimumAge, 13, 21)) return 'The youngest age that may take part must be 13 to 21.';
@@ -138,6 +146,29 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
 }
 
 /** With the ratchet on, what goes to charity and to the AI agents can be raised, never lowered. */
+/**
+ * Switching the chain on can't be done from settings: it takes the approval of several people and a wait (a proposed
+ * "switch on" action). Switching it off is always allowed. Fewer approvals or a shorter wait can't be set while it's on.
+ */
+export function chainProblem(cur: CompanyConfig, next: CompanyConfig, approved = false): string | null {
+  const a = cur.chain, b = next.chain;
+  if (b?.enabled && !a?.enabled && !approved) return 'Switching the chain on needs several people to approve it, then a wait. Propose it under Chain.';
+  if (a?.enabled && b?.enabled && (b.approvalsNeeded < a.approvalsNeeded || b.delayHours < a.delayHours)) return 'While the chain is on, approvals and the wait can be raised, not lowered. Switch it off first.';
+  return null;
+}
+
+/**
+ * Money switches in settings: exchanging points or credit for anything else can't be switched on here (it will take
+ * the same several-people approval as the chain), and the points cap can't change once set.
+ */
+export function walletProblem(cur: CompanyConfig, next: CompanyConfig): string | null {
+  const a = cur.wallet, b = next.wallet;
+  if (b?.conversions?.enabled && !a?.conversions?.enabled) return 'Exchanging points or credit can’t be switched on from settings; it needs several people to approve it.';
+  if (b && b.conversions?.approvedBy !== a?.conversions?.approvedBy) return 'Who approved exchanges is recorded by the approval itself, not set here.';
+  if (a && b && a.points.cap !== b.points.cap) return 'The points cap can’t change once it’s set.';
+  return null;
+}
+
 export function ratchetProblem(cur: CompanyConfig, next: CompanyConfig): string | null {
   if (!cur.ratchet) return null;
   if (!next.ratchet) return 'The promise that giving and the AI agents’ share only go up can’t be taken back.';
