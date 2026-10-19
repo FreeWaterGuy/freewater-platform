@@ -9,7 +9,7 @@ import type { Platform } from '../../platform';
 // A browser that says "don't track me" (Global Privacy Control) or a person who turned it off sends nothing.
 // Each company decides how long these are kept (privacy.keepInteractionsDays, a year by default).
 
-export const interactionKinds = ['page_view', 'page_seconds', 'scroll_percent', 'ad_seconds', 'ad_complete', 'ar_seconds', 'more_open', 'share', 'offer_tap', 'video_view', 'video_seconds', 'video_complete', 'video_tap'] as const;
+export const interactionKinds = ['page_view', 'page_seconds', 'scroll_percent', 'ad_seconds', 'ad_complete', 'ar_seconds', 'more_open', 'more_videos', 'share', 'offer_tap', 'video_view', 'video_seconds', 'video_complete', 'video_tap'] as const;
 export type InteractionKind = (typeof interactionKinds)[number];
 export interface Interaction { target: string; kind: InteractionKind; value?: number; videoId?: string; detail?: string }
 

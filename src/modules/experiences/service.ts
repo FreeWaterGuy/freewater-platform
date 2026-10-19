@@ -110,7 +110,7 @@ export class ExperienceService {
     const when = daypart(this.platform.bus.now(), company.timezone ?? 'UTC');
     const interests = viewer.user ? (await this.accounts.personalization(viewer.user.viewerKey)).interests : [];
     const facts: ScanFacts = { firstScanner: !story?.firstViewer || story.firstViewer === viewerKey, passedOn: !!story?.firstViewer && story.firstViewer !== viewerKey, newToAdvertiser: r.advertiserId ? !(await this.seenBefore(r.companyId, viewerKey, r.advertiserId)) : true, daypart: when.daypart, day: when.day, interests, keptMinutes: story?.minutesSincePrint ?? 0 };
-    const videos = await this.videos.forViewer(c, facts);
+    const videos = await this.videos.forPerson(c, facts, viewerKey);
     // The video's button goes through click tracking like every other link, so a sale from it is credited to this bottle.
     const a = this.attribution;
     const spot = target.kind === 'slot' ? { unitId: target.unitId, slot: target.slot } : { packId: target.packId, face: target.face };
