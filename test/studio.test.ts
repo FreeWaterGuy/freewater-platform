@@ -229,6 +229,21 @@ describe('the studio, as a brand uses it', () => {
     expect(out.draft.poster).toBeUndefined();
   });
 
+  it('keeps a studio design as designed when the chat sets up the rest of the ad', async () => {
+    const p = (await call('POST', '/v1/studio/photos', photoFile('rocket.jpg'), joes, 'image/jpeg')).body;
+    const spec = { brand: 'Joe', headline: 'Burgers, launched', colors: { paper: '#FFF7E6', ink: '#2B1A10', accent: '#D7262E' }, type: 'serif', photo: p };
+    const draft = (await call('POST', '/v1/ads/drafts', {})).body;
+    await call('POST', '/v1/studio/use', { draftId: draft.id, spec });
+    await app.ads.chat({ id: draft.id, companyId: 'freewater', advertiserId: 'adv-joes', text: 'Sizes 4 and 6, all machines, 500 bottles. When scanned, show an offer: free fries on Tuesdays.', attachments: [] });
+    let d = (await call('GET', `/v1/ads/drafts/${draft.id}`)).body.draft;
+    expect(d.studio.headline).toBe('Burgers, launched');
+    expect(d.studio.colors).toEqual(spec.colors);
+    await app.ads.chat({ id: draft.id, companyId: 'freewater', advertiserId: 'adv-joes', text: 'Change the headline to "Smash burgers, launched"', attachments: [] });
+    d = (await call('GET', `/v1/ads/drafts/${draft.id}`)).body.draft;
+    expect(d.studio.headline).toBe('Smash burgers, launched');
+    expect(d.studio.colors).toEqual(spec.colors);
+  });
+
   it('is for advertisers: the company team uses its own tools', async () => {
     expect((await call('GET', '/v1/studio', undefined, admin)).status).toBe(403);
   });

@@ -124,8 +124,12 @@ export class AdsService {
     const company = this.platform.companies.get(r.companyId)!;
     const adv = await this.advertiser(r.companyId, r.advertiserId);
     const locations = [...this.platform.locations.values()].filter((l) => l.companyId === r.companyId);
+    // A studio design is the artwork: the assistant sees it as artwork that's done (its words and colors), so it
+    // doesn't fill in a poster of its own.
+    const st = r.draft.studio;
+    const seen: AdDraft = st ? { ...r.draft, poster: { brand: st.brand, headline: st.headline, ...(st.sub ? { sub: st.sub } : {}), colors: { bg: st.colors.paper, fg: st.colors.ink, accent: st.colors.accent } } } : r.draft;
     const out = await this.assistant.respond({
-      draft: r.draft,
+      draft: seen,
       history: r.messages.map(({ role, text, attachments }) => ({ role, text, attachments })),
       message: input.text,
       attachments: input.attachments,
@@ -139,7 +143,11 @@ export class AdsService {
         missing: missing(r.draft, this.host),
       },
     });
-    const { draft, problems } = applyPatch(r.draft, out.patch ?? {}, { company, locations, host: this.host, attachments: input.attachments });
+    // With a studio design, its words and colors change only when the message asks about them (an offer named for
+    // the scan page isn't a new headline).
+    const patch = { ...(out.patch ?? {}) };
+    if (st && patch.poster && !/\b(headline|title|big words|say|small line|subline|underneath|wording|colou?rs?|background|brand name)\b|["“]/i.test(input.text)) delete patch.poster;
+    const { draft, problems } = applyPatch(r.draft, patch, { company, locations, host: this.host, attachments: input.attachments });
     const now = this.platform.bus.now().toISOString();
     const left = missing(draft, this.host);
     let reply = out.reply;
