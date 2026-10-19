@@ -174,6 +174,7 @@ export const agentRegistry = {
   'team-assistant': { name: 'Team assistant', role: 'Turns what FreeWater’s team types, and the receipts they attach, into drafts for the books.', essential: false },
   security: { name: 'Security agent', role: 'Makes FreeWater safer over time without slowing it down: reads the security log, keys, team and connections in the background each hour, and proposes what to tighten. Anything that can’t be undone waits for a person. Its value is harm that didn’t happen, which the books can’t price, so its work is treated as essential.', essential: true },
   value: { name: 'Value agent', role: 'Finds where the system can lower costs, capture more value and give more, and proposes the changes: how far each part still is from the deepest price it could fund.', essential: false },
+  'prompt-helper': { name: 'Prompt helper', role: 'Answers what people ask in the games’ prompt box, about anything, briefly and kindly.', essential: false },
   code: { name: 'Code agent', role: 'Improves the platform’s code as a whole: lower running costs, faster, fewer failures. Its changes go through review.', essential: false },
 } as const;
 export type AgentId = keyof typeof agentRegistry;

@@ -29,6 +29,9 @@ export interface DataPolicy {
   shareWithPlatform: boolean;
 }
 
+/** What data is for, said the same way everywhere it's asked for. */
+export const dataUse = 'We use this to train our AI and to plan future free and negatively priced products. We never sell your personal data. We may share findings that can’t be traced to anyone.';
+
 const r = (collect: boolean, consent: ConsentMode, keepDays: number): CategoryRule => ({ collect, consent, keepDays });
 
 export const regionInfo: Record<Exclude<Region, 'custom'>, string> = {

@@ -132,6 +132,8 @@ export interface CompanyConfig {
   minimumAge?: number;
   /** Points, credit and what can be done with them. Points are on by default; credit and exchanging are off. */
   wallet?: import('../modules/wallet/assets').WalletSettings;
+  /** The games people can play for points. On by default; a company can replace the categories and brands. */
+  games?: Partial<import('../modules/games/service').GameSettings>;
   /** How much of the books the world sees, live. Each company chooses. */
   transparency?: Transparency;
   /** Security choices. Owners can be required to use a second sign-in step (a code from an authenticator app). */

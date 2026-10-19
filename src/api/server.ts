@@ -16,6 +16,7 @@ import { transparencyRoutes } from './transparency';
 import { agentRoutes } from './agents';
 import { environmentRoutes } from './environment';
 import { walletRoutes } from './wallet';
+import { gamesRoutes } from './games';
 import { studioRoutes } from './studio';
 import { BadKeyGuard, classify, limits, RateLimiter, securityHeaders, SecurityLog } from './security';
 import { teamRoutes } from './team';
@@ -606,6 +607,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   agentRoutes(app, route);
   environmentRoutes(app, route);
   walletRoutes(app, route);
+  gamesRoutes(app, route);
   studioRoutes(app, route);
   teamRoutes(app, route);
 
@@ -685,7 +687,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const body: any = req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body) ? req.body : undefined;
     const companyId = key?.companyId ?? companyOfPublic(body);
     if (!companyId || !platform.companies.has(companyId)) return;
-    const masked = body ? Object.fromEntries(Object.entries(body).map(([k, v]) => [k, /^(to|email|phone|address|code|password|token|dataBase64|birthDate|zip|household|language|lat|lng|accuracyM|context|place)$/i.test(k) ? (k === 'to' || k === 'email' || k === 'phone' ? mask(v) : '[kept out]') : v])) : undefined;
+    const masked = body ? Object.fromEntries(Object.entries(body).map(([k, v]) => [k, /^(to|email|phone|address|code|password|token|dataBase64|birthDate|zip|household|language|lat|lng|accuracyM|context|place|text|why)$/i.test(k) ? (k === 'to' || k === 'email' || k === 'phone' ? mask(v) : '[kept out]') : v])) : undefined;
     app.data.activity(companyId, actorOf(key, masked), `${r.method} ${r.url}`, { target: JSON.stringify(req.params ?? {}).slice(0, 200), detail: { status, ...(masked ? { body: masked } : {}) }, ip: req.ip, headers: req.headers, device: String(req.headers['user-agent'] ?? ''), gpc: String(req.headers['sec-gpc'] ?? '') === '1' }).catch(() => {});
   };
 
@@ -739,6 +741,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   const staticFiles: Record<string, { type: string; path: string }> = {
     'scan.js': { type: 'text/javascript', path: join(webDir, 'scan.js') },
     'scan.css': { type: 'text/css', path: join(webDir, 'scan.css') },
+    'play.js': { type: 'text/javascript', path: join(webDir, 'play.js') },
+    'play.css': { type: 'text/css', path: join(webDir, 'play.css') },
     'model-viewer.min.js': { type: 'text/javascript', path: modelViewerPath },
     'app.js': { type: 'text/javascript', path: join(webDir, 'app.js') },
     'app.css': { type: 'text/css', path: join(webDir, 'app.css') },
@@ -786,6 +790,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   // The FreeWater app: one page that handles every /app address itself.
   const appPage = async (_req: FastifyRequest, reply: FastifyReply) => reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; frame-ancestors 'none'").header('permissions-policy', 'camera=(self), geolocation=(self)').send(file(join(webDir, 'app.html')));
   server.get('/app', appPage);
+  // The games, for points: /play?c=<company>.
+  server.get('/play', async (_req, reply) => reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', "default-src 'self'; img-src 'self' data: blob:; connect-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; frame-ancestors 'none'").send(file(join(webDir, 'play.html'))));
   server.get('/app/*', async (req, reply) => {
     if (req.url.split('?')[0] === '/app/manifest.webmanifest') {
       return reply.type('application/manifest+json').send({ name: 'FreeWater', short_name: 'FreeWater', start_url: '/app', display: 'standalone', background_color: '#FFFFFF', theme_color: '#FFFFFF', icons: [{ src: '/static/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' }] });

@@ -50,7 +50,11 @@ import type { FootageProvider, StoryWriter } from './modules/video/contract';
 import { InteractionService } from './modules/interactions/service';
 import { geoFromEnv } from './modules/data/geoip';
 import { DataService } from './modules/data/service';
+import { seededRandom } from './core/ids';
 import { WalletService } from './modules/wallet/service';
+import { GamesService } from './modules/games/service';
+import { ClaudePrompter, builtinPrompter, type Prompter } from './modules/games/prompter';
+import { OpenFoodFactsImages, StockImages, WikipediaImages, type ProductImageSource } from './modules/games/images';
 import { TransparencyService } from './modules/transparency/service';
 import { AnchorService, GitHubPublisher, OpenTimestampsPublisher, type AnchorPublisher } from './modules/transparency/anchors';
 import { NumberLineService } from './modules/numberline/service';
@@ -110,6 +114,10 @@ export interface AppOptions {
   studioDesigner?: StudioDesigner;
   studioProviders?: { libraries: PhotoLibrary[]; images: ImageMaker; models: ModelMaker };
   geocoder?: Geocoder; // defaults to the test geocoder
+  /** Answers the games' prompt box (Claude with a key, else a polite note). */
+  prompter?: Prompter;
+  /** Where photos of real products come from (Wikipedia, Open Food Facts, photo libraries by default). */
+  productImages?: ProductImageSource[];
   /** Where each visitor is, so their own law applies (GEOIP_DB, a MaxMind file; without one, only trusted host headers). */
   geo?: import('./modules/data/jurisdiction').GeoIp | null;
   /** Tests and local runs: treat anyone we can't place as being here. Ignored in production (unknown means strictest). */
@@ -231,6 +239,7 @@ export async function createApp(opts: AppOptions) {
     return n;
   };
   data.removeUploads = async (companyId, userIds) => ('removeForUsers' in assets ? (assets as SqlAssetStore).removeForUsers(companyId, userIds) : 0);
+  data.removeAssets = async (companyId, ids) => ('removeIds' in assets ? (assets as SqlAssetStore).removeIds(companyId, ids) : 0);
   // The number line and honest data: everything placed, every choice sorted, from the first bottle on.
   const numberline = new NumberLineService(db, platform, opts.numberLineAgent ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeNumberLineAgent({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL }) : rulesAgent), opts.clock);
   numberline.rewardInPlay = (companyId) => !!platform.companies.get(companyId)?.lottery?.enabled;
@@ -247,6 +256,8 @@ export async function createApp(opts: AppOptions) {
   wallet.mayEarn = async (companyId, subject) => (await data.rewardsAllowed(companyId, [subject, ...(await data.linkedSubjects(companyId, subject))])) && (await data.ageOk(companyId, [subject])) !== false;
   wallet.linked = (companyId, subject) => data.linkedSubjects(companyId, subject);
   wallet.sourceSecret = await loadSecret(db, 'wallet');
+  const prompter = opts.prompter ?? (process.env.ANTHROPIC_API_KEY ? new ClaudePrompter({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_PROMPT_MODEL }) : builtinPrompter);
+  const games = new GamesService(db, platform, wallet, data, assets, prompter, opts.clock, opts.seed !== undefined ? seededRandom(opts.seed + 101) : Math.random);
   numberline.environmentOf = (companyId, person, subject, unitId) => environment.environmentOf(companyId, person, subject, unitId);
   accounts.audienceExtras = (companyId, personKey) => environment.audienceExtras(companyId, personKey);
   environment.watchScans();
@@ -278,6 +289,8 @@ export async function createApp(opts: AppOptions) {
     }),
     opts.studioDesigner ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeStudioDesigner({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL, fallback: rulesDesigner }) : rulesDesigner),
     opts.clock);
+  // Photos of real products for the games' cards: the company's own, Wikipedia, Open Food Facts, then photo libraries.
+  games.imageSources = opts.productImages ?? [new WikipediaImages(), new OpenFoodFactsImages(), new StockImages(studio.providers.libraries)];
   // Studio photos inside labels: printed labels carry them at print size (so a machine prints them whole, even
   // offline), previews at a smaller size. Only the studio's own picture tags are filled in, only with pictures.
   const photoCache = (maxBytes: number) => {
@@ -395,7 +408,7 @@ export async function createApp(opts: AppOptions) {
   await fleet.load();
   made.registry.registerPrinter('model6-fleet', new MachineFleetPrinter(() => fleet, made.printer));
 
-  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, studio, transparency, anchors, agents, profit, distributions, team, secondStep };
+  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, games, studio, transparency, anchors, agents, profit, distributions, team, secondStep };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;
