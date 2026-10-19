@@ -246,11 +246,7 @@ export async function createApp(opts: AppOptions) {
   const wallet = new WalletService(db, platform, opts.clock);
   wallet.mayEarn = async (companyId, subject) => (await data.rewardsAllowed(companyId, [subject, ...(await data.linkedSubjects(companyId, subject))])) && (await data.ageOk(companyId, [subject])) !== false;
   wallet.linked = (companyId, subject) => data.linkedSubjects(companyId, subject);
-  // Points for scanning a real bottle: once per bottle spot per person, only when its page really loaded.
-  platform.bus.on('unit.scanned', (e) => {
-    if (!e.payload.experienceLoaded || !/^[A-Za-z0-9_-]{8,64}$/.test(e.payload.viewerKey)) return;
-    wallet.later(wallet.earn(e.companyId, e.payload.viewerKey, 'scan', `scan:${e.payload.unitId}:${e.payload.slotIndex}:${e.payload.viewerKey}`));
-  });
+  wallet.sourceSecret = await loadSecret(db, 'wallet');
   numberline.environmentOf = (companyId, person, subject, unitId) => environment.environmentOf(companyId, person, subject, unitId);
   accounts.audienceExtras = (companyId, personKey) => environment.audienceExtras(companyId, personKey);
   environment.watchScans();

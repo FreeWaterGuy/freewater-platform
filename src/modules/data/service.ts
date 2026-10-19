@@ -453,8 +453,12 @@ export class DataService {
       await run('gifts directed', `update giving_directions set person = $3 where company_id = $1 and person = $2`, [companyId, k, c]);
       await run('value-back tests', `update value_arms set person = $3 where company_id = $1 and person = $2`, [companyId, k, c]);
       // Points and credit stay in the books (the journal must add up), under a code that leads nowhere.
-      await run('wallet', `update wallet_lines set account = $3 where account = $2 and tx_id in (select id from wallet_tx where company_id = $1)`, [companyId, `holder:${k}`, `holder:${c}`]);
-      await run('wallet', `update wallet_balances set account = $3 where company_id = $1 and account = $2`, [companyId, `holder:${k}`, `holder:${c}`]);
+      // Holding the points lock, so a reward being written at this moment can't land under the old name afterwards.
+      await this.db.transaction(async (tx) => {
+        await tx.query(`select 1 from wallet_balances where company_id = $1 and asset = $2 and account = 'supply' for update`, [companyId, `points:${companyId}`]);
+        await tx.query(`update wallet_lines set account = $3 where account = $2 and tx_id in (select id from wallet_tx where company_id = $1)`, [companyId, `holder:${k}`, `holder:${c}`]);
+        await tx.query(`update wallet_balances set account = $3 where company_id = $1 and account = $2`, [companyId, `holder:${k}`, `holder:${c}`]);
+      });
     }
   }
 

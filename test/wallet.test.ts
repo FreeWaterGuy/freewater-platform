@@ -37,9 +37,9 @@ describe('the points schedule', () => {
 describe('earning points', () => {
   it('a real bottle scan earns points once, and the same bottle again earns nothing', async () => {
     const u = (await app.platform.order({ companyId: 'freewater', orderId: 'w-1', locationId: 'ATX-014', productId: 'bottle-16oz' })).unit;
-    app.platform.scan(u.id, 0, 'viewer-wallet-1', true, 'scan-w-1');
-    app.platform.scan(u.id, 0, 'viewer-wallet-1', true, 'scan-w-2');
-    await app.wallet.idle();
+    const scan = (v: string) => call('POST', '/v1/public/scans', undefined, { unitId: u.id, slot: 0, viewerKey: v, experienceLoaded: true });
+    expect((await scan('viewer-wallet-1')).body.points).toBe(10);
+    expect((await scan('viewer-wallet-1')).body.points).toBeUndefined();
     const w = (await call('GET', '/v1/public/wallet/freewater?viewer=viewer-wallet-1')).body;
     expect(w.points.balance).toBe(10);
     expect(w.points.terms).toMatch(/no cash value/);
@@ -49,9 +49,19 @@ describe('earning points', () => {
 
   it('a page that didn’t load earns nothing', async () => {
     const u = (await app.platform.order({ companyId: 'freewater', orderId: 'w-2', locationId: 'ATX-014', productId: 'bottle-16oz' })).unit;
-    app.platform.scan(u.id, 0, 'viewer-wallet-2', false, 'scan-w-3');
-    await app.wallet.idle();
+    await call('POST', '/v1/public/scans', undefined, { unitId: u.id, slot: 0, viewerKey: 'viewer-wallet-2', experienceLoaded: false });
     expect(await app.wallet.pointsOf('freewater', 'viewer-wallet-2')).toBe(0);
+  });
+
+  it('a script can’t mint points: only the first few people per bottle, and one network has a daily limit', async () => {
+    const u = (await app.platform.order({ companyId: 'freewater', orderId: 'w-bot', locationId: 'ATX-014', productId: 'bottle-16oz' })).unit;
+    const got: number[] = [];
+    for (let i = 0; i < 8; i++) got.push((await call('POST', '/v1/public/scans', undefined, { unitId: u.id, slot: 0, viewerKey: `viewer-bot-${i}000`, experienceLoaded: true })).body.points ?? 0);
+    expect(got.filter((x) => x > 0).length).toBe(3);
+    // Many bottles, many made-up phones, one network: stops at three people's daily limit.
+    let total = 0;
+    for (let i = 0; i < 60; i++) total += (await app.wallet.earn('freewater', `viewer-net-${i}000`, 'feedback', `net:${i}`, { source: 'same-network' })).points;
+    expect(total).toBe(900); // 60 people × 20 would be 1,200
   });
 
   it('keeps to each action’s daily count and the daily total', async () => {
@@ -103,7 +113,7 @@ describe('credit and corrections', () => {
 
   it('a mistake is undone by a new entry; the old one stays, and the books still add up', async () => {
     await app.wallet.earn('freewater', 'viewer-wallet-7', 'feedback', 'w7:1');
-    const entry = (await app.wallet.wallet('freewater', 'viewer-wallet-7')).history[0].id;
+    const entry = (await app.wallet.wallet('freewater', 'viewer-wallet-7')).history[0]!.id;
     const r = await call('POST', '/v1/wallet/correct', keys['freewater-admin'], { entry, reason: 'bot account' });
     expect(r.status).toBe(200);
     expect(await app.wallet.pointsOf('freewater', 'viewer-wallet-7')).toBe(0);

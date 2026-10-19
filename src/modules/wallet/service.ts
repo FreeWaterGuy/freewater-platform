@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import type { SqlClient } from '../../db/client';
 import type { Platform } from '../../platform';
 import { newId } from '../../core/ids';
@@ -31,6 +32,21 @@ export class WalletService {
   later(p: Promise<unknown>) { const q = p.catch(() => {}).finally(() => this.pending.delete(q)); this.pending.add(q); }
   async idle() { while (this.pending.size) await Promise.all([...this.pending]); }
 
+  /** Keys the network fingerprints, so a fingerprint can't be turned back into an address. Set by the app. */
+  sourceSecret: string | Buffer = '';
+  /** A fingerprint of the network a request came from, for today only. */
+  sourceOf(ip: string | undefined) {
+    if (!ip) return undefined;
+    return createHmac('sha256', this.sourceSecret).update(`${this.clock().toISOString().slice(0, 10)}|${ip}`).digest('base64url').slice(0, 22);
+  }
+  /** A phone's key inside a reference, kept as a fingerprint (an erased phone can't be found again through it). */
+  hidden(companyId: string, key: string) { return createHmac('sha256', this.sourceSecret).update(`${companyId}|${key}`).digest('base64url').slice(0, 22); }
+
+  /** Points for scanning a real bottle whose page loaded: once per bottle spot per person, for the first few people only. */
+  async earnScan(companyId: string, viewerKey: string, unitId: string, slot: number, ip?: string) {
+    return this.earn(companyId, viewerKey, 'scan', `scan:${unitId}:${slot}:${this.hidden(companyId, viewerKey)}`, { source: this.sourceOf(ip), about: `unit:${unitId}`, perAbout: 3 });
+  }
+
   settings(companyId: string): WalletSettings {
     const c = this.platform.companies.get(companyId);
     return c?.wallet ?? defaultWallet(c?.name);
@@ -42,7 +58,16 @@ export class WalletService {
    * Points for something a person really did (scanned a real bottle, played a round, gave feedback). Counted once per
    * `ref`, within the day's limits, at the current rate, and never past the cap. Returns 0 points (with why) when not.
    */
-  async earn(companyId: string, subject: string, action: string, ref: string): Promise<Earned> {
+  async earn(companyId: string, subject: string, action: string, ref: string, opts: { source?: string; about?: string; perAbout?: number } = {}): Promise<Earned> {
+    try { return await this.earnOnce(companyId, subject, action, ref, opts); } catch (e: any) {
+      // Two identical requests at once: the second finds the first's entry.
+      if (e?.code === '23505') return { points: 0, balance: await this.pointsOf(companyId, subject), reason: 'already_counted' };
+      throw e;
+    }
+  }
+  /** One network (a household, a café, a script) can earn at most this many people's daily limit in a day. */
+  static perSourceDays = 3;
+  private async earnOnce(companyId: string, subject: string, action: string, ref: string, opts: { source?: string; about?: string; perAbout?: number }): Promise<Earned> {
     const s = this.settings(companyId).points;
     if (!s.enabled) return { points: 0, balance: 0, reason: 'off' };
     const base = s.perAction[action] ?? 0;
@@ -59,10 +84,16 @@ export class WalletService {
       const today = (await tx.query<any>(`select coalesce(sum(l.amount),0)::bigint as pts, count(*) filter (where t.kind = $4)::int as n from wallet_tx t join wallet_lines l on l.tx_id = t.id where t.company_id = $1 and t.asset = $2 and t.day = $3 and t.kind like 'earn:%' and l.account = any($5)`,
         [companyId, asset, day, `earn:${action}`, subjects.map((x) => `holder:${x}`)])).rows[0];
       if (today.n >= (s.actionDailyMax[action] ?? Infinity)) return { points: 0, balance: await this.sum(tx, companyId, asset, subjects), reason: 'daily_limit' };
-      const room = s.dailyMax - Number(today.pts);
+      // A real bottle is held by one person, maybe a few: only the first few people earn for scanning it.
+      if (opts.about && opts.perAbout !== undefined && Number((await tx.query<any>(`select count(*)::int as n from wallet_tx where company_id = $1 and about = $2 and kind = $3`, [companyId, opts.about, `earn:${action}`])).rows[0].n) >= opts.perAbout) return { points: 0, balance: await this.sum(tx, companyId, asset, subjects), reason: 'bottle_limit' };
+      let room = s.dailyMax - Number(today.pts);
+      if (opts.source) {
+        const fromSource = Number((await tx.query<any>(`select coalesce(sum(l.amount),0)::bigint as pts from wallet_tx t join wallet_lines l on l.tx_id = t.id and l.account like 'holder:%' where t.company_id = $1 and t.asset = $2 and t.day = $3 and t.source = $4 and t.kind like 'earn:%'`, [companyId, asset, day, opts.source])).rows[0].pts);
+        room = Math.min(room, s.dailyMax * WalletService.perSourceDays - fromSource);
+      }
       const pts = Math.min(pointsNow(base, -supply, s.cap), Math.max(0, room));
       if (pts <= 0) return { points: 0, balance: await this.sum(tx, companyId, asset, subjects), reason: room <= 0 ? 'daily_limit' : 'cap_reached' };
-      await this.post(tx, companyId, asset, `earn:${action}`, `earn:${ref}`, [['supply', -pts], [`holder:${subject}`, pts]], { action });
+      await this.post(tx, companyId, asset, `earn:${action}`, `earn:${ref}`, [['supply', -pts], [`holder:${subject}`, pts]], { action }, { source: opts.source, about: opts.about });
       return { points: pts, balance: await this.sum(tx, companyId, asset, subjects) };
     });
   }
@@ -72,6 +103,12 @@ export class WalletService {
    * arrived (the payment itself is handled by the books). Credit can never exceed what's in reserve.
    */
   async fundReserve(companyId: string, sponsor: string, cents: number, by: string, ref: string) {
+    return this.once(() => this.fundOnce(companyId, sponsor, cents, by, ref), () => { throw new WalletError('duplicate', 'That payment was already recorded.', 409); });
+  }
+  private async once<T>(f: () => Promise<T>, dup: () => T): Promise<T> {
+    try { return await f(); } catch (e: any) { if (e?.code === '23505') return dup(); throw e; }
+  }
+  private async fundOnce(companyId: string, sponsor: string, cents: number, by: string, ref: string) {
     if (!Number.isInteger(cents) || cents <= 0 || cents > 100_000_000) throw new WalletError('bad_amount', 'Put in 1¢ to $1,000,000.');
     const asset = this.creditAsset(companyId);
     return this.db.transaction(async (tx) => {
@@ -83,6 +120,9 @@ export class WalletService {
 
   /** Give a person dollar credit out of a sponsor's reserve. Only when credit is on, and never more than the reserve holds. */
   async giveCredit(companyId: string, sponsor: string, subject: string, cents: number, ref: string, why: string) {
+    return this.once(() => this.creditOnce(companyId, sponsor, subject, cents, ref, why), () => ({ cents: 0, reason: 'already_given' }));
+  }
+  private async creditOnce(companyId: string, sponsor: string, subject: string, cents: number, ref: string, why: string) {
     if (!this.settings(companyId).credit.enabled) throw new WalletError('switched_off', 'Credit is switched off until a person turns it on.', 403);
     if (!Number.isInteger(cents) || cents <= 0 || cents > 100_000) throw new WalletError('bad_amount', 'Give 1¢ to $1,000.');
     if (this.mayEarn && !(await this.mayEarn(companyId, subject))) throw new WalletError('not_available_here', 'Rewards aren’t available for this person.', 403);
@@ -107,11 +147,16 @@ export class WalletService {
   /** Fix a mistake: a new entry that undoes an old one. The old one stays, marked as undone. */
   async correct(companyId: string, txId: string, by: string, reason: string) {
     return this.db.transaction(async (tx) => {
-      const t = (await tx.query<any>(`select * from wallet_tx where id = $1 and company_id = $2`, [txId, companyId])).rows[0];
+      const t = (await tx.query<any>(`select * from wallet_tx where id = $1 and company_id = $2 for update`, [txId, companyId])).rows[0];
       if (!t) throw new WalletError('not_found', 'No such entry.', 404);
       if (t.reversed_by) throw new WalletError('already_corrected', 'That entry was already undone.', 409);
       if (t.kind === 'correction') throw new WalletError('is_correction', 'Undo the original entry instead.');
       const lines = (await tx.query<any>(`select account, amount from wallet_lines where tx_id = $1`, [txId])).rows;
+      // Undoing a payment into a reserve can't leave less in it than has already been given out as credit.
+      for (const l of lines) if (l.account.startsWith('reserve:') && Number(l.amount) > 0) {
+        const bal = Number((await tx.query<any>(`select balance from wallet_balances where company_id = $1 and asset = $2 and account = $3 for update`, [companyId, t.asset, l.account])).rows[0]?.balance ?? 0);
+        if (bal - Number(l.amount) < 0) throw new WalletError('reserve_used', 'Some of that reserve was already given out as credit; it can’t be undone in full.', 409);
+      }
       const id = await this.post(tx, companyId, t.asset, 'correction', `correct:${txId}`, lines.map((l) => [l.account, -Number(l.amount)] as [string, number]), { by, reason: reason.slice(0, 300), corrects: txId });
       await tx.query(`update wallet_tx set reversed_by = $2 where id = $1`, [txId, id]);
       return { corrected: txId, by: id };
@@ -130,7 +175,7 @@ export class WalletService {
     const s = this.settings(companyId);
     const holders = subjects.map((x) => `holder:${x}`);
     const history = (await this.db.query<any>(`select t.id, t.asset, t.kind, t.memo, t.at, l.amount from wallet_tx t join wallet_lines l on l.tx_id = t.id where t.company_id = $1 and l.account = any($2) order by t.at desc, t.id desc limit 50`, [companyId, holders])).rows
-      .map((r) => ({ id: r.id, what: r.asset.startsWith('points:') ? 'points' : 'credit', kind: r.kind, amount: Number(r.amount), at: new Date(r.at).toISOString(), ...(typeof r.memo === 'string' ? JSON.parse(r.memo) : r.memo ?? {}) }));
+      .map((r) => { const m = (typeof r.memo === 'string' ? JSON.parse(r.memo) : r.memo) ?? {}; return { id: r.id, what: r.asset.startsWith('points:') ? 'points' : 'credit', kind: r.kind, amount: Number(r.amount), at: new Date(r.at).toISOString(), ...(m.action ? { action: m.action } : {}), ...(m.why ? { why: m.why } : {}) }; });
     const viewers = subjects.filter((x) => !x.includes(':'));
     const coupons = viewers.length ? (await this.db.query<any>(`select code, advertiser_id, campaign_id, created_at from coupon_codes where company_id = $1 and viewer_key = any($2) order by created_at desc limit 50`, [companyId, viewers]).catch(() => ({ rows: [] as any[] }))).rows
       .map((r) => ({ code: r.code, advertiser: this.platform.campaigns.get(r.campaign_id)?.advertiserName ?? null, at: new Date(r.created_at).toISOString() })) : [];
@@ -160,7 +205,8 @@ export class WalletService {
   async check(companyId: string) {
     const rebuilt = (await this.db.query<any>(`select t.asset, l.account, sum(l.amount)::bigint as bal from wallet_lines l join wallet_tx t on t.id = l.tx_id where t.company_id = $1 group by t.asset, l.account`, [companyId])).rows;
     const kept = new Map((await this.db.query<any>(`select asset, account, balance from wallet_balances where company_id = $1`, [companyId])).rows.map((r) => [`${r.asset}|${r.account}`, Number(r.balance)]));
-    const off = rebuilt.filter((r) => (kept.get(`${r.asset}|${r.account}`) ?? 0) !== Number(r.bal)).map((r) => ({ asset: r.asset, account: r.account, journal: Number(r.bal), balance: kept.get(`${r.asset}|${r.account}`) ?? 0 }));
+    const journal = new Map(rebuilt.map((r) => [`${r.asset}|${r.account}`, Number(r.bal)]));
+    const off = [...new Set([...journal.keys(), ...kept.keys()])].filter((k) => (journal.get(k) ?? 0) !== (kept.get(k) ?? 0)).map((k) => { const [asset, account] = k.split('|') as [string, string]; return { asset, account, journal: journal.get(k) ?? 0, balance: kept.get(k) ?? 0 }; });
     const unbalanced = (await this.db.query<any>(`select t.id from wallet_tx t join wallet_lines l on l.tx_id = t.id where t.company_id = $1 group by t.id having sum(l.amount) <> 0`, [companyId])).rows.map((r) => r.id);
     return { ok: !off.length && !unbalanced.length, off, unbalanced };
   }
@@ -170,11 +216,11 @@ export class WalletService {
   private async subjectsOf(companyId: string, subject: string) {
     return [...new Set([subject, ...((await this.linked?.(companyId, subject)) ?? [])])];
   }
-  private async post(tx: SqlClient, companyId: string, asset: string, kind: string, ref: string, lines: [string, number][], memo: Record<string, unknown>) {
+  private async post(tx: SqlClient, companyId: string, asset: string, kind: string, ref: string, lines: [string, number][], memo: Record<string, unknown>, extra: { source?: string; about?: string } = {}) {
     if (lines.reduce((a, [, n]) => a + n, 0) !== 0) throw new Error('wallet entry does not balance');
     const id = newId('wtx');
     const at = this.clock();
-    await tx.query(`insert into wallet_tx (id, company_id, asset, kind, ref, memo, day, at) values ($1,$2,$3,$4,$5,$6,$7,$8)`, [id, companyId, asset, kind, ref, JSON.stringify(memo), at.toISOString().slice(0, 10), at.toISOString()]);
+    await tx.query(`insert into wallet_tx (id, company_id, asset, kind, ref, memo, day, at, source, about) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [id, companyId, asset, kind, ref, JSON.stringify(memo), at.toISOString().slice(0, 10), at.toISOString(), extra.source ?? null, extra.about ?? null]);
     for (const [account, amount] of lines) {
       await tx.query(`insert into wallet_lines (tx_id, account, amount) values ($1,$2,$3)`, [id, account, amount]);
       await tx.query(`insert into wallet_balances (company_id, asset, account, balance) values ($1,$2,$3,$4) on conflict (company_id, asset, account) do update set balance = wallet_balances.balance + excluded.balance`, [companyId, asset, account, amount]);

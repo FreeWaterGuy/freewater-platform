@@ -1022,8 +1022,12 @@ create table person_details (company_id text not null, subject text not null, ag
     sql: `
 -- Wallets: a double-entry journal (each entry's lines add to zero) and balances kept alongside. A mistake is fixed by a
 -- correcting entry that points back at the one it undoes; nothing is edited.
-create table wallet_tx (id text primary key, company_id text not null, asset text not null, kind text not null, ref text not null, memo jsonb, day text not null, at timestamptz not null, reversed_by text, unique (company_id, ref));
+-- source: a keyed fingerprint of the network a reward came from that day (not reversible to an address), so one
+-- household or one script can't earn without limit. about: the bottle a scan reward was for.
+create table wallet_tx (id text primary key, company_id text not null, asset text not null, kind text not null, ref text not null, memo jsonb, day text not null, at timestamptz not null, reversed_by text, source text, about text, unique (company_id, ref));
 create index wallet_tx_day on wallet_tx(company_id, asset, day);
+create index wallet_tx_source on wallet_tx(company_id, day, source);
+create index wallet_tx_about on wallet_tx(company_id, about);
 create table wallet_lines (tx_id text not null references wallet_tx(id), account text not null, amount bigint not null);
 create index wallet_lines_account on wallet_lines(account);
 create index wallet_lines_tx on wallet_lines(tx_id);
