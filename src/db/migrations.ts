@@ -1109,6 +1109,24 @@ update wallet_balances b set account = 'holder:' || h.id from wallet_holders h w
 delete from chain_seals;
 `,
   },
+  {
+    id: '039_launch',
+    sql: `
+-- Going live in steps, testing with bots and resetting, and minting that people sign on the real network.
+alter table chain_actions add column prepared text;
+create table chain_state (company_id text not null, key text not null, value text not null, primary key (company_id, key));
+create table launch_resets (company_id text not null, at timestamptz not null, by text not null, counts jsonb not null);
+`,
+  },
+  {
+    id: '040_game_extras',
+    sql: `
+-- How a tap or a spin went (where and when the tap landed; how long a 3D model was turned), and picks that came true.
+alter table game_rounds add column extra jsonb;
+create table game_launches (id text primary key, company_id text not null, category text not null, item_id text not null, label text not null, share real not null, answers integer not null, offer_id text, by text not null, at timestamptz not null);
+create index game_launches_company on game_launches(company_id);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

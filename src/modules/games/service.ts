@@ -29,8 +29,12 @@ export interface GameSettings {
   checkEvery: number;
   /** Answers faster than this (milliseconds, measured by the server) earn nothing and are marked. */
   minAnswerMs: number;
+  /** Every this-many screens, "tap the QR code" on a bottle (a quick reflex game). */
+  tapEvery: number;
+  /** Every this-many screens, two 3D things to spin around (and place in your room, in AR). */
+  arEvery: number;
 }
-export const defaultGames: GameSettings = { enabled: true, adRoundEvery: 4, checkEvery: 9, minAnswerMs: 700 };
+export const defaultGames: GameSettings = { enabled: true, adRoundEvery: 4, checkEvery: 9, minAnswerMs: 700, tapEvery: 7, arEvery: 11 };
 
 /** California's notice of financial incentive, and the same idea everywhere: what's exchanged, and that it's optional. */
 export const incentiveNotice = 'Points for answering are a financial incentive under California law. You get points for each answer; we get your answers, which we use to train our AI and plan future free and negatively priced products. We value each answer at about the points it earns. Playing is optional: everything else (AR, videos, offers) works without it. You can stop any time and erase your answers.';
@@ -105,7 +109,7 @@ export class GamesService {
     const needs = !s.enabled ? 'off' : !rules.rewards ? 'not_available_here' : age === false ? 'too_young' : age === null ? 'age' : !joined || !said?.on ? 'yes' : null;
     return {
       canPlay: needs === null, needs, minimumAge: rules.minimumAge, region: rules.region,
-      notice: incentiveNotice, use: dataUse,
+      notice: incentiveNotice, use: dataUse, cameTrue: await this.cameTrue(companyId, viewerKey),
       points: { perRound: this.wallet.settings(companyId).points.perAction.game_round ?? 0, balance: await this.wallet.pointsOf(companyId, viewerKey), name: this.wallet.settings(companyId).points.name },
     };
   }
@@ -141,7 +145,7 @@ export class GamesService {
     const open = await openRound();
     if (open) return this.view(open, companyId);
     const played = Number((await this.db.query<any>(`select count(*)::int as n from game_rounds where company_id = $1 and person = $2`, [companyId, viewerKey])).rows[0].n) + 1;
-    const round = played % s.checkEvery === 0 ? this.checkRound(companyId) : played % s.adRoundEvery === 0 ? this.adRound(companyId) : this.choiceRound(companyId);
+    const round = played % s.checkEvery === 0 ? this.checkRound(companyId) : played % s.adRoundEvery === 0 ? this.adRound(companyId) : played % s.tapEvery === 0 ? this.tapRound() : played % s.arEvery === 0 ? this.arRound() : this.choiceRound(companyId);
     const id = newId('gr');
     try {
       await this.db.query(`insert into game_rounds (id, company_id, person, kind, category, realness, items, served_at) values ($1,$2,$3,$4,$5,$6,$7,$8)`, [id, companyId, viewerKey, round.kind, round.category, round.realness, JSON.stringify(round.items), this.now()]);
@@ -157,7 +161,7 @@ export class GamesService {
    * An answer: which one, why (optional), and how it was given (taps before settling, how long the person says it took).
    * The server times it too; an answer faster than a person could read earns nothing and is marked.
    */
-  async answer(companyId: string, viewerKey: string, roundId: string, a: { pick: string; why?: string; changes?: number; responseMs?: number; taps?: string[] }, req?: { ip?: string; headers: Record<string, unknown> }) {
+  async answer(companyId: string, viewerKey: string, roundId: string, a: { pick: string; why?: string; changes?: number; responseMs?: number; tap?: { x: number; y: number; tMs: number }; spinMs?: number }, req?: { ip?: string; headers: Record<string, unknown> }) {
     if (!(await this.status(companyId, viewerKey, req)).canPlay) throw new GameError('not_playing', 'Join the game first.', 403);
     const r = (await this.db.query<any>(`select * from game_rounds where id = $1 and company_id = $2 and person = $3`, [roundId, companyId, viewerKey])).rows[0];
     if (!r) throw new GameError('not_found', 'No such screen.', 404);
@@ -172,14 +176,26 @@ export class GamesService {
     const failedCheckToday = (await this.db.query<any>(`select 1 from game_rounds where company_id = $1 and person = $2 and kind = 'check' and flagged = 'failed_check' and answered_at >= $3 limit 1`, [companyId, viewerKey, dayStart])).rows.length > 0;
     let flagged: string | null = elapsed < s.minAnswerMs ? 'too_fast' : null;
     if (r.kind === 'check' && !chosen.correct) flagged = 'failed_check';
+    // Tap the QR: it counts if the tap landed on the code while it was showing, and no faster than a person can react.
+    let missed = false, extra: Record<string, unknown> | null = null;
+    if (r.kind === 'tap') {
+      const t = chosen.target, tap = a.tap;
+      // x is a share of the label's width, y of its height; the code is square on a 3:4 label.
+      // The server's own clock too: the answer can't come before the code appeared, or long after it was gone.
+      const since = elapsed - t.delayMs;
+      missed = !tap || since < 250 || since > t.showMs + 4000 || Math.abs(tap.x - t.x) > t.size / 2 + 0.03 || Math.abs(tap.y - t.y) > (t.size * 0.75) / 2 + 0.03 || tap.tMs < 250 || tap.tMs > t.showMs;
+      extra = tap ? { tap: { x: Math.round(tap.x * 1000) / 1000, y: Math.round(tap.y * 1000) / 1000, tMs: Math.round(tap.tMs) }, hit: !missed } : { hit: false };
+    }
+    if (r.kind === 'ar' && a.spinMs !== undefined) extra = { spinMs: Math.max(0, Math.min(600_000, Math.round(a.spinMs))) };
     const tier = r.kind === 'choice' ? structuralTier(chosen.frame as Frame, items.filter((i) => i !== chosen).map((i) => i.frame as Frame)) : null;
     const why = a.why?.trim().slice(0, 500) || null;
     // Taken by this request only: two at once can't both answer.
     const took = await this.db.query(`update game_rounds set answered_at = $2, pick = $3, why = $4, changes = $5, response_ms = $6, server_ms = $7, tier = $8, flagged = $9 where id = $1 and answered_at is null`,
       [roundId, this.now(), chosen.key, why, Math.max(0, Math.min(50, a.changes ?? 0)), a.responseMs !== undefined ? Math.max(0, Math.min(600_000, Math.round(a.responseMs))) : null, elapsed, tier, flagged]);
     if (!Number(took.rowCount ?? 1)) throw new GameError('answered', 'Already answered.', 409);
+    if (extra) await this.db.query(`update game_rounds set extra = $2 where id = $1`, [roundId, JSON.stringify(extra)]);
     let points = 0;
-    if (!flagged && !failedCheckToday && r.kind !== 'check') {
+    if (!flagged && !failedCheckToday && r.kind !== 'check' && !missed) {
       points = (await this.wallet.earn(companyId, viewerKey, r.kind === 'ad' ? 'ad_feedback' : 'game_round', `round:${roundId}`, { source: this.wallet.sourceOf(req?.ip) })).points;
       // A reason in a few words, for an ad round, counts as feedback too.
       if (r.kind === 'ad' && why && why.length >= 15) points += (await this.wallet.earn(companyId, viewerKey, 'feedback', `why:${roundId}`, { source: this.wallet.sourceOf(req?.ip) })).points;
@@ -201,13 +217,14 @@ export class GamesService {
       if (c.shown < GamesService.revealAfter) { others = null; break; }
       others[i.key] = Math.round((100 * c.picked) / c.shown);
     } else others = null;
-    return { points, streak, ...(bonus ? { bonus } : {}), ...(others ? { others } : { early: r.kind === 'choice' }), ...(flagged ? { note: flagged === 'too_fast' ? 'That was very quick. Take a moment with each one.' : 'Take a closer look at the question.' } : {}), ...(tier ? { tier } : {}) };
+    return { points, streak, ...(r.kind === 'tap' ? { hit: !missed } : {}), ...(bonus ? { bonus } : {}), ...(others ? { others } : { early: r.kind === 'choice' }), ...(flagged ? { note: flagged === 'too_fast' ? 'That was very quick. Take a moment with each one.' : 'Take a closer look at the question.' } : {}), ...(tier ? { tier } : {}) };
   }
 
   /** The feedback box: anything the person wants to tell us, with a picture or screenshot if they like. */
-  async feedback(companyId: string, viewerKey: string, f: { text: string; image?: { contentType: string; bytes: Uint8Array } }, req?: { ip?: string }) {
+  async feedback(companyId: string, viewerKey: string, f: { text: string; image?: { contentType: string; bytes: Uint8Array }; video?: { contentType: string; bytes: Uint8Array } }, req?: { ip?: string }) {
+    if (f.video && !f.image) f = { ...f, image: f.video }; // a video is kept the same way (checked to really be a video)
     const text = f.text.trim().slice(0, 2000);
-    if (text.length < 3 && !f.image) throw new GameError('empty', 'Write something or add a picture.');
+    if (text.length < 3 && !f.image) throw new GameError('empty', 'Write something or add a picture or video.');
     if (!(await this.status(companyId, viewerKey, req as any)).canPlay) throw new GameError('not_playing', 'Join the game first.', 403);
     // Kept under this phone, so erasing the phone erases the picture too.
     const asset = f.image ? await this.assets.put({ companyId, userId: `viewer:${viewerKey}`, contentType: f.image.contentType, bytes: f.image.bytes, name: 'feedback' }) : null;
@@ -231,6 +248,39 @@ export class GamesService {
     const real = q.length >= 15 && /[a-z]{3,}.*\s.*[a-z]{3,}/i.test(q) && !(await this.repeated(companyId, viewerKey, 'prompt', q, id));
     const points = real && (await this.mayEarn(companyId, viewerKey)) ? (await this.wallet.earn(companyId, viewerKey, 'prompt', `prompt:${id}`, { source: this.wallet.sourceOf(req?.ip) })).points : 0;
     return { answer, points };
+  }
+
+  // ---------- picks that come true ----------
+
+  /** For one category: what people picked most (clean answers only, no bots), by share of the times each was shown. */
+  async winners(companyId: string, category: string) {
+    const rows = (await this.db.query<any>(`select items, pick_item from game_rounds where company_id = $1 and category = $2 and kind = 'choice' and answered_at is not null and flagged is null and person not like 'bot\\_%'`, [companyId, category])).rows;
+    const shown = new Map<string, { label: string; shown: number; picked: number }>();
+    for (const r of rows) for (const i of (typeof r.items === 'string' ? JSON.parse(r.items) : r.items) as any[]) {
+      const x = shown.get(i.id) ?? { label: i.label, shown: 0, picked: 0 }; x.shown++; if (i.id === r.pick_item) x.picked++; shown.set(i.id, x);
+    }
+    return [...shown.entries()].map(([id, x]) => ({ id, label: x.label, shown: x.shown, picked: x.picked, share: x.shown ? x.picked / x.shown : 0 })).sort((a, b) => Number(b.shown >= 20) - Number(a.shown >= 20) || b.share - a.share || b.shown - a.shown); // only items seen enough can win
+  }
+  /**
+   * The team makes a pick come true: the winner of a "may come true" category is recorded, linked to the offer the
+   * company makes for it, and everyone who picked it is told the next time they play.
+   */
+  async comeTrue(companyId: string, category: string, by: string, o: { itemId?: string; offerId?: string } = {}) {
+    if (!this.settings(companyId).mayComeTrue?.includes(category)) throw new GameError('not_promised', 'Only categories marked “picks may come true” can come true.', 409);
+    const w = await this.winners(companyId, category);
+    if (o.offerId && !(await this.db.query(`select 1 from offers where id = $1 and company_id = $2`, [o.offerId, companyId])).rows.length) throw new GameError('not_found', 'No such offer.', 404);
+    const pick = o.itemId ? w.find((x) => x.id === o.itemId) : w[0];
+    if (!pick || pick.shown < 20) throw new GameError('too_few', 'Not enough people have picked in this category yet (at least 20 views of the winner).', 409);
+    const id = newId('gl');
+    await this.db.query(`insert into game_launches (id, company_id, category, item_id, label, share, answers, offer_id, by, at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [id, companyId, category, pick.id, pick.label, pick.share, pick.shown, o.offerId ?? null, by, this.now()]);
+    return { id, category, item: pick.label, share: Math.round(pick.share * 1000) / 1000, offerId: o.offerId ?? null };
+  }
+  async launches(companyId: string) {
+    return (await this.db.query<any>(`select id, category, item_id, label, share, answers, offer_id, at from game_launches where company_id = $1 order by at desc`, [companyId])).rows.map((r) => ({ id: r.id, category: r.category, item: r.label, share: Number(r.share), answers: r.answers, offerId: r.offer_id, at: new Date(r.at).toISOString() }));
+  }
+  /** Picks this person made that came true. */
+  private async cameTrue(companyId: string, person: string) {
+    return (await this.db.query<any>(`select l.label, l.offer_id from game_launches l where l.company_id = $1 and exists (select 1 from game_rounds r where r.company_id = l.company_id and r.person = $2 and r.pick_item = l.item_id and r.answered_at <= l.at) order by l.at desc limit 5`, [companyId, person])).rows.map((r) => ({ item: r.label, offerId: r.offer_id }));
   }
 
   /** What the games have learned, for the team: picks by price setup, how fast and how sure people were, where on the screen. */
@@ -318,6 +368,19 @@ export class GamesService {
     const items = this.pick(pool, n).map((a, i) => ({ key: `k${i}`, id: a.id, label: a.label, svg: a.svg(), position: i, frame: { kind: 'free_ads' } as Frame }));
     return { kind: 'ad', category: 'ads', ask: 'Which ad would make you scan the bottle?', realness: 'virtual' as Realness, items };
   }
+  /** Tap the QR: a bottle label (a made-up ad) with its code popping up somewhere for a moment. */
+  private tapRound() {
+    const ad = this.pick(fictionalAds, 1)[0]!;
+    const size = 0.16 + this.random() * 0.06;
+    const target = { x: Math.round((0.15 + this.random() * 0.7) * 1000) / 1000, y: Math.round((0.2 + this.random() * 0.6) * 1000) / 1000, size: Math.round(size * 1000) / 1000, delayMs: Math.round(600 + this.random() * 1400), showMs: 2600 };
+    return { kind: 'tap', category: 'tap', ask: 'Tap the code as soon as it pops up!', realness: 'virtual' as Realness, items: [{ key: 'k0', id: `tap:${ad.id}`, label: ad.spec.brand, svg: renderStudio(ad.spec, 300, 400), target, position: 0, frame: { kind: 'free_ads' } as Frame }] };
+  }
+  /** Two 3D things to turn around (and, on a phone, place in the room): which would you have? */
+  private arRound() {
+    const models: [string, string][] = [['burger', 'A burger'], ['fries', 'Fries'], ['drink', 'A cold drink'], ['latte', 'A latte'], ['house', 'A little house']];
+    const two = this.pick(models, 2);
+    return { kind: 'ar', category: 'ar', ask: 'Spin them around. Which would you rather have right now?', realness: 'virtual' as Realness, items: two.map(([id, label], i) => ({ key: `k${i}`, id: `model:${id}`, label, model: `/models/builtin/${id}.glb`, ios: `/models/builtin/${id}.usdz`, position: i, frame: { kind: 'free_ads' } as Frame })) };
+  }
   /** A quick check that a person is reading: pick the one named in the question. */
   private checkRound(companyId: string): ReturnType<GamesService['choiceRound']> {
     const cat = this.pick(this.catalog(companyId).filter((c) => c.items.length >= 3), 1)[0];
@@ -340,11 +403,11 @@ export class GamesService {
     const own = new Map(cat?.items.filter((i) => i.image).map((i) => [i.id, { url: `/assets/${i.image}.jpg`, credit: null as string | null, license: null as string | null }]) ?? []);
     const photos = new Map<string, { url: string; credit: string | null; license: string | null }>(own);
     if (ids.length) for (const p of (await this.db.query<any>(`select item_id, asset_id, credit, license from catalog_images where company_id = $1 and item_id = any($2) and asset_id is not null`, [companyId, ids])).rows) if (!photos.has(p.item_id)) photos.set(p.item_id, { url: `/assets/${p.asset_id}.jpg`, credit: p.credit, license: p.license });
-    const ask = r.ask ?? (r.kind === 'ad' ? 'Which ad would make you scan the bottle?' : r.kind === 'check' ? `Quick check: tap “${items.find((i) => i.correct)?.label ?? ''}”` : cat?.ask ?? 'Which would you pick?');
+    const ask = r.ask ?? (r.kind === 'ad' ? 'Which ad would make you scan the bottle?' : r.kind === 'tap' ? 'Tap the code as soon as it pops up!' : r.kind === 'ar' ? 'Spin them around. Which would you rather have right now?' : r.kind === 'check' ? `Quick check: tap “${items.find((i) => i.correct)?.label ?? ''}”` : cat?.ask ?? 'Which would you pick?');
     return {
-      id: r.id, kind: r.kind, ask, category: cat?.name ?? (r.kind === 'ad' ? 'Ads' : r.category),
+      id: r.id, kind: r.kind, ask, category: cat?.name ?? ({ ad: 'Ads', tap: 'Quick tap', ar: 'In 3D' } as Record<string, string>)[r.kind] ?? r.category,
       realness: { kind: r.realness as Realness, text: realnessText[r.realness as Realness] },
-      items: items.map((i) => ({ key: i.key, label: i.label, brand: i.brand ?? null, name: i.name ?? i.label, price: i.price ?? null, ...(photos.get(i.id) ? { photo: photos.get(i.id) } : {}), ...(i.svg ? { svg: i.svg } : {}), ...(i.frame && r.kind === 'choice' ? { setup: i.frame.kind, net: frameNet(i.frame) } : {}) })),
+      items: items.map((i) => ({ key: i.key, label: i.label, brand: i.brand ?? null, name: i.name ?? i.label, price: i.price ?? null, ...(photos.get(i.id) ? { photo: photos.get(i.id) } : {}), ...(i.svg ? { svg: i.svg } : {}), ...(i.target ? { target: i.target } : {}), ...(i.model ? { model: i.model, ios: i.ios } : {}), ...(i.frame && r.kind === 'choice' ? { setup: i.frame.kind, net: frameNet(i.frame) } : {}) })),
       askWhy: r.kind === 'ad',
     };
   }

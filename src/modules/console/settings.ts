@@ -19,7 +19,7 @@ export const fontChoices: { id: string; label: string; value: string }[] = [
 export const adCategories = ['food', 'drink', 'coffee', 'fitness', 'health', 'news', 'retail', 'local-services', 'real-estate', 'auto', 'finance', 'entertainment', 'events', 'travel', 'tech', 'education', 'nonprofit', 'politics', 'alcohol', 'tobacco', 'cannabis', 'gambling', 'weapons', 'dating'];
 
 /** The parts of the settings a PATCH may send. Anything else is refused. */
-export const editableKeys = ['name', 'receiptBaseUrl', 'scanBaseUrl', 'brand', 'productFacts', 'giving', 'openBooks', 'unitCosts', 'consumerPricing', 'timezone', 'consumer', 'machines', 'qr', 'ar', 'standardProductId', 'adRules', 'prices', 'modules', 'lottery', 'data', 'transparency', 'agents', 'ratchet', 'security', 'research', 'wallet', 'offers', 'games', 'minimumAge', 'chain'] as const;
+export const editableKeys = ['name', 'receiptBaseUrl', 'scanBaseUrl', 'brand', 'productFacts', 'giving', 'openBooks', 'unitCosts', 'consumerPricing', 'timezone', 'consumer', 'machines', 'qr', 'ar', 'standardProductId', 'adRules', 'prices', 'modules', 'lottery', 'data', 'transparency', 'agents', 'ratchet', 'security', 'research', 'wallet', 'offers', 'games', 'minimumAge', 'chain', 'launch'] as const;
 export type EditableKey = (typeof editableKeys)[number];
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
@@ -118,6 +118,9 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
     if (g.enabled !== undefined && typeof g.enabled !== 'boolean') return 'The games are on or off.';
     if (g.checkEvery !== undefined && !isInt(g.checkEvery, 3, 30)) return 'A quick check comes every 3 to 30 screens.';
     if (g.adRoundEvery !== undefined && !isInt(g.adRoundEvery, 2, 50)) return 'An ad round comes every 2 to 50 screens.';
+    if (g.tapEvery !== undefined && !isInt(g.tapEvery, 2, 50)) return 'A quick-tap round comes every 2 to 50 screens.';
+    if (g.arEvery !== undefined && !isInt(g.arEvery, 2, 50)) return 'A 3D round comes every 2 to 50 screens.';
+    if (g.mayComeTrue !== undefined && (!Array.isArray(g.mayComeTrue) || g.mayComeTrue.some((x: unknown) => typeof x !== 'string'))) return 'Picks that may come true are a list of categories.';
     if (g.minAnswerMs !== undefined && !isInt(g.minAnswerMs, 400, 5000)) return 'The quickest counted answer is 0.4 to 5 seconds.';
     if (g.catalog !== undefined && (!Array.isArray(g.catalog) || g.catalog.length > 100 || g.catalog.some((k: any) => !k || typeof k.id !== 'string' || typeof k.name !== 'string' || typeof k.ask !== 'string' || !Array.isArray(k.items) || k.items.length > 50 || k.items.some((i: any) => !i || typeof i.id !== 'string' || typeof i.name !== 'string')))) return 'Each game category has an id, a name, a question and up to 50 items with ids and names.';
   }
@@ -154,6 +157,7 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
  * "switch on" action). Switching it off is always allowed. Fewer approvals or a shorter wait can't be set while it's on.
  */
 export function chainProblem(cur: CompanyConfig, next: CompanyConfig, approved = false): string | null {
+  if (JSON.stringify(cur.launch ?? null) !== JSON.stringify(next.launch ?? null) && !approved) return 'Going live (and turning on withdrawals) is its own step, approved and with a wait. Propose it under Launch.';
   const a = cur.chain, b = next.chain;
   if (b?.enabled && !a?.enabled && !approved) return 'Switching the chain on needs several people to approve it, then a wait. Propose it under Chain.';
   if (a?.enabled && b?.enabled && (b.approvalsNeeded < a.approvalsNeeded || b.delayHours < a.delayHours)) return 'While the chain is on, approvals and the wait can be raised, not lowered. Switch it off first.';
@@ -164,8 +168,9 @@ export function chainProblem(cur: CompanyConfig, next: CompanyConfig, approved =
  * Money switches in settings: exchanging points or credit for anything else can't be switched on here (it will take
  * the same several-people approval as the chain), and the points cap can't change once set.
  */
-export function walletProblem(cur: CompanyConfig, next: CompanyConfig): string | null {
+export function walletProblem(cur: CompanyConfig, next: CompanyConfig, approved = false): string | null {
   const a = cur.wallet ?? defaultWallet(cur.name), b = next.wallet;
+  if (approved) return a && b && a.points.cap !== b.points.cap ? 'The points cap can’t change once it’s set.' : null;
   if (b?.conversions?.enabled && !a?.conversions?.enabled) return 'Exchanging points or credit can’t be switched on from settings; it needs several people to approve it.';
   if (b && b.conversions?.approvedBy !== a?.conversions?.approvedBy) return 'Who approved exchanges is recorded by the approval itself, not set here.';
   if (a && b && a.points.cap !== b.points.cap) return 'The points cap can’t change once it’s set.';

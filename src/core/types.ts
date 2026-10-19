@@ -138,6 +138,11 @@ export interface CompanyConfig {
   offers?: { enabled: boolean };
   /** The chain layer (a future token, hourly seals on a blockchain). Off; switching it on takes several people's approval. */
   chain?: import('../modules/chain/service').ChainSettings;
+  /**
+   * Where the company is: 'test' (everything can be reset, bots can play), 'points' (live with placeholder points), or
+   * 'token' (live with the real token). Only moves forward, and only through an approved step.
+   */
+  launch?: { stage: 'test' | 'points' | 'token'; withdrawals?: boolean };
   /** How much of the books the world sees, live. Each company chooses. */
   transparency?: Transparency;
   /** Security choices. Owners can be required to use a second sign-in step (a code from an authenticator app). */

@@ -47,6 +47,10 @@ with a plain explanation.
 | `TRUST_GEO_HEADERS` | `1` when the host adds a visitor-country header (Cloudflare `CF-IPCountry`, Vercel, Fastly). Only behind such a host: otherwise anyone could send it. |
 | `SANCTIONED_COUNTRIES` | Comma-separated country codes where points and prizes aren't offered (default `CU,IR,KP,SY`). |
 | `VERYFI_CLIENT_ID`, `VERYFI_USERNAME`, `VERYFI_API_KEY` | Reads receipt photos for brand offers. Without them, each receipt waits for a person on the team to check. |
+| `SOLANA_DEVNET_MINT`, `SOLANA_DEVNET_PAYER`, `SOLANA_DEVNET_MINT_AUTHORITY`, `SOLANA_DEVNET_RPC_URL` | Solana's free test network, used before going live with the token (keys as JSON arrays, as Solana's tools save them). Without them, a stand-in runs. |
+| `SOLANA_TOKEN_PROGRAM` | `classic` if the token was made with the original SPL token program; Token-2022 otherwise. The Solana connection is the platform company's (`PLATFORM_COMPANY`); white-label companies run on the stand-in until they have their own token. |
+| `SOLANA_MINT`, `SOLANA_PAYER`, `SOLANA_CUSTODY`, `SOLANA_RPC_URL` | The real Solana network, used once live with the token. The payer key only pays fees and writes seals; minting and people's tokens belong to the Squads vault (`SOLANA_CUSTODY`), signed by people. A minting key for the real network is refused. |
+| `TREMENDOUS_API_KEY`, `TREMENDOUS_FUNDING_SOURCE`, `TREMENDOUS_SANDBOX` | Gift cards bought with credit (Tremendous). Without them, a stand-in answers and its cards say TEST. Gift cards stay off until exchanges are approved under Launch. |
 | `GEO_FIXED` | Local runs only (ignored in production): treat every visitor as being in one place, e.g. `US-TX`. |
 | `FW_AI_PRICES` | Real per-model prices (JSON), once invoices are in. |
 | `FW_ANCHOR_GITHUB_TOKEN`, `FW_ANCHOR_GITHUB_REPO`, `FW_ANCHOR_GITHUB_BRANCH`, `FW_ANCHOR_BITCOIN` | Where each day's books fingerprint is published. |

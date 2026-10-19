@@ -139,3 +139,13 @@ pre.code .c { color: #8A96A0; }
 .field .events-pick label code, .field .scope-list label b { font-weight: 700; }
 
 .chip-check{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--line,#DDE5EC);border-radius:999px;font-size:14px;cursor:pointer;margin:0 6px 6px 0}
+
+.stages { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.stages li { border-radius: var(--r); box-shadow: inset 0 0 0 1.5px var(--line); padding: 16px; display: grid; gap: 6px; align-content: start; }
+.stages li .n { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; box-shadow: inset 0 0 0 2px var(--line); }
+.stages li small { color: var(--muted); }
+.stages li em { font-style: normal; font-size: 12px; font-weight: 700; color: var(--ink); }
+.stages li.now { box-shadow: inset 0 0 0 2px var(--ink); }
+.stages li.now .n { background: var(--ink); color: #fff; box-shadow: none; }
+.stages li.done .n { background: var(--ok); color: #fff; box-shadow: none; }
+@media (max-width: 760px) { .stages { grid-template-columns: 1fr; } }

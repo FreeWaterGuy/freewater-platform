@@ -11,7 +11,10 @@ export interface TokenChain {
   readonly network: string;
   /** Write an hour's fingerprint (a Merkle root) to the chain. Returns where it can be seen. */
   anchor(root: string, label: string): Promise<{ ref: string }>;
-  mint(to: string, amount: number, ref: string): Promise<{ ref: string }>;
+  /** Mint into custody. On a real network it may come back prepared, for people to sign (in Squads). */
+  mint(to: string, amount: number, ref: string): Promise<{ ref: string; prepared?: string }>;
+  /** Check a mint people signed elsewhere: finished, for this action, this amount. */
+  confirmMint?(signature: string, ref: string, amount: number): Promise<boolean>;
   totalSupply(): Promise<number>;
   balanceOf(address: string): Promise<number>;
   /** The contract's own pause switch: while paused, nothing moves. */
