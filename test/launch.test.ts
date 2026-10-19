@@ -45,13 +45,22 @@ describe('the test stage', () => {
     expect(report.kept).toBeGreaterThan(20);
   });
 
+  it('bots never bill advertisers, and a reset keeps money brands really sent', async () => {
+    const before = app.platform.ledger.entries.length;
+    await app.launch.runBots('freewater', { bots: 2, rounds: 2 });
+    expect(app.platform.ledger.entries.length).toBe(before);
+    await app.wallet.fundReserve('freewater', 'brand-real', 5_000, 'test', 'real-pay-1');
+  });
+
   it('a reset wipes every test record, and a person must do it', async () => {
     expect((await call('POST', '/v1/launch/reset', { confirm: 'RESET' }, keys['freewater-admin'])).body.error.code).toBe('person_needed');
     const r = await app.launch.reset('freewater', 'user:josh');
     expect(r.counts['wallet entries']).toBeGreaterThan(0);
-    for (const t of ['wallet_tx', 'game_rounds', 'wallet_holders']) expect(Number((await db.query<any>(`select count(*)::int as n from ${t}`)).rows[0].n)).toBe(0);
+    for (const t of ['game_rounds', 'wallet_holders']) expect(Number((await db.query<any>(`select count(*)::int as n from ${t}`)).rows[0].n)).toBe(0);
     expect(Number((await db.query<any>(`select count(*)::int as n from person_details where subject like 'bot\\_%'`)).rows[0].n)).toBe(0);
     expect((await app.launch.status('freewater')).lastReset?.by).toBe('user:josh');
+    expect(Number((await db.query<any>(`select balance from wallet_balances where account = 'reserve:brand-real'`)).rows[0].balance)).toBe(5000);
+    expect((await app.wallet.check('freewater')).ok).toBe(true);
   });
 
   it('the stage can’t be changed from settings', async () => {
@@ -137,11 +146,17 @@ describe('the Solana connection', () => {
     expect(r.prepared).toBeTruthy();
   });
   it('checks a signed mint on the chain: our memo and the exact amount', async () => {
-    const s = new SolanaChain({ network: 'mainnet-beta', rpcUrl: 'http://x', mint, payer: Keypair.generate(), custody: Keypair.generate().publicKey.toBase58(), connection: {
-      getParsedTransaction: async () => ({ meta: { err: null }, transaction: { message: { instructions: [{ program: 'spl-memo', parsed: 'fw-mint|ca_3' }, { parsed: { type: 'mintTo', info: { mint, amount: '9' } } }] } } }),
+    const { PublicKey } = await import('@solana/web3.js');
+    const vault = Keypair.generate().publicKey;
+    const custodyAccount = tokenAccount(vault, new PublicKey(mint)).toBase58();
+    let to = custodyAccount;
+    const s = new SolanaChain({ network: 'mainnet-beta', rpcUrl: 'http://x', mint, payer: Keypair.generate(), custody: vault.toBase58(), connection: {
+      getParsedTransaction: async () => ({ meta: { err: null }, transaction: { message: { instructions: [{ program: 'spl-memo', parsed: 'fw-mint|ca_3' }, { parsed: { type: 'mintTo', info: { mint, account: to, mintAuthority: vault.toBase58(), amount: '9' } } }] } } }),
     } as any });
     expect(await s.confirmMint('sig', 'ca_3', 9)).toBe(true);
     expect(await s.confirmMint('sig', 'ca_3', 10)).toBe(false);
-    expect(await s.confirmMint('sig', 'ca_4', 9)).toBe(false);
+    expect(await s.confirmMint('sig', 'ca_', 9)).toBe(false); // the memo must match exactly
+    to = Keypair.generate().publicKey.toBase58();
+    expect(await s.confirmMint('sig', 'ca_3', 9)).toBe(false); // minted somewhere other than custody
   });
 });

@@ -29,16 +29,22 @@ export class LaunchService {
     await this.db.transaction(async (tx) => {
       const q = async (name: string, sql: string, args: unknown[] = [companyId]) => { const r: any = await tx.query(sql, args); counts[name] = (counts[name] ?? 0) + Number(r.rowCount ?? 0); };
       await q('offer claims', `delete from offer_claims where company_id = $1`);
-      await q('wallet lines', `delete from wallet_lines where tx_id in (select id from wallet_tx where company_id = $1)`);
-      await q('wallet entries', `delete from wallet_tx where company_id = $1`);
-      await q('wallet balances', `delete from wallet_balances where company_id = $1`);
+      // Money a brand really sent into a reserve stays (and anything correcting it); everything people earned, got or
+      // spent while testing goes. Balances are then rebuilt from what's left, so the books still add up.
+      const keep = `(kind = 'fund' or (kind = 'correction' and memo->>'corrects' in (select id from wallet_tx where company_id = $1 and kind = 'fund')))`;
+      await q('wallet lines', `delete from wallet_lines where tx_id in (select id from wallet_tx where company_id = $1 and not ${keep})`);
+      await q('wallet entries', `delete from wallet_tx where company_id = $1 and not ${keep}`);
+      await tx.query(`delete from wallet_balances where company_id = $1`, [companyId]);
+      await tx.query(`insert into wallet_balances (company_id, asset, account, balance) select t.company_id, t.asset, l.account, sum(l.amount) from wallet_lines l join wallet_tx t on t.id = l.tx_id where t.company_id = $1 group by t.company_id, t.asset, l.account`, [companyId]);
       await q('wallets', `delete from wallet_holders where company_id = $1`);
       await q('game screens', `delete from game_rounds where company_id = $1`);
       await q('feedback and questions', `delete from game_notes where company_id = $1`);
       await q('players', `delete from game_players where company_id = $1`);
       await q('seals', `delete from chain_seals where company_id = $1`);
       await q('chain checks', `delete from chain_checks where company_id = $1`);
-      await q('chain actions', `delete from chain_actions where company_id = $1 and kind <> 'go_live_points'`);
+      // Pausing, unpausing and switching the chain on stay (a reset must never unpause anything), as does going live.
+      await q('chain actions', `delete from chain_actions where company_id = $1 and kind not in ('go_live_points','pause','unpause','switch_on')`);
+      await q('picks that came true', `delete from game_launches where company_id = $1`);
       await q('test chain', `delete from test_chain where company_id = $1`);
     });
     // Everything kept about the bots themselves.
@@ -63,6 +69,7 @@ export class LaunchService {
     let answered = 0, points = 0, scans = 0, notes = 0;
     const units = [...this.platform.units.values()].filter((u) => u.companyId === companyId && u.kind !== 'custom').slice(-500);
     for (let b = 0; b < bots; b++) {
+      if (this.chain.stage(companyId) !== 'test') break; // going live stops the bots at once
       const key = `bot_${randomBytes(9).toString('base64url')}`;
       const taste = { free: 0.5 + r() * 0.4, brands: new Set<string>(), careless: r() < 0.08 };
       await this.data.notePlace(companyId, key, { country: 'US', state: ['TX', 'CA', 'NY', 'FL', 'IL'][Math.floor(r() * 5)]!, source: 'ip' });
@@ -90,8 +97,8 @@ export class LaunchService {
       }
       if (units.length && r() < 0.7) {
         const u = units[Math.floor(r() * units.length)]!;
-        const e = this.platform.scan(u.id, 0, key, true, `bot-scan-${key}`);
-        if (e) { const got = await this.wallet.earnScan(companyId, key, u.id, 0); points += got.points; scans++; }
+        // Never a real scan: that would bill the advertiser and count toward giving. Bots only earn the test points.
+        const got = await this.wallet.earnScan(companyId, key, u.id, 0); points += got.points; scans++;
       }
       if (r() < 0.2) { const f = await this.games.feedback(companyId, key, { text: 'Bot feedback: I would love more free snacks at the gym machine.' }).catch(() => null); if (f) { notes++; points += f.points; } }
     }

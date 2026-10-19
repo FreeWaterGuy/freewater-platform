@@ -65,7 +65,6 @@ export class SolanaChain implements TokenChain {
   private program: PublicKey;
   private mintKey: PublicKey;
   private custodyKey: PublicKey;
-  private pausedFlag = false;
   constructor(private o: SolanaOptions) {
     if (o.network === 'mainnet-beta' && o.testMintAuthority) throw new Error('A server-held minting key is refused on the real network; minting there is signed by people in Squads.');
     this.network = o.network === 'devnet' ? 'solana-devnet' : 'solana';
@@ -91,7 +90,6 @@ export class SolanaChain implements TokenChain {
    * transaction for people to sign in Squads; nothing is minted until they do.
    */
   async mint(_to: string, amount: number, ref: string): Promise<{ ref: string; prepared?: string }> {
-    if (this.pausedFlag) throw new Error('Paused.');
     const dest = tokenAccount(this.custodyKey, this.mintKey, this.program);
     if (this.o.testMintAuthority) {
       const auth = this.o.testMintAuthority;
@@ -109,9 +107,12 @@ export class SolanaChain implements TokenChain {
     const t: any = await this.c.getParsedTransaction(signature, { maxSupportedTransactionVersion: 0, commitment: 'finalized' });
     if (!t || t.meta?.err) return false;
     const ixs: any[] = [...(t.transaction?.message?.instructions ?? []), ...((t.meta?.innerInstructions ?? []).flatMap((x: any) => x.instructions))];
-    const memo = ixs.some((i) => (i.program === 'spl-memo' || i.programId?.toString() === MEMO_PROGRAM.toBase58()) && String(i.parsed ?? '').includes(`fw-mint|${ref}`));
-    const minted = ixs.some((i) => (i.parsed?.type === 'mintTo' || i.parsed?.type === 'mintToChecked') && i.parsed.info?.mint === this.mintKey.toBase58() && String(i.parsed.info?.amount ?? i.parsed.info?.tokenAmount?.amount) === String(amount));
-    return memo && minted;
+    const memo = ixs.some((i) => (i.program === 'spl-memo' || i.programId?.toString() === MEMO_PROGRAM.toBase58()) && String(i.parsed ?? '') === `fw-mint|${ref}`);
+    // Exactly this amount, of our token, into FreeWater's custody, by the custody vault: nothing minted anywhere else.
+    const custodyAccount = tokenAccount(this.custodyKey, this.mintKey, this.program).toBase58();
+    const mints = ixs.filter((i) => (i.parsed?.type === 'mintTo' || i.parsed?.type === 'mintToChecked') && i.parsed.info?.mint === this.mintKey.toBase58());
+    const ok = mints.length === 1 && mints[0].parsed.info.account === custodyAccount && (mints[0].parsed.info.mintAuthority ?? mints[0].parsed.info.multisigMintAuthority) === this.custodyKey.toBase58() && String(mints[0].parsed.info.amount ?? mints[0].parsed.info.tokenAmount?.amount) === String(amount);
+    return memo && ok;
   }
 
   async totalSupply() { return Number((await this.c.getTokenSupply(this.mintKey)).value.amount); }
@@ -122,8 +123,9 @@ export class SolanaChain implements TokenChain {
    * FreeWater's own pause: nothing more is sent from here. (The token's own pause switch, in Token-2022, is held by
    * the Squads vault and used there.) The pause is recorded on the chain in a memo, so it's public.
    */
-  async setPaused(paused: boolean) { this.pausedFlag = paused; return { ref: await this.send([memoIx(`fw-pause|${paused}`, this.o.payer.publicKey)], [this.o.payer]) }; }
-  async paused() { return this.pausedFlag; }
+  async setPaused(paused: boolean) { return { ref: await this.send([memoIx(`fw-pause|${paused}`, this.o.payer.publicKey)], [this.o.payer]) }; }
+  /** Whether things are paused is kept in FreeWater's own records (see ChainService.isPaused), not here. */
+  async paused() { return false; }
 }
 
 /** Reads a key from a setting: a JSON array of numbers (as Solana's own tools save it). */

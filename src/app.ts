@@ -370,7 +370,10 @@ export async function createApp(opts: AppOptions) {
   if (opts.chainFor) chain.chainFor = opts.chainFor;
   else if (solana.devnet || solana.mainnet) {
     const fallback = chain.chainFor;
-    chain.chainFor = (companyId) => (chain.stage(companyId) === 'token' ? solana.mainnet : solana.devnet) ?? fallback(companyId);
+    // One FreeWater token and one mint: the Solana connection belongs to the platform company. A white-label company
+    // gets its own token (and its own settings) before it can use a real chain; until then it runs on the stand-in.
+    const platformCompany = process.env.PLATFORM_COMPANY ?? 'freewater';
+    chain.chainFor = (companyId) => (companyId === platformCompany ? (chain.stage(companyId) === 'token' ? solana.mainnet : solana.devnet) : undefined) ?? fallback(companyId);
     if (solana.custody) chain.custody = solana.custody;
   }
   const launch = new LaunchService(db, platform, data, games, wallet, chain, opts.clock, opts.seed !== undefined ? seededRandom(opts.seed + 202) : Math.random);

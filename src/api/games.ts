@@ -33,7 +33,10 @@ export function gamesRoutes(app: App, route: (r: RouteDef) => void) {
     if (!/^[A-Za-z0-9_-]{8,64}$/.test(v)) throw new ApiError(400, 'viewer_required', 'Send ?viewer=<the random id this phone keeps>.');
     const bytes = req.body as Buffer;
     if (!Buffer.isBuffer(bytes) || !bytes.length) throw new ApiError(400, 'empty', 'Send the video as the body.');
-    return { status: 201, body: await wrap(() => games.feedback(id, v, { text: String(q.text ?? '').slice(0, 2000), video: { contentType: String(req.headers['content-type'] ?? ''), bytes: new Uint8Array(bytes) } }, req)) };
+    if (req.headers['content-type'] !== 'video/mp4') throw new ApiError(415, 'unsupported_type', 'Send an MP4 video.');
+    // The words come in a header, not the address, so they don't end up in web logs.
+    let text = ''; try { text = decodeURIComponent(String(req.headers['x-feedback-text'] ?? '')); } catch { text = ''; }
+    return { status: 201, body: await wrap(() => games.feedback(id, v, { text: text.slice(0, 2000), video: { contentType: String(req.headers['content-type'] ?? ''), bytes: new Uint8Array(bytes) } }, req)) };
   } });
   route({ method: 'POST', url: '/v1/public/games/:companyId/prompt', scope: 'public', summary: 'Ask anything. Our AI answers; a real question earns a few points.', body: obj({ viewerKey, text: { type: 'string', maxLength: 1000 } }, ['viewerKey', 'text']), handler: async (req) => {
     const b = req.body as any;

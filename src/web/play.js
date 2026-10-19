@@ -201,7 +201,7 @@
         const f = file.files && file.files[0];
         if (f && f.type === 'video/mp4') {
           if (f.size > 30 * 1024 * 1024) throw new Error('Videos can be up to 30 MB.');
-          const res = await fetch(`${base}/feedback/video?viewer=${encodeURIComponent(viewerKey)}&text=${encodeURIComponent(text.value)}`, { method: 'POST', headers: { 'content-type': 'video/mp4' }, body: f });
+          const res = await fetch(`${base}/feedback/video?viewer=${encodeURIComponent(viewerKey)}`, { method: 'POST', headers: { 'content-type': 'video/mp4', 'x-feedback-text': encodeURIComponent(text.value.slice(0, 2000)) }, body: f });
           const r = await res.json().catch(() => ({}));
           if (!res.ok) throw new Error(r?.error?.message || 'Couldn’t send that video.');
           s.remove(); if (r.points) { balance += r.points; showPoints(true); } toast(r.points ? `Thanks! +${r.points}` : 'Thanks!');

@@ -208,6 +208,8 @@ export class WalletService {
   async convertPoints(companyId: string, subject: string, points: number, ref: string) {
     return this.once(() => this.db.transaction(async (tx) => {
       const acct = await this.accountOf(tx, companyId, subject);
+      const have = Number((await tx.query<any>(`select balance from wallet_balances where company_id = $1 and asset = $2 and account = $3 for update`, [companyId, this.pointsAsset(companyId), acct])).rows[0]?.balance ?? 0);
+      if (have < points) throw new WalletError('not_enough', 'Those points were already used.', 409);
       return { entry: await this.post(tx, companyId, this.pointsAsset(companyId), 'convert', `convert:${ref}`, [[acct, -points], ['converted', points]], { why: 'turned into the token' }) };
     }), () => ({ entry: null as string | null }));
   }

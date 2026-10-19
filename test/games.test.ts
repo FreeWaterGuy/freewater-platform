@@ -23,6 +23,7 @@ async function play(v: string, wait = 1500) {
   now += wait;
   const pick = r.kind === 'check' ? (await db.query<any>(`select items from game_rounds where id = $1`, [r.id])).rows[0].items.find((i: any) => i.correct).key : r.items[0].key;
   const tap = r.kind === 'tap' ? { x: r.items[0].target.x, y: r.items[0].target.y, tMs: 600 } : undefined;
+  if (tap) now += r.items[0].target.delayMs + 600; // the code pops up after a moment
   return { round: r, answer: (await call('POST', `${G}/answer`, { viewerKey: v, round: r.id, pick, changes: 1, responseMs: wait, ...(tap ? { tap } : {}) })).body };
 }
 
@@ -221,6 +222,7 @@ describe('playing', () => {
       now += 2500;
       if (r.kind !== 'tap') { await call('POST', `${G}/answer`, { viewerKey: v, round: r.id, pick: r.items[0].key, ...(r.kind === 'check' ? { pick: (await db.query<any>(`select items from game_rounds where id = $1`, [r.id])).rows[0].items.find((x: any) => x.correct).key } : {}) }); continue; }
       const t = r.items[0].target;
+      now += t.delayMs;
       const tap = results.length === 0 ? { x: t.x, y: t.y, tMs: 600 } : { x: t.x + 0.4, y: t.y, tMs: 600 };
       const a = (await call('POST', `${G}/answer`, { viewerKey: v, round: r.id, pick: 'k0', tap })).body;
       results.push(a.hit);
@@ -239,7 +241,7 @@ describe('playing', () => {
     }
     expect(seen).toBe(true);
     const mp4 = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypmp42'), Buffer.alloc(64)]);
-    const r = await server.inject({ method: 'POST', url: `${G}/feedback/video?viewer=${v}&text=${encodeURIComponent('Here is a quick video of the machine at my gym.')}`, payload: mp4, headers: { 'content-type': 'video/mp4' } });
+    const r = await server.inject({ method: 'POST', url: `${G}/feedback/video?viewer=${v}`, payload: mp4, headers: { 'content-type': 'video/mp4', 'x-feedback-text': encodeURIComponent('Here is a quick video of the machine at my gym.') } });
     expect(r.statusCode).toBe(201);
     expect(r.json().points).toBeGreaterThan(0);
   });

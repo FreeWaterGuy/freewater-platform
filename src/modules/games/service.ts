@@ -181,7 +181,9 @@ export class GamesService {
     if (r.kind === 'tap') {
       const t = chosen.target, tap = a.tap;
       // x is a share of the label's width, y of its height; the code is square on a 3:4 label.
-      missed = !tap || Math.abs(tap.x - t.x) > t.size / 2 + 0.03 || Math.abs(tap.y - t.y) > (t.size * 0.75) / 2 + 0.03 || tap.tMs < 250 || tap.tMs > t.showMs;
+      // The server's own clock too: the answer can't come before the code appeared, or long after it was gone.
+      const since = elapsed - t.delayMs;
+      missed = !tap || since < 250 || since > t.showMs + 4000 || Math.abs(tap.x - t.x) > t.size / 2 + 0.03 || Math.abs(tap.y - t.y) > (t.size * 0.75) / 2 + 0.03 || tap.tMs < 250 || tap.tMs > t.showMs;
       extra = tap ? { tap: { x: Math.round(tap.x * 1000) / 1000, y: Math.round(tap.y * 1000) / 1000, tMs: Math.round(tap.tMs) }, hit: !missed } : { hit: false };
     }
     if (r.kind === 'ar' && a.spinMs !== undefined) extra = { spinMs: Math.max(0, Math.min(600_000, Math.round(a.spinMs))) };
@@ -266,6 +268,7 @@ export class GamesService {
   async comeTrue(companyId: string, category: string, by: string, o: { itemId?: string; offerId?: string } = {}) {
     if (!this.settings(companyId).mayComeTrue?.includes(category)) throw new GameError('not_promised', 'Only categories marked “picks may come true” can come true.', 409);
     const w = await this.winners(companyId, category);
+    if (o.offerId && !(await this.db.query(`select 1 from offers where id = $1 and company_id = $2`, [o.offerId, companyId])).rows.length) throw new GameError('not_found', 'No such offer.', 404);
     const pick = o.itemId ? w.find((x) => x.id === o.itemId) : w[0];
     if (!pick || pick.shown < 20) throw new GameError('too_few', 'Not enough people have picked in this category yet (at least 20 views of the winner).', 409);
     const id = newId('gl');
@@ -277,7 +280,7 @@ export class GamesService {
   }
   /** Picks this person made that came true. */
   private async cameTrue(companyId: string, person: string) {
-    return (await this.db.query<any>(`select l.label, l.offer_id from game_launches l where l.company_id = $1 and exists (select 1 from game_rounds r where r.company_id = l.company_id and r.person = $2 and r.pick_item = l.item_id) order by l.at desc limit 5`, [companyId, person])).rows.map((r) => ({ item: r.label, offerId: r.offer_id }));
+    return (await this.db.query<any>(`select l.label, l.offer_id from game_launches l where l.company_id = $1 and exists (select 1 from game_rounds r where r.company_id = l.company_id and r.person = $2 and r.pick_item = l.item_id and r.answered_at <= l.at) order by l.at desc limit 5`, [companyId, person])).rows.map((r) => ({ item: r.label, offerId: r.offer_id }));
   }
 
   /** What the games have learned, for the team: picks by price setup, how fast and how sure people were, where on the screen. */
