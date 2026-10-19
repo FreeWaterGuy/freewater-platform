@@ -73,9 +73,10 @@ export class PackService {
     pack.faces = fillBoxFaces({ company, box, routeId: pack.routeId, campaigns: [...p.campaigns.values()], random: p.random });
     pack.rendered = renderBox({ packId: pack.id, box, company, faces: pack.faces, campaigns: p.campaigns, routeId: pack.routeId, stop: pack.stop, codes: p.codes });
     const printer = p.registry.printerFor(company);
+    const boxSvg = await p.forPrint(pack.rendered.svg); // studio photos go inside the file the printer gets
     for (let attempt = 1; attempt <= 2; attempt++) {
       const jobId = newId('job');
-      const r = await printer.print({ jobId, idempotencyKey: `${pack.id}:box:${attempt}`, unitId: `${pack.id}-box`, locationId: pack.routeId, svg: pack.rendered.svg, widthIn: pack.rendered.widthIn, heightIn: pack.rendered.heightIn });
+      const r = await printer.print({ jobId, idempotencyKey: `${pack.id}:box:${attempt}`, unitId: `${pack.id}-box`, locationId: pack.routeId, svg: boxSvg, widthIn: pack.rendered.widthIn, heightIn: pack.rendered.heightIn });
       if (r.status === 'printed') {
         pack.status = 'box_printed';
         this.save(pack);

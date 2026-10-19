@@ -163,7 +163,7 @@ export class ConsoleService {
     const unit = this.sampleUnit(companyId);
     const location = unit.locationId;
     const label = await this.registry.rendererFor(shown).render({ unit: { ...unit, locationId: location }, product, company: shown, campaigns: this.platform.campaigns });
-    return { svg: label.svg, problem };
+    return { svg: await this.platform.forView(label.svg), problem };
   }
 
   /** The company's most recent bottle, or else its house ad across the whole label. */

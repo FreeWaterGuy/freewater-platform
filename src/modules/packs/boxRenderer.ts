@@ -52,11 +52,11 @@ export function renderBox(input: {
     const r = rects[f.face];
     const c = campaigns.get(f.campaignId);
     if (!c) throw new Error(`Box face ${f.face} points at unknown campaign ${f.campaignId}`);
-    parts.push(`<svg x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" viewBox="0 0 ${r.w} ${r.h}" overflow="hidden">${c.creative.svg(r.w, r.h)}</svg>`);
+    const q = Math.min(64, r.h * 0.35);
+    parts.push(`<svg x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" viewBox="0 0 ${r.w} ${r.h}" overflow="hidden">${c.creative.svg(r.w, r.h, { qr: { x: r.w - q - 8, y: r.h - q - 8, size: q } })}</svg>`);
     const smart = input.codes ? input.codes.box(company, packId, f.face) : `${base}/b/${packId}/${f.face}`;
     const url = qrMode(company, c) === 'static' ? staticTarget(c, input.codes ? smart : null) : smart;
     faceUrls[f.face] = url;
-    const q = Math.min(64, r.h * 0.35);
     parts.push(qrSvg(url, r.x + r.w - q - 8, r.y + r.h - q - 8, q, 'H', campaignQrStyle(company, c)));
   }
 

@@ -1,3 +1,4 @@
+import { studioCreative } from '../modules/studio/layout';
 import { shareFromSixths } from '../modules/ads/layouts';
 import { createHash, randomBytes } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -311,7 +312,7 @@ export function campaignRecord(c: Campaign): CampaignRecord {
 
 export function hydrateCampaign(r: CampaignRecord, builtins: Record<string, Creative>): Campaign {
   const ref = r.creativeRef;
-  const creative = ref.kind === 'svg' ? svgCreative(ref.markup) : ref.kind === 'poster' ? posterCreative(ref.spec) : builtins[ref.id];
+  const creative = ref.kind === 'svg' ? svgCreative(ref.markup) : ref.kind === 'poster' ? posterCreative(ref.spec) : ref.kind === 'studio' ? studioCreative(ref.spec) : builtins[ref.id];
   if (!creative) throw new Error(`Campaign ${r.id} uses built-in artwork "${ref.kind === 'builtin' ? ref.id : ''}" that this server doesn't have`);
   return { ...r, creative };
 }

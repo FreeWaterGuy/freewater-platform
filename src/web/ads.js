@@ -28,7 +28,7 @@
   const toastEl = h('div', { class: 'toast', role: 'status' }); document.body.append(toastEl);
   let tt; const toast = (m) => { toastEl.textContent = m; toastEl.classList.add('show'); clearTimeout(tt); tt = setTimeout(() => toastEl.classList.remove('show'), 2600); };
 
-  const state = { token: store.get('fw_ads_token'), me: null, config: null, path: fixture ? fixture.start : location.pathname };
+  const state = { token: store.get('fw_ads_token'), me: null, config: null, path: fixture ? fixture.start : location.pathname + location.search };
 
   // The second sign-in step: when it's on, sign-in asks for the code from the authenticator app (or a recovery code).
   const withSecondStep = (r) => (!r || !r.secondStep ? Promise.resolve(r) : new Promise((resolve, reject) => {
@@ -68,7 +68,7 @@
   // ---------- routing ----------
   const routes = [
     [/^\/ads\/?$/, overview], [/^\/ads\/new$/, newAd], [/^\/ads\/drafts\/([\w-]+)$/, builder], [/^\/ads\/drafts\/([\w-]+)\/review$/, review],
-    [/^\/ads\/campaigns\/([\w-]+)\/change$/, changeAd], [/^\/ads\/campaigns\/([\w-]+)\/code$/, codePage], [/^\/ads\/billing$/, billing], [/^\/ads\/tracking$/, tracking], [/^\/ads\/redeem(?:\/([\w-]+))?$/, redeem], [/^\/ads\/statement$/, statementPage],
+    [/^\/ads\/campaigns\/([\w-]+)\/change$/, changeAd], [/^\/ads\/campaigns\/([\w-]+)\/code$/, codePage], [/^\/ads\/billing$/, billing], [/^\/ads\/studio(?:\?.*)?$/, studioPage], [/^\/ads\/tracking$/, tracking], [/^\/ads\/redeem(?:\/([\w-]+))?$/, redeem], [/^\/ads\/statement$/, statementPage],
   ];
   let cleanup = null;
   function go(path, replace) { state.path = path; if (!fixture) history[replace ? 'replaceState' : 'pushState'](null, '', path); render(); }
@@ -88,12 +88,123 @@
         h('nav', { 'aria-label': 'Main' },
           link('/ads', { 'aria-current': active === 'overview' ? 'page' : null }, icon(I.chart), 'Overview'),
           link('/ads/new', { 'aria-current': active === 'new' ? 'page' : null }, icon(I.plus), 'New ad'),
+          link('/ads/studio', { 'aria-current': active === 'studio' ? 'page' : null }, icon(I.plus), 'Ad studio'),
           link('/ads/tracking', { 'aria-current': active === 'tracking' ? 'page' : null }, icon(I.target), 'Sales tracking'),
           link('/ads/redeem', { 'aria-current': active === 'redeem' ? 'page' : null }, icon(I.ticket), 'Check a coupon'),
           link('/ads/statement', { 'aria-current': active === 'statement' ? 'page' : null }, icon(I.chart), 'Statement'),
           link('/ads/billing', { 'aria-current': active === 'billing' ? 'page' : null }, icon(I.card), 'Billing')),
         h('div', { class: 'who' }, h('b', { text: state.business?.name ?? '' }), me?.email || me?.phone || '', h('br'), h('button', { type: 'button', onclick: async () => { try { await api('POST', '/v1/auth/sign-out'); } catch {} state.token = null; state.me = null; state.business = null; store.set('fw_ads_token', null); render(); } }, 'Sign out'))),
       h('main', { class: 'main' }, ...content)));
+  }
+
+  // ---------- the ad studio: brand kit, photos, finished designs at every size, custom AR ----------
+  async function studioPage() {
+    const draftId = new URLSearchParams(state.path.split('?')[1] ?? '').get('draft');
+    let data = await api('GET', '/v1/studio');
+    let designs = [], made3d = null;
+    const out = h('div', { class: 'studio' });
+    const inline = (svg) => { const d = h('div', { class: 'art' }); d.innerHTML = svg; return d; }; // our own drawing (it loads your photos from this site)
+    const field = (label, control, hint) => { const fid = `s${Math.random().toString(36).slice(2, 8)}`; control.id ||= fid; return h('div', { class: 'field' }, h('label', { for: control.id, text: label }), control, hint ? h('div', { class: 'hint', text: hint }) : null); };
+    const upload = async (url, file) => {
+      const res = await fetch(url, { method: 'POST', headers: { 'content-type': file.type, authorization: `Bearer ${state.token}` }, body: file });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(body?.error?.message || 'That didn’t upload.');
+      return body;
+    };
+    const conn = data.connections;
+    const standInNote = [conn.photoLibraries[0]?.standIn ? 'the photo library' : null, conn.imageAi.standIn ? 'the image AI' : null, conn.photoTo3d.standIn ? 'photo-to-3D' : null].filter(Boolean);
+
+    function draw() {
+      const k = data.kit;
+      // 1. Brand kit
+      const name = h('input', { class: 'input', value: k.name, maxlength: 40 });
+      const about = h('textarea', { class: 'input', rows: 2, maxlength: 300, placeholder: 'What you sell, where, what makes you different' }); about.value = k.about ?? '';
+      const col = (v) => h('input', { type: 'color', value: v, class: 'swatch' });
+      const c = k.colors ?? { paper: '#F5F1EA', ink: '#1A1A1A', accent: '#1E7DB8' };
+      const paper = col(c.paper), ink = col(c.ink), accent = col(c.accent);
+      const type = h('select', { class: 'input' }, [['serif', 'Serif (classic, editorial)'], ['grotesk', 'Grotesk (bold, modern)'], ['condensed', 'Condensed (tall, punchy)'], ['rounded', 'Rounded (friendly)']].map(([v, t]) => h('option', { value: v, text: t, ...(k.type === v ? { selected: true } : {}) })));
+      const logoIn = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp', hidden: true });
+      logoIn.onchange = async () => { const f = logoIn.files[0]; if (!f) return; try { await upload('/v1/studio/logo', f); data = await api('GET', '/v1/studio'); toast('Logo saved'); draw(); } catch (x) { toast(x.message); } };
+      const saveKit = async () => { try { data.kit = await api('PATCH', '/v1/studio/kit', { name: name.value, about: about.value, colors: { paper: paper.value, ink: ink.value, accent: accent.value }, type: type.value }); toast('Brand kit saved'); } catch (x) { toast(x.message); } };
+      const kit = h('section', { class: 'card stack' }, h('h2', { text: '1. Your brand kit' }), h('p', { class: 'muted', text: 'Set this up once. Every design uses it.' }),
+        h('div', { class: 'form' }, field('Name on your ads', name), field('About you', about), field('Type style', type)),
+        h('div', { class: 'swatches' }, h('label', {}, paper, ' Background'), h('label', {}, ink, ' Words'), h('label', {}, accent, ' Accent')),
+        h('div', { class: 'row' }, h('button', { class: 'btn', type: 'button', onclick: saveKit }, 'Save brand kit'), logoIn, h('button', { class: 'btn secondary', type: 'button', onclick: () => logoIn.click() }, k.logo ? 'Change logo' : 'Add your logo'), k.logo ? h('img', { class: 'logo-thumb', src: `/assets/${k.logo.asset}.png`, alt: 'Your logo' }) : null));
+
+      // 2. Photos
+      const photoIn = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp', multiple: true, hidden: true });
+      photoIn.onchange = async () => { for (const f of [...photoIn.files].slice(0, 10)) { try { await upload('/v1/studio/photos', f); } catch (x) { toast(`${f.name}: ${x.message}`); } } data = await api('GET', '/v1/studio'); draw(); };
+      const q = h('input', { class: 'input', placeholder: 'Search photos, like “iced latte on a table”' });
+      const results = h('div', { class: 'photo-grid' });
+      const search = async () => {
+        try {
+          const r = await api('GET', `/v1/studio/library?q=${encodeURIComponent(q.value)}`);
+          results.replaceChildren(...(r.photos.length ? r.photos.map((p) => h('figure', {}, h('img', { src: p.previewUrl, alt: p.description }), h('figcaption', { text: `${p.credit.name}` }),
+            h('button', { class: 'btn small', type: 'button', onclick: async (e) => { e.target.disabled = true; try { await api('POST', '/v1/studio/library', { library: r.library, id: p.id }); data = await api('GET', '/v1/studio'); toast('Added to your photos'); draw(); } catch (x) { toast(x.message); e.target.disabled = false; } } }, 'Use this'))) : [h('p', { class: 'muted', text: 'Nothing found. Try other words.' })]));
+        } catch (x) { toast(x.message); }
+      };
+      const prompt = h('input', { class: 'input', placeholder: 'Describe a picture, like “a smash burger on butcher paper, golden hour”' });
+      const shape = h('select', { class: 'input' }, ['4:3', '1:1', '3:4', '16:9'].map((v) => h('option', { value: v, text: v })));
+      const generate = async (e) => { e.target.disabled = true; try { await api('POST', '/v1/studio/generate', { prompt: prompt.value, aspect: shape.value }); data = await api('GET', '/v1/studio'); toast('Picture made'); draw(); } catch (x) { toast(x.message); } e.target.disabled = false; };
+      const mine = h('div', { class: 'photo-grid' }, k.photos.map((p) => h('figure', {}, h('img', { src: `/assets/${p.asset}.jpg`, alt: '' }), p.credit ? h('figcaption', { text: `${p.credit.name} · ${p.credit.source}` }) : h('figcaption', { text: 'Your photo' }),
+        h('button', { class: 'linkish', type: 'button', onclick: async () => { try { await api('DELETE', `/v1/studio/photos/${p.asset}`); data = await api('GET', '/v1/studio'); draw(); } catch (x) { toast(x.message); } } }, 'Remove'))));
+      const photos = h('section', { class: 'card stack' }, h('h2', { text: '2. Photos' }), h('p', { class: 'muted', text: 'Your own photos look best. No photos? Use the free photo library, or have the image AI make one. Each photo is cropped around its subject for every size.' }),
+        h('div', { class: 'row' }, photoIn, h('button', { class: 'btn', type: 'button', onclick: () => photoIn.click() }, 'Upload photos')),
+        k.photos.length ? mine : h('p', { class: 'muted', text: 'No photos yet.' }),
+        h('div', { class: 'row' }, q, h('button', { class: 'btn secondary', type: 'button', onclick: search }, 'Search the library')), results,
+        h('div', { class: 'row' }, prompt, shape, h('button', { class: 'btn secondary', type: 'button', onclick: generate }, 'Make it with AI')));
+
+      // 3. Designs
+      const msg = h('input', { class: 'input', maxlength: 120, placeholder: 'What is this ad for? Like “Our new cold brew is here”' });
+      const offer = h('input', { class: 'input', maxlength: 60, placeholder: 'An offer, if any. Like “First cup free”' });
+      const where = h('input', { class: 'input', maxlength: 60, placeholder: 'Where, if it helps. Like “South Congress”' });
+      const gallery = h('div', { class: 'designs' });
+      const showDesigns = async () => {
+        gallery.replaceChildren(h('p', { class: 'muted', text: 'Designing…' }));
+        const cards = [];
+        for (const spec of designs) {
+          const pv = await api('POST', '/v1/studio/preview', { spec });
+          const use = async (e) => {
+            e.target.disabled = true;
+            try {
+              const id = draftId || (await api('POST', '/v1/ads/drafts', {})).id;
+              await api('POST', '/v1/studio/use', { draftId: id, spec });
+              if (made3d) await api('POST', '/v1/studio/ar/use', { draftId: id, asset: made3d.asset, alt: made3d.model.alt, title: spec.headline });
+              go(`/ads/drafts/${id}`);
+            } catch (x) { toast(x.message); e.target.disabled = false; }
+          };
+          cards.push(h('article', { class: 'design card' }, h('div', { class: 'design-sizes' }, pv.sizes.slice(0, 4).map((s) => h('figure', {}, inline(s.svg), h('figcaption', { text: s.label })))),
+            h('details', {}, h('summary', { text: 'On a bottle, and on a box' }), inline(pv.labelSvg), pv.boxFaceSvg ? inline(pv.boxFaceSvg) : null),
+            h('button', { class: 'btn', type: 'button', onclick: use }, draftId ? 'Use this design in my ad' : 'Make an ad with this design')));
+        }
+        gallery.replaceChildren(...cards);
+      };
+      const designNow = async (e) => { e.target.disabled = true; try { designs = (await api('POST', '/v1/studio/designs', { message: msg.value, offer: offer.value || undefined, where: where.value || undefined })).designs; await showDesigns(); } catch (x) { toast(x.message); gallery.replaceChildren(); } e.target.disabled = false; };
+      const designer = h('section', { class: 'card stack' }, h('h2', { text: '3. Designs' }), h('p', { class: 'muted', text: `Say what the ad is for. You get finished designs at every label size, with your photos, colors and type (designer: ${conn.designer === 'claude' ? 'Claude' : 'built-in rules'}).` }),
+        h('div', { class: 'form' }, field('The ad is for', msg), field('Offer', offer), field('Where', where)), h('div', {}, h('button', { class: 'btn', type: 'button', onclick: designNow }, 'Design my ad')), gallery);
+
+      // 4. Custom AR
+      const arPhoto = h('select', { class: 'input' }, k.photos.map((p, i) => h('option', { value: p.asset, text: `Photo ${i + 1}${p.credit ? ` (${p.credit.source})` : ''}` })));
+      const arName = h('input', { class: 'input', maxlength: 60, placeholder: 'What it is, like “Cold brew, 16 oz”' });
+      const arH = h('input', { class: 'input', type: 'number', min: 1, max: 300, placeholder: 'Real height in cm (optional)' });
+      const arOut = h('div', {});
+      const makeAr = async (e) => {
+        e.target.disabled = true;
+        try {
+          made3d = await api('POST', '/v1/studio/ar', { asset: arPhoto.value, name: arName.value || 'Product', ...(arH.value ? { heightCm: Number(arH.value) } : {}) });
+          arOut.replaceChildren(h('div', { class: 'notice ok', text: `3D model ready${made3d.standIn ? ' (a stand-in: your photo on a standing card; a full 3D model comes once a photo-to-3D service is connected)' : ''}. Designs you use from here put it on your ad's scan page, in AR at real size.` }), h('a', { href: made3d.glbUrl, class: 'btn secondary small', target: '_blank', rel: 'noopener' }, 'Open the 3D file'));
+        } catch (x) { toast(x.message); }
+        e.target.disabled = false;
+      };
+      const ar = h('section', { class: 'card stack' }, h('h2', { text: '4. Custom AR (optional)' }), h('p', { class: 'muted', text: 'Turn a product photo into a 3D model people can put on their table when they scan your ad.' }),
+        k.photos.length ? h('div', { class: 'form' }, field('Product photo', arPhoto), field('Name', arName), field('Height', arH)) : h('p', { class: 'muted', text: 'Add a product photo first.' }),
+        k.photos.length ? h('div', {}, h('button', { class: 'btn secondary', type: 'button', onclick: makeAr }, 'Make 3D model')) : null, arOut);
+
+      out.replaceChildren(kit, photos, designer, ar);
+    }
+    shell('studio', h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Ad studio' }), h('p', { text: 'Your brand kit and photos in, finished ads at every size out.' }))),
+      standInNote.length ? h('div', { class: 'notice', style: 'margin-bottom:16px', text: `Test mode for ${standInNote.join(', ')}: these use stand-ins until ${state.config.name} connects the real services.` }) : null, out);
+    draw();
   }
 
   // ---------- statement: every bottle, what you bid and what the auction charged ----------
@@ -619,7 +730,7 @@
     ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); say(); } });
     ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = `${Math.min(140, ta.scrollHeight)}px`; });
     shell('new',
-      h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: d.campaignId ? 'Change your ad' : 'Make an ad' }), h('p', { text: `Chat with the assistant (${d.assistant}). Nothing prints until you review it and ${state.config.name} approves it.` }))),
+      h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: d.campaignId ? 'Change your ad' : 'Make an ad' }), h('p', { text: `Chat with the assistant (${d.assistant}). Nothing prints until you review it and ${state.config.name} approves it.` })), link(`/ads/studio?draft=${id}`, { class: 'btn secondary' }, 'Design it with photos')),
       h('div', { class: 'builder' },
         h('section', { class: 'chat', 'aria-label': 'Chat' }, msgs, sugg, attached,
           h('form', { class: 'composer', onsubmit: (e) => { e.preventDefault(); say(); } }, file, h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Attach a logo or photo', onclick: () => file.click() }, icon(I.clip)), ta, send)),

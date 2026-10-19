@@ -2,7 +2,7 @@
 // Used for FreeWater's built-in demo models; advertisers upload their own GLB files for the real thing.
 
 type V3 = [number, number, number];
-interface Mesh { positions: number[]; normals: number[]; indices: number[]; color: [number, number, number]; roughness?: number }
+interface Mesh { positions: number[]; normals: number[]; indices: number[]; color: [number, number, number]; roughness?: number; uvs?: number[]; texture?: Uint8Array; doubleSided?: boolean }
 
 const hex = (h: string): [number, number, number] => {
   const n = parseInt(h.slice(1), 16);
@@ -101,6 +101,19 @@ export function roof(o: { w: number; d: number; h: number; y0: number; color: st
   return { positions: P, normals: N, indices: I, color: hex(o.color) };
 }
 
+/**
+ * A standing picture card (a photo printed on both sides), w wide and h tall, standing on y0 and facing the viewer.
+ * Used to turn a product photo into something AR can place.
+ */
+export function texturedCard(o: { w: number; h: number; y0?: number; jpeg: Uint8Array }): Mesh {
+  const x = o.w / 2, y0 = o.y0 ?? 0, y1 = y0 + o.h, d = 0.15;
+  const P = [-x, y0, d, x, y0, d, x, y1, d, -x, y1, d, x, y0, -d, -x, y0, -d, -x, y1, -d, x, y1, -d];
+  const N = [0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1];
+  // The back shows the picture mirrored the right way round, as a printed card would.
+  const UV = [0, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0];
+  return { positions: P, normals: N, indices: [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7], color: [1, 1, 1], roughness: 0.6, uvs: UV, texture: o.jpeg };
+}
+
 /** Pack meshes into one binary glTF (GLB) file. `scale` turns model units into metres. */
 export function toGlb(meshes: Mesh[], scale = 1): Uint8Array {
   const chunks: Buffer[] = [];
@@ -113,6 +126,7 @@ export function toGlb(meshes: Mesh[], scale = 1): Uint8Array {
     offset += buf.length + pad;
     return bufferViews.length - 1;
   };
+  const images: any[] = [], textures: any[] = [];
   meshes.forEach((m, i) => {
     const pos = Buffer.from(new Float32Array(m.positions).buffer);
     const nor = Buffer.from(new Float32Array(m.normals).buffer);
@@ -120,13 +134,25 @@ export function toGlb(meshes: Mesh[], scale = 1): Uint8Array {
     // A loop, not Math.min(...all): a big model has more points than a function call can take.
     const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
     for (let j = 0; j < m.positions.length; j++) { const k = j % 3, v = m.positions[j]!; if (v < min[k]!) min[k] = v; if (v > max[k]!) max[k] = v; }
+    const a = accessors.length;
     accessors.push({ bufferView: push(pos, 34962), componentType: 5126, count: m.positions.length / 3, type: 'VEC3', min, max });
     accessors.push({ bufferView: push(nor, 34962), componentType: 5126, count: m.normals.length / 3, type: 'VEC3' });
     accessors.push({ bufferView: push(idx, 34963), componentType: 5125, count: m.indices.length, type: 'SCALAR' });
-    materials.push({ pbrMetallicRoughness: { baseColorFactor: [...m.color, 1], metallicFactor: 0, roughnessFactor: m.roughness ?? 0.7 } });
-    gltfMeshes.push({ primitives: [{ attributes: { POSITION: i * 3, NORMAL: i * 3 + 1 }, indices: i * 3 + 2, material: i }] });
+    const attributes: Record<string, number> = { POSITION: a, NORMAL: a + 1 };
+    const pbr: any = { baseColorFactor: [...m.color, 1], metallicFactor: 0, roughnessFactor: m.roughness ?? 0.7 };
+    if (m.uvs) { attributes.TEXCOORD_0 = accessors.length; accessors.push({ bufferView: push(Buffer.from(new Float32Array(m.uvs).buffer), 34962), componentType: 5126, count: m.uvs.length / 2, type: 'VEC2' }); }
+    if (m.texture) {
+      const png = m.texture[0] === 0x89;
+      images.push({ bufferView: push(Buffer.from(m.texture), 0), mimeType: png ? 'image/png' : 'image/jpeg' });
+      textures.push({ source: images.length - 1, sampler: 0 });
+      pbr.baseColorTexture = { index: textures.length - 1 };
+    }
+    materials.push({ pbrMetallicRoughness: pbr, ...(m.doubleSided ? { doubleSided: true } : {}) });
+    gltfMeshes.push({ primitives: [{ attributes, indices: a + 2, material: i }] });
     nodes.push({ mesh: i });
   });
+  // Image data isn't vertex data: its buffer views carry no target.
+  for (const v of bufferViews) if (v.target === 0) delete v.target;
   const bin = Buffer.concat(chunks);
   const json = {
     asset: { version: '2.0', generator: 'FreeWater model builder' },
@@ -134,6 +160,7 @@ export function toGlb(meshes: Mesh[], scale = 1): Uint8Array {
     scenes: [{ nodes: [meshes.length] }],
     nodes: [...nodes, { children: nodes.map((_, i) => i), scale: [scale, scale, scale] }],
     meshes: gltfMeshes, materials, accessors, bufferViews,
+    ...(images.length ? { images, textures, samplers: [{ magFilter: 9729, minFilter: 9987, wrapS: 33071, wrapT: 33071 }] } : {}),
     buffers: [{ byteLength: bin.length }],
   };
   let jsonBuf = Buffer.from(JSON.stringify(json));

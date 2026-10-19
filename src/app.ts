@@ -24,6 +24,11 @@ import type { AdAssistant } from './modules/ai/contract';
 import { DesignService } from './modules/custom/service';
 import { BuiltinDesigner } from './modules/ai/builtinDesigner';
 import { ClaudeDesigner } from './modules/ai/claudeDesigner';
+import { StudioService } from './modules/studio/service';
+import { ClaudeDesigner as ClaudeStudioDesigner, RulesDesigner, type StudioDesigner } from './modules/studio/designer';
+import { studioProviders, type ImageMaker, type ModelMaker, type PhotoLibrary } from './modules/studio/providers';
+import { join as joinPath, dirname as dirnamePath } from 'node:path';
+import { fileURLToPath as toPath } from 'node:url';
 import type { DesignAssistant } from './modules/ai/designContract';
 import { DeliveryService } from './modules/delivery/service';
 import { SimpleRoutePlanner, type RoutePlanner } from './modules/delivery/planner';
@@ -99,6 +104,9 @@ export interface AppOptions {
   /** Where daily books fingerprints are published (defaults: GitHub when configured, and a Bitcoin timestamp in production). */
   anchorPublishers?: AnchorPublisher[];
   designer?: DesignAssistant;
+  /** The ad studio's designer and outside services (stand-ins and the rules designer when not given and no keys are set). */
+  studioDesigner?: StudioDesigner;
+  studioProviders?: { libraries: PhotoLibrary[]; images: ImageMaker; models: ModelMaker };
   geocoder?: Geocoder; // defaults to the test geocoder
   planner?: RoutePlanner; // defaults to the simple route planner
   payouts?: PayoutProvider; // sends money to charities; defaults to the test provider (no real money)
@@ -242,6 +250,54 @@ export async function createApp(opts: AppOptions) {
   const builtinDesigner = new BuiltinDesigner();
   const designer = opts.designer ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeDesigner({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL, fallback: builtinDesigner }) : builtinDesigner);
   const designs = new DesignService(db, platform, made.registry, host, assets, designer);
+  // The ad studio: brand kits, photos (uploaded, from a library, or made by AI), designs at every size, custom AR.
+  const standInPhotos = joinPath(dirnamePath(toPath(import.meta.url)), 'modules', 'studio', 'stand-in-photos');
+  const rulesDesigner = new RulesDesigner();
+  const studio = new StudioService(db, platform, assets, ads,
+    opts.studioProviders ?? studioProviders(process.env, standInPhotos, {
+      'coffee.jpg': { description: 'A cup of espresso on a saucer on a wooden table', credit: 'Rachel Michetti (CC0)', words: ['coffee', 'espresso', 'cafe', 'cup', 'latte', 'morning'] },
+      'cat.jpg': { description: 'A tabby cat looking at the camera', credit: 'Stefan van der Walt (CC0)', words: ['cat', 'pet', 'kitten', 'animal'] },
+      'rocket.jpg': { description: 'A rocket on its launch pad at dusk', credit: 'SpaceX (public domain)', words: ['rocket', 'space', 'launch', 'science', 'museum'] },
+      'space.jpg': { description: 'Thousands of galaxies in deep space', credit: 'NASA / Hubble (public domain)', words: ['space', 'galaxy', 'stars', 'night', 'planetarium', 'astronomy'] },
+    }),
+    opts.studioDesigner ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeStudioDesigner({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL, fallback: rulesDesigner }) : rulesDesigner),
+    opts.clock);
+  // Studio photos inside labels: printed labels carry them at print size (so a machine prints them whole, even
+  // offline), previews at a smaller size. Only the studio's own picture tags are filled in, only with pictures.
+  const photoCache = (maxBytes: number) => {
+    const m = new Map<string, string>(); let bytes = 0;
+    return {
+      get(k: string) { const v = m.get(k); if (v !== undefined) { m.delete(k); m.set(k, v); } return v; },
+      set(k: string, v: string) { m.set(k, v); bytes += v.length; for (const [old, ov] of m) { if (bytes <= maxBytes || old === k) break; m.delete(old); bytes -= ov.length; } },
+    };
+  };
+  const STUDIO_IMAGE = /<image data-fw-photo="1" href="\/assets\/(as_[A-Za-z0-9_-]+)\.(?:jpg|png)"([^>]*)\/>/g;
+  const fillPhotos = async (svg: string, cache: ReturnType<typeof photoCache>, size: number | null) => {
+    if (!svg.includes('data-fw-photo')) return svg;
+    for (const id of new Set([...svg.matchAll(STUDIO_IMAGE)].map((m) => m[1]!))) {
+      if (cache.get(id) !== undefined) continue;
+      // A storage hiccup throws: the print fails cleanly (nothing billed) and the next one tries again.
+      const f = await assets.get(id);
+      if (!f || !['image/jpeg', 'image/png'].includes(f.asset.contentType)) {
+        // Really gone: this label goes without it, and the ads that use it stop until someone looks.
+        for (const c of platform.campaigns.values()) {
+          const ref = c.creativeRef?.kind === 'studio' ? c.creativeRef.spec : null;
+          if (c.active && ref && (ref.photo?.asset === id || ref.logo?.asset === id)) { c.active = false; platform.persist.campaign(c); }
+        }
+        console.error(`A label points at photo ${id}, which is missing; the ads using it are paused.`);
+        continue;
+      }
+      const png = f.asset.contentType === 'image/png';
+      const bytes = size ? await (await import('sharp')).default(f.bytes, { limitInputPixels: 40_000_000 }).resize(size, size, { fit: 'inside', withoutEnlargement: true })[png ? 'png' : 'jpeg']().toBuffer() : Buffer.from(f.bytes);
+      cache.set(id, `data:${f.asset.contentType};base64,${bytes.toString('base64')}`);
+    }
+    // A picture that can't be found is left out; the rest of the label prints.
+    return svg.replace(STUDIO_IMAGE, (m, id, rest) => { const d = cache.get(id); return d ? `<image href="${d}"${rest}/>` : ''; });
+  };
+  const printCopies = photoCache(256 * 1024 * 1024), previewCopies = photoCache(64 * 1024 * 1024);
+  platform.forPrint = (svg) => fillPhotos(svg, printCopies, null);
+  platform.forView = (svg) => fillPhotos(svg, previewCopies, 900).catch(() => svg);
+  ads.inlineAssets = platform.forView;
 
   const geocoder = opts.geocoder ?? new TestGeocoder({ Austin: { lat: 30.2672, lng: -97.7431, radiusKm: 6 }, Denver: { lat: 39.7392, lng: -104.9903, radiusKm: 6 } });
   const delivery = new DeliveryService(db, platform, packs, accounts, messenger, geocoder, opts.planner ?? new SimpleRoutePlanner(), () => persistence.flush());
@@ -323,7 +379,7 @@ export async function createApp(opts: AppOptions) {
   await fleet.load();
   made.registry.registerPrinter('model6-fleet', new MachineFleetPrinter(() => fleet, made.printer));
 
-  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, transparency, anchors, agents, profit, distributions, team, secondStep };
+  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, studio, transparency, anchors, agents, profit, distributions, team, secondStep };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

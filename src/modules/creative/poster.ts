@@ -27,7 +27,7 @@ export function checkPosterSpec(s: any): string | null {
   if (s.sub !== undefined && (typeof s.sub !== 'string' || s.sub.length > 80)) return 'the small line must be under 80 characters';
   if (!s.colors || !HEX.test(s.colors.bg) || !HEX.test(s.colors.fg) || !HEX.test(s.colors.accent)) return 'colors must look like #D7262E';
   if (s.icon !== undefined && !posterIcons.includes(s.icon)) return `the icon must be one of ${posterIcons.join(', ')}`;
-  if (s.font !== undefined && !(s.font in posterFonts)) return `the lettering must be one of ${Object.keys(posterFonts).join(', ')}`;
+  if (s.font !== undefined && (typeof s.font !== 'string' || !Object.hasOwn(posterFonts, s.font))) return `the lettering must be one of ${Object.keys(posterFonts).join(', ')}`;
   if (s.image !== undefined) {
     if (!s.image || !IMG.test(s.image.dataUrl ?? '') || s.image.dataUrl.length > 1_400_000) return 'the picture must be a PNG, JPEG or WebP under 1 MB';
     if (s.image.role !== 'photo' && s.image.role !== 'logo') return 'the picture must be a photo or a logo';
@@ -55,6 +55,7 @@ function wrap(s: string, max: number): string[] {
 }
 
 /** Simple icons drawn in a 100×100 box in the accent color. */
+export function iconDrawing(icon: PosterIcon, color: string, ink: string): string { return iconSvg(icon, color, ink); }
 function iconSvg(icon: PosterIcon, color: string, ink: string): string {
   const c = color, k = ink;
   switch (icon) {

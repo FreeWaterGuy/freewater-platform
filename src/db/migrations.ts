@@ -982,6 +982,20 @@ create index value_sales_experiment on value_sales(experiment_id);
 create table bottle_holders (unit_id text primary key, company_id text not null, person text not null, at timestamptz not null);
 `,
   },
+  {
+    id: '028_studio',
+    sql: `
+-- Each advertiser's brand kit for the ad studio: name, colors, type style, logo, what they're about.
+create table brand_kits (company_id text not null, advertiser_id text not null, kit jsonb not null, updated_at timestamptz not null, primary key (company_id, advertiser_id));
+-- Photos in the studio (the file is an asset), with what was learned about them and where they came from.
+create table studio_photos (asset_id text primary key, company_id text not null, advertiser_id text not null, info jsonb not null, source text not null, created_at timestamptz not null);
+create index studio_photos_owner on studio_photos(company_id, advertiser_id, created_at desc);
+`,
+  },
+  {
+    id: '029_studio_photo_removal',
+    sql: `alter table studio_photos add column if not exists removed_at timestamptz;`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

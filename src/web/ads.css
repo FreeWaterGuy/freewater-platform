@@ -197,3 +197,28 @@ details summary{cursor:pointer;font-weight:600}
 .nl-for_sale{left:12%}.nl-free{left:calc(50% - 7px)}.nl-negatively_priced{right:12%}
 .nl-why{margin:4px 0 0;padding-left:18px;font-size:14px}
 .ad-preview .empty{padding:18px}
+
+/* Ad studio */
+.studio { display: grid; gap: 18px; }
+.studio .card { background: #fff; border-radius: var(--r); box-shadow: inset 0 0 0 1.5px var(--line); padding: 18px; }
+.studio h2 { margin: 0; font: 700 20px/1.2 var(--display); }
+.studio .stack { display: grid; gap: 12px; }
+.studio .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.studio .row .input { flex: 1 1 220px; min-width: 0; }
+.studio .muted { color: var(--muted); margin: 0; }
+.swatches { display: flex; flex-wrap: wrap; gap: 14px; }
+.swatches label { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; }
+.swatch { width: 40px; height: 32px; border: 0; padding: 0; background: none; }
+.logo-thumb { height: 34px; max-width: 120px; object-fit: contain; }
+.photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+.photo-grid figure { margin: 0; display: grid; gap: 4px; }
+.photo-grid img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 10px; }
+.photo-grid figcaption { font-size: 12px; color: var(--muted); }
+.designs { display: grid; gap: 14px; }
+.design { display: grid; gap: 10px; }
+.design-sizes { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.design-sizes figure { margin: 0; }
+.design-sizes figcaption { font-size: 12px; color: var(--muted); }
+.design .art > svg { max-width: 100%; height: auto; display: block; border-radius: 4px; box-shadow: 0 1px 4px rgba(0,0,0,.12); }
+.design-sizes .art > svg { max-height: 220px; width: auto; }
+.linkish { background: none; border: 0; padding: 0; color: var(--muted); text-decoration: underline; cursor: pointer; justify-self: start; font-size: 12px; }
