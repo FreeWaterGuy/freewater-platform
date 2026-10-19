@@ -57,6 +57,9 @@ import { ClaudePrompter, builtinPrompter, type Prompter } from './modules/games/
 import { OpenFoodFactsImages, StockImages, WikipediaImages, type ProductImageSource } from './modules/games/images';
 import { OffersService } from './modules/offers/service';
 import { ChainService } from './modules/chain/service';
+import { solanaFromEnv } from './modules/chain/solanaEnv';
+import { LaunchService } from './modules/launch/service';
+import type { TokenChain } from './modules/chain/plugs';
 import { readerFromEnv, type ReceiptReader } from './modules/offers/receipts';
 import { OpenFoodFactsLookup, type ProductLookup } from './modules/offers/barcodes';
 import { TransparencyService } from './modules/transparency/service';
@@ -126,6 +129,8 @@ export interface AppOptions {
   receiptReader?: ReceiptReader;
   /** Looks up barcodes (Open Food Facts by default; null for none). */
   productLookup?: ProductLookup | null;
+  /** Which chain each company uses (tests pass their own). */
+  chainFor?: (companyId: string) => TokenChain;
   /** Where each visitor is, so their own law applies (GEOIP_DB, a MaxMind file; without one, only trusted host headers). */
   geo?: import('./modules/data/jurisdiction').GeoIp | null;
   /** Tests and local runs: treat anyone we can't place as being here. Ignored in production (unknown means strictest). */
@@ -356,6 +361,17 @@ export async function createApp(opts: AppOptions) {
   // The chain layer, switched off: hourly seals of the wallet journal, actions needing several people, the daily check.
   const chain = new ChainService(db, platform, wallet, publishers, opts.clock);
   chain.alert = (companyId, message) => void runtime.alerts.alert('chain', 'critical', `Chain (${companyId})`, message);
+  // Solana: the free test network before going live with the token, the real network after. Keys live in the host's
+  // settings. Without them, the stand-in runs (and says so).
+  const solana = solanaFromEnv(process.env);
+  if (opts.chainFor) chain.chainFor = opts.chainFor;
+  else if (solana.devnet || solana.mainnet) {
+    const fallback = chain.chainFor;
+    chain.chainFor = (companyId) => (chain.stage(companyId) === 'token' ? solana.mainnet : solana.devnet) ?? fallback(companyId);
+    if (solana.custody) chain.custody = solana.custody;
+  }
+  const launch = new LaunchService(db, platform, data, games, wallet, chain, opts.clock, opts.seed !== undefined ? seededRandom(opts.seed + 202) : Math.random);
+  wallet.stageOf = (companyId) => chain.stage(companyId);
 
   const flush = () => persistence.flush();
   const publicUrl = opts.publicUrl ?? process.env.PUBLIC_URL;
@@ -363,7 +379,14 @@ export async function createApp(opts: AppOptions) {
   const webhooks = new WebhookService(db, opts.webhookSender ?? new HttpWebhookSender({ allowPrivate }), messenger, opts.clock, flush, { allowPrivate, consoleUrl: publicUrl });
   const consoleSvc = new ConsoleService(db, platform, made.registry, accounts, messenger, flush, { consoleUrl: publicUrl, clock: opts.clock });
   // Switched on with the rules as they were when people approved it, never weaker ones set since.
-  chain.turnOn = async (companyId, by, rules) => { const now = chain.settings(companyId); await consoleSvc.save(companyId, { chain: { ...now, network: rules.network, approvalsNeeded: Math.max(now.approvalsNeeded, rules.approvalsNeeded), delayHours: Math.max(now.delayHours, rules.delayHours), enabled: true } }, by, undefined, { chainApproved: true }); };
+  chain.turnOn = async (companyId, by, rules, kind) => {
+    const now = chain.settings(companyId);
+    const launch = platform.companies.get(companyId)?.launch ?? { stage: 'test' as const };
+    if (kind === 'go_live_points') { await consoleSvc.save(companyId, { launch: { ...launch, stage: 'points' } }, by, undefined, { chainApproved: true }); return; }
+    if (kind === 'withdrawals_on') { await consoleSvc.save(companyId, { launch: { ...launch, withdrawals: true } }, by, undefined, { chainApproved: true }); return; }
+    const chainOn = { ...now, network: rules.network, approvalsNeeded: Math.max(now.approvalsNeeded, rules.approvalsNeeded), delayHours: Math.max(now.delayHours, rules.delayHours), enabled: true };
+    await consoleSvc.save(companyId, { chain: chainOn, ...(kind === 'go_live_token' ? { launch: { ...launch, stage: 'token' } } : {}) }, by, undefined, { chainApproved: true });
+  };
   chain.isMember = async (companyId, person, at) => {
     if (!person.startsWith('user:')) return false;
     const u = (await db.query<any>(`select role, created_at from users where id = $1 and company_id = $2 and deleted_at is null`, [person.slice(5), companyId])).rows[0];
@@ -429,7 +452,7 @@ export async function createApp(opts: AppOptions) {
   await fleet.load();
   made.registry.registerPrinter('model6-fleet', new MachineFleetPrinter(() => fleet, made.printer));
 
-  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, games, offers, chain, studio, transparency, anchors, agents, profit, distributions, team, secondStep };
+  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, games, offers, chain, launch, studio, transparency, anchors, agents, profit, distributions, team, secondStep };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

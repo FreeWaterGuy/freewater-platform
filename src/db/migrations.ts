@@ -1109,6 +1109,15 @@ update wallet_balances b set account = 'holder:' || h.id from wallet_holders h w
 delete from chain_seals;
 `,
   },
+  {
+    id: '039_launch',
+    sql: `
+-- Going live in steps, testing with bots and resetting, and minting that people sign on the real network.
+alter table chain_actions add column prepared text;
+create table chain_state (company_id text not null, key text not null, value text not null, primary key (company_id, key));
+create table launch_resets (company_id text not null, at timestamptz not null, by text not null, counts jsonb not null);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

@@ -19,7 +19,7 @@ export const fontChoices: { id: string; label: string; value: string }[] = [
 export const adCategories = ['food', 'drink', 'coffee', 'fitness', 'health', 'news', 'retail', 'local-services', 'real-estate', 'auto', 'finance', 'entertainment', 'events', 'travel', 'tech', 'education', 'nonprofit', 'politics', 'alcohol', 'tobacco', 'cannabis', 'gambling', 'weapons', 'dating'];
 
 /** The parts of the settings a PATCH may send. Anything else is refused. */
-export const editableKeys = ['name', 'receiptBaseUrl', 'scanBaseUrl', 'brand', 'productFacts', 'giving', 'openBooks', 'unitCosts', 'consumerPricing', 'timezone', 'consumer', 'machines', 'qr', 'ar', 'standardProductId', 'adRules', 'prices', 'modules', 'lottery', 'data', 'transparency', 'agents', 'ratchet', 'security', 'research', 'wallet', 'offers', 'games', 'minimumAge', 'chain'] as const;
+export const editableKeys = ['name', 'receiptBaseUrl', 'scanBaseUrl', 'brand', 'productFacts', 'giving', 'openBooks', 'unitCosts', 'consumerPricing', 'timezone', 'consumer', 'machines', 'qr', 'ar', 'standardProductId', 'adRules', 'prices', 'modules', 'lottery', 'data', 'transparency', 'agents', 'ratchet', 'security', 'research', 'wallet', 'offers', 'games', 'minimumAge', 'chain', 'launch'] as const;
 export type EditableKey = (typeof editableKeys)[number];
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
@@ -154,6 +154,7 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
  * "switch on" action). Switching it off is always allowed. Fewer approvals or a shorter wait can't be set while it's on.
  */
 export function chainProblem(cur: CompanyConfig, next: CompanyConfig, approved = false): string | null {
+  if (JSON.stringify(cur.launch ?? null) !== JSON.stringify(next.launch ?? null) && !approved) return 'Going live (and turning on withdrawals) is its own step, approved and with a wait. Propose it under Launch.';
   const a = cur.chain, b = next.chain;
   if (b?.enabled && !a?.enabled && !approved) return 'Switching the chain on needs several people to approve it, then a wait. Propose it under Chain.';
   if (a?.enabled && b?.enabled && (b.approvalsNeeded < a.approvalsNeeded || b.delayHours < a.delayHours)) return 'While the chain is on, approvals and the wait can be raised, not lowered. Switch it off first.';

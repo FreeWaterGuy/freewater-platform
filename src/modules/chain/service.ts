@@ -36,8 +36,8 @@ export function checkChain(c: ChainSettings | undefined): string | null {
   return null;
 }
 
-export type ActionKind = 'mint' | 'unpause' | 'switch_on';
-const IRREVERSIBLE: ActionKind[] = ['mint', 'unpause', 'switch_on'];
+export type ActionKind = 'mint' | 'unpause' | 'switch_on' | 'go_live_points' | 'go_live_token' | 'convert' | 'withdrawals_on';
+const IRREVERSIBLE: ActionKind[] = ['mint', 'unpause', 'switch_on', 'go_live_points', 'go_live_token', 'convert', 'withdrawals_on'];
 
 export class ChainService {
   constructor(private db: SqlClient, private platform: Platform, private wallet: WalletService, private publishers: AnchorPublisher[] = [], private clock: () => Date = () => new Date()) {}
@@ -48,7 +48,7 @@ export class ChainService {
   /** Was this person on the company's team at this time? Set by the app. */
   isMember?: (companyId: string, person: string, at: Date) => Promise<boolean>;
   /** Saves "the chain is on" in the company's settings (with its history). Set by the app. */
-  turnOn?: (companyId: string, by: string, rules: ChainSettings) => Promise<void>;
+  turnOn?: (companyId: string, by: string, rules: ChainSettings, kind: ActionKind) => Promise<void>;
   /** Tells a person something needs them (an alert). Set by the app. */
   alert?: (companyId: string, message: string) => void;
 
@@ -137,18 +137,26 @@ export class ChainService {
   // ---------- actions that need several people ----------
 
   /**
-   * Propose something that can't be undone. It needs `approvalsNeeded` different people (the one who proposes counts
-   * as none), then waits `delayHours`, then any of them can run it. Only people (not service keys) approve.
+   * Propose something that can't be undone. Going live with points needs only the person proposing (an owner, signed
+   * in) and a day's wait; everything involving the real token needs `approvalsNeeded` other people too, then the wait.
    */
   async propose(companyId: string, kind: ActionKind, params: Record<string, unknown>, person: string) {
-    if (!IRREVERSIBLE.includes(kind)) throw new ChainError('bad_kind', 'Propose a mint, an unpause, or switching the chain on.');
+    if (!IRREVERSIBLE.includes(kind)) throw new ChainError('bad_kind', `Propose one of: ${IRREVERSIBLE.join(', ')}.`);
     if (kind === 'mint' && !(typeof params.to === 'string' && Number.isInteger(params.amount) && (params.amount as number) > 0)) throw new ChainError('bad_params', 'A mint needs who it’s for and a whole amount.');
-    if (this.isMember && !(await this.isMember(companyId, person, this.clock()))) throw new ChainError('not_member', 'Only people on the team can propose this.', 403);
+    if (kind === 'convert' && !(Number.isInteger(params.tokensPerPoint) && (params.tokensPerPoint as number) > 0)) throw new ChainError('bad_params', 'Say how many token units each point becomes (a whole number).');
+    const stage = this.stage(companyId);
+    if (kind === 'go_live_points' && stage !== 'test') throw new ChainError('wrong_stage', 'Already live.', 409);
+    if (kind === 'go_live_token' && stage !== 'points') throw new ChainError('wrong_stage', 'Go live with points first.', 409);
+    if ((kind === 'convert' || kind === 'withdrawals_on') && stage !== 'token') throw new ChainError('wrong_stage', 'This comes after going live with the token.', 409);
+    if (this.isMember && !(await this.isMember(companyId, person, this.clock()))) throw new ChainError('not_member', 'Only owners and finance people on the team can propose this.', 403);
     const id = newId('ca');
     // The rules as they are now are kept with the action: changing settings later can't weaken it.
     const s = this.settings(companyId);
-    await this.db.query(`insert into chain_actions (id, company_id, kind, params, proposed_by, approvals, needed, status, created_at, rules) values ($1,$2,$3,$4,$5,'[]',$6,'proposed',$7,$8)`, [id, companyId, kind, JSON.stringify(params), person, s.approvalsNeeded, this.now(), JSON.stringify(s)]);
-    this.alert?.(companyId, `${person} proposed: ${kind} ${JSON.stringify(params)}. It needs ${s.approvalsNeeded} other people to approve, then a ${s.delayHours}-hour wait.`);
+    const needed = kind === 'go_live_points' ? 0 : s.approvalsNeeded;
+    const delay = kind === 'go_live_points' ? 24 : s.delayHours;
+    await this.db.query(`insert into chain_actions (id, company_id, kind, params, proposed_by, approvals, needed, status, created_at, rules, not_before) values ($1,$2,$3,$4,$5,'[]',$6,$7,$8,$9,$10)`,
+      [id, companyId, kind, JSON.stringify(params), person, needed, needed === 0 ? 'approved' : 'proposed', this.now(), JSON.stringify({ ...s, delayHours: delay }), needed === 0 ? new Date(this.clock().getTime() + delay * 3600_000).toISOString() : null]);
+    this.alert?.(companyId, `${person} proposed: ${kind} ${JSON.stringify(params)}. ${needed ? `It needs ${needed} other people to approve, then` : 'It runs after'} a ${delay}-hour wait.`);
     return this.action(companyId, id);
   }
   async approve(companyId: string, id: string, person: string) {
@@ -171,10 +179,10 @@ export class ChainService {
     });
   }
   async cancel(companyId: string, id: string, person: string) {
-    await this.db.query(`update chain_actions set status = 'cancelled', cancelled_by = $3 where id = $1 and company_id = $2 and status in ('proposed','approved')`, [id, companyId, person]);
+    await this.db.query(`update chain_actions set status = 'cancelled', cancelled_by = $3 where id = $1 and company_id = $2 and status in ('proposed','approved','signing')`, [id, companyId, person]);
     return this.action(companyId, id);
   }
-  /** Run an approved action once its wait is over. Not while the chain is off, or paused (except unpausing). */
+  /** Run an approved action once its wait is over. Token actions don't run while paused. */
   async run(companyId: string, id: string, person: string) {
     const a = (await this.db.query<any>(`select * from chain_actions where id = $1 and company_id = $2`, [id, companyId])).rows[0];
     if (!a) throw new ChainError('not_found', 'No such action.', 404);
@@ -184,63 +192,128 @@ export class ChainService {
     if (new Date(a.not_before).getTime() + 14 * 86_400_000 < this.clock().getTime()) { await this.db.query(`update chain_actions set status = 'expired' where id = $1`, [id]); throw new ChainError('expired', 'This approval ran out. Propose it again.', 410); }
     const s = this.settings(companyId);
     const p = typeof a.params === 'string' ? JSON.parse(a.params) : a.params;
-    if (a.kind !== 'switch_on' && !s.enabled) throw new ChainError('switched_off', 'The chain is switched off.', 403);
-    const chain = this.chainFor(companyId);
-    if (a.kind !== 'unpause' && a.kind !== 'switch_on' && (await chain.paused())) throw new ChainError('paused', 'Everything is paused.', 423);
+    const onChain = a.kind === 'mint' || a.kind === 'convert';
+    if (onChain && !s.enabled) throw new ChainError('switched_off', 'The chain is switched off.', 403);
+    if (a.kind !== 'unpause' && onChain && (await this.isPaused(companyId))) throw new ChainError('paused', 'Everything is paused.', 423);
     const took = await this.db.query(`update chain_actions set status = 'running' where id = $1 and status = 'approved'`, [id]);
     if (!Number(took.rowCount ?? 0)) throw new ChainError('not_approved', 'Already running.', 409);
+    const rules: ChainSettings = { ...defaultChain, ...(typeof a.rules === 'string' ? JSON.parse(a.rules) : a.rules ?? {}) };
     try {
+      const chain = this.chainFor(companyId);
       let ref = '';
-      if (a.kind === 'mint') {
-        if (!a.ref && (p.to === 'erased' || (this.wallet.mayEarn && !(await this.wallet.mayEarn(companyId, p.to))))) throw new Error('This person can’t receive it (erased, too young, or where rewards aren’t allowed).');
-        const address = await this.custody.addressFor(companyId, p.to);
-        ref = a.ref ?? (await chain.mint(address, p.amount, id)).ref;
-        // Kept at once, so if the books entry fails it can be finished later without minting twice.
-        await this.db.query(`update chain_actions set ref = $2 where id = $1`, [id, ref]);
-        await this.wallet.recordMint(companyId, p.to, p.amount, id, ref);
+      if (a.kind === 'mint' || a.kind === 'convert') {
+        const plan = a.kind === 'mint' ? await this.mintPlan(companyId, p) : await this.convertPlan(companyId, p.tokensPerPoint);
+        if (!plan.total) throw new Error('Nothing to mint.');
+        await this.db.query(`update chain_actions set params = $2 where id = $1`, [id, JSON.stringify({ ...p, plan })]);
+        if (!a.ref) {
+          const r = await chain.mint(await this.custody.addressFor(companyId, 'custody'), plan.total, id);
+          if (r.prepared) {
+            // The real network: people sign this in Squads; then `confirmSigned` checks it and finishes the books.
+            await this.db.query(`update chain_actions set status = 'signing', prepared = $2 where id = $1`, [id, r.prepared]);
+            this.alert?.(companyId, `${a.kind} ${id} is ready to sign in Squads (${plan.total} token units).`);
+            return this.action(companyId, id);
+          }
+          ref = r.ref;
+          await this.db.query(`update chain_actions set ref = $2 where id = $1`, [id, ref]);
+        } else ref = a.ref;
+        await this.finishMint(companyId, id, plan, ref);
       } else if (a.kind === 'unpause') ref = (await chain.setPaused(false)).ref;
-      else if (a.kind === 'switch_on') { if (!this.turnOn) throw new Error('Settings can’t be changed from here.'); await this.turnOn(companyId, `approved action ${id}`, { ...defaultChain, ...(typeof a.rules === 'string' ? JSON.parse(a.rules) : a.rules ?? {}) }); ref = 'settings'; }
+      else if (a.kind === 'switch_on' || a.kind === 'go_live_points' || a.kind === 'go_live_token' || a.kind === 'withdrawals_on') {
+        if (!this.turnOn) throw new Error('Settings can’t be changed from here.');
+        await this.turnOn(companyId, `approved action ${id}`, rules, a.kind);
+        ref = 'settings';
+      }
       await this.db.query(`update chain_actions set status = 'done', ran_by = $2, ran_at = $3, ref = $4 where id = $1`, [id, person, this.now(), ref]);
     } catch (e: any) {
       // A mint that reached the chain but not the books goes back to approved, to be finished (not minted again).
-      const reached = a.kind === 'mint' && (await this.db.query<any>(`select ref from chain_actions where id = $1`, [id])).rows[0]?.ref;
+      const reached = (a.kind === 'mint' || a.kind === 'convert') && (await this.db.query<any>(`select ref from chain_actions where id = $1`, [id])).rows[0]?.ref;
       await this.db.query(`update chain_actions set status = $3, error = $2 where id = $1`, [id, String(e?.message ?? e).slice(0, 300), reached ? 'approved' : 'failed']);
       throw new ChainError('failed', `It didn’t run: ${e?.message ?? e}`, 502);
     }
     return this.action(companyId, id);
   }
+  /** After people signed a mint in Squads: check it on the chain, then record it in the books. */
+  async confirmSigned(companyId: string, id: string, signature: string, person: string) {
+    const a = (await this.db.query<any>(`select * from chain_actions where id = $1 and company_id = $2`, [id, companyId])).rows[0];
+    if (!a || a.status !== 'signing') throw new ChainError('not_signing', 'This isn’t waiting for signatures.', 409);
+    const p = typeof a.params === 'string' ? JSON.parse(a.params) : a.params;
+    const chain = this.chainFor(companyId);
+    if (!chain.confirmMint || !(await chain.confirmMint(signature, id, p.plan.total))) throw new ChainError('not_found_on_chain', 'That signature isn’t a finished mint of this amount for this action.', 422);
+    if ((await this.db.query(`select 1 from chain_actions where company_id = $1 and ref = $2`, [companyId, signature])).rows.length) throw new ChainError('used', 'That signature was already used.', 409);
+    await this.db.query(`update chain_actions set ref = $2 where id = $1`, [id, signature]);
+    await this.finishMint(companyId, id, p.plan, signature);
+    await this.db.query(`update chain_actions set status = 'done', ran_by = $2, ran_at = $3 where id = $1`, [id, person, this.now()]);
+    return this.action(companyId, id);
+  }
+  /** Who gets what. A conversion turns every point anyone holds into the token at the agreed rate. */
+  private async mintPlan(companyId: string, p: any) {
+    if (p.to === 'erased' || (this.wallet.mayEarn && !(await this.wallet.mayEarn(companyId, p.to)))) throw new Error('This person can’t receive it (erased, too young, or where rewards aren’t allowed).');
+    return { total: p.amount as number, to: [{ subject: p.to as string, points: 0, tokens: p.amount as number }] };
+  }
+  private async convertPlan(companyId: string, rate: number) {
+    const holders = await this.wallet.pointHolders(companyId);
+    const to = holders.map((h) => ({ subject: h.subject, points: h.points, tokens: h.points * rate }));
+    return { total: to.reduce((a, x) => a + x.tokens, 0), to };
+  }
+  private async finishMint(companyId: string, id: string, plan: { to: { subject: string; points: number; tokens: number }[] }, ref: string) {
+    for (const x of plan.to) {
+      if (x.points) await this.wallet.convertPoints(companyId, x.subject, x.points, `${id}:${x.subject}`);
+      await this.wallet.recordMint(companyId, x.subject, x.tokens, `${id}:${x.subject}`, ref);
+    }
+  }
   /** The pause switch: any one person, at once, no wait. Unpausing needs the full approval and wait. */
   async pause(companyId: string, person: string, reason: string) {
-    const ref = (await this.chainFor(companyId).setPaused(true)).ref;
+    const ref = await this.chainFor(companyId).setPaused(true).then((r) => r.ref).catch(() => 'not on chain');
     await this.db.query(`insert into chain_actions (id, company_id, kind, params, proposed_by, approvals, needed, status, created_at, ran_by, ran_at, ref) values ($1,$2,'pause',$3,$4,'[]',1,'done',$5,$4,$5,$6)`, [newId('ca'), companyId, JSON.stringify({ reason: reason.slice(0, 300) }), person, this.now(), ref]);
     this.alert?.(companyId, `Chain paused by ${person}: ${reason}`);
     return { paused: true, ref };
   }
+  /** Paused if the latest pause came after the latest unpause that ran. Kept here, so a restart can't lose it. */
+  async isPaused(companyId: string) {
+    const r = (await this.db.query<any>(`select kind from chain_actions where company_id = $1 and kind in ('pause','unpause') and status = 'done' order by ran_at desc limit 1`, [companyId])).rows[0];
+    return r?.kind === 'pause';
+  }
   async action(companyId: string, id: string) {
     const a = (await this.db.query<any>(`select * from chain_actions where id = $1 and company_id = $2`, [id, companyId])).rows[0];
     if (!a) throw new ChainError('not_found', 'No such action.', 404);
-    return { id: a.id, kind: a.kind, params: typeof a.params === 'string' ? JSON.parse(a.params) : a.params, status: a.status, proposedBy: a.proposed_by, approvals: typeof a.approvals === 'string' ? JSON.parse(a.approvals) : a.approvals, needed: a.needed, notBefore: a.not_before ? new Date(a.not_before).toISOString() : null, ref: a.ref ?? null, error: a.error ?? null };
+    const params = typeof a.params === 'string' ? JSON.parse(a.params) : a.params;
+    return { id: a.id, kind: a.kind, params: params?.plan ? { ...params, plan: { total: params.plan.total, people: params.plan.to.length } } : params, status: a.status, proposedBy: a.proposed_by, approvals: typeof a.approvals === 'string' ? JSON.parse(a.approvals) : a.approvals, needed: a.needed, notBefore: a.not_before ? new Date(a.not_before).toISOString() : null, ref: a.ref ?? null, error: a.error ?? null, ...(a.status === 'signing' ? { toSign: a.prepared } : {}) };
   }
   async actions(companyId: string) {
     const ids = (await this.db.query<any>(`select id from chain_actions where company_id = $1 order by created_at desc limit 100`, [companyId])).rows.map((r) => r.id as string);
     return Promise.all(ids.map((i) => this.action(companyId, i)));
   }
 
+  // ---------- stages ----------
+
+  /** test: everything can be reset; points: live, placeholder points; token: live, with the real token. */
+  stage(companyId: string): 'test' | 'points' | 'token' { return this.platform.companies.get(companyId)?.launch?.stage ?? 'test'; }
+
   // ---------- the daily check ----------
 
-  /** The books' token supply against the chain's. If they differ, everything pauses and a person is told. */
+  /**
+   * The books' token supply against the chain's. If they differ, everything pauses and a person is told. In test,
+   * tokens minted before the last reset are left out (the test network can't take them back).
+   */
   async reconcile(companyId: string) {
     if (!this.settings(companyId).enabled) return { checked: false, reason: 'switched_off' };
     const books = await this.wallet.tokenSupply(companyId);
-    const chain = await this.chainFor(companyId).totalSupply();
+    const baseline = Number((await this.db.query<any>(`select value from chain_state where company_id = $1 and key = 'baseline'`, [companyId])).rows[0]?.value ?? 0);
+    const chain = (await this.chainFor(companyId).totalSupply()) - baseline;
     const ok = books === chain;
     await this.db.query(`insert into chain_checks (company_id, at, books, chain, ok) values ($1,$2,$3,$4,$5)`, [companyId, this.now(), books, chain, ok]);
     if (!ok) await this.pause(companyId, 'daily check', `The books show ${books} tokens and the chain shows ${chain}.`);
     return { checked: true, ok, books, chain };
   }
+  /** Test only: remember the chain's supply now, so what the test network already has isn't counted after a reset. */
+  async resetBaseline(companyId: string) {
+    const supply = this.settings(companyId).enabled ? await this.chainFor(companyId).totalSupply().catch(() => 0) : 0;
+    await this.db.query(`insert into chain_state (company_id, key, value) values ($1,'baseline',$2) on conflict (company_id, key) do update set value = excluded.value`, [companyId, String(supply)]);
+  }
   async status(companyId: string) {
     const s = this.settings(companyId);
     const last = (await this.db.query<any>(`select * from chain_checks where company_id = $1 order by at desc limit 1`, [companyId])).rows[0];
-    return { ...s, chain: this.chainFor(companyId).name, custody: this.custody.name, paused: await this.chainFor(companyId).paused(), lastCheck: last ? { at: new Date(last.at).toISOString(), ok: last.ok, books: Number(last.books), chain: Number(last.chain) } : null, tokenSupply: await this.wallet.tokenSupply(companyId) };
+    const chain = this.chainFor(companyId);
+    return { ...s, stage: this.stage(companyId), chain: chain.name, network: chain.network, custody: this.custody.name, paused: await this.isPaused(companyId), lastCheck: last ? { at: new Date(last.at).toISOString(), ok: last.ok, books: Number(last.books), chain: Number(last.chain) } : null, tokenSupply: await this.wallet.tokenSupply(companyId) };
   }
 }

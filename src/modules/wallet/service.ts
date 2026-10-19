@@ -49,6 +49,9 @@ export class WalletService {
     return this.earn(companyId, viewerKey, 'scan', `scan:${unitId}:${slot}:${this.hidden(companyId, viewerKey)}`, { source: this.sourceOf(ip), about: `unit:${unitId}`, perAbout: 3 });
   }
 
+  /** Where the company is: test, live with points, or live with the token. Set by the app. */
+  stageOf?: (companyId: string) => 'test' | 'points' | 'token';
+
   settings(companyId: string): WalletSettings {
     const c = this.platform.companies.get(companyId);
     return c?.wallet ?? defaultWallet(c?.name);
@@ -195,6 +198,18 @@ export class WalletService {
       return { entry: id };
     }), () => ({ entry: null as string | null }));
   }
+  /** Everyone holding points now (by the phone or account their wallet belongs to). */
+  async pointHolders(companyId: string): Promise<{ subject: string; points: number }[]> {
+    return (await this.db.query<any>(`select h.subject, b.balance from wallet_balances b join wallet_holders h on h.company_id = b.company_id and b.account = 'holder:' || h.id where b.company_id = $1 and b.asset = $2 and b.balance > 0 order by h.subject`, [companyId, this.pointsAsset(companyId)])).rows
+      .map((r) => ({ subject: r.subject as string, points: Number(r.balance) }));
+  }
+  /** Points turned into the token: taken from the person and kept on the 'converted' line, so the books show it. */
+  async convertPoints(companyId: string, subject: string, points: number, ref: string) {
+    return this.once(() => this.db.transaction(async (tx) => {
+      const acct = await this.accountOf(tx, companyId, subject);
+      return { entry: await this.post(tx, companyId, this.pointsAsset(companyId), 'convert', `convert:${ref}`, [[acct, -points], ['converted', points]], { why: 'turned into the token' }) };
+    }), () => ({ entry: null as string | null }));
+  }
   async tokenSupply(companyId: string) { return -(await this.balance(this.db, companyId, this.tokenAsset(companyId), 'token_supply')); }
   /** Every wallet entry in a time window, with its lines, for the hourly seal. */
   async entriesBetween(companyId: string, from: string, to: string) {
@@ -243,7 +258,7 @@ export class WalletService {
     const s = this.settings(companyId);
     const holders = await this.accountsOf(this.db, companyId, subjects);
     const history = (await this.db.query<any>(`select t.id, t.asset, t.kind, t.memo, t.at, l.amount from wallet_tx t join wallet_lines l on l.tx_id = t.id where t.company_id = $1 and l.account = any($2) order by t.at desc, t.id desc limit 50`, [companyId, holders])).rows
-      .map((r) => { const m = (typeof r.memo === 'string' ? JSON.parse(r.memo) : r.memo) ?? {}; return { id: r.id, what: r.asset.startsWith('points:') ? 'points' : 'credit', kind: r.kind, amount: Number(r.amount), at: new Date(r.at).toISOString(), ...(m.action ? { action: m.action } : {}), ...(m.why ? { why: m.why } : {}) }; });
+      .map((r) => { const m = (typeof r.memo === 'string' ? JSON.parse(r.memo) : r.memo) ?? {}; return { id: r.id, what: r.asset.startsWith('points:') ? 'points' : r.asset.startsWith('token:') ? 'token' : 'credit', kind: r.kind, amount: Number(r.amount), at: new Date(r.at).toISOString(), ...(m.action ? { action: m.action } : {}), ...(m.why ? { why: m.why } : {}) }; });
     const viewers = subjects.filter((x) => !x.includes(':'));
     const coupons = viewers.length ? (await this.db.query<any>(`select code, advertiser_id, campaign_id, created_at from coupon_codes where company_id = $1 and viewer_key = any($2) order by created_at desc limit 50`, [companyId, viewers]).catch(() => ({ rows: [] as any[] }))).rows
       .map((r) => ({ code: r.code, advertiser: this.platform.campaigns.get(r.campaign_id)?.advertiserName ?? null, at: new Date(r.created_at).toISOString() })) : [];
@@ -253,6 +268,8 @@ export class WalletService {
       points: { name: s.points.name, balance: await this.sum(this.db, companyId, this.pointsAsset(companyId), subjects), enabled: s.points.enabled, terms: pointsTerms },
       credit: { balanceCents: await this.sum(this.db, companyId, this.creditAsset(companyId), subjects), enabled: s.credit.enabled, note: 'Dollar credit is paid for by brands and held in reserve, one dollar for every dollar of credit.' },
       exchange: { enabled: s.conversions.enabled && !!s.conversions.approvedBy },
+      token: { balance: await this.sum(this.db, companyId, this.tokenAsset(companyId), subjects), live: this.stageOf?.(companyId) === 'token', withdrawals: !!this.platform.companies.get(companyId)?.launch?.withdrawals, held: 'Held safely for you in FreeWater’s custody on Solana, controlled by several people, until you choose to move it to a wallet of your own.' },
+      test: (this.stageOf?.(companyId) ?? 'test') === 'test',
       history, coupons, saved,
     };
   }
