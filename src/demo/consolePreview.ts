@@ -89,7 +89,7 @@ const rec = {
   honest: await (async () => { await app.numberline.idle(); return call('GET', '/v1/honest-data', token); })(),
   agents: await (async () => {
     // A change the value agent proposed, approved and measured a week later, then the fund shared out.
-    const p = await app.agents.propose('freewater', { agentId: 'value', kind: 'pricing', title: 'Scans are worth more than 25¢', detail: 'Advertisers get a held, gifted bottle; price the scan for it.', change: { path: 'prices.perScan', value: 32 }, expected: 'More per bottle.' });
+    const p = await app.agents.propose('freewater', { agentId: 'value', kind: 'pricing', title: 'Scans are worth more than 25¢', detail: 'Advertisers get a held, gifted bottle; price the scan for it.', change: { path: 'prices.perScan', value: 32 }, basis: 'what an engaged scan of a free product is worth to the advertiser', expected: 'More per bottle.' });
     setNow(end - 9 * 86_400_000); await app.agents.decide(p.id, true, 'Josh', 'freewater');
     await simulateHistory(app, setNow, { endMs: end - 86_400_000, days: 7, bottlesPerDay: 8, idPrefix: 'ag' });
     setNow(end); await app.agents.measure(); await app.agents.settle('freewater'); await app.agents.scan('freewater');
