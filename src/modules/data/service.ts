@@ -235,6 +235,7 @@ export class DataService {
    */
   private async eraseEnvironment(companyId: string, keys: string[], run: (name: string, sql: string, params: unknown[]) => Promise<void>, code: () => string) {
     await run('choice screens', `delete from choice_sets where company_id = $1 and person = any($2)`, [companyId, keys]);
+    await run('videos seen', `delete from video_seen where viewer_key = any($1) and campaign_id in (select id from campaigns where company_id = $2)`, [keys, companyId]);
     await run('ad preferences', `delete from ad_preferences where company_id = $1 and person = any($2)`, [companyId, keys]);
     await run('measurement panel', `delete from research_panel where company_id = $1 and person = any($2)`, [companyId, keys]);
     for (const k of keys) {

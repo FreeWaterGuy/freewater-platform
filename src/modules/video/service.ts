@@ -16,7 +16,7 @@ import { builtinWriter } from './motion';
 
 export class VideoError extends Error { constructor(public code: string, message: string, public status = 400) { super(message); } }
 
-export interface VideoView { id: string; style: VideoStyle; kind: 'motion' | 'file'; spec?: MotionSpec; url?: string; by: string }
+export interface VideoView { id: string; style: VideoStyle; kind: 'motion' | 'file'; spec?: MotionSpec; url?: string; by: string; /** Shown to this person before (their video for this ad). */ again?: boolean }
 
 const MOTION_TAKES = 3; // cuts of the motion video per kind of moment
 const FOOTAGE_PER_DAY = 12; // footage clips started per ad per day, at most (they cost money)
@@ -50,6 +50,22 @@ export class VideoService {
   }
 
   /** The videos for this person, best first. Makes what's missing: motion now, footage in the background. */
+  /**
+   * For one person: the video they were shown for this ad before, first, so scanning again shows the same one; then
+   * the others for this moment, for when they ask for more. The first time, the best one is theirs from then on.
+   */
+  async forPerson(c: Campaign, facts: ScanFacts, viewerKey: string): Promise<VideoView[]> {
+    const fresh = await this.forViewer(c, facts);
+    const seen = (await this.db.query<any>(`select video_id from video_seen where campaign_id = $1 and viewer_key = $2`, [c.id, viewerKey])).rows[0]?.video_id as string | undefined;
+    if (seen) {
+      const r = (await this.db.query<any>(`select * from videos where id = $1 and campaign_id = $2 and status = 'ready' and review = 'approved'`, [seen, c.id])).rows[0];
+      if (r) return [{ ...this.view(r), again: true }, ...fresh.filter((v) => v.id !== r.id)];
+      // Their video was taken down: they get a new one, which becomes theirs.
+    }
+    if (fresh[0]) await this.db.query(`insert into video_seen (campaign_id, viewer_key, video_id, at) values ($1,$2,$3,$4) on conflict (campaign_id, viewer_key) do update set video_id = excluded.video_id, at = excluded.at`, [c.id, viewerKey, fresh[0].id, this.clock().toISOString()]);
+    return fresh;
+  }
+
   async forViewer(c: Campaign, facts: ScanFacts): Promise<VideoView[]> {
     const seg = VideoService.segmentOf(facts);
     const key = segmentKey(seg);

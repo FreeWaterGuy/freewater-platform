@@ -996,6 +996,13 @@ create index studio_photos_owner on studio_photos(company_id, advertiser_id, cre
     id: '029_studio_photo_removal',
     sql: `alter table studio_photos add column if not exists removed_at timestamptz;`,
   },
+  {
+    id: '030_video_seen',
+    sql: `
+-- The video each person was shown for an ad: a later scan shows them the same one first (they can ask for more).
+create table video_seen (campaign_id text not null, viewer_key text not null, video_id text not null, at timestamptz not null, primary key (campaign_id, viewer_key));
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

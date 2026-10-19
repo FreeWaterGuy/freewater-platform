@@ -120,9 +120,28 @@ describe('"Show me more": personalized video, learned from every view', () => {
     expect(clip).toMatchObject({ status: 'ready', review: 'pending', prompt: 'test prompt' });
     expect((await more()).body.videos.some((v: any) => v.kind === 'file')).toBe(false); // not yet approved
     await call('POST', `/v1/campaigns/cmp-joes/videos/${clip.id}/review`, keys['advertiser-joes'], { approve: true });
+    // This person keeps the video they saw first; the new footage is there when they ask for more.
     const after = (await more()).body.videos;
-    expect(after[0]).toMatchObject({ kind: 'file', style: 'live_action' });
-    expect(after[0].url).toMatch(/^\/assets\/.+\.mp4$/);
+    expect(after[0]).toMatchObject({ kind: 'motion', again: true });
+    const clipShown = after.find((v: any) => v.kind === 'file');
+    expect(clipShown).toMatchObject({ style: 'live_action' });
+    expect(clipShown.url).toMatch(/^\/assets\/.+\.mp4$/);
+    // Someone new gets the best one now, the approved footage.
+    const fresh = (await call('GET', `/v1/public/experience/${unit.id}/${slot}/more?viewer=viewer-foot-0002`)).body.videos;
+    expect(fresh[0]).toMatchObject({ kind: 'file', style: 'live_action' });
+  });
+
+  it('shows a person the same video when they scan again, even later in the day, with the rest on request', async () => {
+    const { unit, slot } = await bottleWith('cmp-joes');
+    const more = () => call('GET', `/v1/public/experience/${unit.id}/${slot}/more?viewer=viewer-same-0001`);
+    const first = (await more()).body.videos;
+    expect(first[0].again).toBeUndefined();
+    const saved = now;
+    now += 9 * 3600_000; // the evening: a different moment
+    const again = (await more()).body.videos;
+    expect(again[0]).toMatchObject({ id: first[0].id, again: true });
+    expect(again.filter((v: any) => v.id === first[0].id)).toHaveLength(1); // not shown twice
+    now = saved;
   });
 
   it('the AI storyboard writer can never invent a price', async () => {

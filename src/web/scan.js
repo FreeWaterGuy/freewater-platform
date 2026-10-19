@@ -539,7 +539,14 @@
         const r = await api('GET', `${url}?viewer=${encodeURIComponent(viewerKey)}`);
         btn.remove();
         if (!r.videos?.length) { box.append(h('p', { class: 'text', text: 'That’s everything for now.' })); return; }
-        box.append(h('h2', { class: 'section-title', text: 'Made for this moment' }), ...r.videos.map((v) => videoCard(v, ctx)));
+        // Their video first (the same one each time they scan this ad), the rest only if they ask.
+        const [first, ...rest] = r.videos;
+        box.append(h('h2', { class: 'section-title', text: first.again ? 'Your video' : 'Made for this moment' }), videoCard(first, ctx));
+        if (rest.length) {
+          const moreBtn = h('button', { type: 'button', class: 'btn secondary more-btn' }, `More videos (${rest.length})`);
+          moreBtn.addEventListener('click', () => { track(ctx, 'more_videos'); moreBtn.replaceWith(...rest.map((v) => videoCard(v, ctx))); });
+          box.append(moreBtn);
+        }
       } catch { btn.disabled = false; btn.textContent = b.label; toast('That didn’t load. Try again.'); }
     });
     box.append(btn);
