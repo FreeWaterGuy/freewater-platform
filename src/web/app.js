@@ -25,6 +25,7 @@
     pin: 'M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11Z|M12 12.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z',
     scan: 'M4 8V5a1 1 0 0 1 1-1h3|M16 4h3a1 1 0 0 1 1 1v3|M20 16v3a1 1 0 0 1-1 1h-3|M8 20H5a1 1 0 0 1-1-1v-3|M8 9h3v3H8z|M13 12h3v3h-3z',
     saved: 'M6 3h12v18l-6-4-6 4V3Z',
+    wallet: 'M3 7h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z|M3 7l12-4v4|M16 13h.01',
     me: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z|M4 21a8 8 0 0 1 16 0',
     back: 'M15 18l-6-6 6-6',
     ar: 'M12 2 3 7v10l9 5 9-5V7l-9-5Z|M12 22V12|M3 7l9 5 9-5',
@@ -73,6 +74,7 @@
     [/^\/app\/m\/([A-Za-z0-9_-]+)$/, machineScreen],
     [/^\/app\/scan$/, scanScreen],
     [/^\/app\/saved$/, savedScreen],
+    [/^\/app\/wallet$/, walletScreen],
     [/^\/app\/me$/, meScreen],
     [/^\/app\/bottles\/([A-Za-z0-9_-]+)$/, bottleScreen],
     [/^\/app\/design$/, designScreen],
@@ -108,7 +110,7 @@
     return s;
   };
   const nav = (active) => h('nav', { class: 'nav', 'aria-label': 'Main' }, h('div', { class: 'nav-inner' },
-    [['home', '/app', 'Home', I.home], ['machines', '/app/machines', 'Machines', I.pin], ['scan', '/app/scan', 'Scan', I.scan], ['saved', '/app/saved', 'Saved', I.saved], ['me', '/app/me', 'Me', I.me]].map(([id, path, label, ic]) =>
+    [['home', '/app', 'Home', I.home], ['machines', '/app/machines', 'Machines', I.pin], ['scan', '/app/scan', 'Scan', I.scan], ['wallet', '/app/wallet', 'Wallet', I.wallet], ['me', '/app/me', 'Me', I.me]].map(([id, path, label, ic]) =>
       link(path, { class: id === 'scan' ? 'scan' : '', 'aria-current': active === id ? 'page' : null }, id === 'scan' ? h('span', { class: 'bubble' }, icon(ic)) : icon(ic), label))));
   const backBar = (title, sub, to) => h('div', { class: 'title-row' }, h('button', { class: 'back', type: 'button', 'aria-label': 'Back', onclick: () => (to ? go(to) : fixture || history.length < 2 ? go('/app') : history.back()) }, icon(I.back)), h('div', {}, h('h1', { text: title }), sub && h('p', { text: sub })));
   const initials = (me) => (me?.displayName ? me.displayName.trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('') : (me?.email || '').slice(0, 1) || '#').toUpperCase();
@@ -192,6 +194,7 @@
           h('div', {}, h('b', { text: money(stats.savedCents) }), h('span', { text: 'saved' })))
           : h('p', { style: 'margin:0;opacity:.85', text: 'Free spring water, paid for by the ads on the bottle. Every bottle gives to charity.' })),
       link('/app/scan', { class: 'tile blue' }, h('span', { class: 'tile-ico' }, icon(I.scan)), h('span', { class: 'grow' }, h('b', { text: 'Scan a bottle' }), h('span', { text: 'Open the AR printed on any FreeWater' }))),
+      link('/app/wallet', { class: 'tile ice' }, h('span', { class: 'grow' }, h('b', { text: 'Your wallet' }), h('span', { class: 'muted small', text: 'Points, offers, coupons and what you saved' })), h('span', { class: 'go', text: 'Open' })),
       deliveryCard(delivery),
       m0 && link(`/app/m/${m0.id}`, { class: 'tile ice' }, h('span', { class: 'grow' }, h('b', { text: `${m0.id} on ${m0.name}` }), h('span', { class: 'muted small', text: m0.address || m0.city })), h('span', { class: 'go', text: 'Get one' })),
       me && h('h2', { class: 'section' }, 'Your bottles'),
@@ -468,14 +471,64 @@
   }
 
   // ---------- saved ----------
+  // ---------- wallet: points, credit, the token, offers, coupons, what you saved ----------
+  const viewerKey = () => { let v = null; try { v = localStorage.getItem('fw_viewer'); } catch {} if (!v || !/^[A-Za-z0-9_-]{8,64}$/.test(v)) { const a = new Uint8Array(16); crypto.getRandomValues(a); v = btoa(String.fromCharCode(...a)).replace(/[+/=]/g, (c) => ({ '+': '-', '/': '_', '=': '' })[c]); try { localStorage.setItem('fw_viewer', v); } catch {} } return v; };
+  async function walletScreen() {
+    const me = await loadMe();
+    const cid = encodeURIComponent(state.config.companyId);
+    const vk = viewerKey();
+    const [w, offers] = await Promise.all([me ? api('GET', '/v1/me/wallet') : api('GET', `/v1/public/wallet/${cid}?viewer=${encodeURIComponent(vk)}`), api('GET', `/v1/public/offers/${cid}?viewer=${encodeURIComponent(vk)}`).catch(() => ({ offers: [], mine: [] }))]);
+    const tok = (n) => (n / 1e6).toLocaleString(undefined, { maximumFractionDigits: 6 });
+    const claim = async (o, btn) => {
+      if (!me && !(await signIn('Offers pay real money, so they need an account.'))) return;
+      btn.disabled = true;
+      try { const r = await api('POST', `/v1/public/offers/${cid}/${o.id}/claim`, { viewerKey: vk }); toast(r.how); render(); } catch (e) { toast(e.message); btn.disabled = false; }
+    };
+    const receipt = (c) => {
+      const f = h('input', { type: 'file', accept: 'image/*', capture: 'environment', 'aria-label': 'Photo of the receipt', style: 'max-width:100%' });
+      f.addEventListener('change', async () => {
+        const file = f.files[0]; if (!file) return;
+        try {
+          if (file.size > 2 * 1024 * 1024) throw new Error('Photos can be up to 2 MB.');
+          const b64 = await new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1]); r.onerror = no; r.readAsDataURL(file); });
+          const r = await api('POST', `/v1/public/offers/${cid}/claims/${c.id}/receipt`, { viewerKey: vk, image: { contentType: file.type, dataBase64: b64 } });
+          toast(r.note || 'Thanks!'); render();
+        } catch (e) { toast(e.message); }
+      });
+      return h('label', { class: 'field' }, h('span', { class: 'small muted', text: 'Bought it? Add a photo of the receipt' }), f);
+    };
+    const said = { claimed: 'Buy it, then add the receipt', receipt_sent: 'Checking your receipt', verified: 'Approved', paid: 'Paid', rejected: 'Receipt not accepted (points returned)', expired: 'Ran out (points returned)', void: 'Closed' };
+    screen({ nav: 'wallet' },
+      h('h1', { class: 'display', style: 'font-size:26px', text: 'Wallet' }),
+      w.test ? h('div', { class: 'notice', text: 'Testing: these points are for trying things out and will be wiped before going live.' }) : null,
+      h('section', { class: 'hero-card' },
+        h('div', { class: 'stats' },
+          h('div', {}, h('b', { text: w.points.balance.toLocaleString() }), h('span', { text: 'points' })),
+          (w.credit.enabled || w.credit.balanceCents) ? h('div', {}, h('b', { text: money(w.credit.balanceCents) }), h('span', { text: 'credit' })) : null,
+          (w.token.live || w.token.balance) ? h('div', {}, h('b', { text: tok(w.token.balance) }), h('span', { text: 'tokens' })) : null),
+        w.token.live ? h('p', { style: 'margin:8px 0 0;opacity:.85;font-size:14px', text: w.token.held }) : null),
+      link('/play', { class: 'tile blue' }, h('span', { class: 'tile-ico' }, icon(I.scan)), h('span', { class: 'grow' }, h('b', { text: 'Play for points' }), h('span', { text: 'Pick what you’d really choose. Same points whichever you pick.' }))),
+      offers.offers.length || offers.mine.length ? h('h2', { class: 'section' }, 'Offers') : null,
+      ...offers.offers.map((o) => { const b = h('button', { class: 'btn small', type: 'button', text: o.pointsCost ? `Claim for ${o.pointsCost} points` : 'Claim' }); b.addEventListener('click', () => claim(o, b)); return h('div', { class: 'list-row' }, h('span', { class: 'grow' }, h('b', { text: o.title }), h('span', { class: 'small muted', text: `${o.deal} · ${o.retailers.includes('any') ? 'any store' : o.retailers.join(', ')}` })), b); }),
+      ...offers.mine.map((c) => h('div', { class: 'list-row', style: 'flex-wrap:wrap' }, h('span', { class: 'grow' }, h('b', { text: c.title }), h('span', { class: 'small muted', text: said[c.status] ?? c.status })), c.status === 'claimed' ? receipt(c) : null)),
+      w.coupons.length ? h('h2', { class: 'section' }, 'Coupons') : null,
+      ...w.coupons.map((c) => h('div', { class: 'list-row' }, h('span', { class: 'grow' }, h('b', { text: c.advertiser ?? 'Coupon' }), h('span', { class: 'small muted', style: 'font-family:ui-monospace,Menlo,monospace', text: c.code })))),
+      h('h2', { class: 'section' }, 'Saved from your scans', me ? link('/app/saved', {}, 'See all') : null),
+      w.saved.length ? h('div', { class: 'rail' }, w.saved.slice(0, 10).map(savedCard)) : h('div', { class: 'empty', text: me ? 'Tap “Save” on any ad you scan and it waits for you here.' : 'Sign in, then tap “Save” on any ad you scan.' }),
+      w.history.length ? h('h2', { class: 'section' }, 'Recent') : null,
+      ...w.history.slice(0, 12).map((x) => h('div', { class: 'list-row' }, h('span', { class: 'grow' }, h('b', { text: { 'earn:scan': 'Scanned a bottle', 'earn:game_round': 'Played a screen', 'earn:ad_feedback': 'Picked an ad', 'earn:feedback': 'Sent feedback', 'earn:prompt': 'Asked a question', 'earn:upload': 'Added a picture', 'earn:streak_bonus': 'Streak bonus', spend: 'Claimed an offer', correction: 'Corrected', offer: 'Offer paid', convert: 'Became tokens', mint: 'Tokens' }[x.kind] ?? x.kind }), h('span', { class: 'small muted', text: new Date(x.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) })), h('b', { text: `${x.amount > 0 ? '+' : ''}${x.what === 'credit' ? money(x.amount) : x.what === 'token' ? tok(x.amount) : x.amount.toLocaleString()}` }))),
+      h('p', { class: 'small muted', style: 'margin-top:18px', text: w.points.terms }),
+      !me ? h('button', { class: 'btn secondary', type: 'button', onclick: async () => { if (await signIn('Keep your points on every phone.')) render(); } }, 'Sign in to keep your points') : null);
+  }
+
   async function savedScreen() {
     const me = await loadMe();
     if (!me) {
-      screen({ nav: 'saved' }, h('h1', { class: 'display', style: 'font-size:26px', text: 'Saved' }), h('div', { class: 'empty', text: 'Sign in to keep offers, homes and stories you save from your scans.' }), h('button', { class: 'btn', type: 'button', onclick: async () => { if (await signIn()) render(); } }, 'Sign in'));
+      screen({ nav: 'wallet' }, h('h1', { class: 'display', style: 'font-size:26px', text: 'Saved' }), h('div', { class: 'empty', text: 'Sign in to keep offers, homes and stories you save from your scans.' }), h('button', { class: 'btn', type: 'button', onclick: async () => { if (await signIn()) render(); } }, 'Sign in'));
       return;
     }
     const items = await api('GET', '/v1/me/saved');
-    screen({ nav: 'saved' },
+    screen({ nav: 'wallet' },
       h('h1', { class: 'display', style: 'font-size:26px', text: 'Saved' }),
       items.length ? h('div', {}, items.map((s) => h('div', { class: 'list-row' },
         h('span', { class: 'swatch', style: `background:${s.theme?.button || '#000'}` }),

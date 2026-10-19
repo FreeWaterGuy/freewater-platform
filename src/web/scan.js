@@ -108,7 +108,7 @@
       const rec = target.kind === 'slot'
         ? api('POST', '/v1/public/scans', { unitId: target.unitId, slot: target.slot, viewerKey, experienceLoaded: loaded, ...(opened.variant ? { variant: opened.variant.id } : {}), ...(store.get('fw_no_tracking') === '1' ? {} : { context: visitContext() }) })
         : api('POST', '/v1/public/box-scans', { packId: target.packId, face: target.face, viewerKey, experienceLoaded: loaded });
-      rec.then(() => { if (loaded) play('scan', ctx); }).catch(() => {});
+      rec.then((r) => { if (loaded) play('scan', ctx); if (r?.points) toast(`+${r.points} points · they’re in your wallet`); }).catch(() => {});
     }, 0));
   }
 
@@ -544,7 +544,8 @@
       api('POST', `/v1/public/data/${encodeURIComponent(opened.companyId)}/do-not-sell`, { viewerKey, on: box.checked }).catch(() => { box.checked = !box.checked; });
     });
     const near = nearbyBlock(opened);
-    return h('div', { class: 'your-data-all' }, whyBlock(opened), ...(near ? [near] : []), eraseData(opened), h('p', { class: 'your-data' }, dns));
+    const playLink = h('p', { class: 'your-data' }, h('a', { href: `/play?c=${encodeURIComponent(opened.companyId)}`, text: 'Play for points' }), ' · ', h('a', { href: '/app/wallet', text: 'Your wallet' }));
+    return h('div', { class: 'your-data-all' }, playLink, whyBlock(opened), ...(near ? [near] : []), eraseData(opened), h('p', { class: 'your-data' }, dns));
   }
 
   function eraseData(opened) {
