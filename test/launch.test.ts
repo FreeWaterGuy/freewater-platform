@@ -66,6 +66,10 @@ describe('the test stage', () => {
   it('the stage can’t be changed from settings', async () => {
     const { chainProblem } = await import('../src/modules/console/settings');
     expect(chainProblem({} as any, { launch: { stage: 'points' } } as any)).toMatch(/its own step/);
+    // Locking again is always allowed.
+    expect(chainProblem({ launch: { stage: 'token', withdrawals: true } } as any, { launch: { stage: 'token', withdrawals: false } } as any)).toBeNull();
+    expect(chainProblem({ launch: { stage: 'token', withdrawals: false } } as any, { launch: { stage: 'token', withdrawals: true } } as any)).toMatch(/its own step/);
+    expect(chainProblem({ launch: { stage: 'token', withdrawals: true } } as any, { launch: { stage: 'points', withdrawals: false } } as any)).toMatch(/its own step/);
   });
 });
 

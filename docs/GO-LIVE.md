@@ -42,8 +42,33 @@
     `TRUST_GEO_HEADERS=1`). Without either, everyone gets the strictest (European) rules. The lawyer should confirm the
     country rules in `src/modules/data/jurisdiction.ts`, the minimum ages, and the sanctioned-country list
     (`SANCTIONED_COUNTRIES`, default Cuba, Iran, North Korea, Syria).
+10d. **Reading receipts**: a Veryfi account (`VERYFI_CLIENT_ID`, `VERYFI_USERNAME`, `VERYFI_API_KEY`). Without it,
+    your team checks receipts by eye.
+10e. **Gift cards**: a Tremendous account with a funding source (`TREMENDOUS_API_KEY`, `TREMENDOUS_FUNDING_SOURCE`;
+    `TREMENDOUS_SANDBOX=1` to try their test site first). Without it, a stand-in makes cards that say TEST.
+10f. **Solana**: first a free test-network setup (`SOLANA_DEVNET_MINT`, `SOLANA_DEVNET_PAYER`,
+    `SOLANA_DEVNET_MINT_AUTHORITY`) to try the whole flow with play money. For the real network: a **Squads** vault
+    (squads.so) whose keys are held by at least 3 trusted people, the token created with the vault as its only minter,
+    a paid RPC provider (`SOLANA_RPC_URL`), and `SOLANA_MINT`, `SOLANA_PAYER`, `SOLANA_CUSTODY` (the vault). Never put
+    a minting key for the real network on the server: it's refused.
 11. **The label printer** for the machines, once it's chosen.
 12. **A GitHub token** for publishing each day's books fingerprint (optional, but it's what makes the books provable).
+
+## The launch order
+
+The full guide to every switch is `docs/SWITCHES.md`. In short:
+
+1. **Invite approvers.** Under *Team*, add at least 2 other owners or finance people. Only people already on the team
+   when a step is proposed can approve it. Turn on the second sign-in step for owners (*Security*).
+2. **Test.** In *Launch*, run bots, look at everything, reset, repeat. Try the blockchain on Solana's test network.
+3. **Go live with points.** *Launch → Propose going live* (only you), wait 24 hours, run it. Test data is wiped.
+   This can't be undone.
+4. **Turn on money one switch at a time** as each is ready: record brand reserves, then dollar credit, then brand
+   offers (each approved), then gift cards (needs approvals).
+5. **The token, after the lawyer signs off.** *Launch → Propose going live with the token*: 2 approvals and the wait.
+   Then conversions and minting, each signed in Squads. Withdrawals last (not built yet).
+
+To stop anything: *Blockchain → Pause now*, or turn the switch off. Off is always immediate.
 
 ## Then wired in (code, once you've chosen)
 
@@ -53,7 +78,7 @@ Expect roughly a day each, with tests, once the account exists.
 
 ## Also before real money flows
 
-- **A lawyer**: terms of service, privacy policy, advertising rules, the prize game's rules, and the trust that would
+- **A lawyer**: the token (before going live with it), gift cards and points rules, terms of service, privacy policy, advertising rules, the prize game's rules, and the trust that would
   hold the AI agents' 3%.
 - **Insurance** (general liability, cyber).
 - **An outside security test** (a "pen test") of the live setup.

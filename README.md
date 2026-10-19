@@ -4,7 +4,14 @@ The FreeWater platform: it takes an order, picks the ads, lays out a print-ready
 
 ## Running it for real
 
-`docs/GO-LIVE.md` lists what's ready and what's left before launch; `docs/RUNNING.md` is the guide for running it in production (settings, first start, health checks, alerts, backups, deploys, the load test).
+Start here:
+
+| Guide | What's in it |
+|---|---|
+| [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) | What FreeWater must do, and the rules that never change |
+| [`docs/SWITCHES.md`](docs/SWITCHES.md) | **How to launch, lock and unlock everything**: every switch, who can flip it, the waits, and what to do if something goes wrong |
+| [`docs/GO-LIVE.md`](docs/GO-LIVE.md) | What's ready, what's left, and the order to launch in |
+| [`docs/RUNNING.md`](docs/RUNNING.md) | Running it in production: every setting, first start, health checks, alerts, backups, deploys, the load test |
 
 ## Try it
 
@@ -412,6 +419,33 @@ npm run demo:ads-preview   # builds out/ads-preview/, a clickable copy that need
 - **Results from the books** (`GET /v1/ads/overview`): spend, bottles printed, box sides, scans, AR launches, sales, saves and link taps, day by day and per ad. Every ledger line now carries its campaign, so each number traces to the lines it adds up.
 - **Billing**: invoices made from those ledger lines, a saved card charged automatically, and pay-now for open ones.
 
+## Where people are (`src/modules/data/jurisdiction.ts`)
+
+The law follows the person: each visitor gets the rules of where they are (from `GEOIP_DB` or a trusted country header). A company can be stricter, never looser. Unknown location means the strictest rules. Sanctioned countries are refused, and a minimum age applies (13, higher where the law says).
+
+## Points, credit and the wallet (`src/modules/wallet`, `src/modules/offers`)
+
+- **Double-entry books:** every entry balances; balances can be rebuilt from the entries. Wallets belong to random ids, not names.
+- **Points** for scans, games and feedback, the same whichever item is picked, with a fixed cap. **Dollar credit** is paid only from a brand's real reserve.
+- **Hourly seals:** each hour of the books gets one fingerprint linked to the hour before. Anyone can check their own entry at `/v1/public/wallet/:companyId/proof/:entryId`.
+- **Gift cards** (`giftcards.ts`): Tremendous, or a stand-in whose cards say TEST. **Partners** (`partners.ts`): slots for a card issuer and a treasury provider.
+- **Brand offers:** brands fund offers; each needs approval and pays out only from the reserve.
+- The app's **Wallet** tab (`/app/wallet`) shows points, credit and tokens.
+
+## The games (`src/modules/games`)
+
+A visual game of real products, name-brand food first. Screens: pick one, ads, quick checks, tap the QR (checked by the server) and AR. Prices show $0 unless one option differs. Video and written feedback. Categories can be marked "may come true", and a winner with at least 20 views from real people can be launched.
+
+## The token on Solana (`src/modules/chain`)
+
+- **Solana**, Token-2022 by default. On the test network the server can mint play tokens; on the real network it only prepares a mint, people sign it in a **Squads** vault, and the server checks it on the chain before recording it.
+- **Approvals:** steps that can't be undone need other owners or finance people, then a wait, and they expire.
+- **Pause** by any one person at once; a **daily check** pauses everything if the books and the chain disagree.
+
+## Testing, then going live (`src/modules/launch`)
+
+Three stages, in order, never back: **testing** (bots up to 200 at a time, and a full reset), **live with points**, **live with the token**. See `docs/SWITCHES.md`.
+
 ## The database
 
 `src/db` holds the database contract (`SqlClient`) and two adapters:
@@ -452,6 +486,11 @@ The server keeps working state in memory and writes through to the database, so 
 | `src/modules/accounts` | Sign-in codes, sessions, roles, privacy, export and delete |
 | `src/modules/payments` | Holds, charges, saved cards, advertiser invoices |
 | `src/adapters/messaging`, `src/adapters/payments` | Messenger and payment contracts with test versions |
+| `src/modules/wallet`, `src/modules/offers` | Points, credit, the wallet books, hourly seals, gift cards, partners and brand offers |
+| `src/modules/games` | The visual game, feedback, and picks that come true |
+| `src/modules/chain` | Solana, approvals, pause, the daily check and the stand-in chain |
+| `src/modules/launch` | Test bots, reset, and the stages |
+| `src/modules/data/jurisdiction.ts` | Each person's own privacy law, by where they are |
 | `src/api` | The public API (v1) and its OpenAPI description |
 | `src/app.ts`, `src/server` | Start-up: load from the database, run the API, make keys |
 | `src/platform.ts` | The thin core that runs the pipeline |
@@ -467,3 +506,5 @@ All prices in `src/demo/seed.ts` are placeholders.
 - Going live (step 10): real providers for payments, payouts, messages, maps and routing; hosting, backups and monitoring
 - Real printer and dispenser drivers for the Model 6 (`src/machine/hardware.ts`) and a printer adapter for the micro-factory lines, once the printers are chosen
 - Signed software updates for machines
+- Withdrawals to people's own wallets (the switch exists; the sending isn't built yet and answers "not built yet")
+- Approvers: invite at least 2 other owners or finance people before any token step
