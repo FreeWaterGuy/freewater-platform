@@ -1057,6 +1057,22 @@ create index game_notes_person on game_notes(company_id, person, kind);
 create table catalog_images (company_id text not null, item_id text not null, status text not null, asset_id text, source text, credit text, license text, source_url text, checked_at timestamptz not null, primary key (company_id, item_id));
 `,
   },
+  {
+    id: '035_offers',
+    sql: `
+-- Brand offers, each claim on one (with the receipt that proves the purchase), and what each barcode is (barcodes).
+create table offers (id text primary key, company_id text not null, advertiser_id text not null, data jsonb not null, status text not null, created_by text, created_at timestamptz not null, approved_by text, approved_at timestamptz);
+create index offers_company on offers(company_id, status);
+create table offer_claims (id text primary key, offer_id text not null references offers(id), company_id text not null, person text not null, status text not null, step integer not null, terms jsonb not null,
+  points_spent integer not null default 0, spend_entry text, claimed_at timestamptz not null, expires_at timestamptz not null,
+  receipt_asset text, receipt_hash text, receipt_read jsonb, sent_at timestamptz, reviewed_by text, reviewed_at timestamptz, verified_by text,
+  product_cents integer, owed_cents integer, cause_cents integer, paid_at timestamptz);
+create index offer_claims_offer on offer_claims(offer_id, status);
+create index offer_claims_person on offer_claims(company_id, person);
+create unique index offer_claims_receipt on offer_claims(company_id, receipt_hash) where receipt_hash is not null;
+create table barcodes (gtin text primary key, name text not null, brand text, image_url text, source text, at timestamptz not null);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

@@ -474,6 +474,9 @@ export class DataService {
     if (this.removeUploads) await this.removeUploads(companyId, keys.filter((k) => !k.includes(':')).map((k) => `viewer:${k}`));
     await run('feedback and questions', `delete from game_notes where company_id = $1 and person = any($2)`, [companyId, keys]);
     await run('games joined', `delete from game_players where company_id = $1 and person = any($2)`, [companyId, keys]);
+    // Offer claims stay for the brand's bill and the books, with the receipt photo and what was read from it removed
+    // and the person replaced by a code that leads nowhere.
+    for (const k of keys) await run('offer claims', `update offer_claims set person = $3, receipt_read = null, receipt_asset = null where company_id = $1 and person = $2`, [companyId, k, `erased_${randomBytes(9).toString('base64url')}`]);
   }
 
   /** Delete what's older than each company keeps, for each kind. Run daily. */

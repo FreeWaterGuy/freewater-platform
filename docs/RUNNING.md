@@ -46,6 +46,7 @@ with a plain explanation.
 | `GEOIP_DB` | Path to MaxMind's GeoLite2 City file, to tell where each visitor is so their own law applies. Without it (and without trusted headers), everyone gets the strictest rules. |
 | `TRUST_GEO_HEADERS` | `1` when the host adds a visitor-country header (Cloudflare `CF-IPCountry`, Vercel, Fastly). Only behind such a host: otherwise anyone could send it. |
 | `SANCTIONED_COUNTRIES` | Comma-separated country codes where points and prizes aren't offered (default `CU,IR,KP,SY`). |
+| `VERYFI_CLIENT_ID`, `VERYFI_USERNAME`, `VERYFI_API_KEY` | Reads receipt photos for brand offers. Without them, each receipt waits for a person on the team to check. |
 | `GEO_FIXED` | Local runs only (ignored in production): treat every visitor as being in one place, e.g. `US-TX`. |
 | `FW_AI_PRICES` | Real per-model prices (JSON), once invoices are in. |
 | `FW_ANCHOR_GITHUB_TOKEN`, `FW_ANCHOR_GITHUB_REPO`, `FW_ANCHOR_GITHUB_BRANCH`, `FW_ANCHOR_BITCOIN` | Where each day's books fingerprint is published. |

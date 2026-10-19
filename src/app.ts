@@ -55,6 +55,9 @@ import { WalletService } from './modules/wallet/service';
 import { GamesService } from './modules/games/service';
 import { ClaudePrompter, builtinPrompter, type Prompter } from './modules/games/prompter';
 import { OpenFoodFactsImages, StockImages, WikipediaImages, type ProductImageSource } from './modules/games/images';
+import { OffersService } from './modules/offers/service';
+import { readerFromEnv, type ReceiptReader } from './modules/offers/receipts';
+import { OpenFoodFactsLookup, type ProductLookup } from './modules/offers/barcodes';
 import { TransparencyService } from './modules/transparency/service';
 import { AnchorService, GitHubPublisher, OpenTimestampsPublisher, type AnchorPublisher } from './modules/transparency/anchors';
 import { NumberLineService } from './modules/numberline/service';
@@ -118,6 +121,10 @@ export interface AppOptions {
   prompter?: Prompter;
   /** Where photos of real products come from (Wikipedia, Open Food Facts, photo libraries by default). */
   productImages?: ProductImageSource[];
+  /** Reads receipt photos (Veryfi when configured; otherwise the team checks each by eye). */
+  receiptReader?: ReceiptReader;
+  /** Looks up barcodes (Open Food Facts by default; null for none). */
+  productLookup?: ProductLookup | null;
   /** Where each visitor is, so their own law applies (GEOIP_DB, a MaxMind file; without one, only trusted host headers). */
   geo?: import('./modules/data/jurisdiction').GeoIp | null;
   /** Tests and local runs: treat anyone we can't place as being here. Ignored in production (unknown means strictest). */
@@ -289,6 +296,7 @@ export async function createApp(opts: AppOptions) {
     }),
     opts.studioDesigner ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeStudioDesigner({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL, fallback: rulesDesigner }) : rulesDesigner),
     opts.clock);
+  const offers = new OffersService(db, platform, wallet, assets, opts.receiptReader ?? readerFromEnv(process.env), opts.productLookup === null ? null : opts.productLookup ?? new OpenFoodFactsLookup(), opts.clock);
   // Photos of real products for the games' cards: the company's own, Wikipedia, Open Food Facts, then photo libraries.
   games.imageSources = opts.productImages ?? [new WikipediaImages(), new OpenFoodFactsImages(), new StockImages(studio.providers.libraries)];
   // Studio photos inside labels: printed labels carry them at print size (so a machine prints them whole, even
@@ -408,7 +416,7 @@ export async function createApp(opts: AppOptions) {
   await fleet.load();
   made.registry.registerPrinter('model6-fleet', new MachineFleetPrinter(() => fleet, made.printer));
 
-  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, games, studio, transparency, anchors, agents, profit, distributions, team, secondStep };
+  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, games, offers, studio, transparency, anchors, agents, profit, distributions, team, secondStep };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

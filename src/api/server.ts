@@ -17,6 +17,7 @@ import { agentRoutes } from './agents';
 import { environmentRoutes } from './environment';
 import { walletRoutes } from './wallet';
 import { gamesRoutes } from './games';
+import { offersRoutes } from './offers';
 import { studioRoutes } from './studio';
 import { BadKeyGuard, classify, limits, RateLimiter, securityHeaders, SecurityLog } from './security';
 import { teamRoutes } from './team';
@@ -608,6 +609,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   environmentRoutes(app, route);
   walletRoutes(app, route);
   gamesRoutes(app, route);
+  offersRoutes(app, route);
   studioRoutes(app, route);
   teamRoutes(app, route);
 

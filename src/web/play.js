@@ -142,8 +142,43 @@
         h('div', { class: 'wallet-row' }, w.points.name, h('b', { text: w.points.balance.toLocaleString('en-US') })),
         w.credit.enabled || w.credit.balanceCents ? h('div', { class: 'wallet-row' }, 'Credit', h('b', { text: `$${(w.credit.balanceCents / 100).toFixed(2)}` })) : null,
         w.coupons.length ? h('div', { class: 'wallet-row' }, 'Coupons', h('b', { text: String(w.coupons.length) })) : null,
-        h('p', { class: 'notice', text: w.points.terms }));
+        h('p', { class: 'notice', text: w.points.terms }),
+        await offersBlock());
     } catch (e) { toast(e.message); }
+  }
+  // Brand offers: claim with points, buy it anywhere listed, send the receipt.
+  async function offersBlock() {
+    let o;
+    try { o = await api('GET', `/v1/public/offers/${encodeURIComponent(companyId)}?viewer=${encodeURIComponent(viewerKey)}`); } catch { return null; }
+    if (!o.offers.length && !o.mine.length) return null;
+    const box = h('div', { class: 'offers' }, h('h3', { text: 'Offers' }));
+    for (const of of o.offers) {
+      const btn = h('button', { type: 'button', class: 'btn', text: of.pointsCost ? `Claim for ${of.pointsCost} points` : 'Claim' });
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        try { const r = await api('POST', `/v1/public/offers/${encodeURIComponent(companyId)}/${of.id}/claim`, { viewerKey }); balance -= r.pointsSpent; showPoints(true); btn.textContent = 'Claimed'; toast(r.how); }
+        catch (e) { btn.disabled = false; toast(e.message); }
+      });
+      box.append(h('div', { class: 'offer' }, of.brand ? h('div', { class: 'brand', text: of.brand }) : null, h('b', { text: of.title }), h('div', { class: 'deal', text: of.deal }), h('div', { class: 'msg', text: `At ${of.retailers.includes('any') ? 'any store' : of.retailers.join(', ')}` }), btn));
+    }
+    for (const c of o.mine) {
+      const row = h('div', { class: 'claim' }, h('b', { text: c.title }), h('span', { class: 'msg', text: { claimed: 'Buy it, then send the receipt', receipt_sent: 'Checking your receipt', verified: 'Approved', paid: `Paid${c.cents ? ` $${(c.cents / 100).toFixed(2)}` : ''}`, rejected: 'Receipt not accepted', expired: 'Ran out' }[c.status] || c.status }));
+      if (c.status === 'claimed') {
+        const file = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp', 'aria-label': 'Receipt photo' });
+        file.addEventListener('change', async () => {
+          const f = file.files && file.files[0]; if (!f) return;
+          try {
+            if (f.size > 2 * 1024 * 1024) throw new Error('Photos can be up to 2 MB.');
+            const dataBase64 = await new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1]); r.onerror = no; r.readAsDataURL(f); });
+            const r = await api('POST', `/v1/public/offers/${encodeURIComponent(companyId)}/claims/${c.id}/receipt`, { viewerKey, image: { contentType: f.type, dataBase64 } });
+            toast(r.note || (r.status === 'paid' ? 'Paid!' : 'Thanks!')); file.replaceWith(h('span', { class: 'msg', text: 'Receipt sent' }));
+          } catch (e) { toast(e.message); }
+        });
+        row.append(h('label', { class: 'field' }, 'Receipt photo', file));
+      }
+      box.append(row);
+    }
+    return box;
   }
   const answerEl = h('div');
   const askBar = (() => {
