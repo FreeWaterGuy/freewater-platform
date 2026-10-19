@@ -44,6 +44,8 @@ export class GamesService {
     private prompter: Prompter = builtinPrompter, private clock: () => Date = () => new Date(), private random: () => number = Math.random,
   ) {}
 
+  /** How many times each item must have been on a screen before "how others picked" is shown. */
+  static revealAfter = 20;
   /** Where product photos come from, tried in order. Set by the app. */
   imageSources: ProductImageSource[] = [];
 
@@ -180,8 +182,24 @@ export class GamesService {
       // A reason in a few words, for an ad round, counts as feedback too.
       if (r.kind === 'ad' && why && why.length >= 15) points += (await this.wallet.earn(companyId, viewerKey, 'feedback', `why:${roundId}`, { source: this.wallet.sourceOf(req?.ip) })).points;
     }
+    await this.db.query(`update game_rounds set pick_item = $2 where id = $1`, [roundId, chosen.id]);
+    // A streak: every 10 good answers in a day earns a bonus (the same whatever was picked).
+    let streak = 0, bonus = 0;
+    if (!flagged && r.kind !== 'check') {
+      streak = Number((await this.db.query<any>(`select count(*)::int as n from game_rounds where company_id = $1 and person = $2 and answered_at >= $3 and flagged is null and kind <> 'check'`, [companyId, viewerKey, dayStart])).rows[0].n);
+      if (points && streak > 0 && streak % 10 === 0) bonus = (await this.wallet.earn(companyId, viewerKey, 'streak_bonus', `streak:${viewerKey}:${dayStart.slice(0, 10)}:${streak}`, { source: this.wallet.sourceOf(req?.ip) })).points;
+      points += bonus;
+    }
     if (points) await this.db.query(`update game_rounds set points = $2 where id = $1`, [roundId, points]);
-    return { points, ...(flagged ? { note: flagged === 'too_fast' ? 'That was very quick. Take a moment with each one.' : 'Take a closer look at the question.' } : {}), ...(tier ? { tier } : {}) };
+    // What everyone else picked, for the reveal: of the times each was on a screen, how often it was chosen.
+    // Shown only once enough people have seen each one (20), so it says something real.
+    let others: Record<string, number> | null = {};
+    if (r.kind === 'choice' || r.kind === 'ad') for (const i of items) {
+      const c = (await this.db.query<any>(`select count(*) filter (where pick_item = $3)::int as picked, count(*)::int as shown from game_rounds where company_id = $1 and category = $2 and answered_at is not null and flagged is null and items @> $4::jsonb`, [companyId, r.category, i.id, JSON.stringify([{ id: i.id }])])).rows[0];
+      if (c.shown < GamesService.revealAfter) { others = null; break; }
+      others[i.key] = Math.round((100 * c.picked) / c.shown);
+    } else others = null;
+    return { points, streak, ...(bonus ? { bonus } : {}), ...(others ? { others } : { early: r.kind === 'choice' }), ...(flagged ? { note: flagged === 'too_fast' ? 'That was very quick. Take a moment with each one.' : 'Take a closer look at the question.' } : {}), ...(tier ? { tier } : {}) };
   }
 
   /** The feedback box: anything the person wants to tell us, with a picture or screenshot if they like. */
@@ -255,7 +273,10 @@ export class GamesService {
   private choiceRound(companyId: string) {
     let cats = this.catalog(companyId).filter((c) => c.items.length >= 2);
     if (!cats.length) cats = defaultCatalog;
-    const cat = this.pick(cats, 1)[0]!;
+    // Name-brand food comes up most, then things the company could one day offer, then the rest.
+    const total = cats.reduce((a, c) => a + (c.weight ?? 1), 0);
+    let roll = this.random() * total;
+    const cat = cats.find((c) => (roll -= c.weight ?? 1) < 0) ?? cats[0]!;
     const n = 2 + Math.floor(this.random() * Math.min(3, cat.items.length - 1));
     const chosen = this.pick(cat.items, n);
     const frames = this.frames(cat, chosen);

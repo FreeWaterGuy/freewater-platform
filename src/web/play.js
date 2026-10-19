@@ -88,22 +88,43 @@
         picked = it.key;
         for (const c of cards) { c.classList.toggle('on', c === card); c.setAttribute('aria-pressed', String(c === card)); }
         go.disabled = false;
+        // One tap answers: a moment to change your mind, then it's in. (Ads wait for "Next", in case you say why.)
+        if (!r.askWhy) { clearTimeout(autoGo); autoGo = setTimeout(() => go.click(), 650); }
       });
       return card;
     });
     const why = r.askWhy ? h('label', { class: 'field why' }, 'Why that one? (optional, earns extra)', h('textarea', { maxlength: '500', placeholder: 'What made it stand out?' })) : null;
-    const go = h('button', { type: 'button', class: 'btn', disabled: true, text: 'Next' });
+    let autoGo, sent = false;
+    const go = h('button', { type: 'button', class: `btn${r.askWhy ? '' : ' hidden'}`, disabled: true, text: 'Next' });
     go.addEventListener('click', async () => {
+      if (sent) return; sent = true;
       go.disabled = true;
       try {
         const a = await api('POST', `${base}/answer`, { viewerKey, round: r.id, pick: picked, changes, responseMs: Math.round(performance.now() - shownAt), ...(why && why.querySelector('textarea').value.trim() ? { why: why.querySelector('textarea').value.trim() } : {}) });
-        if (a.points) { balance += a.points; showPoints(true); toast(`+${a.points} points`); } else if (a.note) toast(a.note);
+        if (a.points) { balance += a.points; showPoints(true); }
+        if (a.streak !== undefined) setStreak(a.streak);
+        if (a.bonus) toast(`Streak bonus! +${a.bonus}`); else if (a.early && a.points) toast(`+${a.points} · You’re one of the first to pick here`); else if (a.points) toast(`+${a.points}`); else if (a.note) toast(a.note);
+        // The reveal: how everyone else picked.
+        if (a.others) {
+          r.items.forEach((it, i) => { const pct = a.others[it.key]; if (pct === undefined) return; cards[i].append(h('div', { class: `reveal${it.key === picked ? ' mine' : ''}` }, h('b', { text: `${pct}%` }), h('span', { text: it.key === picked ? 'picked this too' : 'picked this' }))); });
+          await new Promise((ok) => setTimeout(ok, 1300));
+        }
         next();
-      } catch (e) { if (e.status === 409 || e.status === 410) return next(); go.disabled = false; toast(e.message); }
+      } catch (e) { if (e.status === 409 || e.status === 410) return next(); sent = false; go.disabled = false; toast(e.message); }
     });
-    show(h('div', { class: 'meta' }, h('span', { class: 'chip', text: r.category }), chip), h('h2', { text: r.ask }), h('div', { class: `grid${r.items.length === 2 && r.kind !== 'ad' ? '' : ''}` }, cards), why, go,
+    show(h('div', { class: 'meta' }, h('span', { class: 'chip', text: r.category }), chip), streakBar(), h('h2', { text: r.ask }), h('div', { class: `grid${r.items.length === 2 && r.kind !== 'ad' ? '' : ''}` }, cards), why, go,
       h('div', { class: 'links' }, h('button', { type: 'button', class: 'linkish', text: 'Send feedback', onclick: openFeedback }), h('button', { type: 'button', class: 'linkish', text: 'Stop playing', onclick: stop })));
   }
+
+  // ---------- streaks ----------
+  let streak = 0;
+  const streakEl = h('div', { class: 'streak' });
+  function setStreak(n) { streak = n; renderStreak(); }
+  function renderStreak() {
+    const into = streak % 10;
+    streakEl.replaceChildren(h('span', { class: 'streak-n', text: streak ? `${streak} in a row today` : 'Every 10 picks: a bonus' }), h('div', { class: 'bar' }, ...Array.from({ length: 10 }, (_, i) => h('i', { class: i < into || (streak && into === 0) ? 'on' : '' }))));
+  }
+  function streakBar() { renderStreak(); return streakEl; }
 
   async function stop() {
     try { await api('POST', `${base}/leave`, { viewerKey }); } catch {}

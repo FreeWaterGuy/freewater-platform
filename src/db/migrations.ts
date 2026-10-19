@@ -1074,6 +1074,14 @@ create unique index offer_claims_print on offer_claims(company_id, receipt_print
 create table barcodes (gtin text primary key, name text not null, brand text, image_url text, source text, at timestamptz not null);
 `,
   },
+  {
+    id: '036_game_reveal',
+    sql: `
+-- Which item was picked (not just its spot on the screen), for the "how many others picked this" reveal.
+alter table game_rounds add column pick_item text;
+create index game_rounds_category on game_rounds(company_id, category) where answered_at is not null;
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

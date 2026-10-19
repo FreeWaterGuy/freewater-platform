@@ -39,6 +39,13 @@ describe('the catalog', () => {
     expect(defaultCatalog.find((c) => c.id === 'fruit')!.items.some((i) => i.name === 'Banana')).toBe(true);
     expect(defaultCatalog.find((c) => c.id === 'fast_food')!.items.some((i) => i.brand === 'McDonald’s')).toBe(true);
   });
+  it('is mostly name-brand food, with no delivery apps or store chains', () => {
+    const ids = defaultCatalog.map((c) => c.id);
+    for (const gone of ['delivery', 'grocery', 'hotels', 'rides', 'music_apps', 'fitness']) expect(ids).not.toContain(gone);
+    const food = ['cereal', 'snacks', 'candy', 'drinks', 'fast_food', 'ice_cream', 'bars', 'pizza', 'coffee', 'fruit', 'dairy', 'frozen'];
+    const w = (f: (id: string) => boolean) => defaultCatalog.filter((c) => f(c.id)).reduce((a, c) => a + (c.weight ?? 1), 0);
+    expect(w((id) => food.includes(id))).toBeGreaterThan(3 * w((id) => !food.includes(id)));
+  });
   it('sorts a pick into the tier it would be if real', () => {
     expect(structuralTier({ kind: 'for_sale', cents: 200 }, [{ kind: 'negative', youGetCents: 10 }])).toBe('5');
     expect(structuralTier({ kind: 'for_sale', cents: 200 }, [{ kind: 'for_sale', cents: 150 }])).toBe('1');
@@ -94,6 +101,22 @@ describe('playing', () => {
     }
     expect(allFree).toBeGreaterThan(0);
     expect(oneOdd).toBeGreaterThan(0);
+  });
+
+  it('shows how everyone else picked, and gives a bonus every 10 in a row', async () => {
+    const v = 'viewer-game-12';
+    await ready(v);
+    const { GamesService } = await import('../src/modules/games/service');
+    GamesService.revealAfter = 1;
+    let bonus = 0, revealed = false;
+    for (let i = 0; i < 14; i++) {
+      const { round, answer } = await play(v);
+      if (round.kind === 'choice' && answer.others) { expect(Object.keys(answer.others).length).toBe(round.items.length); revealed = true; }
+      bonus += answer.bonus ?? 0;
+    }
+    expect(revealed).toBe(true);
+    expect(bonus).toBe(20);
+    GamesService.revealAfter = 20;
   });
 
   it('reloading shows the same screen, and an answer counts once', async () => {
