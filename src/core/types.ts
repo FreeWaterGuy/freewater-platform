@@ -134,6 +134,8 @@ export interface CompanyConfig {
   wallet?: import('../modules/wallet/assets').WalletSettings;
   /** The games people can play for points. On by default; a company can replace the categories and brands. */
   games?: Partial<import('../modules/games/service').GameSettings>;
+  /** Brand offers (free, cheaper or negatively priced products, redeemed with a receipt). Off until a person turns them on. */
+  offers?: { enabled: boolean };
   /** How much of the books the world sees, live. Each company chooses. */
   transparency?: Transparency;
   /** Security choices. Owners can be required to use a second sign-in step (a code from an authenticator app). */

@@ -111,6 +111,7 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
 
   const pol = checkPolicy(c.data);
   if (pol) return `Data: ${pol}`;
+  if (c.offers && typeof c.offers.enabled !== 'boolean') return 'Brand offers are on or off.';
   const wal = checkWallet(c.wallet);
   if (wal) return `Wallet: ${wal}`;
   if (c.minimumAge !== undefined && !isInt(c.minimumAge, 13, 21)) return 'The youngest age that may take part must be 13 to 21.';

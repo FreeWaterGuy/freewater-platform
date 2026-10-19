@@ -137,6 +137,50 @@ export class WalletService {
     });
   }
 
+  /**
+   * Use points on something the company offers (a brand's offer, say). Taken from the person's phones and accounts
+   * together; never more than they have. Undone with `correct` if the offer falls through.
+   */
+  async spendPoints(companyId: string, subject: string, points: number, ref: string, what: string) {
+    if (!Number.isInteger(points) || points <= 0) throw new WalletError('bad_amount', 'Spend a whole number of points.');
+    const asset = this.pointsAsset(companyId);
+    const subjects = await this.subjectsOf(companyId, subject);
+    return this.once(() => this.db.transaction(async (tx) => {
+      if ((await tx.query(`select 1 from wallet_tx where company_id = $1 and ref = $2`, [companyId, `spend:${ref}`])).rows.length) return { spent: 0, reason: 'already_spent', entry: null as string | null };
+      const rows = (await tx.query<any>(`select account, balance from wallet_balances where company_id = $1 and asset = $2 and account = any($3) and balance > 0 order by balance desc for update`, [companyId, asset, subjects.map((x) => `holder:${x}`)])).rows;
+      if (rows.reduce((a, r) => a + Number(r.balance), 0) < points) throw new WalletError('not_enough', 'Not enough points for that.', 409);
+      const lines: [string, number][] = [];
+      let left = points;
+      for (const r of rows) { if (!left) break; const take = Math.min(left, Number(r.balance)); lines.push([r.account, -take]); left -= take; }
+      lines.push(['spent', points]);
+      const entry = await this.post(tx, companyId, asset, 'spend', `spend:${ref}`, lines, { why: what.slice(0, 200) });
+      return { spent: points, reason: undefined as string | undefined, entry };
+    }), () => ({ spent: 0, reason: 'already_spent', entry: null }));
+  }
+
+  /**
+   * A brand's offer pays out from its reserve: dollar credit to the person, and a gift to a cause, in one entry. Only
+   * when credit is on, and never more than the reserve holds.
+   */
+  async payOffer(companyId: string, sponsor: string, subject: string, toPersonCents: number, cause: { name: string; cents: number } | null, ref: string, why: string) {
+    if (!this.settings(companyId).credit.enabled) throw new WalletError('switched_off', 'Credit is switched off until a person turns it on.', 403);
+    if (toPersonCents > 0 && this.mayEarn && !(await this.mayEarn(companyId, subject))) throw new WalletError('not_available_here', 'Rewards aren’t available for this person.', 403);
+    const total = toPersonCents + (cause?.cents ?? 0);
+    if (!Number.isInteger(total) || total <= 0) throw new WalletError('bad_amount', 'Nothing to pay.');
+    const asset = this.creditAsset(companyId);
+    return this.once(() => this.db.transaction(async (tx) => {
+      if ((await tx.query(`select 1 from wallet_tx where company_id = $1 and ref = $2`, [companyId, `offer:${ref}`])).rows.length) return { paid: 0, reason: 'already_paid' };
+      await tx.query(`insert into wallet_balances (company_id, asset, account, balance) values ($1,$2,$3,0) on conflict do nothing`, [companyId, asset, `reserve:${sponsor}`]);
+      const reserve = Number((await tx.query<any>(`select balance from wallet_balances where company_id = $1 and asset = $2 and account = $3 for update`, [companyId, asset, `reserve:${sponsor}`])).rows[0].balance);
+      if (reserve < total) throw new WalletError('reserve_short', 'The brand’s reserve doesn’t cover that.', 409);
+      const lines: [string, number][] = [[`reserve:${sponsor}`, -total]];
+      if (toPersonCents > 0) lines.push([`holder:${subject}`, toPersonCents]);
+      if (cause && cause.cents > 0) lines.push([`cause:${cause.name}`, cause.cents]);
+      await this.post(tx, companyId, asset, 'offer', `offer:${ref}`, lines, { why: why.slice(0, 200) });
+      return { paid: total, reason: undefined as string | undefined };
+    }), () => ({ paid: 0, reason: 'already_paid' }));
+  }
+
   /** Turning points or credit into something else. Switched off until a person approves it (and a partner is chosen). */
   async convert(companyId: string): Promise<never> {
     const c = this.settings(companyId).conversions;

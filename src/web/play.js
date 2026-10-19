@@ -88,22 +88,43 @@
         picked = it.key;
         for (const c of cards) { c.classList.toggle('on', c === card); c.setAttribute('aria-pressed', String(c === card)); }
         go.disabled = false;
+        // One tap answers: a moment to change your mind, then it's in. (Ads wait for "Next", in case you say why.)
+        if (!r.askWhy) { clearTimeout(autoGo); autoGo = setTimeout(() => go.click(), 650); }
       });
       return card;
     });
     const why = r.askWhy ? h('label', { class: 'field why' }, 'Why that one? (optional, earns extra)', h('textarea', { maxlength: '500', placeholder: 'What made it stand out?' })) : null;
-    const go = h('button', { type: 'button', class: 'btn', disabled: true, text: 'Next' });
+    let autoGo, sent = false;
+    const go = h('button', { type: 'button', class: `btn${r.askWhy ? '' : ' hidden'}`, disabled: true, text: 'Next' });
     go.addEventListener('click', async () => {
+      if (sent) return; sent = true;
       go.disabled = true;
       try {
         const a = await api('POST', `${base}/answer`, { viewerKey, round: r.id, pick: picked, changes, responseMs: Math.round(performance.now() - shownAt), ...(why && why.querySelector('textarea').value.trim() ? { why: why.querySelector('textarea').value.trim() } : {}) });
-        if (a.points) { balance += a.points; showPoints(true); toast(`+${a.points} points`); } else if (a.note) toast(a.note);
+        if (a.points) { balance += a.points; showPoints(true); }
+        if (a.streak !== undefined) setStreak(a.streak);
+        if (a.bonus) toast(`Streak bonus! +${a.bonus}`); else if (a.early && a.points) toast(`+${a.points} · You’re one of the first to pick here`); else if (a.points) toast(`+${a.points}`); else if (a.note) toast(a.note);
+        // The reveal: how everyone else picked.
+        if (a.others) {
+          r.items.forEach((it, i) => { const pct = a.others[it.key]; if (pct === undefined) return; cards[i].append(h('div', { class: `reveal${it.key === picked ? ' mine' : ''}` }, h('b', { text: `${pct}%` }), h('span', { text: it.key === picked ? 'picked this too' : 'picked this' }))); });
+          await new Promise((ok) => setTimeout(ok, 1300));
+        }
         next();
-      } catch (e) { if (e.status === 409 || e.status === 410) return next(); go.disabled = false; toast(e.message); }
+      } catch (e) { if (e.status === 409 || e.status === 410) return next(); sent = false; go.disabled = false; toast(e.message); }
     });
-    show(h('div', { class: 'meta' }, h('span', { class: 'chip', text: r.category }), chip), h('h2', { text: r.ask }), h('div', { class: `grid${r.items.length === 2 && r.kind !== 'ad' ? '' : ''}` }, cards), why, go,
+    show(h('div', { class: 'meta' }, h('span', { class: 'chip', text: r.category }), chip), streakBar(), h('h2', { text: r.ask }), h('div', { class: `grid${r.items.length === 2 && r.kind !== 'ad' ? '' : ''}` }, cards), why, go,
       h('div', { class: 'links' }, h('button', { type: 'button', class: 'linkish', text: 'Send feedback', onclick: openFeedback }), h('button', { type: 'button', class: 'linkish', text: 'Stop playing', onclick: stop })));
   }
+
+  // ---------- streaks ----------
+  let streak = 0;
+  const streakEl = h('div', { class: 'streak' });
+  function setStreak(n) { streak = n; renderStreak(); }
+  function renderStreak() {
+    const into = streak % 10;
+    streakEl.replaceChildren(h('span', { class: 'streak-n', text: streak ? `${streak} in a row today` : 'Every 10 picks: a bonus' }), h('div', { class: 'bar' }, ...Array.from({ length: 10 }, (_, i) => h('i', { class: i < into || (streak && into === 0) ? 'on' : '' }))));
+  }
+  function streakBar() { renderStreak(); return streakEl; }
 
   async function stop() {
     try { await api('POST', `${base}/leave`, { viewerKey }); } catch {}
@@ -142,8 +163,43 @@
         h('div', { class: 'wallet-row' }, w.points.name, h('b', { text: w.points.balance.toLocaleString('en-US') })),
         w.credit.enabled || w.credit.balanceCents ? h('div', { class: 'wallet-row' }, 'Credit', h('b', { text: `$${(w.credit.balanceCents / 100).toFixed(2)}` })) : null,
         w.coupons.length ? h('div', { class: 'wallet-row' }, 'Coupons', h('b', { text: String(w.coupons.length) })) : null,
-        h('p', { class: 'notice', text: w.points.terms }));
+        h('p', { class: 'notice', text: w.points.terms }),
+        await offersBlock());
     } catch (e) { toast(e.message); }
+  }
+  // Brand offers: claim with points, buy it anywhere listed, send the receipt.
+  async function offersBlock() {
+    let o;
+    try { o = await api('GET', `/v1/public/offers/${encodeURIComponent(companyId)}?viewer=${encodeURIComponent(viewerKey)}`); } catch { return null; }
+    if (!o.offers.length && !o.mine.length) return null;
+    const box = h('div', { class: 'offers' }, h('h3', { text: 'Offers' }));
+    for (const of of o.offers) {
+      const btn = h('button', { type: 'button', class: 'btn', text: of.pointsCost ? `Claim for ${of.pointsCost} points` : 'Claim' });
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        try { const r = await api('POST', `/v1/public/offers/${encodeURIComponent(companyId)}/${of.id}/claim`, { viewerKey }); balance -= r.pointsSpent; showPoints(true); btn.textContent = 'Claimed'; toast(r.how); }
+        catch (e) { btn.disabled = false; toast(e.message); }
+      });
+      box.append(h('div', { class: 'offer' }, of.brand ? h('div', { class: 'brand', text: of.brand }) : null, h('b', { text: of.title }), h('div', { class: 'deal', text: of.deal }), h('div', { class: 'msg', text: `At ${of.retailers.includes('any') ? 'any store' : of.retailers.join(', ')}` }), btn));
+    }
+    for (const c of o.mine) {
+      const row = h('div', { class: 'claim' }, h('b', { text: c.title }), h('span', { class: 'msg', text: { claimed: 'Buy it, then send the receipt', receipt_sent: 'Checking your receipt', verified: 'Approved', paid: `Paid${c.cents ? ` $${(c.cents / 100).toFixed(2)}` : ''}`, rejected: 'Receipt not accepted', expired: 'Ran out' }[c.status] || c.status }));
+      if (c.status === 'claimed') {
+        const file = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp', 'aria-label': 'Receipt photo' });
+        file.addEventListener('change', async () => {
+          const f = file.files && file.files[0]; if (!f) return;
+          try {
+            if (f.size > 2 * 1024 * 1024) throw new Error('Photos can be up to 2 MB.');
+            const dataBase64 = await new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1]); r.onerror = no; r.readAsDataURL(f); });
+            const r = await api('POST', `/v1/public/offers/${encodeURIComponent(companyId)}/claims/${c.id}/receipt`, { viewerKey, image: { contentType: f.type, dataBase64 } });
+            toast(r.note || (r.status === 'paid' ? 'Paid!' : 'Thanks!')); file.replaceWith(h('span', { class: 'msg', text: 'Receipt sent' }));
+          } catch (e) { toast(e.message); }
+        });
+        row.append(h('label', { class: 'field' }, 'Receipt photo', file));
+      }
+      box.append(row);
+    }
+    return box;
   }
   const answerEl = h('div');
   const askBar = (() => {
