@@ -260,31 +260,30 @@ export class GamesService {
     const chosen = this.pick(cat.items, n);
     const frames = this.frames(cat, chosen);
     const realness = (this.settings(companyId).mayComeTrue?.includes(cat.id) ? 'may_come_true' : 'virtual') as Realness;
-    const items = chosen.map((it, i) => ({ key: `k${i}`, id: it.id, label: it.brand ? `${it.brand} ${it.name}` : it.name, brand: it.brand ?? null, name: it.name, frame: frames[i]!, price: cat.priced ? frameText(frames[i]!) : null, position: i }));
+    const items = chosen.map((it, i) => ({ key: `k${i}`, id: it.id, label: it.brand ? `${it.brand} ${it.name}` : it.name, brand: it.brand ?? null, name: it.name, frame: frames[i]!, price: frames.some((f) => f.kind !== 'free_ads') ? (frames[i]!.kind === 'free_ads' ? '$0' : frameText(frames[i]!)) : null, position: i }));
     return { kind: 'choice', category: cat.id, ask: cat.ask, realness, items };
   }
   /**
-   * Price setups for a screen: usually a mix, so a pick shows what a price is worth to people. Each item is priced from
-   * its own usual price. Sometimes every item gets the same kind of setup at the same share of its own price, so the
-   * pick is about the product itself.
+   * Price setups for a screen. Mostly visual: by default every option is free ($0) and no price is shown, so the pick
+   * is about the thing itself. About half the time one option is different (for sale at its own usual price, cheaper
+   * than usual, or negatively priced), and only then are prices shown: that one's in words, the others as $0.
    */
   private frames(cat: Category, chosen: CatalogItem[]): Frame[] {
-    if (!cat.priced) return chosen.map(() => ({ kind: 'free_ads' as const }));
-    const kinds = ['for_sale', 'discounted', 'free_ads', 'free_sponsor', 'neg_you', 'neg_cause'] as const;
-    const make = (kind: (typeof kinds)[number], usual: number, x: number): Frame => {
-      const at = (lo: number, hi: number) => Math.round(usual * (lo + x * (hi - lo)));
-      switch (kind) {
-        case 'for_sale': return { kind: 'for_sale', cents: at(0.9, 1.1) };
-        case 'discounted': return { kind: 'discounted', cents: at(0.4, 0.75), usualCents: usual };
-        case 'free_ads': return { kind: 'free_ads' };
-        case 'free_sponsor': return { kind: 'free_sponsor' };
-        case 'neg_you': return { kind: 'negative', youGetCents: Math.max(5, at(0.05, 0.15)) };
-        case 'neg_cause': return { kind: 'negative', causeCents: Math.max(5, at(0.03, 0.08)) };
-      }
-    };
-    const usualOf = (it: CatalogItem) => it.cents ?? cat.usualCents ?? 300;
-    if (this.random() < 0.3) { const k = this.pick([...kinds], 1)[0]!; const x = this.random(); return chosen.map((it) => make(k, usualOf(it), x)); }
-    return chosen.map((it) => make(this.pick([...kinds], 1)[0]!, usualOf(it), this.random()));
+    const free: Frame[] = chosen.map(() => ({ kind: 'free_ads' as const }));
+    if (!cat.priced || this.random() < 0.5) return free;
+    const odd = Math.floor(this.random() * chosen.length);
+    const usual = chosen[odd]!.cents ?? cat.usualCents ?? 300;
+    const x = this.random();
+    const at = (lo: number, hi: number) => Math.round(usual * (lo + x * (hi - lo)));
+    const options: Frame[] = [
+      { kind: 'for_sale', cents: at(0.9, 1.1) },
+      { kind: 'discounted', cents: at(0.4, 0.75), usualCents: usual },
+      { kind: 'negative', youGetCents: Math.max(5, at(0.03, 0.12)) },
+      { kind: 'negative', causeCents: Math.max(5, at(0.02, 0.08)) },
+      { kind: 'negative', youGetCents: Math.max(5, at(0.02, 0.06)), causeCents: Math.max(5, at(0.01, 0.04)) },
+    ];
+    free[odd] = this.pick(options, 1)[0]!;
+    return free;
   }
   /** Ads to compare: made-up brands from the studio, and real ones running now. Nothing here is billed or scannable. */
   private adRound(companyId: string) {

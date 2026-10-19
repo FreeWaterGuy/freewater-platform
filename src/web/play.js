@@ -82,7 +82,7 @@
         ? h('button', { type: 'button', class: 'card ad', 'aria-pressed': 'false' }, h('img', { alt: `Ad for ${it.label}`, src: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(it.svg)}` }), h('div', { class: 'name', text: it.label }))
         : h('button', { type: 'button', class: `card${it.photo ? ' has-photo' : ''}`, 'aria-pressed': 'false' },
           it.photo ? h('figure', { class: 'photo' }, h('img', { src: it.photo.url, alt: it.label, loading: 'eager' }), it.photo.credit ? h('figcaption', { text: `Photo: ${it.photo.credit}${it.photo.license ? ` (${it.photo.license})` : ''}` }) : null) : null,
-          h('div', {}, it.brand && !it.name.toLowerCase().startsWith(it.brand.toLowerCase()) ? h('div', { class: 'brand', text: it.brand }) : null, h('div', { class: 'name', text: it.name })), it.price ? h('div', { class: `price ${it.setup || ''}`, text: it.price }) : null);
+          h('div', {}, it.brand && !it.name.toLowerCase().startsWith(it.brand.toLowerCase()) ? h('div', { class: 'brand', text: it.brand }) : null, h('div', { class: 'name', text: it.name })), it.price ? h('div', { class: `price ${it.price === '$0' ? 'zero' : it.setup || ''}`, text: it.price }) : null);
       card.addEventListener('click', () => {
         if (picked && picked !== it.key) changes++;
         picked = it.key;

@@ -48,6 +48,10 @@ h2 { font: 700 23px/1.2 var(--display); margin: 6px 0 14px; letter-spacing: -.00
 .card .photo { margin: 0 0 2px; position: relative; }
 .card .photo img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 12px; display: block; background: #fff; }
 .card .photo figcaption { font-size: 9px; line-height: 1.2; color: var(--muted); margin-top: 4px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.card.has-photo { min-height: 0; gap: 6px; }
+.card.has-photo .name { font: 700 15px/1.25 var(--body); }
+.card.has-photo .brand { font-size: 10px; }
+.price.zero { color: var(--muted); font-weight: 500; }
 .card .brand { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
 .card .name { font: 700 19px/1.2 var(--display); overflow-wrap: anywhere; }
 .price { font-size: 14px; font-weight: 700; line-height: 1.3; }

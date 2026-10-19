@@ -81,6 +81,21 @@ describe('playing', () => {
     expect(row.items[0].position).toBe(0);
   });
 
+  it('mostly visual: everything is $0 with no prices shown, unless one option is different', async () => {
+    const v = 'viewer-game-11';
+    await ready(v);
+    let allFree = 0, oneOdd = 0;
+    for (let i = 0; i < 30; i++) {
+      const { round } = await play(v);
+      if (round.kind !== 'choice') continue;
+      const priced = round.items.filter((x: any) => x.price && x.price !== '$0');
+      if (round.items.every((x: any) => x.price === null)) allFree++;
+      else { expect(priced.length).toBe(1); expect(round.items.filter((x: any) => x.price === '$0').length).toBe(round.items.length - 1); oneOdd++; }
+    }
+    expect(allFree).toBeGreaterThan(0);
+    expect(oneOdd).toBeGreaterThan(0);
+  });
+
   it('reloading shows the same screen, and an answer counts once', async () => {
     const v = 'viewer-game-3';
     await ready(v);

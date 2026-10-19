@@ -25,7 +25,7 @@ const fakeWiki = (async (url: string) => {
     const free = u.searchParams.get('titles') === 'File:RAV4_2023.jpg';
     return ok({ query: { pages: { '-1': { imageinfo: [{ thumburl: 'https://upload.wikimedia.org/rav4.jpg', descriptionurl: 'https://commons.wikimedia.org/wiki/File:RAV4_2023.jpg', extmetadata: { LicenseShortName: { value: free ? 'CC BY-SA 4.0' : 'Fair use' }, Artist: { value: '<a href="x">Jane Doe</a>' } } }] } } } });
   }
-  if (u.host === 'upload.wikimedia.org') return new Response(jpeg, { status: 200 });
+  if (u.host === 'upload.wikimedia.org') return new Response(Buffer.from(jpeg), { status: 200 });
   return new Response('no', { status: 404 });
 }) as unknown as typeof fetch;
 
@@ -55,7 +55,7 @@ describe('photos of the real products', () => {
     const cereal = defaultCatalog.find((c) => c.id === 'cereal')!;
     const off = new OpenFoodFactsImages((async (url: string) => url.includes('search.pl')
       ? new Response(JSON.stringify({ products: [{ code: '1', brands: 'Store Brand', image_front_url: 'https://images.openfoodfacts.org/x.jpg' }, { code: '2', brands: 'Kellogg’s', image_front_url: 'https://images.openfoodfacts.org/y.jpg' }] }))
-      : new Response(jpeg)) as unknown as typeof fetch);
+      : new Response(Buffer.from(jpeg))) as unknown as typeof fetch);
     const got = await off.find(cereal.items[0]!, cereal);
     expect(got?.sourceUrl).toContain('/product/2');
   });
