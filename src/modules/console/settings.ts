@@ -38,6 +38,7 @@ export function contrast(a: string, b: string): number {
 /** Every rule a company's settings must follow. Returns the first problem, in words a person can act on, or null. */
 export function checkSettings(c: CompanyConfig, registered: { ads: string[]; renderer: string[]; printer: string[] }): string | null {
   if (!str(c.name, 1, 60)) return 'The company name must be 1 to 60 characters.';
+  if (c.giving.peopleChoose !== undefined && typeof c.giving.peopleChoose !== 'boolean') return 'Letting people choose the cause is on or off (true or false).';
   if (c.research?.noAdsControlShare !== undefined && !isNum(c.research.noAdsControlShare, 0, 0.05)) return 'The no-ads control share must be 0 to 0.05 (0 to 5% of known households).';
   try {
     const u = new URL(c.receiptBaseUrl);
