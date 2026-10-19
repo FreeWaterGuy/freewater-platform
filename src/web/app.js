@@ -473,6 +473,20 @@
   // ---------- saved ----------
   // ---------- wallet: points, credit, the token, offers, coupons, what you saved ----------
   const viewerKey = () => { let v = null; try { v = localStorage.getItem('fw_viewer'); } catch {} if (!v || !/^[A-Za-z0-9_-]{8,64}$/.test(v)) { const a = new Uint8Array(16); crypto.getRandomValues(a); v = btoa(String.fromCharCode(...a)).replace(/[+/=]/g, (c) => ({ '+': '-', '/': '_', '=': '' })[c]); try { localStorage.setItem('fw_viewer', v); } catch {} } return v; };
+  function giftCardTile(w) {
+    const box = h('div', { class: 'list-row', style: 'flex-wrap:wrap;gap:8px' }, h('span', { class: 'grow' }, h('b', { text: 'Get a gift card' }), h('span', { class: 'small muted', text: `Spend your ${money(w.credit.balanceCents)} credit. It goes to your email.` })));
+    const open = h('button', { class: 'btn small', type: 'button', text: 'Choose' });
+    open.addEventListener('click', async () => {
+      const { cards } = await api('GET', '/v1/me/wallet/gift-cards');
+      const pick = h('select', { class: 'input' }, cards.map((c) => h('option', { value: c.id, text: c.name })));
+      const amt = h('input', { class: 'input', type: 'number', min: 5, step: 1, value: Math.min(25, Math.floor(w.credit.balanceCents / 100)), 'aria-label': 'Dollars' });
+      const go = h('button', { class: 'btn small', type: 'button', text: 'Send it' });
+      go.addEventListener('click', async () => { go.disabled = true; try { const r = await api('POST', '/v1/me/wallet/gift-cards', { product: pick.value, cents: Math.round(Number(amt.value) * 100) }); toast(r.test ? `Test card: ${r.code}` : 'Sent to your email.'); render(); } catch (e) { toast(e.message); go.disabled = false; } });
+      open.replaceWith(pick, amt, go);
+    });
+    box.append(open);
+    return box;
+  }
   async function walletScreen() {
     const me = await loadMe();
     const cid = encodeURIComponent(state.config.companyId);
@@ -507,6 +521,7 @@
           (w.credit.enabled || w.credit.balanceCents) ? h('div', {}, h('b', { text: money(w.credit.balanceCents) }), h('span', { text: 'credit' })) : null,
           (w.token.live || w.token.balance) ? h('div', {}, h('b', { text: tok(w.token.balance) }), h('span', { text: 'tokens' })) : null),
         w.token.live ? h('p', { style: 'margin:8px 0 0;opacity:.85;font-size:14px', text: w.token.held }) : null),
+      me && w.exchange.enabled && w.credit.balanceCents >= 500 ? giftCardTile(w) : null,
       link('/play', { class: 'tile blue' }, h('span', { class: 'tile-ico' }, icon(I.scan)), h('span', { class: 'grow' }, h('b', { text: 'Play for points' }), h('span', { text: 'Pick what you’d really choose. Same points whichever you pick.' }))),
       offers.offers.length || offers.mine.length ? h('h2', { class: 'section' }, 'Offers') : null,
       ...offers.offers.map((o) => { const b = h('button', { class: 'btn small', type: 'button', text: o.pointsCost ? `Claim for ${o.pointsCost} points` : 'Claim' }); b.addEventListener('click', () => claim(o, b)); return h('div', { class: 'list-row' }, h('span', { class: 'grow' }, h('b', { text: o.title }), h('span', { class: 'small muted', text: `${o.deal} · ${o.retailers.includes('any') ? 'any store' : o.retailers.join(', ')}` })), b); }),

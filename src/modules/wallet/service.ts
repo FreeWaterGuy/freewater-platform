@@ -3,6 +3,7 @@ import type { SqlClient } from '../../db/client';
 import type { Platform } from '../../platform';
 import { newId } from '../../core/ids';
 import { defaultWallet, era, pointsNow, pointsTerms, type WalletSettings } from './assets';
+import type { GiftCardProvider } from './giftcards';
 
 // Each person's wallet: points they earned, dollar credit a brand paid for, and what they saved. Every movement is a
 // journal entry whose lines add to zero; balances are kept alongside for speed and can always be rebuilt from the
@@ -218,6 +219,39 @@ export class WalletService {
     const by = new Map<string, Entry>();
     for (const r of rows) { const e: Entry = by.get(r.id) ?? { id: r.id, asset: r.asset, kind: r.kind, at: new Date(r.at).toISOString(), lines: [] }; e.lines.push({ account: r.account, amount: Number(r.amount) }); by.set(r.id, e); }
     return [...by.values()];
+  }
+
+  /**
+   * Spend dollar credit on a gift card. Only once exchanges are approved, only with a signed-in account (the card goes
+   * to its email), never more than the person has. If the gift-card company says no, the credit goes back.
+   */
+  async buyGiftCard(companyId: string, subject: string, o: { email: string; product: string; cents: number }, provider: GiftCardProvider) {
+    const c = this.settings(companyId).conversions;
+    if (!c.enabled || !c.approvedBy) throw new WalletError('switched_off', 'Gift cards are switched off until exchanges are approved.', 403);
+    if (!subject.startsWith('user:')) throw new WalletError('sign_in', 'Sign in so the card can go to your email.', 401);
+    if (!Number.isInteger(o.cents) || o.cents < 100) throw new WalletError('bad_amount', 'Choose at least $1.');
+    const p = (await provider.catalog()).find((x) => x.id === o.product);
+    if (!p) throw new WalletError('not_found', 'No such gift card.', 404);
+    if (o.cents < p.minCents || o.cents > p.maxCents) throw new WalletError('bad_amount', `This card is ${p.minCents / 100} to ${p.maxCents / 100} dollars.`);
+    const asset = this.creditAsset(companyId);
+    const subjects = await this.subjectsOf(companyId, subject);
+    const ref = `gc_${randomBytes(9).toString('base64url')}`;
+    const entry = await this.db.transaction(async (tx) => {
+      const rows = (await tx.query<any>(`select account, balance from wallet_balances where company_id = $1 and asset = $2 and account = any($3) and balance > 0 order by balance desc for update`, [companyId, asset, await this.accountsOf(tx, companyId, subjects)])).rows;
+      if (rows.reduce((a, r) => a + Number(r.balance), 0) < o.cents) throw new WalletError('not_enough', 'Not enough credit for that.', 409);
+      const lines: [string, number][] = [];
+      let left = o.cents;
+      for (const r of rows) { if (!left) break; const take = Math.min(left, Number(r.balance)); lines.push([r.account, -take]); left -= take; }
+      lines.push(['spent:giftcards', o.cents]);
+      return this.post(tx, companyId, asset, 'giftcard', `giftcard:${ref}`, lines, { why: `${p.name} gift card` });
+    });
+    try {
+      const got = await provider.order({ product: p.id, cents: o.cents, email: o.email, ref });
+      return { card: p.name, cents: o.cents, ...got };
+    } catch (e: any) {
+      await this.correct(companyId, entry, 'gift cards', `the gift-card company said no: ${String(e?.message ?? e).slice(0, 100)}`).catch(() => {});
+      throw new WalletError('provider_failed', 'The gift-card company couldn’t send it just now. Your credit is back.', 502);
+    }
   }
 
   /** Turning points or credit into something else. Switched off until a person approves it (and a partner is chosen). */

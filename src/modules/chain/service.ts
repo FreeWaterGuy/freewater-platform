@@ -36,8 +36,8 @@ export function checkChain(c: ChainSettings | undefined): string | null {
   return null;
 }
 
-export type ActionKind = 'mint' | 'unpause' | 'switch_on' | 'go_live_points' | 'go_live_token' | 'convert' | 'withdrawals_on';
-const IRREVERSIBLE: ActionKind[] = ['mint', 'unpause', 'switch_on', 'go_live_points', 'go_live_token', 'convert', 'withdrawals_on'];
+export type ActionKind = 'mint' | 'unpause' | 'switch_on' | 'go_live_points' | 'go_live_token' | 'convert' | 'withdrawals_on' | 'exchanges_on';
+const IRREVERSIBLE: ActionKind[] = ['mint', 'unpause', 'switch_on', 'go_live_points', 'go_live_token', 'convert', 'withdrawals_on', 'exchanges_on'];
 
 export class ChainService {
   constructor(private db: SqlClient, private platform: Platform, private wallet: WalletService, private publishers: AnchorPublisher[] = [], private clock: () => Date = () => new Date()) {}
@@ -149,6 +149,7 @@ export class ChainService {
     const stage = this.stage(companyId);
     if (kind === 'go_live_points' && stage !== 'test') throw new ChainError('wrong_stage', 'Already live.', 409);
     if (kind === 'go_live_token' && stage !== 'points') throw new ChainError('wrong_stage', 'Go live with points first.', 409);
+    if (kind === 'exchanges_on' && stage === 'test') throw new ChainError('wrong_stage', 'Go live with points first.', 409);
     if ((kind === 'convert' || kind === 'withdrawals_on') && stage !== 'token') throw new ChainError('wrong_stage', 'This comes after going live with the token.', 409);
     if (this.isMember && !(await this.isMember(companyId, person, this.clock()))) throw new ChainError('not_member', 'Only owners and finance people on the team can propose this.', 403);
     const id = newId('ca');
@@ -220,7 +221,7 @@ export class ChainService {
         } else ref = a.ref;
         await this.finishMint(companyId, id, plan, ref);
       } else if (a.kind === 'unpause') ref = (await chain.setPaused(false)).ref;
-      else if (a.kind === 'switch_on' || a.kind === 'go_live_points' || a.kind === 'go_live_token' || a.kind === 'withdrawals_on') {
+      else if (a.kind === 'switch_on' || a.kind === 'go_live_points' || a.kind === 'go_live_token' || a.kind === 'withdrawals_on' || a.kind === 'exchanges_on') {
         if (!this.turnOn) throw new Error('Settings can’t be changed from here.');
         // Going live starts clean: everything from testing is wiped first, so no test record ever reaches real people.
         if (a.kind === 'go_live_points' && this.beforeGoLive) await this.beforeGoLive(companyId, person);

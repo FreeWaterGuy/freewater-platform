@@ -168,8 +168,9 @@ export function chainProblem(cur: CompanyConfig, next: CompanyConfig, approved =
  * Money switches in settings: exchanging points or credit for anything else can't be switched on here (it will take
  * the same several-people approval as the chain), and the points cap can't change once set.
  */
-export function walletProblem(cur: CompanyConfig, next: CompanyConfig): string | null {
+export function walletProblem(cur: CompanyConfig, next: CompanyConfig, approved = false): string | null {
   const a = cur.wallet ?? defaultWallet(cur.name), b = next.wallet;
+  if (approved) return a && b && a.points.cap !== b.points.cap ? 'The points cap can’t change once it’s set.' : null;
   if (b?.conversions?.enabled && !a?.conversions?.enabled) return 'Exchanging points or credit can’t be switched on from settings; it needs several people to approve it.';
   if (b && b.conversions?.approvedBy !== a?.conversions?.approvedBy) return 'Who approved exchanges is recorded by the approval itself, not set here.';
   if (a && b && a.points.cap !== b.points.cap) return 'The points cap can’t change once it’s set.';

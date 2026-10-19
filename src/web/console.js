@@ -204,7 +204,7 @@
   const chip = (text, tone) => h('span', { class: `pill${tone ? ` ${tone}` : ''}`, text });
   const actionRow = (a, after) => {
     const btn = (label, fn, cls = 'btn small') => h('button', { class: cls, type: 'button', onclick: async (e) => { e.currentTarget.disabled = true; try { await fn(); toast('Done.'); render(); } catch (x) { toast(x.message); e.currentTarget.disabled = false; } } }, label);
-    const names = { go_live_points: 'Go live with points', go_live_token: 'Go live with the token', convert: 'Turn points into tokens', withdrawals_on: 'Turn on withdrawals', mint: 'Mint tokens', unpause: 'Unpause', switch_on: 'Switch the chain on', pause: 'Pause' };
+    const names = { exchanges_on: 'Turn on gift cards', go_live_points: 'Go live with points', go_live_token: 'Go live with the token', convert: 'Turn points into tokens', withdrawals_on: 'Turn on withdrawals', mint: 'Mint tokens', unpause: 'Unpause', switch_on: 'Switch the chain on', pause: 'Pause' };
     const ready = a.status === 'approved' && a.notBefore && Date.parse(a.notBefore) <= Date.now();
     const sign = a.status === 'signing' ? (() => {
       const sig = h('input', { class: 'input', placeholder: 'Transaction signature from Squads', spellcheck: 'false', style: 'font-family:var(--mono)' });
@@ -226,7 +226,7 @@
     const [st, chainSt, actions] = await Promise.all([api('GET', '/v1/launch'), api('GET', '/v1/chain'), api('GET', '/v1/chain/actions')]);
     const steps = [['test', 'Testing', 'Try everything yourself and with bots. Reset any time.'], ['points', 'Live with points', 'Real people earn placeholder points and rewards. No more resets.'], ['token', 'Live with the token', 'Points become the Solana token, held safely in custody.']];
     const at = steps.findIndex(([k]) => k === st.stage);
-    const mine = actions.filter((a) => ['go_live_points', 'go_live_token', 'convert', 'withdrawals_on'].includes(a.kind) && !['done', 'cancelled', 'expired', 'failed'].includes(a.status));
+    const mine = actions.filter((a) => ['go_live_points', 'go_live_token', 'convert', 'withdrawals_on', 'exchanges_on'].includes(a.kind) && !['done', 'cancelled', 'expired', 'failed'].includes(a.status));
     const reset = (() => {
       const word = h('input', { class: 'input', placeholder: 'Type RESET', 'aria-label': 'Type RESET to confirm' });
       const go = h('button', { class: 'btn secondary', type: 'button', disabled: true }, 'Wipe all test data');
@@ -248,6 +248,7 @@
     shell('launch', head('Launch', 'Test everything first, then go live in steps. Each step is approved, waits, and can’t be undone.'),
       h('ol', { class: 'stages', 'aria-label': 'Launch steps' }, steps.map(([k, name, d], i) => h('li', { class: i < at ? 'done' : i === at ? 'now' : '', 'aria-current': i === at ? 'step' : null }, h('span', { class: 'n', text: i < at ? '✓' : String(i + 1) }), h('b', { text: name }), h('small', { text: d }), i === at ? h('em', { text: 'You are here' }) : null))),
       ...(st.stage === 'test' ? [bots, reset] : []), next,
+      st.stage !== 'test' ? section('Gift cards', 'Let people spend their dollar credit on gift cards (Amazon, Target and others), sent to their email. Needs other people’s approval and the wait.', h('button', { class: 'btn secondary', type: 'button', onclick: () => propose('exchanges_on').catch((x) => toast(x.message)) }, 'Propose turning on gift cards')) : null,
       section('Waiting', 'Steps proposed and not yet run.', actionsTable(mine)));
   }
 

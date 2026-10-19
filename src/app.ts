@@ -52,6 +52,7 @@ import { geoFromEnv } from './modules/data/geoip';
 import { DataService } from './modules/data/service';
 import { seededRandom } from './core/ids';
 import { WalletService } from './modules/wallet/service';
+import { giftCardsFromEnv, type GiftCardProvider } from './modules/wallet/giftcards';
 import { GamesService } from './modules/games/service';
 import { ClaudePrompter, builtinPrompter, type Prompter } from './modules/games/prompter';
 import { OpenFoodFactsImages, StockImages, WikipediaImages, type ProductImageSource } from './modules/games/images';
@@ -131,6 +132,8 @@ export interface AppOptions {
   productLookup?: ProductLookup | null;
   /** Which chain each company uses (tests pass their own). */
   chainFor?: (companyId: string) => TokenChain;
+  /** Gift cards bought with credit (Tremendous when configured; a stand-in that says TEST otherwise). */
+  giftCards?: GiftCardProvider;
   /** Where each visitor is, so their own law applies (GEOIP_DB, a MaxMind file; without one, only trusted host headers). */
   geo?: import('./modules/data/jurisdiction').GeoIp | null;
   /** Tests and local runs: treat anyone we can't place as being here. Ignored in production (unknown means strictest). */
@@ -372,6 +375,7 @@ export async function createApp(opts: AppOptions) {
   }
   const launch = new LaunchService(db, platform, data, games, wallet, chain, opts.clock, opts.seed !== undefined ? seededRandom(opts.seed + 202) : Math.random);
   wallet.stageOf = (companyId) => chain.stage(companyId);
+  const giftCards = opts.giftCards ?? giftCardsFromEnv(process.env);
   chain.beforeGoLive = (companyId, by) => launch.reset(companyId, by);
 
   const flush = () => persistence.flush();
@@ -384,6 +388,7 @@ export async function createApp(opts: AppOptions) {
     const now = chain.settings(companyId);
     const launch = platform.companies.get(companyId)?.launch ?? { stage: 'test' as const };
     if (kind === 'go_live_points') { await consoleSvc.save(companyId, { launch: { ...launch, stage: 'points' } }, by, undefined, { chainApproved: true }); return; }
+    if (kind === 'exchanges_on') { const w = wallet.settings(companyId); await consoleSvc.save(companyId, { wallet: { ...w, conversions: { enabled: true, approvedBy: by, approvedAt: new Date().toISOString() } } }, by, undefined, { chainApproved: true }); return; }
     if (kind === 'withdrawals_on') { await consoleSvc.save(companyId, { launch: { ...launch, withdrawals: true } }, by, undefined, { chainApproved: true }); return; }
     const chainOn = { ...now, network: rules.network, approvalsNeeded: Math.max(now.approvalsNeeded, rules.approvalsNeeded), delayHours: Math.max(now.delayHours, rules.delayHours), enabled: true };
     await consoleSvc.save(companyId, { chain: chainOn, ...(kind === 'go_live_token' ? { launch: { ...launch, stage: 'token' } } : {}) }, by, undefined, { chainApproved: true });
@@ -453,7 +458,7 @@ export async function createApp(opts: AppOptions) {
   await fleet.load();
   made.registry.registerPrinter('model6-fleet', new MachineFleetPrinter(() => fleet, made.printer));
 
-  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, games, offers, chain, launch, studio, transparency, anchors, agents, profit, distributions, team, secondStep };
+  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, profit, distributions, team, secondStep };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;
