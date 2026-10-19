@@ -117,10 +117,13 @@ export class OffersService {
   /** Claim an offer: points are taken now (if it costs any), and there are 14 days to buy it and send the receipt. */
   /** Is this person signed in to an account (a verified email or phone)? Offers pay money, so they need one. Set by the app. */
   hasAccount?: (companyId: string, person: string) => Promise<boolean>;
+  /** Has this person shown they're old enough? Offers pay money, so an unknown age isn't enough. Set by the app. */
+  ageKnown?: (companyId: string, person: string) => Promise<boolean>;
 
   async claim(companyId: string, person: string, offerId: string) {
     if (!this.enabled(companyId)) throw new OfferError('switched_off', 'Brand offers aren’t on yet.', 403);
     if (this.wallet.mayEarn && !(await this.wallet.mayEarn(companyId, person))) throw new OfferError('not_available_here', 'Offers aren’t available for you here.', 403);
+    if (this.ageKnown && !(await this.ageKnown(companyId, person))) throw new OfferError('age', 'Tell us your birthday first (offers are only for people old enough where you are).', 403);
     if (this.hasAccount && !(await this.hasAccount(companyId, person))) throw new OfferError('sign_in', 'Sign in to claim offers (they pay real money, so each person needs an account).', 401);
     const pre = await this.row(companyId, offerId).catch(() => null);
     if (!pre || pre.status !== 'live') throw new OfferError('not_live', 'That offer isn’t available.', 404);

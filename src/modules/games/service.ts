@@ -123,7 +123,9 @@ export class GamesService {
   }
   async leave(companyId: string, viewerKey: string) {
     await this.db.query(`update game_players set left_at = $3 where company_id = $1 and person = $2`, [companyId, viewerKey, this.now()]);
-    await this.data.consent(companyId, viewerKey, { choices: false }, 'games: stopped playing');
+    // The yes given to play is taken back in full: page tracking too, unless the person said yes to it on its own.
+    const viaGames = (await this.db.query<any>(`select 1 from data_consents where company_id = $1 and subject = $2 and category = 'interactions' and granted and source like 'games:%'`, [companyId, viewerKey])).rows.length > 0;
+    await this.data.consent(companyId, viewerKey, { choices: false, ...(viaGames ? { interactions: false } : {}) }, 'games: stopped playing');
     return { left: true };
   }
 
@@ -187,7 +189,7 @@ export class GamesService {
     let streak = 0, bonus = 0;
     if (!flagged && r.kind !== 'check') {
       streak = Number((await this.db.query<any>(`select count(*)::int as n from game_rounds where company_id = $1 and person = $2 and answered_at >= $3 and flagged is null and kind <> 'check'`, [companyId, viewerKey, dayStart])).rows[0].n);
-      if (points && streak > 0 && streak % 10 === 0) bonus = (await this.wallet.earn(companyId, viewerKey, 'streak_bonus', `streak:${viewerKey}:${dayStart.slice(0, 10)}:${streak}`, { source: this.wallet.sourceOf(req?.ip) })).points;
+      if (points && streak > 0 && streak % 10 === 0) bonus = (await this.wallet.earn(companyId, viewerKey, 'streak_bonus', `streak:${this.wallet.hidden(companyId, viewerKey)}:${dayStart.slice(0, 10)}:${streak}`, { source: this.wallet.sourceOf(req?.ip) })).points;
       points += bonus;
     }
     if (points) await this.db.query(`update game_rounds set points = $2 where id = $1`, [roundId, points]);

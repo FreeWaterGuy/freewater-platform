@@ -203,7 +203,7 @@ export class DataService {
    * minimum (never their birthday). For anyone old enough, the birth year is kept as they allow (it's in the optional
    * details).
    */
-  async ageCheck(companyId: string, subject: string, birthDate: string, live?: Place | null) {
+  async ageCheck(companyId: string, subject: string, birthDate: string, live?: Place | null, opts: { fromAccount?: boolean } = {}) {
     const born = new Date(`${birthDate}T00:00:00Z`);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(birthDate) || Number.isNaN(born.getTime())) throw new DataError('bad_date', 'Send your birthday as YYYY-MM-DD.');
     const now = this.clock();
@@ -212,6 +212,9 @@ export class DataService {
     if (age < 0 || age > 120) throw new DataError('bad_date', 'That birthday doesn’t look right.');
     const { minimumAge: min } = await this.rulesFor(companyId, [subject], live);
     const ok = age >= min;
+    // Once someone is known to be old enough, only their signed-in account can change that (so whoever finds a phone's
+    // random code can't lock its owner out of rewards).
+    if (!ok && !opts.fromAccount && (await this.db.query(`select 1 from person_details where company_id = $1 and subject = any($2) and age_ok`, [companyId, [subject, ...(await this.linkedSubjects(companyId, subject))]])).rows.length) throw new DataError('age_on_file', 'An age is already on file. Change it from your account.', 409);
     await this.db.query(`insert into person_details (company_id, subject, age_ok, birth_year, updated_at) values ($1,$2,$3,$4,$5) on conflict (company_id, subject) do update set age_ok = excluded.age_ok, birth_year = excluded.birth_year, updated_at = excluded.updated_at`,
       [companyId, subject, ok, ok ? born.getUTCFullYear() : null, now.toISOString()]);
     if (!ok) await this.db.query(`update person_details set zip = null, household = null, language = null where company_id = $1 and subject = $2`, [companyId, subject]);
@@ -354,11 +357,27 @@ export class DataService {
         designs: userIds.length ? await q(`select id, status, data, messages, created_at from custom_designs where user_id = any($1) order by created_at desc limit 50`, [userIds]).catch(() => []) : [],
         lottery: await q(`select via, status, prize, created_at from lottery_chances where company_id = $1 and viewer_key = any($2) order by created_at desc limit 100`, [companyId, viewers]),
       },
+      // Everything from the wallet, the games, offers and what they told us, under all their phones and accounts.
+      ...(await this.more(companyId, [...new Set([...viewers, ...userIds.map((u) => `user:${u}`)])].filter(Boolean))),
       asAdvertiser: advertiserIds.length ? {
         campaigns: [...this.platform.campaigns.values()].filter((c) => advertiserIds.includes(c.advertiserId)).map((c) => ({ id: c.id, name: c.advertiserName, category: c.category, offering: c.offering ?? null, active: c.active })),
         drafts: await q(`select id, status, data, messages, created_by, updated_at from ad_drafts where advertiser_id = any($1) order by updated_at desc limit 50`, [advertiserIds]).catch(() => []),
       } : null,
       activity: person ? await q(`select actor_type, kind, target, detail, at from activity where person_id = $1 order by at desc limit 500`, [person]) : [],
+    };
+  }
+
+  private async more(companyId: string, keys: string[]) {
+    const q = async (sql: string, args: unknown[]) => (await this.db.query<any>(sql, args).catch(() => ({ rows: [] as any[] }))).rows;
+    return {
+      wallet: await q(`select t.asset, t.kind, t.at, l.amount from wallet_holders h join wallet_lines l on l.account = 'holder:' || h.id join wallet_tx t on t.id = l.tx_id and t.company_id = h.company_id where h.company_id = $1 and h.subject = any($2) order by t.at desc limit 1000`, [companyId, keys]),
+      games: await q(`select kind, category, items, pick, why, response_ms, changes, served_at, answered_at, points from game_rounds where company_id = $1 and person = any($2) order by served_at desc limit 1000`, [companyId, keys]),
+      feedbackAndQuestions: await q(`select kind, text, answer, at from game_notes where company_id = $1 and person = any($2) order by at desc limit 500`, [companyId, keys]),
+      offers: await q(`select c.status, c.claimed_at, c.points_spent, c.owed_cents, o.data->>'title' as title from offer_claims c join offers o on o.id = c.offer_id where c.company_id = $1 and c.person = any($2) order by c.claimed_at desc limit 200`, [companyId, keys]),
+      places: await q(`select source, country, state, city, at from person_places where company_id = $1 and subject = any($2)`, [companyId, keys]),
+      locationsShared: await q(`select lat, lng, accuracy_m, at from precise_locations where company_id = $1 and subject = any($2) order by at desc limit 200`, [companyId, keys]),
+      aboutYou: await q(`select birth_year, age_ok, zip, household, language from person_details where company_id = $1 and subject = any($2)`, [companyId, keys]),
+      dataChoices: await q(`select category, granted, source, at from data_consents where company_id = $1 and subject = any($2)`, [companyId, keys]),
     };
   }
 
@@ -447,6 +466,10 @@ export class DataService {
     await run('choice screens', `delete from choice_sets where company_id = $1 and person = any($2)`, [companyId, keys]);
     await run('videos seen', `delete from video_seen where viewer_key = any($1) and campaign_id in (select id from campaigns where company_id = $2)`, [keys, companyId]);
     await run('ad preferences', `delete from ad_preferences where company_id = $1 and person = any($2)`, [companyId, keys]);
+    // Points and credit stay in the books (and in their published seals) under a random wallet id; only the link from
+    // this person to that id goes, so nothing in the journal changes.
+    await run('wallet link', `delete from wallet_holders where company_id = $1 and subject = any($2)`, [companyId, keys]);
+    await run('chain actions', `update chain_actions set params = jsonb_set(params, '{to}', '"erased"') where company_id = $1 and params->>'to' = any($2)`, [companyId, keys]);
     await run('measurement panel', `delete from research_panel where company_id = $1 and person = any($2)`, [companyId, keys]);
     for (const k of keys) {
       const c = code();
@@ -454,13 +477,6 @@ export class DataService {
       await run('bottles held', `update bottle_holders set person = $3 where company_id = $1 and person = $2`, [companyId, k, c]);
       await run('gifts directed', `update giving_directions set person = $3 where company_id = $1 and person = $2`, [companyId, k, c]);
       await run('value-back tests', `update value_arms set person = $3 where company_id = $1 and person = $2`, [companyId, k, c]);
-      // Points and credit stay in the books (the journal must add up), under a code that leads nowhere.
-      // Holding the points lock, so a reward being written at this moment can't land under the old name afterwards.
-      await this.db.transaction(async (tx) => {
-        await tx.query(`select 1 from wallet_balances where company_id = $1 and asset = $2 and account = 'supply' for update`, [companyId, `points:${companyId}`]);
-        await tx.query(`update wallet_lines set account = $3 where account = $2 and tx_id in (select id from wallet_tx where company_id = $1)`, [companyId, `holder:${k}`, `holder:${c}`]);
-        await tx.query(`update wallet_balances set account = $3 where company_id = $1 and account = $2`, [companyId, `holder:${k}`, `holder:${c}`]);
-      });
     }
   }
 
@@ -531,6 +547,8 @@ export class DataService {
       // Exact positions go after the shortest keep any law allows (the company's, or the EU's if shorter).
       await del(`delete from precise_locations where company_id = $1 and at < $2`, short('preciseLocation'));
     }
+    // Network fingerprints on rewards are only needed for the day's limits: gone after two days.
+    await this.db.query(`update wallet_tx set source = null where source is not null and at < $1`, [new Date(this.clock().getTime() - 2 * 86_400_000).toISOString()]).catch(() => {});
     // Changes a person moved aside hold raw data; once dealt with (or after 90 days), they go.
     await this.db.query(`delete from persistence_failures where at < now() - interval '90 days'`).catch(() => {});
     return n;

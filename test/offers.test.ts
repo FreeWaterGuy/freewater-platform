@@ -30,7 +30,7 @@ beforeAll(async () => {
 afterAll(async () => { await server.close(); await app.persistence.flush(); await db.close(); });
 
 /** Offers need a signed-in account: join the phone to one. */
-const signedIn = (v: string) => app.data.link('freewater', [`user:usr_${v.replace(/-/g, '')}`, v], 'test');
+const signedIn = async (v: string) => { await app.data.link('freewater', [`user:usr_${v.replace(/-/g, '')}`, v], 'test'); await app.data.ageCheck('freewater', v, '1990-01-01'); };
 const offer = (extra: Record<string, unknown> = {}) => ({ advertiserId, title: 'King-size Snickers', products: [SNICKERS], retailers: ['Walmart'], reward: { kind: 'free', upToCents: 300, youGetCents: 25, causeCents: 10 }, pointsCost: 20, perPerson: 1, maxClaims: 100, ...extra });
 
 describe('barcodes', () => {
@@ -55,7 +55,8 @@ describe('brand offers', () => {
     expect(live[0].deal).toContain('Well Aware');
   });
 
-  it('needs a signed-in account (offers pay real money)', async () => {
+  it('needs a signed-in account and a known age (offers pay real money)', async () => {
+    await app.data.ageCheck('freewater', 'viewer-offer-anon', '1990-01-01');
     expect((await call('POST', `/v1/public/offers/freewater/${id}/claim`, { viewerKey: 'viewer-offer-anon' })).status).toBe(401);
   });
 

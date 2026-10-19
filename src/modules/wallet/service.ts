@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import type { SqlClient } from '../../db/client';
 import type { Platform } from '../../platform';
 import { newId } from '../../core/ids';
@@ -9,7 +9,9 @@ import { defaultWallet, era, pointsNow, pointsTerms, type WalletSettings } from 
 // journal. A mistake is fixed with a correcting entry, never an edit.
 //
 // Accounts:
-//   holder:<subject>   a person (a phone's key or user:<id>); one person's linked phones and accounts are added up
+//   holder:<id>        a person, by a random id kept apart (wallet_holders): the journal and its published seals never
+//                      hold a phone's key or an account id, so erasing a person removes only that link
+//                      (one person's linked phones and accounts are added up)
 //   supply             points: goes negative as points are issued, so issued = -supply (never past the cap)
 //   reserve:<sponsor>  credit: money a brand put aside, before it's given out as credit
 //   outside:<sponsor>  credit: where reserve money came from (a payment, recorded by the team)
@@ -82,7 +84,7 @@ export class WalletService {
       const supply = Number((await tx.query<any>(`select balance from wallet_balances where company_id = $1 and asset = $2 and account = 'supply' for update`, [companyId, asset])).rows[0].balance);
       if ((await tx.query(`select 1 from wallet_tx where company_id = $1 and ref = $2`, [companyId, `earn:${ref}`])).rows.length) return { points: 0, balance: await this.sum(tx, companyId, asset, subjects), reason: 'already_counted' };
       const today = (await tx.query<any>(`select coalesce(sum(l.amount),0)::bigint as pts, count(*) filter (where t.kind = $4)::int as n from wallet_tx t join wallet_lines l on l.tx_id = t.id where t.company_id = $1 and t.asset = $2 and t.day = $3 and t.kind like 'earn:%' and l.account = any($5)`,
-        [companyId, asset, day, `earn:${action}`, subjects.map((x) => `holder:${x}`)])).rows[0];
+        [companyId, asset, day, `earn:${action}`, await this.accountsOf(tx, companyId, subjects)])).rows[0];
       if (today.n >= (s.actionDailyMax[action] ?? Infinity)) return { points: 0, balance: await this.sum(tx, companyId, asset, subjects), reason: 'daily_limit' };
       // A real bottle is held by one person, maybe a few: only the first few people earn for scanning it.
       if (opts.about && opts.perAbout !== undefined && Number((await tx.query<any>(`select count(*)::int as n from wallet_tx where company_id = $1 and about = $2 and kind = $3`, [companyId, opts.about, `earn:${action}`])).rows[0].n) >= opts.perAbout) return { points: 0, balance: await this.sum(tx, companyId, asset, subjects), reason: 'bottle_limit' };
@@ -93,7 +95,7 @@ export class WalletService {
       }
       const pts = Math.min(pointsNow(base, -supply, s.cap), Math.max(0, room));
       if (pts <= 0) return { points: 0, balance: await this.sum(tx, companyId, asset, subjects), reason: room <= 0 ? 'daily_limit' : 'cap_reached' };
-      await this.post(tx, companyId, asset, `earn:${action}`, `earn:${ref}`, [['supply', -pts], [`holder:${subject}`, pts]], { action }, { source: opts.source, about: opts.about });
+      await this.post(tx, companyId, asset, `earn:${action}`, `earn:${ref}`, [['supply', -pts], [await this.accountOf(tx, companyId, subject), pts]], { action }, { source: opts.source, about: opts.about });
       return { points: pts, balance: await this.sum(tx, companyId, asset, subjects) };
     });
   }
@@ -132,7 +134,7 @@ export class WalletService {
       await tx.query(`insert into wallet_balances (company_id, asset, account, balance) values ($1,$2,$3,0) on conflict do nothing`, [companyId, asset, `reserve:${sponsor}`]);
       const reserve = Number((await tx.query<any>(`select balance from wallet_balances where company_id = $1 and asset = $2 and account = $3 for update`, [companyId, asset, `reserve:${sponsor}`])).rows[0].balance);
       if (reserve < cents) throw new WalletError('reserve_short', 'The sponsor’s reserve doesn’t cover that.', 409);
-      await this.post(tx, companyId, asset, 'credit', `credit:${ref}`, [[`reserve:${sponsor}`, -cents], [`holder:${subject}`, cents]], { why: why.slice(0, 200) });
+      await this.post(tx, companyId, asset, 'credit', `credit:${ref}`, [[`reserve:${sponsor}`, -cents], [await this.accountOf(tx, companyId, subject), cents]], { why: why.slice(0, 200) });
       return { cents };
     });
   }
@@ -147,7 +149,7 @@ export class WalletService {
     const subjects = await this.subjectsOf(companyId, subject);
     return this.once(() => this.db.transaction(async (tx) => {
       if ((await tx.query(`select 1 from wallet_tx where company_id = $1 and ref = $2`, [companyId, `spend:${ref}`])).rows.length) return { spent: 0, reason: 'already_spent', entry: null as string | null };
-      const rows = (await tx.query<any>(`select account, balance from wallet_balances where company_id = $1 and asset = $2 and account = any($3) and balance > 0 order by balance desc for update`, [companyId, asset, subjects.map((x) => `holder:${x}`)])).rows;
+      const rows = (await tx.query<any>(`select account, balance from wallet_balances where company_id = $1 and asset = $2 and account = any($3) and balance > 0 order by balance desc for update`, [companyId, asset, await this.accountsOf(tx, companyId, subjects)])).rows;
       if (rows.reduce((a, r) => a + Number(r.balance), 0) < points) throw new WalletError('not_enough', 'Not enough points for that.', 409);
       const lines: [string, number][] = [];
       let left = points;
@@ -174,7 +176,7 @@ export class WalletService {
       const reserve = Number((await tx.query<any>(`select balance from wallet_balances where company_id = $1 and asset = $2 and account = $3 for update`, [companyId, asset, `reserve:${sponsor}`])).rows[0].balance);
       if (reserve < total) throw new WalletError('reserve_short', 'The brand’s reserve doesn’t cover that.', 409);
       const lines: [string, number][] = [[`reserve:${sponsor}`, -total]];
-      if (toPersonCents > 0) lines.push([`holder:${subject}`, toPersonCents]);
+      if (toPersonCents > 0) lines.push([await this.accountOf(tx, companyId, subject), toPersonCents]);
       if (cause && cause.cents > 0) lines.push([`cause:${cause.name}`, cause.cents]);
       await this.post(tx, companyId, asset, 'offer', `offer:${ref}`, lines, { why: why.slice(0, 200) });
       return { paid: total, reason: undefined as string | undefined };
@@ -189,7 +191,7 @@ export class WalletService {
   async recordMint(companyId: string, subject: string, amount: number, ref: string, chainRef: string) {
     if (!Number.isInteger(amount) || amount <= 0) throw new WalletError('bad_amount', 'Mint a whole, positive amount.');
     return this.once(() => this.db.transaction(async (tx) => {
-      const id = await this.post(tx, companyId, this.tokenAsset(companyId), 'mint', `mint:${ref}`, [['token_supply', -amount], [`holder:${subject}`, amount]], { chainRef });
+      const id = await this.post(tx, companyId, this.tokenAsset(companyId), 'mint', `mint:${ref}`, [['token_supply', -amount], [await this.accountOf(tx, companyId, subject), amount]], { chainRef });
       return { entry: id };
     }), () => ({ entry: null as string | null }));
   }
@@ -239,7 +241,7 @@ export class WalletService {
   async wallet(companyId: string, subject: string, userId?: string) {
     const subjects = await this.subjectsOf(companyId, subject);
     const s = this.settings(companyId);
-    const holders = subjects.map((x) => `holder:${x}`);
+    const holders = await this.accountsOf(this.db, companyId, subjects);
     const history = (await this.db.query<any>(`select t.id, t.asset, t.kind, t.memo, t.at, l.amount from wallet_tx t join wallet_lines l on l.tx_id = t.id where t.company_id = $1 and l.account = any($2) order by t.at desc, t.id desc limit 50`, [companyId, holders])).rows
       .map((r) => { const m = (typeof r.memo === 'string' ? JSON.parse(r.memo) : r.memo) ?? {}; return { id: r.id, what: r.asset.startsWith('points:') ? 'points' : 'credit', kind: r.kind, amount: Number(r.amount), at: new Date(r.at).toISOString(), ...(m.action ? { action: m.action } : {}), ...(m.why ? { why: m.why } : {}) }; });
     const viewers = subjects.filter((x) => !x.includes(':'));
@@ -279,6 +281,24 @@ export class WalletService {
 
   // ---------- inside ----------
 
+  /** A person's wallet account: a random id, made the first time they get anything. */
+  private async accountOf(db: SqlClient, companyId: string, subject: string) {
+    const found = (await db.query<any>(`select id from wallet_holders where company_id = $1 and subject = $2`, [companyId, subject])).rows[0];
+    if (found) return `holder:${found.id}`;
+    const id = randomBytes(12).toString('base64url');
+    const made = (await db.query<any>(`insert into wallet_holders (company_id, subject, id) values ($1,$2,$3) on conflict (company_id, subject) do update set subject = excluded.subject returning id`, [companyId, subject, id])).rows[0];
+    return `holder:${made.id}`;
+  }
+  private async accountsOf(db: SqlClient, companyId: string, subjects: string[]) {
+    if (!subjects.length) return [];
+    return (await db.query<any>(`select id from wallet_holders where company_id = $1 and subject = any($2)`, [companyId, subjects])).rows.map((r) => `holder:${r.id}`);
+  }
+  /** Erasing a person: only the link from them to their wallet account goes. The journal (and its seals) is untouched. */
+  async forget(companyId: string, subjects: string[]) {
+    const r = await this.db.query(`delete from wallet_holders where company_id = $1 and subject = any($2)`, [companyId, subjects]);
+    return Number(r.rowCount ?? 0);
+  }
+
   private async subjectsOf(companyId: string, subject: string) {
     return [...new Set([subject, ...((await this.linked?.(companyId, subject)) ?? [])])];
   }
@@ -297,6 +317,6 @@ export class WalletService {
     return Number((await db.query<any>(`select balance from wallet_balances where company_id = $1 and asset = $2 and account = $3`, [companyId, asset, account])).rows[0]?.balance ?? 0);
   }
   private async sum(db: SqlClient, companyId: string, asset: string, subjects: string[]) {
-    return Number((await db.query<any>(`select coalesce(sum(balance),0)::bigint as b from wallet_balances where company_id = $1 and asset = $2 and account = any($3)`, [companyId, asset, subjects.map((x) => `holder:${x}`)])).rows[0].b);
+    return Number((await db.query<any>(`select coalesce(sum(balance),0)::bigint as b from wallet_balances where company_id = $1 and asset = $2 and account = any($3)`, [companyId, asset, await this.accountsOf(db, companyId, subjects)])).rows[0].b);
   }
 }
