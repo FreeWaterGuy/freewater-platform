@@ -164,6 +164,7 @@ export class WalletService {
    */
   async payOffer(companyId: string, sponsor: string, subject: string, toPersonCents: number, cause: { name: string; cents: number } | null, ref: string, why: string) {
     if (!this.settings(companyId).credit.enabled) throw new WalletError('switched_off', 'Credit is switched off until a person turns it on.', 403);
+    if (toPersonCents > 0 && this.mayEarn && !(await this.mayEarn(companyId, subject))) throw new WalletError('not_available_here', 'Rewards aren’t available for this person.', 403);
     const total = toPersonCents + (cause?.cents ?? 0);
     if (!Number.isInteger(total) || total <= 0) throw new WalletError('bad_amount', 'Nothing to pay.');
     const asset = this.creditAsset(companyId);

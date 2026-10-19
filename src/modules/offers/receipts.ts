@@ -27,7 +27,7 @@ export class VeryfiReader implements ReceiptReader {
     return {
       store: d.vendor?.name ?? null, date: d.date ? String(d.date).slice(0, 10) : null, totalCents: typeof d.total === 'number' ? Math.round(d.total * 100) : null,
       lines: (d.line_items ?? []).map((l: any) => ({ text: String(l.description ?? '').slice(0, 200), ...(l.upc ? { gtin: String(l.upc) } : {}), ...(typeof l.total === 'number' ? { cents: Math.round(l.total * 100) } : {}), ...(l.quantity ? { quantity: Number(l.quantity) } : {}) })),
-      confidence: typeof d.ocr_score === 'number' ? d.ocr_score : 0.8,
+      confidence: typeof d.ocr_score === 'number' ? d.ocr_score : 0, // unknown: a person checks it
     };
   }
 }

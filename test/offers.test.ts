@@ -29,6 +29,8 @@ beforeAll(async () => {
 });
 afterAll(async () => { await server.close(); await app.persistence.flush(); await db.close(); });
 
+/** Offers need a signed-in account: join the phone to one. */
+const signedIn = (v: string) => app.data.link('freewater', [`user:usr_${v.replace(/-/g, '')}`, v], 'test');
 const offer = (extra: Record<string, unknown> = {}) => ({ advertiserId, title: 'King-size Snickers', products: [SNICKERS], retailers: ['Walmart'], reward: { kind: 'free', upToCents: 300, youGetCents: 25, causeCents: 10 }, pointsCost: 20, perPerson: 1, maxClaims: 100, ...extra });
 
 describe('barcodes', () => {
@@ -53,20 +55,24 @@ describe('brand offers', () => {
     expect(live[0].deal).toContain('Well Aware');
   });
 
+  it('needs a signed-in account (offers pay real money)', async () => {
+    expect((await call('POST', `/v1/public/offers/freewater/${id}/claim`, { viewerKey: 'viewer-offer-anon' })).status).toBe(401);
+  });
+
   it('a claim costs points, needs enough of them, and once per person', async () => {
     const v = 'viewer-offer-1';
-    expect((await call('POST', `/v1/public/offers/freewater/${id}/claim`, { viewerKey: v })).status).toBe(409); // no points yet
+    expect((await (await signedIn(v), call('POST', `/v1/public/offers/freewater/${id}/claim`, { viewerKey: v }))).status).toBe(409); // no points yet
     for (let i = 0; i < 3; i++) await app.wallet.earn('freewater', v, 'scan', `o1:${i}`);
-    const c = await call('POST', `/v1/public/offers/freewater/${id}/claim`, { viewerKey: v });
+    const c = await (await signedIn(v), call('POST', `/v1/public/offers/freewater/${id}/claim`, { viewerKey: v }));
     expect(c.status).toBe(201);
     expect(await app.wallet.pointsOf('freewater', v)).toBe(10);
-    expect((await call('POST', `/v1/public/offers/freewater/${id}/claim`, { viewerKey: v })).status).toBe(409);
+    expect((await (await signedIn(v), call('POST', `/v1/public/offers/freewater/${id}/claim`, { viewerKey: v }))).status).toBe(409);
   });
 
   it('a receipt the reader is sure of pays the person and the cause from the brand’s reserve (when credit is on)', async () => {
     const v = 'viewer-offer-2';
     for (let i = 0; i < 3; i++) await app.wallet.earn('freewater', v, 'scan', `o2:${i}`);
-    const claim = (await call('POST', `/v1/public/offers/freewater/${id}/claim`, { viewerKey: v })).body.claim;
+    const claim = (await (await signedIn(v), call('POST', `/v1/public/offers/freewater/${id}/claim`, { viewerKey: v }))).body.claim;
     nextRead = { store: 'WALMART SUPERCENTER #123', date: '2026-10-20', totalCents: 900, lines: [{ text: 'SNICKERS KS', gtin: '040000004325', cents: 279 }], confidence: 0.95 };
     now += 86_400_000;
     // Credit off: approved, held.
@@ -90,7 +96,7 @@ describe('brand offers', () => {
     const o2 = (await call('POST', '/v1/offers', offer({ title: 'Second', perPerson: 2 }), admin)).body.id;
     await call('POST', `/v1/offers/${o2}/submit`, undefined, admin); await call('POST', `/v1/offers/${o2}/approve`, undefined, admin);
     for (let i = 0; i < 6; i++) await app.wallet.earn('freewater', v, 'scan', `o3:${i}`);
-    const c1 = (await call('POST', `/v1/public/offers/freewater/${o2}/claim`, { viewerKey: v })).body.claim;
+    const c1 = (await (await signedIn(v), call('POST', `/v1/public/offers/freewater/${o2}/claim`, { viewerKey: v }))).body.claim;
     expect((await call('POST', `/v1/public/offers/freewater/claims/${c1}/receipt`, { viewerKey: v, image: { contentType: 'image/png', dataBase64: png(1) } })).status).toBe(409);
     nextRead = null;
     expect((await call('POST', `/v1/public/offers/freewater/claims/${c1}/receipt`, { viewerKey: v, image: { contentType: 'image/png', dataBase64: png(2) } })).body.status).toBe('checking');
@@ -100,12 +106,26 @@ describe('brand offers', () => {
     expect(await app.wallet.pointsOf('freewater', v)).toBe(before + 20);
   });
 
+  it('a different photo of the same purchase is refused, and a receipt with no readable date waits for a person', async () => {
+    const o5 = (await call('POST', '/v1/offers', offer({ title: 'Same receipt', pointsCost: 0 }), admin)).body.id;
+    await call('POST', `/v1/offers/${o5}/submit`, undefined, admin); await call('POST', `/v1/offers/${o5}/approve`, undefined, admin);
+    const a = 'viewer-offer-6a', b = 'viewer-offer-6b';
+    await signedIn(a); await signedIn(b);
+    const ca = (await call('POST', `/v1/public/offers/freewater/${o5}/claim`, { viewerKey: a })).body.claim;
+    const cb = (await call('POST', `/v1/public/offers/freewater/${o5}/claim`, { viewerKey: b })).body.claim;
+    nextRead = { store: 'Walmart', date: new Date(now).toISOString().slice(0, 10), totalCents: 500, lines: [{ text: 'SNICKERS', gtin: SNICKERS, cents: 279 }], confidence: 0.99 };
+    expect((await call('POST', `/v1/public/offers/freewater/claims/${ca}/receipt`, { viewerKey: a, image: { contentType: 'image/png', dataBase64: png(10) } })).status).toBe(200);
+    expect((await call('POST', `/v1/public/offers/freewater/claims/${cb}/receipt`, { viewerKey: b, image: { contentType: 'image/png', dataBase64: png(11) } })).status).toBe(409);
+    nextRead = { store: 'Walmart', date: 'n/a', totalCents: 700, lines: [{ text: 'SNICKERS', gtin: SNICKERS, cents: 279 }], confidence: 0.99 };
+    expect((await call('POST', `/v1/public/offers/freewater/claims/${cb}/receipt`, { viewerKey: b, image: { contentType: 'image/png', dataBase64: png(12) } })).body.status).toBe('checking');
+  });
+
   it('stepped offers: the first claims get one deal, later ones another', async () => {
     const o3 = (await call('POST', '/v1/offers', offer({ title: 'Stepped', pointsCost: 0, steps: [{ upToClaims: 1, pointsCost: 0, reward: { kind: 'free', upToCents: 300 } }], reward: { kind: 'percent_off', percent: 50, upToCents: 300 } }), admin)).body.id;
     await call('POST', `/v1/offers/${o3}/submit`, undefined, admin); await call('POST', `/v1/offers/${o3}/approve`, undefined, admin);
     const first = (await call('GET', '/v1/public/offers/freewater')).body.offers.find((o: any) => o.id === o3);
     expect(first.deal).toBe('Free');
-    await call('POST', `/v1/public/offers/freewater/${o3}/claim`, { viewerKey: 'viewer-offer-4' });
+    await (await signedIn('viewer-offer-4'), call('POST', `/v1/public/offers/freewater/${o3}/claim`, { viewerKey: 'viewer-offer-4' }));
     const later = (await call('GET', '/v1/public/offers/freewater')).body.offers.find((o: any) => o.id === o3);
     expect(later.deal).toBe('50% off');
   });
@@ -115,7 +135,7 @@ describe('brand offers', () => {
     const o4 = (await call('POST', '/v1/offers', offer({ title: 'Expiring' }), admin)).body.id;
     await call('POST', `/v1/offers/${o4}/submit`, undefined, admin); await call('POST', `/v1/offers/${o4}/approve`, undefined, admin);
     for (let i = 0; i < 2; i++) await app.wallet.earn('freewater', v, 'scan', `o5:${i}`);
-    await call('POST', `/v1/public/offers/freewater/${o4}/claim`, { viewerKey: v });
+    await (await signedIn(v), call('POST', `/v1/public/offers/freewater/${o4}/claim`, { viewerKey: v }));
     expect(await app.wallet.pointsOf('freewater', v)).toBe(0);
     now += 15 * 86_400_000;
     expect(await app.offers.expire('freewater')).toBeGreaterThan(0);

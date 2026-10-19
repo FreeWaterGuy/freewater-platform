@@ -476,6 +476,8 @@ export class DataService {
     await run('games joined', `delete from game_players where company_id = $1 and person = any($2)`, [companyId, keys]);
     // Offer claims stay for the brand's bill and the books, with the receipt photo and what was read from it removed
     // and the person replaced by a code that leads nowhere.
+    // Anything not yet paid is void: no money goes to someone who's been erased.
+    await run('offer claims', `update offer_claims set status = 'void' where company_id = $1 and person = any($2) and status in ('claimed','receipt_sent','verified')`, [companyId, keys]);
     for (const k of keys) await run('offer claims', `update offer_claims set person = $3, receipt_read = null, receipt_asset = null where company_id = $1 and person = $2`, [companyId, k, `erased_${randomBytes(9).toString('base64url')}`]);
   }
 

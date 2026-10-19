@@ -1066,10 +1066,11 @@ create index offers_company on offers(company_id, status);
 create table offer_claims (id text primary key, offer_id text not null references offers(id), company_id text not null, person text not null, status text not null, step integer not null, terms jsonb not null,
   points_spent integer not null default 0, spend_entry text, claimed_at timestamptz not null, expires_at timestamptz not null,
   receipt_asset text, receipt_hash text, receipt_read jsonb, sent_at timestamptz, reviewed_by text, reviewed_at timestamptz, verified_by text,
-  product_cents integer, owed_cents integer, cause_cents integer, paid_at timestamptz);
+  product_cents integer, owed_cents integer, cause_cents integer, paid_at timestamptz, receipt_print text);
 create index offer_claims_offer on offer_claims(offer_id, status);
 create index offer_claims_person on offer_claims(company_id, person);
 create unique index offer_claims_receipt on offer_claims(company_id, receipt_hash) where receipt_hash is not null;
+create unique index offer_claims_print on offer_claims(company_id, receipt_print) where receipt_print is not null;
 create table barcodes (gtin text primary key, name text not null, brand text, image_url text, source text, at timestamptz not null);
 `,
   },

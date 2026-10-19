@@ -115,41 +115,48 @@ export class OffersService {
   }
 
   /** Claim an offer: points are taken now (if it costs any), and there are 14 days to buy it and send the receipt. */
+  /** Is this person signed in to an account (a verified email or phone)? Offers pay money, so they need one. Set by the app. */
+  hasAccount?: (companyId: string, person: string) => Promise<boolean>;
+
   async claim(companyId: string, person: string, offerId: string) {
     if (!this.enabled(companyId)) throw new OfferError('switched_off', 'Brand offers aren’t on yet.', 403);
     if (this.wallet.mayEarn && !(await this.wallet.mayEarn(companyId, person))) throw new OfferError('not_available_here', 'Offers aren’t available for you here.', 403);
-    // Checked and recorded while holding the offer, so two people can't take the last one; points are taken after.
-    const made = await this.db.transaction(async (tx) => {
-      const r = (await tx.query<any>(`select * from offers where id = $1 and company_id = $2 for update`, [offerId, companyId])).rows[0];
-      if (!r || r.status !== 'live') throw new OfferError('not_live', 'That offer isn’t available.', 404);
-      const d = this.data(r);
-      const now = this.clock().getTime();
-      if ((d.startsAt && Date.parse(d.startsAt) > now) || (d.endsAt && Date.parse(d.endsAt) < now)) throw new OfferError('not_live', 'That offer isn’t running now.', 410);
-      const used = Number((await tx.query<any>(`select count(*)::int as n from offer_claims where offer_id = $1 and status not in ('rejected','expired')`, [offerId])).rows[0].n);
-      if (used >= d.maxClaims) throw new OfferError('all_claimed', 'All of these have been claimed.', 410);
-      const mine = Number((await tx.query<any>(`select count(*)::int as n from offer_claims where offer_id = $1 and person = $2 and status not in ('rejected','expired')`, [offerId, person])).rows[0].n);
-      if (mine >= d.perPerson) throw new OfferError('limit', 'You’ve already claimed this one.', 409);
-      const step = this.stepAt(d, used);
-      const id = newId('oc');
-      const expires = new Date(now + CLAIM_DAYS * 86_400_000).toISOString();
-      await tx.query(`insert into offer_claims (id, offer_id, company_id, person, status, step, terms, points_spent, claimed_at, expires_at) values ($1,$2,$3,$4,'claimed',$5,$6,$7,$8,$9)`,
-        [id, offerId, companyId, person, step.index, JSON.stringify(step.reward), step.pointsCost, this.now(), expires]);
-      return { id, d, step, expires };
-    });
-    if (made.step.pointsCost > 0) {
-      try {
-        const spent = await this.wallet.spendPoints(companyId, person, made.step.pointsCost, `claim:${made.id}`, `Claimed: ${made.d.title}`);
-        await this.db.query(`update offer_claims set spend_entry = $2 where id = $1`, [made.id, spent.entry]);
-      } catch (e) {
-        await this.db.query(`delete from offer_claims where id = $1`, [made.id]);
-        throw e;
-      }
+    if (this.hasAccount && !(await this.hasAccount(companyId, person))) throw new OfferError('sign_in', 'Sign in to claim offers (they pay real money, so each person needs an account).', 401);
+    const pre = await this.row(companyId, offerId).catch(() => null);
+    if (!pre || pre.status !== 'live') throw new OfferError('not_live', 'That offer isn’t available.', 404);
+    const usedNow = Number((await this.db.query<any>(`select count(*)::int as n from offer_claims where offer_id = $1 and status not in ('rejected','expired','void')`, [offerId])).rows[0].n);
+    const cost = this.stepAt(this.data(pre), usedNow).pointsCost;
+    // Points first, so a crash can never leave a claim that cost nothing; if the claim then fails, they go back.
+    const id = newId('oc');
+    const spent = cost > 0 ? (await this.wallet.spendPoints(companyId, person, cost, `claim:${id}`, `Claimed: ${this.data(pre).title}`)).entry : null;
+    try {
+      const made = await this.db.transaction(async (tx) => {
+        const r = (await tx.query<any>(`select * from offers where id = $1 and company_id = $2 for update`, [offerId, companyId])).rows[0];
+        if (!r || r.status !== 'live') throw new OfferError('not_live', 'That offer isn’t available.', 404);
+        const d = this.data(r);
+        const now = this.clock().getTime();
+        if ((d.startsAt && Date.parse(d.startsAt) > now) || (d.endsAt && Date.parse(d.endsAt) < now)) throw new OfferError('not_live', 'That offer isn’t running now.', 410);
+        const used = Number((await tx.query<any>(`select count(*)::int as n from offer_claims where offer_id = $1 and status not in ('rejected','expired','void')`, [offerId])).rows[0].n);
+        if (used >= d.maxClaims) throw new OfferError('all_claimed', 'All of these have been claimed.', 410);
+        const mine = Number((await tx.query<any>(`select count(*)::int as n from offer_claims where offer_id = $1 and person = $2 and status not in ('rejected','expired','void')`, [offerId, person])).rows[0].n);
+        if (mine >= d.perPerson) throw new OfferError('limit', 'You’ve already claimed this one.', 409);
+        const step = this.stepAt(d, used);
+        if (step.pointsCost !== cost) throw new OfferError('changed', 'The offer just changed. Try again.', 409);
+        const expires = new Date(now + CLAIM_DAYS * 86_400_000).toISOString();
+        await tx.query(`insert into offer_claims (id, offer_id, company_id, person, status, step, terms, points_spent, spend_entry, claimed_at, expires_at) values ($1,$2,$3,$4,'claimed',$5,$6,$7,$8,$9,$10)`,
+          [id, offerId, companyId, person, step.index, JSON.stringify(step.reward), step.pointsCost, spent, this.now(), expires]);
+        return { d, step, expires };
+      });
+      return { claim: id, expiresAt: made.expires, pointsSpent: made.step.pointsCost, how: `Buy ${made.d.title} at ${made.d.retailers.includes('any') ? 'any store' : made.d.retailers.join(', ')} within ${CLAIM_DAYS} days, then send a photo of the receipt.` };
+    } catch (e) {
+      if (spent) await this.wallet.correct(companyId, spent, 'offers', 'claim didn’t go through: points returned').catch(() => {});
+      throw e;
     }
-    return { claim: made.id, expiresAt: made.expires, pointsSpent: made.step.pointsCost, how: `Buy ${made.d.title} at ${made.d.retailers.includes('any') ? 'any store' : made.d.retailers.join(', ')} within ${CLAIM_DAYS} days, then send a photo of the receipt.` };
   }
 
   /** The receipt photo. Read automatically when a reader is connected and sure; otherwise the team checks it. */
   async receipt(companyId: string, person: string, claimId: string, image: { contentType: string; bytes: Uint8Array }) {
+    if (!this.enabled(companyId)) throw new OfferError('switched_off', 'Brand offers are switched off.', 403);
     const c = (await this.db.query<any>(`select * from offer_claims where id = $1 and company_id = $2 and person = $3`, [claimId, companyId, person])).rows[0];
     if (!c) throw new OfferError('not_found', 'No such claim.', 404);
     if (c.status !== 'claimed') throw new OfferError('already_sent', 'A receipt was already sent for this.', 409);
@@ -160,7 +167,11 @@ export class OffersService {
     const read = await this.reader.read(image.bytes, image.contentType).catch(() => null);
     const offer = await this.row(companyId, c.offer_id);
     const match = read ? this.match(this.data(offer), read, new Date(c.claimed_at).toISOString()) : null;
-    await this.db.query(`update offer_claims set status = 'receipt_sent', receipt_asset = $2, receipt_hash = $3, receipt_read = $4, sent_at = $5 where id = $1`, [claimId, asset.id, hash, read ? JSON.stringify(read) : null, this.now()]);
+    // The same purchase photographed again (a different picture of the same receipt) can't be used twice either.
+    const print = read?.store && read.date && read.totalCents !== null ? createHash('sha256').update(`${read.store.toLowerCase().replace(/\W+/g, '')}|${read.date}|${read.totalCents}`).digest('hex') : null;
+    if (print && (await this.db.query(`select 1 from offer_claims where company_id = $1 and receipt_print = $2`, [companyId, print])).rows.length) throw new OfferError('used_receipt', 'That receipt was already used.', 409);
+    const took = await this.db.query(`update offer_claims set status = 'receipt_sent', receipt_asset = $2, receipt_hash = $3, receipt_read = $4, sent_at = $5, receipt_print = $6 where id = $1 and status = 'claimed'`, [claimId, asset.id, hash, read ? JSON.stringify(read) : null, this.now(), print]);
+    if (!Number(took.rowCount ?? 0)) throw new OfferError('already_sent', 'A receipt was already sent for this.', 409);
     if (match?.ok && read!.confidence >= 0.8) return this.settle(companyId, claimId, match.cents, `reader:${this.reader.name}`);
     return { status: 'checking', note: 'Thanks! A person will check your receipt, usually within a day.' };
   }
@@ -171,7 +182,8 @@ export class OffersService {
     if (!c) throw new OfferError('not_found', 'No such claim.', 404);
     if (c.status !== 'receipt_sent') throw new OfferError('not_waiting', 'This claim isn’t waiting for a check.', 409);
     if (!approve) {
-      await this.db.query(`update offer_claims set status = 'rejected', reviewed_by = $2, reviewed_at = $3 where id = $1`, [claimId, by, this.now()]);
+      const took = await this.db.query(`update offer_claims set status = 'rejected', reviewed_by = $2, reviewed_at = $3 where id = $1 and status = 'receipt_sent'`, [claimId, by, this.now()]);
+      if (!Number(took.rowCount ?? 0)) throw new OfferError('not_waiting', 'This claim isn’t waiting for a check.', 409);
       if (c.spend_entry) await this.wallet.correct(companyId, c.spend_entry, by, 'receipt not accepted: points returned').catch(() => {});
       return { status: 'rejected' };
     }
@@ -186,9 +198,13 @@ export class OffersService {
     const offer = await this.row(companyId, c.offer_id);
     const t: OfferReward = typeof c.terms === 'string' ? JSON.parse(c.terms) : c.terms;
     const back = t.kind === 'free' ? Math.min(paidCents, t.upToCents) : t.kind === 'percent_off' ? Math.min(Math.round(paidCents * (t.percent ?? 0) / 100), t.upToCents) : Math.min(t.cents ?? 0, paidCents);
-    const toPerson = back + (t.youGetCents ?? 0);
+    const toPerson = Math.max(0, back) + (t.youGetCents ?? 0);
     const cause = t.causeCents ? { name: this.cause(companyId), cents: t.causeCents } : null;
-    await this.db.query(`update offer_claims set status = 'verified', verified_by = $2, product_cents = $3, owed_cents = $4, cause_cents = $5 where id = $1`, [claimId, by, paidCents, toPerson, cause?.cents ?? 0]);
+    // Only a claim waiting on its receipt moves on, once: a second request at the same moment changes nothing.
+    const took = await this.db.query(`update offer_claims set status = 'verified', verified_by = $2, product_cents = $3, owed_cents = $4, cause_cents = $5 where id = $1 and status = 'receipt_sent'`, [claimId, by, paidCents, toPerson, cause?.cents ?? 0]);
+    if (!Number(took.rowCount ?? 0)) throw new OfferError('not_waiting', 'This claim isn’t waiting for a check.', 409);
+    if (toPerson + (cause?.cents ?? 0) <= 0) { await this.db.query(`update offer_claims set status = 'paid', paid_at = $2 where id = $1`, [claimId, this.now()]); return { status: 'paid', cents: 0, causeCents: 0 }; }
+    if (!this.enabled(companyId)) return { status: 'verified', cents: toPerson, causeCents: cause?.cents ?? 0, note: 'Approved. Your credit will arrive once payouts are switched on.' };
     try {
       await this.wallet.payOffer(companyId, `advertiser:${offer.advertiser_id}`, c.person, toPerson, cause, claimId, `Offer: ${this.data(offer).title}`);
       await this.db.query(`update offer_claims set status = 'paid', paid_at = $2 where id = $1`, [claimId, this.now()]);
@@ -200,12 +216,13 @@ export class OffersService {
   }
   /** Pay everything approved but held (credit just switched on, or a reserve topped up). Run regularly. */
   async payHeld(companyId: string) {
+    if (!this.enabled(companyId)) return 0;
     let n = 0;
     for (const c of (await this.db.query<any>(`select c.*, o.advertiser_id, o.data from offer_claims c join offers o on o.id = c.offer_id where c.company_id = $1 and c.status = 'verified'`, [companyId])).rows) {
       const d = typeof c.data === 'string' ? JSON.parse(c.data) : c.data;
       try {
         await this.wallet.payOffer(companyId, `advertiser:${c.advertiser_id}`, c.person, Number(c.owed_cents), Number(c.cause_cents) ? { name: this.cause(companyId), cents: Number(c.cause_cents) } : null, c.id, `Offer: ${d.title}`);
-        await this.db.query(`update offer_claims set status = 'paid', paid_at = $2 where id = $1`, [c.id, this.now()]); n++;
+        await this.db.query(`update offer_claims set status = 'paid', paid_at = $2 where id = $1 and status = 'verified'`, [c.id, this.now()]); n++;
       } catch { /* still held */ }
     }
     return n;
@@ -245,12 +262,17 @@ export class OffersService {
 
   /** Does a read receipt show this product bought at a listed store, after the claim? And for how much? */
   match(d: OfferInput, read: ReadReceipt, claimedAt: string): { ok: boolean; cents: number; why?: string } {
-    const store = (read.store ?? '').toLowerCase();
-    if (!d.retailers.includes('any') && !d.retailers.some((r) => store.includes(r.toLowerCase()))) return { ok: false, cents: 0, why: 'store' };
-    if (!read.date || Date.parse(read.date) < Date.parse(claimedAt.slice(0, 10))) return { ok: false, cents: 0, why: 'date' };
+    const words = (x: string) => x.toLowerCase().replace(/[’'.]/g, '').split(/[^a-z0-9]+/).filter(Boolean);
+    const store = words(read.store ?? '');
+    const listed = (r: string) => { const w = words(r); return w.length > 0 && store.some((_, i) => w.every((x, k) => store[i + k] === x)); };
+    if (!d.retailers.includes('any') && !d.retailers.some(listed)) return { ok: false, cents: 0, why: 'store' };
+    const day = read.date ? Date.parse(read.date) : NaN;
+    const from = Date.parse(claimedAt.slice(0, 10));
+    if (!Number.isFinite(day) || day < from || day > from + (CLAIM_DAYS + 1) * 86_400_000 || (d.endsAt && day > Date.parse(d.endsAt) + 86_400_000)) return { ok: false, cents: 0, why: 'date' };
     const line = read.lines.find((l) => l.gtin && normalizeGtin(l.gtin) && d.products.includes(normalizeGtin(l.gtin)!));
     if (!line) return { ok: false, cents: 0, why: 'product' };
-    return { ok: true, cents: line.cents ?? 0 };
+    if (!line.cents || line.cents <= 0) return { ok: false, cents: 0, why: 'price' };
+    return { ok: true, cents: line.cents };
   }
   private stepAt(d: OfferInput, used: number) {
     const steps = [...(d.steps ?? [])].sort((a, b) => a.upToClaims - b.upToClaims);
@@ -284,7 +306,7 @@ export class OffersService {
   }
   private async view(r: any, full: boolean) {
     const d = this.data(r);
-    const used = Number((await this.db.query<any>(`select count(*)::int as n from offer_claims where offer_id = $1 and status not in ('rejected','expired')`, [r.id])).rows[0].n);
+    const used = Number((await this.db.query<any>(`select count(*)::int as n from offer_claims where offer_id = $1 and status not in ('rejected','expired','void')`, [r.id])).rows[0].n);
     const step = this.stepAt(d, used);
     const t = step.reward;
     const $ = (c: number) => (c >= 100 ? `$${(c / 100).toFixed(2)}` : `${c}¢`);

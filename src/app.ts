@@ -297,6 +297,7 @@ export async function createApp(opts: AppOptions) {
     opts.studioDesigner ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeStudioDesigner({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL, fallback: rulesDesigner }) : rulesDesigner),
     opts.clock);
   const offers = new OffersService(db, platform, wallet, assets, opts.receiptReader ?? readerFromEnv(process.env), opts.productLookup === null ? null : opts.productLookup ?? new OpenFoodFactsLookup(), opts.clock);
+  offers.hasAccount = async (companyId, person) => person.startsWith('user:') || (await data.linkedSubjects(companyId, person)).some((x) => x.startsWith('user:'));
   // Photos of real products for the games' cards: the company's own, Wikipedia, Open Food Facts, then photo libraries.
   games.imageSources = opts.productImages ?? [new WikipediaImages(), new OpenFoodFactsImages(), new StockImages(studio.providers.libraries)];
   // Studio photos inside labels: printed labels carry them at print size (so a machine prints them whole, even
