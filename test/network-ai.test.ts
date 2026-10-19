@@ -161,7 +161,7 @@ describe('an AI can decline to work on an ad, and its reason reaches review', ()
     await db.query(`update ad_drafts set campaign_id = 'cmp-joes' where id = $1`, [(d as any).id]);
     const list = await app.ads.objections('freewater', 'cmp-joes');
     expect(list).toHaveLength(1);
-    expect(list[0].reason).toMatch(/health claim/);
+    expect(list[0]!.reason).toMatch(/health claim/);
   });
 });
 
