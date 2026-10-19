@@ -467,6 +467,9 @@ export class DataService {
     await run('places', `delete from person_places where company_id = $1 and subject = any($2)`, [companyId, keys]);
     await run('locations shared', `delete from precise_locations where company_id = $1 and subject = any($2)`, [companyId, keys]);
     await run('about you', `delete from person_details where company_id = $1 and subject = any($2)`, [companyId, keys]);
+    await run('game answers', `delete from game_rounds where company_id = $1 and person = any($2)`, [companyId, keys]);
+    await run('feedback and questions', `delete from game_notes where company_id = $1 and person = any($2)`, [companyId, keys]);
+    await run('games joined', `delete from game_players where company_id = $1 and person = any($2)`, [companyId, keys]);
   }
 
   /** Delete what's older than each company keeps, for each kind. Run daily. */
@@ -493,6 +496,8 @@ export class DataService {
       await keepIn('activity', 'actor_id', 'at', 'activity', `and actor_type in ('viewer','consumer','public')`);
       await keepIn('choices', 'person', 'at', 'choices');
       await keepIn('choice_sets', 'person', 'created_at', 'choices');
+      await keepIn('game_rounds', 'person', 'served_at', 'choices');
+      await keepIn('game_notes', 'person', 'at', 'designContent');
       await del(`delete from interactions where company_id = $1 and at < $2`, p.rules.interactions.keepDays);
       await del(`delete from interactions where company_id = $1 and at < $2 and viewer_key not in ${lax}`, short('interactions'));
       await del(`delete from activity where company_id = $1 and at < $2`, p.rules.activity.keepDays);
@@ -501,6 +506,10 @@ export class DataService {
       await del(`delete from choices where company_id = $1 and at < $2 and person not in ${lax}`, short('choices'));
       await del(`delete from choice_sets where company_id = $1 and created_at < $2`, p.rules.choices.keepDays);
       await del(`delete from choice_sets where company_id = $1 and created_at < $2 and person not in ${lax}`, short('choices'));
+      await del(`delete from game_rounds where company_id = $1 and served_at < $2`, p.rules.choices.keepDays);
+      await del(`delete from game_rounds where company_id = $1 and served_at < $2 and person not in ${lax}`, short('choices'));
+      await del(`delete from game_notes where company_id = $1 and at < $2`, p.rules.designContent.keepDays);
+      await del(`delete from game_notes where company_id = $1 and at < $2 and person not in ${lax}`, short('designContent'));
       // IP addresses and device details: the strictest keep for everyone (they're worth little after a month).
       await this.db.query(`update activity set ip = null where company_id = $1 and at < $2 and ip is not null`, [c.id, before(short('ipAddress'))]);
       await this.db.query(`update activity set device = null where company_id = $1 and at < $2 and device is not null`, [c.id, before(short('device'))]);

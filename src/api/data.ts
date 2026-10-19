@@ -1,13 +1,11 @@
 import type { App } from '../app';
 import type { ApiKey } from '../db/store';
-import { categoryInfo, dataCategories, preset, regionInfo } from '../modules/data/policy';
+import { categoryInfo, dataCategories, dataUse, preset, regionInfo } from '../modules/data/policy';
 import { DataService } from '../modules/data/service';
 import { tierNames } from '../modules/numberline/tiers';
 import type { Placement } from '../modules/numberline/placement';
 import { ApiError, obj, S, type RouteDef } from './http';
 
-/** What data is for, said the same way everywhere it's asked for. */
-export const dataUse = 'We use this to train our AI and to plan future free and negatively priced products. We never sell your personal data. We may share findings that can’t be traced to anyone.';
 
 /** The data switchboard, people's own data choices and rights, one person across roles, and the number line. */
 export function dataRoutes(app: App, route: (r: RouteDef) => void) {

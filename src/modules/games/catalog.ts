@@ -1,0 +1,105 @@
+import type { StudioSpec } from '../studio/layout';
+
+// What the games ask about. Real brands and products appear as plain cards (names only, no logos or packaging), so a
+// pick says what people really prefer. Each company can replace or extend this list; it's data, not code.
+
+export interface CatalogItem { id: string; name: string; brand?: string; kind: 'product' | 'service' | 'genre' | 'place' | 'platform' }
+export interface Category {
+  id: string;
+  name: string;
+  /** The question on the screen. */
+  ask: string;
+  items: CatalogItem[];
+  /** Prices make sense here (a cereal has a price; a music genre doesn't). */
+  priced: boolean;
+  /** Usual price in cents, for the price setups (a rough shelf price). */
+  usualCents?: number;
+}
+
+const items = (kind: CatalogItem['kind'], list: string[]): CatalogItem[] =>
+  list.map((s) => { const [brand, name] = s.includes('|') ? s.split('|') as [string, string] : [undefined, s]; return { id: slug(`${brand ?? ''} ${name}`), name, ...(brand ? { brand } : {}), kind }; });
+const slug = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50);
+
+export const defaultCatalog: Category[] = [
+  { id: 'cereal', name: 'Cereal', ask: 'Which cereal would you take?', priced: true, usualCents: 499, items: items('product', ['Kellogg’s|Frosted Flakes', 'General Mills|Cheerios', 'Post|Honey Bunches of Oats', 'General Mills|Cinnamon Toast Crunch', 'Kellogg’s|Froot Loops', 'Quaker|Oatmeal Squares', 'Kashi|GO Original', 'Nature’s Path|Flax Plus']) },
+  { id: 'snacks', name: 'Snacks', ask: 'Which snack would you take?', priced: true, usualCents: 399, items: items('product', ['Lay’s|Classic Chips', 'Doritos|Nacho Cheese', 'Cheetos|Crunchy', 'Pringles|Original', 'Goldfish|Cheddar', 'SkinnyPop|Popcorn', 'KIND|Dark Chocolate Nuts', 'RXBAR|Chocolate Sea Salt']) },
+  { id: 'candy', name: 'Candy', ask: 'Which would you grab?', priced: true, usualCents: 229, items: items('product', ['Snickers|King Size', 'Reese’s|Peanut Butter Cups', 'M&M’s|Peanut', 'Kit Kat|Bar', 'Skittles|Original', 'Twix|Bar', 'Hershey’s|Milk Chocolate', 'Sour Patch Kids|Bag']) },
+  { id: 'drinks', name: 'Drinks', ask: 'Which drink would you take?', priced: true, usualCents: 249, items: items('product', ['Coca-Cola|Classic', 'Pepsi|Cola', 'Dr Pepper|Original', 'Sprite|Lemon-Lime', 'Gatorade|Cool Blue', 'Red Bull|Energy Drink', 'LaCroix|Pamplemousse', 'Liquid Death|Mountain Water']) },
+  { id: 'coffee', name: 'Coffee', ask: 'Where would you get coffee?', priced: true, usualCents: 525, items: items('service', ['Starbucks|Latte', 'Dunkin’|Iced Coffee', 'McDonald’s|McCafé Latte', 'Peet’s|Cold Brew', 'Dutch Bros|Golden Eagle', 'Tim Hortons|Double-Double']) },
+  { id: 'fast_food', name: 'Fast food', ask: 'Which would you pick for lunch?', priced: true, usualCents: 699, items: items('product', ['McDonald’s|Cheeseburger', 'Chick-fil-A|Chicken Sandwich', 'Taco Bell|Crunchwrap Supreme', 'Wendy’s|Dave’s Single', 'Chipotle|Burrito Bowl', 'Subway|Turkey Footlong', 'Burger King|Whopper', 'Panda Express|Orange Chicken']) },
+  { id: 'fruit', name: 'Fruit and fresh food', ask: 'Which would you take?', priced: true, usualCents: 99, items: items('product', ['Banana', 'Apple', 'Orange', 'Grapes (a bag)', 'Baby carrots', 'Avocado', 'Strawberries (a box)', 'Blueberries (a box)']) },
+  { id: 'dairy', name: 'Dairy and alternatives', ask: 'Which would you take?', priced: true, usualCents: 449, items: items('product', ['Chobani|Greek Yogurt', 'Oatly|Oat Milk', 'Fairlife|Milk', 'Silk|Almond Milk', 'Tillamook|Cheddar', 'Babybel|Mini Cheese']) },
+  { id: 'frozen', name: 'Frozen food', ask: 'Which would you take?', priced: true, usualCents: 599, items: items('product', ['DiGiorno|Pepperoni Pizza', 'Amy’s|Bean Burrito', 'Lean Cuisine|Chicken Alfredo', 'Ben & Jerry’s|Half Baked', 'Häagen-Dazs|Vanilla', 'Eggo|Waffles']) },
+  { id: 'grocery', name: 'Where you shop', ask: 'Where would you shop for groceries?', priced: false, items: items('service', ['Walmart', 'Costco', 'Kroger', 'Target', 'Whole Foods', 'Trader Joe’s', 'Aldi', 'H-E-B']) },
+  { id: 'cars', name: 'Cars', ask: 'Which would you drive?', priced: true, usualCents: 3_500_000, items: items('product', ['Toyota|RAV4', 'Honda|Civic', 'Tesla|Model Y', 'Ford|F-150', 'Chevrolet|Equinox', 'Hyundai|Ioniq 5', 'Subaru|Outback', 'BMW|3 Series']) },
+  { id: 'phones', name: 'Phones', ask: 'Which phone would you take?', priced: true, usualCents: 79_900, items: items('product', ['Apple|iPhone', 'Samsung|Galaxy S', 'Google|Pixel', 'Motorola|Moto G', 'OnePlus|Nord']) },
+  { id: 'streaming', name: 'Streaming', ask: 'Which would you keep?', priced: true, usualCents: 1_599, items: items('service', ['Netflix', 'YouTube Premium', 'Disney+', 'Max', 'Prime Video', 'Hulu', 'Apple TV+', 'Peacock']) },
+  { id: 'music', name: 'Music', ask: 'What would you put on?', priced: false, items: items('genre', ['Hip-hop', 'Pop', 'Country', 'Rock', 'R&B', 'Latin', 'EDM', 'Jazz', 'Classical', 'K-pop']) },
+  { id: 'music_apps', name: 'Music apps', ask: 'Which would you use?', priced: true, usualCents: 1_199, items: items('service', ['Spotify', 'Apple Music', 'YouTube Music', 'Amazon Music', 'Pandora', 'SoundCloud']) },
+  { id: 'movies', name: 'Movies', ask: 'What would you watch tonight?', priced: false, items: items('genre', ['Comedy', 'Action', 'Horror', 'Romance', 'Documentary', 'Sci-fi', 'Animated', 'Drama']) },
+  { id: 'social', name: 'Social apps', ask: 'Which would you open first?', priced: false, items: items('platform', ['Instagram', 'TikTok', 'YouTube', 'Snapchat', 'X', 'Facebook', 'Reddit', 'Pinterest', 'Threads', 'Discord']) },
+  { id: 'creators', name: 'Creators', ask: 'Which kind of creator do you watch most?', priced: false, items: items('genre', ['Cooking', 'Gaming', 'Fitness', 'Comedy', 'Beauty', 'Tech reviews', 'Travel', 'Personal finance', 'DIY and home', 'Sports']) },
+  { id: 'travel', name: 'Travel', ask: 'Where would you go?', priced: true, usualCents: 120_000, items: items('place', ['Beach town', 'Big city', 'National park', 'Ski trip', 'Theme park', 'Road trip', 'Cruise', 'Abroad']) },
+  { id: 'hotels', name: 'Places to stay', ask: 'Where would you stay?', priced: true, usualCents: 18_900, items: items('service', ['Marriott', 'Hilton', 'Airbnb', 'Hyatt', 'Holiday Inn', 'Vrbo']) },
+  { id: 'rides', name: 'Getting around', ask: 'How would you get there?', priced: true, usualCents: 1_800, items: items('service', ['Uber', 'Lyft', 'Bus or train', 'Bike or scooter', 'Drive myself', 'Walk']) },
+  { id: 'delivery', name: 'Food delivery', ask: 'Which would you order with?', priced: true, usualCents: 2_500, items: items('service', ['DoorDash', 'Uber Eats', 'Grubhub', 'Instacart', 'Pick it up myself']) },
+  { id: 'fitness', name: 'Staying active', ask: 'Which would you do?', priced: true, usualCents: 4_000, items: items('service', ['Planet Fitness', 'Peloton', 'Orangetheory', 'Running outside', 'Yoga class', 'Home workout app']) },
+  { id: 'sports', name: 'Sports', ask: 'What would you watch?', priced: false, items: items('genre', ['NFL', 'NBA', 'Soccer', 'MLB', 'College football', 'UFC', 'F1', 'WNBA', 'NHL', 'Tennis']) },
+];
+
+/**
+ * How a choice is offered: the price frames. The same product can be for sale, free (paid for by ads or a sponsor),
+ * cheaper than usual, or negatively priced (you'd be paid, or a cause would be).
+ */
+export type Frame =
+  | { kind: 'for_sale'; cents: number }
+  | { kind: 'discounted'; cents: number; usualCents: number }
+  | { kind: 'free_ads' }
+  | { kind: 'free_sponsor' }
+  | { kind: 'negative'; youGetCents?: number; causeCents?: number };
+
+export function frameText(f: Frame) {
+  const $ = (c: number) => (c >= 100_000 ? `$${Math.round(c / 100).toLocaleString('en-US')}` : c >= 100 ? `$${(c / 100).toFixed(2)}` : `${c}¢`);
+  switch (f.kind) {
+    case 'for_sale': return $(f.cents);
+    case 'discounted': return `${$(f.cents)} (usually ${$(f.usualCents)})`;
+    case 'free_ads': return 'Free (paid for by ads)';
+    case 'free_sponsor': return 'Free (a brand pays)';
+    case 'negative': return [f.youGetCents ? `Free, and you get ${$(f.youGetCents)}` : 'Free', f.causeCents ? `${$(f.causeCents)} goes to a cause` : ''].filter(Boolean).join(' · ');
+  }
+}
+
+/** Where a price setup sits on the number line. */
+export function frameNet(f: Frame): number {
+  switch (f.kind) {
+    case 'for_sale': return f.cents;
+    case 'discounted': return f.cents;
+    case 'free_ads': case 'free_sponsor': return 0;
+    case 'negative': return -((f.youGetCents ?? 0) + (f.causeCents ?? 0));
+  }
+}
+
+/**
+ * The tier a choice would sit in if it were real (Abundance Engineering, chapter 10), from how it was offered: paying
+ * while a free or negatively priced option was right there is brand commitment (5); the free one among free ones is
+ * revealed preference (3); negatively priced, values-weighted (4a when the operator picked the cause, 4b when the
+ * person gets the money); for sale against only priced options is constrained (1).
+ */
+export function structuralTier(chosen: Frame, others: Frame[]): '1' | '3' | '4a' | '4b' | '5' {
+  const net = frameNet(chosen);
+  if (net > 0) return others.some((o) => frameNet(o) <= 0) ? '5' : '1';
+  if (net < 0) return chosen.kind === 'negative' && chosen.youGetCents ? '4b' : '4a';
+  return '3';
+}
+
+/** Made-up brands for the "which ad works" rounds: they never run anywhere, so nobody is billed and nothing is real. */
+export const fictionalAds: { id: string; spec: StudioSpec }[] = [
+  { id: 'f-sundown', spec: { brand: 'Sundown Tacos', kicker: 'NEW ON 6TH STREET', headline: 'Two tacos. One dollar. Tonight.', sub: 'Show this at the counter after 9pm.', offer: '2 for $1', colors: { paper: '#1D1A2F', ink: '#FFF4E0', accent: '#FF7A3D' }, type: 'condensed', look: 'type', icon: 'taco' } },
+  { id: 'f-greenhouse', spec: { brand: 'Greenhouse Grocer', headline: 'Free bananas, every morning', sub: 'One per person, before 10am.', offer: 'Free', colors: { paper: '#F4F1E6', ink: '#1F3A2B', accent: '#F2C230' }, type: 'serif', look: 'band', icon: 'bag' } },
+  { id: 'f-voltline', spec: { brand: 'Voltline', kicker: 'CHARGING', headline: 'Your first charge is on us', sub: 'Any Voltline station in town.', offer: 'First charge free', colors: { paper: '#0E1B2C', ink: '#E8F4FF', accent: '#3DD6F5' }, type: 'grotesk', look: 'frame', icon: 'bolt' } },
+  { id: 'f-pawpals', spec: { brand: 'Paw Pals', headline: 'A free walk for your dog', sub: 'Book a walker near you.', offer: 'First walk free', colors: { paper: '#FFF6EC', ink: '#3A2416', accent: '#E85D75' }, type: 'serif', look: 'type', icon: 'paw' } },
+  { id: 'f-northbeat', spec: { brand: 'Northbeat Radio', kicker: 'LIVE THIS FRIDAY', headline: 'Free show at the park', sub: 'Gates at 6. Bring a blanket.', colors: { paper: '#12121A', ink: '#FFFFFF', accent: '#B388FF' }, type: 'condensed', look: 'band', icon: 'music' } },
+  { id: 'f-brightsmile', spec: { brand: 'Bright Smile Dental', headline: 'Cleanings for $0 with any plan', sub: 'Open Saturdays.', offer: '$0 cleaning', colors: { paper: '#EEF7FB', ink: '#0B2E40', accent: '#2BB3A3' }, type: 'grotesk', look: 'frame', icon: 'tooth' } },
+  { id: 'f-slice', spec: { brand: 'Corner Slice', headline: 'Buy a slice, we give one away', sub: 'Every slice you buy feeds someone nearby.', offer: '1 for 1', colors: { paper: '#FFF1E0', ink: '#2A1205', accent: '#D7262E' }, type: 'serif', look: 'type', icon: 'pizza' } },
+  { id: 'f-brewhaus', spec: { brand: 'Brewhaus', kicker: 'COFFEE', headline: 'Bring the bottle, get a free refill', sub: 'Any size, any day.', offer: 'Free refill', colors: { paper: '#2B1B12', ink: '#F7EBDD', accent: '#E3A857' }, type: 'grotesk', look: 'band', icon: 'coffee' } },
+];

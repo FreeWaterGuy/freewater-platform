@@ -1034,6 +1034,20 @@ create index wallet_lines_tx on wallet_lines(tx_id);
 create table wallet_balances (company_id text not null, asset text not null, account text not null, balance bigint not null, primary key (company_id, asset, account));
 `,
   },
+  {
+    id: '033_games',
+    sql: `
+-- Who said yes to playing (and the notice they were shown), each screen served and how it was answered, and what
+-- people wrote in the feedback and prompt boxes.
+create table game_players (company_id text not null, person text not null, joined_at timestamptz not null, left_at timestamptz, notice text not null, primary key (company_id, person));
+create table game_rounds (id text primary key, company_id text not null, person text not null, kind text not null, category text not null, realness text not null, items jsonb not null,
+  served_at timestamptz not null, answered_at timestamptz, pick text, why text, changes integer, response_ms integer, server_ms integer, tier text, flagged text, points integer);
+create index game_rounds_person on game_rounds(company_id, person, served_at);
+create index game_rounds_answered on game_rounds(company_id, served_at) where answered_at is not null;
+create table game_notes (id text primary key, company_id text not null, person text not null, kind text not null, text text not null, answer text, asset_id text, at timestamptz not null);
+create index game_notes_person on game_notes(company_id, person, kind);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {
