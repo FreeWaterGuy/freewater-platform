@@ -17,7 +17,7 @@ const count = async (sql: string, p: unknown[]) => Number((await db.query<any>(s
 
 beforeAll(async () => {
   db = await createPgliteClient();
-  app = await createApp({ db, seedDemo: true, seed: 9, clock: () => new Date(now) });
+  app = await createApp({ db, assumePlace: { country: 'US', state: 'AL' }, seedDemo: true, seed: 9, clock: () => new Date(now) });
   keys = app.demoKeys!;
   server = await buildServer(app);
 });

@@ -37,6 +37,11 @@
     for the photo library; and, when chosen, a photo-to-3D service for custom AR (until then, a product photo becomes a
     standing photo card in AR). Before real labels print with library photos, confirm their terms cover printing on
     packaging (a question for the lawyer below).
+10c. **Where visitors are** (so each person's own privacy law applies to them): MaxMind's free GeoLite2 City file
+    (sign up, download it weekly, set `GEOIP_DB` to its path), or a host that adds a country header (Cloudflare: set
+    `TRUST_GEO_HEADERS=1`). Without either, everyone gets the strictest (European) rules. The lawyer should confirm the
+    country rules in `src/modules/data/jurisdiction.ts`, the minimum ages, and the sanctioned-country list
+    (`SANCTIONED_COUNTRIES`, default Cuba, Iran, North Korea, Syria).
 11. **The label printer** for the machines, once it's chosen.
 12. **A GitHub token** for publishing each day's books fingerprint (optional, but it's what makes the books provable).
 

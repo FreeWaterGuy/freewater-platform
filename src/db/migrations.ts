@@ -1003,6 +1003,20 @@ create index studio_photos_owner on studio_photos(company_id, advertiser_id, cre
 create table video_seen (campaign_id text not null, viewer_key text not null, video_id text not null, at timestamptz not null, primary key (campaign_id, viewer_key));
 `,
   },
+  {
+    id: '031_person_places',
+    sql: `
+-- Where each person is (country and US state; the city only as the rules allow), so their own law applies to them.
+-- 'ip' is where their last request came from; 'declared' is what they told us in the app. The stricter of the two wins.
+create table person_places (company_id text not null, subject text not null, source text not null, country text not null, state text, city text, at timestamptz not null, primary key (company_id, subject, source));
+-- Exact positions a person chose to share (for nearby deals), kept only as long as the rules allow.
+create table precise_locations (id bigserial primary key, company_id text not null, subject text not null, lat double precision not null, lng double precision not null, accuracy_m integer, at timestamptz not null);
+create index precise_locations_subject on precise_locations(company_id, subject);
+-- Optional things a person tells us about themselves, and whether they're old enough for the games and rewards.
+-- Someone under the minimum age has nothing kept but that answer.
+create table person_details (company_id text not null, subject text not null, age_ok boolean, birth_year integer, zip text, household integer, language text, updated_at timestamptz not null, primary key (company_id, subject));
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

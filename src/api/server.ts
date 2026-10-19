@@ -141,7 +141,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     return { body: { unitId, slot: placement!.slotIndex, kind: 'ad', owner: placement!.advertiserName, campaignId: placement!.campaignId, experienceId: placement!.experienceId, isHouse: placement!.isHouse } };
   } });
 
-  route({ method: 'POST', url: '/v1/public/scans', scope: 'public', summary: 'Record a scan. Billed only if the experience loaded and it is not a repeat.', body: obj({ unitId: S.str, slot: S.int, viewerKey: S.str, experienceLoaded: S.bool, scanId: S.str, variant: { type: 'string', maxLength: 40 } }, ['unitId', 'slot', 'viewerKey', 'experienceLoaded']), handler: async (req) => {
+  route({ method: 'POST', url: '/v1/public/scans', scope: 'public', summary: 'Record a scan. Billed only if the experience loaded and it is not a repeat.', body: obj({ unitId: S.str, slot: S.int, viewerKey: S.str, experienceLoaded: S.bool, scanId: S.str, variant: { type: 'string', maxLength: 40 }, context: obj({ language: { type: 'string', maxLength: 35 }, screen: { type: 'string', maxLength: 20 }, timezone: { type: 'string', maxLength: 50 }, referrer: { type: 'string', maxLength: 500 } }) }, ['unitId', 'slot', 'viewerKey', 'experienceLoaded']), handler: async (req) => {
     const b = req.body as any;
     placementFor(null, b.unitId, b.slot);
     const before = platform.ledger.entries.length;
@@ -149,6 +149,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const variant = b.variant && pl && platform.campaigns.get(pl.campaignId)?.variants?.some((v) => v.id === b.variant) ? b.variant : undefined;
     const e = platform.scan(b.unitId, b.slot, b.viewerKey, b.experienceLoaded, b.scanId ?? newId('scan'), variant);
     if (b.experienceLoaded) await experiences.rememberViewer({ kind: 'slot', unitId: b.unitId, slot: b.slot }, b.viewerKey);
+    if (b.context && /^[A-Za-z0-9_-]{8,64}$/.test(b.viewerKey)) await app.data.scanContext(experiences.ownerOf({ kind: 'slot', unitId: b.unitId, slot: b.slot }).companyId, b.viewerKey, { ...b.context, target: `${b.unitId}/${b.slot}` }, req).catch(() => {});
     return { status: 202, body: { recorded: !!e, billed: platform.ledger.entries.length > before } };
   } });
 
@@ -171,7 +172,14 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const companyId = experiences.ownerOf(target).companyId;
     const game = custom ? null : app.lottery.settings(companyId);
     const environment = target.kind === 'slot' && !custom ? await app.environment.forScanPage(target.unitId, target.slot, viewer).catch(() => null) : null;
-    return { body: { ...opened, companyId, lottery: game ? app.lottery.publicInfo(game) : null, privacy: { askFirst: app.data.askFirst(companyId) }, ...(environment ? { environment } : {}) } };
+    // The person's own law applies: where they are decides what's asked first, the youngest age that may play, and
+    // whether rewards are offered at all.
+    const place = app.data.placeOf(req);
+    await app.data.notePlace(companyId, viewer, place).catch(() => {});
+    const rules = await app.data.rulesFor(companyId, [viewer], place);
+    const playable = rules.rewards && (await app.data.ageOk(companyId, [viewer])) !== false;
+    const privacy = { askFirst: rules.askFirst, region: rules.region, minimumAge: rules.minimumAge, rewards: rules.rewards, doNotSell: await app.data.doesNotSell(companyId, [viewer]), why: target.kind === 'slot' ? `/v1/public/why/${encodeURIComponent(target.unitId)}/${target.slot}` : null };
+    return { body: { ...opened, companyId, lottery: game && playable ? app.lottery.publicInfo(game) : null, privacy, ...(environment ? { environment } : {}) } };
   };
   route({ method: 'GET', url: '/v1/public/experience/:unitId/:slot', scope: 'public', summary: 'The page a bottle slot opens, as blocks. Opening it is free; the page then reports the scan once it has shown.', handler: async (req) => {
     const { unitId, slot } = req.params as any;
@@ -673,7 +681,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const companyId = key?.companyId ?? companyOfPublic(body);
     if (!companyId || !platform.companies.has(companyId)) return;
     const masked = body ? Object.fromEntries(Object.entries(body).map(([k, v]) => [k, /^(to|email|phone|address|code|password|token|dataBase64)$/i.test(k) ? (k === 'to' || k === 'email' || k === 'phone' ? mask(v) : '[kept out]') : v])) : undefined;
-    app.data.activity(companyId, actorOf(key, masked), `${r.method} ${r.url}`, { target: JSON.stringify(req.params ?? {}).slice(0, 200), detail: { status, ...(masked ? { body: masked } : {}) }, ip: req.ip, device: String(req.headers['user-agent'] ?? ''), gpc: String(req.headers['sec-gpc'] ?? '') === '1' }).catch(() => {});
+    app.data.activity(companyId, actorOf(key, masked), `${r.method} ${r.url}`, { target: JSON.stringify(req.params ?? {}).slice(0, 200), detail: { status, ...(masked ? { body: masked } : {}) }, ip: req.ip, headers: req.headers, device: String(req.headers['user-agent'] ?? ''), gpc: String(req.headers['sec-gpc'] ?? '') === '1' }).catch(() => {});
   };
 
   for (const r of routes) {

@@ -11,7 +11,7 @@ describe('the data environment', () => {
   let db: SqlClient, app: App, server: FastifyInstance, key: string;
   beforeAll(async () => {
     db = await createPgliteClient();
-    app = await createApp({ db, seedDemo: true, seed: 5 });
+    app = await createApp({ db, assumePlace: { country: 'US', state: 'AL' }, seedDemo: true, seed: 5 });
     key = app.demoKeys!['freewater-admin']!;
     server = await buildServer(app);
   });

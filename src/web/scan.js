@@ -106,7 +106,7 @@
     if (record) requestAnimationFrame(() => setTimeout(() => {
       const loaded = !doc.fallback;
       const rec = target.kind === 'slot'
-        ? api('POST', '/v1/public/scans', { unitId: target.unitId, slot: target.slot, viewerKey, experienceLoaded: loaded, ...(opened.variant ? { variant: opened.variant.id } : {}) })
+        ? api('POST', '/v1/public/scans', { unitId: target.unitId, slot: target.slot, viewerKey, experienceLoaded: loaded, ...(opened.variant ? { variant: opened.variant.id } : {}), ...(store.get('fw_no_tracking') === '1' ? {} : { context: visitContext() }) })
         : api('POST', '/v1/public/box-scans', { packId: target.packId, face: target.face, viewerKey, experienceLoaded: loaded });
       rec.then(() => { if (loaded) play('scan', ctx); }).catch(() => {});
     }, 0));
@@ -450,8 +450,9 @@
       bar.remove();
     };
     const bar = h('div', { class: 'consent', role: 'region', 'aria-label': 'Your data' },
-      h('p', { text: `May we keep anonymous notes on how you use this page (${ask.map((a) => a.label.toLowerCase()).join(', ')}) to make it better? Nothing is sold, and you can change your mind any time.` }),
-      h('div', { class: 'row' }, h('button', { type: 'button', class: 'btn', onclick: () => answer(true) }, 'Yes, that’s fine'), h('button', { type: 'button', class: 'btn secondary', onclick: () => answer(false) }, 'No thanks')));
+      h('p', { text: `May we keep ${ask.map((a) => a.label.toLowerCase()).join(', ')} from this visit? We use it to train our AI and to plan future free and negatively priced products. We never sell your personal data. Everything on this page works either way, and you can change your mind any time.` }),
+      // Both answers look the same: saying no is as easy as saying yes.
+      h('div', { class: 'row' }, h('button', { type: 'button', class: 'btn', onclick: () => answer(true) }, 'Yes, that’s fine'), h('button', { type: 'button', class: 'btn', onclick: () => answer(false) }, 'No thanks')));
     return bar;
   }
 
@@ -497,7 +498,56 @@
   }
 
   // Anyone can erase what their phone did here, without an account. A second tap confirms (no pop-ups).
+  /** The phone's language, screen size and time zone, and the site that sent it here (kept only as the rules allow). */
+  function visitContext() {
+    let timezone; try { timezone = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { timezone = undefined; }
+    let referrer; try { referrer = document.referrer ? new URL(document.referrer).origin : undefined; } catch { referrer = undefined; }
+    return { language: (navigator.language || '').slice(0, 35), screen: `${screen.width}x${screen.height}`.slice(0, 20), ...(timezone ? { timezone } : {}), ...(referrer ? { referrer } : {}) };
+  }
+
+  /** "Why am I seeing this?": what decided this ad, in plain words. */
+  function whyBlock(opened) {
+    const box = h('details', { class: 'why' }, h('summary', {}, 'Why am I seeing this?'));
+    let loaded = false;
+    box.addEventListener('toggle', () => {
+      if (!box.open || loaded || !opened.privacy?.why) return;
+      loaded = true;
+      api('GET', `${opened.privacy.why}?viewer=${encodeURIComponent(viewerKey)}`).then((r) => {
+        box.append(h('ul', {}, ...r.reasons.map((x) => h('li', {}, x))), h('p', { class: 'muted' }, `Never used: ${r.neverUsed.join('; ')}.`), h('p', { class: 'muted' }, r.use));
+      }).catch(() => box.append(h('p', { class: 'muted' }, 'Couldn’t load that just now.')));
+    });
+    return box;
+  }
+
+  /** Deals and machines near the person, only if they ask (the phone then asks them to allow it). Nothing is earned for it. */
+  function nearbyBlock(opened) {
+    if (!('geolocation' in navigator)) return null;
+    const out = h('div', { class: 'nearby' });
+    const btn = h('button', { type: 'button', class: 'linkish' }, 'Show free water near me');
+    btn.addEventListener('click', () => {
+      btn.disabled = true; btn.textContent = 'Finding you…';
+      navigator.geolocation.getCurrentPosition((pos) => {
+        api('POST', `/v1/public/data/${encodeURIComponent(opened.companyId)}/location`, { viewerKey, lat: pos.coords.latitude, lng: pos.coords.longitude, accuracyM: pos.coords.accuracy })
+          .then((r) => { btn.remove(); out.append(r.nearby.length ? h('ul', {}, ...r.nearby.map((n) => h('li', {}, `${n.name}, ${n.city} · ${n.km} km`))) : h('p', { class: 'muted' }, 'No machines near you yet.')); })
+          .catch(() => { btn.disabled = false; btn.textContent = 'Couldn’t look just now. Try again'; });
+      }, () => { btn.disabled = false; btn.textContent = 'Show free water near me'; }, { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 });
+    });
+    out.append(btn);
+    return out;
+  }
+
   function yourData(opened) {
+    const dns = h('label', { class: 'dns' }, h('input', { type: 'checkbox' }), ' Do not sell or share my personal information');
+    const box = dns.querySelector('input');
+    box.checked = !!opened.privacy?.doNotSell;
+    box.addEventListener('change', () => {
+      api('POST', `/v1/public/data/${encodeURIComponent(opened.companyId)}/do-not-sell`, { viewerKey, on: box.checked }).catch(() => { box.checked = !box.checked; });
+    });
+    const near = nearbyBlock(opened);
+    return h('div', { class: 'your-data-all' }, whyBlock(opened), ...(near ? [near] : []), eraseData(opened), h('p', { class: 'your-data' }, dns));
+  }
+
+  function eraseData(opened) {
     let armed = false;
     const btn = h('button', { type: 'button', class: 'linkish' }, 'Erase what this phone did here');
     btn.addEventListener('click', () => {

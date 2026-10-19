@@ -141,7 +141,14 @@ export class NumberLineService {
 
   // ---------- choices ----------
 
-  async record(companyId: string, person: string, kind: string, chosen: { subject: string; placed: Placed }, facts: Omit<ChoiceFacts, 'chosen' | 'alternatives' | 'stance'> & { alternatives: { subject: string; placed: Placed }[]; environment?: Record<string, unknown>; unitId?: string }, ref: string) {
+  /**
+   * May this person's choices be kept as theirs? (Their data choices and their own law.) When not, the choice is still
+   * counted, with no one attached. Set by the app.
+   */
+  keepsChoicesOf?: (companyId: string, person: string) => Promise<boolean>;
+
+  async record(companyId: string, rawPerson: string, kind: string, chosen: { subject: string; placed: Placed }, facts: Omit<ChoiceFacts, 'chosen' | 'alternatives' | 'stance'> & { alternatives: { subject: string; placed: Placed }[]; environment?: Record<string, unknown>; unitId?: string }, ref: string) {
+    const person = /^(bottle|cause|anonymous)/.test(rawPerson) || !this.keepsChoicesOf || (await this.keepsChoicesOf(companyId, rawPerson).catch(() => false)) ? rawPerson : 'anonymous';
     const stance = await this.stanceOf(person);
     const environment = facts.environment ?? (await this.environmentOf(companyId, person, chosen.subject, facts.unitId).catch(() => undefined));
     const c = classify({ ...facts, chosen: { subject: chosen.subject, placement: chosen.placed.placement }, alternatives: facts.alternatives.map((a) => ({ subject: a.subject, placement: a.placed.placement })), ...(stance ? { stance } : {}) });

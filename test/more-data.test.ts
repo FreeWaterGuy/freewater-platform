@@ -48,7 +48,7 @@ async function bottleWith(campaignId: string) {
 
 beforeAll(async () => {
   db = await createPgliteClient();
-  app = await createApp({ db, seedDemo: true, seed: 31, clock, footage });
+  app = await createApp({ db, assumePlace: { country: 'US', state: 'AL' }, seedDemo: true, seed: 31, clock, footage });
   keys = app.demoKeys!;
   server = await buildServer(app);
   app.videos.random = () => 0.9;
