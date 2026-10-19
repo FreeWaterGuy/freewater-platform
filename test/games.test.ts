@@ -22,7 +22,8 @@ async function play(v: string, wait = 1500) {
   const r = (await call('POST', `${G}/next`, { viewerKey: v })).body;
   now += wait;
   const pick = r.kind === 'check' ? (await db.query<any>(`select items from game_rounds where id = $1`, [r.id])).rows[0].items.find((i: any) => i.correct).key : r.items[0].key;
-  return { round: r, answer: (await call('POST', `${G}/answer`, { viewerKey: v, round: r.id, pick, changes: 1, responseMs: wait })).body };
+  const tap = r.kind === 'tap' ? { x: r.items[0].target.x, y: r.items[0].target.y, tMs: 600 } : undefined;
+  return { round: r, answer: (await call('POST', `${G}/answer`, { viewerKey: v, round: r.id, pick, changes: 1, responseMs: wait, ...(tap ? { tap } : {}) })).body };
 }
 
 beforeAll(async () => {
@@ -208,6 +209,52 @@ describe('playing', () => {
     const v = 'viewer-game-10';
     await ready(v);
     for (let i = 0; i < 10; i++) expect((await call('POST', `${G}/next`, { viewerKey: v })).status).toBe(200), now += 1500, await play(v);
+    fw.games = undefined;
+  });
+
+  it('tap the QR: a tap on the code while it shows counts; a miss or a too-quick tap doesn’t', async () => {
+    const v = 'viewer-game-tap';
+    await ready(v);
+    const results: boolean[] = [];
+    for (let i = 0; i < 16 && results.length < 2; i++) {
+      const r = (await call('POST', `${G}/next`, { viewerKey: v })).body;
+      now += 2500;
+      if (r.kind !== 'tap') { await call('POST', `${G}/answer`, { viewerKey: v, round: r.id, pick: r.items[0].key, ...(r.kind === 'check' ? { pick: (await db.query<any>(`select items from game_rounds where id = $1`, [r.id])).rows[0].items.find((x: any) => x.correct).key } : {}) }); continue; }
+      const t = r.items[0].target;
+      const tap = results.length === 0 ? { x: t.x, y: t.y, tMs: 600 } : { x: t.x + 0.4, y: t.y, tMs: 600 };
+      const a = (await call('POST', `${G}/answer`, { viewerKey: v, round: r.id, pick: 'k0', tap })).body;
+      results.push(a.hit);
+      if (a.hit) expect(a.points).toBeGreaterThan(0); else expect(a.points).toBe(0);
+    }
+    expect(results).toEqual([true, false]);
+  });
+
+  it('3D rounds keep how long things were turned; videos can come with feedback', async () => {
+    const v = 'viewer-game-3d';
+    await ready(v);
+    let seen = false;
+    for (let i = 0; i < 24 && !seen; i++) {
+      const { round } = await play(v);
+      if (round.kind === 'ar') { seen = true; expect(round.items[0].model).toMatch(/\.glb$/); }
+    }
+    expect(seen).toBe(true);
+    const mp4 = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypmp42'), Buffer.alloc(64)]);
+    const r = await server.inject({ method: 'POST', url: `${G}/feedback/video?viewer=${v}&text=${encodeURIComponent('Here is a quick video of the machine at my gym.')}`, payload: mp4, headers: { 'content-type': 'video/mp4' } });
+    expect(r.statusCode).toBe(201);
+    expect(r.json().points).toBeGreaterThan(0);
+  });
+
+  it('a pick that may come true: the team makes the winner come true, and the people who picked it are told', async () => {
+    const fw = app.platform.companies.get('freewater')!;
+    fw.games = { mayComeTrue: ['candy'], catalog: [{ id: 'candy', name: 'Candy', ask: 'Pick', priced: false, items: [{ id: 'a', name: 'A', kind: 'product' }, { id: 'b', name: 'B', kind: 'product' }] }] };
+    for (let i = 0; i < 24; i++) { const v = `viewer-true-${i}`; await ready(v); await play(v); }
+    const w = (await call('GET', '/v1/games/winners?category=candy', undefined, keys['freewater-admin'])).body;
+    expect(w[0].shown).toBeGreaterThanOrEqual(20);
+    const ct = await call('POST', '/v1/games/come-true', { category: 'candy' }, keys['freewater-admin']);
+    expect(ct.status).toBe(201);
+    const picker = (await db.query<any>(`select person from game_rounds where pick_item = $1 and category = 'candy' limit 1`, [w[0].id])).rows[0].person;
+    expect((await call('GET', `${G}/status?viewer=${picker}`)).body.cameTrue[0].item).toBe(w[0].label);
+    expect((await call('POST', '/v1/games/come-true', { category: 'snacks' }, keys['freewater-admin'])).status).toBe(409);
     fw.games = undefined;
   });
 

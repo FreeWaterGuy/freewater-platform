@@ -83,7 +83,9 @@ export class LaunchService {
           pick = items.reduce((best, x) => (score(x) > score(best) ? x : best), items[0]);
           if (pick.brand && r() < 0.3) taste.brands.add(pick.brand);
         }
-        const a = await this.games.answer(companyId, key, screen.id, { pick: pick.key, changes: r() < 0.15 ? 1 : 0, responseMs: Math.round(think), ...(screen.kind === 'ad' && r() < 0.3 ? { why: 'The colors and the free offer caught my eye.' } : {}) }).catch(() => null);
+        const t = screen.kind === 'tap' ? items[0].target : null;
+        const tap = t ? { x: t.x + (r() - 0.5) * (taste.careless ? 0.4 : 0.08), y: t.y + (r() - 0.5) * (taste.careless ? 0.4 : 0.08), tMs: 350 + r() * 900 } : undefined;
+        const a = await this.games.answer(companyId, key, screen.id, { pick: pick.key, changes: r() < 0.15 ? 1 : 0, responseMs: Math.round(think), ...(tap ? { tap } : {}), ...(screen.kind === 'ar' ? { spinMs: Math.round(r() * 8000) } : {}), ...(screen.kind === 'ad' && r() < 0.3 ? { why: 'The colors and the free offer caught my eye.' } : {}) }).catch(() => null);
         if (a) { answered++; points += a.points; }
       }
       if (units.length && r() < 0.7) {

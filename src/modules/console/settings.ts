@@ -118,6 +118,9 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
     if (g.enabled !== undefined && typeof g.enabled !== 'boolean') return 'The games are on or off.';
     if (g.checkEvery !== undefined && !isInt(g.checkEvery, 3, 30)) return 'A quick check comes every 3 to 30 screens.';
     if (g.adRoundEvery !== undefined && !isInt(g.adRoundEvery, 2, 50)) return 'An ad round comes every 2 to 50 screens.';
+    if (g.tapEvery !== undefined && !isInt(g.tapEvery, 2, 50)) return 'A quick-tap round comes every 2 to 50 screens.';
+    if (g.arEvery !== undefined && !isInt(g.arEvery, 2, 50)) return 'A 3D round comes every 2 to 50 screens.';
+    if (g.mayComeTrue !== undefined && (!Array.isArray(g.mayComeTrue) || g.mayComeTrue.some((x: unknown) => typeof x !== 'string'))) return 'Picks that may come true are a list of categories.';
     if (g.minAnswerMs !== undefined && !isInt(g.minAnswerMs, 400, 5000)) return 'The quickest counted answer is 0.4 to 5 seconds.';
     if (g.catalog !== undefined && (!Array.isArray(g.catalog) || g.catalog.length > 100 || g.catalog.some((k: any) => !k || typeof k.id !== 'string' || typeof k.name !== 'string' || typeof k.ask !== 'string' || !Array.isArray(k.items) || k.items.length > 50 || k.items.some((i: any) => !i || typeof i.id !== 'string' || typeof i.name !== 'string')))) return 'Each game category has an id, a name, a question and up to 50 items with ids and names.';
   }

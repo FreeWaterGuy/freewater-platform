@@ -46,6 +46,7 @@
     let st;
     try { st = await api('GET', `${base}/status?viewer=${encodeURIComponent(viewerKey)}`); } catch { return show(h('p', { class: 'msg', text: 'Couldn’t load the game. Try again in a moment.' })); }
     balance = st.points.balance; pointsName = st.points.name; perRound = st.points.perRound; showPoints();
+    if (st.cameTrue?.length && st.canPlay) { toast(`Your pick came true: ${st.cameTrue[0].item}! Look in your wallet.`); }
     if (st.canPlay) return next();
     const notice = h('details', { class: 'notice' }, h('summary', { text: 'What you give and what you get' }), h('p', { text: st.notice }), h('p', { text: st.use }));
     if (st.needs === 'not_available_here' || st.needs === 'off') return show(h('h1', { text: 'Play for points' }), h('p', { class: 'lead', text: 'The games aren’t available where you are. Everything else on your bottle still works.' }));
@@ -74,6 +75,8 @@
   async function next() {
     let r;
     try { r = await api('POST', `${base}/next`, { viewerKey }); } catch (e) { if (e.status === 403) return start(); return show(h('p', { class: 'msg', text: e.message })); }
+    if (r.kind === 'tap') return tapRound(r);
+    if (r.kind === 'ar') return arRound(r);
     const shownAt = performance.now();
     let picked = null, changes = 0;
     const chip = h('span', { class: `chip ${r.realness.kind === 'real' ? 'real' : r.realness.kind === 'may_come_true' ? 'maybe' : ''}`, text: r.realness.text });
@@ -126,6 +129,55 @@
   }
   function streakBar() { renderStreak(); return streakEl; }
 
+  // Tap the QR: the label shows, and its code pops up somewhere for a moment. Tap it before it's gone.
+  function tapRound(r) {
+    const it = r.items[0], t = it.target;
+    const stage = h('div', { class: 'tap-stage', role: 'button', 'aria-label': 'Tap the code when it appears' }, h('img', { alt: `A bottle label for ${it.label}`, src: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(it.svg)}` }));
+    const code = h('div', { class: 'tap-code', 'aria-hidden': 'true', style: `left:${(t.x - t.size / 2) * 100}%;top:${(t.y - (t.size * 0.75) / 2) * 100}%;width:${t.size * 100}%` });
+    for (let i = 0; i < 25; i++) code.append(h('i', { class: [0, 1, 2, 3, 4, 5, 9, 10, 14, 15, 19, 20, 21, 22, 23, 24, 12, 7, 17].includes(i) ? 'on' : '' }));
+    let appearedAt = 0, done = false;
+    const send = async (tap) => {
+      if (done) return; done = true;
+      try {
+        const a = await api('POST', `${base}/answer`, { viewerKey, round: r.id, pick: 'k0', ...(tap ? { tap } : {}), responseMs: tap ? Math.round(tap.tMs) : 0 });
+        if (a.points) { balance += a.points; showPoints(true); }
+        if (a.streak !== undefined) setStreak(a.streak);
+        toast(a.hit ? `Got it! +${a.points}` : 'Missed it. Next one!');
+        setTimeout(next, 900);
+      } catch (e) { if (e.status === 409 || e.status === 410) return next(); toast(e.message); }
+    };
+    stage.addEventListener('pointerdown', (e) => {
+      if (!appearedAt) return;
+      const b = stage.getBoundingClientRect();
+      send({ x: (e.clientX - b.left) / b.width, y: (e.clientY - b.top) / b.height, tMs: performance.now() - appearedAt });
+    });
+    setTimeout(() => { stage.append(code); appearedAt = performance.now(); setTimeout(() => { code.remove(); if (!done) send(null); }, t.showMs); }, t.delayMs);
+    show(h('div', { class: 'meta' }, h('span', { class: 'chip', text: r.category })), streakBar(), h('h2', { text: r.ask }), stage, h('p', { class: 'after', text: 'Like scanning a real bottle, only faster.' }));
+  }
+
+  // In 3D: turn each one around (on a phone, place it in your room), then pick.
+  function arRound(r) {
+    const shownAt = performance.now();
+    let spinMs = 0, spinStart = 0;
+    const views = r.items.map((it) => {
+      const mv = document.createElement('model-viewer');
+      for (const [k, v] of Object.entries({ src: it.model, 'ios-src': it.ios, alt: it.label, 'camera-controls': '', 'auto-rotate': '', ar: '', 'ar-modes': 'webxr scene-viewer quick-look', 'touch-action': 'pan-y', 'shadow-intensity': '1' })) mv.setAttribute(k, v);
+      mv.addEventListener('pointerdown', () => { spinStart = performance.now(); });
+      mv.addEventListener('pointerup', () => { if (spinStart) spinMs += performance.now() - spinStart; spinStart = 0; });
+      const pickBtn = h('button', { type: 'button', class: 'btn', text: `This one: ${it.label}` });
+      pickBtn.addEventListener('click', async () => {
+        try {
+          const a = await api('POST', `${base}/answer`, { viewerKey, round: r.id, pick: it.key, responseMs: Math.round(performance.now() - shownAt), spinMs: Math.round(spinMs) });
+          if (a.points) { balance += a.points; showPoints(true); toast(`+${a.points}`); }
+          if (a.streak !== undefined) setStreak(a.streak);
+          next();
+        } catch (e) { if (e.status === 409 || e.status === 410) return next(); toast(e.message); }
+      });
+      return h('div', { class: 'ar-card' }, mv, pickBtn);
+    });
+    show(h('div', { class: 'meta' }, h('span', { class: 'chip', text: r.category })), streakBar(), h('h2', { text: r.ask }), h('div', { class: 'ar-grid' }, views), h('p', { class: 'after', text: 'Drag to turn them. On a phone, tap the cube icon to see one in your room.' }));
+  }
+
   async function stop() {
     try { await api('POST', `${base}/leave`, { viewerKey }); } catch {}
     show(h('h1', { text: 'Thanks for playing' }), h('p', { class: 'lead', text: `You have ${balance.toLocaleString('en-US')} points. Nothing more is kept from the games unless you play again.` }), h('button', { type: 'button', class: 'btn ghost', text: 'Play again', onclick: start }));
@@ -140,13 +192,21 @@
   }
   function openFeedback() {
     const text = h('textarea', { maxlength: '2000', placeholder: 'Ideas, problems, what you’d love for free…', rows: '5' });
-    const file = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp' });
+    const file = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,video/mp4' });
     const send = h('button', { type: 'button', class: 'btn', text: 'Send' });
-    const s = sheet(h('h2', { text: 'Tell us anything' }), h('label', { class: 'field' }, 'Your message', text), h('label', { class: 'field' }, 'Add a picture or screenshot (optional)', file), send);
+    const s = sheet(h('h2', { text: 'Tell us anything' }), h('label', { class: 'field' }, 'Your message', text), h('label', { class: 'field' }, 'Add a picture, screenshot or short video (optional)', file), send);
     send.addEventListener('click', async () => {
       send.disabled = true;
       try {
         const f = file.files && file.files[0];
+        if (f && f.type === 'video/mp4') {
+          if (f.size > 30 * 1024 * 1024) throw new Error('Videos can be up to 30 MB.');
+          const res = await fetch(`${base}/feedback/video?viewer=${encodeURIComponent(viewerKey)}&text=${encodeURIComponent(text.value)}`, { method: 'POST', headers: { 'content-type': 'video/mp4' }, body: f });
+          const r = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(r?.error?.message || 'Couldn’t send that video.');
+          s.remove(); if (r.points) { balance += r.points; showPoints(true); } toast(r.points ? `Thanks! +${r.points}` : 'Thanks!');
+          return;
+        }
         if (f && f.size > 2 * 1024 * 1024) throw new Error('Pictures can be up to 2 MB.');
         const image = f ? { contentType: f.type, dataBase64: await new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1]); r.onerror = no; r.readAsDataURL(f); }) } : undefined;
         const r = await api('POST', `${base}/feedback`, { viewerKey, text: text.value, ...(image ? { image } : {}) });
