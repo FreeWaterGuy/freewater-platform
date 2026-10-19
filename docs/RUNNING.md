@@ -166,3 +166,18 @@ The status page shows bottles and ledger lines in memory. Before memory runs sho
 is needed, the working state moves from memory into the database (bottles, ledger, event keys read on demand), so
 servers become interchangeable behind the load balancer. That is a planned change, not an emergency: the memory
 alert gives weeks of notice at pilot volumes.
+
+
+## The ad studio's outside services
+
+Without keys, each uses a stand-in that says it's a stand-in, so everything can be tried end to end.
+
+| Setting | What it turns on |
+| --- | --- |
+| `UNSPLASH_ACCESS_KEY` | The Unsplash photo library (credited to photographers, as their rules ask). |
+| `PEXELS_API_KEY` | The Pexels photo library. |
+| `GOOGLE_API_KEY` | Google Imagen for photos made to order (`IMAGEN_MODEL` picks the model; Google renames them). |
+| `ANTHROPIC_API_KEY` | Claude as the art director, writing and choosing the designs (otherwise built-in rules). |
+
+Photos are kept once, shrunk to print size, and stripped of hidden data. Labels point at them; a label sent to a
+printer or machine carries its photos inside it, so it prints whole even offline.

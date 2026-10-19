@@ -5,6 +5,7 @@ import { newId } from '../../core/ids';
 import type { SqlClient } from '../../db/client';
 import type { Platform } from '../../platform';
 import type { Registry } from '../../core/registry';
+import { checkStudioSpec, renderStudio, studioCreative, type StudioSpec } from '../studio/layout';
 import { posterCreative, posterFonts, posterIcons, renderPoster, type PosterSpec } from '../creative/poster';
 import type { ExperienceHost } from '../experiences/host';
 import { themeFor } from '../experiences/host';
@@ -94,9 +95,9 @@ export class AdsService {
     if (input.fromCampaignId) {
       const c = this.platform.campaigns.get(input.fromCampaignId);
       if (!c || c.companyId !== input.companyId || c.advertiserId !== input.advertiserId) throw new AdsError(404, 'not_found', 'Campaign not found.');
-      if (c.creativeRef?.kind !== 'poster') throw new AdsError(422, 'not_editable_here', 'This ad’s artwork was uploaded as a file. Upload a new file to change it.');
+      if (c.creativeRef?.kind !== 'poster' && c.creativeRef?.kind !== 'studio') throw new AdsError(422, 'not_editable_here', 'This ad’s artwork was uploaded as a file. Upload a new file to change it.');
       draft = {
-        name: c.name, category: c.category, poster: c.creativeRef.spec, sizes: c.sizes, formats: c.formats ?? ['label'], locations: c.targeting.locations ?? 'all',
+        name: c.name, category: c.category, ...(c.creativeRef.kind === 'studio' ? { studio: c.creativeRef.spec } : { poster: c.creativeRef.spec }), sizes: c.sizes, formats: c.formats ?? ['label'], locations: c.targeting.locations ?? 'all',
         buy: c.buy.type === 'guaranteed' ? { type: 'guaranteed', prints: Math.max(100, c.buy.remainingPrints) } : { type: 'bid', dailyCapCents: c.buy.dailyCapCents, maxCentsPerLabel: c.buy.maxCentsPerLabel },
         experienceId: c.experienceId, experienceConfig: c.experienceConfig, theme: c.theme,
       };
@@ -157,7 +158,45 @@ export class AdsService {
     const d = r.draft;
     const spec = { brand: adv.name, headline: 'Your headline', colors: { bg: '#EEF6FB', fg: '#0B0B0B', accent: '#1E7DB8' }, ...(d.poster ?? {}) } as PosterSpec;
     const ready = !!d.experienceId && this.host.checkConfig(d.experienceId, d.experienceConfig ?? {}) === null;
-    return this.render({ companyId, advertiserId, advertiserName: adv.name, category: d.category ?? adv.category, draw: (w, h) => renderPoster(spec, w, h), sizes: d.sizes?.length ? d.sizes : ([2, 4, 6] as Share[]), formats: d.formats ?? ['label'], experience: ready ? { id: d.experienceId!, config: d.experienceConfig ?? {} } : null, theme: themeFromPoster(d) });
+    return this.render({ companyId, advertiserId, advertiserName: adv.name, category: d.category ?? adv.category, draw: (w, h) => (d.studio ? renderStudio(d.studio, w, h) : renderPoster(spec, w, h)), sizes: d.sizes?.length ? d.sizes : ([2, 4, 6] as Share[]), formats: d.formats ?? ['label'], experience: ready ? { id: d.experienceId!, config: d.experienceConfig ?? {} } : null, theme: themeFromPoster(d) });
+  }
+
+  /** Puts the photos an ad points at inside its preview (set by the app; previews without photos need nothing). */
+  inlineAssets: (svg: string) => Promise<string> = async (svg) => svg;
+
+  /** Use a design from the ad studio as this draft's artwork. */
+  async useStudioDesign(id: string, companyId: string, advertiserId: string, spec: StudioSpec) {
+    const r = await this.row(id, companyId, advertiserId);
+    if (r.status !== 'open') throw new AdsError(409, 'already_submitted', 'This ad was already submitted. Start a new one to change it.');
+    const problem = checkStudioSpec(spec);
+    if (problem) throw new AdsError(422, 'invalid_design', `That design can't be used: ${problem}.`);
+    r.draft = { ...r.draft, studio: spec };
+    const now = this.platform.bus.now().toISOString();
+    r.messages.push({ role: 'assistant', text: `Using the “${spec.headline}” design from the studio. Check every size in the preview.`, at: now });
+    r.updatedAt = now;
+    await this.save(r);
+    return this.view(r);
+  }
+
+  /** Use custom AR from the studio as this ad's scan page: the model, placed in the room at real size. */
+  async useStudioAr(id: string, companyId: string, advertiserId: string, ar: { glbUrl: string; alt: string; title: string; link?: { label: string; url: string } }) {
+    const r = await this.row(id, companyId, advertiserId);
+    if (r.status !== 'open') throw new AdsError(409, 'already_submitted', 'This ad was already submitted. Start a new one to change it.');
+    if (!/^\/assets\/as_[A-Za-z0-9_-]+\.glb$/.test(ar.glbUrl)) throw new AdsError(422, 'invalid_model', 'Use a 3D model made in the studio.');
+    const config = { title: ar.title.slice(0, 120), caption: 'See it on your table', model: { glbUrl: ar.glbUrl, alt: ar.alt.slice(0, 200) }, ...(ar.link ? { link: ar.link } : {}) };
+    const problem = this.host.checkConfig('ar-place', config);
+    if (problem) throw new AdsError(422, 'invalid_scan_page', `That scan page can't be used: ${problem}`);
+    r.draft = { ...r.draft, experienceId: 'ar-place', experienceConfig: config };
+    const now = this.platform.bus.now().toISOString();
+    r.messages.push({ role: 'assistant', text: `Your scan page now shows ${ar.alt} in AR, on the table at real size.`, at: now });
+    r.updatedAt = now;
+    await this.save(r);
+    return this.view(r);
+  }
+
+  /** Any artwork, at every size, on a real label and a box side: for the studio's previews before a draft exists. */
+  async previewArt(o: { companyId: string; advertiserId: string; advertiserName: string; category: string; draw: (w: number, h: number) => string; sizes?: Share[] }) {
+    return this.render({ ...o, sizes: o.sizes ?? ([1, 2, 3, 4, 6] as Share[]), formats: ['label', 'box-face'], experience: null, theme: {} });
   }
 
   /** The same views for a submitted campaign, for the people reviewing it. */
@@ -199,7 +238,9 @@ export class AdsService {
       ? await this.host.open({ pluginId: o.experience.id, config: o.experience.config, theme, scan: { target: { kind: 'slot', unitId: 'preview', slot: 0 }, companyId: o.companyId, locationId: 'preview', owner: { name: o.advertiserName, advertiserId: o.advertiserId, campaignId: 'preview' }, viewer: { key: 'preview', signedIn: false, interests: [], firstTimeWithAdvertiser: true }, now: this.platform.bus.now() } })
       : null;
     const footer = { company: company.name, brand: company.brand, ads: 3, giving: givingLine(company, 'preview'), receiptUrl: null, packUrl: null };
-    return { sizes, labelSvg: label.svg, boxFaceSvg: boxFace, scan: scan ? { doc: scan, footer } : null };
+    // Previews are shown as pictures, which can't fetch the photos they point at: the photos go inside them.
+    const inline = this.inlineAssets;
+    return { sizes: await Promise.all(sizes.map(async (s) => ({ ...s, svg: await inline(s.svg) }))), labelSvg: await inline(label.svg), boxFaceSvg: boxFace ? await inline(boxFace) : null, scan: scan ? { doc: scan, footer } : null };
   }
 
   async submit(input: { id: string; companyId: string; advertiserId: string }) {
@@ -209,8 +250,9 @@ export class AdsService {
     if (left.length) throw new AdsError(422, 'not_ready', `Before submitting, add ${left.map((m) => missingLabels[m]).join(', ')}.`);
     const company = this.platform.companies.get(r.companyId)!;
     const adv = await this.advertiser(r.companyId, r.advertiserId);
-    const d = r.draft as Required<Pick<AdDraft, 'poster' | 'sizes' | 'buy' | 'experienceId' | 'locations' | 'category'>> & AdDraft;
+    const d = r.draft as Required<Pick<AdDraft, 'sizes' | 'buy' | 'experienceId' | 'locations' | 'category'>> & AdDraft;
     const spec = d.poster as PosterSpec;
+    const art = d.studio ? { creative: studioCreative(d.studio), creativeRef: { kind: 'studio' as const, spec: d.studio } } : { creative: posterCreative(spec), creativeRef: { kind: 'poster' as const, spec } };
     const now = this.platform.bus.now().toISOString();
     const existing = r.campaignId ? this.platform.campaigns.get(r.campaignId) : undefined;
     const buy: Campaign['buy'] = d.buy.type === 'guaranteed'
@@ -219,8 +261,8 @@ export class AdsService {
     const c: Campaign = {
       ...(existing ?? {}),
       id: existing?.id ?? newId('cmp'), companyId: r.companyId, advertiserId: r.advertiserId, advertiserName: adv.name,
-      name: d.name ?? spec.headline, category: d.category, sizes: d.sizes, formats: d.formats ?? ['label'],
-      creative: posterCreative(spec), creativeRef: { kind: 'poster', spec },
+      name: d.name ?? (d.studio?.headline ?? spec.headline), category: d.category, sizes: d.sizes, formats: d.formats ?? ['label'],
+      ...art,
       experienceId: d.experienceId, experienceConfig: d.experienceConfig ?? {}, theme: themeFromPoster(d),
       targeting: d.locations === 'all' ? {} : { locations: d.locations as string[] }, buy,
       active: false, review: { status: 'submitted', at: now }, createdAt: existing?.createdAt ?? now,
@@ -292,10 +334,10 @@ export class AdsService {
     const campaigns = [...this.platform.campaigns.values()].filter((c) => c.companyId === input.companyId && c.advertiserId === input.advertiserId && !c.isHouse)
       .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '') || a.id.localeCompare(b.id))
       .map((c) => ({
-        id: c.id, name: c.name ?? (c.creativeRef?.kind === 'poster' ? c.creativeRef.spec.headline : c.advertiserName), status: this.status(c), review: c.review ?? null,
+        id: c.id, name: c.name ?? (c.creativeRef?.kind === 'poster' || c.creativeRef?.kind === 'studio' ? c.creativeRef.spec.headline : c.advertiserName), status: this.status(c), review: c.review ?? null,
         sizes: c.sizes, formats: c.formats ?? ['label'], where: c.targeting.locations ?? 'all', experienceId: c.experienceId,
         budget: c.buy.type === 'guaranteed' ? { type: 'guaranteed', bottlesLeft: c.buy.remainingPrints } : { type: 'bid', dailyCapCents: c.buy.dailyCapCents, spentTodayCents: c.buy.spentTodayCents },
-        editable: c.creativeRef?.kind === 'poster',
+        editable: c.creativeRef?.kind === 'poster' || c.creativeRef?.kind === 'studio',
         thumbSvg: `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(thumbW)}" height="450" viewBox="0 0 ${thumbW.toFixed(1)} 450">${c.creative.svg(thumbW, 450)}</svg>`,
         results: byCampaign.get(c.id) ?? blank(),
       }));

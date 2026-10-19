@@ -209,7 +209,7 @@ export interface CompanyConfig {
 }
 
 /** How a creative is stored: uploaded SVG artwork, or one of the built-in generated designs. */
-export type CreativeRef = { kind: 'svg'; markup: string } | { kind: 'builtin'; id: string } | { kind: 'poster'; spec: import('../modules/creative/poster').PosterSpec };
+export type CreativeRef = { kind: 'svg'; markup: string } | { kind: 'builtin'; id: string } | { kind: 'poster'; spec: import('../modules/creative/poster').PosterSpec } | { kind: 'studio'; spec: import('../modules/studio/layout').StudioSpec };
 
 export interface Creative {
   /** Artwork as SVG markup sized to any box; the renderer scales it to the slot. A real system stores an asset URL. */

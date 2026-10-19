@@ -231,11 +231,14 @@ export class Platform {
   private async run(opts: OrderOptions & { orderId: string }): Promise<OrderOutcome> {
     const { company, location, unit, label } = await this.fillAndRender(opts);
 
-    // 3. Print, retrying once. Only a confirmed print is billed.
+    // 3. Print, retrying once. Only a confirmed print is billed. The printer gets the label with its photos inside it.
     const printer = this.registry.printerFor(company);
+    let printSvg: string;
+    try { printSvg = await this.forPrint(label.svg); }
+    catch (e: any) { this.fail(unit, `artwork_missing: ${e?.message ?? e}`, opts.orderId); return { ok: false, unit, reason: 'artwork_missing', attempts: 0 }; }
     for (let attempt = 1; attempt <= this.maxAttempts; attempt++) {
       const jobId = newId('job');
-      const result = await printer.print({ jobId, idempotencyKey: `${unit.id}:attempt:${attempt}`, unitId: unit.id, locationId: location.id, svg: label.svg, widthIn: label.widthIn, heightIn: label.heightIn });
+      const result = await printer.print({ jobId, idempotencyKey: `${unit.id}:attempt:${attempt}`, unitId: unit.id, locationId: location.id, svg: printSvg, widthIn: label.widthIn, heightIn: label.heightIn });
       if (result.status === 'printed') {
         this.confirm(unit, jobId, { customerId: opts.custom?.customerId, customPriceCents: opts.custom?.priceCents });
         return { ok: true, unit, label, attempts: attempt };
@@ -304,6 +307,11 @@ export class Platform {
   engaged(companyId: string, payload: import('./core/events').EventPayloads['experience.engaged'], id = newId('eng')) {
     return this.bus.publish('experience.engaged', companyId, payload, id);
   }
+  /**
+   * A label as a printer gets it: photos the artwork points at (from the ad studio) put inside the file, at print
+   * size, so a machine prints it whole even offline. Set by the app; labels without photos are unchanged.
+   */
+  forPrint: (svg: string) => Promise<string> = async (svg) => svg;
   /** Packs live in the pack service; it tells the core which company each belongs to. */
   packCompany: (packId: string) => string = (id) => { throw new Error(`Unknown pack "${id}"`); };
   purchase(unitId: string, slotIndex: number, orderId: string, amountCents: number, buyer?: string) {

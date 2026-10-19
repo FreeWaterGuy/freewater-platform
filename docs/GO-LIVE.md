@@ -31,7 +31,12 @@
 7. **Payouts to charities**: Stripe Connect, or your bank's transfer service, and the charity's bank details.
 8. **Email and texts** for sign-in codes and receipts: e.g. Postmark or Resend for email, Twilio for texts.
 9. **Address lookup** for home delivery: Google Maps or Mapbox.
-10. **AI keys**: Anthropic (Claude), and Google (Veo) only if you want live-action video.
+10. **AI keys**: Anthropic (Claude), and Google (one key covers Veo for live-action video and Imagen for ad photos
+    made to order: `GOOGLE_API_KEY`).
+10b. **For the ad studio**: a free Unsplash developer key (`UNSPLASH_ACCESS_KEY`) and/or Pexels key (`PEXELS_API_KEY`)
+    for the photo library; and, when chosen, a photo-to-3D service for custom AR (until then, a product photo becomes a
+    standing photo card in AR). Before real labels print with library photos, confirm their terms cover printing on
+    packaging (a question for the lawyer below).
 11. **The label printer** for the machines, once it's chosen.
 12. **A GitHub token** for publishing each day's books fingerprint (optional, but it's what makes the books provable).
 

@@ -1,5 +1,6 @@
 import { SHARES, type CompanyConfig, type Location, type Share } from '../../core/types';
 import { bidFloor } from './budget';
+import { checkStudioSpec, type StudioSpec } from '../studio/layout';
 import { checkPosterSpec, posterIcons, posterFonts, readableOn, contrast, type PosterSpec } from '../creative/poster';
 import type { Theme } from '../experiences/blocks';
 import type { ExperienceHost } from '../experiences/host';
@@ -13,6 +14,8 @@ export interface AdDraft {
   name?: string;
   category?: string;
   poster?: Partial<PosterSpec>;
+  /** A design from the ad studio (photo layouts). When set, it's the artwork, instead of the poster. */
+  studio?: StudioSpec;
   sizes?: Share[];
   formats?: ('label' | 'box-face')[];
   locations?: string[] | 'all';
@@ -48,7 +51,7 @@ export type Missing = keyof typeof missingLabels;
 
 export function missing(d: AdDraft, host: ExperienceHost): Missing[] {
   const out: Missing[] = [];
-  if (!d.poster || checkPosterSpec(d.poster) !== null) out.push('artwork');
+  if (d.studio ? checkStudioSpec(d.studio) !== null : (!d.poster || checkPosterSpec(d.poster) !== null)) out.push('artwork');
   if (!d.category) out.push('category');
   if (!d.sizes?.length) out.push('sizes');
   if (!d.locations || (Array.isArray(d.locations) && d.locations.length === 0)) out.push('where');
@@ -150,6 +153,11 @@ export function applyPatch(d: AdDraft, patch: DraftPatch, ctx: DraftContext): { 
 
 /** The scan page's colors, from the artwork's unless the advertiser picked their own. */
 export function themeFromPoster(d: AdDraft): Partial<Theme> {
+  if (d.studio) {
+    const s = d.studio.colors;
+    const button = contrast(s.accent, '#FFFFFF') >= 3 ? s.accent : s.ink;
+    return { background: s.paper, text: s.ink, accent: contrast(s.accent, s.paper) >= 3 ? s.accent : s.ink, button, buttonText: readableOn(button), ...(d.theme ?? {}) };
+  }
   const c = d.poster?.colors;
   if (!c) return d.theme ?? {};
   const light = contrast(c.bg, '#FFFFFF') < 1.4;

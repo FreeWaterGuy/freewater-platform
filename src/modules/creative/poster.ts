@@ -55,6 +55,7 @@ function wrap(s: string, max: number): string[] {
 }
 
 /** Simple icons drawn in a 100×100 box in the accent color. */
+export function iconDrawing(icon: PosterIcon, color: string, ink: string): string { return iconSvg(icon, color, ink); }
 function iconSvg(icon: PosterIcon, color: string, ink: string): string {
   const c = color, k = ink;
   switch (icon) {

@@ -24,6 +24,11 @@ import type { AdAssistant } from './modules/ai/contract';
 import { DesignService } from './modules/custom/service';
 import { BuiltinDesigner } from './modules/ai/builtinDesigner';
 import { ClaudeDesigner } from './modules/ai/claudeDesigner';
+import { StudioService } from './modules/studio/service';
+import { ClaudeDesigner as ClaudeStudioDesigner, RulesDesigner, type StudioDesigner } from './modules/studio/designer';
+import { studioProviders, type ImageMaker, type ModelMaker, type PhotoLibrary } from './modules/studio/providers';
+import { join as joinPath, dirname as dirnamePath } from 'node:path';
+import { fileURLToPath as toPath } from 'node:url';
 import type { DesignAssistant } from './modules/ai/designContract';
 import { DeliveryService } from './modules/delivery/service';
 import { SimpleRoutePlanner, type RoutePlanner } from './modules/delivery/planner';
@@ -99,6 +104,9 @@ export interface AppOptions {
   /** Where daily books fingerprints are published (defaults: GitHub when configured, and a Bitcoin timestamp in production). */
   anchorPublishers?: AnchorPublisher[];
   designer?: DesignAssistant;
+  /** The ad studio's designer and outside services (stand-ins and the rules designer when not given and no keys are set). */
+  studioDesigner?: StudioDesigner;
+  studioProviders?: { libraries: PhotoLibrary[]; images: ImageMaker; models: ModelMaker };
   geocoder?: Geocoder; // defaults to the test geocoder
   planner?: RoutePlanner; // defaults to the simple route planner
   payouts?: PayoutProvider; // sends money to charities; defaults to the test provider (no real money)
@@ -242,6 +250,48 @@ export async function createApp(opts: AppOptions) {
   const builtinDesigner = new BuiltinDesigner();
   const designer = opts.designer ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeDesigner({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL, fallback: builtinDesigner }) : builtinDesigner);
   const designs = new DesignService(db, platform, made.registry, host, assets, designer);
+  // The ad studio: brand kits, photos (uploaded, from a library, or made by AI), designs at every size, custom AR.
+  const standInPhotos = joinPath(dirnamePath(toPath(import.meta.url)), 'modules', 'studio', 'stand-in-photos');
+  const rulesDesigner = new RulesDesigner();
+  const studio = new StudioService(db, platform, assets, ads,
+    opts.studioProviders ?? studioProviders(process.env, standInPhotos, {
+      'coffee.jpg': { description: 'A cup of espresso on a saucer on a wooden table', credit: 'Rachel Michetti (CC0)', words: ['coffee', 'espresso', 'cafe', 'cup', 'latte', 'morning'] },
+      'cat.jpg': { description: 'A tabby cat looking at the camera', credit: 'Stefan van der Walt (CC0)', words: ['cat', 'pet', 'kitten', 'animal'] },
+      'rocket.jpg': { description: 'A rocket on its launch pad at dusk', credit: 'SpaceX (public domain)', words: ['rocket', 'space', 'launch', 'science', 'museum'] },
+      'space.jpg': { description: 'Thousands of galaxies in deep space', credit: 'NASA / Hubble (public domain)', words: ['space', 'galaxy', 'stars', 'night', 'planetarium', 'astronomy'] },
+    }),
+    opts.studioDesigner ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeStudioDesigner({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL, fallback: rulesDesigner }) : rulesDesigner),
+    opts.clock);
+  // Printed labels carry their photos inside them, at print size (kept in memory for the most used ones).
+  const printCopies = new Map<string, string>();
+  platform.forPrint = async (svg) => {
+    if (!svg.includes('/assets/as_')) return svg;
+    const ids = [...new Set([...svg.matchAll(/\/assets\/(as_[A-Za-z0-9_-]+)\.(?:jpg|png)/g)].map((m) => m[1]!))];
+    for (const id of ids) {
+      if (printCopies.has(id)) continue;
+      const f = await assets.get(id);
+      if (!f) throw new Error(`A label points at photo ${id}, which is missing.`);
+      if (printCopies.size > 100) printCopies.clear();
+      printCopies.set(id, `data:${f.asset.contentType};base64,${Buffer.from(f.bytes).toString('base64')}`);
+    }
+    return svg.replace(/\/assets\/(as_[A-Za-z0-9_-]+)\.(?:jpg|png)/g, (m, id) => printCopies.get(id) ?? m);
+  };
+  // Ad previews carry their photos inside them (a preview-sized copy of each, made once).
+  const previewCopies = new Map<string, string>();
+  ads.inlineAssets = async (svg) => {
+    const ids = [...new Set([...svg.matchAll(/\/assets\/(as_[A-Za-z0-9_-]+)\.(?:jpg|png)/g)].map((m) => m[1]!))];
+    for (const id of ids) {
+      if (previewCopies.has(id)) continue;
+      const f = await assets.get(id).catch(() => null);
+      if (!f) continue;
+      const png = f.asset.contentType === 'image/png';
+      const img = (await import('sharp')).default(f.bytes).resize(900, 900, { fit: 'inside', withoutEnlargement: true });
+      const out = png ? await img.png().toBuffer() : await img.jpeg({ quality: 80 }).toBuffer();
+      if (previewCopies.size > 300) previewCopies.clear();
+      previewCopies.set(id, `data:${png ? 'image/png' : 'image/jpeg'};base64,${out.toString('base64')}`);
+    }
+    return svg.replace(/\/assets\/(as_[A-Za-z0-9_-]+)\.(?:jpg|png)/g, (m, id) => previewCopies.get(id) ?? m);
+  };
 
   const geocoder = opts.geocoder ?? new TestGeocoder({ Austin: { lat: 30.2672, lng: -97.7431, radiusKm: 6 }, Denver: { lat: 39.7392, lng: -104.9903, radiusKm: 6 } });
   const delivery = new DeliveryService(db, platform, packs, accounts, messenger, geocoder, opts.planner ?? new SimpleRoutePlanner(), () => persistence.flush());
@@ -323,7 +373,7 @@ export async function createApp(opts: AppOptions) {
   await fleet.load();
   made.registry.registerPrinter('model6-fleet', new MachineFleetPrinter(() => fleet, made.printer));
 
-  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, transparency, anchors, agents, profit, distributions, team, secondStep };
+  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, studio, transparency, anchors, agents, profit, distributions, team, secondStep };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

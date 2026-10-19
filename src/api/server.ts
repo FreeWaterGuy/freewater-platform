@@ -15,6 +15,7 @@ import { dataRoutes } from './data';
 import { transparencyRoutes } from './transparency';
 import { agentRoutes } from './agents';
 import { environmentRoutes } from './environment';
+import { studioRoutes } from './studio';
 import { BadKeyGuard, classify, limits, RateLimiter, securityHeaders, SecurityLog } from './security';
 import { teamRoutes } from './team';
 import { operationsRoutes } from './operations';
@@ -592,6 +593,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   transparencyRoutes(app, server, route);
   agentRoutes(app, route);
   environmentRoutes(app, route);
+  studioRoutes(app, route);
   teamRoutes(app, route);
 
   // ---------- wiring ----------
