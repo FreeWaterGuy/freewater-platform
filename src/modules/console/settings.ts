@@ -2,9 +2,9 @@ import { checkQrColor, checkQrLogo } from '../print/qr';
 import { SHARES, type CompanyConfig } from '../../core/types';
 import { checkLottery } from '../lottery/rules';
 import { checkPolicy } from '../data/policy';
-import { checkAiSettings } from '../ai/routing';
+import { checkAiSettings } from '../ai/settings';
 import { checkWallet, defaultWallet } from '../wallet/assets';
-import { checkChain } from '../chain/service';
+import { checkChain } from '../chain/settings';
 
 // What a company may change about itself, the checks each change must pass, and plain words for what changed.
 

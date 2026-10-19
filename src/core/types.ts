@@ -131,7 +131,7 @@ export interface CompanyConfig {
    */
   minimumAge?: number;
   /** Which AI this company uses: the network’s (default), its own (key in host settings as AI_KEY_<ID>), or none. */
-  ai?: import('../modules/ai/routing').AiSettings;
+  ai?: import('../modules/ai/settings').AiSettings;
   /** Points, credit and what can be done with them. Points are on by default; credit and exchanging are off. */
   wallet?: import('../modules/wallet/assets').WalletSettings;
   /** The games people can play for points. On by default; a company can replace the categories and brands. */
@@ -139,7 +139,7 @@ export interface CompanyConfig {
   /** Brand offers (free, cheaper or negatively priced products, redeemed with a receipt). Off until a person turns them on. */
   offers?: { enabled: boolean };
   /** The chain layer (a future token, hourly seals on a blockchain). Off; switching it on takes several people's approval. */
-  chain?: import('../modules/chain/service').ChainSettings;
+  chain?: import('../modules/chain/settings').ChainSettings;
   /**
    * Where the company is: 'test' (everything can be reset, bots can play), 'points' (live with placeholder points), or
    * 'token' (live with the real token). Only moves forward, and only through an approved step.
