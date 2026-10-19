@@ -125,6 +125,11 @@ export interface CompanyConfig {
   privacy?: { keepInteractionsDays: number };
   /** What data the company collects, by kind, and how people agree to it: a switchboard for each country's law. */
   data?: import('../modules/data/policy').DataPolicy;
+  /**
+   * The youngest age that may take part in the games and earn rewards. Each person's own law can raise it (up to 16 in
+   * parts of Europe); a company can only raise it, never lower it below 13.
+   */
+  minimumAge?: number;
   /** How much of the books the world sees, live. Each company chooses. */
   transparency?: Transparency;
   /** Security choices. Owners can be required to use a second sign-in step (a code from an authenticator app). */

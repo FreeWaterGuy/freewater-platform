@@ -201,6 +201,14 @@ video { width: 100%; border-radius: var(--radius); background: #000; display: bl
 @media (prefers-reduced-motion: reduce){.m-shape{animation:none}}
 
 .your-data{margin:18px 16px 28px;text-align:center;font-size:12px;opacity:.7}
+.your-data-all{margin:18px 16px 28px;font-size:12px}
+.your-data-all .your-data{margin:8px 0}
+.why,.nearby{text-align:center;opacity:.8;margin:8px 0}
+.why summary{cursor:pointer;text-decoration:underline}
+.why ul,.nearby ul{text-align:left;margin:8px auto;max-width:34em;padding-left:18px;line-height:1.45}
+.why .muted,.nearby .muted{opacity:.75}
+.nearby .linkish{background:none;border:0;padding:4px;color:inherit;font:inherit;text-decoration:underline;cursor:pointer}
+.dns{display:inline-flex;gap:6px;align-items:center;cursor:pointer}
 .your-data .linkish{background:none;border:0;padding:4px;color:inherit;font:inherit;text-decoration:underline;cursor:pointer}
 
 /* Your choices on this bottle (gift, kinds of ads, the panel). No ads here. */

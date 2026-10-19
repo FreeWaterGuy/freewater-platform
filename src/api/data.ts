@@ -6,6 +6,9 @@ import { tierNames } from '../modules/numberline/tiers';
 import type { Placement } from '../modules/numberline/placement';
 import { ApiError, obj, S, type RouteDef } from './http';
 
+/** What data is for, said the same way everywhere it's asked for. */
+export const dataUse = 'We use this to train our AI and to plan future free and negatively priced products. We never sell your personal data. We may share findings that can’t be traced to anyone.';
+
 /** The data switchboard, people's own data choices and rights, one person across roles, and the number line. */
 export function dataRoutes(app: App, route: (r: RouteDef) => void) {
   const { data, numberline, platform } = app;
@@ -20,14 +23,83 @@ export function dataRoutes(app: App, route: (r: RouteDef) => void) {
     const id = (req.params as any).companyId;
     if (!platform.companies.has(id)) throw new ApiError(404, 'not_found', 'Company not found.');
     const viewer = String((req.query as any).viewer ?? '');
-    const p = data.policy(id);
-    return { body: { region: p.region, askFirst: data.askFirst(id), kinds: /^[A-Za-z0-9_-]{8,64}$/.test(viewer) ? await data.consents(id, viewer) : dataCategories.filter((k) => p.rules[k].collect).map((k) => ({ category: k, ...categoryInfo[k], asks: p.rules[k].consent, keepDays: p.rules[k].keepDays })) } };
+    const known = /^[A-Za-z0-9_-]{8,64}$/.test(viewer);
+    const place = data.placeOf(req);
+    const rules = await data.rulesFor(id, known ? [viewer] : [], place);
+    const p = rules.policy;
+    return { body: {
+      region: rules.region, companyRegion: data.policy(id).region, askFirst: rules.askFirst, minimumAge: rules.minimumAge, rewards: rules.rewards,
+      doNotSell: known ? await data.doesNotSell(id, [viewer]) : false, use: dataUse,
+      kinds: known ? await data.consents(id, viewer, place) : dataCategories.filter((k) => p.rules[k].collect).map((k) => ({ category: k, ...categoryInfo[k], asks: p.rules[k].consent, keepDays: p.rules[k].keepDays })),
+    } };
   } });
   route({ method: 'POST', url: '/v1/public/data/:companyId/consent', scope: 'public', summary: 'This phone’s yes or no for each kind of data.', body: obj({ viewerKey: viewerKeyProp, choices: choicesProp }, ['viewerKey', 'choices']), handler: async (req) => {
     const b = req.body as any;
     const id = (req.params as any).companyId;
     if (!platform.companies.has(id)) throw new ApiError(404, 'not_found', 'Company not found.');
     return { body: await data.consent(id, b.viewerKey, b.choices, 'scan page') };
+  } });
+
+  const company = (req: { params: unknown }) => { const id = (req.params as any).companyId as string; if (!platform.companies.has(id)) throw new ApiError(404, 'not_found', 'Company not found.'); return id; };
+  const placeProp = obj({ country: { type: 'string', pattern: '^[A-Za-z]{2}$' }, state: { type: 'string', pattern: '^[A-Za-z]{2,3}$' } }, ['country']);
+  const ageProp = { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' };
+  const detailsProp = obj({ zip: { type: ['string', 'null'], maxLength: 12 }, household: { type: ['integer', 'null'], minimum: 1, maximum: 20 }, language: { type: ['string', 'null'], maxLength: 35 } });
+  const declared = (b: any) => ({ country: String(b.country).toUpperCase(), ...(b.state ? { state: String(b.state).toUpperCase() } : {}), source: 'declared' as const });
+
+  route({ method: 'POST', url: '/v1/public/data/:companyId/place', scope: 'public', summary: 'Where this person says they live (country, and US state). Where they connect from counts too: whichever law is stricter applies.', body: obj({ viewerKey: viewerKeyProp, place: placeProp }, ['viewerKey', 'place']), handler: async (req) => {
+    const id = company(req); const b = req.body as any;
+    await data.notePlace(id, b.viewerKey, declared(b.place), 'declared');
+    const r = await data.rulesFor(id, [b.viewerKey], data.placeOf(req));
+    return { body: { region: r.region, askFirst: r.askFirst, minimumAge: r.minimumAge, rewards: r.rewards } };
+  } });
+  route({ method: 'POST', url: '/v1/public/data/:companyId/location', scope: 'public', summary: 'This phone’s exact position, shared by the person to see deals and machines near them. Optional; nothing is earned for it. Kept to about 10 meters, and only as long as the rules allow.', body: obj({ viewerKey: viewerKeyProp, lat: { type: 'number', minimum: -90, maximum: 90 }, lng: { type: 'number', minimum: -180, maximum: 180 }, accuracyM: { type: 'number', minimum: 0, maximum: 100000 } }, ['viewerKey', 'lat', 'lng']), handler: async (req) => {
+    const id = company(req); const b = req.body as any;
+    return { body: await data.sharePreciseLocation(id, b.viewerKey, { lat: b.lat, lng: b.lng, accuracyM: b.accuracyM }, req) };
+  } });
+  route({ method: 'POST', url: '/v1/public/data/:companyId/age', scope: 'public', summary: 'Is this person old enough for the games and rewards where they are? Under the minimum age, only that answer is kept.', body: obj({ viewerKey: viewerKeyProp, birthDate: ageProp }, ['viewerKey', 'birthDate']), handler: async (req) => {
+    const id = company(req); const b = req.body as any;
+    return { body: await wrap(() => data.ageCheck(id, b.viewerKey, b.birthDate, data.placeOf(req))) };
+  } });
+  route({ method: 'POST', url: '/v1/public/data/:companyId/do-not-sell', scope: 'public', summary: '“Do not sell or share my personal information” for this phone. We never sell personal data; this also stops any sharing.', body: obj({ viewerKey: viewerKeyProp, on: S.bool }, ['viewerKey', 'on']), handler: async (req) => {
+    const id = company(req); const b = req.body as any;
+    return { body: await data.setDoNotSell(id, b.viewerKey, b.on, 'scan page') };
+  } });
+
+  route({ method: 'GET', url: '/v1/me/details', scope: 'me', summary: 'The optional things you told us: zip code, household size, language, and whether you’re old enough for the games.', handler: async (_req, key) => ({ body: await data.details(key!.companyId, `user:${key!.userId}`) }) });
+  route({ method: 'POST', url: '/v1/me/details', scope: 'me', summary: 'Tell us your zip code, household size or language, if you like. All optional; send null to remove one.', body: detailsProp, handler: async (req, key) => ({ body: await wrap(() => data.setDetails(key!.companyId, `user:${key!.userId}`, req.body as any)) }) });
+  route({ method: 'POST', url: '/v1/me/age', scope: 'me', summary: 'Your birthday, to check you’re old enough for the games and rewards where you are. Only the year is kept.', body: obj({ birthDate: ageProp }, ['birthDate']), handler: async (req, key) => ({ body: await wrap(() => data.ageCheck(key!.companyId, `user:${key!.userId}`, (req.body as any).birthDate, data.placeOf(req))) }) });
+  route({ method: 'POST', url: '/v1/me/place', scope: 'me', summary: 'Where you live (country, and US state).', body: obj({ place: placeProp }, ['place']), handler: async (req, key) => {
+    await data.notePlace(key!.companyId, `user:${key!.userId}`, declared((req.body as any).place), 'declared');
+    const r = await data.rulesFor(key!.companyId, [`user:${key!.userId}`], data.placeOf(req));
+    return { body: { region: r.region, askFirst: r.askFirst, minimumAge: r.minimumAge, rewards: r.rewards } };
+  } });
+  route({ method: 'POST', url: '/v1/me/do-not-sell', scope: 'me', summary: '“Do not sell or share my personal information.”', body: obj({ on: S.bool }, ['on']), handler: async (req, key) => ({ body: await data.setDoNotSell(key!.companyId, `user:${key!.userId}`, (req.body as any).on, 'account') }) });
+
+  route({ method: 'GET', url: '/v1/public/why/:unitId/:slot', scope: 'public', summary: '“Why am I seeing this?” What decided the ad on this bottle and what’s shown after scanning, in plain words. Send ?viewer= to include what this phone’s own choices allow.', handler: async (req) => {
+    const { unitId, slot } = req.params as any;
+    const unit = platform.units.get(unitId);
+    if (!unit) throw new ApiError(404, 'not_found', 'No such bottle.');
+    const pl = unit.placements.find((x) => x.slotIndex === Number(slot));
+    const camp = pl ? platform.campaigns.get(pl.campaignId) : undefined;
+    const loc = unit.locationId ? platform.locations.get(unit.locationId) : undefined;
+    const viewer = String((req.query as any).viewer ?? '');
+    const companyId = camp?.companyId ?? unit.companyId ?? '';
+    const own = /^[A-Za-z0-9_-]{8,64}$/.test(viewer) && companyId ? await data.consents(companyId, viewer, data.placeOf(req)) : null;
+    const on = (k: string) => !!own?.find((c) => c.category === k)?.on;
+    const t = camp?.targeting ?? {};
+    const reasons: string[] = [];
+    if (unit.kind === 'custom') reasons.push('This is someone’s own custom bottle: they designed what’s on it.');
+    else if (!camp || pl?.isHouse) reasons.push('This is the company’s own message: no advertiser bought this spot.');
+    else {
+      reasons.push(`${camp.advertiserName} paid for this spot on the bottle, so the bottle could be free.`);
+      if (t.locations?.length) reasons.push(`They chose ${loc ? `${loc.name} in ${loc.city}` : 'certain machines'} as a place to show it.`);
+      else if (loc) reasons.push(`The bottle came from ${loc.name} in ${loc.city}; this ad runs everywhere.`);
+      if (t.products?.length || t.productCategories?.length) reasons.push('They chose this kind of drink to appear on.');
+      if (t.audience) reasons.push('It was printed for a person whose account matches who the ad is for (for example, a delivery customer in a certain area). Bottles for nobody in particular never carry such ads.');
+    }
+    reasons.push('After scanning, the video you see first is picked by the time of day and whether you’ve scanned this ad before. You’ll see the same one again when you rescan.');
+    if (own) reasons.push(on('interactions') ? 'What you watched and tapped before is used to pick videos you’ll like. You can turn that off.' : 'Nothing you did before is used to pick what you see: you turned that off, or your local law asks first.');
+    return { body: { reasons, neverUsed: ['Your name, contacts or messages', 'What you do in other apps or websites', 'Data bought from anyone'], use: dataUse, yourChoices: companyId ? `/v1/public/data/${companyId}` : null } };
   } });
 
   route({ method: 'GET', url: '/v1/me/data', scope: 'me', summary: 'Everything kept about you, from every direction: your accounts, scans, page interactions, choices, designs, ads you made and what you did. Download it any time.', handler: async (_req, key) => ({ body: await data.profile(key!.companyId, `user:${key!.userId}`) }) });
@@ -56,6 +128,7 @@ export function dataRoutes(app: App, route: (r: RouteDef) => void) {
     if (!subject) throw new ApiError(400, 'what', 'Send ?email=, ?phone=, ?user=, ?viewer= or ?person=.');
     return { body: await data.profile(k, subject) };
   } });
+  route({ method: 'GET', url: '/v1/data/machines', scope: ['admin', 'ledger'], summary: 'What works at each machine, from counts only (no one’s personal data): scans and AR by kind of ad and time of day, last ?days= (default 30).', handler: async (req, key) => ({ body: await data.machineLearning(staff(key).companyId, Math.min(365, Math.max(1, Number((req.query as any).days ?? 30) || 30))) }) });
   route({ method: 'POST', url: '/v1/data/purge', scope: 'admin', summary: 'Delete everything older than your settings keep (it also runs daily).', handler: async (_req, key) => { staff(key); return { body: { deleted: await data.purge() } }; } });
 
   // ---------- the number line ----------

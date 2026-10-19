@@ -110,6 +110,7 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
 
   const pol = checkPolicy(c.data);
   if (pol) return `Data: ${pol}`;
+  if (c.minimumAge !== undefined && !isInt(c.minimumAge, 13, 21)) return 'The youngest age that may take part must be 13 to 21.';
   if (g.percentOfProfit !== undefined && !isNum(g.percentOfProfit, 0, 90)) return 'The share of the upside’s profit given must be 0% to 90%.';
   if (c.agents) {
     const a = c.agents;

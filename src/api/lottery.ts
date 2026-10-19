@@ -14,6 +14,8 @@ export function lotteryRoutes(app: App, route: (r: RouteDef) => void, parseTarge
     const target = parseTarget(b.target);
     const owner = experiences.ownerOf(target);
     if (target.kind === 'slot' && app.platform.units.get(target.unitId)?.kind === 'custom') return { body: { playing: false } };
+    // Not where sanctions forbid rewards, and not for anyone who said they're under the minimum age.
+    if (!(await app.data.rewardsAllowed(owner.companyId, [b.viewerKey], app.data.placeOf(req))) || (await app.data.ageOk(owner.companyId, [b.viewerKey])) === false) return { body: { playing: false } };
     return { status: 201, body: await lottery.chance({ companyId: owner.companyId, target: b.target, viewerKey: b.viewerKey, via: b.via }) };
   } });
   route({ method: 'POST', url: '/v1/public/lottery/chances/:id/claim', scope: 'public', summary: 'The tap on the ball: when (milliseconds after it appeared) and where (fractions of the screen). Won only if it landed on the ball while it was showing.', body: obj({ viewerKey: viewerKeyProp, tap: obj({ tMs: { type: 'number', minimum: 0, maximum: 60000 }, x: { type: 'number', minimum: -1, maximum: 2 }, y: { type: 'number', minimum: -1, maximum: 2 } }, ['tMs', 'x', 'y']) }, ['viewerKey', 'tap']), handler: async (req) => {

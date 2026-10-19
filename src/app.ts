@@ -48,6 +48,7 @@ import { ClaudeWriter, builtinWriter } from './modules/video/motion';
 import { VeoProvider } from './modules/video/veo';
 import type { FootageProvider, StoryWriter } from './modules/video/contract';
 import { InteractionService } from './modules/interactions/service';
+import { geoFromEnv } from './modules/data/geoip';
 import { DataService } from './modules/data/service';
 import { TransparencyService } from './modules/transparency/service';
 import { AnchorService, GitHubPublisher, OpenTimestampsPublisher, type AnchorPublisher } from './modules/transparency/anchors';
@@ -108,6 +109,10 @@ export interface AppOptions {
   studioDesigner?: StudioDesigner;
   studioProviders?: { libraries: PhotoLibrary[]; images: ImageMaker; models: ModelMaker };
   geocoder?: Geocoder; // defaults to the test geocoder
+  /** Where each visitor is, so their own law applies (GEOIP_DB, a MaxMind file; without one, only trusted host headers). */
+  geo?: import('./modules/data/jurisdiction').GeoIp | null;
+  /** Tests and local runs: treat anyone we can't place as being here. Ignored in production (unknown means strictest). */
+  assumePlace?: { country: string; state?: string };
   planner?: RoutePlanner; // defaults to the simple route planner
   payouts?: PayoutProvider; // sends money to charities; defaults to the test provider (no real money)
   webhookSender?: WebhookSender; // sends webhooks; defaults to real HTTPS
@@ -213,6 +218,11 @@ export async function createApp(opts: AppOptions) {
   experiences.videos = videos;
   const interactions = new InteractionService(db, platform, opts.clock);
   const data = new DataService(db, platform, interactions, opts.clock);
+  // Where each person is decides which law applies to them. Unknown: the strictest.
+  data.geo = opts.geo === null ? undefined : opts.geo ?? geoFromEnv(process.env);
+  data.trustGeoHeaders = process.env.TRUST_GEO_HEADERS === '1';
+  if (opts.assumePlace && process.env.NODE_ENV !== 'production') data.assumedPlace = { ...opts.assumePlace, source: 'declared' };
+  if (process.env.SANCTIONED_COUNTRIES) data.sanctionedCountries = process.env.SANCTIONED_COUNTRIES.split(',').map((c) => c.trim().toUpperCase()).filter((c) => /^[A-Z]{2}$/.test(c));
   data.eraseAddresses = async (companyId, userIds) => {
     let n = 0;
     for (const p of packs.packs.values()) if (p.companyId === companyId && p.customerId && userIds.includes(p.customerId) && p.address !== 'erased' && (p.status === 'delivered' || p.status === 'returned')) { p.address = 'erased'; platform.persist.pack(p); n++; }
@@ -230,6 +240,7 @@ export async function createApp(opts: AppOptions) {
   };
 
   // The data environment: choices made in a clean setting, exposure recorded, people directing gifts and choosing ads.
+  numberline.keepsChoicesOf = (companyId, person) => data.allowed(companyId, 'choices', [person]);
   const environment = new EnvironmentService(db, platform, numberline, opts.clock);
   numberline.environmentOf = (companyId, person, subject, unitId) => environment.environmentOf(companyId, person, subject, unitId);
   accounts.audienceExtras = (companyId, personKey) => environment.audienceExtras(companyId, personKey);
