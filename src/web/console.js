@@ -67,6 +67,7 @@
     [/^\/console\/?$/, startPage], [/^\/console\/company$/, companyPage], [/^\/console\/brand$/, brandPage], [/^\/console\/ads$/, adsPage], [/^\/console\/giving$/, givingPage], [/^\/console\/game$/, gamePage], [/^\/console\/transparency$/, transparencyPage], [/^\/console\/data$/, dataPage], [/^\/console\/numberline$/, numberLinePage], [/^\/console\/agents$/, agentsPage], [/^\/console\/given$/, givenPage], [/^\/console\/security$/, securityPage],
     [/^\/console\/modules$/, modulesPage], [/^\/console\/codes$/, codesPage], [/^\/console\/products$/, productsPage], [/^\/console\/machines$/, machinesPage], [/^\/console\/team$/, teamPage], [/^\/console\/history$/, historyPage],
     [/^\/console\/keys$/, keysPage], [/^\/console\/webhooks$/, webhooksPage], [/^\/console\/webhooks\/([\w-]+)$/, webhookPage], [/^\/console\/licensees$/, licenseesPage],
+    [/^\/console\/launch$/, launchPage], [/^\/console\/wallet$/, walletPage], [/^\/console\/offers$/, offersPage], [/^\/console\/games$/, gamesPage], [/^\/console\/chain$/, chainPage],
   ];
   let cleanup = null;
   function go(path, replace) {
@@ -98,7 +99,9 @@
 
   function shell(active, ...content) {
     const nav = [
-      ['start', '/console', 'Get started', I.start], ['company', '/console/company', 'Company', I.company], ['brand', '/console/brand', 'Brand', I.brand], ['ads', '/console/ads', 'Ads and prices', I.ads], ['codes', '/console/codes', 'QR codes and AR', I.qr], ['products', '/console/products', 'Products', I.product],
+      ['start', '/console', 'Get started', I.start],
+      'Points and rewards', ['launch', '/console/launch', 'Launch', I.start], ['wallet', '/console/wallet', 'Points and credit', I.giving], ['offers', '/console/offers', 'Brand offers', I.ads], ['games', '/console/games', 'The games', I.game], ['chain', '/console/chain', 'Blockchain', I.key],
+      'Settings', ['company', '/console/company', 'Company', I.company], ['brand', '/console/brand', 'Brand', I.brand], ['ads', '/console/ads', 'Ads and prices', I.ads], ['codes', '/console/codes', 'QR codes and AR', I.qr], ['products', '/console/products', 'Products', I.product],
       ['giving', '/console/giving', 'Giving', I.giving], ['game', '/console/game', 'Prize game', I.game], ['transparency', '/console/transparency', 'Transparency', I.eye], ['data', '/console/data', 'Data and privacy', I.shield], ['numberline', '/console/numberline', 'Number line', I.line], ['agents', '/console/agents', 'AI agents', I.ai], ['security', '/console/security', 'Security', I.shield], ['modules', '/console/modules', 'Modules', I.modules], ['machines', '/console/machines', 'Machines', I.machine], ['team', '/console/team', 'Team', I.team], ['history', '/console/history', 'History', I.history],
       'Developers', ['keys', '/console/keys', 'API keys', I.key], ['webhooks', '/console/webhooks', 'Webhooks', I.hook], ['docs', '/developers', 'Docs', I.docs],
       ...(S.ov?.config?.id === 'freewater' ? ['FreeWater team', ['given', '/console/given', 'Bottles given & receipts', I.box]] : []),
@@ -195,6 +198,128 @@
     return h('label', { class: `switch${o.full ? ' full' : ''}` }, box, h('div', {}, h('b', { text: title }), h('span', { text: desc })));
   };
   const section = (title, lead, ...kids) => h('section', { class: 'section' }, h('h2', { text: title }), lead ? h('p', { class: 'lead', text: lead }) : null, ...kids);
+
+  // ---------- launch: test, then live ----------
+  const person = () => !!S.ov?.you?.person;
+  const chip = (text, tone) => h('span', { class: `pill${tone ? ` ${tone}` : ''}`, text });
+  const actionRow = (a, after) => {
+    const btn = (label, fn, cls = 'btn small') => h('button', { class: cls, type: 'button', onclick: async (e) => { e.currentTarget.disabled = true; try { await fn(); toast('Done.'); render(); } catch (x) { toast(x.message); e.currentTarget.disabled = false; } } }, label);
+    const names = { go_live_points: 'Go live with points', go_live_token: 'Go live with the token', convert: 'Turn points into tokens', withdrawals_on: 'Turn on withdrawals', mint: 'Mint tokens', unpause: 'Unpause', switch_on: 'Switch the chain on', pause: 'Pause' };
+    const ready = a.status === 'approved' && a.notBefore && Date.parse(a.notBefore) <= Date.now();
+    const sign = a.status === 'signing' ? (() => {
+      const sig = h('input', { class: 'input', placeholder: 'Transaction signature from Squads', spellcheck: 'false', style: 'font-family:var(--mono)' });
+      return h('div', { class: 'stack', style: 'gap:8px' }, h('p', { class: 'muted', style: 'margin:0', text: 'Sign this in Squads with the other keyholders, then paste the signature here. It is checked on Solana before the books change.' }),
+        h('div', { class: 'toolbar' }, h('button', { class: 'btn small secondary', type: 'button', onclick: () => copy(a.toSign) }, 'Copy transaction'), sig, btn('Check and record', () => api('POST', `/v1/chain/actions/${a.id}/signed`, { signature: sig.value.trim() }))));
+    })() : null;
+    return h('tr', {}, h('td', {}, h('b', { text: names[a.kind] ?? a.kind }), a.params?.plan ? h('div', { class: 'muted', text: `${a.params.plan.total.toLocaleString()} token units to ${a.params.plan.people} people` }) : a.params?.reason ? h('div', { class: 'muted', text: a.params.reason }) : null, sign),
+      h('td', { text: a.status === 'proposed' ? `${a.approvals.length} of ${a.needed} approvals` : a.status === 'approved' ? (ready ? 'Ready to run' : `Waiting until ${when(a.notBefore)}`) : a.status }),
+      h('td', { text: a.proposedBy }),
+      h('td', {}, h('div', { class: 'toolbar' },
+        a.status === 'proposed' ? btn('Approve', () => api('POST', `/v1/chain/actions/${a.id}/approve`)) : null,
+        ready ? btn('Run it now', () => api('POST', `/v1/chain/actions/${a.id}/run`), 'btn small blue') : null,
+        ['proposed', 'approved', 'signing'].includes(a.status) ? btn('Cancel', () => api('POST', `/v1/chain/actions/${a.id}/cancel`), 'btn small secondary') : null, after)));
+  };
+  const actionsTable = (list) => list.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['What', 'Where it is', 'Proposed by', ''].map((x) => h('th', { text: x })))), h('tbody', {}, list.map((a) => actionRow(a))))) : h('p', { class: 'muted', style: 'margin:0', text: 'Nothing proposed.' });
+  const propose = async (kind, params = {}) => { await api('POST', '/v1/chain/actions', { kind, params }); toast('Proposed. Everyone on the team was told.'); render(); };
+
+  async function launchPage() {
+    const [st, chainSt, actions] = await Promise.all([api('GET', '/v1/launch'), api('GET', '/v1/chain'), api('GET', '/v1/chain/actions')]);
+    const steps = [['test', 'Testing', 'Try everything yourself and with bots. Reset any time.'], ['points', 'Live with points', 'Real people earn placeholder points and rewards. No more resets.'], ['token', 'Live with the token', 'Points become the Solana token, held safely in custody.']];
+    const at = steps.findIndex(([k]) => k === st.stage);
+    const mine = actions.filter((a) => ['go_live_points', 'go_live_token', 'convert', 'withdrawals_on'].includes(a.kind) && !['done', 'cancelled', 'expired', 'failed'].includes(a.status));
+    const reset = (() => {
+      const word = h('input', { class: 'input', placeholder: 'Type RESET', 'aria-label': 'Type RESET to confirm' });
+      const go = h('button', { class: 'btn secondary', type: 'button', disabled: true }, 'Wipe all test data');
+      word.addEventListener('input', () => { go.disabled = word.value !== 'RESET'; });
+      go.addEventListener('click', async () => { go.disabled = true; try { const r = await api('POST', '/v1/launch/reset', { confirm: 'RESET' }); toast(`Wiped: ${Object.entries(r.counts).filter(([, n]) => n).map(([k, n]) => `${n} ${k}`).join(', ') || 'nothing to wipe'}.`); render(); } catch (x) { toast(x.message); } });
+      return section('Reset', 'Wipes every wallet, game answer, offer claim, seal and bot from testing. Settings, products and offers themselves stay.', h('div', { class: 'toolbar' }, word, go), st.lastReset ? h('p', { class: 'muted', style: 'margin:0', text: `Last reset ${ago(st.lastReset.at)} by ${st.lastReset.by}.` }) : null);
+    })();
+    const bots = (() => {
+      const n = h('input', { class: 'input', type: 'number', min: 1, max: 200, value: 20, 'aria-label': 'How many bots' });
+      const r = h('input', { class: 'input', type: 'number', min: 1, max: 60, value: 15, 'aria-label': 'Screens each' });
+      const out = h('p', { class: 'muted', style: 'margin:0' });
+      const go = h('button', { class: 'btn blue', type: 'button' }, 'Run bots');
+      go.addEventListener('click', async () => { go.disabled = true; out.textContent = 'Bots are playing…'; try { const x = await api('POST', '/v1/launch/bots', { bots: Number(n.value), rounds: Number(r.value) }); out.textContent = `${x.bots} bots answered ${x.answered} screens, scanned ${x.scans} bottles, sent ${x.feedback} notes and earned ${x.points.toLocaleString()} points.`; } catch (e) { out.textContent = e.message; } go.disabled = false; });
+      return section('Test with bots', 'Bots play like people: their own tastes, a few seconds a screen, most quick checks passed, some careless. Each is marked as a bot and wiped by a reset.', h('div', { class: 'form' }, field('Bots', n), field('Screens each', r)), h('div', { class: 'toolbar' }, go, link('/console/games', { class: 'btn secondary' }, 'See what they picked')), out);
+    })();
+    const next = st.stage === 'test' ? section('Go live with points', 'Real people start earning placeholder points, rewards and offers. Everything from testing is wiped as it goes live, and after this there’s no going back. It can run a day after you propose it.', person() ? h('button', { class: 'btn blue', type: 'button', onclick: () => propose('go_live_points').catch((x) => toast(x.message)) }, 'Propose going live') : h('p', { class: 'notice err', text: 'Sign in as yourself to propose this.' }))
+      : st.stage === 'points' ? section('Go live with the token', `Needs ${chainSt.approvalsNeeded} other owners or finance people to approve, then a ${chainSt.delayHours}-hour wait. After it, points can be turned into the token.`, h('button', { class: 'btn blue', type: 'button', onclick: () => propose('go_live_token').catch((x) => toast(x.message)) }, 'Propose going live with the token'))
+      : section('Points into tokens', 'Every point anyone holds becomes the token at the rate you set (the token has 6 decimal places: 1,000,000 units is one token). Approved by others, then the wait; on Solana it’s signed in Squads.', (() => { const rate = h('input', { class: 'input', type: 'number', min: 1, value: 1000000, 'aria-label': 'Token units per point' }); return h('div', { class: 'toolbar' }, field('Token units per point', rate), h('button', { class: 'btn blue', type: 'button', onclick: () => propose('convert', { tokensPerPoint: Number(rate.value) }).catch((x) => toast(x.message)) }, 'Propose the conversion'), st.withdrawals ? chip('Withdrawals on') : h('button', { class: 'btn secondary', type: 'button', onclick: () => propose('withdrawals_on').catch((x) => toast(x.message)) }, 'Propose turning on withdrawals')); })());
+    shell('launch', head('Launch', 'Test everything first, then go live in steps. Each step is approved, waits, and can’t be undone.'),
+      h('ol', { class: 'stages', 'aria-label': 'Launch steps' }, steps.map(([k, name, d], i) => h('li', { class: i < at ? 'done' : i === at ? 'now' : '', 'aria-current': i === at ? 'step' : null }, h('span', { class: 'n', text: i < at ? '✓' : String(i + 1) }), h('b', { text: name }), h('small', { text: d }), i === at ? h('em', { text: 'You are here' }) : null))),
+      ...(st.stage === 'test' ? [bots, reset] : []), next,
+      section('Waiting', 'Steps proposed and not yet run.', actionsTable(mine)));
+  }
+
+  // ---------- wallet and points ----------
+  async function walletPage() {
+    const [supply, check, camps] = await Promise.all([api('GET', `/v1/public/wallet/${encodeURIComponent(S.ov.config.id)}/supply`), api('GET', '/v1/wallet/check'), api('GET', '/v1/campaigns').catch(() => [])]);
+    const brands = [...new Map(camps.map((c) => [c.advertiserId, c.advertiserName])).entries()];
+    settingsPage('wallet', 'Points and credit', 'Points are earned for real activity and are the same whichever item someone picks. Dollar credit is paid from a brand’s reserve, never more than it holds.', (ctx) => {
+      if (!ctx.draft.wallet) { ctx.draft.wallet = structuredClone(S.ov.options.wallet); S.ov.config.wallet = structuredClone(S.ov.options.wallet); }
+      const actions = Object.keys(ctx.draft.wallet.points.perAction);
+      const label = { scan: 'Scanning a real bottle', game_round: 'Each game screen', ad_feedback: 'Each ad round', feedback: 'Feedback (20+ characters)', prompt: 'A real question', upload: 'A picture with feedback', streak_bonus: 'Every 10 in a row' };
+      const reserve = (() => { const who = h('select', { class: 'input' }, brands.map(([id, name]) => h('option', { value: `advertiser:${id}`, text: name }))), amt = h('input', { class: 'input', type: 'number', min: 0.01, step: '0.01', placeholder: '$' }), ref = h('input', { class: 'input', placeholder: 'Payment reference' }); return h('div', { class: 'stack' }, h('div', { class: 'form' }, field('Brand (reserve)', who), field('Amount arrived', amt), field('Payment reference', ref)), h('div', { class: 'toolbar' }, h('button', { class: 'btn secondary', type: 'button', onclick: async () => { try { const r = await api('POST', '/v1/wallet/reserve', { sponsor: who.value, cents: Math.round(Number(amt.value) * 100), ref: ref.value.trim() }); toast(`Reserve now ${dollars(r.reserve)}.`); } catch (x) { toast(x.message); } } }, 'Record money in reserve'))); })();
+      return [
+        h('div', { class: 'kpis', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' },
+          h('div', { class: 'kpi' }, h('span', { text: 'Points given out' }), h('b', { text: supply.issued.toLocaleString() })), h('div', { class: 'kpi' }, h('span', { text: 'Cap' }), h('b', { text: supply.cap.toLocaleString() })),
+          h('div', { class: 'kpi' }, h('span', { text: 'Halvings so far' }), h('b', { text: String(supply.era) })), h('div', { class: 'kpi' }, h('span', { text: 'Books add up' }), h('b', { text: check.ok ? 'Yes' : 'No' }))),
+        section('Points per action', 'What each action earns now, before halvings. Points never depend on which item someone picks.', h('div', { class: 'form' }, actions.map((k) => num(ctx, `wallet.points.perAction.${k}`, label[k] ?? k, { min: 0, max: 10000, hint: `Earns ${supply.earnNow[k] ?? 0} now` }))),
+          h('div', { class: 'form' }, num(ctx, 'wallet.points.dailyMax', 'Most points one person can earn in a day', { min: 0, max: 1000000 }), text(ctx, 'wallet.points.name', 'What points are called', { max: 40 }))),
+        section('Money switches', 'Changed only by a person signed in. Exchanging points for anything else takes the several-people approval under Launch.',
+          toggle(ctx, 'wallet.credit.enabled', 'Dollar credit', 'Pay people from brands’ reserves (offers, rewards).'), toggle(ctx, 'offers.enabled', 'Brand offers', 'Approved offers go live for people to claim.')),
+        section('Brand reserves', 'Record money a brand sent for credit, once it has really arrived.', reserve),
+      ];
+    });
+  }
+
+  // ---------- offers and receipts ----------
+  async function offersPage() {
+    const [list, waiting] = await Promise.all([api('GET', '/v1/offers'), api('GET', '/v1/offers/receipts')]);
+    const btn = (label, fn, cls = 'btn small') => h('button', { class: cls, type: 'button', onclick: async (e) => { e.currentTarget.disabled = true; try { await fn(); toast('Done.'); render(); } catch (x) { toast(x.message); e.currentTarget.disabled = false; } } }, label);
+    const rows = list.map((o) => h('tr', {}, h('td', {}, h('b', { text: o.title }), h('div', { class: 'muted', text: `${o.brand ?? o.advertiserId} · ${o.deal}` })), h('td', { text: o.pointsCost ? `${o.pointsCost} points` : 'Free to claim' }), h('td', { text: `${o.claimed} claimed, ${o.left} left` }), h('td', {}, chip({ pending: 'Waiting for you', live: 'Live', paused: 'Paused', draft: 'Draft' }[o.status] ?? o.status)),
+      h('td', {}, h('div', { class: 'toolbar' }, o.status === 'pending' || o.status === 'paused' ? btn('Approve', () => api('POST', `/v1/offers/${o.id}/approve`), 'btn small blue') : null, o.status === 'live' ? btn('Pause', () => api('POST', `/v1/offers/${o.id}/pause`), 'btn small secondary') : null))));
+    const receipts = waiting.map((w) => {
+      const price = h('input', { class: 'input', type: 'number', min: 0, step: '0.01', placeholder: 'Price on receipt ($)', style: 'max-width:180px' });
+      const img = h('img', { alt: `Receipt for ${w.title}`, style: 'max-width:260px;max-height:360px;border-radius:12px;border:1px solid var(--line)' });
+      fetch(w.receipt, { headers: { authorization: `Bearer ${S.token}` } }).then((r) => r.blob()).then((b) => { img.src = URL.createObjectURL(b); }).catch(() => {});
+      return h('div', { class: 'panel-box', style: 'display:flex;gap:16px;flex-wrap:wrap' }, img, h('div', { class: 'stack', style: 'min-width:0;flex:1' }, h('b', { text: w.title }), h('span', { class: 'muted', text: `Sent ${ago(w.sentAt)}${w.read ? ` · read: ${w.read.store ?? '?'} on ${w.read.date ?? '?'}` : ' · no reader connected'}` }),
+        h('div', { class: 'toolbar' }, price, btn('Accept', () => api('POST', `/v1/offers/receipts/${w.claim}/review`, { approve: true, paidCents: Math.round(Number(price.value) * 100) }), 'btn small blue'), btn('Turn down', () => api('POST', `/v1/offers/receipts/${w.claim}/review`, { approve: false }), 'btn small secondary'))));
+    });
+    shell('offers', head('Brand offers', S.ov.config.offers?.enabled ? 'Brands make offers; you approve them. People claim with points, buy, and send a receipt.' : 'Brand offers are switched off (Points and credit → Money switches). You can still look over drafts.'),
+      section(`Receipts to check (${waiting.length})`, 'Accept with the price on the receipt, or turn it down (their points go back).', receipts.length ? receipts : h('p', { class: 'muted', style: 'margin:0', text: 'Nothing waiting.' })),
+      section('Offers', 'Brands send offers for approval from their ad console.', list.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Offer', 'Costs', 'Claims', 'Status', ''].map((x) => h('th', { text: x })))), h('tbody', {}, rows))) : h('p', { class: 'muted', style: 'margin:0', text: 'No offers yet.' })));
+  }
+
+  // ---------- the games ----------
+  async function gamesPage() {
+    const [r, cat] = await Promise.all([api('GET', '/v1/games/report'), api('GET', '/v1/games/catalog')]);
+    const pct = (x) => `${Math.round(x * 100)}%`;
+    const names = { for_sale: 'For sale', discounted: 'Cheaper than usual', free_ads: 'Free', free_sponsor: 'Free (a brand pays)', negative: 'Negatively priced' };
+    const tierNames = { 1: 'Constrained', 3: 'Revealed preference', '4a': 'Values (we chose the cause)', '4b': 'Values (they get paid)', 5: 'Brand commitment' };
+    const bars = (obj, label) => h('div', { class: 'stack', style: 'gap:6px' }, Object.entries(obj).map(([k, v]) => h('div', { style: 'display:grid;grid-template-columns:minmax(0,180px) 1fr 60px;gap:10px;align-items:center' }, h('span', { text: label(k) }), h('div', { style: 'height:10px;border-radius:5px;background:var(--line);overflow:hidden' }, h('i', { style: `display:block;height:100%;width:${Math.round(v.rate * 100)}%;background:var(--blue, #2F8FC4)` })), h('b', { style: 'font-variant-numeric:tabular-nums', text: pct(v.rate) }))));
+    const upload = (item) => { const f = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp', style: 'max-width:200px' }); f.addEventListener('change', async () => { const file = f.files[0]; if (!file) return; const b64 = await new Promise((ok) => { const rd = new FileReader(); rd.onload = () => ok(String(rd.result).split(',')[1]); rd.readAsDataURL(file); }); try { await api('POST', `/v1/games/catalog/${encodeURIComponent(item.id)}/photo`, { contentType: file.type, dataBase64: b64, credit: S.config.name }); toast('Photo saved.'); render(); } catch (x) { toast(x.message); } }); return f; };
+    shell('games', head('The games', `Last 30 days: ${r.kept.toLocaleString()} answers kept, ${r.marked.toLocaleString()} set aside (too fast or a failed check). Median ${r.medianMs ? `${(r.medianMs / 1000).toFixed(1)} s` : '—'} a screen; ${r.changedMind} changed their mind.`, h('button', { class: 'btn secondary', type: 'button', onclick: async () => { try { const x = await api('POST', '/v1/games/catalog/photos'); toast(`Found ${x.found} photos.`); render(); } catch (e) { toast(e.message); } } }, 'Look for photos now')),
+      h('div', { class: 'grid2' },
+        section('Picked, by price setup', 'Of the times each setup was on a screen, how often it was chosen.', bars(r.pickRateBySetup, (k) => names[k] ?? k)),
+        section('Picked, by place on screen', 'If the first spot wins much more often, the layout is steering people.', bars(r.pickRateByPosition, (k) => `Spot ${Number(k) + 1}`))),
+      section('Honest-data tiers', 'Which tier each pick would be if it were real.', h('div', { class: 'pills' }, Object.entries(r.tiers).map(([k, n]) => chip(`${tierNames[k] ?? k}: ${n}`)))),
+      section('Photos on the cards', 'Each item’s photo, where it came from and its license. Open a category to check them, or upload your own (a brand’s official photo) to replace any.', ...cat.map((c) => h('details', { class: 'stack', style: 'gap:8px' }, h('summary', { style: 'cursor:pointer;font-weight:700', text: `${c.name}: ${c.items.filter((i) => i.image).length} of ${c.items.length} have photos${c.source === 'none' ? ' (name cards)' : ''}` }),
+        h('div', { style: 'display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px' }, c.items.map((it) => h('div', { class: 'panel-box', style: 'padding:10px;gap:6px;display:grid' }, it.image ? h('img', { src: it.image, alt: it.label, style: 'width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:8px' }) : h('div', { class: 'muted', style: 'aspect-ratio:4/3;display:grid;place-items:center;border-radius:8px;background:var(--line)', text: it.status === 'none' ? 'No free photo' : 'Not looked for yet' }), h('b', { style: 'font-size:13px', text: it.label }), it.credit ? h('small', { class: 'muted', text: `${it.credit} · ${it.license}` }) : null, upload(it))))))));
+  }
+
+  // ---------- the chain ----------
+  async function chainPage() {
+    const [st, actions, seals, check] = await Promise.all([api('GET', '/v1/chain'), api('GET', '/v1/chain/actions'), api('GET', `/v1/public/wallet/${encodeURIComponent(S.ov.config.id)}/seals`), api('GET', '/v1/chain/seals/check')]);
+    const reason = h('input', { class: 'input', placeholder: 'Why you’re pausing', 'aria-label': 'Reason' });
+    shell('chain', head('Blockchain', `${st.enabled ? 'On' : 'Off'} · ${st.network === 'test' ? 'practice chain (not a real blockchain)' : st.network} · ${st.paused ? 'PAUSED' : 'running'}`),
+      h('div', { class: 'kpis', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' },
+        h('div', { class: 'kpi' }, h('span', { text: 'Stage' }), h('b', { text: st.stage })), h('div', { class: 'kpi' }, h('span', { text: 'Tokens in the books' }), h('b', { text: st.tokenSupply.toLocaleString() })),
+        h('div', { class: 'kpi' }, h('span', { text: 'Last daily check' }), h('b', { text: st.lastCheck ? (st.lastCheck.ok ? 'Matched' : 'MISMATCH') : '—' })), h('div', { class: 'kpi' }, h('span', { text: 'Seals intact' }), h('b', { text: check.ok ? `All ${check.checked}` : `${check.broken.length} broken` }))),
+      section('Pause', 'Stops everything on the chain at once. Any one person. Unpausing needs approvals and the wait.', h('div', { class: 'toolbar' }, reason, h('button', { class: 'btn secondary', type: 'button', onclick: async () => { try { await api('POST', '/v1/chain/pause', { reason: reason.value || 'Paused from the console' }); toast('Paused.'); render(); } catch (x) { toast(x.message); } } }, 'Pause now'), st.paused ? h('button', { class: 'btn blue', type: 'button', onclick: () => propose('unpause').catch((x) => toast(x.message)) }, 'Propose unpausing') : null)),
+      section('Approvals', `Anything that can’t be undone needs ${st.approvalsNeeded} other owners or finance people who were on the team when it was proposed, then a ${st.delayHours}-hour wait.`, actionsTable(actions)),
+      section('Hourly seals', 'One fingerprint for every hour of the wallet books, each including the hour before. Anyone can check their own entry against it.', seals.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Hour', 'Fingerprint', 'Published'].map((x) => h('th', { text: x })))), h('tbody', {}, seals.slice(0, 24).map((x) => h('tr', {}, h('td', { text: when(x.hour) }), h('td', { style: 'font-family:var(--mono);font-size:12px', text: `${x.root.slice(0, 20)}…` }), h('td', { text: Object.keys(x.published).join(', ') || 'not yet' })))))) : h('p', { class: 'muted', style: 'margin:0', text: 'No seals yet.' })));
+  }
 
   // ---------- get started ----------
   async function startPage() {

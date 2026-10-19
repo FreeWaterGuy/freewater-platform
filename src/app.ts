@@ -372,6 +372,7 @@ export async function createApp(opts: AppOptions) {
   }
   const launch = new LaunchService(db, platform, data, games, wallet, chain, opts.clock, opts.seed !== undefined ? seededRandom(opts.seed + 202) : Math.random);
   wallet.stageOf = (companyId) => chain.stage(companyId);
+  chain.beforeGoLive = (companyId, by) => launch.reset(companyId, by);
 
   const flush = () => persistence.flush();
   const publicUrl = opts.publicUrl ?? process.env.PUBLIC_URL;

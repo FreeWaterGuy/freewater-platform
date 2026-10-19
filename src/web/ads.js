@@ -68,7 +68,7 @@
   // ---------- routing ----------
   const routes = [
     [/^\/ads\/?$/, overview], [/^\/ads\/new$/, newAd], [/^\/ads\/drafts\/([\w-]+)$/, builder], [/^\/ads\/drafts\/([\w-]+)\/review$/, review],
-    [/^\/ads\/campaigns\/([\w-]+)\/change$/, changeAd], [/^\/ads\/campaigns\/([\w-]+)\/code$/, codePage], [/^\/ads\/billing$/, billing], [/^\/ads\/studio(?:\?.*)?$/, studioPage], [/^\/ads\/tracking$/, tracking], [/^\/ads\/redeem(?:\/([\w-]+))?$/, redeem], [/^\/ads\/statement$/, statementPage],
+    [/^\/ads\/campaigns\/([\w-]+)\/change$/, changeAd], [/^\/ads\/campaigns\/([\w-]+)\/code$/, codePage], [/^\/ads\/billing$/, billing], [/^\/ads\/studio(?:\?.*)?$/, studioPage], [/^\/ads\/tracking$/, tracking], [/^\/ads\/redeem(?:\/([\w-]+))?$/, redeem], [/^\/ads\/statement$/, statementPage], [/^\/ads\/offers$/, offersPage],
   ];
   let cleanup = null;
   function go(path, replace) { state.path = path; if (!fixture) history[replace ? 'replaceState' : 'pushState'](null, '', path); render(); }
@@ -89,6 +89,7 @@
           link('/ads', { 'aria-current': active === 'overview' ? 'page' : null }, icon(I.chart), 'Overview'),
           link('/ads/new', { 'aria-current': active === 'new' ? 'page' : null }, icon(I.plus), 'New ad'),
           link('/ads/studio', { 'aria-current': active === 'studio' ? 'page' : null }, icon(I.plus), 'Ad studio'),
+          link('/ads/offers', { 'aria-current': active === 'offers' ? 'page' : null }, icon(I.ticket), 'Offers'),
           link('/ads/tracking', { 'aria-current': active === 'tracking' ? 'page' : null }, icon(I.target), 'Sales tracking'),
           link('/ads/redeem', { 'aria-current': active === 'redeem' ? 'page' : null }, icon(I.ticket), 'Check a coupon'),
           link('/ads/statement', { 'aria-current': active === 'statement' ? 'page' : null }, icon(I.chart), 'Statement'),
@@ -289,6 +290,53 @@
   }
 
   // ---------- sales tracking: the tag, server reporting, and what it found ----------
+  // ---------- brand offers ----------
+  async function offersPage() {
+    const list = await api('GET', '/v1/offers');
+    const f = {};
+    const inp = (id, o = {}) => (f[id] = h('input', { class: 'input', id: `of-${id}`, ...o }));
+    const fld = (id, label, el, hint) => h('div', { class: 'field' }, h('label', { for: `of-${id}`, text: label }), el, hint ? h('small', { style: 'color:var(--muted)', text: hint }) : null);
+    let pctBox, offBox;
+    const kind = h('select', { class: 'input', id: 'of-kind' }, [['free', 'Free'], ['percent_off', 'A percent off'], ['cents_off', 'An amount off']].map(([v, l]) => h('option', { value: v, text: l })));
+    const found = h('div', { style: 'font-size:14px;color:var(--muted)' });
+    inp('barcodes', { placeholder: '040000004325', spellcheck: 'false' });
+    f.barcodes.addEventListener('change', async () => {
+      const codes = f.barcodes.value.split(/[\s,]+/).filter(Boolean);
+      const names = await Promise.all(codes.map((c) => api('GET', `/v1/products/${encodeURIComponent(c)}`).then((p) => `${c}: ${p.name ? `${p.brand ? `${p.brand} ` : ''}${p.name}` : 'not found (it still works if the barcode is right)'}`).catch((x) => `${c}: ${x.message}`)));
+      found.textContent = names.join(' · ');
+    });
+    const $ = (id) => Math.round(Number(f[id].value || 0) * 100);
+    const form = h('form', { class: 'panel', style: 'gap:12px', onsubmit: async (e) => {
+      e.preventDefault();
+      const reward = { kind: kind.value, upToCents: $('upto'), ...(kind.value === 'percent_off' ? { percent: Number(f.percent.value) } : {}), ...(kind.value === 'cents_off' ? { cents: $('off') } : {}), ...($('youget') ? { youGetCents: $('youget') } : {}), ...($('cause') ? { causeCents: $('cause') } : {}) };
+      try {
+        const o = await api('POST', '/v1/offers', { title: f.title.value.trim(), ...(f.details.value.trim() ? { details: f.details.value.trim() } : {}), products: f.barcodes.value.split(/[\s,]+/).filter(Boolean), retailers: f.stores.value.split(',').map((x) => x.trim()).filter(Boolean), reward, pointsCost: Number(f.points.value || 0), perPerson: Number(f.per.value || 1), maxClaims: Number(f.max.value || 1) });
+        await api('POST', `/v1/offers/${o.id}/submit`);
+        toast('Sent to FreeWater to approve.'); go('/ads/offers');
+      } catch (x) { toast(x.message); }
+    } },
+      h('h2', { class: 'section', text: 'Make an offer' }),
+      h('p', { style: 'margin:0;color:var(--muted)', text: 'People trade points for it, buy your product at any store you list, and send a photo of the receipt. You pay back what they spent (and anything extra) from your reserve. FreeWater approves each offer.' }),
+      fld('title', 'What it is', inp('title', { maxlength: 80, placeholder: 'A free king-size Snickers' })),
+      fld('barcodes', 'The exact products (barcode numbers)', f.barcodes, 'The number under the UPC or EAN barcode. Several? Separate them with commas.'), found,
+      fld('stores', 'Where', inp('stores', { placeholder: 'Walmart, Target (or “any”)' })),
+      fld('kind', 'The deal', kind), (pctBox = fld('percent', 'Percent off', inp('percent', { type: 'number', min: 1, max: 100, placeholder: '50' }))), (offBox = fld('off', 'Amount off ($)', inp('off', { type: 'number', min: 0, step: '0.01' }))),
+      fld('upto', 'Pay back up to ($)', inp('upto', { type: 'number', min: 0, step: '0.01', value: '3.00' }), 'The most paid back for the product itself.'),
+      fld('youget', 'Plus, to the person ($)', inp('youget', { type: 'number', min: 0, step: '0.01', placeholder: '0.25' }), 'Optional: makes it negatively priced.'),
+      fld('cause', 'Plus, to the cause ($)', inp('cause', { type: 'number', min: 0, step: '0.01', placeholder: '0.10' }), `Optional: goes to ${state.me?.company?.cause ?? 'FreeWater’s cause'}.`),
+      fld('points', 'Points it costs', inp('points', { type: 'number', min: 0, value: 100 })), fld('per', 'Each person, up to', inp('per', { type: 'number', min: 1, value: 1 })), fld('max', 'In all, up to', inp('max', { type: 'number', min: 1, value: 1000 })),
+      fld('details', 'Anything else (optional)', inp('details', { maxlength: 500 })),
+      h('div', {}, h('button', { class: 'btn', type: 'submit' }, 'Send for approval')));
+    const showDeal = () => { pctBox.hidden = kind.value !== 'percent_off'; offBox.hidden = kind.value !== 'cents_off'; };
+    kind.addEventListener('change', showDeal); showDeal();
+    const status = { draft: 'Draft', pending: 'Waiting for FreeWater', live: 'Live', paused: 'Paused' };
+    shell('offers',
+      h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Offers' }), h('p', { text: 'Free, cheaper or negatively priced: your product at any store, paid for from your reserve.' }))),
+      list.length ? h('div', { class: 'cards', style: 'margin-bottom:24px' }, list.map((o) => h('div', { class: 'panel', style: 'gap:6px' }, h('b', { text: o.title }), h('span', { text: o.deal }), h('span', { style: 'color:var(--muted)', text: `${status[o.status] ?? o.status} · ${o.claimed} claimed · ${o.left} left` }),
+        o.status === 'live' ? h('div', {}, h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { try { await api('POST', `/v1/offers/${o.id}/pause`); toast('Paused.'); go('/ads/offers'); } catch (x) { toast(x.message); } } }, 'Pause')) : null))) : h('div', { class: 'empty', text: 'No offers yet.' }),
+      h('div', { class: 'review', style: 'max-width:720px' }, form));
+  }
+
   async function tracking() {
     const t = await api('GET', '/v1/ads/tracking');
     const reach = await api('GET', '/v1/ads/reach').catch(() => null);

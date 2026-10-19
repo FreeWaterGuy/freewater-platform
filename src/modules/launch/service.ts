@@ -38,7 +38,7 @@ export class LaunchService {
       await q('players', `delete from game_players where company_id = $1`);
       await q('seals', `delete from chain_seals where company_id = $1`);
       await q('chain checks', `delete from chain_checks where company_id = $1`);
-      await q('chain actions', `delete from chain_actions where company_id = $1`);
+      await q('chain actions', `delete from chain_actions where company_id = $1 and kind <> 'go_live_points'`);
       await q('test chain', `delete from test_chain where company_id = $1`);
     });
     // Everything kept about the bots themselves.

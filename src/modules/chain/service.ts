@@ -45,6 +45,8 @@ export class ChainService {
   /** Which chain and custody each company uses. The test stand-ins until a person connects real ones. */
   chainFor: (companyId: string) => TokenChain = (companyId) => new TestChain(this.db, companyId, this.clock);
   custody: Custody = new TestCustody();
+  /** Wipes test data just before going live. Set by the app. */
+  beforeGoLive?: (companyId: string, by: string) => Promise<unknown>;
   /** Was this person on the company's team at this time? Set by the app. */
   isMember?: (companyId: string, person: string, at: Date) => Promise<boolean>;
   /** Saves "the chain is on" in the company's settings (with its history). Set by the app. */
@@ -220,6 +222,8 @@ export class ChainService {
       } else if (a.kind === 'unpause') ref = (await chain.setPaused(false)).ref;
       else if (a.kind === 'switch_on' || a.kind === 'go_live_points' || a.kind === 'go_live_token' || a.kind === 'withdrawals_on') {
         if (!this.turnOn) throw new Error('Settings can’t be changed from here.');
+        // Going live starts clean: everything from testing is wiped first, so no test record ever reaches real people.
+        if (a.kind === 'go_live_points' && this.beforeGoLive) await this.beforeGoLive(companyId, person);
         await this.turnOn(companyId, `approved action ${id}`, rules, a.kind);
         ref = 'settings';
       }

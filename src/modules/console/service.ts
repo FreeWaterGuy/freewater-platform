@@ -1,3 +1,6 @@
+import { defaultWallet } from '../wallet/assets';
+import { defaultGames } from '../games/service';
+import { defaultChain } from '../chain/service';
 import type { SqlClient } from '../../db/client';
 import type { Platform } from '../../platform';
 import type { Registry } from '../../core/registry';
@@ -67,7 +70,7 @@ export class ConsoleService {
     const charities = (await this.db.query<{ name: string }>(`select name from charities where company_id = $1 order by name`, [companyId])).rows.map((r) => r.name);
     return {
       config, version,
-      options: { modules: this.registry.names(), fonts: fontChoices, categories: adCategories, timezones: commonTimezones, editable: editableKeys, lottery: lotteryDefaults(config) },
+      options: { modules: this.registry.names(), fonts: fontChoices, categories: adCategories, timezones: commonTimezones, editable: editableKeys, lottery: lotteryDefaults(config), wallet: defaultWallet(config.name), games: defaultGames, chain: defaultChain },
       locations: this.locations(companyId),
       charities,
       checklist: await this.checklist(companyId),
