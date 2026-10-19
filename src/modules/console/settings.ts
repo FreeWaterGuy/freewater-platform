@@ -2,6 +2,7 @@ import { checkQrColor, checkQrLogo } from '../print/qr';
 import { SHARES, type CompanyConfig } from '../../core/types';
 import { checkLottery } from '../lottery/rules';
 import { checkPolicy } from '../data/policy';
+import { checkWallet } from '../wallet/assets';
 
 // What a company may change about itself, the checks each change must pass, and plain words for what changed.
 
@@ -110,6 +111,8 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
 
   const pol = checkPolicy(c.data);
   if (pol) return `Data: ${pol}`;
+  const wal = checkWallet(c.wallet);
+  if (wal) return `Wallet: ${wal}`;
   if (c.minimumAge !== undefined && !isInt(c.minimumAge, 13, 21)) return 'The youngest age that may take part must be 13 to 21.';
   if (g.percentOfProfit !== undefined && !isNum(g.percentOfProfit, 0, 90)) return 'The share of the upside’s profit given must be 0% to 90%.';
   if (c.agents) {

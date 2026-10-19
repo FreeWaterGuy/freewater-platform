@@ -1017,6 +1017,19 @@ create index precise_locations_subject on precise_locations(company_id, subject)
 create table person_details (company_id text not null, subject text not null, age_ok boolean, birth_year integer, zip text, household integer, language text, updated_at timestamptz not null, primary key (company_id, subject));
 `,
   },
+  {
+    id: '032_wallet',
+    sql: `
+-- Wallets: a double-entry journal (each entry's lines add to zero) and balances kept alongside. A mistake is fixed by a
+-- correcting entry that points back at the one it undoes; nothing is edited.
+create table wallet_tx (id text primary key, company_id text not null, asset text not null, kind text not null, ref text not null, memo jsonb, day text not null, at timestamptz not null, reversed_by text, unique (company_id, ref));
+create index wallet_tx_day on wallet_tx(company_id, asset, day);
+create table wallet_lines (tx_id text not null references wallet_tx(id), account text not null, amount bigint not null);
+create index wallet_lines_account on wallet_lines(account);
+create index wallet_lines_tx on wallet_lines(tx_id);
+create table wallet_balances (company_id text not null, asset text not null, account text not null, balance bigint not null, primary key (company_id, asset, account));
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {
