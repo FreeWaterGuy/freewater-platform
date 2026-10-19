@@ -11,6 +11,7 @@ Start here:
 | Guide | What's in it |
 |---|---|
 | [`docs/OVERVIEW.md`](docs/OVERVIEW.md) | What the platform does, in plain words |
+| [`docs/AI.md`](docs/AI.md) | Every use of AI: what it does, its limits, and what happens without it |
 | [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) | What FreeWater must do, and the rules that never change |
 | [`docs/SWITCHES.md`](docs/SWITCHES.md) | **How to launch, lock and unlock everything**: every switch, who can flip it, the waits, and what to do if something goes wrong |
 | [`docs/GO-LIVE.md`](docs/GO-LIVE.md) | What's ready, what's left, and the order to launch in |

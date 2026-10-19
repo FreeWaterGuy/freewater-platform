@@ -100,7 +100,7 @@ platform is the software that runs all of it. Other companies can also run it un
 - Turning anything off is always immediate.
 - Safety limits never come off.
 
-The full rules are in `docs/REQUIREMENTS.md`, and every switch is in `docs/SWITCHES.md`.
+Every use of AI is in `docs/AI.md`. The full rules are in `docs/REQUIREMENTS.md`, and every switch is in `docs/SWITCHES.md`.
 
 ## Where it stands
 
