@@ -2,7 +2,7 @@ import { checkQrColor, checkQrLogo } from '../print/qr';
 import { SHARES, type CompanyConfig } from '../../core/types';
 import { checkLottery } from '../lottery/rules';
 import { checkPolicy } from '../data/policy';
-import { checkWallet } from '../wallet/assets';
+import { checkWallet, defaultWallet } from '../wallet/assets';
 import { checkChain } from '../chain/service';
 
 // What a company may change about itself, the checks each change must pass, and plain words for what changed.
@@ -116,6 +116,9 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
   if (c.games) {
     const g = c.games;
     if (g.enabled !== undefined && typeof g.enabled !== 'boolean') return 'The games are on or off.';
+    if (g.checkEvery !== undefined && !isInt(g.checkEvery, 3, 30)) return 'A quick check comes every 3 to 30 screens.';
+    if (g.adRoundEvery !== undefined && !isInt(g.adRoundEvery, 2, 50)) return 'An ad round comes every 2 to 50 screens.';
+    if (g.minAnswerMs !== undefined && !isInt(g.minAnswerMs, 400, 5000)) return 'The quickest counted answer is 0.4 to 5 seconds.';
     if (g.catalog !== undefined && (!Array.isArray(g.catalog) || g.catalog.length > 100 || g.catalog.some((k: any) => !k || typeof k.id !== 'string' || typeof k.name !== 'string' || typeof k.ask !== 'string' || !Array.isArray(k.items) || k.items.length > 50 || k.items.some((i: any) => !i || typeof i.id !== 'string' || typeof i.name !== 'string')))) return 'Each game category has an id, a name, a question and up to 50 items with ids and names.';
   }
   const ch = checkChain(c.chain);
@@ -162,7 +165,7 @@ export function chainProblem(cur: CompanyConfig, next: CompanyConfig, approved =
  * the same several-people approval as the chain), and the points cap can't change once set.
  */
 export function walletProblem(cur: CompanyConfig, next: CompanyConfig): string | null {
-  const a = cur.wallet, b = next.wallet;
+  const a = cur.wallet ?? defaultWallet(cur.name), b = next.wallet;
   if (b?.conversions?.enabled && !a?.conversions?.enabled) return 'Exchanging points or credit can’t be switched on from settings; it needs several people to approve it.';
   if (b && b.conversions?.approvedBy !== a?.conversions?.approvedBy) return 'Who approved exchanges is recorded by the approval itself, not set here.';
   if (a && b && a.points.cap !== b.points.cap) return 'The points cap can’t change once it’s set.';

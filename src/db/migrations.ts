@@ -1094,6 +1094,21 @@ create table chain_checks (company_id text not null, at timestamptz not null, bo
 create table test_chain (company_id text not null, ref text primary key, kind text not null, data jsonb not null, at timestamptz not null);
 `,
   },
+  {
+    id: '038_wallet_holders',
+    sql: `
+-- Each person's wallet account is a random id; this is the only link from a person to it. The journal and its
+-- published seals hold only the id, so erasing someone deletes this one row and changes nothing that was sealed.
+create table wallet_holders (company_id text not null, subject text not null, id text not null unique, primary key (company_id, subject));
+-- Accounts already in the journal under a person's key move to a random id once, before any seal is relied on.
+insert into wallet_holders (company_id, subject, id)
+  select distinct t.company_id, substr(l.account, 8), md5(random()::text || l.account) from wallet_lines l join wallet_tx t on t.id = l.tx_id where l.account like 'holder:%'
+  on conflict do nothing;
+update wallet_lines l set account = 'holder:' || h.id from wallet_tx t, wallet_holders h where t.id = l.tx_id and h.company_id = t.company_id and l.account = 'holder:' || h.subject;
+update wallet_balances b set account = 'holder:' || h.id from wallet_holders h where h.company_id = b.company_id and b.account = 'holder:' || h.subject;
+delete from chain_seals;
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

@@ -192,6 +192,7 @@ export class ChainService {
     try {
       let ref = '';
       if (a.kind === 'mint') {
+        if (!a.ref && (p.to === 'erased' || (this.wallet.mayEarn && !(await this.wallet.mayEarn(companyId, p.to))))) throw new Error('This person can’t receive it (erased, too young, or where rewards aren’t allowed).');
         const address = await this.custody.addressFor(companyId, p.to);
         ref = a.ref ?? (await chain.mint(address, p.amount, id)).ref;
         // Kept at once, so if the books entry fails it can be finished later without minting twice.

@@ -48,10 +48,11 @@ describe('hourly seals', () => {
   });
 
   it('a past entry changed in the books no longer matches its seal', async () => {
-    await db.query(`update wallet_lines set amount = amount * 2 where account = 'holder:viewer-chain-1'`);
+    const acct = `holder:${(await db.query<any>(`select id from wallet_holders where subject = 'viewer-chain-1'`)).rows[0].id}`;
+    await db.query(`update wallet_lines set amount = amount * 2 where account = $1`, [acct]);
     const r = await app.chain.checkSeals('freewater');
     expect(r.ok).toBe(false);
-    await db.query(`update wallet_lines set amount = amount / 2 where account = 'holder:viewer-chain-1'`);
+    await db.query(`update wallet_lines set amount = amount / 2 where account = $1`, [acct]);
   });
 });
 

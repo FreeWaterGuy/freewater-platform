@@ -138,11 +138,14 @@ export class ConsoleService {
   }
 
   /** Put an earlier version back. It becomes a new version, so the history keeps everything. */
-  async restore(companyId: string, v: number, by: string) {
+  async restore(companyId: string, v: number, by: string, opts: { person?: boolean } = {}) {
     const old = await this.version(companyId, v);
     const cur = this.company(companyId);
     const next = { ...old, id: companyId };
-    const problem = checkSettings(next, this.registry.names()) ?? ratchetProblem(cur, next);
+    // Putting back an old version passes the same checks as any other change (the chain can't come back on this way).
+    const money = ['wallet', 'offers', 'chain'].some((k) => JSON.stringify((cur as any)[k] ?? null) !== JSON.stringify((next as any)[k] ?? null));
+    if (money && !opts.person) throw new ConsoleError('person_needed', 'This version changes money or chain settings; a person signed in has to put it back.', 403);
+    const problem = checkSettings(next, this.registry.names()) ?? ratchetProblem(cur, next) ?? chainProblem(cur, next) ?? walletProblem(cur, next);
     if (problem) throw new ConsoleError('invalid_settings', `Version ${v} can’t be put back as it is: ${problem}`, 422);
     const changes = describeChange(cur, next);
     const latest = await this.latestVersion(companyId);
