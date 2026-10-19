@@ -157,7 +157,9 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
  * "switch on" action). Switching it off is always allowed. Fewer approvals or a shorter wait can't be set while it's on.
  */
 export function chainProblem(cur: CompanyConfig, next: CompanyConfig, approved = false): string | null {
-  if (JSON.stringify(cur.launch ?? null) !== JSON.stringify(next.launch ?? null) && !approved) return 'Going live (and turning on withdrawals) is its own step, approved and with a wait. Propose it under Launch.';
+  // Locking again is always allowed: withdrawals can be switched off from settings at any time.
+  const relock = cur.launch?.withdrawals && next.launch && !next.launch.withdrawals && next.launch.stage === cur.launch.stage;
+  if (JSON.stringify(cur.launch ?? null) !== JSON.stringify(next.launch ?? null) && !approved && !relock) return 'Going live (and turning on withdrawals) is its own step, approved and with a wait. Propose it under Launch.';
   const a = cur.chain, b = next.chain;
   if (b?.enabled && !a?.enabled && !approved) return 'Switching the chain on needs several people to approve it, then a wait. Propose it under Chain.';
   if (a?.enabled && b?.enabled && (b.approvalsNeeded < a.approvalsNeeded || b.delayHours < a.delayHours)) return 'While the chain is on, approvals and the wait can be raised, not lowered. Switch it off first.';
