@@ -130,6 +130,8 @@ export interface CompanyConfig {
    * parts of Europe); a company can only raise it, never lower it below 13.
    */
   minimumAge?: number;
+  /** Points, credit and what can be done with them. Points are on by default; credit and exchanging are off. */
+  wallet?: import('../modules/wallet/assets').WalletSettings;
   /** How much of the books the world sees, live. Each company chooses. */
   transparency?: Transparency;
   /** Security choices. Owners can be required to use a second sign-in step (a code from an authenticator app). */

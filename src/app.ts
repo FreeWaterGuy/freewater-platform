@@ -50,6 +50,7 @@ import type { FootageProvider, StoryWriter } from './modules/video/contract';
 import { InteractionService } from './modules/interactions/service';
 import { geoFromEnv } from './modules/data/geoip';
 import { DataService } from './modules/data/service';
+import { WalletService } from './modules/wallet/service';
 import { TransparencyService } from './modules/transparency/service';
 import { AnchorService, GitHubPublisher, OpenTimestampsPublisher, type AnchorPublisher } from './modules/transparency/anchors';
 import { NumberLineService } from './modules/numberline/service';
@@ -242,6 +243,10 @@ export async function createApp(opts: AppOptions) {
   // The data environment: choices made in a clean setting, exposure recorded, people directing gifts and choosing ads.
   numberline.keepsChoicesOf = (companyId, person) => data.allowed(companyId, 'choices', [person]);
   const environment = new EnvironmentService(db, platform, numberline, opts.clock);
+  const wallet = new WalletService(db, platform, opts.clock);
+  wallet.mayEarn = async (companyId, subject) => (await data.rewardsAllowed(companyId, [subject, ...(await data.linkedSubjects(companyId, subject))])) && (await data.ageOk(companyId, [subject])) !== false;
+  wallet.linked = (companyId, subject) => data.linkedSubjects(companyId, subject);
+  wallet.sourceSecret = await loadSecret(db, 'wallet');
   numberline.environmentOf = (companyId, person, subject, unitId) => environment.environmentOf(companyId, person, subject, unitId);
   accounts.audienceExtras = (companyId, personKey) => environment.audienceExtras(companyId, personKey);
   environment.watchScans();
@@ -390,7 +395,7 @@ export async function createApp(opts: AppOptions) {
   await fleet.load();
   made.registry.registerPrinter('model6-fleet', new MachineFleetPrinter(() => fleet, made.printer));
 
-  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, studio, transparency, anchors, agents, profit, distributions, team, secondStep };
+  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, studio, transparency, anchors, agents, profit, distributions, team, secondStep };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

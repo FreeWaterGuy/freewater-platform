@@ -15,6 +15,7 @@ import { dataRoutes } from './data';
 import { transparencyRoutes } from './transparency';
 import { agentRoutes } from './agents';
 import { environmentRoutes } from './environment';
+import { walletRoutes } from './wallet';
 import { studioRoutes } from './studio';
 import { BadKeyGuard, classify, limits, RateLimiter, securityHeaders, SecurityLog } from './security';
 import { teamRoutes } from './team';
@@ -149,8 +150,11 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const variant = b.variant && pl && platform.campaigns.get(pl.campaignId)?.variants?.some((v) => v.id === b.variant) ? b.variant : undefined;
     const e = platform.scan(b.unitId, b.slot, b.viewerKey, b.experienceLoaded, b.scanId ?? newId('scan'), variant);
     if (b.experienceLoaded) await experiences.rememberViewer({ kind: 'slot', unitId: b.unitId, slot: b.slot }, b.viewerKey);
+    // Points only for a scan the platform counted (its page loaded, not a repeat), of a real printed bottle.
+    let points: number | undefined;
+    if (e && b.experienceLoaded && /^[A-Za-z0-9_-]{8,64}$/.test(b.viewerKey)) points = (await app.wallet.earnScan(e.companyId, b.viewerKey, b.unitId, b.slot, req.ip).catch(() => null))?.points;
     if (b.context && /^[A-Za-z0-9_-]{8,64}$/.test(b.viewerKey)) await app.data.scanContext(experiences.ownerOf({ kind: 'slot', unitId: b.unitId, slot: b.slot }).companyId, b.viewerKey, { ...b.context, target: `${b.unitId}/${b.slot}` }, req).catch(() => {});
-    return { status: 202, body: { recorded: !!e, billed: platform.ledger.entries.length > before } };
+    return { status: 202, body: { recorded: !!e, billed: platform.ledger.entries.length > before, ...(points ? { points } : {}) } };
   } });
 
   route({ method: 'POST', url: '/v1/public/ar-launches', scope: 'public', summary: 'Record an AR launch. Billed only if it loaded and it is not a repeat.', body: obj({ unitId: S.str, slot: S.int, viewerKey: S.str, loaded: S.bool, launchId: S.str }, ['unitId', 'slot', 'viewerKey', 'loaded']), handler: async (req) => {
@@ -601,6 +605,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   transparencyRoutes(app, server, route);
   agentRoutes(app, route);
   environmentRoutes(app, route);
+  walletRoutes(app, route);
   studioRoutes(app, route);
   teamRoutes(app, route);
 

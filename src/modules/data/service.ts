@@ -292,7 +292,8 @@ export class DataService {
     const [kind, value] = subjectParts(subject);
     return (await this.db.query<any>(`select person_id from person_links where company_id = $1 and kind = $2 and value = $3`, [companyId, kind, value])).rows[0]?.person_id ?? null;
   }
-  private async linkedSubjects(companyId: string, subject: string) {
+  /** Every phone and account joined to the same person as this one (not including it). */
+  async linkedSubjects(companyId: string, subject: string) {
     const p = await this.personFor(companyId, subject);
     if (!p) return [];
     return (await this.db.query<any>(`select kind, value from person_links where person_id = $1`, [p])).rows.map((r) => (r.kind === 'viewer' ? r.value : `${r.kind}:${r.value}`));
@@ -451,6 +452,13 @@ export class DataService {
       await run('bottles held', `update bottle_holders set person = $3 where company_id = $1 and person = $2`, [companyId, k, c]);
       await run('gifts directed', `update giving_directions set person = $3 where company_id = $1 and person = $2`, [companyId, k, c]);
       await run('value-back tests', `update value_arms set person = $3 where company_id = $1 and person = $2`, [companyId, k, c]);
+      // Points and credit stay in the books (the journal must add up), under a code that leads nowhere.
+      // Holding the points lock, so a reward being written at this moment can't land under the old name afterwards.
+      await this.db.transaction(async (tx) => {
+        await tx.query(`select 1 from wallet_balances where company_id = $1 and asset = $2 and account = 'supply' for update`, [companyId, `points:${companyId}`]);
+        await tx.query(`update wallet_lines set account = $3 where account = $2 and tx_id in (select id from wallet_tx where company_id = $1)`, [companyId, `holder:${k}`, `holder:${c}`]);
+        await tx.query(`update wallet_balances set account = $3 where company_id = $1 and account = $2`, [companyId, `holder:${k}`, `holder:${c}`]);
+      });
     }
   }
 
