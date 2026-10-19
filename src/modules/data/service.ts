@@ -186,6 +186,7 @@ export class DataService {
     if (prof.person) { await run('activity', `delete from activity where person_id = $1`, [prof.person]); await this.db.query(`delete from person_links where person_id = $1`, [prof.person]); await this.db.query(`delete from people where id = $1`, [prof.person]); }
     await run('consents', `delete from data_consents where company_id = $1 and subject = any($2)`, [companyId, v]);
     await run('advertisers seen', `delete from viewer_advertisers where company_id = $1 and viewer_key = any($2)`, [companyId, v]);
+    await this.eraseEnvironment(companyId, [...v, ...users.map((id) => `user:${id}`)], run, erased);
     // What has to stay for the books or an advertiser's bill: kept, with the phone replaced by a random code.
     for (const key of v) {
       const code = erased();
@@ -219,11 +220,29 @@ export class DataService {
     await run('consents', `delete from data_consents where company_id = $1 and subject = $2`, [companyId, viewerKey]);
     await run('advertisers seen', `delete from viewer_advertisers where company_id = $1 and viewer_key = $2`, [companyId, viewerKey]);
     await run('links', `delete from person_links where company_id = $1 and kind = 'viewer' and value = $2`, [companyId, viewerKey]);
+    await this.eraseEnvironment(companyId, [viewerKey], run, () => code);
     await run('clicks', `update clicks set viewer_key = $3 where company_id = $1 and viewer_key = $2`, [companyId, viewerKey, code]);
     await run('coupons', `update coupon_codes set viewer_key = $3 || '_' || code where company_id = $1 and viewer_key = $2`, [companyId, viewerKey, code]);
     await run('prize draws', `update lottery_chances set viewer_key = $3 where company_id = $1 and viewer_key = $2`, [companyId, viewerKey, code]);
     await run('holdout records', `update agent_arms set viewer_key = $3 where company_id = $1 and viewer_key = $2`, [companyId, viewerKey, code]);
     return { erased: true, counts, kept: 'Scans stay in the books as counts under this phone’s old random code, which now leads to nothing about you. Your phone gets a new one.' };
+  }
+
+  /**
+   * The data environment's records about a person: their choice screens, ad preferences, panel membership and bottles
+   * they hold go. Where their bottle's gift went and the value-back tests they were in stay for the books and the
+   * advertiser's bill, under a random code.
+   */
+  private async eraseEnvironment(companyId: string, keys: string[], run: (name: string, sql: string, params: unknown[]) => Promise<void>, code: () => string) {
+    await run('choice screens', `delete from choice_sets where company_id = $1 and person = any($2)`, [companyId, keys]);
+    await run('ad preferences', `delete from ad_preferences where company_id = $1 and person = any($2)`, [companyId, keys]);
+    await run('measurement panel', `delete from research_panel where company_id = $1 and person = any($2)`, [companyId, keys]);
+    await run('bottles held', `delete from bottle_holders where company_id = $1 and person = any($2)`, [companyId, keys]);
+    for (const k of keys) {
+      const c = code();
+      await run('gifts directed', `update giving_directions set person = $3 where company_id = $1 and person = $2`, [companyId, k, c]);
+      await run('value-back tests', `update value_arms set person = $3 where company_id = $1 and person = $2`, [companyId, k, c]);
+    }
   }
 
   /** Delete what's older than each company keeps, for each kind. Run daily. */
@@ -236,6 +255,7 @@ export class DataService {
       await del(`delete from interactions where company_id = $1 and at < $2`, p.rules.interactions.keepDays);
       await del(`delete from activity where company_id = $1 and at < $2`, p.rules.activity.keepDays);
       await del(`delete from choices where company_id = $1 and at < $2`, p.rules.choices.keepDays);
+      await del(`delete from choice_sets where company_id = $1 and created_at < $2`, p.rules.choices.keepDays);
       await this.db.query(`update activity set ip = null where company_id = $1 and at < $2`, [c.id, before(p.rules.ipAddress.keepDays)]);
       await this.db.query(`update activity set device = null where company_id = $1 and at < $2`, [c.id, before(p.rules.device.keepDays)]);
     }

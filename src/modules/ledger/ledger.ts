@@ -99,6 +99,7 @@ export class Ledger {
     bus.on('giving.directed', (e) => this.add(e, { unitId: e.payload.unitId, debit: `payable:charity:${e.payload.from}`, credit: `payable:charity:${e.payload.to}`, amountCents: e.payload.cents, kind: 'giving_redirect', memo: `A person chose ${e.payload.to} for this bottle’s gift (instead of ${e.payload.from})` }));
     // An advertiser's value-back test: what the offer returned, paid by the advertiser, to the cause.
     bus.on('value_back.given', (e) => this.add(e, { unitId: e.payload.unitId, campaignId: e.payload.campaignId, debit: `receivable:advertiser:${e.payload.advertiserId}`, credit: `payable:charity:${e.payload.cause}`, amountCents: e.payload.cents, kind: 'donation', memo: `Value-back on ${e.payload.advertiserName}’s offer (a measured test, step ${e.payload.cents}¢), paid by the advertiser` }));
+    bus.on('value_back.reversed', (e) => this.add(e, { unitId: e.payload.unitId, campaignId: e.payload.campaignId, debit: `payable:charity:${e.payload.cause}`, credit: `receivable:advertiser:${e.payload.advertiserId}`, amountCents: e.payload.cents, kind: 'donation', memo: `Value-back on ${e.payload.advertiserName}’s offer taken back: the sale was refunded` }));
     bus.on('owner_payout.recorded', (e) => this.add(e, { debit: `equity:payout:${e.payload.kind}`, credit: 'cash:bank', amountCents: e.payload.amountCents, kind: 'owner_payout', memo: e.payload.memo }));
     // 'print.failed' is deliberately not subscribed: nothing to bill.
   }
@@ -287,7 +288,11 @@ export class Ledger {
   /** After a restart: reload past lines and what the billing rules need to remember. Nothing is billed again. */
   restore(input: { entries: LedgerEntry[]; printed: { unitId: string; placements: Placement[]; locationId: string }[]; boxes?: { packId: string; faces: BoxFacePlacement[] }[]; engagementEvents: PlatformEvent[] }) {
     // One at a time: spreading hundreds of thousands of lines into push() overflows the stack.
-    for (const l of input.entries) { this.entries.push(l); this.index(l); }
+    for (const l of input.entries) {
+      this.entries.push(l); this.index(l);
+      // Bottles whose gift a person directed: what they give later still goes where the person chose.
+      if (l.kind === 'giving_redirect' && l.unitId) this.directedTo.set(l.unitId, l.credit.replace(/^payable:charity:/, ''));
+    }
     for (const p of input.printed) this.printedUnits.set(p.unitId, { placements: p.placements, locationId: p.locationId });
     for (const b of input.boxes ?? []) this.printedBoxes.set(b.packId, b.faces);
     for (const e of input.engagementEvents) {

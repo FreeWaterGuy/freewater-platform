@@ -229,8 +229,9 @@ export async function createApp(opts: AppOptions) {
   platform.bus.on('purchase.completed', (e) => {
     const u = e.payload.unitId ? platform.units.get(e.payload.unitId) : undefined;
     const pl = u?.placements.find((x) => x.slotIndex === e.payload.slotIndex);
-    if (u && pl && !pl.isHouse) environment.onSale(e.companyId, u.id, pl.slotIndex, pl.campaignId).catch(() => {});
+    if (u && pl && !pl.isHouse) environment.onSale(e.companyId, u.id, pl.slotIndex, pl.campaignId, e.payload.orderId).catch(() => {});
   });
+  platform.bus.on('purchase.refunded', (e) => { environment.onRefund(e.companyId, e.payload.orderId).catch(() => {}); });
 
   const builtinAssistant = new BuiltinAdAssistant();
   const assistant = opts.assistant ?? (process.env.ANTHROPIC_API_KEY ? new ClaudeAdAssistant({ apiKey: process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL, fallback: builtinAssistant }) : builtinAssistant);

@@ -63,7 +63,8 @@ describe('the data environment', () => {
 
   it('leaves out the kinds of ads a person never wants', async () => {
     const v = 'viewer-avoids-food';
-    const r = await call('POST', '/v1/public/companies/freewater/ad-preferences', { viewerKey: v, avoid: ['Food', 'coffee', '<script>'] }, false);
+    expect((await call('POST', '/v1/public/companies/freewater/ad-preferences', { viewerKey: v, avoid: ['food', '<script>'] }, false)).status).toBe(400);
+    const r = await call('POST', '/v1/public/companies/freewater/ad-preferences', { viewerKey: v, avoid: ['Food', 'coffee'] }, false);
     expect(r.body.avoid).toEqual(['food', 'coffee']);
     expect(r.body.kinds).toContain('food');
     for (let i = 0; i < 6; i++) {
@@ -120,7 +121,10 @@ describe('the data environment', () => {
     expect(c.tier).toBe('4b');
     // The scan page shows it.
     const page = (await server.inject({ method: 'GET', url: `/v1/public/experience/${u.id}/${u.placements[0]!.slotIndex}?viewer=${holder}` })).json();
-    expect(page.environment.giving).toMatchObject({ directed: true, current: 'Central Texas Food Bank' });
+    expect(page.environment.giving).toMatchObject({ directed: true, current: 'Central Texas Food Bank', chosenByYou: true });
+    const other = (await server.inject({ method: 'GET', url: `/v1/public/experience/${u.id}/${u.placements[0]!.slotIndex}?viewer=viewer-gift-second` })).json();
+    expect(other.environment.giving).toMatchObject({ chosenByYou: false, canChoose: false });
+    expect((await app.books.bottle(u.id)).giving!.charity).toBe('Central Texas Food Bank');
   });
 
   it('tests stepped value-back on an offer only after a person approves, only for people in the panel, paid by the advertiser', async () => {
@@ -142,27 +146,64 @@ describe('the data environment', () => {
     expect((await call('POST', `/v1/environment/experiments/${e.id}/decide`, { approve: true })).body.status).toBe('running');
     expect(await app.environment.valueBackFor('freewater', 'cmp-joes', 'viewer-vb-outside', u!.id, slot)).toBeNull();
     expect((await call('POST', '/v1/public/companies/freewater/panel', { viewerKey: 'viewer-vb-panel', join: true }, false)).body.inPanel).toBe(true);
-    // The step a panel member sees is the same all week; find one who gets the 100¢ step.
-    let member = '';
-    for (let i = 0; i < 50 && !member; i++) {
+    // Each panel member keeps one step for the whole test; find one who gets 100¢, each on a fresh bottle with Joe's.
+    const joesBottle = async (i: number) => { for (let k = 0; k < 40; k++) { const b = await printFor(`viewer-vb-p${i}-${k}`, `vb-${i}-${k}`); const sl = b.placements.find((p) => p.campaignId === 'cmp-joes'); if (sl) return { b, sl: sl.slotIndex }; } throw new Error('no Joe’s bottle'); };
+    let member = '', bottle = u!, at = slot;
+    for (let i = 0; i < 30 && !member; i++) {
       const v = `viewer-vb-m${i}`;
       await app.environment.joinPanel('freewater', v);
-      const vb = await app.environment.valueBackFor('freewater', 'cmp-joes', v, u!.id, slot);
-      if (vb?.cents === 100) member = v;
+      const { b, sl } = await joesBottle(i);
+      const vb = await app.environment.valueBackFor('freewater', 'cmp-joes', v, b.id, sl);
+      expect(await app.environment.valueBackFor('freewater', 'cmp-joes', v, b.id, sl)).toEqual(vb); // the same every time
+      if (vb?.cents === 100) { member = v; bottle = b; at = sl; }
     }
     expect(member).not.toBe('');
-    const page = (await server.inject({ method: 'GET', url: `/v1/public/experience/${u!.id}/${slot}?viewer=${member}` })).json();
+    const page = (await server.inject({ method: 'GET', url: `/v1/public/experience/${bottle.id}/${at}?viewer=${member}` })).json();
     expect(page.environment.valueBack).toMatchObject({ cents: 100, cause: 'Well Aware' });
-    // A sale through it: the advertiser pays the step to the cause.
-    app.platform.bus.publish('purchase.completed', 'freewater', { unitId: u!.id, slotIndex: slot, orderId: 'joes-sale-1', amountCents: 500 }, 'joes-sale-1');
-    await new Promise((r) => setTimeout(r, 50));
-    const line = app.platform.ledger.receipt(u!.id).lines.find((l) => l.debit === 'receivable:advertiser:adv-joes' && l.kind === 'donation');
-    expect(line).toMatchObject({ amountCents: 100, credit: 'payable:charity:Well Aware' });
+    // Someone else opening that bottle slot (even in the panel) sees the offer as it is: the arm is the member's.
+    expect(await app.environment.valueBackFor('freewater', 'cmp-joes', 'viewer-vb-panel', bottle.id, at)).toBeNull();
+    // A sale through it: the advertiser pays the step to the cause, once per order; a refund takes it back.
+    const vbLines = () => app.platform.ledger.receipt(bottle.id).lines.filter((l) => l.kind === 'donation' && (l.debit === 'receivable:advertiser:adv-joes' || l.credit === 'receivable:advertiser:adv-joes'));
+    app.platform.purchase(bottle.id, at, 'joes-sale-1', 500);
+    app.platform.purchase(bottle.id, at, 'joes-sale-2', 500);
+    await new Promise((r) => setTimeout(r, 80));
+    expect(vbLines()).toHaveLength(2);
+    expect(vbLines()[0]).toMatchObject({ amountCents: 100, credit: 'payable:charity:Well Aware' });
+    app.platform.refund(bottle.id, at, 'joes-sale-2', 500);
+    await new Promise((r) => setTimeout(r, 80));
+    expect(vbLines()).toHaveLength(3);
+    expect(vbLines()[2]).toMatchObject({ amountCents: 100, debit: 'payable:charity:Well Aware', credit: 'receivable:advertiser:adv-joes' });
     await app.persistence.flush();
     const results = (await call('GET', '/v1/environment/experiments')).body.find((r: any) => r.id === e.id).results;
     expect(results.map((r: any) => r.stepCents)).toEqual([0, 100]);
-    expect(results.reduce((a: number, r: any) => a + r.shown, 0)).toBeGreaterThan(0);
-    expect(results.find((r: any) => r.stepCents === 100).sales).toBe(1);
+    expect(results.reduce((a: number, r: any) => a + r.shown, 0)).toBeGreaterThan(1);
+    expect(results.find((r: any) => r.stepCents === 100).sales).toBe(1); // the refunded one doesn't count
+  });
+
+  it('forgets a person’s choice screens, ad preferences and panel when they erase their phone', async () => {
+    const v = 'viewer-erase-env';
+    await app.environment.setAdPreferences('freewater', v, ['food']);
+    await app.environment.joinPanel('freewater', v);
+    await app.environment.machineChoice('freewater', v, 'ATX-014');
+    expect((await call('POST', '/v1/public/data/freewater/forget', { viewerKey: v }, false)).status).toBeLessThan(300);
+    expect((await app.environment.adPreferences('freewater', v)).avoid).toEqual([]);
+    expect(await app.environment.inPanel('freewater', v)).toBe(false);
+    expect((await db.query(`select 1 from choice_sets where person = $1`, [v])).rows).toHaveLength(0);
+  });
+
+  it('after a restart, a directed bottle’s later gifts still go where its holder chose, and its holder stays its holder', async () => {
+    const holder = 'viewer-restart-holder';
+    const u = await printFor('viewer-restart-printed', 'restart-1');
+    app.platform.scan(u.id, u.placements[0]!.slotIndex, holder, true);
+    expect((await app.environment.directGiving(u.id, holder, 'Austin Parks Foundation')).to).toBe('Austin Parks Foundation');
+    await app.numberline.idle();
+    await app.persistence.flush();
+    const again = await createApp({ db });
+    again.platform.scan(u.id, u.placements.at(-1)!.slotIndex, 'viewer-restart-later', true);
+    expect(again.platform.ledger.receipt(u.id).lines.filter((l) => l.kind === 'donation').at(-1)!.credit).toBe('payable:charity:Austin Parks Foundation');
+    expect(await again.environment.holderOf(u.id)).toBe(holder);
+    await again.numberline.idle();
+    await again.persistence.flush();
   });
 
   it('the charter says how value-back differs from a reward, and keeps ads off the choosing', () => {

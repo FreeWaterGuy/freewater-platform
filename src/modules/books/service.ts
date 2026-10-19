@@ -53,16 +53,19 @@ export class BooksService {
   /** What each charity has been given (owed when bottles print), what's been sent, and what's still owed. */
   async balances(companyId: string) {
     await this.flush(); // read the books only after every pending line is written
+    // Each charity's gifts, net: into its payable (gifts, a person's redirect to it, an advertiser's value-back) less
+    // out of it (a refunded sale's gift taken back, a redirect away from it). Transfers are counted separately.
     const rows = (await this.db.query<any>(
-      `select substring(credit from 17) as charity, sum(amount_cents)::bigint as cents, count(*)::int as lines from ledger_entries where company_id = $1 and kind = 'donation' group by 1`, [companyId])).rows;
+      `select charity, sum(cents)::bigint as cents, sum(lines)::int as lines from (
+         select substring(credit from 17) as charity, amount_cents as cents, (kind = 'donation')::int as lines from ledger_entries where company_id = $1 and kind in ('donation', 'giving_redirect') and credit like 'payable:charity:%'
+         union all
+         select substring(debit from 17), -amount_cents, 0 from ledger_entries where company_id = $1 and kind in ('donation', 'giving_redirect') and debit like 'payable:charity:%'
+       ) x group by 1`, [companyId])).rows;
     const sent = (await this.db.query<any>(
       `select substring(debit from 17) as charity, sum(amount_cents)::bigint as cents from ledger_entries where company_id = $1 and kind = 'charity_transfer' group by 1`, [companyId])).rows;
     const out = new Map<string, { donatedCents: number; sentCents: number; owedCents: number; bottles: number }>();
     for (const r of rows) out.set(r.charity, { donatedCents: n(r.cents), sentCents: 0, owedCents: 0, bottles: n(r.lines) });
-    // Gifts a person sent elsewhere: out of the charity the bottle named, into the one they chose.
-    const moved = (await this.db.query<any>(`select substring(debit from 17) as from_c, substring(credit from 17) as to_c, sum(amount_cents)::bigint as cents from ledger_entries where company_id = $1 and kind = 'giving_redirect' group by 1, 2`, [companyId])).rows;
     const get = (c: string) => { let b = out.get(c); if (!b) out.set(c, (b = { donatedCents: 0, sentCents: 0, owedCents: 0, bottles: 0 })); return b; };
-    for (const r of moved) { get(r.from_c).donatedCents -= n(r.cents); get(r.to_c).donatedCents += n(r.cents); }
     for (const r of sent) get(r.charity).sentCents = n(r.cents);
     for (const b of out.values()) b.owedCents = b.donatedCents - b.sentCents;
     return out;
@@ -278,7 +281,15 @@ export class BooksService {
     const receipt = this.platform.ledger.receipt(unitId);
     const loc = this.platform.locations.get(u.locationId);
     const donation = receipt.lines.find((l) => l.kind === 'donation');
-    const charity = donation ? donation.credit.replace(/^payable:charity:/, '') : null;
+    // Where its gift went, net of any redirect a person made (the cause they chose) and anything taken back.
+    const net = new Map<string, number>();
+    for (const l of receipt.lines) {
+      if (l.kind !== 'donation' && l.kind !== 'giving_redirect') continue;
+      if (l.credit.startsWith('payable:charity:')) net.set(l.credit.slice(16), (net.get(l.credit.slice(16)) ?? 0) + l.amountCents);
+      if (l.debit.startsWith('payable:charity:')) net.set(l.debit.slice(16), (net.get(l.debit.slice(16)) ?? 0) - l.amountCents);
+    }
+    const to = [...net].filter(([, c]) => c > 0).sort((a, b) => b[1] - a[1]);
+    const charity = to[0]?.[0] ?? null;
     let transfer = null;
     if (donation && charity) {
       const t = (await this.db.query<any>(`select t.id from charity_transfers t join charities c on c.id = t.charity_id where t.company_id = $1 and c.name = $2 and t.status <> 'failed' and t.covers_until >= $3 order by t.covers_until limit 1`, [u.companyId, charity, donation.at.toISOString()])).rows[0];
@@ -288,7 +299,7 @@ export class BooksService {
     return {
       unitId, company: company.name, companyId: company.id, printedAt: u.createdAt, place: loc ? `${loc.id}, ${loc.name}` : u.locationId, kind: u.kind,
       ads: ads.length, earned: receipt.earned, earnedLines: receipt.lines.filter((l) => l.kind !== 'donation').map((l) => ({ kind: l.kind, memo: l.memo, amountCents: l.amountCents, at: l.at.toISOString() })),
-      standardCosts: company.unitCosts ?? null, giving: donation ? { cents: donation.amountCents, charity, transfer } : null, givingOn: company.giving.mode !== 'none',
+      standardCosts: company.unitCosts ?? null, giving: donation && to.length ? { cents: to.reduce((a, [, c]) => a + c, 0), charity: to.map(([k]) => k).join(' & '), transfer } : null, givingOn: company.giving.mode !== 'none',
     };
   }
 

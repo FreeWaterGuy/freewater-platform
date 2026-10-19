@@ -164,9 +164,10 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     if (stocked && !stocked.includes(productId)) throw new ApiError(422, 'not_stocked', `This machine doesn't have that. It has: ${stocked.map((id) => platform.products.get(id)?.name ?? id).join(', ')}.`);
     // The bottle is printed for this person: ads that target people can be chosen, and their first scan confirms it reached them.
     const audience = await app.accounts.audienceFor(userId, key!.companyId);
-    // Chosen from the machine's options (shown in a random order, no ads on the choosing): recorded as that choice.
-    if (b.choiceSetId && audience) await app.environment.choose(b.choiceSetId, `bottle:${productId}`, audience.personKey, orderId).catch(() => {});
     const running = platform.order({ companyId: key!.companyId, orderId, locationId: b.locationId, productId, consumerId: userId, audience });
+    // Chosen from this machine's options (shown in a random order, no ads on the choosing): recorded as that choice,
+    // once the bottle is actually printed.
+    if (b.choiceSetId && audience) void running.then((o) => (o.ok ? app.environment.choose(b.choiceSetId, `bottle:${productId}`, audience.personKey, orderId, `machine:${b.locationId}`) : null)).catch(() => {});
     // A Model 6 takes a while to print: answer now and let the app watch the countdown.
     const r = await Promise.race([running, new Promise<null>((res) => setTimeout(() => res(null), app.fleet.isModel6(b.locationId) ? 1500 : 60_000))]);
     if (r && !r.ok) return { status: 422, body: { error: { code: 'print_failed', message: "The machine couldn't print your bottle. Nothing was used up; try again." } } };

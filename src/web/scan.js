@@ -463,9 +463,9 @@
     const g = e.giving;
     if (g && g.causes.length > 1) {
       const money = (c) => (c >= 100 ? `$${(c / 100).toFixed(2)}` : `${c}¢`);
-      const note = h('p', { class: 'muted', text: g.directed ? `This bottle’s ${money(g.cents)} gift goes to ${g.current}. You chose it.` : `This bottle gives ${money(g.cents)} to ${g.current}. You can choose where it goes instead:` });
+      const note = h('p', { class: 'muted', text: g.directed ? `This bottle’s ${money(g.cents)} gift goes to ${g.current}.${g.chosenByYou ? ' You chose it.' : ' The person holding it chose it.'}` : g.canChoose ? `This bottle gives ${money(g.cents)} to ${g.current}. You can choose where it goes instead:` : `This bottle gives ${money(g.cents)} to ${g.current}.` });
       parts.push(note);
-      if (!g.directed) {
+      if (!g.directed && g.canChoose) {
         const sel = h('select', { 'aria-label': 'Choose a cause' }, g.causes.map((c) => h('option', { value: c, text: c, ...(c === g.current ? { selected: true } : {}) })));
         const btn = h('button', { type: 'button', class: 'btn secondary' }, 'Send it there');
         btn.addEventListener('click', () => {

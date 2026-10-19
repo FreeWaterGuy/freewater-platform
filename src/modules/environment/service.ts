@@ -131,21 +131,23 @@ export class EnvironmentService {
   }
 
   /** The person chose one: recorded as a choice among the others, with where it sat and what they'd seen. */
-  async choose(choiceSetId: string, subject: string, person: string, ref: string) {
+  async choose(choiceSetId: string, subject: string, person: string, ref: string, context?: string) {
     const r = (await this.db.query<any>(`select * from choice_sets where id = $1`, [choiceSetId])).rows[0];
-    if (!r || r.person !== person) throw new EnvironmentError('not_found', 'No such choice.', 404);
+    if (!r || r.person !== person || (context && r.context !== context)) throw new EnvironmentError('not_found', 'No such choice.', 404);
     if (r.chosen) return { recorded: false, reason: 'Already chosen.' };
     const opts = (typeof r.options === 'string' ? JSON.parse(r.options) : r.options) as { subject: string; position: number; facts: OfferingFacts }[];
     const exposure = typeof r.exposure === 'string' ? JSON.parse(r.exposure) : r.exposure;
     const picked = opts.find((o) => o.subject === subject);
     if (!picked) throw new EnvironmentError('not_an_option', 'That wasn’t one of the options.');
+    // Claim it first, so the same choice can't be recorded twice.
+    const claimed = (await this.db.query<any>(`update choice_sets set chosen = $2, chosen_at = $3 where id = $1 and chosen is null returning id`, [choiceSetId, subject, iso(this.now())])).rows.length;
+    if (!claimed) return { recorded: false, reason: 'Already chosen.' };
     const place = async (o: { subject: string; facts: OfferingFacts }) => ({ subject: o.subject, placed: await this.numberline.placementOf(r.company_id, o.subject, o.facts) });
     await this.numberline.record(r.company_id, person, 'choose', await place(picked), {
       alternatives: await Promise.all(opts.filter((o) => o.subject !== subject).map(place)),
       placementRank: picked.position,
       environment: { choiceSetId, context: r.context, randomizedOrder: true, paidRank: false, exposure, exposed: (exposure[subject]?.bottlesCarrying ?? 0) + (exposure[subject]?.engagedBefore ?? 0) > 0, ...(this.platform.companies.get(r.company_id)?.research?.noAdsControlShare ? { cohort: this.inControl(r.company_id, person) ? 'no_ads' : 'ads' } : {}) },
     }, ref);
-    await this.db.query(`update choice_sets set chosen = $2, chosen_at = $3 where id = $1`, [choiceSetId, subject, iso(this.now())]);
     return { recorded: true };
   }
 
@@ -180,10 +182,17 @@ export class EnvironmentService {
     return { cents: from.reduce((a, [, v]) => a + v, 0), from, current: done?.to_cause ?? from.map(([k]) => k).join(' & '), directed: !!done, causes };
   }
 
-  /** First person to scan each bottle (kept as scans arrive; the events table covers anything from before a restart). */
-  private firstScan = new Map<string, string>();
+  /** The first person to scan each bottle holds it (kept in the database, so a restart changes nothing). */
   watchScans() {
-    this.platform.bus.on('unit.scanned', (e) => { if (e.payload.viewerKey && !this.firstScan.has(e.payload.unitId)) this.firstScan.set(e.payload.unitId, e.payload.viewerKey); });
+    this.platform.bus.on('unit.scanned', (e) => {
+      if (!e.payload.viewerKey || !e.payload.experienceLoaded) return;
+      this.holderWrites = this.holderWrites.then(() => this.db.query(`insert into bottle_holders (unit_id, company_id, person, at) values ($1,$2,$3,$4) on conflict do nothing`, [e.payload.unitId, e.companyId, e.payload.viewerKey, e.at.toISOString()])).catch(() => {});
+    });
+  }
+  private holderWrites: Promise<unknown> = Promise.resolve();
+  async holderOf(unitId: string) {
+    await this.holderWrites;
+    return ((await this.db.query<any>(`select person from bottle_holders where unit_id = $1`, [unitId])).rows[0]?.person as string | undefined) ?? this.platform.units.get(unitId)?.intendedFor;
   }
 
   /** The person holding the bottle chooses where its gift goes. Once per bottle, before the gift is sent. */
@@ -195,14 +204,15 @@ export class EnvironmentService {
     if (g.directed) throw new EnvironmentError('already', `This bottle’s gift already goes to ${g.current}.`, 409);
     if (!g.causes.includes(to)) throw new EnvironmentError('unknown_cause', 'Choose one of the listed causes.');
     if (this.now().getTime() - new Date(u.createdAt).getTime() > 30 * DAY) throw new EnvironmentError('too_late', 'A bottle’s gift can be directed within 30 days of it being printed.', 409);
-    // Only whoever first scanned it (or the person it was printed for) holds it.
-    const first = this.firstScan.get(unitId) ?? (await this.db.query<any>(`select payload->>'viewerKey' as v from events where company_id = $1 and type = 'unit.scanned' and payload->>'unitId' = $2 order by seq limit 1`, [u.companyId, unitId])).rows[0]?.v;
-    if (person !== first && person !== u.intendedFor) throw new EnvironmentError('not_holder', 'Only the person holding the bottle can choose where its gift goes.', 403);
+    // Only the person holding it: whoever first scanned it (or, before any scan, the person it was printed for).
+    if (person !== (await this.holderOf(unitId))) throw new EnvironmentError('not_holder', 'Only the person holding the bottle can choose where its gift goes.', 403);
     // Money already sent can't be moved.
     const sent = (await this.db.query<any>(`select 1 from charity_transfers t join charities c on c.id = t.charity_id where t.company_id = $1 and c.name = any($2) and t.status <> 'failed' and t.covers_until >= $3 limit 1`, [u.companyId, g.from.map(([k]) => k), u.createdAt])).rows.length;
     if (sent) throw new EnvironmentError('already_sent', 'This bottle’s gift has already been sent.', 409);
+    // Claim the bottle first: only one choice per bottle ever moves money.
+    const won = (await this.db.query<any>(`insert into giving_directions (unit_id, company_id, person, from_cause, to_cause, cents, at) values ($1,$2,$3,$4,$5,$6,$7) on conflict do nothing returning unit_id`, [unitId, u.companyId, person, g.current, to, g.cents, iso(this.now())])).rows.length;
+    if (!won) throw new EnvironmentError('already', 'This bottle’s gift has already been directed.', 409);
     for (const [from, cents] of g.from) if (from !== to) this.platform.bus.publish('giving.directed', u.companyId, { unitId, from, to, cents, person }, `giving:${unitId}:${from}`);
-    await this.db.query(`insert into giving_directions (unit_id, company_id, person, from_cause, to_cause, cents, at) values ($1,$2,$3,$4,$5,$6,$7) on conflict do nothing`, [unitId, u.companyId, person, g.current, to, g.cents, iso(this.now())]);
     // The choice itself, user-directed (Tier 4b), among the causes on offer.
     const facts = (cause: string): OfferingFacts => ({ kind: 'bottle', name: `This bottle’s gift to ${cause}`, priceCents: 0, valueBack: { donationCents: g.cents, paymentCents: 0, cause, directedBy: 'person' } });
     const place = async (cause: string) => ({ subject: `cause:${cause}`, placed: await this.numberline.placementOf(u.companyId, `cause:${cause}`, facts(cause)) });
@@ -215,12 +225,19 @@ export class EnvironmentService {
   async adPreferences(companyId: string, person: string) {
     const r = (await this.db.query<any>(`select avoid from ad_preferences where company_id = $1 and person = $2`, [companyId, person])).rows[0];
     const avoid = (r?.avoid ?? []) as string[];
-    const kinds = [...new Set([...this.platform.campaigns.values()].filter((c) => c.companyId === companyId && !c.isHouse).map((c) => c.category))].sort();
-    return { avoid, kinds };
+    return { avoid, kinds: this.adKinds(companyId) };
+  }
+  /** The kinds of ads a company carries, in the one form preferences and the ad engine both use (lowercase). */
+  private adKinds(companyId: string) {
+    return [...new Set([...this.platform.campaigns.values()].filter((c) => c.companyId === companyId && !c.isHouse).map((c) => c.category.toLowerCase().trim()))].sort();
   }
   async setAdPreferences(companyId: string, person: string, avoid: string[]) {
     this.company(companyId);
-    const clean = [...new Set(avoid.map((a) => String(a).toLowerCase().trim()).filter((a) => /^[a-z0-9 _-]{2,40}$/.test(a)))].slice(0, 30);
+    const kinds = new Set(this.adKinds(companyId));
+    const asked = [...new Set(avoid.map((a) => String(a).toLowerCase().trim()))];
+    const unknown = asked.filter((a) => !kinds.has(a));
+    if (unknown.length) throw new EnvironmentError('unknown_kind', `Not a kind of ad here: ${unknown.slice(0, 3).join(', ')}. Choose from the list.`);
+    const clean = asked.slice(0, 30);
     await this.db.query(`insert into ad_preferences (company_id, person, avoid, updated_at) values ($1,$2,$3,$4) on conflict (company_id, person) do update set avoid = excluded.avoid, updated_at = excluded.updated_at`, [companyId, person, clean, iso(this.now())]);
     return this.adPreferences(companyId, person);
   }
@@ -281,35 +298,54 @@ export class EnvironmentService {
   }
 
   /**
-   * The value-back this person sees on this ad on this bottle: a step of a running test (the same one all week), but
-   * only for people who joined the panel. Everyone else sees the offer as it is. Recorded as a test arm.
+   * The value-back this person sees on this ad on this bottle, during a running test, for people in the panel only.
+   * Each bottle slot has one arm: the panel member who first opened it, at one step (fixed per person for the whole
+   * test), and that step is what they see every time and what a sale through it pays. Anyone else sees the offer as is.
    */
   async valueBackFor(companyId: string, campaignId: string, person: string, unitId: string, slot: number) {
     const e = (await this.db.query<any>(`select * from value_experiments where company_id = $1 and campaign_id = $2 and status = 'running' order by created_at desc limit 1`, [companyId, campaignId])).rows[0];
-    if (!e || !(await this.inPanel(companyId, person))) return null;
-    const steps = (e.steps as number[]).map(Number);
-    const step = steps[Math.floor(unit01(`vb:${e.id}:${person}:${isoWeek(this.now())}`) * steps.length)]!;
-    await this.db.query(`insert into value_arms (experiment_id, company_id, person, unit_id, slot, step, at) values ($1,$2,$3,$4,$5,$6,$7) on conflict do nothing`, [e.id, companyId, person, unitId, slot, step, iso(this.now())]);
+    if (!e) return null;
     const cause = e.cause ?? this.platform.companies.get(companyId)?.giving.defaultCharity ?? null;
-    return step > 0 && cause ? { experimentId: e.id, cents: step, cause } : { experimentId: e.id, cents: 0, cause };
+    const armOf = async () => (await this.db.query<any>(`select person, step from value_arms where experiment_id = $1 and unit_id = $2 and slot = $3`, [e.id, unitId, slot])).rows[0];
+    let arm = await armOf();
+    if (!arm) {
+      if (!(await this.inPanel(companyId, person))) return null;
+      const steps = (e.steps as number[]).map(Number);
+      const step = steps[Math.floor(unit01(`vb:${e.id}:${person}`) * steps.length)]!;
+      await this.db.query(`insert into value_arms (experiment_id, company_id, person, unit_id, slot, step, at) values ($1,$2,$3,$4,$5,$6,$7) on conflict do nothing`, [e.id, companyId, person, unitId, slot, step, iso(this.now())]);
+      arm = await armOf();
+    }
+    if (!arm || arm.person !== person) return null;
+    return { experimentId: e.id as string, cents: cause ? n(arm.step) : 0, cause };
   }
 
-  /** A sale from that ad, by someone in a test arm: the advertiser pays the step to the cause, as promised. */
-  async onSale(companyId: string, unitId: string, slot: number, campaignId: string) {
+  /** A sale through a test arm: the advertiser pays the step that was shown, to the cause, once per order. */
+  async onSale(companyId: string, unitId: string, slot: number, campaignId: string, orderId: string) {
     const arm = (await this.db.query<any>(`select a.*, e.cause from value_arms a join value_experiments e on e.id = a.experiment_id where a.company_id = $1 and a.unit_id = $2 and a.slot = $3 and e.campaign_id = $4 order by a.at desc limit 1`, [companyId, unitId, slot, campaignId])).rows[0];
-    if (!arm || !(n(arm.step) > 0)) return;
-    const camp = this.platform.campaigns.get(campaignId)!;
+    if (!arm) return;
     const cause = arm.cause ?? this.platform.companies.get(companyId)?.giving.defaultCharity;
     if (!cause) return;
-    this.platform.bus.publish('value_back.given', companyId, { experimentId: arm.experiment_id, unitId, campaignId, advertiserId: camp.advertiserId, advertiserName: camp.advertiserName, cause, cents: n(arm.step), person: arm.person }, `vb:${arm.experiment_id}:${unitId}:${slot}`);
+    const fresh = (await this.db.query<any>(`insert into value_sales (order_id, experiment_id, company_id, unit_id, slot, step, cause, at) values ($1,$2,$3,$4,$5,$6,$7,$8) on conflict do nothing returning order_id`, [orderId, arm.experiment_id, companyId, unitId, slot, n(arm.step), cause, iso(this.now())])).rows.length;
+    if (!fresh || !(n(arm.step) > 0)) return;
+    const camp = this.platform.campaigns.get(campaignId)!;
+    this.platform.bus.publish('value_back.given', companyId, { experimentId: arm.experiment_id, unitId, campaignId, advertiserId: camp.advertiserId, advertiserName: camp.advertiserName, cause, cents: n(arm.step), person: arm.person }, `vb:${orderId}`);
   }
 
-  /** What each step did: people shown it, clicks through to the offer, and sales. Where the line crosses is distance. */
+  /** A refunded sale: its value-back is taken back too (from the cause, back to the advertiser). */
+  async onRefund(companyId: string, orderId: string) {
+    const r = (await this.db.query<any>(`update value_sales set refunded_at = $3 where order_id = $1 and company_id = $2 and refunded_at is null returning *`, [orderId, companyId, iso(this.now())])).rows[0];
+    if (!r || !(n(r.step) > 0)) return;
+    const e = await this.experiment(r.experiment_id);
+    const camp = this.platform.campaigns.get(e.campaignId)!;
+    this.platform.bus.publish('value_back.reversed', companyId, { experimentId: e.id, unitId: r.unit_id, campaignId: e.campaignId, advertiserId: camp.advertiserId, advertiserName: camp.advertiserName, cause: r.cause, cents: n(r.step), orderId }, `vb-back:${orderId}`);
+  }
+
+  /** What each step did: people shown it, clicks through to the offer, and sales kept. Where the line crosses is distance. */
   async results(experimentId: string) {
     const e = await this.experiment(experimentId);
     const arms = (await this.db.query<any>(`select step, count(distinct person)::int as people, count(*)::int as shown from value_arms where experiment_id = $1 group by 1 order by 1`, [experimentId])).rows;
-    const clicks = (await this.db.query<any>(`select a.step, count(distinct c.id)::int as n from value_arms a join clicks c on c.unit_id = a.unit_id and c.slot = a.slot and c.campaign_id = $2 where a.experiment_id = $1 group by 1`, [experimentId, e.campaignId])).rows;
-    const sales = (await this.db.query<any>(`select a.step, count(*)::int as n from value_arms a join events v on v.type = 'purchase.completed' and v.payload->>'unitId' = a.unit_id and (v.payload->>'slotIndex')::int = a.slot where a.experiment_id = $1 group by 1`, [experimentId])).rows;
+    const clicks = (await this.db.query<any>(`select a.step, count(distinct c.id)::int as n from value_arms a join clicks c on c.company_id = a.company_id and c.unit_id = a.unit_id and c.slot = a.slot and c.campaign_id = $2 where a.experiment_id = $1 group by 1`, [experimentId, e.campaignId])).rows;
+    const sales = (await this.db.query<any>(`select step, count(*)::int as n from value_sales where experiment_id = $1 and refunded_at is null group by 1`, [experimentId])).rows;
     return e.steps.map((s) => {
       const a = arms.find((r) => n(r.step) === s);
       const shown = n(a?.shown), c = n(clicks.find((r) => n(r.step) === s)?.n), sl = n(sales.find((r) => n(r.step) === s)?.n);
@@ -324,8 +360,12 @@ export class EnvironmentService {
     const p = u.placements.find((x) => x.slotIndex === slot);
     const giving = await this.givingChoice(unitId);
     const valueBack = p && !p.isHouse ? await this.valueBackFor(u.companyId, p.campaignId, person, unitId, slot) : null;
+    const by = giving?.directed ? (await this.db.query<any>(`select person from giving_directions where unit_id = $1`, [unitId])).rows[0]?.person : null;
+    // The holder is set by their first scan, which the page reports after it shows: a phone opening a bottle nobody
+    // has scanned yet will hold it.
+    const holder = giving && !giving.directed ? await this.holderOf(unitId) : null;
     return {
-      giving: giving ? { cents: giving.cents, current: giving.current, directed: giving.directed, causes: giving.causes } : null,
+      giving: giving ? { cents: giving.cents, current: giving.current, directed: giving.directed, chosenByYou: !!by && by === person, canChoose: !giving.directed && (!holder || holder === person), causes: giving.causes } : null,
       adPreferences: await this.adPreferences(u.companyId, person),
       panel: { inPanel: await this.inPanel(u.companyId, person), about: 'Take part in measurements: some offers you see will return a different amount (never less than the offer as it is), so we can learn what people really value.' },
       ...(valueBack && valueBack.cents > 0 ? { valueBack: { cents: valueBack.cents, cause: valueBack.cause, says: `Buy through this offer and ${valueBack.cents}¢ goes to ${valueBack.cause}, paid by the advertiser.` } } : {}),
@@ -334,20 +374,27 @@ export class EnvironmentService {
 
   // ---------- reading it ----------
 
-  /** How choices split: fresh against after an ad, and (when a control runs) no-ads weeks against ads weeks. */
+  /**
+   * How choices split: fresh against after an ad, and (when a control runs) no-ads weeks against ads weeks. Only real
+   * choices count for fresh against after an ad (choosing a product or cause, buying), not responses to an ad.
+   */
   async report(companyId: string, days = 30) {
     const since = new Date(this.now().getTime() - days * DAY);
-    const rows = (await this.db.query<any>(`select kind, tier, conditions from choices where company_id = $1 and at >= $2`, [companyId, iso(since)])).rows;
-    const env = (r: any) => (typeof r.conditions === 'string' ? JSON.parse(r.conditions) : r.conditions)?.environment ?? null;
-    const set = rows.filter((r) => env(r));
-    const count = (f: (r: any) => boolean) => set.filter(f).length;
+    const r = (await this.db.query<any>(`select
+        count(*) filter (where (conditions->'environment'->>'randomizedOrder')::boolean) as clean,
+        count(*) filter (where kind in ('choose','direct_giving','purchase') and conditions->'environment'->>'exposed' = 'false') as fresh,
+        count(*) filter (where kind in ('choose','direct_giving','purchase') and conditions->'environment'->>'exposed' = 'true') as after_ad,
+        count(*) filter (where conditions->'environment'->>'cohort' = 'no_ads') as no_ads,
+        count(*) filter (where conditions->'environment'->>'cohort' = 'ads') as ads,
+        count(*) filter (where kind = 'direct_giving') as directed
+      from choices where company_id = $1 and at >= $2`, [companyId, iso(since)])).rows[0] ?? {};
     return {
       since: iso(since),
-      choicesInCleanSets: count((r) => env(r).randomizedOrder),
-      madeFresh: count((r) => env(r).exposed === false),
-      madeAfterAnAd: count((r) => env(r).exposed === true),
-      byCohort: { noAds: count((r) => env(r).cohort === 'no_ads'), ads: count((r) => env(r).cohort === 'ads') },
-      directedGifts: count((r) => r.kind === 'direct_giving'),
+      choicesInCleanSets: n(r.clean),
+      madeFresh: n(r.fresh),
+      madeAfterAnAd: n(r.after_ad),
+      byCohort: { noAds: n(r.no_ads), ads: n(r.ads) },
+      directedGifts: n(r.directed),
       noAdsControlShare: this.platform.companies.get(companyId)?.research?.noAdsControlShare ?? 0,
       panel: n((await this.db.query<any>(`select count(*)::int as n from research_panel where company_id = $1 and left_at is null`, [companyId])).rows[0]?.n),
     };

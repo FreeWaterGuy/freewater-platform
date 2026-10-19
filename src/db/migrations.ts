@@ -972,8 +972,14 @@ create table research_panel (company_id text not null, person text not null, joi
 -- An advertiser's offer tested at stepped value-back amounts, approved by a person before it runs.
 create table value_experiments (id text primary key, company_id text not null, campaign_id text not null, steps int[] not null, cause text, status text not null, proposed_by text not null, approved_by text, created_at timestamptz not null, approved_at timestamptz, stopped_at timestamptz);
 create index value_experiments_running on value_experiments(company_id, campaign_id, status);
-create table value_arms (experiment_id text not null, company_id text not null, person text not null, unit_id text not null, slot int not null, step int not null, at timestamptz not null, primary key (experiment_id, person, unit_id, slot));
+-- One arm per bottle slot in a test: the panel member who first opened it, and the step they were shown (and keep).
+create table value_arms (experiment_id text not null, company_id text not null, person text not null, unit_id text not null, slot int not null, step int not null, at timestamptz not null, primary key (experiment_id, unit_id, slot));
 create index value_arms_unit on value_arms(unit_id, slot);
+-- Each sale through a test arm, and whether it was refunded (the value-back is reversed with it).
+create table value_sales (order_id text primary key, experiment_id text not null, company_id text not null, unit_id text not null, slot int not null, step int not null, cause text not null, at timestamptz not null, refunded_at timestamptz);
+create index value_sales_experiment on value_sales(experiment_id);
+-- Who first scanned each bottle: the person holding it, who may choose where its gift goes.
+create table bottle_holders (unit_id text primary key, company_id text not null, person text not null, at timestamptz not null);
 `,
   },
 ];

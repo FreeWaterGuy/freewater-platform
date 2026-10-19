@@ -187,7 +187,7 @@ export class NumberLineService {
     const pl = u?.placements.find((x) => x.slotIndex === p.slotIndex);
     const camp = pl ? this.platform.campaigns.get(pl.campaignId) : undefined;
     if (!camp) return;
-    await this.record(companyId, p.unitId ? this.personOf(p.unitId) : `pack:${p.packId}`, 'purchase', await this.offering(camp), { alternatives: [], paidCents: p.amountCents, ...(p.unitId ? { unitId: p.unitId } : {}) }, ref);
+    await this.record(companyId, p.unitId ? this.personOf(p.unitId) : `pack:${p.packId}`, 'purchase', await this.offering(camp), { alternatives: [], paidCents: p.amountCents }, ref); // the ad on this bottle counts as seen before buying
   }
 
   // ---------- reading the honest data ----------
