@@ -25,6 +25,8 @@ export function consoleRoutes(app: App, route: (r: RouteDef) => void) {
   } });
   route({ method: 'PATCH', url: '/v1/console/settings', scope: 'admin', summary: 'Change your settings: brand, product facts, giving, open books, ad rules, prices, modules and more. Send only what changes, and the version you started from.', body: obj({ changes: changesProp, version: S.int }, ['changes']), handler: async (req, key) => {
     const b = req.body as any;
+    // Money and chain switches are changed by a person signed in, never by a service key.
+    if (['wallet', 'offers', 'chain'].some((k) => k in (b.changes ?? {})) && !key!.userId) throw new ApiError(403, 'person_needed', 'Money and chain settings are changed by a person signed in, not a service key.');
     return { body: await cons.save(staff(key).companyId, b.changes, by(key!), b.version) };
   } });
   route({ method: 'POST', url: '/v1/console/preview-label', scope: 'admin', summary: 'A sample bottle label with these settings, before saving. Problems are listed instead of saving anything.', body: obj({ changes: changesProp }), handler: async (req, key) => ({ body: await cons.previewLabel(staff(key).companyId, (req.body as any).changes ?? {}) }) });

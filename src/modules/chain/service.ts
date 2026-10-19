@@ -3,7 +3,7 @@ import type { Platform } from '../../platform';
 import type { WalletService } from '../wallet/service';
 import type { AnchorPublisher } from '../transparency/anchors';
 import { newId } from '../../core/ids';
-import { leafOf, proofOf, rootOf, verify } from './merkle';
+import { leafOf, leafText, proofOf, rootOf, verify } from './merkle';
 import { TestChain, TestCustody, type Custody, type TokenChain } from './plugs';
 
 // The chain layer. Switched off, and built so a token can slide in later without changing the books:
@@ -45,8 +45,10 @@ export class ChainService {
   /** Which chain and custody each company uses. The test stand-ins until a person connects real ones. */
   chainFor: (companyId: string) => TokenChain = (companyId) => new TestChain(this.db, companyId, this.clock);
   custody: Custody = new TestCustody();
+  /** Was this person on the company's team at this time? Set by the app. */
+  isMember?: (companyId: string, person: string, at: Date) => Promise<boolean>;
   /** Saves "the chain is on" in the company's settings (with its history). Set by the app. */
-  turnOn?: (companyId: string, by: string) => Promise<void>;
+  turnOn?: (companyId: string, by: string, rules: ChainSettings) => Promise<void>;
   /** Tells a person something needs them (an alert). Set by the app. */
   alert?: (companyId: string, message: string) => void;
 
@@ -58,10 +60,12 @@ export class ChainService {
   /** Seal every finished hour not yet sealed (up to 48 at a time), for every company. */
   async sealAll() { let n = 0; for (const c of this.platform.companies.values()) n += await this.seal(c.id); return n; }
   async seal(companyId: string, max = 48) {
+    await this.republish(companyId);
     const last = (await this.db.query<any>(`select hour, root from chain_seals where company_id = $1 order by hour desc limit 1`, [companyId])).rows[0];
     const first = last ? new Date(new Date(last.hour).getTime() + 3600_000) : await this.firstHour(companyId);
     if (!first) return 0;
-    const thisHour = new Date(Math.floor(this.clock().getTime() / 3600_000) * 3600_000);
+    // An hour is sealed only once it's been over for 10 minutes, so entries still being saved at its end are in it.
+    const thisHour = new Date(Math.floor((this.clock().getTime() - 10 * 60_000) / 3600_000) * 3600_000);
     let prev: string = last?.root ?? '0'.repeat(64), n = 0;
     for (let h = first; h < thisHour && n < max; h = new Date(h.getTime() + 3600_000)) {
       const entries = await this.wallet.entriesBetween(companyId, h.toISOString(), new Date(h.getTime() + 3600_000).toISOString());
@@ -78,6 +82,22 @@ export class ChainService {
     }
     return n;
   }
+  /** Seals whose publishing failed (GitHub down, say) are tried again, newest first. */
+  private async republish(companyId: string) {
+    const rows = (await this.db.query<any>(`select hour, root, prev_root, entries, refs from chain_seals where company_id = $1 order by hour desc limit 200`, [companyId])).rows;
+    const want = [...this.publishers.map((p) => p.name), ...(this.settings(companyId).enabled ? ['chain'] : [])];
+    for (const r of rows) {
+      const refs: Record<string, string> = typeof r.refs === 'string' ? JSON.parse(r.refs) : r.refs;
+      const missing = want.filter((w) => !refs[w]);
+      if (!missing.length) continue;
+      const hour = new Date(r.hour);
+      for (const p of this.publishers.filter((x) => missing.includes(x.name))) {
+        try { refs[p.name] = (await p.publish({ companyId, company: this.platform.companies.get(companyId)?.name ?? companyId, day: `${hour.toISOString().slice(0, 13)}h-wallet`, hash: r.root, prevHash: r.prev_root, lines: r.entries })).ref; } catch { /* next time */ }
+      }
+      if (missing.includes('chain')) { try { refs.chain = (await this.chainFor(companyId).anchor(r.root, hour.toISOString())).ref; } catch { /* next time */ } }
+      await this.db.query(`update chain_seals set refs = $3 where company_id = $1 and hour = $2`, [companyId, hour.toISOString(), JSON.stringify(refs)]);
+    }
+  }
   private async firstHour(companyId: string) {
     const r = (await this.db.query<any>(`select min(at) as at from wallet_tx where company_id = $1`, [companyId])).rows[0];
     return r?.at ? new Date(Math.floor(new Date(r.at).getTime() / 3600_000) * 3600_000) : null;
@@ -92,9 +112,10 @@ export class ChainService {
     const entries = await this.wallet.entriesBetween(companyId, hour.toISOString(), new Date(hour.getTime() + 3600_000).toISOString());
     const leaves = entries.map(leafOf);
     const i = entries.findIndex((e) => e.id === entryId);
+    if (i < 0) throw new ChainError('not_sealed', 'That entry isn’t in its hour’s seal yet.', 409);
     const entry = entries[i]!;
     const path = proofOf(leaves, i);
-    return { entry: entryId, leaf: leaves[i], path, entriesRoot: seal.entries_root, prevRoot: seal.prev_root, sealedRoot: seal.root, hour: hour.toISOString(), matches: verify(leaves[i]!, path, seal.entries_root) && rootOf([seal.prev_root, seal.entries_root]) === seal.root, published: typeof seal.refs === 'string' ? JSON.parse(seal.refs) : seal.refs, how: 'Hash the entry as leafOf does, combine it with each fingerprint in path (smaller first), and you get entriesRoot; combine prevRoot and entriesRoot the same way to get sealedRoot, which is published.', lines: entry.lines.length };
+    return { entry: entryId, leaf: leaves[i], path, entriesRoot: seal.entries_root, prevRoot: seal.prev_root, sealedRoot: seal.root, hour: hour.toISOString(), matches: verify(leaves[i]!, path, seal.entries_root) && rootOf([seal.prev_root, seal.entries_root]) === seal.root, published: typeof seal.refs === 'string' ? JSON.parse(seal.refs) : seal.refs, leafText: leafText(entry), how: 'leaf = SHA-256(0x00 + leafText as UTF-8). Then for each fingerprint in path: SHA-256(0x01 + the smaller of the two + the larger, as bytes). The result is entriesRoot. Combine prevRoot and entriesRoot the same way to get sealedRoot, which is what was published.' };
   }
   async seals(companyId: string, limit = 48) {
     return (await this.db.query<any>(`select hour, root, entries, refs from chain_seals where company_id = $1 order by hour desc limit $2`, [companyId, limit])).rows.map((r) => ({ hour: new Date(r.hour).toISOString(), root: r.root, entries: r.entries, published: typeof r.refs === 'string' ? JSON.parse(r.refs) : r.refs }));
@@ -122,9 +143,12 @@ export class ChainService {
   async propose(companyId: string, kind: ActionKind, params: Record<string, unknown>, person: string) {
     if (!IRREVERSIBLE.includes(kind)) throw new ChainError('bad_kind', 'Propose a mint, an unpause, or switching the chain on.');
     if (kind === 'mint' && !(typeof params.to === 'string' && Number.isInteger(params.amount) && (params.amount as number) > 0)) throw new ChainError('bad_params', 'A mint needs who it’s for and a whole amount.');
+    if (this.isMember && !(await this.isMember(companyId, person, this.clock()))) throw new ChainError('not_member', 'Only people on the team can propose this.', 403);
     const id = newId('ca');
+    // The rules as they are now are kept with the action: changing settings later can't weaken it.
     const s = this.settings(companyId);
-    await this.db.query(`insert into chain_actions (id, company_id, kind, params, proposed_by, approvals, needed, status, created_at) values ($1,$2,$3,$4,$5,'[]',$6,'proposed',$7)`, [id, companyId, kind, JSON.stringify(params), person, s.approvalsNeeded, this.now()]);
+    await this.db.query(`insert into chain_actions (id, company_id, kind, params, proposed_by, approvals, needed, status, created_at, rules) values ($1,$2,$3,$4,$5,'[]',$6,'proposed',$7,$8)`, [id, companyId, kind, JSON.stringify(params), person, s.approvalsNeeded, this.now(), JSON.stringify(s)]);
+    this.alert?.(companyId, `${person} proposed: ${kind} ${JSON.stringify(params)}. It needs ${s.approvalsNeeded} other people to approve, then a ${s.delayHours}-hour wait.`);
     return this.action(companyId, id);
   }
   async approve(companyId: string, id: string, person: string) {
@@ -135,9 +159,14 @@ export class ChainService {
       if (a.proposed_by === person) throw new ChainError('own_proposal', 'Someone other than the person who proposed it must approve it.', 403);
       const approvals: { by: string; at: string }[] = typeof a.approvals === 'string' ? JSON.parse(a.approvals) : a.approvals;
       if (approvals.some((x) => x.by === person)) throw new ChainError('already_approved', 'You already approved this.', 409);
+      // Only people who were already on the team when it was proposed count (no new accounts made to approve it).
+      if (this.isMember && !(await this.isMember(companyId, person, new Date(a.created_at)))) throw new ChainError('not_member', 'Only people who were on the team when this was proposed can approve it.', 403);
       approvals.push({ by: person, at: this.now() });
       const ready = approvals.length >= a.needed;
-      await tx.query(`update chain_actions set approvals = $2, status = $3, not_before = $4 where id = $1`, [id, JSON.stringify(approvals), ready ? 'approved' : 'proposed', ready ? new Date(this.clock().getTime() + this.settings(companyId).delayHours * 3600_000).toISOString() : null]);
+      const rules: ChainSettings = { ...defaultChain, ...(typeof a.rules === 'string' ? JSON.parse(a.rules) : a.rules ?? {}) };
+      const delay = Math.max(rules.delayHours, this.settings(companyId).delayHours);
+      await tx.query(`update chain_actions set approvals = $2, status = $3, not_before = $4 where id = $1`, [id, JSON.stringify(approvals), ready ? 'approved' : 'proposed', ready ? new Date(this.clock().getTime() + delay * 3600_000).toISOString() : null]);
+      this.alert?.(companyId, `${person} approved ${a.kind} (${approvals.length} of ${a.needed}).${ready ? ` It can run after ${delay} hours.` : ''}`);
       return { approvals: approvals.length, needed: a.needed, ready };
     });
   }
@@ -151,6 +180,8 @@ export class ChainService {
     if (!a) throw new ChainError('not_found', 'No such action.', 404);
     if (a.status !== 'approved') throw new ChainError('not_approved', 'This hasn’t been approved by enough people.', 409);
     if (new Date(a.not_before).getTime() > this.clock().getTime()) throw new ChainError('waiting', `This can run after ${new Date(a.not_before).toISOString()}.`, 409);
+    // Approvals don't last forever: two weeks after it could first run, it must be proposed again.
+    if (new Date(a.not_before).getTime() + 14 * 86_400_000 < this.clock().getTime()) { await this.db.query(`update chain_actions set status = 'expired' where id = $1`, [id]); throw new ChainError('expired', 'This approval ran out. Propose it again.', 410); }
     const s = this.settings(companyId);
     const p = typeof a.params === 'string' ? JSON.parse(a.params) : a.params;
     if (a.kind !== 'switch_on' && !s.enabled) throw new ChainError('switched_off', 'The chain is switched off.', 403);
@@ -162,13 +193,17 @@ export class ChainService {
       let ref = '';
       if (a.kind === 'mint') {
         const address = await this.custody.addressFor(companyId, p.to);
-        ref = (await chain.mint(address, p.amount, id)).ref;
+        ref = a.ref ?? (await chain.mint(address, p.amount, id)).ref;
+        // Kept at once, so if the books entry fails it can be finished later without minting twice.
+        await this.db.query(`update chain_actions set ref = $2 where id = $1`, [id, ref]);
         await this.wallet.recordMint(companyId, p.to, p.amount, id, ref);
       } else if (a.kind === 'unpause') ref = (await chain.setPaused(false)).ref;
-      else if (a.kind === 'switch_on') { if (!this.turnOn) throw new Error('Settings can’t be changed from here.'); await this.turnOn(companyId, `approved action ${id}`); ref = 'settings'; }
+      else if (a.kind === 'switch_on') { if (!this.turnOn) throw new Error('Settings can’t be changed from here.'); await this.turnOn(companyId, `approved action ${id}`, { ...defaultChain, ...(typeof a.rules === 'string' ? JSON.parse(a.rules) : a.rules ?? {}) }); ref = 'settings'; }
       await this.db.query(`update chain_actions set status = 'done', ran_by = $2, ran_at = $3, ref = $4 where id = $1`, [id, person, this.now(), ref]);
     } catch (e: any) {
-      await this.db.query(`update chain_actions set status = 'failed', error = $2 where id = $1`, [id, String(e?.message ?? e).slice(0, 300)]);
+      // A mint that reached the chain but not the books goes back to approved, to be finished (not minted again).
+      const reached = a.kind === 'mint' && (await this.db.query<any>(`select ref from chain_actions where id = $1`, [id])).rows[0]?.ref;
+      await this.db.query(`update chain_actions set status = $3, error = $2 where id = $1`, [id, String(e?.message ?? e).slice(0, 300), reached ? 'approved' : 'failed']);
       throw new ChainError('failed', `It didn’t run: ${e?.message ?? e}`, 502);
     }
     return this.action(companyId, id);

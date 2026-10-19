@@ -361,7 +361,13 @@ export async function createApp(opts: AppOptions) {
   const allowPrivate = opts.allowPrivateWebhooks ?? process.env.ALLOW_PRIVATE_WEBHOOKS === '1';
   const webhooks = new WebhookService(db, opts.webhookSender ?? new HttpWebhookSender({ allowPrivate }), messenger, opts.clock, flush, { allowPrivate, consoleUrl: publicUrl });
   const consoleSvc = new ConsoleService(db, platform, made.registry, accounts, messenger, flush, { consoleUrl: publicUrl, clock: opts.clock });
-  chain.turnOn = async (companyId, by) => { await consoleSvc.save(companyId, { chain: { ...chain.settings(companyId), enabled: true } }, by, undefined, { chainApproved: true }); };
+  // Switched on with the rules as they were when people approved it, never weaker ones set since.
+  chain.turnOn = async (companyId, by, rules) => { const now = chain.settings(companyId); await consoleSvc.save(companyId, { chain: { ...now, network: rules.network, approvalsNeeded: Math.max(now.approvalsNeeded, rules.approvalsNeeded), delayHours: Math.max(now.delayHours, rules.delayHours), enabled: true } }, by, undefined, { chainApproved: true }); };
+  chain.isMember = async (companyId, person, at) => {
+    if (!person.startsWith('user:')) return false;
+    const u = (await db.query<any>(`select role, created_at from users where id = $1 and company_id = $2 and deleted_at is null`, [person.slice(5), companyId])).rows[0];
+    return !!u && ['owner', 'finance'].includes(u.role) && new Date(u.created_at).getTime() <= at.getTime();
+  };
 
   // Bottles FreeWater gives outside the platform (before the software runs them), recorded by the team.
   const distributions = new DistributionService(db, platform, { today: (companyId) => delivery.today(companyId), charities: async (companyId) => (await books.charities(companyId)).map((c: any) => c.name), onBottles: (companyId, n) => transparency.addBottles(companyId, n) });

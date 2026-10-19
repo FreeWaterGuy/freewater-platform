@@ -18,7 +18,10 @@ beforeAll(async () => {
   app = await createApp({ db, seedDemo: true, seed: 91, clock: () => new Date(now), assumePlace: { country: 'US', state: 'TX' }, anchorPublishers: [] });
   keys = app.demoKeys!;
   server = await buildServer(app);
+  realIsMember = app.chain.isMember!;
+  app.chain.isMember = async () => true; // alice, bob and carol are on the team
 });
+let realIsMember: NonNullable<App['chain']['isMember']>;
 afterAll(async () => { await server.close(); await app.persistence.flush(); await db.close(); });
 
 describe('Merkle proofs', () => {
@@ -55,12 +58,24 @@ describe('hourly seals', () => {
 describe('things that can’t be undone need several people and a wait', () => {
   it('the chain can’t be switched on from settings', async () => {
     const r = await call('PATCH', '/v1/console/settings', { changes: { chain: { enabled: true, network: 'test', approvalsNeeded: 2, delayHours: 48 } } }, keys['freewater-admin']);
-    expect(r.status).toBe(422);
-    expect(JSON.stringify(r.body)).toMatch(/approve/);
+    expect([403, 422]).toContain(r.status); // a service key can't touch it at all; a person gets told it needs approvals
+    const { chainProblem } = await import('../src/modules/console/settings');
+    expect(chainProblem({ chain: undefined } as any, { chain: { enabled: true } } as any)).toMatch(/approve/);
   });
 
   it('only people (not service keys) can propose', async () => {
     expect((await call('POST', '/v1/chain/actions', { kind: 'switch_on' }, keys['freewater-admin'])).body.error.code).toBe('person_needed');
+  });
+
+  it('only owners and finance who were on the team before the proposal count', async () => {
+    const add = (id: string, role: string, at: string) => db.query(`insert into users (id, company_id, role, viewer_key, created_at) values ($1,'freewater',$2,$3,$4)`, [id, role, `vk_${id}_0000`, at]);
+    await add('usr_old_owner', 'owner', '2026-01-01T00:00:00Z');
+    await add('usr_driver', 'driver', '2026-01-01T00:00:00Z');
+    await add('usr_new_owner', 'owner', new Date(now + 60_000).toISOString());
+    const at = new Date(now);
+    expect(await realIsMember('freewater', 'user:usr_old_owner', at)).toBe(true);
+    expect(await realIsMember('freewater', 'user:usr_driver', at)).toBe(false);
+    expect(await realIsMember('freewater', 'user:usr_new_owner', at)).toBe(false);
   });
 
   it('switching on: two other people approve, the wait passes, then it runs', async () => {

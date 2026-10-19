@@ -5,12 +5,19 @@ import { createHash } from 'node:crypto';
 // was in the books when the root was published, and that it hasn't changed since.
 
 const h = (s: string | Buffer) => createHash('sha256').update(s).digest('hex');
-const pair = (a: string, b: string) => h(Buffer.from(a < b ? a + b : b + a, 'hex'));
+// Leaves and inner nodes are hashed with different first bytes, so one can never pass for the other.
+const pair = (a: string, b: string) => h(Buffer.concat([Buffer.from([1]), Buffer.from(a < b ? a + b : b + a, 'hex')]));
+const byCodepoint = (x: string, y: string) => (x < y ? -1 : x > y ? 1 : 0);
+
+/** The exact text a leaf is the fingerprint of, so anyone can recompute it. */
+export function leafText(e: { id: string; asset: string; kind: string; at: string; lines: { account: string; amount: number }[] }) {
+  const lines = e.lines.map((l) => `${l.account}:${l.amount}`).sort(byCodepoint).join(',');
+  return `fw-wallet-v1|${e.id}|${e.asset}|${e.kind}|${e.at}|${lines}`;
+}
 
 /** The fingerprint of one wallet entry: its id, what moved, and where, in a fixed order. */
 export function leafOf(e: { id: string; asset: string; kind: string; at: string; lines: { account: string; amount: number }[] }) {
-  const lines = [...e.lines].sort((x, y) => x.account.localeCompare(y.account) || x.amount - y.amount).map((l) => `${l.account}:${l.amount}`).join(',');
-  return h(`fw-wallet-v1|${e.id}|${e.asset}|${e.kind}|${e.at}|${lines}`);
+  return h(Buffer.concat([Buffer.from([0]), Buffer.from(leafText(e), 'utf8')]));
 }
 
 export function rootOf(leaves: string[]): string {
