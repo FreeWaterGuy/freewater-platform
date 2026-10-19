@@ -85,6 +85,9 @@ const jobs: Job[] = [
   { name: 'game-photos', everyMs: 6 * 3600_000, timeoutMs: 20 * 60_000, run: saved(async () => { for (const c of app!.platform.companies.values()) await app!.games.fillImages(c.id, 40); }) },
   // Brand offers: close claims with no receipt after 14 days (points go back), and pay approved ones that were held.
   { name: 'offers', everyMs: 3600_000, timeoutMs: 10 * 60_000, run: saved(async () => { for (const c of app!.platform.companies.values()) { await app!.offers.expire(c.id); await app!.offers.payHeld(c.id); } }) },
+  // The chain layer: seal each finished hour of the wallet journal; once a day, check the books against the chain.
+  { name: 'wallet-seals', everyMs: 600_000, timeoutMs: 10 * 60_000, run: saved(() => app!.chain.sealAll()) },
+  { name: 'chain-check', everyMs: 24 * 3600_000, timeoutMs: 10 * 60_000, run: saved(async () => { for (const c of app!.platform.companies.values()) await app!.chain.reconcile(c.id); }) },
   { name: 'fingerprints', everyMs: 3600_000, timeoutMs: 10 * 60_000, run: saved(() => app!.anchors.run()) },
   // Once a day, delete data older than each company keeps.
   // Each minute: how full memory is. The platform keeps its working state in memory (about 13 KB per bottle printed,

@@ -1082,6 +1082,18 @@ alter table game_rounds add column pick_item text;
 create index game_rounds_category on game_rounds(company_id, category) where answered_at is not null;
 `,
   },
+  {
+    id: '037_chain',
+    sql: `
+-- Hourly seals of the wallet journal (chained Merkle roots), actions that need several people, the daily
+-- books-against-chain check, and the test-network stand-in for a chain.
+create table chain_seals (company_id text not null, hour timestamptz not null, root text not null, entries_root text not null, prev_root text not null, entries integer not null, refs jsonb not null, at timestamptz not null, primary key (company_id, hour));
+create table chain_actions (id text primary key, company_id text not null, kind text not null, params jsonb not null, proposed_by text not null, approvals jsonb not null, needed integer not null, status text not null,
+  not_before timestamptz, created_at timestamptz not null, ran_by text, ran_at timestamptz, ref text, error text, cancelled_by text);
+create table chain_checks (company_id text not null, at timestamptz not null, books bigint not null, chain bigint not null, ok boolean not null);
+create table test_chain (company_id text not null, ref text primary key, kind text not null, data jsonb not null, at timestamptz not null);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

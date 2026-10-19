@@ -181,6 +181,28 @@ export class WalletService {
     }), () => ({ paid: 0, reason: 'already_paid' }));
   }
 
+  tokenAsset(companyId: string) { return `token:${companyId}`; }
+  /**
+   * The books' side of a token minted on a chain: it appears in the person's wallet, and the supply account goes
+   * negative by the same amount (so the books' supply can be checked against the chain's every day).
+   */
+  async recordMint(companyId: string, subject: string, amount: number, ref: string, chainRef: string) {
+    if (!Number.isInteger(amount) || amount <= 0) throw new WalletError('bad_amount', 'Mint a whole, positive amount.');
+    return this.once(() => this.db.transaction(async (tx) => {
+      const id = await this.post(tx, companyId, this.tokenAsset(companyId), 'mint', `mint:${ref}`, [['token_supply', -amount], [`holder:${subject}`, amount]], { chainRef });
+      return { entry: id };
+    }), () => ({ entry: null as string | null }));
+  }
+  async tokenSupply(companyId: string) { return -(await this.balance(this.db, companyId, this.tokenAsset(companyId), 'token_supply')); }
+  /** Every wallet entry in a time window, with its lines, for the hourly seal. */
+  async entriesBetween(companyId: string, from: string, to: string) {
+    const rows = (await this.db.query<any>(`select t.id, t.asset, t.kind, t.at, l.account, l.amount from wallet_tx t join wallet_lines l on l.tx_id = t.id where t.company_id = $1 and t.at >= $2 and t.at < $3 order by t.id`, [companyId, from, to])).rows;
+    type Entry = { id: string; asset: string; kind: string; at: string; lines: { account: string; amount: number }[] };
+    const by = new Map<string, Entry>();
+    for (const r of rows) { const e: Entry = by.get(r.id) ?? { id: r.id, asset: r.asset, kind: r.kind, at: new Date(r.at).toISOString(), lines: [] }; e.lines.push({ account: r.account, amount: Number(r.amount) }); by.set(r.id, e); }
+    return [...by.values()];
+  }
+
   /** Turning points or credit into something else. Switched off until a person approves it (and a partner is chosen). */
   async convert(companyId: string): Promise<never> {
     const c = this.settings(companyId).conversions;

@@ -136,6 +136,8 @@ export interface CompanyConfig {
   games?: Partial<import('../modules/games/service').GameSettings>;
   /** Brand offers (free, cheaper or negatively priced products, redeemed with a receipt). Off until a person turns them on. */
   offers?: { enabled: boolean };
+  /** The chain layer (a future token, hourly seals on a blockchain). Off; switching it on takes several people's approval. */
+  chain?: import('../modules/chain/service').ChainSettings;
   /** How much of the books the world sees, live. Each company chooses. */
   transparency?: Transparency;
   /** Security choices. Owners can be required to use a second sign-in step (a code from an authenticator app). */

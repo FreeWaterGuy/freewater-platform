@@ -56,6 +56,7 @@ import { GamesService } from './modules/games/service';
 import { ClaudePrompter, builtinPrompter, type Prompter } from './modules/games/prompter';
 import { OpenFoodFactsImages, StockImages, WikipediaImages, type ProductImageSource } from './modules/games/images';
 import { OffersService } from './modules/offers/service';
+import { ChainService } from './modules/chain/service';
 import { readerFromEnv, type ReceiptReader } from './modules/offers/receipts';
 import { OpenFoodFactsLookup, type ProductLookup } from './modules/offers/barcodes';
 import { TransparencyService } from './modules/transparency/service';
@@ -351,12 +352,16 @@ export async function createApp(opts: AppOptions) {
     ...(process.env.FW_ANCHOR_BITCOIN === '1' || (process.env.NODE_ENV === 'production' && process.env.FW_ANCHOR_BITCOIN !== '0') ? [new OpenTimestampsPublisher()] : []),
   ];
   const anchors = new AnchorService(db, platform, (id) => books.days(id), publishers, (id) => delivery.today(id), opts.clock);
+  // The chain layer, switched off: hourly seals of the wallet journal, actions needing several people, the daily check.
+  const chain = new ChainService(db, platform, wallet, publishers, opts.clock);
+  chain.alert = (companyId, message) => void runtime.alerts.alert('chain', 'critical', `Chain (${companyId})`, message);
 
   const flush = () => persistence.flush();
   const publicUrl = opts.publicUrl ?? process.env.PUBLIC_URL;
   const allowPrivate = opts.allowPrivateWebhooks ?? process.env.ALLOW_PRIVATE_WEBHOOKS === '1';
   const webhooks = new WebhookService(db, opts.webhookSender ?? new HttpWebhookSender({ allowPrivate }), messenger, opts.clock, flush, { allowPrivate, consoleUrl: publicUrl });
   const consoleSvc = new ConsoleService(db, platform, made.registry, accounts, messenger, flush, { consoleUrl: publicUrl, clock: opts.clock });
+  chain.turnOn = async (companyId, by) => { await consoleSvc.save(companyId, { chain: { ...chain.settings(companyId), enabled: true } }, by, undefined, { chainApproved: true }); };
 
   // Bottles FreeWater gives outside the platform (before the software runs them), recorded by the team.
   const distributions = new DistributionService(db, platform, { today: (companyId) => delivery.today(companyId), charities: async (companyId) => (await books.charities(companyId)).map((c: any) => c.name), onBottles: (companyId, n) => transparency.addBottles(companyId, n) });
@@ -417,7 +422,7 @@ export async function createApp(opts: AppOptions) {
   await fleet.load();
   made.registry.registerPrinter('model6-fleet', new MachineFleetPrinter(() => fleet, made.printer));
 
-  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, games, offers, studio, transparency, anchors, agents, profit, distributions, team, secondStep };
+  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, games, offers, chain, studio, transparency, anchors, agents, profit, distributions, team, secondStep };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;
