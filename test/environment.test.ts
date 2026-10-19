@@ -97,6 +97,18 @@ describe('the data environment', () => {
     expect(isoWeek(new Date('2026-10-18T12:00:00Z'))).toBe('2026-W42');
   });
 
+  it('doesn’t offer people a choice of cause unless the company turns it on', async () => {
+    const u = await printFor('viewer-gift-off', 'gift-off');
+    app.platform.scan(u.id, u.placements[0]!.slotIndex, 'viewer-gift-off', true);
+    expect(await app.environment.givingChoice(u.id)).toBeNull();
+    expect((await call('POST', `/v1/public/bottles/${u.id}/giving`, { viewerKey: 'viewer-gift-off', to: 'Central Texas Food Bank' }, false)).body.error.code).toBe('not_offered');
+    const page = (await server.inject({ method: 'GET', url: `/v1/public/experience/${u.id}/${u.placements[0]!.slotIndex}?viewer=viewer-gift-off` })).json();
+    expect(page.environment.giving).toBeNull();
+    // A white-label company can turn it on in its settings.
+    const c = app.platform.companies.get('freewater')!;
+    app.platform.companies.set('freewater', { ...c, giving: { ...c.giving, peopleChoose: true } });
+  });
+
   it('lets the person holding a bottle choose where its gift goes, once, and the books follow', async () => {
     const holder = 'viewer-gift-holder';
     const u = await printFor('viewer-gift-printed', 'gift-1');

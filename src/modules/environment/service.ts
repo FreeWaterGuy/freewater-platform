@@ -168,7 +168,7 @@ export class EnvironmentService {
     const u = this.platform.units.get(unitId);
     if (!u || u.kind !== 'ad_supported') return null;
     const c = this.company(u.companyId);
-    if (c.giving.mode === 'none') return null;
+    if (c.giving.mode === 'none' || !c.giving.peopleChoose) return null;
     const parts = new Map<string, number>();
     for (const l of this.platform.ledger.receipt(unitId).lines) {
       if (l.kind !== 'donation') continue;
@@ -209,6 +209,7 @@ export class EnvironmentService {
   async directGiving(unitId: string, person: string, to: string) {
     const u = this.platform.units.get(unitId);
     if (!u) throw new EnvironmentError('not_found', 'No such bottle.', 404);
+    if (!this.platform.companies.get(u.companyId)?.giving.peopleChoose) throw new EnvironmentError('not_offered', 'This company chooses where its gifts go.', 409);
     const g = await this.givingChoice(unitId);
     if (!g) throw new EnvironmentError('no_gift', 'This bottle doesn’t carry a gift to direct.', 409);
     if (g.directed) throw new EnvironmentError('already', `This bottle’s gift already goes to ${g.current}.`, 409);

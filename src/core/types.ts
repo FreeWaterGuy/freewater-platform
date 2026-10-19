@@ -111,6 +111,11 @@ export interface CompanyConfig {
     /** To give to more than one charity: each charity's percent of every gift (adding up to 100). Used instead of defaultCharity. */
     charitySplit?: Record<string, number> | null;
     charityByLocation?: Record<string, string>;
+    /**
+     * Whoever holds a bottle may choose which of the company's charities its gift goes to. Off unless a company turns
+     * it on (FreeWater gives everything to its one charity). Keeping the cents themselves isn't offered.
+     */
+    peopleChoose?: boolean;
     /** Donations are sent to charities in transfers once they reach this amount. */
     minimumTransferCents?: number;
   };
