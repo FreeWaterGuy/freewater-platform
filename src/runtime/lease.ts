@@ -16,6 +16,9 @@ export class InstanceLease {
   readonly holder: string;
   private timer: NodeJS.Timeout | null = null;
   private lastRenewed = 0;
+  private failures = 0;
+  private renewing = false;
+  private tableReady = false;
   held = false;
 
   constructor(
@@ -30,17 +33,24 @@ export class InstanceLease {
   /** Take the lease if it's free (or lapsed). */
   async tryTake(): Promise<boolean> {
     // The lease comes before migrations (so a new version never changes the tables under a running old one), so its
-    // table may not exist yet on a brand-new database.
-    await this.db.query(`create table if not exists instance_lease (name text primary key, holder text not null, expires_at timestamptz not null, started_at timestamptz not null default now())`);
+    // table may not exist yet on a brand-new database. Once is enough per server.
+    if (!this.tableReady) {
+      await this.db.query(`create table if not exists instance_lease (name text primary key, holder text not null, expires_at timestamptz not null, started_at timestamptz not null default now())`);
+      this.tableReady = true;
+    }
+    // Another server's lapsed lease is deleted, not overwritten. Its writes lock the row "for key share" (see
+    // stillHeld), which a delete must wait for but a renewal (changing only expires_at) doesn't, so a write that checked
+    // the lease just before it lapsed commits before anyone can take it, and renewing never waits on a write.
+    await this.db.query(`delete from instance_lease where name = $1 and holder <> $2 and expires_at < now()`, [this.name, this.holder]);
     const r = await this.db.query(
       `insert into instance_lease (name, holder, expires_at, started_at) values ($1, $2, now() + $3::double precision * interval '1 millisecond', now())
-       on conflict (name) do update set holder = excluded.holder, expires_at = excluded.expires_at, started_at = excluded.started_at
-       where instance_lease.expires_at < now() or instance_lease.holder = excluded.holder
+       on conflict (name) do update set expires_at = excluded.expires_at, started_at = excluded.started_at
+       where instance_lease.holder = excluded.holder
        returning holder`,
       [this.name, this.holder, this.ttl],
     );
     this.held = r.rows.length > 0;
-    if (this.held) this.lastRenewed = Date.now();
+    if (this.held) { this.lastRenewed = Date.now(); this.failures = 0; }
     return this.held;
   }
 
@@ -66,28 +76,39 @@ export class InstanceLease {
   }
 
   async renew() {
+    if (this.renewing || !this.held) return; // one renewal at a time: a slow one isn't overtaken by the next tick
+    this.renewing = true;
+    let timer: NodeJS.Timeout | undefined;
     try {
       // A connection that hangs (rather than failing) must still count as a failure, or the lease would lapse while
-      // this server carried on.
+      // this server carried on. Only expires_at changes (never the key), so a renewal never waits on a write's lock.
       const r = await Promise.race([
         this.db.query(`update instance_lease set expires_at = now() + $3::double precision * interval '1 millisecond' where name = $1 and holder = $2 returning 1`, [this.name, this.holder, this.ttl]),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('the database didn’t answer in time')), this.ttl * 0.3).unref?.()),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('the database didn’t answer in time')), this.ttl * 0.3); timer.unref?.(); }),
       ]);
       if (!r.rows.length) return this.lose('another server took the lease');
       this.lastRenewed = Date.now();
+      this.failures = 0;
     } catch (e) {
-      // Can't reach the database. Keep trying until the lease would have lapsed, then stop: someone else may own it.
-      if (Date.now() - this.lastRenewed > this.ttl * 0.6) this.lose(`couldn't renew the lease: ${(e as Error).message}`);
+      // Can't reach the database. One slow or failed renewal is survivable (the lease still has most of its time); stop
+      // after two in a row, or once the lease is nearly out, whichever comes first: someone else may own it by then.
+      this.failures++;
+      if (this.failures >= 2 || Date.now() - this.lastRenewed > this.ttl * 0.9) this.lose(`couldn't renew the lease (${this.failures} tries in a row): ${(e as Error).message}`);
+    } finally {
+      clearTimeout(timer);
+      this.renewing = false;
     }
   }
 
   /**
    * Inside a write's own transaction: is the lease still this server's, and unexpired by the database's clock? The
-   * row is locked for share until the write commits, so no one can take the lease between this check and the commit.
+   * row is locked "for key share" until the write commits: no one can delete it (the only way another server takes a
+   * lapsed lease) between this check and the commit, while this server's own renewal, which changes no key, never
+   * waits on it.
    */
   async stillHeld(tx: SqlClient): Promise<boolean> {
     if (!this.held) return false;
-    const r = await tx.query(`select 1 from instance_lease where name = $1 and holder = $2 and expires_at > now() for share`, [this.name, this.holder]);
+    const r = await tx.query(`select 1 from instance_lease where name = $1 and holder = $2 and expires_at > now() for key share`, [this.name, this.holder]);
     return r.rows.length > 0;
   }
 

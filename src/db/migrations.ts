@@ -1198,6 +1198,14 @@ drop index if exists units_order;
 create unique index units_order on units(company_id, order_id) where order_id is not null and status <> 'failed';
 `,
   },
+  {
+    id: '049_c4_scan_viewer_index',
+    sql: `
+-- "Has this phone scanned anything here?" is asked at sign-in and when a phone is joined to an account; without this
+-- it read every scan the company ever had. Only scan and AR events, which carry the phone's key.
+create index if not exists events_scan_viewer on events(company_id, (payload->>'viewerKey')) where type in ('unit.scanned','box.scanned','ar.launched','box.ar_launched');
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

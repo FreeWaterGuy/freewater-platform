@@ -481,13 +481,15 @@
       open.disabled = true;
       let cards;
       try { ({ cards } = await api('GET', '/v1/me/wallet/gift-cards')); } catch (e) { toast(e.message); open.disabled = false; return; }
-      // One id for this purchase, sent with every try, so a retry after a dropped answer never buys twice.
-      const requestId = newRequestId();
+      // One id per choice (card and amount), sent with every try of that choice, so a retry after a dropped answer
+      // never buys twice; a different card or amount is a different purchase and gets its own id.
+      const ids = new Map();
+      const idFor = (key) => { if (!ids.has(key)) ids.set(key, newRequestId()); return ids.get(key); };
       const pick = h('select', { class: 'input' }, cards.map((c) => h('option', { value: c.id, text: c.name })));
       const amt = h('input', { class: 'input', type: 'number', min: 5, step: 1, value: Math.min(25, Math.floor(w.credit.balanceCents / 100)), 'aria-label': 'Dollars' });
       const go = h('button', { class: 'btn small', type: 'button', text: 'Send it' });
       let busy = false;
-      go.addEventListener('click', async () => { if (busy) return; busy = true; go.disabled = true; try { const r = await api('POST', '/v1/me/wallet/gift-cards', { product: pick.value, cents: Math.round(Number(amt.value) * 100), requestId }); toast(r.test ? `Test card: ${r.code}` : 'Sent to your email.'); render(); } catch (e) { toast(e.message); go.disabled = false; } finally { busy = false; } });
+      go.addEventListener('click', async () => { if (busy) return; busy = true; go.disabled = true; const product = pick.value, cents = Math.round(Number(amt.value) * 100); try { const r = await api('POST', '/v1/me/wallet/gift-cards', { product, cents, requestId: idFor(`${product}|${cents}`) }); toast(r.test ? `Test card: ${r.code}` : 'Sent to your email.'); render(); } catch (e) { toast(e.message); go.disabled = false; } finally { busy = false; } });
       open.replaceWith(pick, amt, go);
     });
     box.append(open);
