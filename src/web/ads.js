@@ -277,15 +277,23 @@
   function setupScreen() {
     const name = h('input', { class: 'input', id: 's-name', placeholder: 'Tito’s Tacos', autocomplete: 'organization' });
     const cat = h('select', { class: 'input', id: 's-cat' }, ['Food and drink', 'Coffee', 'Real estate', 'Fitness', 'Health', 'Retail', 'Pets', 'Events', 'Auto', 'News', 'Services'].map((c) => h('option', { value: c.toLowerCase().replace(/ and /g, '-').replace(/\s+/g, '-'), text: c })));
-    const site = h('input', { class: 'input', id: 's-site', placeholder: 'https://', type: 'url' });
+    const site = h('input', { class: 'input', id: 's-site', placeholder: 'https://', type: 'url', pattern: 'https://.*', title: 'Start with https:// (a secure web address), like https://titostacos.com', 'aria-describedby': 's-site-hint' });
+    const siteHint = h('p', { class: 'hint', id: 's-site-hint', style: 'margin:4px 0 0;font-size:13px;color:var(--muted)', text: 'Must start with https://' });
+    // The server checks the fields too; turn its technical wording into plain words.
+    const plain = (x) => {
+      if (x.code !== 'invalid_request') return x.message;
+      if (/website/i.test(x.message)) return 'Your website needs to start with https:// (a secure address), like https://titostacos.com.';
+      if (/businessName/i.test(x.message)) return 'Give your business name (2 to 60 characters).';
+      return 'Something in the form isn’t right. Check it and try again.';
+    };
     const err = h('div', { class: 'notice err', hidden: true });
     root.replaceChildren(h('div', { class: 'auth' }, pitch(), h('div', { class: 'right' },
       h('h2', { style: 'font:700 26px/1.2 var(--display);margin:0', text: 'Tell us about your business' }),
       h('form', { style: 'display:flex;flex-direction:column;gap:12px', onsubmit: async (e) => {
         e.preventDefault(); err.hidden = true;
         try { await api('POST', '/v1/advertisers', { businessName: name.value.trim(), category: cat.value === 'food-drink' ? 'food' : cat.value, ...(site.value.trim() ? { website: site.value.trim() } : {}) }); state.me = null; go('/ads/new'); }
-        catch (x) { err.textContent = x.message; err.hidden = false; }
-      } }, h('div', { class: 'field' }, h('label', { for: 's-name', text: 'Business name' }), name), h('div', { class: 'field' }, h('label', { for: 's-cat', text: 'What you do' }), cat), h('div', { class: 'field' }, h('label', { for: 's-site', text: 'Website (optional)' }), site), err, h('button', { class: 'btn wide', type: 'submit' }, 'Start making my ad')))));
+        catch (x) { err.textContent = plain(x); err.hidden = false; }
+      } }, h('div', { class: 'field' }, h('label', { for: 's-name', text: 'Business name' }), name), h('div', { class: 'field' }, h('label', { for: 's-cat', text: 'What you do' }), cat), h('div', { class: 'field' }, h('label', { for: 's-site', text: 'Website (optional)' }), site, siteHint), err, h('button', { class: 'btn wide', type: 'submit' }, 'Start making my ad')))));
     name.focus();
   }
 

@@ -269,7 +269,7 @@
       return;
     }
     const change = async (body, msg) => { try { await api('PATCH', '/v1/me/delivery', body); toast(msg); render(); } catch (x) { toast(x.message); } };
-    const confirmBox = h('div', { class: 'notice err', hidden: true }, h('p', { style: 'margin:0 0 10px', text: 'Stop all deliveries? You can start again any time.' }), h('button', { class: 'btn small', style: 'background:var(--danger)', type: 'button', onclick: async () => { await api('PATCH', '/v1/me/delivery', { action: 'cancel' }); toast('Deliveries stopped'); go('/app'); } }, 'Yes, stop deliveries'));
+    const confirmBox = h('div', { class: 'notice err', hidden: true }, h('p', { style: 'margin:0 0 10px', text: 'Stop all deliveries? You can start again any time.' }), h('button', { class: 'btn small', style: 'background:var(--danger)', type: 'button', onclick: async (e) => { const b = e.currentTarget; b.disabled = true; try { await api('PATCH', '/v1/me/delivery', { action: 'cancel' }); toast('Deliveries stopped'); go('/app'); } catch (x) { toast(x.message); b.disabled = false; } } }, 'Yes, stop deliveries'));
     const notes = h('input', { class: 'input', id: 'dl-notes', maxlength: '300', value: d.notes ?? '', placeholder: 'Side gate, leave by the porch…' });
     screen({ nav: 'home' }, backBar('Home delivery', d.address, '/app'),
       h('section', { class: 'hero-card' }, h('div', { class: 'headline' }, d.status === 'paused' ? 'Paused' : `${d.packSize} bottles`, h('span', { text: d.status === 'paused' ? 'Turn it back on any time.' : d.today && d.today.status === 'planned' ? 'Coming today' : d.nextDate ? niceDate(d.nextDate) : '' })),
@@ -473,15 +473,21 @@
   // ---------- saved ----------
   // ---------- wallet: points, credit, the token, offers, coupons, what you saved ----------
   const viewerKey = () => { let v = null; try { v = localStorage.getItem('fw_viewer'); } catch {} if (!v || !/^[A-Za-z0-9_-]{8,64}$/.test(v)) { const a = new Uint8Array(16); crypto.getRandomValues(a); v = btoa(String.fromCharCode(...a)).replace(/[+/=]/g, (c) => ({ '+': '-', '/': '_', '=': '' })[c]); try { localStorage.setItem('fw_viewer', v); } catch {} } return v; };
+  const newRequestId = () => { if (crypto.randomUUID) return crypto.randomUUID(); const a = new Uint8Array(18); crypto.getRandomValues(a); return btoa(String.fromCharCode(...a)).replace(/[+/=]/g, (c) => ({ '+': '-', '/': '_', '=': '' })[c]); };
   function giftCardTile(w) {
     const box = h('div', { class: 'list-row', style: 'flex-wrap:wrap;gap:8px' }, h('span', { class: 'grow' }, h('b', { text: 'Get a gift card' }), h('span', { class: 'small muted', text: `Spend your ${money(w.credit.balanceCents)} credit. It goes to your email.` })));
     const open = h('button', { class: 'btn small', type: 'button', text: 'Choose' });
     open.addEventListener('click', async () => {
-      const { cards } = await api('GET', '/v1/me/wallet/gift-cards');
+      open.disabled = true;
+      let cards;
+      try { ({ cards } = await api('GET', '/v1/me/wallet/gift-cards')); } catch (e) { toast(e.message); open.disabled = false; return; }
+      // One id for this purchase, sent with every try, so a retry after a dropped answer never buys twice.
+      const requestId = newRequestId();
       const pick = h('select', { class: 'input' }, cards.map((c) => h('option', { value: c.id, text: c.name })));
       const amt = h('input', { class: 'input', type: 'number', min: 5, step: 1, value: Math.min(25, Math.floor(w.credit.balanceCents / 100)), 'aria-label': 'Dollars' });
       const go = h('button', { class: 'btn small', type: 'button', text: 'Send it' });
-      go.addEventListener('click', async () => { go.disabled = true; try { const r = await api('POST', '/v1/me/wallet/gift-cards', { product: pick.value, cents: Math.round(Number(amt.value) * 100) }); toast(r.test ? `Test card: ${r.code}` : 'Sent to your email.'); render(); } catch (e) { toast(e.message); go.disabled = false; } });
+      let busy = false;
+      go.addEventListener('click', async () => { if (busy) return; busy = true; go.disabled = true; try { const r = await api('POST', '/v1/me/wallet/gift-cards', { product: pick.value, cents: Math.round(Number(amt.value) * 100), requestId }); toast(r.test ? `Test card: ${r.code}` : 'Sent to your email.'); render(); } catch (e) { toast(e.message); go.disabled = false; } finally { busy = false; } });
       open.replaceWith(pick, amt, go);
     });
     box.append(open);
@@ -575,7 +581,7 @@
       items.length ? h('div', {}, items.map((s) => h('div', { class: 'list-row' },
         h('span', { class: 'swatch', style: `background:${s.theme?.button || '#000'}` }),
         h('a', { class: 'grow', href: fixture ? '#' : s.url, style: 'text-decoration:none;color:inherit' }, h('b', { text: s.title }), h('span', { class: 'small muted', text: [s.owner, s.code && `Code ${s.code}`].filter(Boolean).join(' · ') })),
-        h('button', { class: 'back', type: 'button', 'aria-label': `Remove ${s.title}`, onclick: async () => { await api('DELETE', `/v1/me/saved/${s.id}`); toast('Removed'); render(); } }, icon(I.trash)))))
+        h('button', { class: 'back', type: 'button', 'aria-label': `Remove ${s.title}`, onclick: async () => { try { await api('DELETE', `/v1/me/saved/${s.id}`); toast('Removed'); render(); } catch (x) { toast(x.message); } } }, icon(I.trash)))))
         : h('div', { class: 'empty', text: 'Nothing saved yet. Tap “Save” on any ad you scan.' }));
   }
 
@@ -628,16 +634,16 @@
         : h('div', { class: 'empty', text: 'No card saved. You only need one to design your own bottles. Free water never needs a card.' }),
       h('h2', { class: 'section' }, 'Your data'),
       h('button', { class: 'btn secondary', type: 'button', onclick: async () => {
-        const data = await api('GET', '/v1/me/export');
+        let data; try { data = await api('GET', '/v1/me/export'); } catch (x) { toast(x.message); return; }
         const a = h('a', { href: URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })), download: 'my-freewater-data.json' });
         document.body.append(a); a.click(); a.remove(); toast('Downloaded');
       } }, 'Download my data'),
       h('button', { class: 'btn secondary', type: 'button', onclick: async () => {
-        const data = await api('GET', '/v1/me/data');
+        let data; try { data = await api('GET', '/v1/me/data'); } catch (x) { toast(x.message); return; }
         const a = h('a', { href: URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })), download: 'everything-kept-about-me.json' });
         document.body.append(a); a.click(); a.remove(); toast('Downloaded');
       } }, 'Everything kept about me'),
-      h('button', { class: 'btn secondary', type: 'button', onclick: async () => { if (!confirm('Erase what we kept about how you used pages and what you chose? Your account stays.')) return; await api('DELETE', '/v1/me/data'); toast('Erased'); } }, 'Erase my activity'),
+      h('button', { class: 'btn secondary', type: 'button', onclick: async () => { if (!confirm('Erase what we kept about how you used pages and what you chose? Your account stays.')) return; try { await api('DELETE', '/v1/me/data'); toast('Erased'); } catch (x) { toast(x.message); } } }, 'Erase my activity'),
       h('button', { class: 'btn secondary', type: 'button', onclick: async () => { try { await api('POST', '/v1/auth/sign-out'); } catch {} signOutLocal(); toast('Signed out'); go('/app'); } }, 'Sign out'),
       h('button', { class: 'btn danger', type: 'button', onclick: () => { confirmBox.hidden = false; confirmBox.scrollIntoView({ behavior: 'smooth', block: 'center' }); } }, 'Delete my account'),
       confirmBox);

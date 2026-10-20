@@ -48,7 +48,10 @@
     if (!res.ok) throw new Error(data?.error?.message || 'Something went wrong.');
     return data;
   }
-  const routes = [[/^\/ops\/?$/, today], [/^\/ops\/review$/, reviewPage], [/^\/ops\/machines$/, machinesPage], [/^\/ops\/machines\/([\w-]+)$/, machinePage], [/^\/ops\/routes$/, routesPage], [/^\/ops\/subscriptions$/, subsPage], [/^\/ops\/books$/, booksPage]];
+  const routes = [[/^\/ops\/?$/, today, 'today'], [/^\/ops\/review$/, reviewPage, 'review'], [/^\/ops\/machines$/, machinesPage, 'machines'], [/^\/ops\/machines\/([\w-]+)$/, machinePage, 'machines'], [/^\/ops\/routes$/, routesPage, 'routes'], [/^\/ops\/subscriptions$/, subsPage, 'subs'], [/^\/ops\/books$/, booksPage, 'books']];
+  // The scopes each page's main call needs (from its route in src/api). 'admin' passes them all.
+  const PAGE_SCOPES = { today: ['packs', 'events', 'ledger', 'campaigns'], review: ['campaigns'], machines: ['orders', 'packs', 'events'], routes: ['packs'], subs: ['packs'], books: ['ledger'] };
+  const can = (page) => { const sc = S.me?.scopes; if (!Array.isArray(sc)) return true; return sc.includes('admin') || (PAGE_SCOPES[page] ?? []).some((x) => sc.includes(x)); };
   let cleanup = null;
   function go(path, replace) { S.path = path; if (!fixture) history[replace ? 'replaceState' : 'pushState'](null, '', path); render(); }
   window.addEventListener('popstate', () => { S.path = location.pathname + location.search; render(); });
@@ -60,14 +63,14 @@
     if (!S.me) return signIn();
     if (S.me.advertiserId || S.me.role === 'consumer') return shell('', h('div', { class: 'notice err', text: 'This console is for the company’s team. Ask an owner to add you.' }));
     const pathname = S.path.split('?')[0];
-    for (const [re, fn] of routes) { const mm = re.exec(pathname); if (mm) { try { await fn(...mm.slice(1)); } catch (e) { shell('', h('div', { class: 'notice err', text: e.message })); } window.scrollTo(0, 0); return; } }
+    for (const [re, fn, pg] of routes) { const mm = re.exec(pathname); if (mm) { if (!can(pg)) { shell('', head('Not available for your role', 'Your role can’t use this page. Ask an owner if you need it.')); window.scrollTo(0, 0); return; } try { await fn(...mm.slice(1)); } catch (e) { shell('', h('div', { class: 'notice err', text: e.message })); } window.scrollTo(0, 0); return; } }
     go('/ops', true);
   }
   function shell(active, ...content) {
     const nav = [['today', '/ops', 'Today', I.today], ['review', '/ops/review', 'Ad review', I.review], ['machines', '/ops/machines', 'Machines', I.machine], ['routes', '/ops/routes', 'Routes', I.route], ['subs', '/ops/subscriptions', 'Deliveries', I.people], ['books', '/ops/books', 'Books', I.books]];
     root.replaceChildren(h('div', { class: 'shell' },
       h('aside', { class: 'side' }, h('div', { class: 'logo', 'aria-label': 'FreeWater Ops' }, h('span', { text: 'free' }), h('span', { text: 'water' }), h('small', { text: 'Ops' })),
-        h('nav', { 'aria-label': 'Main' }, nav.map(([id, path, label, ic]) => link(path, { 'aria-current': active === id ? 'page' : null }, icon(ic), label))),
+        h('nav', { 'aria-label': 'Main' }, nav.filter(([id]) => can(id)).map(([id, path, label, ic]) => link(path, { 'aria-current': active === id ? 'page' : null }, icon(ic), label))),
         h('div', { class: 'who' }, h('b', { text: S.me.displayName || S.me.email || '' }), S.me.role, h('br'), h('button', { type: 'button', onclick: async () => { try { await api('POST', '/v1/auth/sign-out'); } catch {} S.token = null; S.me = null; store.set('fw_ops_token', null); render(); } }, 'Sign out'))),
       h('main', { class: 'main' }, ...content)));
   }
@@ -126,9 +129,15 @@
       const note = h('textarea', { class: 'input', id: 'r-note', placeholder: 'What needs to change? The advertiser sees this word for word.' });
       const decide = async (decision) => {
         if (decision === 'reject' && !note.value.trim()) { toast('Say what needs to change.'); note.focus(); return; }
-        await api('POST', `/v1/review/campaigns/${c.id}`, { decision, ...(note.value.trim() ? { note: note.value.trim() } : {}) });
-        toast(decision === 'approve' ? `Approved. ${c.advertiser} is printing.` : 'Sent back with your note.');
-        queue.splice(queue.findIndex((q) => q.id === c.id), 1); current = queue[0]?.id ?? null; drawList(); show();
+        try {
+          await api('POST', `/v1/review/campaigns/${c.id}`, { decision, ...(note.value.trim() ? { note: note.value.trim() } : {}) });
+          toast(decision === 'approve' ? `Approved. ${c.advertiser} is printing.` : 'Sent back with your note.');
+          queue.splice(queue.findIndex((q) => q.id === c.id), 1); current = queue[0]?.id ?? null; drawList(); show();
+        } catch (x) {
+          // Someone else may have decided it already, or it changed: show why and reload the queue.
+          toast(x.message);
+          try { const fresh = await api('GET', '/v1/review/campaigns'); queue.splice(0, queue.length, ...fresh); if (!queue.some((q) => q.id === current)) current = queue[0]?.id ?? null; drawList(); await show(); } catch {}
+        }
       };
       frame = fixture?.scanFrame ? fixture.scanFrame() : h('iframe', { src: '/preview/scan', title: 'Scan page' });
       const buy = c.buy.type === 'guaranteed' ? `${c.buy.remainingPrints.toLocaleString()} bottles` : `${dollars(c.buy.dailyCapCents)} a day`;
