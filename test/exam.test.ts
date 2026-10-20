@@ -66,8 +66,9 @@ describe('an agent’s changes wait for its test', () => {
   beforeAll(async () => {
     db = await createPgliteClient();
     app = await createApp({ db, seedDemo: true, seed: 11, examModels: { numberline: 'test-model' }, examinee: () => async (q) => (knows ? q.answer : 'a') });
-    key = app.demoKeys!['freewater-admin']!;
     server = await buildServer(app);
+    // A signed-in person: deciding an agent's proposal is a person's decision.
+    key = await app.accounts.createSession((await app.accounts.invite({ companyId: 'freewater', email: 'exam-owner@freewater.io', role: 'owner' })).id);
   });
   afterAll(async () => { await server.close(); await app.persistence.flush(); await db.close(); });
   const call = async (method: string, url: string, payload?: unknown) => {

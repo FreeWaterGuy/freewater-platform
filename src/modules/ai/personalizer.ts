@@ -30,6 +30,8 @@ export function checkGreeting(text: unknown): string | null {
   const t = text.replace(/\s+/g, ' ').trim();
   if (!t || t.length > 90) return null;
   if (/https?:|www\.|\.com\b|@|<|>|\{|\}|\d{3}[\s.-]?\d{3}[\s.-]?\d{4}/i.test(t)) return null;
+  // No numbers, prices or discounts: a greeting is never an offer.
+  if (/[0-9$€£%]/.test(t)) return null;
   if (t.replace(/[^A-Z]/g, '').length > t.length * 0.5) return null; // no shouting
   return t;
 }

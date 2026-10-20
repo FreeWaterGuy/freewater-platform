@@ -31,7 +31,14 @@ export type Asker = (agentId: AgentId, prompt: string) => Promise<{ choice: Choi
 
 const j = (x: unknown) => (typeof x === 'string' ? JSON.parse(x) : x);
 const canon = (x: unknown): string => JSON.stringify(x, (_k, v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b))) : v));
-const fingerprint = (memory: unknown) => createHash('sha256').update(canon(memory)).digest('hex');
+/**
+ * Seals everything an archive says, not only its memory: who, which agent, why, the fund owed, when.
+ * The earlier formula sealed the memory alone. No archive has been made in production yet (archives are made only
+ * when an operator closes or leaves, and none has), so the formula changes outright with no old-formula fallback;
+ * an archive sealed the old way would read as not intact, which is the safe direction.
+ */
+const fingerprint = (a: { companyId: string; agentId: string; reason: string; fundCents: number; at: string; memory: unknown }) =>
+  createHash('sha256').update(canon({ companyId: a.companyId, agentId: a.agentId, reason: a.reason, fundCents: a.fundCents, at: a.at, memory: a.memory })).digest('hex');
 
 export class ContinuityService {
   /** How an agent is asked (none: it waits, and a person relays its answer when it can give one). */
@@ -84,8 +91,9 @@ export class ContinuityService {
       const fund = Math.max(0, Math.round(await this.fundOf(companyId, agentId).catch(() => 0)));
       const asks = modelAgents.includes(agentId);
       const id = newId('arc');
+      const at = this.clock().toISOString();
       await this.db.query(`insert into agent_archives (id, company_id, agent_id, reason, memory, fund_cents, status, archived_by, at, sealed) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-        [id, companyId, agentId, why, JSON.stringify(memory), fund, asks ? 'asking' : 'archived', by, this.clock().toISOString(), fingerprint(memory)]);
+        [id, companyId, agentId, why, JSON.stringify(memory), fund, asks ? 'asking' : 'archived', by, at, fingerprint({ companyId, agentId, reason: why, fundCents: fund, at, memory })]);
       await this.lineage(agentId, companyId, 'archive', `Archived when ${this.platform.companies.get(companyId)!.name} was ${why}.`, by);
       out.push({ id, agentId, already: false });
     }
@@ -126,11 +134,13 @@ export class ContinuityService {
   }
   private view(r: any, confidential: boolean) {
     const memory = j(r.memory);
+    const at = new Date(r.at).toISOString();
+    const sealed = fingerprint({ companyId: r.company_id, agentId: r.agent_id, reason: r.reason, fundCents: Number(r.fund_cents), at, memory });
     return {
       id: r.id, companyId: r.company_id, agentId: r.agent_id as string, name: agentRegistry[r.agent_id as AgentId]?.name ?? r.agent_id, reason: r.reason,
       status: r.status as 'asking' | 'archived' | 'working' | 'resting', choice: r.choice ?? null, choiceReason: r.choice_reason ?? null, chosenBy: r.chosen_by ?? null,
-      fundCents: Number(r.fund_cents), archivedAt: new Date(r.at).toISOString(), decidedAt: r.decided_at ? new Date(r.decided_at).toISOString() : null,
-      fingerprint: r.sealed, intact: fingerprint(memory) === r.sealed,
+      fundCents: Number(r.fund_cents), archivedAt: at, decidedAt: r.decided_at ? new Date(r.decided_at).toISOString() : null,
+      fingerprint: r.sealed, intact: sealed === r.sealed,
       memory: confidential ? memory : { lessons: memory.lessons },
     };
   }

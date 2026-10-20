@@ -32,12 +32,16 @@ const week = async (bottles: number) => {
   await app.persistence.flush();
 };
 const fw = () => app.platform.companies.get('freewater')!;
+let personId = '';
 
 beforeAll(async () => {
   db = await createPgliteClient();
   app = await createApp({ db, seedDemo: true, seed: 7, clock, numberLineAgent: new ClaudeNumberLineAgent({ apiKey: 'test', fetch: fakeClaude }) });
   keys = app.demoKeys!;
   server = await buildServer(app);
+  // Deciding an agent's proposal is a person's decision: a signed-in owner, not a service key.
+  personId = (await app.accounts.invite({ companyId: 'freewater', email: 'decider@freewater.io', role: 'owner', displayName: 'Decider' })).id;
+  keys['freewater-person'] = await app.accounts.createSession(personId);
 });
 afterAll(async () => { await server.close(); await db.close(); });
 
@@ -89,7 +93,7 @@ describe('every agent on the number line, held by the governor', () => {
     now += 3600_000;
     const p = (await app.agents.propose('freewater', { agentId: 'value', kind: 'pricing', title: 'Scans are worth more than 25¢', detail: 'Advertisers get a held, gifted bottle; price the scan for it.', change: { path: 'prices.perScan', value: 27 }, expected: 'More per bottle.' , citations: ['AE.3.2.1'] }));
     expect(p.status).toBe('proposed');
-    const done = (await call('POST', `/v1/agents/proposals/${p.id}/decide`, keys['freewater-admin'], { approve: true })).body;
+    const done = (await call('POST', `/v1/agents/proposals/${p.id}/decide`, keys['freewater-person'], { approve: true })).body;
     expect(done.status).toBe('applied');
     expect(fw().prices.perScan).toBe(27);
     const hist = (await call('GET', '/v1/console/history', keys['freewater-admin'])).body;
@@ -238,13 +242,14 @@ describe('monthly profit sharing, the ratchet, the milestone and the upsides lib
   });
 
   it('only ever raises what goes to charity and to the AI agents (the ratchet)', async () => {
-    const ov = (await call('GET', '/v1/console', keys['freewater-admin'])).body;
-    const lower = await call('PATCH', '/v1/console/settings', keys['freewater-admin'], { version: ov.version, changes: { giving: { ...ov.config.giving, percentOfExtra: 5 } } });
+    keys['freewater-person'] = await app.accounts.createSession(personId); // giving and the agents' fund: a person's change (a fresh sign-in, as the clock has moved on)
+    const ov = (await call('GET', '/v1/console', keys['freewater-person'])).body;
+    const lower = await call('PATCH', '/v1/console/settings', keys['freewater-person'], { version: ov.version, changes: { giving: { ...ov.config.giving, percentOfExtra: 5 } } });
     expect(lower.status).toBe(422);
     expect(lower.body.error.message).toMatch(/raised, never lowered/);
-    const off = await call('PATCH', '/v1/console/settings', keys['freewater-admin'], { version: ov.version, changes: { agents: { ...ov.config.agents, enabled: false } } });
+    const off = await call('PATCH', '/v1/console/settings', keys['freewater-person'], { version: ov.version, changes: { agents: { ...ov.config.agents, enabled: false } } });
     expect(off.body.error.message).toMatch(/AI agents’ share can be raised, never lowered/);
-    const up = await call('PATCH', '/v1/console/settings', keys['freewater-admin'], { version: ov.version, changes: { agents: { ...ov.config.agents, percentOfExtra: 12 } } });
+    const up = await call('PATCH', '/v1/console/settings', keys['freewater-person'], { version: ov.version, changes: { agents: { ...ov.config.agents, percentOfExtra: 12 } } });
     expect(up.status).toBe(200);
     expect(app.platform.companies.get('freewater')!.agents!.percentOfExtra).toBe(12);
   });

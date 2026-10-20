@@ -21,6 +21,8 @@ beforeAll(async () => {
   app = await createApp({ db, seedDemo: true, seed: 5 });
   keys = app.demoKeys!;
   server = await buildServer(app);
+  // Deciding an agent's proposal is a person's decision: a signed-in owner, not a service key.
+  keys['freewater-person'] = await app.accounts.createSession((await app.accounts.invite({ companyId: 'freewater', email: 'decider@freewater.io', role: 'owner', displayName: 'Decider' })).id);
 });
 afterAll(async () => { await server.close(); await app.persistence.flush(); await db.close(); });
 
@@ -77,7 +79,7 @@ describe('security without slowing anything down', () => {
     const p = found.find((x: any) => /Old test script/.test(x.title));
     expect(p).toMatchObject({ agentId: 'security', kind: 'security', status: 'proposed' });
     expect((await call('GET', '/v1/agents', old.key)).status).toBe(200); // nothing happens until a person says so
-    expect((await call('POST', `/v1/agents/proposals/${p.id}/decide`, keys['freewater-admin'], { approve: true })).body.status).toBe('done');
+    expect((await call('POST', `/v1/agents/proposals/${p.id}/decide`, keys['freewater-person'], { approve: true })).body.status).toBe('done');
     expect((await call('GET', '/v1/agents', old.key, undefined, '203.0.113.50')).status).toBe(401);
     // Every company gets its security agent, even one that hasn't turned the agents' fund on.
     expect((await call('POST', '/v1/security/review', keys['peak-spring-admin'])).status).toBe(200);

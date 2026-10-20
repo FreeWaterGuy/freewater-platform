@@ -45,8 +45,14 @@ export class TeamService {
     }
     return { name: r.name as string, contentType: r.content_type as string, bytes: new Uint8Array(r.bytes) };
   }
+  /** A file kept with one record stays with it: refuse (before anything is recorded) a file already attached elsewhere. */
+  private async checkUnlinked(companyId: string, fileIds: string[] | undefined) {
+    if (!fileIds?.length) return;
+    const taken = (await this.db.query<any>(`select id from team_files where company_id = $1 and id = any($2) and linked_to is not null`, [companyId, fileIds])).rows;
+    if (taken.length) throw new TeamError('file_in_use', `That file is already kept with another record (${taken.map((r) => r.id).join(', ')}). Attach a fresh copy instead.`, 409);
+  }
   private async link(companyId: string, fileIds: string[] | undefined, to: string) {
-    for (const id of fileIds ?? []) await this.db.query(`update team_files set linked_to = $3 where id = $1 and company_id = $2`, [id, companyId, to]);
+    for (const id of fileIds ?? []) await this.db.query(`update team_files set linked_to = $3 where id = $1 and company_id = $2 and linked_to is null`, [id, companyId, to]);
   }
   private async filesFor(companyId: string, to: string) {
     return (await this.db.query<any>(`select id, name, content_type, size_bytes from team_files where company_id = $1 and linked_to = $2 order by at`, [companyId, to])).rows.map((r) => ({ id: r.id, name: r.name, contentType: r.content_type, sizeBytes: Number(r.size_bytes), url: `/v1/team/files/${r.id}` }));
@@ -63,6 +69,7 @@ export class TeamService {
   }
 
   async recordBatch(companyId: string, input: BatchInput & { fileIds?: string[] }, by: string) {
+    await this.checkUnlinked(companyId, input.fileIds);
     const b = await this.batches.record(companyId, input, by);
     await this.link(companyId, input.fileIds, b.id);
     return { ...b, files: await this.filesFor(companyId, b.id) };
@@ -70,6 +77,7 @@ export class TeamService {
   async recordExpense(companyId: string, input: { date: string; amountCents: number; category: string; memo: string; fileIds?: string[] }, by: string) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date ?? '') || input.date > this.deps.today(companyId)) throw new TeamError('bad_date', 'The day it was paid, as YYYY-MM-DD, not in the future.');
     if (!(input.amountCents > 0)) throw new TeamError('bad_amount', 'The amount, above zero.');
+    await this.checkUnlinked(companyId, input.fileIds);
     const e = await this.deps.recordExpense(companyId, { category: String(input.category || 'other').slice(0, 40), amountCents: Math.round(input.amountCents), memo: `${String(input.memo || 'Expense').slice(0, 200)} (recorded by ${by})`, date: input.date });
     await this.link(companyId, input.fileIds, e.id);
     return { ...e, files: await this.filesFor(companyId, e.id) };
