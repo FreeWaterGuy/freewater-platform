@@ -74,6 +74,11 @@ export class SqlPersistence implements Persistence {
     this.epoch = opts.epoch ?? `p_${randomBytes(8).toString('hex')}`;
   }
 
+  /** How many changes are waiting to be written right now (normally 0, or a handful for a moment). */
+  get waiting() { return this.pending.length; }
+  /** Where waiting changes are kept on disk, and whether they're being written there now (the database refusing). */
+  get spool() { return { file: this.opts.spoolFile ?? null, active: this.spooled }; }
+
   /** Paused: changes have been waiting for the database longer than a moment. */
   get problem(): PersistenceProblem | null {
     if (this.failingSince === null || Date.now() - this.failingSince < (this.opts.pauseAfterMs ?? 1500)) return null;

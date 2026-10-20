@@ -1,6 +1,7 @@
 import { readUpdatePrivateKey } from '../machine/updates';
 import { secretEnvName, secretNames } from '../modules/codes/service';
 import { isIP } from 'node:net';
+import { parseDsn } from './errors';
 
 /**
  * Which load balancers' word to take for a visitor's address (X-Forwarded-For). Never "everyone": each visitor can
@@ -55,6 +56,11 @@ export function checkConfig(env: NodeJS.ProcessEnv = process.env) {
   if (env.HOST === '127.0.0.1' || !env.HOST) advise(!production, 'HOST is 127.0.0.1, so only this machine can reach the server. In a container, set HOST=0.0.0.0.');
   advise(!!env.ALERT_WEBHOOK_URL || !!env.ALERT_EMAIL, 'No ALERT_WEBHOOK_URL or ALERT_EMAIL: alerts will only go to the log, where no one will see them.');
   if (env.ALERT_WEBHOOK_URL) need(/^https:\/\//.test(env.ALERT_WEBHOOK_URL), 'ALERT_WEBHOOK_URL must be https.');
+  if (env.SENTRY_DSN) {
+    const dsn = parseDsn(env.SENTRY_DSN);
+    need(!!dsn, 'SENTRY_DSN isn’t a Sentry DSN (it looks like https://<key>@o123.ingest.sentry.io/456; copy it from the project’s Client Keys).');
+    if (dsn) need(dsn.envelopeUrl.startsWith('https://'), 'SENTRY_DSN must be https.');
+  } else if (production) advise(false, 'No SENTRY_DSN: unexpected errors are only in the log and the alert channel, with no error tracker to group them (docs/RUNBOOKS.md, "Before anything goes wrong").');
   if (env.FW_AI_PRICES) { try { JSON.parse(env.FW_AI_PRICES); } catch { errors.push('FW_AI_PRICES is not valid JSON.'); } }
   const files = env.FILE_STORAGE ?? 'database';
   if (files === 's3') for (const k of ['S3_BUCKET', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY']) need(!!env[k], `FILE_STORAGE=s3 needs ${k}.`);

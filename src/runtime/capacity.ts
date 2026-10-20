@@ -6,7 +6,7 @@
  * The database's own disk can't be seen from here, so its size is compared with DATABASE_MAX_GB, the size of the
  * plan the host sold (set it). Without it, a warning goes out once the database passes 10 GB, to prompt setting it.
  */
-import { statfs } from 'node:fs/promises';
+import { stat, statfs } from 'node:fs/promises';
 import type { SqlClient } from '../db/client';
 import type { Severity } from './alerts';
 
@@ -52,4 +52,23 @@ export async function checkCapacity(o: { db: SqlClient; spoolDir?: string; maxDa
     }
   }
   return { databaseBytes, databaseShare, spoolFreeBytes, spoolShareUsed };
+}
+
+/**
+ * The spool growing: changes piling up while the database refuses them. The first "the database is refusing changes"
+ * alert goes out at once (src/db/store.ts); this one says how far it has gone, every minute, by the `spool` job:
+ * a warning at 1,000 waiting changes or a 50 MB spool file, critical at 20,000 or 500 MB (memory and the disk are
+ * what run out next). Says when it's back to nothing.
+ */
+export async function checkSpool(o: { waiting: number; spoolFile?: string | null; alert: Alert; state: Map<string, Severity | 'ok'> }): Promise<{ waiting: number; spoolBytes: number | null; level: Severity | 'ok' }> {
+  let spoolBytes: number | null = null;
+  if (o.spoolFile) { try { spoolBytes = (await stat(o.spoolFile)).size; } catch { spoolBytes = 0; } }
+  const mb = (spoolBytes ?? 0) / 1048576;
+  const level: Severity | 'ok' = o.waiting >= 20_000 || mb >= 500 ? 'critical' : o.waiting >= 1000 || mb >= 50 ? 'warning' : 'ok';
+  const was = o.state.get('spool') ?? 'ok';
+  o.state.set('spool', level);
+  const detail = `${o.waiting.toLocaleString('en-US')} change(s) waiting for the database${spoolBytes !== null ? `, spool file ${mb.toFixed(1)} MB (${o.spoolFile})` : ''}. They go in by themselves once the database takes changes again; until then they're in memory and on that disk. See docs/RUNBOOKS.md ("The database is down or refusing changes").`;
+  if (level === 'ok') { if (was !== 'ok' && o.waiting === 0) await o.alert('spool', 'resolved', 'The waiting changes have all been saved', detail); else if (was !== 'ok') o.state.set('spool', was); }
+  else await o.alert(`spool:${level}`, level, `Changes waiting for the database keep piling up (${o.waiting.toLocaleString('en-US')})`, detail);
+  return { waiting: o.waiting, spoolBytes, level };
 }

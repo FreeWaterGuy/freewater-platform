@@ -37,6 +37,7 @@ with a plain explanation.
 | `HOST`, `PORT` | `0.0.0.0` and `8080` in the container (already set in the image). |
 | `ALERT_WEBHOOK_URL` | A chat channel's incoming webhook (Slack, Discord, Google Chat). Alerts go there. |
 | `ALERT_EMAIL` | Also email alerts (once email is connected). |
+| `SENTRY_DSN` | Error tracking (Sentry's free plan, or GlitchTip): the project's DSN from Settings → Client Keys, `https://<key>@o….ingest.sentry.io/<project>`. Unexpected errors (with their stack), other 5xx answers, failed background jobs, unhandled rejections and crashes, and every critical or warning alert go there, scrubbed of personal data (no query, body, headers, cookies, keys, emails, phones, cards or addresses). Without it nothing is sent. Must be https in production. `SENTRY_ENVIRONMENT` names the environment (default `NODE_ENV`); the release is `FW_VERSION` or `GIT_SHA`. Setup: `docs/RUNBOOKS.md`. |
 | `FILE_STORAGE` | `database` (default), `s3`, or `disk` (single server, backed-up disk only). |
 | `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_ENDPOINT`, `S3_REGION`, `S3_PREFIX` | For `FILE_STORAGE=s3`. `S3_ENDPOINT` for R2, B2 or MinIO (e.g. `https://<account>.r2.cloudflarestorage.com`); leave it out for Amazon S3 and set `S3_REGION`. Give the key read, write, delete **and list** on the bucket (without list, a missing file looks like "access denied"). |
 | `FW_SPOOL_DIR` | Where changes waiting for the database are also kept. Default in the image: `/var/lib/freewater/spool`. Mount a volume. In production, an unwritable one stops the start. |
@@ -91,16 +92,30 @@ with the owner's email, turn on the second sign-in step, and add team, machines 
 
 ## Health, status and alerts
 
-- `GET /health/live`: the process is up. Use it for "restart it if this fails".
+- `GET /health`: the process is up, and its version. Never touches the database.
+- `GET /health/live`: the process is up. Use it for "restart it if this fails". It answers even while the server is
+  stopping itself.
 - `GET /health/ready`: it can do its work (database answering, owns the data, every change saved, jobs not failing).
-  Use it for "send it traffic only if this passes". It returns 503 only when it really can't serve.
+  Use it for "send it traffic only if this passes". It returns 503 only when it really can't serve; otherwise
+  `problems` lists what's wrong (changes paused, a job failing) with a 200.
+- `GET /health/uptime`: for an outside uptime checker (UptimeRobot, Better Stack). 200 only when the database answers
+  within 2 seconds and this server owns the data and is sure of it; otherwise 503 with the reason. One `select 1`;
+  `HEAD` works too.
+- `GET /health/deep` (platform key): each background job's freshness (did it work within two of its intervals),
+  what's queued (changes waiting for the database, webhooks waiting), the spool file, the last books reconciliation
+  per company and the last books check (the weekly restore check), and the error tracker's counts.
 - `GET /v1/platform/status` (platform key): the background jobs, saving, which server owns the data, memory,
-  recent alerts.
+  recent alerts. Both staff pages answer at once even while changes are waiting for the database.
 - Alerts go out for: a change that couldn't be saved, a job failing (and again when it recovers), a server error,
   memory at 70% and 85%, the database at 70% and 85% of `DATABASE_MAX_GB`, less than 2 GB (then 0.5 GB) free on the
   spool's disk, visitors' uploads at 80% of the day's ceiling and when it's reached, the server losing its claim to
-  the data, a crash, our own backups being off, and an older version running on a newer database (a rollback). The
-  same alert repeats at most every 30 minutes.
+  the data, a crash, our own backups being off, an older version running on a newer database (a rollback), books
+  that don't reconcile, the chain paused, and changes piling up while the database refuses them (1,000 waiting or a
+  50 MB spool, then 20,000 or 500 MB). The same alert repeats at most every 30 minutes, but one that gets worse
+  (warning to critical) goes out at once.
+- With `SENTRY_DSN`, every critical and warning alert also goes to the error tracker (one issue per alert), and so
+  do unexpected errors, other 5xx answers (one issue per status and code), failed jobs and crashes, each at most once
+  a minute and at most 20 events a minute in all.
 - What to do about each, step by step: `docs/RUNBOOKS.md`.
 
 ## If changes are waiting (the database refusing them)
@@ -148,6 +163,7 @@ decision start once with `FW_SPOOL_SKIP=1` to set it aside unapplied (`….skipp
 | `chain-check` | daily | Checks the books against the chain; pauses on a mismatch. | Yes. |
 | `fingerprints` | hourly | Publishes each finished day's books fingerprint. | Yes: a day is published once. |
 | `memory` | 1 min | Alerts when memory is filling. Runs while paused. | Yes. |
+| `spool` | 1 min | Alerts when changes keep piling up while the database refuses them (1,000 / 20,000 waiting, or a 50 / 500 MB spool file), and when they've all been saved. Runs while paused. | Yes: it only watches. |
 | `data-purge` | daily | Deletes data older than each company keeps. | Yes. |
 | `capacity` | 10 min | Alerts when the database or the spool's disk is filling. Runs while paused. | Yes. |
 | `backup` | daily | Our own encrypted copy of the database (when `BACKUP_KEY` and a backup bucket are set). Runs while paused. | Yes: each copy is new. |

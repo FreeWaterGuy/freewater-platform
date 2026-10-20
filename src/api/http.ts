@@ -19,6 +19,8 @@ export interface RouteDef {
   body?: Record<string, unknown>; // JSON schema
   /** For file uploads: the body is the file itself, up to this many bytes. */
   rawBodyLimit?: number;
+  /** Answer without waiting for changes to be saved: for status pages, which must answer while the database refuses changes. Read-only routes only. */
+  noWait?: boolean;
   handler: Handler;
 }
 

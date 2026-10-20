@@ -25,7 +25,7 @@ import { UploadQuota, uploadLimitsFrom } from '../runtime/uploads';
 import { printLimits } from '../modules/fleet/printCap';
 import { BadKeyGuard, classify, limits, RateLimiter, securityHeaders, SecurityLog, shortIp } from './security';
 import { teamRoutes } from './team';
-import { loggerOptions } from './logging';
+import { loggerOptions, pathOnly } from './logging';
 import { operationsRoutes } from './operations';
 import { VideoError } from '../modules/video/service';
 import { DataError, DataService } from '../modules/data/service';
@@ -861,7 +861,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
         const out = await r.handler(req, (req as any).apiKey as ApiKey | null);
         // Answer only once the change is safely stored. Things recorded on the way past (a scan, what someone did on
         // the page) don't wait while the database is refusing changes: they're queued in order and go in with the rest.
-        if (r.scope === 'public') await persistence.flushUnlessPaused(); else await persistence.flush();
+        if (r.noWait && r.method === 'GET') { /* a status page: answers while changes wait */ } else if (r.scope === 'public') await persistence.flushUnlessPaused(); else await persistence.flush();
         logActivity(r, req, (req as any).apiKey as ApiKey | null, out.status ?? 200);
         const what = sensitive[`${r.method} ${r.url}`];
         if (what) {
@@ -986,7 +986,15 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       return reply.code(503).header('retry-after', '5').send({ error: { code: 'database_unavailable', message: 'FreeWater can’t reach its database for a moment. Please try again shortly.' } });
     }
     server.log.error(err);
-    void app.runtime.alerts.alert(`500:${req.method} ${req.routeOptions?.url ?? '?'}`, 'warning', `Server error on ${req.method} ${req.routeOptions?.url ?? req.url.split('?')[0]}`, String(err?.stack ?? err?.message ?? err));
+    // To the error tracker with its stack, the route's pattern and the company (never the address, body or headers);
+    // then to the alert channel, marked as tracked so it isn't sent to the tracker a second time.
+    const reporter = app.runtime.reporter;
+    if (reporter?.enabled) {
+      (req as any).fwTracked = true;
+      const companyId = (req as any).apiKey?.companyId;
+      reporter.captureException(err, { request: { method: req.method, route: req.routeOptions?.url }, tags: { source: 'http', status: 500, companyId } });
+    }
+    void app.runtime.alerts.alert(`500:${req.method} ${req.routeOptions?.url ?? '?'}`, 'warning', `Server error on ${req.method} ${req.routeOptions?.url ?? pathOnly(req.url)}`, String(err?.stack ?? err?.message ?? err), { tracked: !!reporter?.enabled });
     return reply.code(500).send({ error: { code: 'server_error', message: 'Something went wrong on our side. It has been logged.' } });
   });
 

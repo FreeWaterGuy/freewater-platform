@@ -88,7 +88,12 @@ import type { JobRunner } from './runtime/jobs';
 import { boxes, builtinCreatives, freewater, locations, peakSpring, products, sampleCampaigns } from './demo/seed';
 
 /** What the running server adds around the app: alerts, and (in production) the lease and the job runner. */
-export interface Runtime { alerts: Alerter; startedAt: Date; lease?: InstanceLease; jobs?: JobRunner; /** Lost its claim to the data: answers nothing more. */ lost?: boolean; /** Today's public uploads against their ceilings (set by the API server). */ uploads?: import('./runtime/uploads').UploadQuota }
+/** The last result of the checks people rely on, for GET /health/deep (since this server started). */
+export interface RuntimeChecks {
+  reconciliation?: { at: string; companies: { companyId: string; day?: string; ok: boolean; failed?: number; attention?: number; error?: string }[] };
+  booksCheck?: { at: string; ok: boolean; findings: number; failed: string[] };
+}
+export interface Runtime { alerts: Alerter; startedAt: Date; /** Error tracking (SENTRY_DSN); off when absent. */ reporter?: import('./runtime/errors').ErrorReporter; checks?: RuntimeChecks; lease?: InstanceLease; jobs?: JobRunner; /** Lost its claim to the data: answers nothing more. */ lost?: boolean; /** Today's public uploads against their ceilings (set by the API server). */ uploads?: import('./runtime/uploads').UploadQuota }
 
 export interface AppOptions {
   db: SqlClient;
@@ -195,7 +200,7 @@ export async function createApp(opts: AppOptions) {
 
   const now = opts.clock?.() ?? new Date();
   const state = await loadState(db, builtins, now);
-  const runtime: Runtime = { alerts: opts.alerts ?? new Alerter(), startedAt: new Date(), ...(opts.lease ? { lease: opts.lease } : {}) };
+  const runtime: Runtime = { alerts: opts.alerts ?? new Alerter(), startedAt: new Date(), checks: {}, ...(opts.lease ? { lease: opts.lease } : {}) };
   const persistence = new SqlPersistence(raw, {
     spoolFile: opts.spoolFile,
     epoch: opts.epoch,
@@ -395,7 +400,7 @@ export async function createApp(opts: AppOptions) {
   const anchors = new AnchorService(db, platform, (id) => books.days(id), publishers, (id) => delivery.today(id), opts.clock);
   // The chain layer, switched off: hourly seals of the wallet journal, actions needing several people, the daily check.
   const chain = new ChainService(db, platform, wallet, publishers, opts.clock);
-  chain.alert = (companyId, message) => void runtime.alerts.alert('chain', 'critical', `Chain (${companyId})`, message);
+  chain.alert = (companyId, message) => void runtime.alerts.alert(`chain:${companyId}`, 'critical', `Chain (${companyId})`, message);
   // An ad reached its daily ceiling of billed scans or AR launches (R3): more are counted, never billed, and a person looks.
   platform.ledger.onCeiling = (h) => void runtime.alerts.alert(`billing-ceiling:${h.companyId}:${h.campaignId}:${h.kind}:${h.day}`, 'warning', `Ad ${h.campaignId} reached its daily ceiling of ${h.ceiling} billed ${h.kind === 'scan' ? 'scans' : 'AR launches'} (${h.companyId}, ${h.day})`, `More are counted but not billed today. Far more ${h.kind === 'scan' ? 'scans' : 'AR launches'} than its bottles could get usually means fake scans: check where they come from (GET /v1/books/reconciliation) before the advertiser is invoiced.`);
   // Solana: the free test network before going live with the token, the real network after. Keys live in the host's
