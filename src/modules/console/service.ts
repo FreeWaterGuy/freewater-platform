@@ -268,8 +268,18 @@ export class ConsoleService {
       // A new white-label company starts quiet and chooses how open to be; its data follows US rules until it picks.
       transparency: { ...quietTransparency },
       data: preset('us'),
+      // Everything that moves money, turns on a live stage or carries someone's approval starts safe and off, whatever
+      // the template has since turned on: a new licensee is in test, chooses for itself, and approves its own steps.
+      launch: { stage: 'test', withdrawals: false },
+      chain: { ...defaultChain },
+      wallet: defaultWallet(name.slice(0, 33).trim()), // its points carry its own name (up to 40 characters)
+      offers: { enabled: false },
+      ai: { mode: 'network' },
     };
     delete config.lottery;
+    delete config.agents;
+    delete config.ratchet;
+    delete config.security;
     if (!config.brand.tagline) delete config.brand.tagline;
     const problem = checkSettings(config, this.registry.names());
     if (problem) throw new ConsoleError('invalid_settings', problem, 422);
