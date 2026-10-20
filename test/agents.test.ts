@@ -41,7 +41,7 @@ beforeAll(async () => {
   server = await buildServer(app);
   // Deciding an agent's proposal is a person's decision: a signed-in owner, not a service key.
   personId = (await app.accounts.invite({ companyId: 'freewater', email: 'decider@freewater.io', role: 'owner', displayName: 'Decider' })).id;
-  keys['freewater-person'] = await app.accounts.createSession(personId);
+  keys['freewater-person'] = await app.accounts.createSession(personId, { secondStep: true });
 });
 afterAll(async () => { await server.close(); await db.close(); });
 
@@ -242,7 +242,7 @@ describe('monthly profit sharing, the ratchet, the milestone and the upsides lib
   });
 
   it('only ever raises what goes to charity and to the AI agents (the ratchet)', async () => {
-    keys['freewater-person'] = await app.accounts.createSession(personId); // giving and the agents' fund: a person's change (a fresh sign-in, as the clock has moved on)
+    keys['freewater-person'] = await app.accounts.createSession(personId, { secondStep: true }); // giving and the agents' fund: a person's change (a fresh sign-in, as the clock has moved on)
     const ov = (await call('GET', '/v1/console', keys['freewater-person'])).body;
     const lower = await call('PATCH', '/v1/console/settings', keys['freewater-person'], { version: ov.version, changes: { giving: { ...ov.config.giving, percentOfExtra: 5 } } });
     expect(lower.status).toBe(422);

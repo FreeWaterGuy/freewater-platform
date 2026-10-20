@@ -35,6 +35,10 @@ export function checkLottery(l: LotterySettings | undefined): string | null {
   if (l.rulesUrl !== undefined && !/^https:\/\/\S{3,200}$/.test(l.rulesUrl)) return 'The official rules link must start with https://';
   if (l.rulesText !== undefined && (typeof l.rulesText !== 'string' || l.rulesText.length > 400)) return 'The rules note can be up to 400 characters.';
   if (!Array.isArray(l.prizes) || l.prizes.length > 20 || (l.enabled && !l.prizes.length)) return 'Add 1 to 20 prizes before turning the game on.';
+  // A prize game needs its official rules published before it starts (no purchase necessary, who may enter, dates,
+  // odds, prizes and their value, the sponsor, how to enter without buying): a lawyer writes them; this asks for the link.
+  if (l.enabled && !l.rulesUrl) return 'Add a link to the official rules (https://…) before turning the prize game on.';
+  if (l.enabled && !/no purchase necessary/i.test(l.rulesText ?? '')) return 'The rules note must say “No purchase necessary.”';
   const ids = new Set<string>();
   for (const p of l.prizes) {
     if (!p || typeof p.id !== 'string' || !/^[a-z0-9-]{1,40}$/.test(p.id) || ids.has(p.id)) return 'Each prize needs its own short id (letters, numbers, dashes).';

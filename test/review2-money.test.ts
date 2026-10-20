@@ -26,7 +26,8 @@ async function signIn(to: string) {
   const code = /(\d{6})/.exec((app.messenger as TestOutbox).lastTo(to)!.text)![1];
   return (await call('POST', '/v1/auth/verify', undefined, { companyId: 'freewater', channel: 'email', to, code })).json().token as string;
 }
-const session = async (email: string, role: 'owner' | 'finance' | 'ops') => app.accounts.createSession((await app.accounts.invite({ companyId: 'freewater', email, role, displayName: role })).id);
+// Owners and finance people approve only from a sign-in that passed the second step (threat model R4).
+const session = async (email: string, role: 'owner' | 'finance' | 'ops') => app.accounts.createSession((await app.accounts.invite({ companyId: 'freewater', email, role, displayName: role })).id, { secondStep: true });
 
 beforeAll(async () => {
   db = await createPgliteClient();

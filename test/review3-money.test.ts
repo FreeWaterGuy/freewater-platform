@@ -25,7 +25,8 @@ const call = async (method: string, url: string, token?: string, payload?: unkno
   return { status: r.statusCode, body: (() => { try { return r.json(); } catch { return r.body; } })() };
 };
 const person = async (email: string, role: 'owner' | 'finance' | 'ops') => (await app.accounts.invite({ companyId: 'freewater', email, role, displayName: email.split('@')[0] })).id;
-const sessionFor = (userId: string) => app.accounts.createSession(userId);
+// Owners and finance people approve only from a sign-in that passed the second step (threat model R4).
+const sessionFor = (userId: string) => app.accounts.createSession(userId, { secondStep: true });
 
 // A chain whose mints wait until the test lets them go (a call that hangs for a long time, then lands).
 let gate: Promise<void> | null = null;

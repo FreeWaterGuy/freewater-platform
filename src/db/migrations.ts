@@ -1255,6 +1255,14 @@ alter table agent_settlements add column if not exists plan jsonb;
 alter table agent_settlements add column if not exists status text not null default 'done';
 `,
   },
+  {
+    id: '053_priv_second_step_sessions',
+    sql: `
+-- Which sign-ins passed the authenticator app's step: owners and finance people need one that did before they approve
+-- money or token steps (threat model R4).
+alter table sessions add column if not exists second_step_at timestamptz;
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

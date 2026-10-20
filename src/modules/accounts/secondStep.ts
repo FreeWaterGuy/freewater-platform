@@ -105,3 +105,46 @@ export class SecondStep {
     return { userId: r.user_id, usedRecoveryCode: !app };
   }
 }
+
+// ---------- approvers: the second step before approving money or token steps ----------
+//
+// Owners and finance people approve things that move money or tokens (threat model R4). An inbox alone must never be
+// enough for that, whatever the company has set: before any of the steps below, the person's own sign-in (this very
+// session) must have passed the second step. Owners can still do everything else with an email code unless the
+// company also requires the second step for all their work (security.ownersNeedSecondStep).
+//
+// Setup path: GET /v1/me/second-step → POST /v1/me/second-step/start (QR code) → POST /v1/me/second-step/confirm with
+// a code from the app (this session then counts as having passed it). Later sign-ins ask for the app's code after
+// the emailed one (POST /v1/auth/second-step).
+
+/** Routes that approve, run or release money or token steps. A pause is never here: anyone may stop things at once. */
+export const approvalRoutes: ReadonlySet<string> = new Set([
+  'POST /v1/chain/actions', 'POST /v1/chain/actions/:id/approve', 'POST /v1/chain/actions/:id/run', 'POST /v1/chain/actions/:id/signed',
+  'POST /v1/offers/:id/approve', 'POST /v1/offers/receipts/:claimId/review',
+  'POST /v1/agents/spends/:id/decide',
+  'POST /v1/payouts/run', 'POST /v1/books/owner-payouts', 'POST /v1/books/reinvestments',
+  'POST /v1/wallet/reserve', 'POST /v1/wallet/correct', 'POST /v1/wallet/gift-cards/:ref/settle',
+  'POST /v1/environment/experiments/:id/decide',
+]);
+/** Settings that switch money, prizes or the token on or off, or share money out: changing them is an approval too. */
+export const approvalSettings = ['wallet', 'offers', 'chain', 'launch', 'giving', 'agents', 'lottery'] as const;
+
+export const approverStepMessage = {
+  setUp: 'Owners and finance people need a second sign-in step before approving money or token steps. Set up an authenticator app first (in the console under Security, or POST /v1/me/second-step/start, then /confirm).',
+  signInAgain: 'This sign-in didn’t use your authenticator app. Sign in again and enter the app’s code to approve money or token steps.',
+};
+
+/**
+ * Why this sign-in can't approve money or token steps yet, or null when it can (or when the caller isn't an owner or
+ * finance person signed in: service keys and other roles are refused, or allowed, by the route's own checks).
+ */
+export async function approverStepProblem(
+  accounts: { get(id: string): Promise<{ id: string; role: string } | null>; sessionPassedSecondStep(raw: string): Promise<boolean> },
+  secondStep: { enabled(userId: string): Promise<boolean> },
+  key: { userId?: string; sessionToken?: string },
+): Promise<string | null> {
+  if (!key.userId || !key.sessionToken) return null;
+  const u = await accounts.get(key.userId);
+  if (!u || !(['owner', 'finance'] as string[]).includes(u.role) || (await accounts.sessionPassedSecondStep(key.sessionToken))) return null;
+  return (await secondStep.enabled(u.id)) ? approverStepMessage.signInAgain : approverStepMessage.setUp;
+}

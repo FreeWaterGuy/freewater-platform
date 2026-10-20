@@ -44,6 +44,7 @@ import type { Campaign, Share } from '../core/types';
 import { svgCreative } from '../modules/print/svgCreative';
 import { newId } from '../core/ids';
 import { AccountsError, roleScopes, type Role } from '../modules/accounts/service';
+import { approvalRoutes, approverStepProblem } from '../modules/accounts/secondStep';
 import { PaymentError } from '../modules/payments/service';
 import { ExperienceError, targetKey, type Target } from '../modules/experiences/service';
 import { AssetError, allowedTypes } from '../modules/assets/store';
@@ -527,7 +528,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const q = req.query as any;
     const after = Number(q.after ?? 0), limit = Math.min(500, Number(q.limit ?? 100));
     const rows = (await db.query<any>(`select seq, id, type, at, payload from events where company_id = $1 and seq > $2 and ($3::text is null or type = $3) order by seq limit $4`, [key!.companyId, after, q.type ?? null, limit])).rows;
-    return { body: rows.map((r) => ({ seq: Number(r.seq), id: r.id, type: r.type, at: r.at, payload: typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload })) };
+    // A phone's key is a secret (it opens its wallet): events are read with its fingerprint instead (R15).
+    return { body: rows.map((r) => ({ seq: Number(r.seq), id: r.id, type: r.type, at: r.at, payload: app.data.eventForTeam(typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload) })) };
   } });
 
   // ---------- accounts: people sign in with a code, no passwords ----------
@@ -567,13 +569,17 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const actor = user.displayName ?? (user.email ? mask(user.email) : user.id);
     if (passed.usedRecoveryCode) securityLog.record({ kind: 'recovery_code_used', companyId: user.companyId, actor, ip: req.ip });
     securityLog.record({ kind: 'signed_in', companyId: user.companyId, actor, ip: req.ip, detail: { secondStep: passed.usedRecoveryCode ? 'recovery code' : 'authenticator app' } });
-    return { body: { token: await app.accounts.createSession(user.id), isNew: false, user } };
+    return { body: { token: await app.accounts.createSession(user.id, { secondStep: true }), isNew: false, user } };
   } });
 
   // ---------- your second sign-in step ----------
   const person = (key: ApiKey | null) => { if (!key?.userId) throw new ApiError(403, 'people_only', 'A second sign-in step is for people who sign in, not API keys.'); return key.userId; };
   const ss = async <T>(f: () => Promise<T>) => { try { return await f(); } catch (e: any) { if (e?.status && e?.code) throw new ApiError(e.status, e.code, e.message); throw e; } };
-  route({ method: 'GET', url: '/v1/me/second-step', scope: 'me', summary: 'Whether your second sign-in step is on, and how many recovery codes are left.', handler: async (_req, key) => ({ body: await app.secondStep.status(person(key)) }) });
+  route({ method: 'GET', url: '/v1/me/second-step', scope: 'me', summary: 'Whether your second sign-in step is on, how many recovery codes are left, and whether you need it to approve money or token steps (owners and finance people do).', handler: async (_req, key) => {
+    const id = person(key);
+    const problem = await approverStepProblem(app.accounts, app.secondStep, key!);
+    return { body: { ...(await app.secondStep.status(id)), neededToApprove: ['owner', 'finance'].includes((await app.accounts.get(id))?.role ?? ''), ...(problem ? { toApprove: problem } : {}) } };
+  } });
   route({ method: 'POST', url: '/v1/me/second-step/start', scope: 'me', summary: 'Start setting up an authenticator app: scan the QR code (or type the key) into the app.', handler: async (_req, key) => {
     const id = person(key);
     const company = platform.companies.get(key!.companyId)?.name ?? 'FreeWater';
@@ -581,6 +587,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   } });
   route({ method: 'POST', url: '/v1/me/second-step/confirm', scope: 'me', summary: 'Finish with a code from the app. Returns 8 recovery codes, shown once: keep them somewhere safe.', body: obj({ code: { type: 'string', minLength: 6, maxLength: 8 } }, ['code']), handler: async (req, key) => {
     const out = await ss(() => app.secondStep.confirm(person(key), (req.body as any).code));
+    // A code from the app just proved this person holds it: this sign-in may now approve money and token steps.
+    if (key!.sessionToken) await app.accounts.markSecondStep(key!.sessionToken);
     secondStepCache.delete(key!.userId!);
     securityLog.record({ kind: 'second_step_on', companyId: key!.companyId, actor: key!.name, ip: req.ip });
     return { body: out };
@@ -592,6 +600,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   } });
   route({ method: 'POST', url: '/v1/me/second-step/off', scope: 'me', summary: 'Turn the second sign-in step off. Needs a code from the app (or a recovery code).', body: obj({ code: { type: 'string', minLength: 6, maxLength: 16 } }, ['code']), handler: async (req, key) => {
     const out = await ss(() => app.secondStep.turnOff(person(key), (req.body as any).code));
+    await app.accounts.clearSecondStep(key!.userId!);
     secondStepCache.delete(key!.userId!);
     securityLog.record({ kind: 'second_step_off', companyId: key!.companyId, actor: key!.name, ip: req.ip });
     return { body: out };
@@ -945,6 +954,12 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     return reply.code(500).send({ error: { code: 'server_error', message: 'Something went wrong on our side. It has been logged.' } });
   });
 
+  /** An owner or finance person about to approve money or token steps: this sign-in must have passed the second step. */
+  async function approverStep(key: ApiKey) {
+    const problem = await approverStepProblem(app.accounts, app.secondStep, key);
+    if (problem) throw new ApiError(403, 'second_step_required', problem);
+  }
+
   /** A caller is either a system with an API key (fwk_…) or a signed-in person with a session (fws_…). */
   async function authenticate(req: FastifyRequest, scope: Scope | Scope[]): Promise<ApiKey> {
     const h = req.headers.authorization ?? '';
@@ -975,6 +990,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
         }
       }
     }
+    // Owners and finance people approve money and token steps only from a sign-in that passed the second step (R4).
+    if (key.userId && raw.startsWith('fws_') && approvalRoutes.has(`${req.method} ${req.routeOptions?.url ?? ''}`)) await approverStep(key);
     const need = Array.isArray(scope) ? scope : [scope];
     // 'admin' covers everything a company does for itself, never the platform operator's own powers.
     if (!need.some((s) => key.scopes.includes(s)) && !(key.scopes.includes('admin') && !need.includes('platform'))) throw new ApiError(403, 'missing_scope', `This key can't do that. It needs one of: ${need.join(', ')}.`);

@@ -128,14 +128,26 @@ export class AccountsService {
     return { token: await this.createSession(user.id), user, isNew };
   }
 
-  /** A new session for someone who has passed every step. */
-  async createSession(userId: string) {
+  /** A new session for someone who has passed every step. `secondStep`: they passed the authenticator app's step too. */
+  async createSession(userId: string, opts: { secondStep?: boolean } = {}) {
     const now = this.clock();
     const token = `fws_${randomBytes(24).toString('base64url')}`;
-    await this.db.query(`insert into sessions (id, user_id, token_hash, created_at, expires_at) values ($1,$2,$3,$4,$5)`, [
-      newId('ses'), userId, sha(token), now.toISOString(), new Date(now.getTime() + SESSION_DAYS * 86_400_000).toISOString(),
+    await this.db.query(`insert into sessions (id, user_id, token_hash, created_at, expires_at, second_step_at) values ($1,$2,$3,$4,$5,$6)`, [
+      newId('ses'), userId, sha(token), now.toISOString(), new Date(now.getTime() + SESSION_DAYS * 86_400_000).toISOString(), opts.secondStep ? now.toISOString() : null,
     ]);
     return token;
+  }
+  /** Did this sign-in pass the second step (at sign-in, or by setting the app up during it)? */
+  async sessionPassedSecondStep(raw: string) {
+    return !!(await this.db.query(`select 1 from sessions where token_hash = $1 and revoked_at is null and second_step_at is not null`, [sha(raw)])).rows[0];
+  }
+  /** Setting the app up proves the person holds it: this sign-in counts as having passed the second step. */
+  async markSecondStep(raw: string) {
+    await this.db.query(`update sessions set second_step_at = $2 where token_hash = $1 and revoked_at is null`, [sha(raw), this.clock().toISOString()]);
+  }
+  /** The app was turned off: none of this person's sign-ins count as having passed it any more. */
+  async clearSecondStep(userId: string) {
+    await this.db.query(`update sessions set second_step_at = null where user_id = $1`, [userId]);
   }
 
   async userFromToken(raw: string): Promise<User | null> {
@@ -209,6 +221,10 @@ export class AccountsService {
     await this.db.transaction(async (tx) => {
       await tx.query(`update users set email = null, phone = null, display_name = null, consents = '{}', interests = '[]', deleted_at = $2 where id = $1`, [userId, this.clock().toISOString()]);
       await tx.query(`update sessions set revoked_at = $2 where user_id = $1 and revoked_at is null`, [userId, this.clock().toISOString()]);
+      // The authenticator app's secret and recovery codes belong to the account: they go with it.
+      await tx.query(`delete from second_steps where user_id = $1`, [userId]);
+      await tx.query(`delete from recovery_codes where user_id = $1`, [userId]);
+      await tx.query(`delete from second_step_challenges where user_id = $1`, [userId]);
     });
   }
 
