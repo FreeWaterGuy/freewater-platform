@@ -105,7 +105,8 @@ export function agentRoutes(app: App, route: (r: RouteDef) => void) {
   route({ method: 'POST', url: '/v1/agents/settle', scope: 'admin', summary: 'Share out each finished day’s AI fund (it also runs every hour).', handler: async (_req, key) => ({ body: await wrap(() => agents.settle(staff(key).companyId)) }) });
 
   route({ method: 'POST', url: '/v1/agents/proposals/:id/decide', scope: 'admin', summary: 'Approve (the change is made, as a normal settings change) or reject an agent’s proposal.', body: obj({ approve: S.bool }, ['approve']), handler: async (req, key) => {
-    const k = staff(key);
+    // Approving or rejecting any proposal (some revoke keys and can't be undone) is a person's decision.
+    const k = staff(key); person(k);
     return { body: await wrap(() => agents.decide((req.params as any).id, (req.body as any).approve, who(k), k.companyId)) };
   } });
   route({ method: 'POST', url: '/v1/agents/proposals/:id/undo', scope: 'admin', summary: 'Put a change back the way it was. Before it’s measured, it earns the agent nothing.', handler: async (req, key) => { const k = staff(key); return { body: await wrap(() => agents.undo((req.params as any).id, who(k), k.companyId)) }; } });

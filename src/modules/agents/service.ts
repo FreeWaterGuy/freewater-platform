@@ -141,6 +141,13 @@ export class AgentsService {
     if (!isAgent(agent)) return true;
     const v = this.verdicts.get(agent);
     if (!v) return true;
+    // Frozen (books unverified) or paused: no calls, whatever compute it bought. Essential work is never paused (the
+    // governor makes it 'constrained' instead), but check here too.
+    if (v.standing === 'frozen') return false;
+    if (v.standing === 'paused' && !agentRegistry[agent].essential) return false;
+    // TODO(governor): the daily budget and compute credit are per agent across every operator, so one operator's
+    // calls spend what another's would. Keying them by company needs agent_state (credit) and verdicts per company,
+    // and askGovernor() to pass the company; until then they stay network-wide.
     const spent = this.spentToday.get(`${agent}|${this.day()}`) ?? 0;
     return spent < v.budgetCents * 1000 + (this.credit.get(agent) ?? 0);
   }

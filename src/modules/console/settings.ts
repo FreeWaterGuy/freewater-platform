@@ -4,7 +4,7 @@ import { checkLottery } from '../lottery/rules';
 import { checkPolicy } from '../data/policy';
 import { checkAiSettings } from '../ai/settings';
 import { checkWallet, defaultWallet } from '../wallet/assets';
-import { checkChain } from '../chain/settings';
+import { checkChain, defaultChain } from '../chain/settings';
 
 // What a company may change about itself, the checks each change must pass, and plain words for what changed.
 
@@ -22,6 +22,8 @@ export const adCategories = ['food', 'drink', 'coffee', 'fitness', 'health', 'ne
 /** The parts of the settings a PATCH may send. Anything else is refused. */
 export const editableKeys = ['name', 'receiptBaseUrl', 'scanBaseUrl', 'brand', 'productFacts', 'giving', 'openBooks', 'unitCosts', 'consumerPricing', 'timezone', 'consumer', 'machines', 'qr', 'ar', 'standardProductId', 'adRules', 'prices', 'modules', 'lottery', 'data', 'transparency', 'agents', 'ratchet', 'security', 'research', 'wallet', 'offers', 'games', 'minimumAge', 'chain', 'launch', 'ai'] as const;
 export type EditableKey = (typeof editableKeys)[number];
+/** Settings only a person signed in may change or put back: money, the chain, and every one-way or money-adjacent promise. */
+export const personOnlyKeys: readonly EditableKey[] = ['wallet', 'offers', 'chain', 'ratchet', 'agents', 'minimumAge', 'giving', 'lottery', 'ai', 'data', 'launch', 'security'];
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
 const isInt = (v: unknown, min: number, max: number) => Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
@@ -166,6 +168,13 @@ export function chainProblem(cur: CompanyConfig, next: CompanyConfig, approved =
   const a = cur.chain, b = next.chain;
   if (b?.enabled && !a?.enabled && !approved) return 'Switching the chain on needs several people to approve it, then a wait. Propose it under Chain.';
   if (a?.enabled && b?.enabled && (b.approvalsNeeded < a.approvalsNeeded || b.delayHours < a.delayHours)) return 'While the chain is on, approvals and the wait can be raised, not lowered. Switch it off first.';
+  // Once past the test stage, approvals and the wait only go up, whether the chain is on or off (switching it off
+  // first must not be a way round this).
+  const live = (cur.launch?.stage ?? 'test') !== 'test' || (next.launch?.stage ?? 'test') !== 'test';
+  if (live && b) {
+    const was = { ...defaultChain, ...(a ?? {}) };
+    if (b.approvalsNeeded < was.approvalsNeeded || b.delayHours < was.delayHours) return 'Once live, approvals and the wait can be raised, never lowered.';
+  }
   return null;
 }
 
@@ -183,14 +192,17 @@ export function walletProblem(cur: CompanyConfig, next: CompanyConfig, approved 
 }
 
 export function ratchetProblem(cur: CompanyConfig, next: CompanyConfig): string | null {
+  const down = (a?: number, b?: number) => (a ?? 0) > (b ?? 0);
+  // Always one-way, promise or not: the youngest age that may take part can be raised, never lowered.
+  if (cur.minimumAge !== undefined && (next.minimumAge === undefined || next.minimumAge < cur.minimumAge)) return 'The youngest age that may take part can be raised, never lowered.';
+  // Once the AI agents' fund is on, its share only goes up and it stays on, whether or not giving is promised.
+  if (cur.agents?.enabled && (!next.agents?.enabled || down(cur.agents.percentOfExtra, next.agents.percentOfExtra) || down(cur.agents.percentOfProfit, next.agents.percentOfProfit))) return 'The AI agents’ share can be raised, never lowered or turned off.';
   if (!cur.ratchet) return null;
   if (!next.ratchet) return 'The promise that giving and the AI agents’ share only go up can’t be taken back.';
   const g0 = cur.giving, g1 = next.giving;
   if (g0.mode !== 'none' && g1.mode !== g0.mode) return 'Giving can’t be switched to a different kind once promised; raise it instead.';
-  const down = (a?: number, b?: number) => (a ?? 0) > (b ?? 0);
   if (down(g0.centsPerUnit, g1.centsPerUnit) || down(g0.percentOfRevenue, g1.percentOfRevenue) || down(g0.percentOfExtra, g1.percentOfExtra) || down(g0.percentOfProfit, g1.percentOfProfit)) return 'Giving can be raised, never lowered.';
   if ((g1.extraAboveCents ?? 0) > (g0.extraAboveCents ?? 0)) return 'Where extra giving starts can be lowered (giving more), never raised.';
-  if (cur.agents?.enabled && (!next.agents?.enabled || down(cur.agents.percentOfExtra, next.agents.percentOfExtra) || down(cur.agents.percentOfProfit, next.agents.percentOfProfit))) return 'The AI agents’ share can be raised, never lowered or turned off.';
   return null;
 }
 

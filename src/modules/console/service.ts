@@ -12,7 +12,7 @@ import { posterCreative, type PosterSpec } from '../creative/poster';
 import { lotteryDefaults } from '../lottery/rules';
 import { quietTransparency } from '../transparency/service';
 import { preset } from '../data/policy';
-import { adCategories, applyChange, checkSettings, describeChange, editableKeys, fontChoices, ratchetProblem, chainProblem, walletProblem, type EditableKey } from './settings';
+import { adCategories, applyChange, checkSettings, describeChange, editableKeys, fontChoices, personOnlyKeys, ratchetProblem, chainProblem, walletProblem, type EditableKey } from './settings';
 
 export class ConsoleError extends Error {
   constructor(public code: string, message: string, public status = 400) {
@@ -44,6 +44,20 @@ export class ConsoleService {
   ) {}
 
   private now() { return (this.opts.clock?.() ?? new Date()).toISOString(); }
+
+  /**
+   * Saves and restores for one company run one at a time (the platform runs as a single owner, so an in-process lock
+   * is enough). Every check inside runs against the latest stored settings, never a copy read before waiting.
+   */
+  private locks = new Map<string, Promise<unknown>>();
+  private serial<T>(companyId: string, f: () => Promise<T>): Promise<T> {
+    const prev = this.locks.get(companyId) ?? Promise.resolve();
+    const run = prev.then(f, f);
+    const tail = run.catch(() => {});
+    this.locks.set(companyId, tail);
+    void tail.then(() => { if (this.locks.get(companyId) === tail) this.locks.delete(companyId); });
+    return run;
+  }
 
   private company(id: string): CompanyConfig {
     const c = this.platform.companies.get(id);
@@ -104,8 +118,11 @@ export class ConsoleService {
 
   /** Save a change. Send the version you started from; if someone saved in between, nothing is overwritten. */
   async save(companyId: string, change: Partial<Record<EditableKey, unknown>>, by: string, expectedVersion?: number, opts: { chainApproved?: boolean } = {}) {
-    const cur = this.company(companyId);
+    return this.serial(companyId, () => this.saveNow(companyId, change, by, expectedVersion, opts));
+  }
+  private async saveNow(companyId: string, change: Partial<Record<EditableKey, unknown>>, by: string, expectedVersion: number | undefined, opts: { chainApproved?: boolean }) {
     const version = await this.baseline(companyId);
+    const cur = this.company(companyId);
     if (expectedVersion !== undefined && expectedVersion !== version) throw new ConsoleError('version_conflict', `Someone else saved changes (now version ${version}). Reload to see them, then make your change again.`, 409);
     let next: CompanyConfig;
     try { next = applyChange(cur, change); } catch (e: any) { throw new ConsoleError('not_editable', e.message); }
@@ -142,16 +159,19 @@ export class ConsoleService {
 
   /** Put an earlier version back. It becomes a new version, so the history keeps everything. */
   async restore(companyId: string, v: number, by: string, opts: { person?: boolean } = {}) {
+    return this.serial(companyId, () => this.restoreNow(companyId, v, by, opts));
+  }
+  private async restoreNow(companyId: string, v: number, by: string, opts: { person?: boolean }) {
     const old = await this.version(companyId, v);
+    const latest = await this.baseline(companyId);
     const cur = this.company(companyId);
     const next = { ...old, id: companyId };
     // Putting back an old version passes the same checks as any other change (the chain can't come back on this way).
-    const money = ['wallet', 'offers', 'chain'].some((k) => JSON.stringify((cur as any)[k] ?? null) !== JSON.stringify((next as any)[k] ?? null));
-    if (money && !opts.person) throw new ConsoleError('person_needed', 'This version changes money or chain settings; a person signed in has to put it back.', 403);
+    const money = personOnlyKeys.some((k) => JSON.stringify((cur as any)[k] ?? null) !== JSON.stringify((next as any)[k] ?? null));
+    if (money && !opts.person) throw new ConsoleError('person_needed', 'This version changes money, chain or one-way settings; a person signed in has to put it back.', 403);
     const problem = checkSettings(next, this.registry.names()) ?? ratchetProblem(cur, next) ?? chainProblem(cur, next) ?? walletProblem(cur, next);
     if (problem) throw new ConsoleError('invalid_settings', `Version ${v} can’t be put back as it is: ${problem}`, 422);
     const changes = describeChange(cur, next);
-    const latest = await this.latestVersion(companyId);
     if (!changes.length) return { config: cur, version: latest, changes };
     return this.commit(companyId, next, by, [`Put back version ${v}`, ...changes], latest);
   }

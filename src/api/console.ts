@@ -2,6 +2,7 @@ import type { App } from '../app';
 import { createApiKey, revokeApiKey, scopeInfo, type ApiKey, type Scope } from '../db/store';
 import { publicEvents, testEvent } from '../modules/webhooks/catalog';
 import { ApiError, obj, S, type RouteDef } from './http';
+import { personOnlyKeys } from '../modules/console/settings';
 
 /**
  * The white-label console and the developer side: a company's settings and their history, machines, the team,
@@ -25,8 +26,8 @@ export function consoleRoutes(app: App, route: (r: RouteDef) => void) {
   } });
   route({ method: 'PATCH', url: '/v1/console/settings', scope: 'admin', summary: 'Change your settings: brand, product facts, giving, open books, ad rules, prices, modules and more. Send only what changes, and the version you started from.', body: obj({ changes: changesProp, version: S.int }, ['changes']), handler: async (req, key) => {
     const b = req.body as any;
-    // Money and chain switches are changed by a person signed in, never by a service key.
-    if (['wallet', 'offers', 'chain'].some((k) => k in (b.changes ?? {})) && !key!.userId) throw new ApiError(403, 'person_needed', 'Money and chain settings are changed by a person signed in, not a service key.');
+    // Money, chain and one-way settings are changed by a person signed in, never by a service key.
+    if (personOnlyKeys.some((k) => k in (b.changes ?? {})) && !key!.userId) throw new ApiError(403, 'person_needed', 'Money, chain and one-way settings (giving, the agents’ fund, the promise, the youngest age, the prize game, AI and data rules) are changed by a person signed in, not a service key.');
     return { body: await cons.save(staff(key).companyId, b.changes, by(key!), b.version) };
   } });
   route({ method: 'POST', url: '/v1/console/preview-label', scope: 'admin', summary: 'A sample bottle label with these settings, before saving. Problems are listed instead of saving anything.', body: obj({ changes: changesProp }), handler: async (req, key) => ({ body: await cons.previewLabel(staff(key).companyId, (req.body as any).changes ?? {}) }) });

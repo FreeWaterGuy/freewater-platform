@@ -79,7 +79,7 @@ describe('a second sign-in step with an authenticator app', () => {
     const found = (await call('POST', '/v1/security/review', keys['freewater-admin'])).body;
     const p = found.find((x: any) => x.title === 'Require a second sign-in step for owners');
     expect(p.detail).toMatch(/1 of 2 owners have set one up/);
-    expect((await call('POST', `/v1/agents/proposals/${p.id}/decide`, keys['freewater-admin'], { approve: true })).body.status).toBe('done');
+    expect((await call('POST', `/v1/agents/proposals/${p.id}/decide`, josh, { approve: true })).body.status).toBe('done');
     expect(app.platform.companies.get('freewater')!.security?.ownersNeedSecondStep).toBe(true);
     now += 60_000;
     const sam = (await call('POST', '/v1/auth/verify', undefined, { companyId: 'freewater', channel: 'email', to: 'sam@freewater.io', code: await emailCode('sam@freewater.io') })).body.token;

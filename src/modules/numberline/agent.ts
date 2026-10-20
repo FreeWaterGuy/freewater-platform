@@ -48,10 +48,11 @@ export class ClaudeNumberLineAgent implements NumberLineAgent {
       if (!systems.length || total <= 0) throw new Error('no systems');
       const norm = systems.map((s: any) => ({ system: s.system as EconomicSystem, share: Math.round((s.share / total) * 1000) / 1000 })).sort((a: any, b: any) => b.share - a.share);
       // Never against the numbers: a giving-economy share needs value going out with nothing paid; a market share
-      // needs a price; a free share needs nothing paid.
+      // needs a price; a free share (advertising, outside money or taxes) needs nothing paid.
       const pays = f.priceCents > 0 || f.priceKnown === false;
       for (const s of norm) {
         if (s.system === 'giving' && !f.parts?.length && (pays || rules.netCents >= 0)) throw new Error('giving without value back');
+        if ((s.system === 'free_ad' || s.system === 'free_outside' || s.system === 'public') && pays && !f.parts?.some((p) => !(p.facts.priceCents > 0 || p.facts.priceKnown === false))) throw new Error('free while the person pays');
         if (s.system === 'market' && !pays && !f.parts?.some((p) => p.facts.priceCents > 0)) throw new Error('market without a price');
       }
       const peer = x.peerToPeer === true || f.peerToPeer === true;
