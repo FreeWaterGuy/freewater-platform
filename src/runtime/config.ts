@@ -27,3 +27,29 @@ export function checkConfig(env: NodeJS.ProcessEnv = process.env) {
   for (const [k, v] of Object.entries(env)) if (/_(KEY|SECRET|TOKEN)$/.test(k) && v && /^(changeme|test|xxx+|todo)$/i.test(v)) need(false, `${k} looks like a placeholder.`);
   return { production, errors, warnings };
 }
+
+/**
+ * The stand-ins: the test payment provider, the test payout provider and the test outbox move no real money and send
+ * no real messages. In production they're only allowed for a staging rehearsal, by saying so (ALLOW_STANDINS=1);
+ * otherwise the server refuses to start rather than look live while doing nothing.
+ */
+export function checkStandIns(wired: { payments?: unknown; payouts?: unknown; messenger?: unknown }, env: NodeJS.ProcessEnv = process.env) {
+  const production = env.NODE_ENV === 'production';
+  const active = [
+    !wired.payments && 'TestPaymentProvider (no real money is taken)',
+    !wired.payouts && 'TestPayoutProvider (no real money is sent to charities)',
+    !wired.messenger && 'TestOutbox (no email or text is sent)',
+  ].filter((s): s is string => !!s);
+  const allowed = env.ALLOW_STANDINS === '1';
+  const errors = production && active.length && !allowed
+    ? [`Stand-ins are wired instead of real providers: ${active.join('; ')}. Production needs real ones; for a staging rehearsal, set ALLOW_STANDINS=1.`]
+    : [];
+  return { active, allowed, errors };
+}
+
+/** The spool directory must be writable in production: otherwise waiting changes would live only in memory. */
+export function checkSpoolDir(dir: string, writable: boolean, production: boolean) {
+  if (writable) return { error: null, warning: null };
+  const msg = `can't write to FW_SPOOL_DIR (${dir}). Changes waiting for the database would then live only in memory.`;
+  return production ? { error: `FW_SPOOL_DIR: ${msg} Mount a writable volume there.`, warning: null } : { error: null, warning: msg };
+}

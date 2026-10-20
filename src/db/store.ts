@@ -44,6 +44,12 @@ export class PersistencePaused extends Error {
 }
 const WATERMARK = `insert into persistence_watermark (id, epoch, seq, at) values (1, $1, $2, now()) on conflict (id) do update set epoch = excluded.epoch, seq = excluded.seq, at = excluded.at`;
 
+/** What a write checks inside its transaction: is the lease still this server's (see InstanceLease.stillHeld)? */
+export interface WriteLease { stillHeld(tx: SqlClient): Promise<boolean>; lost(why: string): void }
+class LeaseLapsed extends Error { constructor() { super('this server no longer holds the lease'); } }
+// The same, but never moving this server's own mark backwards (a batch may have written meanwhile).
+const CLAIM = `insert into persistence_watermark (id, epoch, seq, at) values (1, $1, $2, now()) on conflict (id) do update set epoch = excluded.epoch, seq = case when persistence_watermark.epoch = excluded.epoch then greatest(persistence_watermark.seq, excluded.seq) else excluded.seq end, at = excluded.at`;
+
 export class SqlPersistence implements Persistence {
   readonly epoch: string;
   private pending: Op[] = [];
@@ -60,6 +66,7 @@ export class SqlPersistence implements Persistence {
   private claimed = false;
   private skipRequest: { seq: number; done: (r: { skipped: string | null; reason?: string }) => void } | null = null;
   private wakeRetry: (() => void) | null = null;
+  private lease: WriteLease | null = null;
   stats = { written: 0, batches: 0, retries: 0, skipped: 0 };
 
   constructor(private db: SqlClient, private opts: { epoch?: string; maxBatch?: number; retryDelayMs?: number; maxRetryDelayMs?: number; pauseAfterMs?: number; flushTimeoutMs?: number; spoolFile?: string; onProblem?: (p: PersistenceProblem) => void; onRecovered?: () => void } = {}) {
@@ -94,14 +101,18 @@ export class SqlPersistence implements Persistence {
           // data for this server) and with every batch while changes are spooled; otherwise it'd cost a round trip
           // on every write for nothing.
           const mark = !this.claimed || this.spooled;
+          const lease = this.lease;
           try {
-            if (batch.length === 1 && !mark) await this.db.query(batch[0]!.sql, batch[0]!.params);
+            if (batch.length === 1 && !mark && !lease) await this.db.query(batch[0]!.sql, batch[0]!.params);
             else await this.db.transaction(async (tx) => {
+              // With a lease, every write first proves, in its own transaction, that this server still owns the data.
+              if (lease && !(await lease.stillHeld(tx))) throw new LeaseLapsed();
               for (const op of batch) await tx.query(op.sql, op.params);
               if (mark) await tx.query(WATERMARK, [this.epoch, last]);
             });
             if (mark) this.claimed = true;
           } catch (e) {
+            if (e instanceof LeaseLapsed) { this.leaseLapsed(); break; }
             await this.failed(e, batch.length);
             continue;
           }
@@ -219,6 +230,40 @@ export class SqlPersistence implements Persistence {
     }
     renameSync(spoolFile, `${spoolFile}.done-${Date.now()}`);
     return { applied: unique.length };
+  }
+
+  /**
+   * From now on, every write first checks in its own transaction that this server still holds the lease, and if not,
+   * writes nothing, fences (what's waiting goes to the spool for a person) and reports the lease lost. Without a lease
+   * (tests, a laptop) writes aren't checked.
+   */
+  requireLease(lease: WriteLease) { this.lease = lease; }
+
+  private leaseLapsed() {
+    this.fence();
+    this.lease?.lost('a write found the lease no longer held (it lapsed or another server took it); nothing more is written');
+  }
+
+  /**
+   * At start-up, after any spool is recovered and before serving: record this server as the one writing (its
+   * watermark, at the last change it has written, 0 if none). Otherwise a server that never got a write in before the
+   * database went away would spool under an epoch the watermark doesn't name, and its spool would be set aside as stale.
+   */
+  async claim(): Promise<void> {
+    if (this.claimed) return;
+    await this.flush();
+    if (this.claimed) return;
+    const lease = this.lease;
+    try {
+      await this.db.transaction(async (tx) => {
+        if (lease && !(await lease.stillHeld(tx))) throw new LeaseLapsed();
+        await tx.query(CLAIM, [this.epoch, this.written]);
+      });
+    } catch (e) {
+      if (e instanceof LeaseLapsed) this.leaseLapsed();
+      throw e;
+    }
+    this.claimed = true;
   }
 
   /** This server no longer owns the data: keep what's waiting on disk (for a person) and write nothing more. */

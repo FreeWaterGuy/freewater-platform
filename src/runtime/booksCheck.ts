@@ -39,3 +39,31 @@ export async function checkBooks(db: SqlClient) {
   await app.persistence.flush();
   return { ok: findings.every((f) => f.ok), findings };
 }
+
+/**
+ * The same check, in its own process (npm run books:check's script), so the live server never loads a second copy of
+ * the platform into its own memory. Reports the child's findings and whether the books check out.
+ */
+export async function checkBooksInChild(target: { databaseUrl?: string; dataDir?: string }, opts: { timeoutMs?: number } = {}): Promise<{ ok: boolean; findings: { ok: boolean; what: string }[]; output: string; code: number | null }> {
+  const { spawn } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const script = fileURLToPath(new URL('../server/booksCheck.ts', import.meta.url));
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  delete env.DATABASE_URL; delete env.DATA_DIR;
+  if (target.databaseUrl) env.DATABASE_URL = target.databaseUrl;
+  if (target.dataDir) env.DATA_DIR = target.dataDir;
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['--import', 'tsx', script], { env, cwd: fileURLToPath(new URL('../..', import.meta.url)), stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '';
+    child.stdout.on('data', (d) => { output += d; });
+    child.stderr.on('data', (d) => { output += d; });
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`The books check took longer than ${Math.round((opts.timeoutMs ?? 0) / 60_000)} minutes and was stopped.`)); }, opts.timeoutMs ?? 2 * 3600_000);
+    timer.unref?.();
+    child.on('error', (e) => { clearTimeout(timer); reject(e); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      const findings = output.split('\n').map((l) => /^([✓✗]) (.*)$/.exec(l)).filter((m): m is RegExpExecArray => !!m).map((m) => ({ ok: m[1] === '✓', what: m[2]! }));
+      resolve({ ok: code === 0 && findings.every((f) => f.ok), findings, output, code });
+    });
+  });
+}

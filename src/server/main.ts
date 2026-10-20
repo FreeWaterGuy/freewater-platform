@@ -12,15 +12,33 @@ import { migrate } from '../db/migrations';
 import { accessSync, constants, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { Alerter, ChatWebhookSink, EmailSink, type AlertSink } from '../runtime/alerts';
-import { checkConfig } from '../runtime/config';
+import { checkConfig, checkSpoolDir, checkStandIns } from '../runtime/config';
 import { InstanceLease } from '../runtime/lease';
-import { JobRunner, type Job } from '../runtime/jobs';
+import { forEachCompany, JobRunner, type Job } from '../runtime/jobs';
 import { blobStoreFromEnv } from '../modules/assets/blobs';
 import { backup, backupKey, restore } from '../runtime/backup';
 import { backupStoreFromEnv, backupsConfigured } from '../runtime/backupStore';
-import { checkBooks } from '../runtime/booksCheck';
+import { checkBooksInChild } from '../runtime/booksCheck';
 
 const config = checkConfig();
+
+// Real payment, payout and message providers aren't written yet, so these are the stand-ins, and production refuses
+// them unless ALLOW_STANDINS=1 says this is a staging rehearsal. When real ones exist, pass them here and to createApp.
+const providers: { payments?: unknown; payouts?: unknown; messenger?: unknown } = {};
+const standIns = checkStandIns(providers);
+config.errors.push(...standIns.errors);
+
+// Changes waiting for the database are also kept here, so a restart doesn't lose them. In production, a disk that
+// survives the container being replaced (a mounted volume), and one that can't be written stops the start.
+const spoolDir = process.env.FW_SPOOL_DIR ?? (config.production ? '/var/lib/freewater/spool' : './spool');
+let spoolFile: string | undefined = join(spoolDir, 'waiting-changes.jsonl');
+let spoolWritable = true;
+try { mkdirSync(spoolDir, { recursive: true }); accessSync(spoolDir, constants.W_OK); } catch { spoolWritable = false; }
+const spoolCheck = checkSpoolDir(spoolDir, spoolWritable, config.production);
+if (spoolCheck.error) config.errors.push(spoolCheck.error);
+if (spoolCheck.warning) config.warnings.push(spoolCheck.warning);
+if (!spoolWritable) spoolFile = undefined;
+
 for (const w of config.warnings) console.warn(`Settings: ${w}`);
 if (config.errors.length) {
   console.error(`\nFreeWater won't start until these settings are fixed:\n${config.errors.map((e) => `  • ${e}`).join('\n')}\n`);
@@ -31,15 +49,14 @@ const sinks: AlertSink[] = [];
 if (process.env.ALERT_WEBHOOK_URL) sinks.push(new ChatWebhookSink(process.env.ALERT_WEBHOOK_URL, process.env.ALERT_NAME ?? 'FreeWater'));
 const alerts = new Alerter(sinks);
 
+if (standIns.active.length) {
+  const banner = `STAND-INS ACTIVE${config.production ? ' IN PRODUCTION (ALLOW_STANDINS=1: a staging rehearsal only)' : ''}: ${standIns.active.join('; ')}.`;
+  console.warn(`\n${'!'.repeat(80)}\n${banner}\n${'!'.repeat(80)}\n`);
+  if (config.production) void alerts.alert('stand-ins', 'warning', 'This server runs on stand-ins: no real money moves and no real messages go out', banner);
+}
+
 const url = process.env.DATABASE_URL;
 const db = url ? createPostgresClient(url) : await createPgliteClient(process.env.DATA_DIR ?? './data');
-
-// Changes waiting for the database are also kept here, so a restart doesn't lose them. In production, a disk that
-// survives the container being replaced (a mounted volume).
-const spoolDir = process.env.FW_SPOOL_DIR ?? (config.production ? '/var/lib/freewater/spool' : './spool');
-let spoolFile: string | undefined = join(spoolDir, 'waiting-changes.jsonl');
-try { mkdirSync(spoolDir, { recursive: true }); accessSync(spoolDir, constants.W_OK); }
-catch { console.warn(`Settings: can't write to FW_SPOOL_DIR (${spoolDir}). Changes waiting for the database would then live only in memory.`); spoolFile = undefined; }
 
 // Only one server may own the data. Wait for the previous one to stop (it lets go when it shuts down). The lease
 // comes first, before any table is changed, so a new version never migrates under a running old one.
@@ -61,12 +78,32 @@ await db.query(`drop table if exists restore_target`);
 app = await createApp({ db, alerts, seedDemo: process.env.SEED_DEMO === '1', blobs: blobStoreFromEnv(), spoolFile, epoch: lease.holder });
 if (process.env.ALERT_EMAIL) alerts.addSink(new EmailSink(process.env.ALERT_EMAIL, (m) => app!.messenger.send(m)));
 app!.runtime.lease = lease;
+// Every write checks, in its own transaction, that this server still holds the lease; and this server's watermark
+// goes in now (after any spool was recovered, before serving), so a spool it makes later is recognised as its own.
+app!.persistence.requireLease(lease);
+await app!.persistence.claim();
 
 const server = await buildServer(app, { logger: process.env.LOG !== '0' });
+
+// Live-feed streams (server-sent events) never end by themselves, so closing the server would wait on them forever.
+// They're tracked here and ended as soon as closing begins (a browser's EventSource reconnects, to the next server).
+const liveStreams = new Set<import('node:http').ServerResponse>();
+server.server.on('request', (req, res) => {
+  if (!/^\/v1\/public\/companies\/[^/]+\/live(\?|$)/.test(req.url ?? '')) return;
+  liveStreams.add(res);
+  res.on('close', () => liveStreams.delete(res));
+});
+server.addHook('preClose', async () => {
+  for (const res of liveStreams) { try { res.end(); } catch {} }
+  liveStreams.clear();
+});
 
 // The background work. Each job saves its changes before it counts as done.
 const saved = (f: () => Promise<unknown>) => async () => { await f(); await app!.persistence.flush(); };
 const companies = () => [...app!.platform.companies.values()];
+// One company's failure is reported with its id and never stops the job for the others.
+const perCompany = (job: string, step: (companyId: string) => Promise<unknown>, which: () => string[] = () => companies().map((c) => c.id)) =>
+  forEachCompany(which(), step, (companyId, error) => void alerts.alert(`job:${job}:${companyId}`, 'warning', `Background job “${job}” failed for company ${companyId}`, String((error as Error)?.stack ?? error)));
 const jobs: Job[] = [
   { name: 'webhooks', everyMs: 3000, timeoutMs: 120_000, run: saved(() => app!.webhooks.drain()) },
   // Model 6 machines: open an "offline" problem for any that stopped calling in, and let go of kept offline labels
@@ -76,21 +113,21 @@ const jobs: Job[] = [
   // Each hour: close any month that's due, measure changes whose week is up, read every agent's standing, share out
   // the AI fund, and have the security agent look around.
   { name: 'books-and-agents', everyMs: 3600_000, timeoutMs: 30 * 60_000, run: saved(async () => {
-    for (const c of companies()) await app!.profit.closeDue(c.id);
+    await perCompany('books-and-agents', (id) => app!.profit.closeDue(id));
     await app!.agents.measure();
     await app!.agents.refresh();
-    for (const c of companies()) { if (c.agents?.enabled) await app!.agents.settle(c.id); await app!.agents.securityReview(c.id); }
+    await perCompany('books-and-agents', async (id) => { if (app!.platform.companies.get(id)?.agents?.enabled) await app!.agents.settle(id); await app!.agents.securityReview(id); });
   }) },
   // Each day: any agent whose model hasn't passed the current test takes it (a new model or a new test version).
   { name: 'agent-exams', everyMs: 24 * 3600_000, timeoutMs: 30 * 60_000, run: async () => { if (app!.agents.examinee) await app!.agents.runExams(); } },
   // Each hour, publish any finished day's books fingerprint not yet published.
   // Photos of the real products on the games' cards, a few at a time.
-  { name: 'game-photos', everyMs: 6 * 3600_000, timeoutMs: 20 * 60_000, run: saved(async () => { for (const c of app!.platform.companies.values()) await app!.games.fillImages(c.id, 40); }) },
+  { name: 'game-photos', everyMs: 6 * 3600_000, timeoutMs: 20 * 60_000, run: saved(() => perCompany('game-photos', (id) => app!.games.fillImages(id, 40))) },
   // Brand offers: close claims with no receipt after 14 days (points go back), and pay approved ones that were held.
-  { name: 'offers', everyMs: 3600_000, timeoutMs: 10 * 60_000, run: saved(async () => { for (const c of app!.platform.companies.values()) { await app!.offers.expire(c.id); await app!.offers.payHeld(c.id); } }) },
+  { name: 'offers', everyMs: 3600_000, timeoutMs: 10 * 60_000, run: saved(() => perCompany('offers', async (id) => { await app!.offers.expire(id); await app!.offers.payHeld(id); })) },
   // The chain layer: seal each finished hour of the wallet journal; once a day, check the books against the chain.
   { name: 'wallet-seals', everyMs: 600_000, timeoutMs: 10 * 60_000, run: saved(() => app!.chain.sealAll()) },
-  { name: 'chain-check', everyMs: 24 * 3600_000, timeoutMs: 10 * 60_000, run: saved(async () => { for (const c of app!.platform.companies.values()) await app!.chain.reconcile(c.id); }) },
+  { name: 'chain-check', everyMs: 24 * 3600_000, timeoutMs: 10 * 60_000, run: saved(() => perCompany('chain-check', (id) => app!.chain.reconcile(id))) },
   { name: 'fingerprints', everyMs: 3600_000, timeoutMs: 10 * 60_000, run: saved(() => app!.anchors.run()) },
   // Once a day, delete data older than each company keeps.
   // Each minute: how full memory is. The platform keeps its working state in memory (about 13 KB per bottle printed,
@@ -109,8 +146,10 @@ if (backupsConfigured() && url) {
   jobs.push({ name: 'backup', everyMs: 24 * 3600_000, timeoutMs: 2 * 3600_000, whilePaused: true, run: () => backup({ databaseUrl: url, store: backupStoreFromEnv(), key: backupKey() }) });
   if (process.env.RESTORE_TEST_URL) jobs.push({ name: 'restore-check', everyMs: 7 * 24 * 3600_000, timeoutMs: 3 * 3600_000, run: async () => {
     await restore({ store: backupStoreFromEnv(), key: backupKey(), targetUrl: process.env.RESTORE_TEST_URL! });
-    const spare = createPostgresClient(process.env.RESTORE_TEST_URL!);
-    try { const r = await checkBooks(spare); if (!r.ok) throw new Error(r.findings.filter((f) => !f.ok).map((f) => f.what).join('; ')); } finally { await spare.close(); }
+    // The check loads a whole platform from the spare; it runs in its own process so this one's memory isn't shared.
+    const r = await checkBooksInChild({ databaseUrl: process.env.RESTORE_TEST_URL! }, { timeoutMs: 2.5 * 3600_000 });
+    console.log(`Restore check: ${r.ok ? 'the books check out' : 'FAILED'} (${r.findings.length} finding(s)).`);
+    if (!r.ok) throw new Error(r.findings.some((f) => !f.ok) ? r.findings.filter((f) => !f.ok).map((f) => f.what).join('; ') : `the books check exited with ${r.code}: ${r.output.slice(-600)}`);
   } });
 } else if (config.production) console.warn('Settings: backups are off (set BACKUP_KEY and BACKUP_S3_BUCKET). The database host’s own backups are then the only copy.');
 const runner = new JobRunner(db, jobs, {
@@ -136,10 +175,20 @@ let stopping = false;
 const stop = async (code = 0) => {
   if (stopping) return;
   stopping = true;
-  const force = setTimeout(() => process.exit(code || 1), 45_000);
+  // If a clean stop takes too long, still keep what's waiting (spool) and let go of the data before leaving, so the
+  // next server neither loses changes nor waits for the lease to lapse.
+  const force = setTimeout(() => {
+    console.error('Stopping took too long; keeping waiting changes in the spool and letting go of the data.');
+    try { app!.persistence.spoolNow(); } catch {}
+    void Promise.race([lease.release(), new Promise((r) => setTimeout(r, 3_000))]).finally(() => process.exit(code || 1));
+  }, 45_000);
   force.unref();
+  // A request still open after a while (a stream that slipped past the hook, a slow client) is cut off.
+  const cut = setTimeout(() => server.server.closeAllConnections?.(), 15_000);
+  cut.unref();
   try {
-    await server.close(); // stop taking requests; wait for the ones in progress
+    await server.close(); // stop taking requests; end live streams; wait for the ones in progress
+    clearTimeout(cut);
     const still = await runner.stop(30_000);
     if (still.length) console.error(`Stopping while these jobs still run: ${still.join(', ')}. They'll be run again soon after the next start.`);
     // Choices still being recorded (the number line's queue) finish first, briefly.

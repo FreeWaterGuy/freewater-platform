@@ -38,12 +38,14 @@ jobs:
           --health-cmd "pg_isready -U fw" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # the upgrade step builds the previous release too
       - name: Build the server image
         run: docker build --build-arg GIT_SHA=${{ github.sha }} -t freewater:${{ github.sha }} .
       - name: Start it the way production does, and wait until it's ready
         run: |
           docker run -d --name fw --network host \
-            -e NODE_ENV=production -e PORT=8080 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
+            -e NODE_ENV=production -e ALLOW_STANDINS=1 -e PORT=8080 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
             -e DATABASE_URL=postgres://fw:fw@localhost:5432/freewater \
             freewater:${{ github.sha }}
           for i in $(seq 1 60); do
@@ -51,11 +53,23 @@ jobs:
             sleep 2
           done
           echo "::error title=start::$(docker logs fw 2>&1 | tail -c 900 | tr '\n' ' ')"; exit 1
+      - name: Production refuses the stand-ins unless told this is a rehearsal
+        run: |
+          if docker run --rm --network host -e NODE_ENV=production -e PORT=8082 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
+            -e DATABASE_URL=postgres://fw:fw@localhost:5432/freewater freewater:${{ github.sha }} > standins.txt 2>&1; then
+            echo "::error title=stand-ins::started on stand-ins without ALLOW_STANDINS=1"; exit 1
+          fi
+          grep -q "ALLOW_STANDINS=1" standins.txt || { echo "::error title=stand-ins::$(tail -c 900 standins.txt | tr '\n' ' ')"; exit 1; }
       - name: A second copy must wait, not share the data
         run: |
-          docker run --rm --network host -e NODE_ENV=production -e PORT=8081 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
+          if docker run --rm --network host -e NODE_ENV=production -e ALLOW_STANDINS=1 -e PORT=8081 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
             -e DATABASE_URL=postgres://fw:fw@localhost:5432/freewater -e LEASE_WAIT_MS=5000 \
-            freewater:${{ github.sha }} && exit 1 || echo "refused, as it should"
+            freewater:${{ github.sha }} > second.txt 2>&1; then
+            echo "::error title=lease::a second server started alongside the first"; exit 1
+          fi
+          # It must have refused for the right reason (the lease), not crashed for another.
+          grep -q "still owns the data" second.txt || { echo "::error title=lease::$(tail -c 900 second.txt | tr '\n' ' ')"; exit 1; }
+          echo "refused, as it should"
       - name: A backup made inside the image restores, and its books check out
         run: |
           set -o pipefail
@@ -66,4 +80,49 @@ jobs:
       - name: Stops cleanly and hands over
         run: |
           docker stop -t 50 fw
-          docker logs fw | tail -5
+          docker logs fw 2>&1 | tail -5
+          code=$(docker inspect fw --format '{{.State.ExitCode}}')
+          [ "$code" = "0" ] || { echo "::error title=stop::exited with $code"; exit 1; }
+          # The next server takes over at once (the lease was let go, not left to lapse).
+          docker run -d --name fw2 --network host -e NODE_ENV=production -e ALLOW_STANDINS=1 -e PORT=8080 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
+            -e DATABASE_URL=postgres://fw:fw@localhost:5432/freewater -e LEASE_WAIT_MS=10000 \
+            freewater:${{ github.sha }}
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8080/health/ready; then echo; break; fi
+            [ "$i" = 30 ] && { echo "::error title=handover::$(docker logs fw2 2>&1 | tail -c 900 | tr '\n' ' ')"; exit 1; }
+            sleep 2
+          done
+          if docker logs fw2 2>&1 | grep -q "Waiting for the other server"; then echo "::error title=handover::the lease wasn't let go on stop"; exit 1; fi
+          docker stop -t 50 fw2
+          [ "$(docker inspect fw2 --format '{{.State.ExitCode}}')" = "0" ] || { echo "::error title=stop::second server didn't stop cleanly"; exit 1; }
+      - name: The new version migrates a database the previous release filled
+        run: |
+          set -o pipefail
+          prev=${{ github.event.pull_request.base.sha || github.event.before }}
+          if [ -z "$prev" ] || ! git cat-file -e "$prev^{commit}" 2>/dev/null; then prev=$(git rev-parse HEAD^1); fi
+          echo "Previous release: $prev"
+          git worktree add /tmp/prev "$prev"
+          docker build -t freewater:prev /tmp/prev
+          docker run --rm --network host postgres:16 psql postgres://fw:fw@localhost:5432/freewater -qc "create database upgrade"
+          # The previous release, filled with the sample data (not production mode: that refuses SEED_DEMO).
+          docker run -d --name prev --network host -e NODE_ENV=development -e HOST=127.0.0.1 -e PORT=8090 -e SEED_DEMO=1 \
+            -e DATABASE_URL=postgres://fw:fw@localhost:5432/upgrade freewater:prev
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:8090/health/ready; then echo; break; fi
+            [ "$i" = 60 ] && { echo "::error title=upgrade::$(docker logs prev 2>&1 | tail -c 900 | tr '\n' ' ')"; exit 1; }
+            sleep 2
+          done
+          docker stop -t 50 prev
+          # This version on it: migrations apply over real data, and it starts.
+          docker run -d --name upg --network host -e NODE_ENV=production -e ALLOW_STANDINS=1 -e PORT=8091 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
+            -e DATABASE_URL=postgres://fw:fw@localhost:5432/upgrade freewater:${{ github.sha }}
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:8091/health/ready; then echo; break; fi
+            [ "$i" = 60 ] && { echo "::error title=upgrade::$(docker logs upg 2>&1 | tail -c 900 | tr '\n' ' ')"; exit 1; }
+            sleep 2
+          done
+          docker stop -t 50 upg
+          # And its books still check out.
+          docker run --rm --network host -e DATABASE_URL=postgres://fw:fw@localhost:5432/upgrade freewater:${{ github.sha }} \
+            node --import tsx src/server/booksCheck.ts 2>&1 | tee books.txt \
+            || { echo "::error title=upgrade::$(tail -c 900 books.txt | tr '\n' ' ')"; exit 1; }
