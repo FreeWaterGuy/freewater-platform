@@ -5,13 +5,14 @@
 import { createHash } from 'node:crypto';
 import { createPgliteClient } from '../db/pglite';
 import { createPostgresClient } from '../db/postgres';
-import { migrate } from '../db/migrations';
+import { migrateIfSafe } from '../runtime/lease';
 import { blobStoreFromEnv } from '../modules/assets/blobs';
 
 const blobs = blobStoreFromEnv();
 if (!blobs) { console.error('Set FILE_STORAGE=s3 (or disk) and its settings first; see docs/RUNNING.md.'); process.exit(1); }
 const db = process.env.DATABASE_URL ? createPostgresClient(process.env.DATABASE_URL) : await createPgliteClient(process.env.DATA_DIR ?? './data');
-await migrate(db);
+// Not under a running server of an older version: refuse rather than change its tables.
+try { await migrateIfSafe(db); } catch (e) { console.error(`\n${(e as Error).message}\n`); await db.close(); process.exit(1); }
 
 for (const [table, prefix] of [['assets', 'assets'], ['team_files', 'team']] as const) {
   let moved = 0, after = '';

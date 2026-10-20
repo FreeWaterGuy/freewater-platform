@@ -135,3 +135,15 @@ export class JobRunner {
     return [...this.state.entries()].filter(([, s]) => s.running).map(([n]) => n);
   }
 }
+
+/**
+ * Run a job's step for each company in turn. One company's failure doesn't stop the others: it's reported (with the
+ * company's id) and the loop carries on. Returns the ids that failed.
+ */
+export async function forEachCompany(ids: Iterable<string>, step: (companyId: string) => Promise<unknown>, onError: (companyId: string, error: unknown) => void): Promise<string[]> {
+  const failed: string[] = [];
+  for (const id of ids) {
+    try { await step(id); } catch (e) { failed.push(id); try { onError(id, e); } catch {} }
+  }
+  return failed;
+}

@@ -74,7 +74,8 @@ To stop anything: *Blockchain → Pause now*, or turn the switch off. Off is alw
 
 Items 6–11 each need a small connector written against the provider you pick: payments, payouts, email/text,
 address lookup, the printer driver. The platform already has the slot for each one, and stand-ins for testing.
-Expect roughly a day each, with tests, once the account exists.
+Expect roughly a day each, with tests, once the account exists. Until payments, payouts and email/text are wired,
+production only starts with `ALLOW_STANDINS=1` (a staging rehearsal); going live means removing it.
 
 ## Also before real money flows
 
