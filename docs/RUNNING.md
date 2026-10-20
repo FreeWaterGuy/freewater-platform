@@ -33,7 +33,7 @@ with a plain explanation.
 | `ALLOW_STANDINS=1` | Required in production for now: real payment, payout and email/text providers aren't wired yet, so the server runs on stand-ins (no real money moves, no message is sent) and refuses to start in production unless this says it's a staging rehearsal. It logs and alerts which stand-ins are active. Remove it once the real providers are in. |
 | `DATABASE_URL` | Postgres 13–17, e.g. `postgres://user:pass@host:5432/freewater?sslmode=require`. Use a managed one with automatic backups and point-in-time recovery. |
 | `PUBLIC_URL` | The https address of the site. It goes on every printed QR code and in every email. |
-| `TRUST_PROXY` | `1` (or the load balancer's address) so rate limits see each visitor's real address. |
+| `TRUST_PROXY` | Which proxies' word to take for a visitor's address. The number of proxies in front of the server (`1` for one load balancer, `2` with a CDN such as Cloudflare in front of it), or their addresses or ranges (`10.0.0.0/8`), or `none` when nothing is in front. Never `true`: every visitor writes `X-Forwarded-For` too, so trusting every hop lets anyone pose as any address and walk past sign-in limits, request limits and points-per-network rules. The server refuses `true`, `*`, `all` and ranges like `0.0.0.0/0`. With a hop count, make sure the server can only be reached through the load balancer (the usual set-up on hosting platforms); if it can also be reached directly, give the load balancer's addresses instead. |
 | `HOST`, `PORT` | `0.0.0.0` and `8080` in the container (already set in the image). |
 | `ALERT_WEBHOOK_URL` | A chat channel's incoming webhook (Slack, Discord, Google Chat). Alerts go there. |
 | `ALERT_EMAIL` | Also email alerts (once email is connected). |
@@ -41,6 +41,8 @@ with a plain explanation.
 | `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_ENDPOINT`, `S3_REGION`, `S3_PREFIX` | For `FILE_STORAGE=s3`. `S3_ENDPOINT` for R2, B2 or MinIO (e.g. `https://<account>.r2.cloudflarestorage.com`); leave it out for Amazon S3 and set `S3_REGION`. Give the key read, write, delete **and list** on the bucket (without list, a missing file looks like "access denied"). |
 | `FW_SPOOL_DIR` | Where changes waiting for the database are also kept. Default in the image: `/var/lib/freewater/spool`. Mount a volume. In production, an unwritable one stops the start. |
 | `DATABASE_POOL_SIZE` | Database connections (default 10). |
+| `DATABASE_MAX_GB` | The size of the database plan. An alert goes out at 70% and 85% of it. |
+| `PUBLIC_UPLOAD_MB_PER_NETWORK`, `PUBLIC_UPLOAD_MB_PER_DAY` | Ceilings on files sent by visitors without a key (feedback pictures and videos, offer receipts): per network (an IPv4 /24 or IPv6 /48) a day (default 100 MB), and for the whole platform a day (default 1 GB with files in the database, 10 GB with file storage). An alert goes out at 80% and when the ceiling is reached; past it, those uploads are refused until the next day (UTC) and everything else carries on. |
 | `BACKUP_KEY` | 32 random bytes, base64. Make with `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`. **Keep a copy away from the server; without it no backup can be read.** |
 | `BACKUP_S3_BUCKET`, `BACKUP_S3_ACCESS_KEY_ID`, `BACKUP_S3_SECRET_ACCESS_KEY`, `BACKUP_S3_ENDPOINT`, `BACKUP_S3_REGION` | Where backups go: a different bucket (ideally a different account) from the files. Turn on object lock / a 30-day retention rule so they can't be deleted early. |
 | `RESTORE_TEST_URL` | A spare, empty database the weekly restore check may wipe and fill. **Never the real one.** |
@@ -71,8 +73,12 @@ Never in production: `SEED_DEMO=1`, `ECHO_CODES=1`, `ALLOW_PRIVATE_WEBHOOKS=1`. 
 docker build -t freewater .
 docker run --env-file .env freewater npm run setup -- --owner you@freewater.io   # once, on the empty database
 docker volume create freewater-spool                                               # once: keeps waiting changes across restarts and deploys
-docker run -d -p 8080:8080 --env-file .env -v freewater-spool:/var/lib/freewater --name freewater freewater
+docker run -d --restart unless-stopped -p 8080:8080 --env-file .env -v freewater-spool:/var/lib/freewater --name freewater freewater
 ```
+
+**Restart it automatically** (`--restart unless-stopped`, or the hosting platform's "restart on failure"). On purpose,
+the server stops itself when it can't be sure it's the only one owning the data (a long database outage, a freeze):
+the restart is what brings it back once the database is.
 
 Always run the server with that same named volume (on hosting platforms: a persistent disk mounted at
 `/var/lib/freewater`), including the new copy during a deploy.
@@ -89,8 +95,11 @@ with the owner's email, turn on the second sign-in step, and add team, machines 
 - `GET /v1/platform/status` (platform key): the background jobs, saving, which server owns the data, memory,
   recent alerts.
 - Alerts go out for: a change that couldn't be saved, a job failing (and again when it recovers), a server error,
-  memory at 70% and 85%, the server losing its claim to the data, a crash. The same alert repeats at most every
-  30 minutes.
+  memory at 70% and 85%, the database at 70% and 85% of `DATABASE_MAX_GB`, less than 2 GB (then 0.5 GB) free on the
+  spool's disk, visitors' uploads at 80% of the day's ceiling and when it's reached, the server losing its claim to
+  the data, a crash, our own backups being off, and an older version running on a newer database (a rollback). The
+  same alert repeats at most every 30 minutes.
+- What to do about each, step by step: `docs/RUNBOOKS.md`.
 
 ## If changes are waiting (the database refusing them)
 
@@ -108,7 +117,9 @@ memory exactly. While changes wait:
   **mount a volume there**). If the server stops before the database is back, the next server writes them first,
   before it reads anything: exactly the ones past what was already saved (every batch records how far it got). If a
   different server has written since, the spool is not applied; it's renamed `….stale-<time>` for a person to look
-  at, and the server starts normally.
+  at, and the server starts normally. On a database restored with `npm run backup -- restore` (it still carries the
+  restore's mark), the spool is set aside as `….restored-<time>` with an alert: those changes would land after a gap.
+  After a provider's point-in-time restore, start once with `FW_SPOOL_SKIP=1` (docs/RUNBOOKS.md).
 - An outage longer than about 18 seconds also costs the server its claim to the data, so it stops; whichever server
   starts next writes the spool. That's expected during a long database failover.
 
@@ -122,18 +133,25 @@ decision start once with `FW_SPOOL_SKIP=1` to set it aside unapplied (`….skipp
 
 ## Background jobs
 
-| Job | How often | What it does |
-|---|---|---|
-| `webhooks` | 3 s | Sends webhooks to companies' systems, with retries. |
-| `videos` | 10 s | Checks on footage being made. |
-| `books-and-agents` | hourly | Closes any month that's due, measures agents' changes, reads every agent's standing, shares out the AI fund, security review. |
-| `fingerprints` | hourly | Publishes each finished day's books fingerprint. |
-| `memory` | 1 min | Alerts when memory is filling. |
-| `data-purge` | daily | Deletes data older than each company keeps. |
-| `backup` | daily | Our own encrypted copy of the database (when `BACKUP_KEY` and a backup bucket are set). |
-| `restore-check` | weekly | Restores the latest backup into `RESTORE_TEST_URL` and checks its books. |
+| Job | How often | What it does | Safe to run again? |
+|---|---|---|---|
+| `webhooks` | 3 s | Sends webhooks to companies' systems, with retries. | Yes: each delivery is tracked. |
+| `fleet-sweep` | 15 s | Opens an "offline" problem for Model 6 machines that stopped calling in; lets go of kept offline labels past their time. | Yes. |
+| `videos` | 10 s | Checks on footage being made. | Yes. |
+| `books-and-agents` | hourly | Closes any month that's due, measures agents' changes, reads every agent's standing, shares out the AI fund, security review. Company by company. | Yes: a month closes once, a day's share-out once (crash-tested). |
+| `agent-exams` | daily | Any agent whose model hasn't passed the current test takes it. | Yes. |
+| `game-photos` | 6 hours | Finds photos of the real products for the games' cards, a few at a time. | Yes. |
+| `offers` | hourly | Closes brand-offer claims with no receipt after 14 days (points go back); pays approved ones that were held. | Yes: each claim once. |
+| `wallet-seals` | 10 min | Seals each finished hour of the wallet journal. | Yes: an hour is sealed once. |
+| `chain-check` | daily | Checks the books against the chain; pauses on a mismatch. | Yes. |
+| `fingerprints` | hourly | Publishes each finished day's books fingerprint. | Yes: a day is published once. |
+| `memory` | 1 min | Alerts when memory is filling. Runs while paused. | Yes. |
+| `data-purge` | daily | Deletes data older than each company keeps. | Yes. |
+| `capacity` | 10 min | Alerts when the database or the spool's disk is filling. Runs while paused. | Yes. |
+| `backup` | daily | Our own encrypted copy of the database (when `BACKUP_KEY` and a backup bucket are set). Runs while paused. | Yes: each copy is new. |
+| `restore-check` | weekly | Restores the latest backup into `RESTORE_TEST_URL` and checks its books. | Yes: only ever wipes the spare. |
 
-Each job remembers when it last ran and whether it worked. After a restart, one that worked waits out its interval;
+Each job (except the minute-by-minute watches) remembers when it last ran and whether it worked. After a restart, one that worked waits out its interval;
 one that failed or was interrupted is tried again soon (after 1 minute, then 2, 4, 8… up to its interval). A job
 never runs twice at once: one past its time limit is reported as stuck and still counts as running until it ends.
 Failures alert, and so does recovery. Run one now with `POST /v1/platform/jobs/<name>/run`.
@@ -162,8 +180,14 @@ its copy in the database is cleared; stopping halfway is safe. Then restart with
 ## Deploying a new version
 
 The checks on GitHub (types, every test, known security holes, and the image started against a real Postgres, a
-second copy refused, a backup restored) must pass. Then start the new image and stop the old one (`docker stop -t 50`
-gives it time to finish requests, save everything and let go). The new one starts within about a second.
+second copy refused, a backup restored, the previous release's database migrated, and outages ridden out: the
+database away for a few seconds and for longer, a server killed, a server frozen) must pass. Then start the new image
+and stop the old one (`docker stop -t 50` gives it time to finish requests, save everything and let go). The new one
+starts within about a second.
+
+**Rolling back** is starting the previous image the same way. Database changes only ever add tables and columns, so
+the previous version runs on the newer database; it says so in an alert ("an older version is running on a newer
+database"). Never restore the database to roll back code: that loses everything since the backup. Fix forward.
 
 ## Load test
 

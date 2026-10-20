@@ -28,7 +28,7 @@ export function consoleRoutes(app: App, route: (r: RouteDef) => void) {
     const b = req.body as any;
     // Money, chain and one-way settings are changed by a person signed in, never by a service key.
     if (personOnlyKeys.some((k) => k in (b.changes ?? {})) && !key!.userId) throw new ApiError(403, 'person_needed', 'Money, chain and one-way settings (giving, the agents’ fund, the promise, the youngest age, the prize game, AI and data rules) are changed by a person signed in, not a service key.');
-    return { body: await cons.save(staff(key).companyId, b.changes, by(key!), b.version) };
+    return { body: await cons.save(staff(key).companyId, b.changes, by(key!), b.version, { person: !!key!.userId }) };
   } });
   route({ method: 'POST', url: '/v1/console/preview-label', scope: 'admin', summary: 'A sample bottle label with these settings, before saving. Problems are listed instead of saving anything.', body: obj({ changes: changesProp }), handler: async (req, key) => ({ body: await cons.previewLabel(staff(key).companyId, (req.body as any).changes ?? {}) }) });
   route({ method: 'GET', url: '/v1/console/history', scope: 'admin', summary: 'Every saved change to your settings, newest first: who, when and what.', handler: async (_req, key) => ({ body: await cons.history(staff(key).companyId) }) });

@@ -87,7 +87,7 @@ import type { JobRunner } from './runtime/jobs';
 import { boxes, builtinCreatives, freewater, locations, peakSpring, products, sampleCampaigns } from './demo/seed';
 
 /** What the running server adds around the app: alerts, and (in production) the lease and the job runner. */
-export interface Runtime { alerts: Alerter; startedAt: Date; lease?: InstanceLease; jobs?: JobRunner; /** Lost its claim to the data: answers nothing more. */ lost?: boolean }
+export interface Runtime { alerts: Alerter; startedAt: Date; lease?: InstanceLease; jobs?: JobRunner; /** Lost its claim to the data: answers nothing more. */ lost?: boolean; /** Today's public uploads against their ceilings (set by the API server). */ uploads?: import('./runtime/uploads').UploadQuota }
 
 export interface AppOptions {
   db: SqlClient;

@@ -52,6 +52,7 @@ export function operationsRoutes(app: App, server: FastifyInstance, route: (r: R
       lease: runtime.lease ? { held: runtime.lease.held, holder: runtime.lease.holder, current: await runtime.lease.current().catch(() => null) } : null,
       jobs: runtime.jobs?.status() ?? [],
       alerts: runtime.alerts.recent,
+      uploads: runtime.uploads?.status() ?? null,
       memoryMb: { rss: Math.round(mem.rss / 1048576), heap: Math.round(mem.heapUsed / 1048576), heapLimit: Math.round(heap.heap_size_limit / 1048576), bottlesInMemory: app.platform.units.size, ledgerLinesInMemory: app.platform.ledger.entries.length },
       node: process.version,
     } };
