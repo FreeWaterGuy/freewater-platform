@@ -160,10 +160,11 @@ export class ConsoleService {
   }
 
   /** Put an earlier version back. It becomes a new version, so the history keeps everything. */
-  async restore(companyId: string, v: number, by: string, opts: { person?: boolean } = {}) {
+  /** `approval`: called with the settings that would change, before anything is saved; it throws to refuse. */
+  async restore(companyId: string, v: number, by: string, opts: { person?: boolean; approval?: (changed: string[]) => Promise<void> } = {}) {
     return this.serial(companyId, () => this.restoreNow(companyId, v, by, opts));
   }
-  private async restoreNow(companyId: string, v: number, by: string, opts: { person?: boolean }) {
+  private async restoreNow(companyId: string, v: number, by: string, opts: { person?: boolean; approval?: (changed: string[]) => Promise<void> }) {
     const old = await this.version(companyId, v);
     const latest = await this.baseline(companyId);
     const cur = this.company(companyId);
@@ -171,6 +172,10 @@ export class ConsoleService {
     // Putting back an old version passes the same checks as any other change (the chain can't come back on this way).
     const money = personOnlyKeys.some((k) => JSON.stringify((cur as any)[k] ?? null) !== JSON.stringify((next as any)[k] ?? null)) || printLimitsChanged(cur, next);
     if (money && !opts.person) throw new ConsoleError('person_needed', 'This version changes money, chain or one-way settings; a person signed in has to put it back.', 403);
+    if (opts.approval) {
+      const changed = [...new Set([...Object.keys(cur), ...Object.keys(next)])].filter((k) => JSON.stringify((cur as any)[k] ?? null) !== JSON.stringify((next as any)[k] ?? null));
+      await opts.approval(changed);
+    }
     const problem = checkSettings(next, this.registry.names()) ?? ratchetProblem(cur, next) ?? chainProblem(cur, next) ?? walletProblem(cur, next);
     if (problem) throw new ConsoleError('invalid_settings', `Version ${v} can’t be put back as it is: ${problem}`, 422);
     const changes = describeChange(cur, next);

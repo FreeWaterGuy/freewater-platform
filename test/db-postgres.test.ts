@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApp, type App } from '../src/app';
 import { createPostgresClient } from '../src/db/postgres';
 import type { SqlClient } from '../src/db/client';
+import { migrations } from '../src/db/migrations';
 
 /**
  * Real-Postgres check, step 2 (see db-seed-postgres.ts for step 1): start the app with the new code on a database
@@ -23,7 +24,9 @@ describe.skipIf(!url)('the new migrations over data the old code wrote, on real 
 
   it('migrated, with every check holding for the rows already there, and the books still adding up', async () => {
     const ids = (await db.query<any>(`select id from schema_migrations where id >= '052' order by id`)).rows.map((r) => r.id);
-    expect(ids).toEqual(['052_db_journals_append_only', '053_db_money_rules', '054_db_hot_indexes']);
+    // Every migration from 052 on, as the code lists them: a later migration doesn't need this test changed.
+    expect(ids).toEqual(migrations.map((m) => m.id).filter((id) => id >= '052').sort());
+    expect(ids).toEqual(expect.arrayContaining(['052_db_journals_append_only', '053_db_money_rules', '054_db_hot_indexes']));
     expect((await db.query(`select 1 from pg_indexes where indexname in ('events_unit_scans', 'ledger_company_at')`)).rows).toHaveLength(2);
     const unchecked = (await db.query<any>(`select conname from pg_constraint where not convalidated`)).rows.map((r) => r.conname);
     expect(unchecked).toEqual([]);

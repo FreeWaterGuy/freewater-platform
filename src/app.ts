@@ -411,6 +411,7 @@ export async function createApp(opts: AppOptions) {
     if (solana.custody) chain.custody = solana.custody;
   }
   const launch = new LaunchService(db, platform, data, games, wallet, chain, opts.clock, opts.seed !== undefined ? seededRandom(opts.seed + 202) : Math.random);
+  launch.flush = () => persistence.flush();
   wallet.stageOf = (companyId) => chain.stage(companyId);
   const giftCards = opts.giftCards ?? giftCardsFromEnv(process.env);
   chain.beforeGoLive = (companyId, by) => launch.reset(companyId, by);
@@ -505,6 +506,7 @@ export async function createApp(opts: AppOptions) {
   // Model 6 machines: bottles ordered there print at the machine; everything else uses the company's other printer.
   const fleet = new FleetService(db, platform, messenger, flush, opts.fleet);
   await fleet.load();
+  fleet.alert = (key, title, detail) => void runtime.alerts.alert(key, 'warning', title, detail);
   made.registry.registerPrinter('model6-fleet', new MachineFleetPrinter(() => fleet, made.printer));
 
   // After a crash: a money step whose status was written but whose ledger lines never reached the books (written

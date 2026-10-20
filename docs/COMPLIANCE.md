@@ -80,7 +80,7 @@ Keep days are the US preset; EU/UK/Brazil and unknown places get the shorter str
 
 | # | Severity | Finding | Fix | Test |
 |---|---|---|---|---|
-| R4 | CRITICAL | Owners and finance people approved token steps, payouts, reserves and money switches with an email code only; the second step was off by default and owner-only. | `approvalRoutes` and `approvalSettings` in `src/modules/accounts/secondStep.ts`: owners and finance people must approve from a sign-in that passed the authenticator step (`sessions.second_step_at`, migration `053_priv_second_step_sessions`), whatever the company set. Setting the app up during a sign-in counts; turning it off clears every sign-in. The pause is never gated. | `test/privacy-approvers.test.ts` |
+| R4 | CRITICAL | Owners and finance people approved token steps, payouts, reserves and money switches with an email code only; the second step was off by default and owner-only. | `approvalRoutes` and `approvalSettings` in `src/modules/accounts/secondStep.ts`: owners and finance people must approve from a sign-in that passed the authenticator step (`sessions.second_step_at`, migration `053_priv_second_step_sessions`), whatever the company set. Setting the app up never counts for the sign-in it was set up from (sign in again with its code), a new app approves only after 24 hours and the other owners are told; turning it off clears every sign-in. The pause is never gated. | `test/privacy-approvers.test.ts` |
 | R15 | HIGH | The phone key was stored raw as `activity.actor_id` (and could appear in bodies), shown on the team's person search and event feed, and published in prize-draw keys. | Keyed fingerprint (`DataService.viewerTag`) in the activity log, the person search, the event feed and draw keys; old rows re-tagged at start and by the daily purge; erase and purge find rows by fingerprint. | `test/privacy-data.test.ts` (R15 block), `test/lottery.test.ts` |
 | P1 | HIGH | A phone without an account could erase but not download its data (right to know / access). | `POST /v1/public/data/:companyId/download` (key in the body, never the URL); phone-only like `forget`. | `privacy-data` |
 | P2 | MEDIUM | Downloads missed the data level, games joined, choice screens, ad preferences, panel, bottles held, gifts directed, value tests, videos, advertisers seen, links opened, coupons and gift cards; activity showed only rows under a linked person. | Added to `profile` / `more`; activity also by account id and phone fingerprint. | `privacy-data` |
@@ -100,11 +100,16 @@ by its fingerprint).
 - **Who:** every owner and finance person, before any route in `approvalRoutes` (chain proposals, approvals, runs,
   signed mints; offer approvals and receipt reviews; agent spends; payouts, owner payouts, reinvestments; wallet
   reserve, corrections, gift-card settlement; value-test decisions) and before saving any setting in
-  `approvalSettings` (wallet, offers, chain, launch, giving, agents, lottery).
+  `approvalSettings` (wallet, offers, chain, launch, giving, agents, lottery), whether by `PATCH /v1/console/settings`,
+  by putting back an older version that differs in one, or by approving (or undoing) an agent's proposal that changes
+  one; and before making or changing an owner or finance person (`conditionalApprovalRoutes`).
 - **Setup path:** `GET /v1/me/second-step` says `neededToApprove` and, until it's done, how (`toApprove`).
   `POST /v1/me/second-step/start` gives the QR code; `POST /v1/me/second-step/confirm` with a code from the app turns
-  it on, returns recovery codes, and lets this same sign-in approve. Later sign-ins ask for the app's code after the
-  emailed one (`POST /v1/auth/second-step`). A refused approval says which of the two applies (`second_step_required`).
+  it on and returns recovery codes. It never lets the sign-in it was set up from approve: that sign-in came from the
+  inbox alone, and whoever holds the inbox could set up an app of their own. The person signs in again, entering the
+  app's code after the emailed one (`POST /v1/auth/second-step`), and a newly set-up (or replaced) app can approve
+  only 24 hours after it was set up; the company's other owners are emailed at once and an alert is raised, so a
+  stranger's app is seen and stopped in that day. A refused approval says which applies (`second_step_required`).
 - **Unchanged:** the company's `security.ownersNeedSecondStep` still makes owners use it for everything; the chain
   pause needs no second step; service keys can't approve (person-only checks).
 

@@ -696,7 +696,7 @@
             const st = await api('POST', '/v1/me/second-step/start');
             const code = codeField('Code from your app');
             box.replaceChildren(h('p', { style: 'margin:0', text: '1. In your authenticator app, add an account and scan this:' }), h('img', { src: svgSrc(st.qrSvg), alt: 'QR code for your authenticator app', width: 220, height: 220, style: 'background:#fff;border-radius:12px;padding:8px' }), h('p', { class: 'muted', style: 'margin:0;font-size:13px' }, 'Or type this key: ', h('span', { class: 'mono', text: st.secret })), h('p', { style: 'margin:0', text: '2. Enter the 6-digit code it shows:' }),
-              h('div', { class: 'toolbar' }, code, h('button', { class: 'btn blue', type: 'button', onclick: async () => { try { const r = await api('POST', '/v1/me/second-step/confirm', { code: code.value.trim() }); toast('Your second sign-in step is on.'); showCodes(r.recoveryCodes); } catch (x) { toast(x.message); } } }, 'Turn it on')));
+              h('div', { class: 'toolbar' }, code, h('button', { class: 'btn blue', type: 'button', onclick: async () => { try { const r = await api('POST', '/v1/me/second-step/confirm', { code: code.value.trim() }); toast(r.approvesFrom ? 'Your second sign-in step is on. To approve money or token steps, sign in again with its code; a new app can approve from ' + new Date(r.approvesFrom).toLocaleString() + '.' : 'Your second sign-in step is on.'); showCodes(r.recoveryCodes); } catch (x) { toast(x.message); } } }, 'Turn it on')));
           } catch (x) { toast(x.message); }
         } }, 'Set it up')));
     } else {

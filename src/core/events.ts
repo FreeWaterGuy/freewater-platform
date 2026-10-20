@@ -52,6 +52,8 @@ export interface EventPayloads {
   'value_back.reversed': { experimentId: string; unitId: string; campaignId: string; advertiserId: string; advertiserName: string; cause: string; cents: number; orderId: string };
   /** A brand's offer gave to a cause, out of the money the brand put in reserve: owed to the charity like any gift. */
   'offer.cause_given': { claimId: string; sponsor: string; cause: string; cents: Cents };
+  /** A test-stage reset put back a brand's reserve that an offer had given from: the gift it made while testing is undone in the books too. */
+  'offer.cause_undone': { claimId: string; sponsor: string; cause: string; cents: Cents; by: string };
   /** A brand's money for dollar credit really arrived and was put in its reserve (recorded by a person). */
   'reserve.funded': { sponsor: string; cents: Cents; ref: string; entry: string; by: string };
   /** A reserve payment recorded by mistake was undone (a correcting entry in the wallet). */

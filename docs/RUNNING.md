@@ -198,6 +198,54 @@ are at the top of `test/db-seed-postgres.ts`). The journals refuse edits and del
 user too; fixing a past entry is always a correcting entry. Indexes are built inside the migration, which holds up
 writes while it runs (about 7 seconds per million rows).
 
+### Two database users: one owns the tables, the app only uses them
+
+The journals' rules (append-only ledger and events, the wallet journal, settings history, and the other triggers) are
+enforced by triggers. Postgres lets the **owner** of a table drop or disable its triggers, so if the server connects
+as the user that owns the tables, anyone who takes over the server can switch those rules off. In production, keep
+the two apart:
+
+- **`fw_owner`** owns the database and every table. It runs the migrations, and is used for nothing else (not by the
+  server, not by people day to day). Keep its password in your secrets manager, not in the server's settings.
+- **`fw_app`** is what `DATABASE_URL` uses. It can read and write rows, but owns no table, so it can't drop, disable or
+  replace a trigger (`must be owner of table`), nor alter or drop a table.
+
+Set it up once, as the managed database's admin user (`psql "$ADMIN_URL"`):
+
+```sql
+create role fw_owner login password '…';
+create role fw_app login password '…';
+create database freewater owner fw_owner;
+\c freewater
+revoke create on schema public from public;
+grant usage, create on schema public to fw_owner;
+-- The server runs `create table if not exists` for schema_migrations and instance_lease when it starts. Those
+-- already exist (see below), but Postgres checks the right to create before it checks they exist. CREATE here lets
+-- fw_app make new tables of its own; it never gives it any power over fw_owner's tables or their triggers.
+grant usage, create on schema public to fw_app;
+alter default privileges for role fw_owner in schema public grant select, insert, update, delete on tables to fw_app;
+alter default privileges for role fw_owner in schema public grant usage, select on sequences to fw_app;
+```
+
+Then, **before each deploy** (and before the very first start), run the migrations as `fw_owner` from the new image,
+and only then start the server as `fw_app`:
+
+```sh
+docker run --rm -e OWNER_URL="postgres://fw_owner:…@host:5432/freewater?sslmode=require" <new image> \
+  node --import tsx --input-type=module -e "const {createPostgresClient}=await import('./src/db/postgres.ts');const {migrate}=await import('./src/db/migrations.ts');const db=createPostgresClient(process.env.OWNER_URL);console.log('migrated:',await migrate(db));await db.query('create table if not exists instance_lease (name text primary key, holder text not null, expires_at timestamptz not null, started_at timestamptz not null default now())');await db.close()"
+# then, the first time and after any migration that adds tables made before the default privileges above:
+psql "$OWNER_URL" -c "grant select, insert, update, delete on all tables in schema public to fw_app" \
+                  -c "grant usage, select on all sequences in schema public to fw_app"
+```
+
+Migrations only ever add, so running them while the old version still serves is safe (the same rule as rolling back).
+When the server starts as `fw_app` it finds nothing left to migrate and carries on; if a migration was missed it stops
+with a permission error rather than half-applying it, so run the step above and start it again. Backups and restores
+by hand (`npm run backup`, below) are run with `DATABASE_URL` set to the owner's address, since only the owner can
+dump and recreate the triggers.
+`fw.test_reset`, which lets a test-stage reset delete journal rows, still works as `fw_app`: the triggers allow it only
+inside that reset's own transaction and only while the company is still testing.
+
 ## Load test
 
 Against a test server only (it prints test bottles):

@@ -22,8 +22,8 @@ import { chainRoutes } from './chain';
 import { studioRoutes } from './studio';
 import { trustProxyFrom } from '../runtime/config';
 import { UploadQuota, uploadLimitsFrom } from '../runtime/uploads';
-import { PRINT_LIMITS } from '../modules/console/settings';
-import { BadKeyGuard, classify, limits, RateLimiter, securityHeaders, SecurityLog } from './security';
+import { printLimits } from '../modules/fleet/printCap';
+import { BadKeyGuard, classify, limits, RateLimiter, securityHeaders, SecurityLog, shortIp } from './security';
 import { teamRoutes } from './team';
 import { loggerOptions } from './logging';
 import { operationsRoutes } from './operations';
@@ -66,8 +66,7 @@ import { dirname, join } from 'node:path';
 /** The company that runs the platform and may set up licensees. */
 const PLATFORM_COMPANY = process.env.PLATFORM_COMPANY ?? 'freewater';
 /** A machine prints a bottle in several seconds: more than this through the API is a leaked key, not a busy machine. */
-export const DEFAULT_PRINTS_PER_MINUTE = 6;
-export const DEFAULT_PRINTS_PER_DAY = 1500;
+export { DEFAULT_PRINTS_PER_MINUTE, DEFAULT_PRINTS_PER_DAY } from '../modules/fleet/printCap';
 
 export async function buildServer(app: App, opts: { logger?: boolean } = {}): Promise<FastifyInstance> {
   // Behind a load balancer, TRUST_PROXY says how many hops (or which addresses) to believe, never every hop: the
@@ -282,20 +281,10 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
    * machine key is a compromised machine and must be revoked; this cap only keeps a leaked key from printing (and
    * billing advertisers for) bottles at scale until it is. Hitting it raises an alert.
    */
-  const printsSeen = new Map<string, { minute: Map<string, number>; day: string; today: Set<string> }>();
   const printCap = (companyId: string, locationId: string, orderId: string, req: FastifyRequest) => {
-    const m = platform.companies.get(companyId)?.machines;
-    // A stored value that isn't a sane whole number (saved before the settings check knew these) never turns the cap off.
-    const sane = (v: unknown, max: number, fallback: number) => (Number.isInteger(v) && (v as number) >= 1 && (v as number) <= max ? (v as number) : fallback);
-    const perMinute = sane(m?.printsPerMinute, PRINT_LIMITS.perMinute, DEFAULT_PRINTS_PER_MINUTE), perDay = sane(m?.printsPerDay, PRINT_LIMITS.perDay, DEFAULT_PRINTS_PER_DAY);
-    const now = platform.bus.now().getTime(), day = new Date(now).toISOString().slice(0, 10);
-    let s = printsSeen.get(locationId);
-    if (!s) printsSeen.set(locationId, (s = { minute: new Map(), day, today: new Set() }));
-    if (s.day !== day) { s.day = day; s.today.clear(); }
-    for (const [id, t] of s.minute) if (now - t >= 60_000) s.minute.delete(id);
-    // The same order sent again prints nothing new, so it isn't counted again.
-    if (s.today.has(orderId) || s.minute.has(orderId)) return;
-    const over = s.minute.size >= perMinute ? 'minute' : s.today.size >= perDay ? 'day' : null;
+    const { perMinute, perDay } = printLimits(platform.companies.get(companyId)?.machines);
+    // One count per machine, shared with the labels it's handed for offline use (FleetService.refillBuffer).
+    const over = app.fleet.prints.takeOrder(locationId, orderId, { perMinute, perDay });
     if (over) {
       const what = over === 'minute' ? `${perMinute} bottles a minute` : `${perDay} bottles a day`;
       securityLog.record({ kind: 'print_rate_capped', companyId, actor: locationId, ip: req.ip, detail: { locationId, limit: what } }, `pc:${locationId}:${over}`);
@@ -303,8 +292,6 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       const wait = over === 'minute' ? 60 : 3600;
       return { status: 429, headers: { 'retry-after': String(wait) }, body: { error: { code: 'print_limit', message: `This machine can print at most ${what} through the API. Try again in ${wait} seconds.` } } };
     }
-    s.minute.set(orderId, now);
-    s.today.add(orderId);
     return null;
   };
 
@@ -605,11 +592,21 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   } });
   route({ method: 'POST', url: '/v1/me/second-step/confirm', scope: 'me', summary: 'Finish with a code from the app. Returns 8 recovery codes, shown once: keep them somewhere safe.', body: obj({ code: { type: 'string', minLength: 6, maxLength: 8 } }, ['code']), handler: async (req, key) => {
     const out = await ss(() => app.secondStep.confirm(person(key), (req.body as any).code));
-    // A code from the app just proved this person holds it: this sign-in may now approve money and token steps.
-    if (key!.sessionToken) await app.accounts.markSecondStep(key!.sessionToken);
+    // Setting it up never counts as passing it: this sign-in came from the inbox alone, and whoever holds the inbox
+    // could have set up an app of their own. They sign in again with the app's code, and a new app approves money or
+    // token steps only after a day, while the company's other owners are told (threat model R4).
     secondStepCache.delete(key!.userId!);
-    securityLog.record({ kind: 'second_step_on', companyId: key!.companyId, actor: key!.name, ip: req.ip });
-    return { body: out };
+    const user = await app.accounts.get(key!.userId!);
+    const approver = ['owner', 'finance'].includes(user?.role ?? '');
+    const from = await app.secondStep.approvableFrom(key!.userId!);
+    securityLog.record({ kind: 'second_step_on', companyId: key!.companyId, actor: key!.name, ip: req.ip, detail: { role: user?.role, ...(approver && from ? { approvesFrom: from.toISOString() } : {}) } });
+    if (approver) {
+      const others = (await db.query<{ email: string }>(`select email from users where company_id = $1 and role = 'owner' and email is not null and deleted_at is null and id <> $2`, [key!.companyId, key!.userId])).rows;
+      const text = `${key!.name} (${user!.role}) set up a new authenticator app for signing in to ${platform.companies.get(key!.companyId)?.name ?? 'FreeWater'} at ${platform.bus.now().toISOString()}, from network ${shortIp(req.ip)}. It can approve money or token steps from ${from?.toISOString() ?? 'now'}.\n\nIf that wasn't them, take them off the team in the console now (and check the security log).`;
+      for (const o of others) await app.messenger.send({ channel: 'email', to: o.email, subject: 'A new authenticator app was set up', text }).catch(() => {});
+      void app.runtime.alerts.alert(`second-step-on:${key!.userId}`, 'warning', `New authenticator app for an approver at ${key!.companyId}`, text);
+    }
+    return { body: { ...out, signInAgain: true, ...(approver && from ? { approvesFrom: from.toISOString() } : {}) } };
   } });
   route({ method: 'POST', url: '/v1/me/second-step/recovery-codes', scope: 'me', summary: 'New recovery codes (the old ones stop working). Needs a code from the app.', body: obj({ code: { type: 'string', minLength: 6, maxLength: 8 } }, ['code']), handler: async (req, key) => {
     const id = person(key);
@@ -672,6 +669,11 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   route({ method: 'POST', url: '/v1/team', scope: 'admin', summary: 'Add a team member or advertiser staff. They sign in with a code sent to their email.', body: obj({ email: S.str, role: { type: 'string', enum: ['owner', 'ops', 'finance', 'reviewer', 'driver', 'advertiser'] }, advertiserId: S.str, displayName: S.str }, ['email', 'role']), handler: async (req, key) => {
     if (key!.advertiserId || key!.locationId) throw new ApiError(403, 'missing_scope', 'Advertisers cannot add team members.');
     const k = signedInOwner(key, 'Adding someone to the team');
+    // Making someone an owner or finance person (or changing one's role) hands out the power to approve money and
+    // token steps: it's an approval itself, so the second step (R4).
+    const b = req.body as any;
+    const existing = (await db.query<{ role: string }>(`select role from users where company_id = $1 and lower(email) = lower($2) and deleted_at is null`, [k.companyId, String(b.email ?? '').trim()])).rows[0];
+    if (['owner', 'finance'].includes(b.role) || ['owner', 'finance'].includes(existing?.role ?? '')) await approverStep(key!);
     return { status: 201, body: await app.accounts.invite({ companyId: k.companyId, ...(req.body as any), by: k.userId }) };
   } });
 

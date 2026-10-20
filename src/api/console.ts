@@ -14,6 +14,8 @@ export function consoleRoutes(app: App, route: (r: RouteDef) => void) {
   const staff = (key: ApiKey | null) => { if (!key || key.advertiserId || key.locationId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.'); return key; };
   const by = (key: ApiKey) => key.name;
   const changesProp = { type: 'object', additionalProperties: true, maxProperties: 20 };
+  /** An owner or finance person about to approve money, prizes or the token: this sign-in must have passed the second step (R4). */
+  const approverStep = async (key: ApiKey) => { const problem = await approverStepProblem(app.accounts, app.secondStep, key); if (problem) throw new ApiError(403, 'second_step_required', problem); };
 
   // ---------- settings ----------
   route({ method: 'GET', url: '/v1/console', scope: 'admin', summary: 'Everything the console shows: your settings and their version, the choices for each, your machines and charities, and what is left to set up.', handler: async (_req, key) => {
@@ -30,13 +32,17 @@ export function consoleRoutes(app: App, route: (r: RouteDef) => void) {
     // Money, chain and one-way settings are changed by a person signed in, never by a service key.
     if (personOnlyKeys.some((k) => k in (b.changes ?? {})) && !key!.userId) throw new ApiError(403, 'person_needed', 'Money, chain and one-way settings (giving, the agents’ fund, the promise, the youngest age, the prize game, AI and data rules) are changed by a person signed in, not a service key.');
     // Switching money, prizes or the token is an approval: an owner's or finance person's sign-in must have passed the second step.
-    if (approvalSettings.some((k) => k in (b.changes ?? {}))) { const problem = await approverStepProblem(app.accounts, app.secondStep, key!); if (problem) throw new ApiError(403, 'second_step_required', problem); }
+    if (approvalSettings.some((k) => k in (b.changes ?? {}))) await approverStep(key!);
     return { body: await cons.save(staff(key).companyId, b.changes, by(key!), b.version, { person: !!key!.userId }) };
   } });
   route({ method: 'POST', url: '/v1/console/preview-label', scope: 'admin', summary: 'A sample bottle label with these settings, before saving. Problems are listed instead of saving anything.', body: obj({ changes: changesProp }), handler: async (req, key) => ({ body: await cons.previewLabel(staff(key).companyId, (req.body as any).changes ?? {}) }) });
   route({ method: 'GET', url: '/v1/console/history', scope: 'admin', summary: 'Every saved change to your settings, newest first: who, when and what.', handler: async (_req, key) => ({ body: await cons.history(staff(key).companyId) }) });
   route({ method: 'GET', url: '/v1/console/history/:version', scope: 'admin', summary: 'Your settings as they were at one version.', handler: async (req, key) => ({ body: await cons.version(staff(key).companyId, Number((req.params as any).version)) }) });
-  route({ method: 'POST', url: '/v1/console/history/:version/restore', scope: 'admin', summary: 'Put an earlier version back. It is saved as a new version.', handler: async (req, key) => ({ body: await cons.restore(staff(key).companyId, Number((req.params as any).version), by(key!), { person: !!key!.userId }) }) });
+  route({ method: 'POST', url: '/v1/console/history/:version/restore', scope: 'admin', summary: 'Put an earlier version back. It is saved as a new version. A version that switches money, prizes or the token is an approval, like the same change in PATCH /v1/console/settings.', handler: async (req, key) => ({ body: await cons.restore(staff(key).companyId, Number((req.params as any).version), by(key!), {
+    person: !!key!.userId,
+    // Putting back a version that differs in any approval setting is that same approval: the second step (R4).
+    approval: async (changed) => { if (approvalSettings.some((k) => changed.includes(k))) await approverStep(key!); },
+  }) }) });
 
   // ---------- machines ----------
   const machineProps = { name: { type: 'string', minLength: 1, maxLength: 60 }, city: { type: 'string', minLength: 1, maxLength: 60 }, address: { type: 'string', maxLength: 200 }, lat: { type: 'number', minimum: -90, maximum: 90 }, lng: { type: 'number', minimum: -180, maximum: 180 }, printSeconds: { type: 'integer', minimum: 5, maximum: 300 }, hardware: { type: 'string', enum: ['model6', 'virtual'] }, products: { type: 'array', minItems: 1, maxItems: 12, items: { type: 'string', maxLength: 60 } } };

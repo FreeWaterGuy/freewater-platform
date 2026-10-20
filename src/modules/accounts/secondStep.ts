@@ -23,6 +23,9 @@ export function totp(secretB32: string, step: number) {
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 const same = (a: string, b: string) => { const x = Buffer.from(a), y = Buffer.from(b); return x.length === y.length && timingSafeEqual(x, y); };
 
+/** A newly set-up (or replaced) authenticator app can't approve money or token steps for this long. */
+export const NEW_APP_WAIT_MS = 24 * 3600_000;
+
 export class SecondStep {
   private key: Buffer;
   constructor(private db: SqlClient, secret: Buffer, private clock: () => Date = () => new Date()) { this.key = createHash('sha256').update(secret).digest(); }
@@ -37,6 +40,17 @@ export class SecondStep {
     return { enabled: !!r?.enabled_at, ...(r?.enabled_at ? { since: new Date(r.enabled_at).toISOString(), recoveryCodesLeft: left } : {}) };
   }
   async enabled(userId: string) { return !!(await this.db.query<any>(`select 1 from second_steps where user_id = $1 and enabled_at is not null`, [userId])).rows[0]; }
+  /**
+   * When an app set up less than a day ago may first be used to approve money or token steps, or null when it may
+   * already (or there's none). Someone who only had the inbox could set up an app of their own; the day gives the
+   * company's other owners, who are told at once, time to see it and stop them.
+   */
+  async approvableFrom(userId: string): Promise<Date | null> {
+    const r = (await this.db.query<any>(`select enabled_at from second_steps where user_id = $1 and enabled_at is not null`, [userId])).rows[0];
+    if (!r) return null;
+    const from = new Date(new Date(r.enabled_at).getTime() + NEW_APP_WAIT_MS);
+    return from > this.clock() ? from : null;
+  }
 
   /** Start setting it up: a new secret, shown once as a QR code for the app (and as text to type in). */
   async start(userId: string, label: string, issuer: string) {
@@ -114,8 +128,10 @@ export class SecondStep {
 // company also requires the second step for all their work (security.ownersNeedSecondStep).
 //
 // Setup path: GET /v1/me/second-step → POST /v1/me/second-step/start (QR code) → POST /v1/me/second-step/confirm with
-// a code from the app (this session then counts as having passed it). Later sign-ins ask for the app's code after
-// the emailed one (POST /v1/auth/second-step).
+// a code from the app. Setting it up never counts as passing it: the sign-in it was set up from came from the inbox
+// alone, and whoever holds the inbox could set up an app of their own. The person signs in again, entering the app's
+// code after the emailed one (POST /v1/auth/second-step), and a new app may approve only 24 hours after it was set
+// up; the company's other owners are told when one is. Pausing never needs any of this.
 
 /** Routes that approve, run or release money or token steps. A pause is never here: anyone may stop things at once. */
 export const approvalRoutes: ReadonlySet<string> = new Set([
@@ -126,12 +142,25 @@ export const approvalRoutes: ReadonlySet<string> = new Set([
   'POST /v1/wallet/reserve', 'POST /v1/wallet/correct', 'POST /v1/wallet/gift-cards/:ref/settle',
   'POST /v1/environment/experiments/:id/decide',
 ]);
+/**
+ * Routes that are approvals only for some requests, so their handlers check the second step themselves (with
+ * approverStepProblem) when it applies: a settings change, a restored version or an agent's proposal touching one of
+ * the approval settings below, and making (or changing) an owner or finance person.
+ */
+export const conditionalApprovalRoutes: Readonly<Record<string, string>> = {
+  'PATCH /v1/console/settings': 'changes any of approvalSettings',
+  'POST /v1/console/history/:version/restore': 'the version put back differs from the current settings in any of approvalSettings',
+  'POST /v1/agents/proposals/:id/decide': 'approving a proposal whose change is to one of approvalSettings',
+  'POST /v1/agents/proposals/:id/undo': 'undoing a change to one of approvalSettings',
+  'POST /v1/team': 'the role given, or the person’s current role, is owner or finance',
+};
 /** Settings that switch money, prizes or the token on or off, or share money out: changing them is an approval too. */
 export const approvalSettings = ['wallet', 'offers', 'chain', 'launch', 'giving', 'agents', 'lottery'] as const;
 
 export const approverStepMessage = {
-  setUp: 'Owners and finance people need a second sign-in step before approving money or token steps. Set up an authenticator app first (in the console under Security, or POST /v1/me/second-step/start, then /confirm).',
+  setUp: 'Owners and finance people need a second sign-in step before approving money or token steps. Set up an authenticator app first (in the console under Security, or POST /v1/me/second-step/start, then /confirm), then sign in again with its code. A new app can approve 24 hours after it’s set up.',
   signInAgain: 'This sign-in didn’t use your authenticator app. Sign in again and enter the app’s code to approve money or token steps.',
+  newApp: (from: Date) => `Your authenticator app was set up less than a day ago. For safety it can approve money or token steps from ${from.toISOString().replace(/\.\d+Z$/, 'Z')}; your company’s other owners have been told it was set up.`,
 };
 
 /**
@@ -140,11 +169,13 @@ export const approverStepMessage = {
  */
 export async function approverStepProblem(
   accounts: { get(id: string): Promise<{ id: string; role: string } | null>; sessionPassedSecondStep(raw: string): Promise<boolean> },
-  secondStep: { enabled(userId: string): Promise<boolean> },
+  secondStep: { enabled(userId: string): Promise<boolean>; approvableFrom(userId: string): Promise<Date | null> },
   key: { userId?: string; sessionToken?: string },
 ): Promise<string | null> {
   if (!key.userId || !key.sessionToken) return null;
   const u = await accounts.get(key.userId);
-  if (!u || !(['owner', 'finance'] as string[]).includes(u.role) || (await accounts.sessionPassedSecondStep(key.sessionToken))) return null;
-  return (await secondStep.enabled(u.id)) ? approverStepMessage.signInAgain : approverStepMessage.setUp;
+  if (!u || !(['owner', 'finance'] as string[]).includes(u.role)) return null;
+  if (!(await accounts.sessionPassedSecondStep(key.sessionToken))) return (await secondStep.enabled(u.id)) ? approverStepMessage.signInAgain : approverStepMessage.setUp;
+  const from = await secondStep.approvableFrom(u.id);
+  return from ? approverStepMessage.newApp(from) : null;
 }

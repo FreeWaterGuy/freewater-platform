@@ -147,7 +147,7 @@ Status: **OK** (a control exists and was read), **PARTIAL** (a control exists bu
 | A1 | R | Who billed what can't be shown | every line carries its event and campaign (`Ledger.add`); advertiser statements (`transparency/statements.ts`) | OK |
 | A1 | I | One advertiser reads another's lines | `campaignFor`, `invoiceFor`, `payments.invoices(companyId, advertiserId)` | OK |
 | A1 | D | Billing stalls when the DB refuses writes | persistence queue + spool, pause mode (`RUNNING.md`) | OK |
-| A1 | E | Machine key prints (and bills) at scale | `server.ts:printCap` | PARTIAL (R5: limit editable to anything) |
+| A1 | E | Machine key prints (and bills) at scale | `server.ts:printCap`, with offline labels counted toward the same daily cap and `offlinePerHour` held on the server (`fleet/printCap.ts`, `FleetService.refillBuffer`/`offlineReport`) | PARTIAL (R5: limit editable to anything) |
 | A2 Payments | S | Someone pays with another's saved card | cards scoped `(companyId, ownerType, ownerId)` (`PaymentsService.methods`); `me` routes need a person | OK |
 | A2 | T | Price changed by the caller | price from proof / company (`consumer.ts` `POST /v1/me/custom-orders`) | OK |
 | A2 | R | Charge without record | every payment is a ledger line (`Ledger` `payment`), `repairUnrecorded` | OK |
@@ -213,7 +213,7 @@ Status: **OK** (a control exists and was read), **PARTIAL** (a control exists bu
 | B1 | I | Errors leak internals | `setErrorHandler` returns plain messages | OK |
 | B1 | D | Floods of public writes and uploads | per-address limits | PARTIAL (R8, R2) |
 | B1 | E | Key without scope | `authenticate` scope check before the body is read | OK |
-| B2 Machine | S | Stolen machine key | bound to one machine; print cap; revoke | PARTIAL (R5) |
+| B2 Machine | S | Stolen machine key | bound to one machine; print cap (orders and offline labels together); offline bottles an hour held on the server; revoke | PARTIAL (R5) |
 | B2 | T | Machine reports prints that didn't happen | jobs billed only on `dispensed`; offline labels capped by buffer (≤ 50) | OK (trusted hardware) |
 | B2 | E | Machine key reads other data | `unitFor` by location; `staff()` refuses machine keys elsewhere | OK |
 | B3 Providers | S | Fake provider callback | no inbound provider callbacks today (stand-ins) | n/a until real providers |
@@ -278,7 +278,7 @@ answers CORS `*` (fine while sessions are bearer tokens, not cookies; revisit if
 
 **How to read it.** *Scope*: what `authenticate` requires (`admin` also passes any non-`platform` scope). *Person*:
 whether the handler refuses service keys (`yes`), only for some changes, or not at all (`no`); `—` for public routes.
-*Other check*: extra guards in the handler; "second step (owners/finance, R4)" means an owner or finance person must approve from a sign-in that passed the authenticator step (`approvalRoutes` in `src/modules/accounts/secondStep.ts`). *Docs*: whether this matches README, SWITCHES, RUNNING, AI and the
+*Other check*: extra guards in the handler; "second step (owners/finance, R4)" means an owner or finance person must approve from a sign-in that passed the authenticator step at sign-in, with an app set up at least 24 hours before (`approvalRoutes` in `src/modules/accounts/secondStep.ts`, always; `conditionalApprovalRoutes`, when the request touches an approval setting or role). *Docs*: whether this matches README, SWITCHES, RUNNING, AI and the
 route's own OpenAPI summary.
 
 **Mismatches and gaps (13):**
@@ -348,7 +348,7 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 36 | `POST /v1/auth/second-step` | public | — | — | OK (public by design) |
 | 37 | `GET /v1/me/second-step` | me | yes | — | OK |
 | 38 | `POST /v1/me/second-step/start` | me | yes | — | OK |
-| 39 | `POST /v1/me/second-step/confirm` | me | yes | — | OK |
+| 39 | `POST /v1/me/second-step/confirm` | me | yes | — | OK (skeptic fix): never marks the sign-in it was set up from as having passed the step; the person signs in again with the app's code, a new app approves only after 24 hours, and the company's other owners are emailed and an alert raised |
 | 40 | `POST /v1/me/second-step/recovery-codes` | me | yes | — | OK |
 | 41 | `POST /v1/me/second-step/off` | me | yes | — | OK |
 | 42 | `POST /v1/auth/sign-out` | me | yes | — | OK |
@@ -359,7 +359,7 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 47 | `GET /v1/me/saved` | me | yes | — | OK |
 | 48 | `POST /v1/me/saved` | me | yes | — | OK |
 | 49 | `DELETE /v1/me/saved/:id` | me | yes | — | OK |
-| 50 | `POST /v1/team` | admin | yes | team only (no advertiser/machine key); signed-in owner | OK (R1 fixed): an owner signed in adds people; a service key gets `person_needed` |
+| 50 | `POST /v1/team` | admin | yes | team only (no advertiser/machine key); signed-in owner; making or changing an owner/finance person: second step (owners/finance, R4) | OK (R1 fixed): an owner signed in adds people; a service key gets `person_needed`; giving or changing an approver role needs the second step (`conditionalApprovalRoutes`) |
 | 51 | `GET /v1/me/cards` | me | yes | — | OK |
 | 52 | `POST /v1/me/cards` | me | yes | — | OK |
 | 53 | `GET /v1/advertisers/:advertiserId/cards` | invoices | no | — | OK |
@@ -444,7 +444,7 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 132 | `POST /v1/console/preview-label` | admin | no | team only (no advertiser/machine key) | OK |
 | 133 | `GET /v1/console/history` | admin | no | team only (no advertiser/machine key) | OK |
 | 134 | `GET /v1/console/history/:version` | admin | no | team only (no advertiser/machine key) | OK |
-| 135 | `POST /v1/console/history/:version/restore` | admin | some | team only (no advertiser/machine key) | OK (a version touching money/chain needs a person) |
+| 135 | `POST /v1/console/history/:version/restore` | admin | some | team only (no advertiser/machine key); a version differing in money/prize/token switches: second step (owners/finance, R4) | OK (a version touching money/chain needs a person; one differing in any `approvalSettings` key needs the second step, as `PATCH /v1/console/settings` does: `conditionalApprovalRoutes`) |
 | 136 | `POST /v1/console/machines` | admin | no | team only (no advertiser/machine key) | OK |
 | 137 | `PATCH /v1/console/machines/:id` | admin | no | team only (no advertiser/machine key) | OK |
 | 138 | `GET /v1/team` | admin | no | team only (no advertiser/machine key) | OK |
@@ -469,8 +469,8 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 157 | `GET /v1/machine/jobs/next` | orders | no | that machine’s key only | OK |
 | 158 | `POST /v1/machine/jobs/:id/result` | orders | no | that machine’s key only | OK |
 | 159 | `GET /v1/machine/presence` | orders | no | that machine’s key only | OK |
-| 160 | `POST /v1/machine/buffer` | orders | no | that machine’s key only | OK |
-| 161 | `POST /v1/machine/offline-report` | orders | no | that machine’s key only | OK |
+| 160 | `POST /v1/machine/buffer` | orders | no | that machine’s key only; labels count toward the daily print cap | OK (skeptic fix): every label handed out counts toward the machine's `printsPerDay` with its orders (`PrintCounter`); past it, fewer are given and an alert is raised |
+| 161 | `POST /v1/machine/offline-report` | orders | no | that machine’s key only; `offlinePerHour` enforced on the server | OK (skeptic fix): each print time is bounded by when its label was handed out and by now; bottles that would put any hour over `offlinePerHour` are let go unbilled and an alert is raised |
 | 162 | `POST /v1/machine/commands/:id/result` | orders | no | that machine’s key only | OK |
 | 163 | `GET /v1/ops/fleet` | [admin, orders, packs, events] | no | team only (no advertiser/machine key) | OK |
 | 164 | `GET /v1/ops/fleet/:id` | [admin, orders, packs, events] | no | team only (no advertiser/machine key) | OK |
@@ -564,8 +564,8 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 252 | `POST /v1/agents/refresh` | admin | no | team only (no advertiser/machine key) | OK |
 | 253 | `POST /v1/agents/scan` | admin | no | team only (no advertiser/machine key) | OK |
 | 254 | `POST /v1/agents/settle` | admin | no | team only (no advertiser/machine key) | OK |
-| 255 | `POST /v1/agents/proposals/:id/decide` | admin | yes | team only (no advertiser/machine key) | OK; person (SWITCHES) |
-| 256 | `POST /v1/agents/proposals/:id/undo` | admin | yes | team only (no advertiser/machine key) | OK |
+| 255 | `POST /v1/agents/proposals/:id/decide` | admin | yes | team only (no advertiser/machine key); approving a change to a money/prize/token switch: second step (owners/finance, R4) | OK; person (SWITCHES); a proposal changing an `approvalSettings` key (giving, say) needs the second step, as the settings page does |
+| 256 | `POST /v1/agents/proposals/:id/undo` | admin | yes | team only (no advertiser/machine key); undoing a change to a money/prize/token switch: second step (owners/finance, R4) | OK |
 | 257 | `POST /v1/agents/proposals/:id/merged` | admin | yes | team only (no advertiser/machine key) | OK |
 | 258 | `POST /v1/agents/:agentId/spend` | admin | yes | team only (no advertiser/machine key) | OK (R12 fixed): a person relays an agent’s spend |
 | 259 | `POST /v1/agents/spends/:id/decide` | admin | yes | team only (no advertiser/machine key); second step (owners/finance, R4) | OK; person, with the second step |

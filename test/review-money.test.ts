@@ -32,10 +32,10 @@ const call = async (method: string, url: string, token?: string, payload?: unkno
 async function signIn(email: string) {
   await call('POST', '/v1/auth/start', undefined, { companyId: 'freewater', channel: 'email', to: email });
   const code = /(\d{6})/.exec((app.messenger as TestOutbox).lastTo(email)!.text)![1];
-  const token = (await call('POST', '/v1/auth/verify', undefined, { companyId: 'freewater', channel: 'email', to: email, code })).body.token as string;
+  const user = (await call('POST', '/v1/auth/verify', undefined, { companyId: 'freewater', channel: 'email', to: email, code })).body.user;
   // Owners and finance people approve only from a sign-in that passed the second step (threat model R4).
-  await app.accounts.markSecondStep(token);
-  return token;
+  // Test-only shortcut: a session that passed it (setting the app up never marks the sign-in it was set up from).
+  return app.accounts.createSession(user.id, { secondStep: true });
 }
 const approveTwice = async (id: string) => { await app.chain.approve('freewater', id, 'user:amy'); await app.chain.approve('freewater', id, 'user:raj'); };
 const status = async (id: string) => (await db.query<any>(`select status from chain_actions where id = $1`, [id])).rows[0].status as string;

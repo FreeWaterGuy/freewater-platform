@@ -59,9 +59,24 @@ describe('R4: approvers need the second step before they approve', () => {
     expect(r.body.error.message).toMatch(/second-step\/start/);
     // Proposing is an approval step too; the pause is not (anyone may stop things at once).
     expect((await call('POST', '/v1/chain/actions', token, { kind: 'switch_on' })).body.error.code).toBe('second_step_required');
-    // Setting the app up proves they hold it: this same sign-in may now approve.
-    await setUpApp(token);
-    expect((await call('POST', `/v1/chain/actions/${a.id}/approve`, token)).status).toBe(200);
+    // Setting the app up doesn't make this sign-in pass the step: it came from the inbox alone, and whoever holds the
+    // inbox could have set up an app of their own.
+    const secret = await setUpApp(token);
+    const still = await call('POST', `/v1/chain/actions/${a.id}/approve`, token);
+    expect(still.body.error).toMatchObject({ code: 'second_step_required', message: expect.stringMatching(/Sign in again/) });
+    // The company's other owners are told at once.
+    expect(outbox.lastTo('p-owner@freewater.io')).toMatchObject({ subject: 'A new authenticator app was set up', text: expect.stringMatching(/Fin \(finance\)/) });
+    // Signing in again with the app's code passes the step, but a brand-new app can't approve for a day.
+    now += 31_000;
+    const v = await emailSignIn('p-fin@freewater.io');
+    expect(v).toEqual({ secondStep: true, challenge: expect.stringMatching(/^fwc_/) });
+    const signed = (await call('POST', '/v1/auth/second-step', undefined, { challenge: v.challenge, code: totp(secret, step()) })).body.token as string;
+    expect((await call('POST', `/v1/chain/actions/${a.id}/approve`, signed)).body.error).toMatchObject({ code: 'second_step_required', message: expect.stringMatching(/less than a day ago/) });
+    // The pause is never held up.
+    expect((await call('POST', '/v1/chain/pause', token, { reason: 'checking' })).status).toBe(200);
+    now += 24 * 3600_000;
+    expect((await call('POST', `/v1/chain/actions/${a.id}/approve`, token)).body.error.code).toBe('second_step_required'); // the setup sign-in, still never
+    expect((await call('POST', `/v1/chain/actions/${a.id}/approve`, signed)).status).toBe(200);
   });
 
   it('later sign-ins pass the app’s step at sign-in; an older sign-in from before the app was set up must sign in again', async () => {
@@ -69,14 +84,18 @@ describe('R4: approvers need the second step before they approve', () => {
     const fresh = (await emailSignIn('p-owner@freewater.io')).token as string;
     expect((await call('POST', '/v1/wallet/reserve', old, { sponsor: 'brand-p', cents: 100, ref: 'p-1' })).body.error.code).toBe('second_step_required');
     const secret = await setUpApp(fresh);
-    // The old sign-in never used the app: it's asked to sign in again.
-    const again = await call('POST', '/v1/wallet/reserve', old, { sponsor: 'brand-p', cents: 100, ref: 'p-1' });
-    expect(again.body.error).toMatchObject({ code: 'second_step_required', message: expect.stringMatching(/Sign in again/) });
-    // Signing in now asks for the app's code after the emailed one; that sign-in may approve.
+    // Neither the old sign-in nor the one the app was set up from used the app: both are asked to sign in again.
+    for (const t of [old, fresh]) {
+      const again = await call('POST', '/v1/wallet/reserve', t, { sponsor: 'brand-p', cents: 100, ref: 'p-1' });
+      expect(again.body.error).toMatchObject({ code: 'second_step_required', message: expect.stringMatching(/Sign in again/) });
+    }
+    // Signing in now asks for the app's code after the emailed one; once the new app is a day old, that sign-in may approve.
     const v = await emailSignIn('p-owner@freewater.io');
     expect(v).toEqual({ secondStep: true, challenge: expect.stringMatching(/^fwc_/) });
     now += 31_000;
     const signed = (await call('POST', '/v1/auth/second-step', undefined, { challenge: v.challenge, code: totp(secret, step()) })).body.token as string;
+    expect((await call('POST', '/v1/wallet/reserve', signed, { sponsor: 'brand-p', cents: 100, ref: 'p-1' })).body.error.code).toBe('second_step_required');
+    now += 24 * 3600_000;
     expect((await call('POST', '/v1/wallet/reserve', signed, { sponsor: 'brand-p', cents: 100, ref: 'p-1' })).status).toBe(201);
     // Switching money on in the settings is an approval too.
     const version = (await call('GET', '/v1/console', signed)).body.version;
@@ -93,10 +112,14 @@ describe('R4: approvers need the second step before they approve', () => {
     now += 60_000;
     const f = (await emailSignIn('p-fin2@freewater.io')).token as string;
     const secret = await setUpApp(f);
-    expect(await app.accounts.sessionPassedSecondStep(f)).toBe(true);
+    expect(await app.accounts.sessionPassedSecondStep(f)).toBe(false); // setting it up never counts as passing it
     now += 31_000;
-    expect((await call('POST', '/v1/me/second-step/off', f, { code: totp(secret, step()) })).status).toBe(200);
-    expect(await app.accounts.sessionPassedSecondStep(f)).toBe(false);
+    const v = await emailSignIn('p-fin2@freewater.io');
+    const s2 = (await call('POST', '/v1/auth/second-step', undefined, { challenge: v.challenge, code: totp(secret, step()) })).body.token as string;
+    expect(await app.accounts.sessionPassedSecondStep(s2)).toBe(true);
+    now += 31_000;
+    expect((await call('POST', '/v1/me/second-step/off', s2, { code: totp(secret, step()) })).status).toBe(200);
+    expect(await app.accounts.sessionPassedSecondStep(s2)).toBe(false);
   });
 
   it('service keys are still refused by the person-only checks, not by this one', async () => {

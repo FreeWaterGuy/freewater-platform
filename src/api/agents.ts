@@ -2,6 +2,7 @@ import type { App } from '../app';
 import type { ApiKey } from '../db/store';
 import { agentIds, autonomyAreas, charter, governor, spendCategories, winCondition } from '../modules/agents/charter';
 import { ApiError, obj, S, type RouteDef } from './http';
+import { approvalSettings, approverStepProblem } from '../modules/accounts/secondStep';
 import { books } from '../modules/knowledge/library';
 import { EXAM_VERSION, questions } from '../modules/agents/exam';
 
@@ -104,12 +105,23 @@ export function agentRoutes(app: App, route: (r: RouteDef) => void) {
   route({ method: 'POST', url: '/v1/agents/scan', scope: 'admin', summary: 'Have the value agent and the code agent look at last week’s books and propose what they find.', handler: async (_req, key) => ({ body: await wrap(() => agents.scan(staff(key).companyId)) }) });
   route({ method: 'POST', url: '/v1/agents/settle', scope: 'admin', summary: 'Share out each finished day’s AI fund (it also runs every hour).', handler: async (_req, key) => ({ body: await wrap(() => agents.settle(staff(key).companyId)) }) });
 
+  /** A proposal whose change is to an approval setting needs the approver's second step, as the settings page does. */
+  const approvesSetting = async (k: ApiKey, id: string) => {
+    const p = await agents.proposal(id).catch(() => null);
+    const top = typeof p?.change?.path === 'string' && p.kind !== 'code' && p.kind !== 'security' ? p.change.path.split('.')[0]! : '';
+    if (!(approvalSettings as readonly string[]).includes(top)) return;
+    const problem = await approverStepProblem(app.accounts, app.secondStep, k);
+    if (problem) throw new ApiError(403, 'second_step_required', problem);
+  };
   route({ method: 'POST', url: '/v1/agents/proposals/:id/decide', scope: 'admin', summary: 'Approve (the change is made, as a normal settings change) or reject an agent’s proposal.', body: obj({ approve: S.bool }, ['approve']), handler: async (req, key) => {
     // Approving or rejecting any proposal (some revoke keys and can't be undone) is a person's decision.
     const k = staff(key); person(k);
+    // Approving one that changes a setting that switches money, prizes or the token (giving, say) is that same
+    // approval as in PATCH /v1/console/settings: the second step (R4).
+    if ((req.body as any).approve) await approvesSetting(k, (req.params as any).id);
     return { body: await wrap(() => agents.decide((req.params as any).id, (req.body as any).approve, who(k), k.companyId)) };
   } });
-  route({ method: 'POST', url: '/v1/agents/proposals/:id/undo', scope: 'admin', summary: 'Put a change back the way it was. Before it’s measured, it earns the agent nothing.', handler: async (req, key) => { const k = staff(key); person(k); return { body: await wrap(() => agents.undo((req.params as any).id, who(k), k.companyId)) }; } });
+  route({ method: 'POST', url: '/v1/agents/proposals/:id/undo', scope: 'admin', summary: 'Put a change back the way it was. Before it’s measured, it earns the agent nothing.', handler: async (req, key) => { const k = staff(key); person(k); await approvesSetting(k, (req.params as any).id); return { body: await wrap(() => agents.undo((req.params as any).id, who(k), k.companyId)) }; } });
   route({ method: 'POST', url: '/v1/agents/proposals/:id/merged', scope: 'admin', summary: 'A code agent’s change was merged: record the pull request, and its effect is measured.', body: obj({ ref: { type: 'string', minLength: 3, maxLength: 300 } }, ['ref']), handler: async (req, key) => { const k = staff(key); person(k); return { body: await wrap(() => agents.merged((req.params as any).id, (req.body as any).ref, who(k), k.companyId)) }; } });
 
   route({ method: 'POST', url: '/v1/agents/:agentId/spend', scope: 'admin', summary: 'Spend from an agent’s own fund, on its behalf: compute, storage, knowledge, growth, exploration, or a cause. The governor’s rules apply.', body: obj({ category: { type: 'string', enum: Object.keys(spendCategories) }, cents: S.int, purpose: { type: 'string', maxLength: 500 }, cause: { type: 'string', maxLength: 120 } }, ['category', 'cents', 'purpose']), handler: async (req, key) => {

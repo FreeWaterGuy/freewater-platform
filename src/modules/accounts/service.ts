@@ -137,13 +137,12 @@ export class AccountsService {
     ]);
     return token;
   }
-  /** Did this sign-in pass the second step (at sign-in, or by setting the app up during it)? */
+  /**
+   * Did this sign-in pass the second step at sign-in? Setting the app up during a sign-in never counts: that sign-in
+   * came from the inbox alone (threat model R4).
+   */
   async sessionPassedSecondStep(raw: string) {
     return !!(await this.db.query(`select 1 from sessions where token_hash = $1 and revoked_at is null and second_step_at is not null`, [sha(raw)])).rows[0];
-  }
-  /** Setting the app up proves the person holds it: this sign-in counts as having passed the second step. */
-  async markSecondStep(raw: string) {
-    await this.db.query(`update sessions set second_step_at = $2 where token_hash = $1 and revoked_at is null`, [sha(raw), this.clock().toISOString()]);
   }
   /** The app was turned off: none of this person's sign-ins count as having passed it any more. */
   async clearSecondStep(userId: string) {
