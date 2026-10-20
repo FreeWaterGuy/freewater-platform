@@ -10,3 +10,14 @@ agents
 *.jsonl
 .env
 .env.*
+# Never send keys or local state to the build.
+**/.env
+**/.env.*
+*.pem
+*.key
+*.p12
+machine-data
+coverage
+.claude
+.github
+docs

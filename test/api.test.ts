@@ -158,10 +158,13 @@ describe('packs over the API', () => {
     }
     const load = (await call('POST', '/v1/routes/route-3/load', admin)).json();
     expect(load.map((p: any) => p.stop)).toEqual([42, 41]);
-    const wrong = await call('POST', '/v1/deliveries', admin, { routeId: 'route-3', stop: 41, scannedPackId: p2.id, atAddress: true, photoProof: true, emptiesCollected: 0 });
+    // The door report comes from a signed-in driver, not a service key.
+    expect((await call('POST', '/v1/deliveries', admin, { routeId: 'route-3', stop: 41, scannedPackId: p1.id, atAddress: true, photoProof: true, emptiesCollected: 0 })).statusCode).toBe(403);
+    const driver = await app.accounts.createSession((await app.accounts.invite({ companyId: 'freewater', email: 'driver-api@freewater.io', role: 'driver' })).id);
+    const wrong = await call('POST', '/v1/deliveries', driver, { routeId: 'route-3', stop: 41, scannedPackId: p2.id, atAddress: true, photoProof: true, emptiesCollected: 0 });
     expect(wrong.statusCode).toBe(409);
     expect(wrong.json().grab.stopCode).toBe('R3 · 41');
-    const right = await call('POST', '/v1/deliveries', admin, { routeId: 'route-3', stop: 41, scannedPackId: p1.id, atAddress: true, photoProof: true, emptiesCollected: 4 });
+    const right = await call('POST', '/v1/deliveries', driver, { routeId: 'route-3', stop: 41, scannedPackId: p1.id, atAddress: true, photoProof: true, emptiesCollected: 4 });
     expect(right.json().status).toBe('delivered');
   });
 });

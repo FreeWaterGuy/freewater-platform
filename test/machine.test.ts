@@ -8,6 +8,7 @@ import { TestOutbox } from '../src/adapters/messaging/contract';
 import { MachineAgent } from '../src/machine/agent';
 import { SimulatedModel6 } from '../src/machine/hardware';
 import { Journal } from '../src/machine/journal';
+import { newUpdateKeyPair } from '../src/machine/updates';
 
 let db: SqlClient;
 let app: App;
@@ -18,6 +19,7 @@ let agent: MachineAgent;
 let hw: SimulatedModel6;
 let net = true;
 const outbox = new TestOutbox(false);
+const updateKeys = newUpdateKeyPair();
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function waitFor<T>(fn: () => T | Promise<T>, what: string, ms = 8000): Promise<NonNullable<T>> {
   const end = Date.now() + ms;
@@ -61,11 +63,14 @@ beforeAll(async () => {
   await app.console.updateMachine('freewater', 'ATX-014', { hardware: 'model6' });
   await app.console.save('freewater', { modules: { ...app.platform.companies.get('freewater')!.modules, printer: 'model6-fleet' }, machines: { offlineWalkUp: true, offlinePerHour: 2, bufferSize: 3 }, consumer: { freeBottlesPerDay: 24, retailValueCents: 100 } }, 'test');
   await app.accounts.invite({ companyId: 'freewater', email: 'ops@freewater.io', role: 'ops', displayName: 'Sam' });
+  await app.accounts.invite({ companyId: 'freewater', email: 'owner@freewater.io', role: 'owner', displayName: 'Josh' });
+  process.env.MACHINE_UPDATE_SIGNING_KEY = updateKeys.privateKey;
   hw = new SimulatedModel6({ printMs: 120, dropMs: 40 });
-  agent = new MachineAgent({ locationId: 'ATX-014', apiUrl: base, apiKey: keys['machine-ATX-014']!, hardware: hw, journal: new Journal(), heartbeatMs: 150, jobWaitSec: 1, takeScreenMs: 200, failedScreenMs: 200,
+  agent = new MachineAgent({ locationId: 'ATX-014', apiUrl: base, apiKey: keys['machine-ATX-014']!, hardware: hw, updatePublicKey: updateKeys.publicKey, journal: new Journal(), heartbeatMs: 150, jobWaitSec: 1, takeScreenMs: 200, failedScreenMs: 200,
     fetch: ((u: any, i: any) => (net ? fetch(u, i) : Promise.reject(new TypeError('fetch failed')))) as typeof fetch });
 });
 afterAll(async () => {
+  delete process.env.MACHINE_UPDATE_SIGNING_KEY;
   agent.stop();
   await server.close();
   await db.close();
@@ -160,23 +165,25 @@ describe('a Model 6 machine', { timeout: 30_000 }, () => {
 
   it('takes commands from ops: test print, out of service with a reason, back in service, software update', async () => {
     const admin = keys['freewater-admin']!;
-    const t = (await call('POST', '/v1/ops/fleet/ATX-014/commands', admin, { kind: 'test_print' })).body;
+    const ops = await signIn('ops@freewater.io');
+    const owner = await signIn('owner@freewater.io');
+    const t = (await call('POST', '/v1/ops/fleet/ATX-014/commands', ops, { kind: 'test_print' })).body;
     await waitFor(async () => (await call('GET', '/v1/ops/fleet/ATX-014', admin)).body.commands.find((c: any) => c.id === t.id && c.status === 'done'), 'the test print');
     expect((await call('GET', '/v1/ops/fleet/ATX-014', admin)).body.commands.find((c: any) => c.id === t.id).result).toMatch(/Test label printed/);
 
-    await call('POST', '/v1/ops/fleet/ATX-014/commands', admin, { kind: 'out_of_service', args: { reason: 'Moving to the lobby' } });
+    await call('POST', '/v1/ops/fleet/ATX-014/commands', ops, { kind: 'out_of_service', args: { reason: 'Moving to the lobby' } });
     const maya = await signIn('maya@example.com');
     const refused = await vend(maya);
     expect(refused.status).toBe(409);
     expect(refused.body.error.message).toMatch(/Moving to the lobby/);
     await waitFor(() => agent.screen().kind === 'out_of_service' && agent.screen().message?.includes('lobby'), 'the out-of-service screen');
-    await call('POST', '/v1/ops/fleet/ATX-014/commands', admin, { kind: 'in_service' });
+    await call('POST', '/v1/ops/fleet/ATX-014/commands', ops, { kind: 'in_service' });
     await waitFor(() => agent.screen().kind === 'idle', 'back in service');
 
-    await call('POST', '/v1/ops/fleet/ATX-014/commands', admin, { kind: 'update_software', args: { version: '1.0.1' } });
+    await call('POST', '/v1/ops/fleet/ATX-014/commands', owner, { kind: 'update_software', args: { version: '1.0.1' } });
     await waitFor(async () => (await call('GET', '/v1/ops/fleet', admin)).body.find((m: any) => m.id === 'ATX-014').softwareVersion === '1.0.1', 'the new version');
-    expect((await call('POST', '/v1/ops/fleet/ATX-022/commands', admin, { kind: 'restart' })).status).toBe(409); // not a Model 6
-    expect((await call('POST', '/v1/ops/fleet/ATX-014/commands', keys['peak-spring-admin'], { kind: 'restart' })).status).toBe(404);
+    expect((await call('POST', '/v1/ops/fleet/ATX-022/commands', ops, { kind: 'restart' })).status).toBe(409); // not a Model 6
+    expect((await call('POST', '/v1/ops/fleet/ATX-014/commands', keys['peak-spring-admin'], { kind: 'restart' })).status).toBe(403); // a service key, and another company's
   });
 
   it('keeps giving water when its internet drops, and bills those bottles once it’s back', async () => {

@@ -514,13 +514,17 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     try { return { body: packs.load(routeId, typeof runId === 'string' && runId ? runId : undefined).map((p) => packView(p.id)) }; } catch (e: any) { if (e instanceof AmbiguousRunError) throw new ApiError(400, 'run_required', e.message); throw new ApiError(409, 'not_sealed', e.message); }
   } });
 
-  route({ method: 'POST', url: '/v1/deliveries', scope: 'packs', summary: 'The driver scans a box at a door. Delivered only if it is the right box at the right address. Pass runId for a night’s run; without it, the route’s current run.', body: obj({ routeId: S.str, runId: S.str, stop: S.int, scannedPackId: S.str, atAddress: S.bool, photoProof: S.bool, emptiesCollected: S.int }, ['routeId', 'stop', 'scannedPackId', 'atAddress', 'photoProof', 'emptiesCollected']), handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/deliveries', scope: 'packs', summary: 'A signed-in driver (or ops person) scans a box at a door. Delivered only if it is the right box at the right address. Pass runId for a run; without it, the route’s current run. Planned night runs go through /v1/driver instead.', body: obj({ routeId: S.str, runId: S.str, stop: S.int, scannedPackId: S.str, atAddress: S.bool, photoProof: S.bool, emptiesCollected: S.int }, ['routeId', 'stop', 'scannedPackId', 'atAddress', 'photoProof', 'emptiesCollected']), handler: async (req, key) => {
+    // The door report is the driver's word (atAddress, photoProof), so it must come from a person signed in, not a key.
+    if (!key?.userId || key.advertiserId || key.locationId) throw new ApiError(403, 'person_required', 'Sign in as the driver to mark a box delivered.');
     const b = req.body as any;
     let run: string;
     try { run = b.runId ?? packs.currentRun(b.routeId); } catch (e: any) { if (e instanceof AmbiguousRunError) throw new ApiError(400, 'run_required', e.message); throw e; }
     if (!b.runId) b.runId = run;
     const planned = [...packs.packs.values()].find((p) => p.routeId === b.routeId && p.stop === b.stop && (p.runId ?? '') === run);
     if (!planned || planned.companyId !== key!.companyId) throw notFound('Stop');
+    // A planned night run has its own driver, GPS check and photo: it can't be marked delivered around them here.
+    if (await app.delivery.getRun(run, key.companyId).then(() => true, () => false)) throw new ApiError(409, 'use_driver_app', 'This box is on a planned run. Its driver delivers it in the driver app (/v1/driver/runs).');
     const r = packs.deliver(b);
     if (!r.ok) return { status: 409, body: { error: { code: 'wrong_box', message: r.reason }, grab: r.rightPack ? { packId: r.rightPack.id, stopCode: `R${r.rightPack.routeId.replace(/^route-/, '')} · ${r.rightPack.stop}` } : null } };
     return { body: packView(r.pack.id) };

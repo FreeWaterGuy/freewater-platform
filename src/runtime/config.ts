@@ -1,3 +1,4 @@
+import { readUpdatePrivateKey } from '../machine/updates';
 import { isIP } from 'node:net';
 
 /**
@@ -62,6 +63,7 @@ export function checkConfig(env: NodeJS.ProcessEnv = process.env) {
   advise(files !== 'database' || !production, 'Files are stored in the database. That works, but makes the database and its backups large; file storage (FILE_STORAGE=s3) is better.');
   // Internal secrets live only in the host's settings in production (see loadSecret).
   if (production) for (const k of ['FW_SECRET_CODES', 'FW_SECRET_SECOND_STEP', 'FW_SECRET_LINKS', 'FW_SECRET_WALLET']) need((env[k]?.length ?? 0) >= 32, `${k} must be set to 32 or more random characters (or hex:<64 hex digits>). If the database already has it in platform_secrets, use that value: ${k}=hex:<value>.`);
+  if (env.MACHINE_UPDATE_SIGNING_KEY) { try { readUpdatePrivateKey(env.MACHINE_UPDATE_SIGNING_KEY); } catch { errors.push('MACHINE_UPDATE_SIGNING_KEY is not an Ed25519 private key. Make one with npm run key:machine-updates.'); } }
   for (const [k, v] of Object.entries(env)) if (/_(KEY|SECRET|TOKEN)$/.test(k) && v && /^(changeme|test|xxx+|todo)$/i.test(v)) need(false, `${k} looks like a placeholder.`);
   return { production, errors, warnings };
 }
