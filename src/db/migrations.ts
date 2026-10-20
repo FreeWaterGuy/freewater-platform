@@ -1198,6 +1198,23 @@ drop index if exists units_order;
 create unique index units_order on units(company_id, order_id) where order_id is not null and status <> 'failed';
 `,
   },
+  {
+    id: '047_c2_attribution_company_unverified',
+    sql: `
+-- Tags, sales and coupons are kept per company as well as per advertiser: two companies' advertisers can share an id.
+alter table advertiser_tags drop constraint if exists advertiser_tags_advertiser_id_key;
+create unique index if not exists advertiser_tags_company_advertiser on advertiser_tags(company_id, advertiser_id);
+alter table conversions drop constraint if exists conversions_advertiser_id_order_id_key;
+create unique index if not exists conversions_company_advertiser_order on conversions(company_id, advertiser_id, order_id);
+alter table coupon_codes drop constraint if exists coupon_codes_viewer_key_advertiser_id_campaign_id_key;
+create unique index if not exists coupon_codes_company_viewer on coupon_codes(company_id, viewer_key, advertiser_id, campaign_id);
+-- A sale only the tag reported (in the shopper's browser, so anyone could send one) is unverified: shown, never
+-- billed, until the advertiser's server confirms it with its key or the coupon is redeemed. Earlier sales were billed.
+alter table conversions add column status text not null default 'billed' check (status in ('billed', 'unverified'));
+alter table conversions add column verified_at timestamptz;
+create index conversions_click on conversions(click_id) where click_id is not null;
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

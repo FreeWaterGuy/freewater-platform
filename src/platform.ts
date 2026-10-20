@@ -351,12 +351,13 @@ export class Platform {
   purchaseFromBox(packId: string, face: string, orderId: string, amountCents: number) {
     return this.bus.publish('purchase.completed', this.packCompany(packId), { packId, face, orderId, amountCents }, orderId);
   }
-  refundFromBox(packId: string, face: string, orderId: string, amountCents: number) {
-    return this.bus.publish('purchase.refunded', this.packCompany(packId), { packId, face, orderId, amountCents }, orderId);
+  /** A refund of a sale (`orderId`); `key` names this refund itself, so a refund in parts or by another route isn't taken for it. */
+  refundFromBox(packId: string, face: string, orderId: string, amountCents: number, key = orderId) {
+    return this.bus.publish('purchase.refunded', this.packCompany(packId), { packId, face, orderId, amountCents }, key);
   }
-  refund(unitId: string, slotIndex: number, orderId: string, amountCents: number) {
+  refund(unitId: string, slotIndex: number, orderId: string, amountCents: number, key = orderId) {
     const unit = need(this.units, unitId, 'unit');
-    return this.bus.publish('purchase.refunded', unit.companyId, { unitId, slotIndex, orderId, amountCents }, orderId);
+    return this.bus.publish('purchase.refunded', unit.companyId, { unitId, slotIndex, orderId, amountCents }, key);
   }
 }
 
