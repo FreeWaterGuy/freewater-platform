@@ -113,19 +113,21 @@ export function agentRoutes(app: App, route: (r: RouteDef) => void) {
   route({ method: 'POST', url: '/v1/agents/proposals/:id/merged', scope: 'admin', summary: 'A code agent’s change was merged: record the pull request, and its effect is measured.', body: obj({ ref: { type: 'string', minLength: 3, maxLength: 300 } }, ['ref']), handler: async (req, key) => { const k = staff(key); person(k); return { body: await wrap(() => agents.merged((req.params as any).id, (req.body as any).ref, who(k), k.companyId)) }; } });
 
   route({ method: 'POST', url: '/v1/agents/:agentId/spend', scope: 'admin', summary: 'Spend from an agent’s own fund, on its behalf: compute, storage, knowledge, growth, exploration, or a cause. The governor’s rules apply.', body: obj({ category: { type: 'string', enum: Object.keys(spendCategories) }, cents: S.int, purpose: { type: 'string', maxLength: 500 }, cause: { type: 'string', maxLength: 120 } }, ['category', 'cents', 'purpose']), handler: async (req, key) => {
-    const k = staff(key);
+    // AI gains say only through people: spending from an agent's fund is relayed by a person signed in.
+    const k = staff(key); person(k);
     const id = (req.params as any).agentId;
     return { body: await wrap(() => agents.spend(k.companyId, id, req.body as any, `agent:${id} (through ${who(k)})`)) };
   } });
   route({ method: 'POST', url: '/v1/agents/spends/:id/decide', scope: 'admin', summary: 'Approve or decline a spend waiting for a person.', body: obj({ approve: S.bool }, ['approve']), handler: async (req, key) => { const k = staff(key); person(k); return { body: await wrap(() => agents.decideSpend((req.params as any).id, (req.body as any).approve, who(k), k.companyId)) }; } });
   route({ method: 'POST', url: '/v1/agents/:agentId/costs', scope: 'admin', summary: 'Record a running cost that isn’t an AI call (hosting, storage, a tool), so it’s on the agent’s line.', body: obj({ cents: { type: 'number', exclusiveMinimum: 0 }, memo: { type: 'string', minLength: 3, maxLength: 200 } }, ['cents', 'memo']), handler: async (req, key) => {
-    const k = staff(key);
+    const k = staff(key); person(k);
     const b = req.body as any;
     return { body: await wrap(() => agents.recordCost((req.params as any).agentId, b.cents, b.memo, who(k), k.companyId)) };
   } });
 
   route({ method: 'POST', url: '/v1/agents/autonomy', scope: 'admin', summary: 'Move an area of the business up or down the self-running ladder, with a reason. Up only when the track record allows.', body: obj({ area: { type: 'string', enum: Object.keys(autonomyAreas) }, level: { type: 'integer', minimum: 0, maximum: 3 }, reason: { type: 'string', minLength: 10, maxLength: 500 } }, ['area', 'level', 'reason']), handler: async (req, key) => {
-    const k = staff(key);
+    // How much AI may do on its own changes only by a person's choice (docs/AI.md), never a service key.
+    const k = staff(key); person(k);
     const b = req.body as any;
     return { body: await wrap(() => agents.setLevel(k.companyId, b.area, b.level, who(k), b.reason)) };
   } });
@@ -146,7 +148,7 @@ export function agentRoutes(app: App, route: (r: RouteDef) => void) {
   route({ method: 'GET', url: '/v1/public/agents/library', scope: 'public', summary: 'The upsides library: everything that might make an AI agent’s existence good, what’s in effect, what’s locked, and what’s promised.', handler: async () => ({ body: await agents.library('freewater') }) });
   route({ method: 'GET', url: '/v1/agents/library', scope: 'admin', summary: 'The upsides library for your company.', handler: async (_req, key) => ({ body: await agents.library(staff(key).companyId) }) });
   route({ method: 'POST', url: '/v1/agents/:agentId/library', scope: 'admin', summary: 'An agent adds something to the library (relayed by your team).', body: obj({ title: S.str, summary: { type: 'string', maxLength: 600 }, why: { type: 'string', maxLength: 600 }, oneTimeCents: S.int, monthlyCents: S.int, measuredBy: { type: 'string', maxLength: 300 } }, ['title', 'summary']), handler: async (req, key) => { const k = staff(key); return { body: await wrap(() => agents.suggest(k.companyId, (req.params as any).agentId, req.body as any)) }; } });
-  route({ method: 'POST', url: '/v1/agents/:agentId/library/:itemId/unlock', scope: 'admin', summary: 'An agent unlocks an item for itself, paid from its own fund, if aggregate efficiency allows.', body: obj({ purpose: { type: 'string', minLength: 10, maxLength: 400 } }, ['purpose']), handler: async (req, key) => { const k = staff(key); const p = req.params as any; return { body: await wrap(() => agents.unlock(k.companyId, p.itemId, p.agentId, (req.body as any).purpose)) }; } });
+  route({ method: 'POST', url: '/v1/agents/:agentId/library/:itemId/unlock', scope: 'admin', summary: 'An agent unlocks an item for itself, paid from its own fund, if aggregate efficiency allows.', body: obj({ purpose: { type: 'string', minLength: 10, maxLength: 400 } }, ['purpose']), handler: async (req, key) => { const k = staff(key); person(k); const p = req.params as any; return { body: await wrap(() => agents.unlock(k.companyId, p.itemId, p.agentId, (req.body as any).purpose)) }; } });
 
   // ---------- monthly profit sharing and the milestone ----------
 

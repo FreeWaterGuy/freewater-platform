@@ -171,7 +171,7 @@ Status: **OK** (a control exists and was read), **PARTIAL** (a control exists bu
 | A5 | R | Who approved | approvals stored with person ids; alerts on every proposal/approval | OK |
 | A5 | I | Chain keys leak | keys only in env; payer can only pay fees | OK |
 | A5 | D | Stop everything at once | `ChainService.pause` (any owner/finance, no wait); `reconcile` auto-pause | OK |
-| A5 | E | Service key or AI runs a token step | `chain.ts:person` on propose/approve/run/cancel/signed | OK (but R1: a key can create a person) |
+| A5 | E | Service key or AI runs a token step | `chain.ts:person` on propose/approve/run/cancel/signed | OK (R1 fixed: a key can no longer create a person) |
 | A6 Personal data | S | Sign-in code guessed | 5 tries per code, 3 sends per 10 min per destination, 10/min per address (`limits.signIn`) | PARTIAL (R2: per-address part spoofable) |
 | A6 | T | Profile changed by someone else | `me` routes only touch `key.userId` | OK |
 | A6 | R | Consent changes unrecorded | `DataService.consent` keeps reason and time | OK |
@@ -184,20 +184,20 @@ Status: **OK** (a control exists and was read), **PARTIAL** (a control exists bu
 | A7 | I | One advertiser sees another's | `advertiserOf`, `advertiser()` helpers; `campaignFor` | OK |
 | A7 | E | Advertiser turns its own ad on | only a company key or reviewer turns campaigns on | OK |
 | A8 Settings | T | Safety limit lowered | `ratchetProblem` (minimum age, AI fund, giving with promise), `chainProblem`, `walletProblem` | PARTIAL (R5: print limits unchecked) |
-| A8 | E | Service key flips a money switch | `personOnlyKeys` in `PATCH /v1/console/settings`; restore passes `person` | OK (but R1) |
+| A8 | E | Service key flips a money switch | `personOnlyKeys` in `PATCH /v1/console/settings`; restore passes `person` | OK (R1 fixed) |
 | A8 | R | Who changed what | versioned history with `by` (`ConsoleService.save`), security log `settings_saved` | OK |
 | A9 Keys & secrets | S | Stolen key used | hashes only; revoke at once; `last_used_at`; bad-key block per address | PARTIAL (R2) |
-| A9 | E | Key mints a person or more keys | `POST /v1/team`, `POST /v1/keys` accept any `admin` key | **MISSING** (R1, CONFIRMED) |
+| A9 | E | Key mints a person or more keys | `POST /v1/team`, `DELETE /v1/team/:userId` and admin-scoped `POST /v1/keys` need a signed-in owner (`signedInOwner`) | OK (R1 fixed; `test/access-team-keys.test.ts`) |
 | A9 | I | Secrets in the database | `loadSecret` (`src/modules/codes/service.ts`) stores code, wallet and second-step secrets in `platform_secrets` unless `FW_SECRET_*` is set (not in `RUNNING.md`) | PARTIAL (R9) |
 | A9 | I | Session token stolen by a script on our pages | CSP `script-src 'self'` on every page; no inline script | OK (tokens are in `localStorage`, so this CSP is load-bearing) |
 | A10 Honest data | T | Past events rewritten | append-only `events`; daily fingerprints published; hourly seals | OK |
 | A10 | T | Wallet seals rebuilt after an edit | seals published to GitHub/chain; `checkSeals` | PARTIAL (wallet journal not DB-enforced: R9) |
 | A10 | R | Bots counted as people | bots marked; never bill or count to giving | OK |
 | A11 AI agents | E | AI acts beyond what people allowed | governor (`governor.ts:judge`); proposals decided by a person | OK |
-| A11 | E | Autonomy raised without a person | `POST /v1/agents/autonomy` accepts a team service key (track record still checked) | PARTIAL (R12) |
+| A11 | E | Autonomy raised without a person | `POST /v1/agents/autonomy`, `/spend`, `/costs`, `/library/:itemId/unlock` need a person signed in; track record still checked | OK (R12 fixed) |
 | A11 | T | Agent archive edited | archives fingerprinted (`continuity.ts`) | OK |
 | A11 | D | Public prompt box spends the AI budget | governor budget; per-address limits | PARTIAL (R2) |
-| A12 Machines & stock | S | Another company's key prints at our machine | `POST /v1/orders` checks the location exists, not that it is the caller's | **MISSING** (R6, CONFIRMED) |
+| A12 Machines & stock | S | Another company's key prints at our machine | `POST /v1/orders` checks the location is the caller's company's | OK (R6 fixed; `test/access-isolation.test.ts`) |
 | A12 | T | Machine software replaced | `update_software` is a stand-in; no signed updates | **MISSING** (R13) |
 | A12 | T | Box marked delivered at the wrong door | `PackService.deliver` (right box), driver-reported GPS / `atAddress` | PARTIAL (client-asserted; R13) |
 | A12 | E | Any non-machine `orders` key commands machines | `POST /v1/ops/fleet/:id/commands` scope `admin|orders` | PARTIAL (R13) |
@@ -223,7 +223,7 @@ Status: **OK** (a control exists and was read), **PARTIAL** (a control exists bu
 | B4 Partners | S | Forged webhook from us | HMAC `FreeWater-Signature` | OK |
 | B4 | I | Webhooks carry personal data | public event catalogue only (`webhooks/catalog.ts`) | OK |
 | B4 | E | Webhook used to reach our network | `checkWebhookUrl`, `guardedLookup` | OK |
-| B5 Company↔company | I/E | One licensee reads or acts on another | company id on every lookup | PARTIAL (R6: orders at another's location; `POST /v1/packs` route id unchecked) |
+| B5 Company↔company | I/E | One licensee reads or acts on another | company id on every lookup | OK (R6 fixed for orders and packs; every route naming a company's thing walked in `test/access-isolation.test.ts`) |
 | B5 | E | Licensee gets platform powers | `platform` never grantable (`scopeInfo`), only FreeWater owners' sessions and the setup key | OK |
 | B6 Database | T | Rows changed outside the app rules | triggers on two tables only | PARTIAL (R9) |
 | B6 | I | Database or its host backups leak | our backups encrypted with `BACKUP_KEY`; host backups not; secrets in `platform_secrets` | PARTIAL (R9) |
@@ -240,18 +240,18 @@ Likelihood (L) and impact (I) on 1–5; score = L × I. Each has one specialist 
 
 | Rank | Risk | L | I | Score | Evidence | Specialist |
 |---|---|---|---|---|---|---|
-| R1 | **A service key can create a person.** `POST /v1/team` takes any `admin` key (`by` is empty) and can invite an `owner` or `finance` person; `POST /v1/keys` lets an `admin` key mint more `admin` keys. The setup platform key has `admin`. A leaked key therefore becomes every person-only power (money switches, reserves, giving, chain proposals) and survives its own revocation. | 4 | 5 | 20 | CONFIRMED: demo `freewater-admin` key invited `mallory@evil.example` as owner (201); that owner then `POST /v1/wallet/reserve` (201). | test-engineer |
+| R1 | **A service key can create a person.** `POST /v1/team` takes any `admin` key (`by` is empty) and can invite an `owner` or `finance` person; `POST /v1/keys` lets an `admin` key mint more `admin` keys. The setup platform key has `admin`. A leaked key therefore becomes every person-only power (money switches, reserves, giving, chain proposals) and survives its own revocation. | 4 | 5 | 20 | CONFIRMED: demo `freewater-admin` key invited `mallory@evil.example` as owner (201); that owner then `POST /v1/wallet/reserve` (201). **FIXED**: team changes and admin keys need a signed-in owner. | test-engineer |
 | R2 | **Visitor address can be forged.** `checkConfig` requires `TRUST_PROXY` and `RUNNING.md` says `1`; Fastify then takes the left-most `X-Forwarded-For`, which the visitor writes. Breaks `limits.signIn`, `limits.everything`, `BadKeyGuard`, `WalletService.sourceOf` (points per network) and `ScanTokens` rationing. | 5 | 4 | 20 | CONFIRMED: with `TRUST_PROXY=1`, 15 `POST /v1/auth/start` with rotating `X-Forwarded-For` all 202; same header → 429 after 10. | reliability-engineer |
 | R3 | **Scan and AR billing fraud.** A billed scan needs a token from `/q/<code>`, rationed per network per hour; there is no per-slot or per-campaign daily ceiling and no alert. Anyone holding one bottle (or a photo of its code) with many addresses bills its advertisers repeatedly with fresh viewer keys. | 4 | 4 | 16 | PLAUSIBLE: prove with a test issuing tokens from N sources for one slot and checking N billed scans. | financial-auditor |
 | R4 | **Approvers are protected by an email code only.** The second step is off by default (`security.ownersNeedSecondStep`) and, when on, applies to owners only (`authenticate`); finance people approve token steps without it. Sessions last 30 days in `localStorage`. | 3 | 5 | 15 | PLAUSIBLE (code read): a finance session without a second step approves a chain action. | privacy-officer |
 | R5 | **Print limit, a safety governor, is editable and unchecked.** `machines.printsPerMinute/printsPerDay` aren't in `personOnlyKeys` and `checkSettings` doesn't validate them; a string turns the cap off (`s.minute.size >= 'lots'` is false). | 3 | 4 | 12 | CONFIRMED: `PATCH /v1/console/settings` with a service key stored `printsPerMinute: "lots"`, `printsPerDay: 99999999` (200). | reliability-engineer |
-| R6 | **Cross-company printing.** `POST /v1/orders` checks only that `locationId` exists, not that it belongs to the caller's company (machine keys are protected, other `orders` keys aren't). A licensee's key can print at FreeWater's machine; on a Model 6 that queues a job on another company's hardware. `POST /v1/packs` has the same gap for `routeId`. | 3 | 4 | 12 | CONFIRMED: `peak-spring-admin` printed at `ATX-014` (201, `companyId: peak-spring`). | test-engineer |
+| R6 | **Cross-company printing.** `POST /v1/orders` checks only that `locationId` exists, not that it belongs to the caller's company (machine keys are protected, other `orders` keys aren't). A licensee's key can print at FreeWater's machine; on a Model 6 that queues a job on another company's hardware. `POST /v1/packs` has the same gap for `routeId`. | 3 | 4 | 12 | CONFIRMED: `peak-spring-admin` printed at `ATX-014` (201, `companyId: peak-spring`). **FIXED**: answers `unknown_location` / `unknown_route`. | test-engineer |
 | R7 | **Money and approval steps open to service keys, against the docs.** `POST /v1/offers/:id/approve`, `POST /v1/offers/receipts/:claimId/review` (pays credit from a reserve), `POST /v1/environment/experiments/:id/decide` ("A person decides"), `POST /v1/platform/persistence/skip-stuck` ("a person's decision"). | 3 | 4 | 12 | CONFIRMED for skip-stuck (200 with the platform key); others PLAUSIBLE by code read. | financial-auditor |
 | R8 | **Unauthenticated uploads and writes fill the database.** `POST /v1/public/games/:companyId/feedback/video` (30 MB), feedback images, offer receipts (2.8 MB), interactions; `FILE_STORAGE=database` is the default; limits are per address (see R2). | 3 | 4 | 12 | PLAUSIBLE: a load script with rotating addresses; watch DB size and `/health/ready`. | reliability-engineer |
 | R9 | **Immutability and secrets rest on the app, not the database.** Only `ledger_entries` and `events` are append-only in the DB; the wallet journal, seals, chain actions, charity transfers, settings history, security log and agent archives aren't; the app's DB role owns the triggers. Code-signing, wallet-source and second-step encryption secrets live in `platform_secrets` unless `FW_SECRET_*` is set, which `RUNNING.md` doesn't mention (standing rule: secrets only in host settings). | 2 | 5 | 10 | PLAUSIBLE: an `update wallet_lines` succeeds; `platform_secrets` has rows after a default start. | database-engineer |
 | R10 | **Revenue with no money behind it.** `POST /v1/orders` with `custom` (any `orders` key, machine keys included) books `revenue:custom` against a receivable no one pays, and makes the charity's share and the AI fund's share owed, which payouts then send in real money. | 3 | 3 | 9 | CONFIRMED: machine key `ATX-014` order with `custom` → lines `custom 300¢`, `donation 30¢`, `ai_fund 20¢`, no payment. | financial-auditor |
 | R11 | **Books money-out by service keys.** `POST /v1/books/expenses`, `/owner-payouts`, `/reinvestments` and `POST /v1/payouts/run` need only a team key, while `/v1/team/expenses` needs a person. Expenses lower the month's profit and so the charity's and agents' share, publicly. | 2 | 4 | 8 | PLAUSIBLE: a `ledger` service key records an expense (201) and the month's share drops. | financial-auditor |
-| R12 | **AI powers changed by service keys.** `POST /v1/agents/autonomy` (track record still checked), `POST /v1/agents/:agentId/spend`, `/costs`, `/library/:itemId/unlock` take any team key; AI.md says AI gains say only through people and measured results. | 2 | 4 | 8 | PLAUSIBLE: a service key raises an area once the record allows; decide whether that should be person-only. | test-engineer |
+| R12 | **AI powers changed by service keys.** `POST /v1/agents/autonomy` (track record still checked), `POST /v1/agents/:agentId/spend`, `/costs`, `/library/:itemId/unlock` take any team key; AI.md says AI gains say only through people and measured results. | 2 | 4 | 8 | **FIXED**: all four need a person signed in (`person_needed` for a service key). | test-engineer |
 | R13 | **Machines and vans trust what they are told.** Software updates are a stand-in (no signing); any non-machine `orders` key can command any machine; delivery takes the driver app's `atAddress` and `photoProof` booleans. | 2 | 4 | 8 | PLAUSIBLE until real hardware; needs signed updates before machines go out. | supply-chain-engineer |
 | R14 | **Supply chain.** Production runs TypeScript through `tsx` at start; caret version ranges (lockfile and `npm ci` mitigate); GitHub Actions pinned by tag, not commit; base image not pinned by digest; `legacy-peer-deps=true`; `npm audit` gates only `high`; browser libraries (model-viewer, three, jsQR) served from our own origin next to session tokens. | 2 | 4 | 8 | PLAUSIBLE: review `ci.yml`, `Dockerfile`, `.npmrc`, lockfile integrity. | supply-chain-engineer |
 | R15 | **The phone's viewer key is a bearer secret, kept in the clear.** It alone reads a wallet, spends points on offers, changes consent and erases data; `DataService.activity` stores it raw as `activity.actor_id`, readable by the team's data screens; no rotation. | 2 | 3 | 6 | PLAUSIBLE: after a public engagement, `select actor_id from activity` shows the key. | privacy-officer |
@@ -267,7 +267,7 @@ answers CORS `*` (fine while sessions are bearer tokens, not cookies; revisit if
 | Rule | Result |
 |---|---|
 | Never remove a safety governor | **Fail**: print limits can be raised or disabled (R5). Pause, daily check, approvals, points cap: pass |
-| Irreversible steps need people, approvals and a wait | Pass for chain steps; **fail** in effect via R1 (a key can create the people) |
+| Irreversible steps need people, approvals and a wait | Pass for chain steps (R1 fixed: a key can no longer create the people) |
 | Fix data with correcting entries, never edits | Pass for ledger and events (DB-enforced); app-only elsewhere (R9) |
 | Money, crypto, partners off until a person turns them on | Pass for settings switches; **fail** for offer approvals and receipt payouts by service keys (R7) |
 | Keys and secrets only in host settings | **Fail** by default: internal secrets generated into `platform_secrets` (R9) |
@@ -285,10 +285,10 @@ route's own OpenAPI summary.
 
 | Route | Problem | Risk |
 |---|---|---|
-| `POST /v1/team` | Service `admin` key can add an owner (docs: owners add people) | R1 |
-| `DELETE /v1/team/:userId` | Service `admin` key can remove people | low |
-| `POST /v1/orders` | No check that the location is the caller's; custom orders book unpaid revenue | R6, R10 |
-| `POST /v1/packs` | No check that the route is the caller's | low (R6) |
+| `POST /v1/team` | ~~Service `admin` key can add an owner~~ Fixed: signed-in owner only | R1 |
+| `DELETE /v1/team/:userId` | ~~Service `admin` key can remove people~~ Fixed: signed-in owner only | low |
+| `POST /v1/orders` | ~~No check that the location is the caller's~~ (fixed); custom orders book unpaid revenue | R6, R10 |
+| `POST /v1/packs` | ~~No check that the route is the caller's~~ Fixed | low (R6) |
 | `PATCH /v1/console/settings` | Print limits neither person-only nor checked | R5 |
 | `POST /v1/offers/:id/approve` | SWITCHES: owner approves, signed in; service key can | R7 |
 | `POST /v1/offers/receipts/:claimId/review` | Pays credit; service key can | R7 |
@@ -296,7 +296,7 @@ route's own OpenAPI summary.
 | `POST /v1/platform/persistence/skip-stuck` | RUNNING: "a person's decision"; platform key can | R7 |
 | `POST /v1/books/expenses`, `/owner-payouts`, `/reinvestments` | Team-page equivalent needs a person; these don't | R11 |
 | `POST /v1/payouts/run` | Moves money; docs silent on person | R11 (unclear) |
-| `POST /v1/agents/autonomy` | Docs silent on person; AI.md implies people decide | R12 (unclear) |
+| `POST /v1/agents/autonomy` | ~~Docs silent on person~~ Fixed: a person signed in (also spend, costs, library unlock) | R12 |
 | `POST /v1/chain/actions/:id/cancel` | SWITCHES says both "anyone on the team" and "owners" | docs conflict |
 
 **Endpoints outside the route table** (no key, by design): `GET /q/:code`, `/Q/:code` (smart code open; issues the
@@ -321,7 +321,7 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 9 | `POST /v1/public/engagements` | public | — | — | OK (public by design) |
 | 10 | `GET /v1/public/packs/:packId` | public | — | — | OK (public by design) |
 | 11 | `GET /v1/public/companies/:companyId/totals` | public | — | — | OK (public by design) |
-| 12 | `POST /v1/orders` | orders | no | — | **GAP**: a machine key is held to its own machine, but any other `orders` key can print at a location of *another* company (no location-ownership check); a `custom` order books custom revenue with no payment (R6, R10) |
+| 12 | `POST /v1/orders` | orders | no | location must be the caller’s company’s | OK (R6 fixed: another company’s machine answers `unknown_location`); a `custom` order still books custom revenue with no payment (R10) |
 | 13 | `GET /v1/units/:id` | [orders, packs, admin] | no | — | OK |
 | 14 | `GET /v1/units/:id/label.svg` | [orders, packs, admin] | no | — | OK |
 | 15 | `POST /v1/purchases` | purchases | no | — | OK |
@@ -333,7 +333,7 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 21 | `POST /v1/experiences/preview` | campaigns | no | — | OK |
 | 22 | `POST /v1/assets` | campaigns | no | — | OK |
 | 23 | `GET /v1/assets` | campaigns | no | — | OK |
-| 24 | `POST /v1/packs` | packs | no | — | **GAP (low)**: routeId only checked to exist, not to belong to the company |
+| 24 | `POST /v1/packs` | packs | no | route must be the caller’s company’s | OK (fixed: another company’s route answers `unknown_route`) |
 | 25 | `GET /v1/packs/:id` | packs | no | — | OK |
 | 26 | `GET /v1/packs/:id/box.svg` | packs | no | — | OK |
 | 27 | `POST /v1/packs/:id/verify` | packs | no | — | OK |
@@ -342,7 +342,7 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 30 | `POST /v1/routes/:routeId/load` | packs | no | — | OK (company checked through its packs) |
 | 31 | `POST /v1/deliveries` | packs | no | — | OK |
 | 32 | `GET /v1/ledger` | ledger | no | — | OK |
-| 33 | `GET /v1/events` | events | yes | — | OK |
+| 33 | `GET /v1/events` | events | no | — | OK (corrected: read by service keys by design) |
 | 34 | `POST /v1/auth/start` | public | — | — | OK (public by design) |
 | 35 | `POST /v1/auth/verify` | public | — | — | OK (public by design) |
 | 36 | `POST /v1/auth/second-step` | public | — | — | OK (public by design) |
@@ -359,7 +359,7 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 47 | `GET /v1/me/saved` | me | yes | — | OK |
 | 48 | `POST /v1/me/saved` | me | yes | — | OK |
 | 49 | `DELETE /v1/me/saved/:id` | me | yes | — | OK |
-| 50 | `POST /v1/team` | admin | no | team only (no advertiser/machine key) | **MISMATCH**: README says owners add team members; a service key with `admin` (e.g. the setup platform key) can add an *owner* and so gain every person-only power (R1) |
+| 50 | `POST /v1/team` | admin | yes | team only (no advertiser/machine key); signed-in owner | OK (R1 fixed): an owner signed in adds people; a service key gets `person_needed` |
 | 51 | `GET /v1/me/cards` | me | yes | — | OK |
 | 52 | `POST /v1/me/cards` | me | yes | — | OK |
 | 53 | `GET /v1/advertisers/:advertiserId/cards` | invoices | no | — | OK |
@@ -438,18 +438,18 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 126 | `POST /v1/books/reinvestments` | admin | no | team only (no advertiser/machine key) | **MISMATCH (spirit)**: money record by a service key (R11) |
 | 127 | `POST /v1/books/owner-payouts` | admin | no | team only (no advertiser/machine key) | **MISMATCH (spirit)**: money-out record by a service key; SWITCHES keeps money with people (R11) |
 | 128 | `GET /v1/books/surplus` | [ledger, admin] | no | — | OK |
-| 129 | `GET /v1/console` | admin | yes | team only (no advertiser/machine key) | OK |
-| 130 | `PATCH /v1/console/settings` | admin | yes | team only (no advertiser/machine key) | OK for listed money/one-way keys; **GAP**: `machines.printsPerMinute/printsPerDay` (a safety limit) are not person-only and not range-checked (R5) |
+| 129 | `GET /v1/console` | admin | no | team only (no advertiser/machine key) | OK (corrected: keys can read it; it reports `person: false`) |
+| 130 | `PATCH /v1/console/settings` | admin | some | team only (no advertiser/machine key) | OK for listed money/one-way keys; **GAP**: `machines.printsPerMinute/printsPerDay` (a safety limit) are not person-only and not range-checked (R5) |
 | 131 | `POST /v1/console/preview-label` | admin | no | team only (no advertiser/machine key) | OK |
 | 132 | `GET /v1/console/history` | admin | no | team only (no advertiser/machine key) | OK |
 | 133 | `GET /v1/console/history/:version` | admin | no | team only (no advertiser/machine key) | OK |
-| 134 | `POST /v1/console/history/:version/restore` | admin | yes | team only (no advertiser/machine key) | OK (a version touching money/chain needs a person) |
+| 134 | `POST /v1/console/history/:version/restore` | admin | some | team only (no advertiser/machine key) | OK (a version touching money/chain needs a person) |
 | 135 | `POST /v1/console/machines` | admin | no | team only (no advertiser/machine key) | OK |
 | 136 | `PATCH /v1/console/machines/:id` | admin | no | team only (no advertiser/machine key) | OK |
 | 137 | `GET /v1/team` | admin | no | team only (no advertiser/machine key) | OK |
-| 138 | `DELETE /v1/team/:userId` | admin | no | team only (no advertiser/machine key) | **MISMATCH (low)**: owners remove people per README; a service `admin` key can too (last owner protected) |
+| 138 | `DELETE /v1/team/:userId` | admin | yes | team only (no advertiser/machine key); signed-in owner | OK (fixed): owners remove people, signed in; last owner protected |
 | 139 | `GET /v1/keys` | admin | no | team only (no advertiser/machine key) | OK |
-| 140 | `POST /v1/keys` | admin | no | team only (no advertiser/machine key) | OK per docs, but a service `admin` key can mint new `admin` keys, so revoking one leaked key doesn't contain it (R1) |
+| 140 | `POST /v1/keys` | admin | some | team only (no advertiser/machine key); a key with `admin` only by a signed-in owner | OK (R1 fixed): a service key can’t mint `admin` keys, so revoking a leaked key contains it |
 | 141 | `DELETE /v1/keys/:id` | admin | no | team only (no advertiser/machine key) | OK |
 | 142 | `GET /v1/public/webhook-events` | public | — | — | OK (public by design) |
 | 143 | `GET /v1/webhooks` | webhooks | no | team only (no advertiser/machine key) | OK |
@@ -470,7 +470,7 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 158 | `GET /v1/machine/presence` | orders | no | that machine’s key only | OK |
 | 159 | `POST /v1/machine/buffer` | orders | no | that machine’s key only | OK |
 | 160 | `POST /v1/machine/offline-report` | orders | no | that machine’s key only | OK |
-| 161 | `POST /v1/machine/commands/:id/result` | orders | no | team only (no advertiser/machine key); that machine’s key only | OK |
+| 161 | `POST /v1/machine/commands/:id/result` | orders | no | that machine’s key only | OK |
 | 162 | `GET /v1/ops/fleet` | [admin, orders, packs, events] | no | team only (no advertiser/machine key) | OK |
 | 163 | `GET /v1/ops/fleet/:id` | [admin, orders, packs, events] | no | team only (no advertiser/machine key) | OK |
 | 164 | `POST /v1/ops/fleet/:id/commands` | [admin, orders] | no | team only (no advertiser/machine key) | OK; any non-machine `orders` key may command machines (incl. stand-in software update) (R13) |
@@ -565,16 +565,16 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 253 | `POST /v1/agents/proposals/:id/decide` | admin | yes | team only (no advertiser/machine key) | OK; person (SWITCHES) |
 | 254 | `POST /v1/agents/proposals/:id/undo` | admin | yes | team only (no advertiser/machine key) | OK |
 | 255 | `POST /v1/agents/proposals/:id/merged` | admin | yes | team only (no advertiser/machine key) | OK |
-| 256 | `POST /v1/agents/:agentId/spend` | admin | no | team only (no advertiser/machine key) | OK |
+| 256 | `POST /v1/agents/:agentId/spend` | admin | yes | team only (no advertiser/machine key) | OK (R12 fixed): a person relays an agent’s spend |
 | 257 | `POST /v1/agents/spends/:id/decide` | admin | yes | team only (no advertiser/machine key) | OK; person |
-| 258 | `POST /v1/agents/:agentId/costs` | admin | no | team only (no advertiser/machine key) | OK |
-| 259 | `POST /v1/agents/autonomy` | admin | no | team only (no advertiser/machine key) | **UNCLEAR**: raises how much AI may do on its own; docs don't say person-only, but AI.md says AI power grows only by people's choice and track record. Service key can do it (R12) |
+| 258 | `POST /v1/agents/:agentId/costs` | admin | yes | team only (no advertiser/machine key) | OK (R12 fixed) |
+| 259 | `POST /v1/agents/autonomy` | admin | yes | team only (no advertiser/machine key) | OK (R12 fixed): AI gains say only through people (AI.md) |
 | 260 | `POST /v1/agents/:agentId/predictions` | admin | no | team only (no advertiser/machine key) | OK |
 | 261 | `GET /v1/agents/:agentId/ledger` | admin | no | team only (no advertiser/machine key) | OK |
 | 262 | `GET /v1/public/agents/library` | public | — | — | OK (public by design) |
 | 263 | `GET /v1/agents/library` | admin | no | team only (no advertiser/machine key) | OK |
 | 264 | `POST /v1/agents/:agentId/library` | admin | no | team only (no advertiser/machine key) | OK |
-| 265 | `POST /v1/agents/:agentId/library/:itemId/unlock` | admin | no | team only (no advertiser/machine key) | OK |
+| 265 | `POST /v1/agents/:agentId/library/:itemId/unlock` | admin | yes | team only (no advertiser/machine key) | OK (R12 fixed): paid from the agent’s fund, relayed by a person |
 | 266 | `GET /v1/profit` | admin | no | team only (no advertiser/machine key) | OK |
 | 267 | `POST /v1/profit/close` | admin | no | team only (no advertiser/machine key) | OK |
 | 268 | `POST /v1/milestones/factories` | admin | no | team only (no advertiser/machine key) | OK |
