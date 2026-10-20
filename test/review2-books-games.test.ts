@@ -38,9 +38,12 @@ afterAll(async () => { await server.close(); await app.persistence.flush(); awai
 
 describe('1. a reversal takes money back everywhere: a voided batch nets to zero', () => {
   it('the public summary, per-bottle giving, what each charity is owed, the months, the counters and the month’s profit', async () => {
+    // A fresh month with nothing else in it: lines are dated when recorded, so the batch and its void land here.
+    const was = now; now = new Date('2026-11-03T18:00:00Z').getTime();
     const books = async () => (await call('GET', '/v1/public/books/freewater')).body;
     const counters = async () => (await call('GET', '/v1/public/companies/freewater/counters')).body;
-    const sep = (b: any) => ({ monthly: b.monthly.find((m: any) => m.month === '2026-09') ?? null, surplus: b.surplus.months.find((m: any) => m.month === '2026-09') ?? null });
+    const sep = (b: any) => ({ monthly: b.monthly.find((m: any) => m.month === '2026-11') ?? { inCents: 0, outCents: 0, donatedCents: 0 }, surplus: b.surplus.months.find((m: any) => m.month === '2026-11') ?? { inCents: 0, costsCents: 0, givenCents: 0, aiFundCents: 0, surplusCents: 0 } });
+    // Lines are dated when they're recorded (the day given is kept in the memo), so the batch lands in this month.
     const before = await books();
     const cBefore = await counters();
 
@@ -49,7 +52,7 @@ describe('1. a reversal takes money back everywhere: a voided batch nets to zero
     const during = await books();
     expect(during.totals.revenueCents).toBe(before.totals.revenueCents + 30_000);
     expect(during.totals.donatedCents).toBeGreaterThan(before.totals.donatedCents);
-    expect(sep(during).monthly.inCents).toBe(30_000);
+    expect(sep(during).monthly.inCents).toBe(sep(before).monthly.inCents + 30_000);
 
     expect((await call('POST', `/v1/team/batches/${b.body.id}/void`, person, { reason: 'Entered twice' })).status).toBe(200);
     const after = await books();
@@ -58,15 +61,16 @@ describe('1. a reversal takes money back everywhere: a voided batch nets to zero
     expect(after.revenueBy).toEqual(before.revenueBy);
     expect(after.perBottle).toEqual(before.perBottle);
     expect(after.charities).toEqual(before.charities);
-    expect(sep(after).monthly).toMatchObject({ inCents: 0, outCents: 0, donatedCents: 0 });
-    expect(sep(after).surplus).toMatchObject({ inCents: 0, costsCents: 0, givenCents: 0, aiFundCents: 0, surplusCents: 0 });
+    for (const k of ['inCents', 'outCents', 'donatedCents'] as const) expect(sep(after).monthly[k], k).toBe(sep(before).monthly[k]);
+    for (const k of ['inCents', 'costsCents', 'givenCents', 'aiFundCents', 'surplusCents'] as const) expect(sep(after).surplus[k], k).toBe(sep(before).surplus[k]);
     const cAfter = await counters();
     for (const k of ['givenCents', 'sentCents', 'owedCents', 'adMoneyCents', 'prizesCents', 'sales', 'ai'] as const) expect(cAfter[k], k).toEqual(cBefore[k]);
     const some = (c: any) => c.byCharity.filter((x: any) => x.givenCents || x.sentCents);
     expect(some(cAfter)).toEqual(some(cBefore));
-    // The month's profit: nothing in, nothing out, nothing given.
-    const p = await (app.profit as any).close('freewater', '2026-09');
+    // The month's profit is back where it was: the voided batch added nothing.
+    const p = await (app.profit as any).close('freewater', '2026-11');
     expect(p).toMatchObject({ totalRevenueCents: 0, upsideRevenueCents: 0, costsCents: 0, profitCents: 0, charityFloorCents: 0 });
+    now = was;
   });
 });
 
