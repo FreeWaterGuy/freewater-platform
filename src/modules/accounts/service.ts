@@ -197,11 +197,18 @@ export class AccountsService {
   }
 
   /** Add a team member or advertiser staff. They sign in with a code sent to this email. */
-  async invite(input: { companyId: string; email: string; role: Exclude<Role, 'consumer'>; advertiserId?: string; displayName?: string }): Promise<User> {
+  async invite(input: { companyId: string; email: string; role: Exclude<Role, 'consumer'>; advertiserId?: string; displayName?: string; by?: string }): Promise<User> {
     if (input.role === 'advertiser' && !input.advertiserId) throw new AccountsError('advertiser_required', 'Advertiser staff need an advertiserId.');
     const email = normalize('email', input.email);
     const existing = await this.findBy(input.companyId, 'email', email);
     if (existing) {
+      // Inviting someone already here changes their role: the same rules as taking someone off the team.
+      const changes = existing.role !== input.role || (existing.advertiserId ?? null) !== (input.advertiserId ?? null);
+      if (changes && input.by && existing.id === input.by) throw new AccountsError('cannot_change_self', 'You can’t change your own role. Ask another owner.', 409);
+      if (changes && existing.role === 'owner' && input.role !== 'owner') {
+        const owners = (await this.db.query<{ n: number }>(`select count(*)::int as n from users where company_id = $1 and role = 'owner' and deleted_at is null`, [input.companyId])).rows[0]!.n;
+        if (owners <= 1) throw new AccountsError('last_owner', 'Every company needs at least one owner.', 409);
+      }
       await this.db.query(`update users set role = $2, advertiser_id = $3 where id = $1`, [existing.id, input.role, input.advertiserId ?? null]);
       return (await this.get(existing.id))!;
     }

@@ -12,6 +12,11 @@ export function dataRoutes(app: App, route: (r: RouteDef) => void) {
   const { data, numberline, platform } = app;
   const staff = (key: ApiKey | null) => { if (!key || key.advertiserId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.'); return key; };
   const wrap = async <T>(f: () => Promise<T>) => { try { return await f(); } catch (e: any) { if (e?.status && e?.code) throw new ApiError(e.status, e.code, e.message); throw e; } };
+ /** The signed-in person behind a /v1/me request. Service keys (even admin ones, which also pass the 'me' scope) aren't people. */
+  const me = (key: ApiKey | null) => {
+    if (!key?.userId) throw new ApiError(403, 'person_required', 'Sign in as a person to do this; API keys belong to systems.');
+    return { companyId: key.companyId, userId: key.userId, subject: `user:${key.userId}` };
+  };
   const viewerKeyProp = { type: 'string', pattern: '^[A-Za-z0-9_-]{8,64}$' };
   const choicesProp = obj(Object.fromEntries(dataCategories.map((k) => [k, S.bool])));
 
@@ -41,12 +46,17 @@ export function dataRoutes(app: App, route: (r: RouteDef) => void) {
   // ---------- how much each person shares: full, medium or lite ----------
   const levelProp = { type: 'string', enum: ['full', 'medium', 'lite'] };
   /** Choose a level; full earns its one-time points where that's allowed (once per person, across their phones). */
-  const chooseLevel = async (companyId: string, subject: string, level: any, live: any) => {
-    const r = await wrap(() => data.setLevel(companyId, subject, level, 'chosen'));
+  const chooseLevel = async (companyId: string, subject: string, level: any, live: any, ip: string | undefined) => {
+    await wrap(() => data.setLevel(companyId, subject, level, 'chosen'));
     let points = 0;
     if (level === 'full' && !subject.startsWith('bot_') && (await data.levelPaysHere(companyId, [subject], live))) {
       const person = (await data.personFor(companyId, subject).catch(() => null)) ?? subject;
-      points = (await app.wallet.earn(companyId, subject, 'data_full', `data_full:${app.wallet.hidden(companyId, person)}`)).points;
+      // Once per person: not if any of their phones or accounts (or the person) already earned it, under any reference.
+      const subjects = [...new Set([subject, ...(await data.linkedSubjects(companyId, subject).catch(() => [] as string[]))])];
+      const refs = [...new Set([person, ...subjects])].map((s) => `earn:data_full:${app.wallet.hidden(companyId, s)}`);
+      const already = (await app.db.query(`select 1 from wallet_tx t where t.company_id = $1 and (t.ref = any($2) or (t.kind = 'earn:data_full' and exists (select 1 from wallet_lines l join wallet_holders h on l.account = 'holder:' || h.id and h.company_id = t.company_id where l.tx_id = t.id and h.subject = any($3)))) limit 1`, [companyId, refs, subjects])).rows.length > 0;
+      // The network's daily limit applies too, so made-up phone keys from one place can't each collect it.
+      if (!already) points = (await app.wallet.earn(companyId, subject, 'data_full', `data_full:${app.wallet.hidden(companyId, person)}`, { source: app.wallet.sourceOf(ip) })).points;
     }
     return { ...(await data.level(companyId, subject, live)), points };
   };
@@ -59,10 +69,10 @@ export function dataRoutes(app: App, route: (r: RouteDef) => void) {
   route({ method: 'POST', url: '/v1/public/data/:companyId/level', scope: 'public', summary: 'Choose how much this phone shares: full, medium or lite. Nothing works differently at any level; full earns a one-time points bonus where that’s allowed.', body: obj({ viewerKey: viewerKeyProp, level: levelProp }, ['viewerKey', 'level']), handler: async (req) => {
     const id = (req.params as any).companyId; const b = req.body as any;
     if (!platform.companies.has(id)) throw new ApiError(404, 'not_found', 'Company not found.');
-    return { body: await chooseLevel(id, b.viewerKey, b.level, data.placeOf(req)) };
+    return { body: await chooseLevel(id, b.viewerKey, b.level, data.placeOf(req), req.ip) };
   } });
-  route({ method: 'GET', url: '/v1/me/data/level', scope: 'me', summary: 'How much you share: full, medium or lite.', handler: async (req, key) => ({ body: await data.level(key!.companyId, `user:${key!.userId}`, data.placeOf(req)) }) });
-  route({ method: 'POST', url: '/v1/me/data/level', scope: 'me', summary: 'Choose how much you share: full, medium or lite.', body: obj({ level: levelProp }, ['level']), handler: async (req, key) => ({ body: await chooseLevel(key!.companyId, `user:${key!.userId}`, (req.body as any).level, data.placeOf(req)) }) });
+  route({ method: 'GET', url: '/v1/me/data/level', scope: 'me', summary: 'How much you share: full, medium or lite.', handler: async (req, key) => ({ body: await data.level(me(key).companyId, me(key).subject, data.placeOf(req)) }) });
+  route({ method: 'POST', url: '/v1/me/data/level', scope: 'me', summary: 'Choose how much you share: full, medium or lite.', body: obj({ level: levelProp }, ['level']), handler: async (req, key) => ({ body: await chooseLevel(me(key).companyId, me(key).subject, (req.body as any).level, data.placeOf(req), req.ip) }) });
 
   const company = (req: { params: unknown }) => { const id = (req.params as any).companyId as string; if (!platform.companies.has(id)) throw new ApiError(404, 'not_found', 'Company not found.'); return id; };
   const placeProp = obj({ country: { type: 'string', pattern: '^[A-Za-z]{2}$' }, state: { type: 'string', pattern: '^[A-Za-z]{2,3}$' } }, ['country']);
@@ -89,15 +99,15 @@ export function dataRoutes(app: App, route: (r: RouteDef) => void) {
     return { body: await data.setDoNotSell(id, b.viewerKey, b.on, 'scan page') };
   } });
 
-  route({ method: 'GET', url: '/v1/me/details', scope: 'me', summary: 'The optional things you told us: zip code, household size, language, and whether you’re old enough for the games.', handler: async (_req, key) => ({ body: await data.details(key!.companyId, `user:${key!.userId}`) }) });
-  route({ method: 'POST', url: '/v1/me/details', scope: 'me', summary: 'Tell us your zip code, household size or language, if you like. All optional; send null to remove one.', body: detailsProp, handler: async (req, key) => ({ body: await wrap(() => data.setDetails(key!.companyId, `user:${key!.userId}`, req.body as any)) }) });
-  route({ method: 'POST', url: '/v1/me/age', scope: 'me', summary: 'Your birthday, to check you’re old enough for the games and rewards where you are. Only the year is kept.', body: obj({ birthDate: ageProp }, ['birthDate']), handler: async (req, key) => ({ body: await wrap(() => data.ageCheck(key!.companyId, `user:${key!.userId}`, (req.body as any).birthDate, data.placeOf(req), { fromAccount: true })) }) });
+  route({ method: 'GET', url: '/v1/me/details', scope: 'me', summary: 'The optional things you told us: zip code, household size, language, and whether you’re old enough for the games.', handler: async (_req, key) => ({ body: await data.details(me(key).companyId, me(key).subject) }) });
+  route({ method: 'POST', url: '/v1/me/details', scope: 'me', summary: 'Tell us your zip code, household size or language, if you like. All optional; send null to remove one.', body: detailsProp, handler: async (req, key) => ({ body: await wrap(() => data.setDetails(me(key).companyId, me(key).subject, req.body as any)) }) });
+  route({ method: 'POST', url: '/v1/me/age', scope: 'me', summary: 'Your birthday, to check you’re old enough for the games and rewards where you are. Only the year is kept.', body: obj({ birthDate: ageProp }, ['birthDate']), handler: async (req, key) => ({ body: await wrap(() => data.ageCheck(me(key).companyId, me(key).subject, (req.body as any).birthDate, data.placeOf(req), { fromAccount: true })) }) });
   route({ method: 'POST', url: '/v1/me/place', scope: 'me', summary: 'Where you live (country, and US state).', body: obj({ place: placeProp }, ['place']), handler: async (req, key) => {
-    await data.notePlace(key!.companyId, `user:${key!.userId}`, declared((req.body as any).place), 'declared');
-    const r = await data.rulesFor(key!.companyId, [`user:${key!.userId}`], data.placeOf(req));
+    await data.notePlace(me(key).companyId, me(key).subject, declared((req.body as any).place), 'declared');
+    const r = await data.rulesFor(me(key).companyId, [me(key).subject], data.placeOf(req));
     return { body: { region: r.region, askFirst: r.askFirst, minimumAge: r.minimumAge, rewards: r.rewards } };
   } });
-  route({ method: 'POST', url: '/v1/me/do-not-sell', scope: 'me', summary: '“Do not sell or share my personal information.”', body: obj({ on: S.bool }, ['on']), handler: async (req, key) => ({ body: await data.setDoNotSell(key!.companyId, `user:${key!.userId}`, (req.body as any).on, 'account') }) });
+  route({ method: 'POST', url: '/v1/me/do-not-sell', scope: 'me', summary: '“Do not sell or share my personal information.”', body: obj({ on: S.bool }, ['on']), handler: async (req, key) => ({ body: await data.setDoNotSell(me(key).companyId, me(key).subject, (req.body as any).on, 'account') }) });
 
   route({ method: 'GET', url: '/v1/public/why/:unitId/:slot', scope: 'public', summary: '“Why am I seeing this?” What decided the ad on this bottle and what’s shown after scanning, in plain words. Send ?viewer= to include what this phone’s own choices allow.', handler: async (req) => {
     const { unitId, slot } = req.params as any;
@@ -126,19 +136,25 @@ export function dataRoutes(app: App, route: (r: RouteDef) => void) {
     return { body: { reasons, neverUsed: ['Your name, contacts or messages', 'What you do in other apps or websites', 'Data bought from anyone'], use: dataUse, yourChoices: companyId ? `/v1/public/data/${companyId}` : null } };
   } });
 
-  route({ method: 'GET', url: '/v1/me/data', scope: 'me', summary: 'Everything kept about you, from every direction: your accounts, scans, page interactions, choices, designs, ads you made and what you did. Download it any time.', handler: async (_req, key) => ({ body: await data.profile(key!.companyId, `user:${key!.userId}`) }) });
-  route({ method: 'GET', url: '/v1/me/data/choices', scope: 'me', summary: 'Your choices about each kind of data.', handler: async (_req, key) => ({ body: await data.consents(key!.companyId, `user:${key!.userId}`) }) });
-  route({ method: 'POST', url: '/v1/me/data/choices', scope: 'me', summary: 'Say yes or no to each kind of data.', body: obj({ choices: choicesProp }, ['choices']), handler: async (req, key) => ({ body: await data.consent(key!.companyId, `user:${key!.userId}`, (req.body as any).choices, 'account') }) });
+  route({ method: 'GET', url: '/v1/me/data', scope: 'me', summary: 'Everything kept about you, from every direction: your accounts, scans, page interactions, choices, designs, ads you made and what you did. Download it any time.', handler: async (_req, key) => ({ body: await data.profile(me(key).companyId, me(key).subject) }) });
+  route({ method: 'GET', url: '/v1/me/data/choices', scope: 'me', summary: 'Your choices about each kind of data.', handler: async (_req, key) => ({ body: await data.consents(me(key).companyId, me(key).subject) }) });
+  route({ method: 'POST', url: '/v1/me/data/choices', scope: 'me', summary: 'Say yes or no to each kind of data.', body: obj({ choices: choicesProp }, ['choices']), handler: async (req, key) => ({ body: await data.consent(me(key).companyId, me(key).subject, (req.body as any).choices, 'account') }) });
   route({ method: 'POST', url: '/v1/public/data/:companyId/forget', scope: 'public', summary: 'Without an account: erase what’s kept under this phone’s random code (what it did on pages, its choices, consents). Scans stay in the books as counts; the phone gets a new code. An account linked to the phone isn’t touched: that takes signing in.', body: obj({ viewerKey: viewerKeyProp }, ['viewerKey']), handler: async (req) => {
     const companyId = (req.params as any).companyId as string;
     if (!app.platform.companies.has(companyId)) throw new ApiError(404, 'not_found', 'No such company.');
     return { body: await data.erase(companyId, (req.body as any).viewerKey, { followLinks: false }) };
   } });
-  route({ method: 'DELETE', url: '/v1/me/data', scope: 'me', summary: 'Erase what’s kept about you. Money records stay in the books, as the law requires, with your name taken out.', handler: async (_req, key) => ({ body: await data.erase(key!.companyId, `user:${key!.userId}`) }) });
-  route({ method: 'POST', url: '/v1/me/link-device', scope: 'me', summary: 'This phone’s scans belong to you: join what it did before you signed in to your account (as your data choices allow).', body: obj({ viewerKey: viewerKeyProp }, ['viewerKey']), handler: async (req, key) => ({ body: { person: await data.link(key!.companyId, [`user:${key!.userId}`, (req.body as any).viewerKey], 'signed in on this phone') } }) });
+  route({ method: 'DELETE', url: '/v1/me/data', scope: 'me', summary: 'Erase what’s kept about you. Money records stay in the books, as the law requires, with your name taken out.', handler: async (_req, key) => ({ body: await data.erase(me(key).companyId, me(key).subject) }) });
+  route({ method: 'POST', url: '/v1/me/link-device', scope: 'me', summary: 'This phone’s scans belong to you: join what it did before you signed in to your account (as your data choices allow).', body: obj({ viewerKey: viewerKeyProp }, ['viewerKey']), handler: async (req, key) => {
+    const { companyId, userId, subject } = me(key);
+    const viewerKey = (req.body as any).viewerKey as string;
+    // Only a phone that's provably this person's (see DataService.mayLinkDevice): never one already someone else's.
+    if (!(await data.mayLinkDevice(companyId, userId, viewerKey, req.ip))) throw new ApiError(409, 'not_your_phone', 'That phone can’t be joined to your account. Open this page on the phone itself and try again.');
+    return { body: { person: await data.link(companyId, [subject, viewerKey], 'signed in on this phone') } };
+  } });
   route({ method: 'POST', url: '/v1/me/stance', scope: 'me', summary: 'How you feel about the cause your bottles support, and about ads. Only used so the platform counts what you really get (the User Test).', body: obj({ cause: { type: 'string', enum: ['supports', 'indifferent', 'opposes'] }, ads: { type: 'string', enum: ['welcome', 'unwelcome'] } }), handler: async (req, key) => {
     const b = req.body as any;
-    await app.db.query(`update users set consents = consents || $2::jsonb where id = $1`, [key!.userId, JSON.stringify({ ...(b.cause ? { causeStance: b.cause } : {}), ...(b.ads ? { adsStance: b.ads } : {}) })]);
+    await app.db.query(`update users set consents = consents || $2::jsonb where id = $1`, [me(key).userId, JSON.stringify({ ...(b.cause ? { causeStance: b.cause } : {}), ...(b.ads ? { adsStance: b.ads } : {}) })]);
     return { body: { saved: true } };
   } });
 

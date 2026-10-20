@@ -277,8 +277,9 @@ describe('collecting everything the law allows, under each company’s switchboa
     expect((await call('POST', '/v1/public/interactions', undefined, { viewerKey: 'eu-viewer-0001', items: [{ target: t, kind: 'page_view' }] })).body.recorded).toBe(1);
     delete fw.data;
     // Download, then erase.
-    const token = await signIn('erase-me@example.com', 'erase-phone-001');
+    // The phone does something first, then signs in on it (a phone is joined to an account only once it's been seen).
     await call('POST', '/v1/public/interactions', undefined, { viewerKey: 'erase-phone-001', items: [{ target: t, kind: 'page_view' }] });
+    const token = await signIn('erase-me@example.com', 'erase-phone-001');
     const mine = (await call('GET', '/v1/me/data', token)).body;
     expect(mine.asConsumer.interactions.length).toBe(1);
     expect((await call('DELETE', '/v1/me/data', token)).body).toMatchObject({ erased: true });

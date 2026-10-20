@@ -1,5 +1,5 @@
 import { BlockList, isIP } from 'node:net';
-import { lookup } from 'node:dns';
+import { lookup, type LookupAddress, type LookupOptions } from 'node:dns';
 import { request as httpsRequest } from 'node:https';
 import { request as httpRequest } from 'node:http';
 
@@ -52,9 +52,28 @@ export function checkWebhookUrl(raw: string, opts: { allowPrivate?: boolean } = 
 }
 
 /**
+ * The lookup a webhook connection uses: every address the name has is checked, and if any is private the connection
+ * is refused. Node asks for one address or (to try each in turn, as Node 20+ does by default) all of them: both work.
+ */
+export function guardedLookup(allowPrivate: boolean) {
+  return (host: string, options: LookupOptions | number | ((...a: any[]) => void), cb?: (...a: any[]) => void) => {
+    if (typeof options === 'function') { cb = options; options = {}; }
+    const opts: LookupOptions = typeof options === 'number' ? { family: options } : (options ?? {});
+    const done = cb!;
+    lookup(host, { ...opts, all: true }, (err, addresses: LookupAddress[]) => {
+      if (err) return done(err);
+      if (!addresses?.length) return done(Object.assign(new Error(`No address found for ${host}.`), { code: 'ENOTFOUND' }));
+      if (!allowPrivate && addresses.some((a) => isPrivateAddress(a.address))) return done(new Error('That address is on a private network.'));
+      if (opts.all) return done(null, addresses);
+      done(null, addresses[0]!.address, addresses[0]!.family);
+    });
+  };
+}
+
+/**
  * Sends webhooks over HTTPS. The address is looked up once and checked before connecting, and the connection
  * goes to exactly that checked address, so a name can't be switched to a private address in between.
- * Redirects are not followed.
+ * Redirects are not followed. Connections aren't pooled, so every send is looked up and checked afresh.
  */
 export class HttpWebhookSender implements WebhookSender {
   readonly name = 'https';
@@ -63,16 +82,12 @@ export class HttpWebhookSender implements WebhookSender {
   send(req: WebhookRequest): Promise<WebhookResponse> {
     const u = new URL(req.url);
     const allowPrivate = !!this.opts.allowPrivate;
-    const guardedLookup = (host: string, options: any, cb: any) => {
-      lookup(host, { ...options, all: false }, (err, address, family) => {
-        if (err) return cb(err);
-        if (!allowPrivate && isPrivateAddress(address as string)) return cb(new Error('That address is on a private network.'));
-        cb(null, address, family);
-      });
-    };
+    // A literal address skips the lookup, so it's checked here.
+    const literal = u.hostname.replace(/^\[|\]$/g, '');
+    if (!allowPrivate && isIP(literal) && isPrivateAddress(literal)) return Promise.reject(new Error('That address is on a private network.'));
     const request = u.protocol === 'http:' ? httpRequest : httpsRequest;
     return new Promise((resolve, reject) => {
-      const r = request(u, { method: 'POST', headers: { ...req.headers, 'content-length': Buffer.byteLength(req.body) }, lookup: guardedLookup as any, timeout: req.timeoutMs }, (res) => {
+      const r = request(u, { method: 'POST', headers: { ...req.headers, 'content-length': Buffer.byteLength(req.body) }, lookup: guardedLookup(allowPrivate) as any, agent: false, timeout: req.timeoutMs }, (res) => {
         let body = '';
         res.setEncoding('utf8');
         res.on('data', (c: string) => { if (body.length < 1000) body += c; });
