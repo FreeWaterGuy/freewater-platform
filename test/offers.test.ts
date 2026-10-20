@@ -17,13 +17,15 @@ const call = async (method: string, url: string, payload?: unknown, token?: stri
   return { status: r.statusCode, body: (() => { try { return r.json(); } catch { return r.body; } })() };
 };
 const png = (n: number) => Buffer.concat([Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082', 'hex'), Buffer.from([n])]).toString('base64');
-let admin: string, advertiserId: string;
+let admin: string, owner: string, advertiserId: string;
 
 beforeAll(async () => {
   db = await createPgliteClient();
   app = await createApp({ db, seedDemo: true, seed: 81, clock: () => new Date(now), assumePlace: { country: 'US', state: 'TX' }, receiptReader: reader, productLookup: null });
   keys = app.demoKeys!;
   admin = keys['freewater-admin']!;
+  // Approving offers and accepting receipts is a person's (SWITCHES), never a service key's.
+  owner = await app.accounts.createSession((await app.accounts.invite({ companyId: 'freewater', email: 'offers-owner@freewater.io', role: 'owner' })).id);
   advertiserId = [...app.platform.campaigns.values()][0]!.advertiserId;
   server = await buildServer(app);
 });
@@ -46,10 +48,11 @@ describe('brand offers', () => {
   it('stay switched off until a person turns them on', async () => {
     id = (await call('POST', '/v1/offers', offer(), admin)).body.id;
     expect((await call('POST', `/v1/offers/${id}/submit`, undefined, admin)).body.status).toBe('pending');
-    expect((await call('POST', `/v1/offers/${id}/approve`, undefined, admin)).status).toBe(403);
+    expect((await call('POST', `/v1/offers/${id}/approve`, undefined, owner)).status).toBe(403);
     expect((await call('GET', '/v1/public/offers/freewater')).body.offers).toEqual([]);
     app.platform.companies.get('freewater')!.offers = { enabled: true };
-    expect((await call('POST', `/v1/offers/${id}/approve`, undefined, admin)).body.status).toBe('live');
+    expect((await call('POST', `/v1/offers/${id}/approve`, undefined, admin)).body.error.code).toBe('person_needed');
+    expect((await call('POST', `/v1/offers/${id}/approve`, undefined, owner)).body.status).toBe('live');
     const live = (await call('GET', '/v1/public/offers/freewater')).body.offers;
     expect(live[0].deal).toContain('Free and you get 25¢');
     expect(live[0].deal).toContain('Well Aware');
@@ -95,7 +98,7 @@ describe('brand offers', () => {
   it('the same receipt can’t be used twice; an unsure one goes to the team, who can turn it down (points come back)', async () => {
     const v = 'viewer-offer-3';
     const o2 = (await call('POST', '/v1/offers', offer({ title: 'Second', perPerson: 2 }), admin)).body.id;
-    await call('POST', `/v1/offers/${o2}/submit`, undefined, admin); await call('POST', `/v1/offers/${o2}/approve`, undefined, admin);
+    await call('POST', `/v1/offers/${o2}/submit`, undefined, admin); await call('POST', `/v1/offers/${o2}/approve`, undefined, owner);
     for (let i = 0; i < 6; i++) await app.wallet.earn('freewater', v, 'scan', `o3:${i}`);
     const c1 = (await (await signedIn(v), call('POST', `/v1/public/offers/freewater/${o2}/claim`, { viewerKey: v }))).body.claim;
     expect((await call('POST', `/v1/public/offers/freewater/claims/${c1}/receipt`, { viewerKey: v, image: { contentType: 'image/png', dataBase64: png(1) } })).status).toBe(409);
@@ -103,13 +106,13 @@ describe('brand offers', () => {
     expect((await call('POST', `/v1/public/offers/freewater/claims/${c1}/receipt`, { viewerKey: v, image: { contentType: 'image/png', dataBase64: png(2) } })).body.status).toBe('checking');
     expect((await call('GET', '/v1/offers/receipts', undefined, admin)).body.some((r: any) => r.claim === c1)).toBe(true);
     const before = await app.wallet.pointsOf('freewater', v);
-    expect((await call('POST', `/v1/offers/receipts/${c1}/review`, { approve: false }, admin)).body.status).toBe('rejected');
+    expect((await call('POST', `/v1/offers/receipts/${c1}/review`, { approve: false }, owner)).body.status).toBe('rejected');
     expect(await app.wallet.pointsOf('freewater', v)).toBe(before + 20);
   });
 
   it('a different photo of the same purchase is refused, and a receipt with no readable date waits for a person', async () => {
     const o5 = (await call('POST', '/v1/offers', offer({ title: 'Same receipt', pointsCost: 0 }), admin)).body.id;
-    await call('POST', `/v1/offers/${o5}/submit`, undefined, admin); await call('POST', `/v1/offers/${o5}/approve`, undefined, admin);
+    await call('POST', `/v1/offers/${o5}/submit`, undefined, admin); await call('POST', `/v1/offers/${o5}/approve`, undefined, owner);
     const a = 'viewer-offer-6a', b = 'viewer-offer-6b';
     await signedIn(a); await signedIn(b);
     const ca = (await call('POST', `/v1/public/offers/freewater/${o5}/claim`, { viewerKey: a })).body.claim;
@@ -123,7 +126,7 @@ describe('brand offers', () => {
 
   it('stepped offers: the first claims get one deal, later ones another', async () => {
     const o3 = (await call('POST', '/v1/offers', offer({ title: 'Stepped', pointsCost: 0, steps: [{ upToClaims: 1, pointsCost: 0, reward: { kind: 'free', upToCents: 300 } }], reward: { kind: 'percent_off', percent: 50, upToCents: 300 } }), admin)).body.id;
-    await call('POST', `/v1/offers/${o3}/submit`, undefined, admin); await call('POST', `/v1/offers/${o3}/approve`, undefined, admin);
+    await call('POST', `/v1/offers/${o3}/submit`, undefined, admin); await call('POST', `/v1/offers/${o3}/approve`, undefined, owner);
     const first = (await call('GET', '/v1/public/offers/freewater')).body.offers.find((o: any) => o.id === o3);
     expect(first.deal).toBe('Free');
     await (await signedIn('viewer-offer-4'), call('POST', `/v1/public/offers/freewater/${o3}/claim`, { viewerKey: 'viewer-offer-4' }));
@@ -134,7 +137,7 @@ describe('brand offers', () => {
   it('claims with no receipt close after 14 days and the points go back', async () => {
     const v = 'viewer-offer-5';
     const o4 = (await call('POST', '/v1/offers', offer({ title: 'Expiring' }), admin)).body.id;
-    await call('POST', `/v1/offers/${o4}/submit`, undefined, admin); await call('POST', `/v1/offers/${o4}/approve`, undefined, admin);
+    await call('POST', `/v1/offers/${o4}/submit`, undefined, admin); await call('POST', `/v1/offers/${o4}/approve`, undefined, owner);
     for (let i = 0; i < 2; i++) await app.wallet.earn('freewater', v, 'scan', `o5:${i}`);
     await (await signedIn(v), call('POST', `/v1/public/offers/freewater/${o4}/claim`, { viewerKey: v }));
     expect(await app.wallet.pointsOf('freewater', v)).toBe(0);

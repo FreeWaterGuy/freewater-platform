@@ -10,6 +10,13 @@ export function offersRoutes(app: App, route: (r: RouteDef) => void) {
   const company = (req: { params: unknown }) => { const id = (req.params as any).companyId as string; if (!platform.companies.has(id)) throw new ApiError(404, 'not_found', 'No such company.'); return id; };
   const staff = (key: ApiKey | null) => { if (!key || key.advertiserId || key.locationId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.'); return key; };
   const who = (key: ApiKey) => `${key.name ?? 'team'} (key ${key.id})`;
+  /** Approving an offer (SWITCHES: the owner, signed in) and accepting a receipt (it pays credit from a reserve) are a person's. */
+  const person = (key: ApiKey | null) => {
+    const k = staff(key);
+    if (!k.userId) throw new ApiError(403, 'person_needed', 'This needs a person signed in, not a service key.');
+    return k;
+  };
+  const by = (key: ApiKey) => `user:${key.userId}`;
   const cents = { type: 'integer', minimum: 0, maximum: 100000 };
   const reward = obj({ kind: { type: 'string', enum: ['free', 'percent_off', 'cents_off'] }, percent: { type: 'integer', minimum: 1, maximum: 100 }, cents, upToCents: cents, youGetCents: cents, causeCents: cents }, ['kind', 'upToCents']);
   const offerBody = obj({
@@ -31,7 +38,7 @@ export function offersRoutes(app: App, route: (r: RouteDef) => void) {
   } });
   route({ method: 'GET', url: '/v1/offers', scope: ['admin', 'ledger', 'campaigns'], summary: 'Offers (an advertiser sees only its own).', handler: async (_req, key) => ({ body: await offers.list(key!.companyId, key!.advertiserId ?? undefined) }) });
   route({ method: 'POST', url: '/v1/offers/:id/submit', scope: ['admin', 'campaigns'], summary: 'Send a draft offer to the company to approve.', handler: async (req, key) => ({ body: await wrap(() => offers.submit(key!.companyId, (req.params as any).id, key!.advertiserId ?? undefined)) }) });
-  route({ method: 'POST', url: '/v1/offers/:id/approve', scope: 'admin', summary: 'Approve an offer so it goes live. Only when brand offers are switched on.', handler: async (req, key) => ({ body: await wrap(() => offers.approve(staff(key).companyId, (req.params as any).id, who(key!))) }) });
+  route({ method: 'POST', url: '/v1/offers/:id/approve', scope: 'admin', summary: 'Approve an offer so it goes live (a person signed in). Only when brand offers are switched on.', handler: async (req, key) => { const k = person(key); return { body: await wrap(() => offers.approve(k.companyId, (req.params as any).id, by(k))) }; } });
   route({ method: 'POST', url: '/v1/offers/:id/pause', scope: ['admin', 'campaigns'], summary: 'Pause a live offer.', handler: async (req, key) => ({ body: await wrap(() => offers.pause(key!.companyId, (req.params as any).id, key!.advertiserId ?? undefined)) }) });
   route({ method: 'GET', url: '/v1/offers/receipts', scope: 'admin', summary: 'Receipts waiting for a person to check.', handler: async (_req, key) => ({ body: await offers.waiting(staff(key).companyId) }) });
   route({ method: 'GET', url: '/v1/offers/receipts/:claimId', scope: 'admin', summary: 'The receipt photo for a claim.', handler: async (req, key) => {
@@ -39,9 +46,10 @@ export function offersRoutes(app: App, route: (r: RouteDef) => void) {
     if (!f) throw new ApiError(404, 'not_found', 'No receipt.');
     return { type: f.asset.contentType, raw: f.bytes };
   } });
-  route({ method: 'POST', url: '/v1/offers/receipts/:claimId/review', scope: 'admin', summary: 'Accept a receipt (with what the product cost, in cents) or turn it down (the points go back).', body: obj({ approve: S.bool, paidCents: cents }, ['approve']), handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/offers/receipts/:claimId/review', scope: 'admin', summary: 'Accept a receipt (with what the product cost, in cents) or turn it down (the points go back). A person signed in.', body: obj({ approve: S.bool, paidCents: cents }, ['approve']), handler: async (req, key) => {
     const b = req.body as any;
-    return { body: await wrap(() => offers.review(staff(key).companyId, (req.params as any).claimId, b.approve, who(key!), b.paidCents)) };
+    const k = person(key);
+    return { body: await wrap(() => offers.review(k.companyId, (req.params as any).claimId, b.approve, by(k), b.paidCents)) };
   } });
   route({ method: 'GET', url: '/v1/products/:barcode', scope: ['admin', 'campaigns'], summary: 'What a barcode is (UPC or EAN).', handler: async (req) => ({ body: await wrap(() => offers.product((req.params as any).barcode)) }) });
 

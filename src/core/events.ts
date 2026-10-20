@@ -42,9 +42,9 @@ export interface EventPayloads {
   'ai_fund.allocated': { day: string; agentId: string; amountCents: Cents; held: boolean; reason: string; fromHeld?: boolean; fromCommon?: boolean };
   /** An agent spent from its own fund (on compute, storage, knowledge, growth, exploration, or a cause it chose). */
   'ai_fund.spent': { spendId: string; agentId: string; category: string; amountCents: Cents; memo: string; cause?: string };
-  'expense.recorded': { expenseId: string; category: string; amountCents: Cents; memo: string; date: string };
+  'expense.recorded': { expenseId: string; category: string; amountCents: Cents; memo: string; date: string; /** Who recorded it (a person, `user:<id>`). */ by?: string };
   /** Surplus put back into the system: new capacity, energy, routes, research, or held in reserve. Not a cost. */
-  'reinvestment.recorded': { reinvestmentId: string; category: string; amountCents: Cents; memo: string; date: string };
+  'reinvestment.recorded': { reinvestmentId: string; category: string; amountCents: Cents; memo: string; date: string; by?: string };
   /** A person chose which cause a bottle's gift goes to. */
   'giving.directed': { unitId: string; from: string; to: string; cents: Cents; person: string };
   /** The value an offer returned to a cause in a measured test, paid by the advertiser. */
@@ -52,8 +52,12 @@ export interface EventPayloads {
   'value_back.reversed': { experimentId: string; unitId: string; campaignId: string; advertiserId: string; advertiserName: string; cause: string; cents: number; orderId: string };
   /** A brand's offer gave to a cause, out of the money the brand put in reserve: owed to the charity like any gift. */
   'offer.cause_given': { claimId: string; sponsor: string; cause: string; cents: Cents };
+  /** A brand's money for dollar credit really arrived and was put in its reserve (recorded by a person). */
+  'reserve.funded': { sponsor: string; cents: Cents; ref: string; entry: string; by: string };
+  /** A reserve payment recorded by mistake was undone (a correcting entry in the wallet). */
+  'reserve.returned': { sponsor: string; cents: Cents; entry: string; by: string; reason: string };
   /** Money paid out to the company's owners (a dividend, a buyback, a distribution). */
-  'owner_payout.recorded': { payoutId: string; kind: string; amountCents: Cents; memo: string; date: string };
+  'owner_payout.recorded': { payoutId: string; kind: string; amountCents: Cents; memo: string; date: string; by?: string };
   'machine.incident_opened': { incidentId: string; locationId: string; kind: string; severity: 'warning' | 'critical'; message: string };
   'machine.incident_resolved': { incidentId: string; locationId: string; kind: string; minutes: number };
   'unit.failed': { unitId: string; orderId?: string; reason: string };

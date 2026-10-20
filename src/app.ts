@@ -78,6 +78,7 @@ import { DistributionService } from './modules/distributions/service';
 import { TeamService } from './modules/team/service';
 import { builtinIntake, ClaudeIntake, type IntakeAssistant } from './modules/team/intake';
 import { Alerter } from './runtime/alerts';
+import { Reconciliation } from './modules/books/reconciliation';
 import { charter as agentCharter, winCondition } from './modules/agents/charter';
 import { claudeExaminee } from './modules/agents/exam';
 import type { BlobStore } from './modules/assets/blobs';
@@ -390,6 +391,8 @@ export async function createApp(opts: AppOptions) {
   // The chain layer, switched off: hourly seals of the wallet journal, actions needing several people, the daily check.
   const chain = new ChainService(db, platform, wallet, publishers, opts.clock);
   chain.alert = (companyId, message) => void runtime.alerts.alert('chain', 'critical', `Chain (${companyId})`, message);
+  // An ad reached its daily ceiling of billed scans or AR launches (R3): more are counted, never billed, and a person looks.
+  platform.ledger.onCeiling = (h) => void runtime.alerts.alert(`billing-ceiling:${h.companyId}:${h.campaignId}:${h.kind}:${h.day}`, 'warning', `Ad ${h.campaignId} reached its daily ceiling of ${h.ceiling} billed ${h.kind === 'scan' ? 'scans' : 'AR launches'} (${h.companyId}, ${h.day})`, `More are counted but not billed today. Far more ${h.kind === 'scan' ? 'scans' : 'AR launches'} than its bottles could get usually means fake scans: check where they come from (GET /v1/books/reconciliation) before the advertiser is invoiced.`);
   // Solana: the free test network before going live with the token, the real network after. Keys live in the host's
   // settings. Without them, the stand-in runs (and says so).
   const solana = solanaFromEnv(process.env);
@@ -503,14 +506,21 @@ export async function createApp(opts: AppOptions) {
   // before lines were stored first, or by a step whose status is its own guard) gets them now. Every event's key is
   // the step's own, so nothing is booked twice; on a clean start this books nothing. (Batches and the agents' fund
   // repair themselves as they start, above.)
+  // The daily reconciliation report: the books against themselves and their outside counterparts.
+  const reconciliation = new Reconciliation(db, platform, {
+    wallet, flush: () => persistence.flush(), today: (companyId, at) => delivery.today(companyId, at),
+    anchors: (companyId) => anchors.list(companyId), days: (companyId) => books.days(companyId),
+    charities: async (companyId) => (await books.charities(companyId)).map((c: any) => c.name),
+  });
   await payments.repairUnrecorded();
   for (const c of platform.companies.values()) { await books.repairUnrecorded(c.id); await profit.repairShares(c.id); }
   await lottery.repairUnrecorded();
   await environment.repairDirections();
+  await wallet.repairReserveLines();
   await offers.repairCauseGifts();
   await persistence.flush();
 
-  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens };
+  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

@@ -298,15 +298,17 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     return null;
   };
 
-  route({ method: 'POST', url: '/v1/orders', scope: 'orders', summary: 'Print one bottle. Send the same orderId again and you get the same bottle back; nothing prints twice. A custom design is priced by the company (a price sent here is ignored).', body: obj({ orderId: S.str, locationId: S.str, productId: S.str, custom: obj({ customerId: S.str, svg: { type: 'string', minLength: 1, maxLength: 2_000_000 }, priceCents: S.int }, ['customerId', 'svg']) }, ['orderId', 'locationId', 'productId']), handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/orders', scope: 'orders', summary: 'Print one bottle. Send the same orderId again and you get the same bottle back; nothing prints twice. A custom design printed here is never billed (a price sent is ignored); paid custom bottles go through POST /v1/me/custom-orders.', body: obj({ orderId: S.str, locationId: S.str, productId: S.str, custom: obj({ customerId: S.str, svg: { type: 'string', minLength: 1, maxLength: 2_000_000 }, priceCents: S.int }, ['customerId', 'svg']) }, ['orderId', 'locationId', 'productId']), handler: async (req, key) => {
     const b = req.body as any;
     if (!platform.locations.has(b.locationId)) throw new ApiError(422, 'unknown_location', `Location ${b.locationId} doesn't exist.`);
     if (!platform.products.has(b.productId)) throw new ApiError(422, 'unknown_product', `Product ${b.productId} doesn't exist.`);
     let custom;
     if (b.custom) {
-      // Priced here, never by the caller: a price sent with the order would let a machine key make up revenue (and the
-      // charity's share of it). Custom bottles bought in the app are priced by the consumer route.
-      try { custom = { customerId: b.custom.customerId, art: svgCreative(b.custom.svg), priceCents: platform.companies.get(key!.companyId)!.prices.customUnit }; } catch (e: any) { throw new ApiError(422, 'artwork_refused', e.message); }
+      // Never billed here: nobody's money is held for it, so booking its price would be revenue no one pays, and the
+      // charity's and the AI fund's shares of it would be owed (and sent) in real money. A custom bottle someone pays
+      // for goes through POST /v1/me/custom-orders, where the money is held first and taken once it prints. A price
+      // sent here is ignored.
+      try { custom = { customerId: b.custom.customerId, art: svgCreative(b.custom.svg), priceCents: 0 }; } catch (e: any) { throw new ApiError(422, 'artwork_refused', e.message); }
     }
     if (key!.locationId && key!.locationId !== b.locationId) throw new ApiError(403, 'wrong_machine', `This key belongs to ${key!.locationId} and can only print there.`);
     const capped = key!.locationId ? printCap(key!.companyId, key!.locationId, b.orderId, req) : null;

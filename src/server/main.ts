@@ -128,6 +128,13 @@ const jobs: Job[] = [
   { name: 'offers', everyMs: 3600_000, timeoutMs: 10 * 60_000, run: saved(() => perCompany('offers', async (id) => { await app!.offers.expire(id); await app!.offers.payHeld(id); })) },
   // The chain layer: seal each finished hour of the wallet journal; once a day, check the books against the chain.
   { name: 'wallet-seals', everyMs: 600_000, timeoutMs: 10 * 60_000, run: saved(() => app!.chain.sealAll()) },
+  // Each day: reconcile the books (against the card processor, the bank, invoices, the wallet, published days); a
+  // person is alerted about anything that fails or needs a look. The report is at GET /v1/books/reconciliation.
+  { name: 'reconciliation', everyMs: 24 * 3600_000, timeoutMs: 30 * 60_000, run: () => perCompany('reconciliation', async (id) => {
+    const r = await app!.reconciliation.report(id);
+    const bad = r.checks.filter((c) => c.status !== 'ok');
+    if (bad.length) await alerts.alert(`reconciliation:${id}`, r.ok ? 'warning' : 'critical', `Books reconciliation for ${id} (${r.day}): ${r.failed} failed, ${r.attention} need a look`, bad.map((c) => `${c.status === 'fail' ? '✗' : '!'} ${c.what}: ${c.detail}`).join('\n'));
+  }) },
   { name: 'chain-check', everyMs: 24 * 3600_000, timeoutMs: 10 * 60_000, run: saved(() => perCompany('chain-check', (id) => app!.chain.reconcile(id))) },
   { name: 'fingerprints', everyMs: 3600_000, timeoutMs: 10 * 60_000, run: saved(() => app!.anchors.run()) },
   // Once a day, delete data older than each company keeps.

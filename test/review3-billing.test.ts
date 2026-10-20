@@ -185,12 +185,13 @@ describe('review 3: a bottle’s receipt takes refunded gifts off (5)', () => {
 
 describe('review 3: machine keys can’t make up prices or print without limit (6, 7)', () => {
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="#09f"/></svg>';
-  it('prices a custom bottle from the company’s prices, whatever the caller sends', async () => {
+  it('never bills a custom bottle printed by a system key, whatever price the caller sends (no money is held for it)', async () => {
     now += 2 * 86_400_000;
     const r = await call('POST', '/v1/orders', keys['machine-ATX-014'], { orderId: 'rv3-custom', locationId: 'ATX-014', productId: 'bottle-16oz', custom: { customerId: 'cust-rv3', svg, priceCents: 9_999_999 } });
     expect(r.status).toBe(201);
-    const line = app.platform.ledger.entries.find((l) => l.kind === 'custom' && l.unitId === r.body.id)!;
-    expect(line.amountCents).toBe(app.platform.companies.get('freewater')!.prices.customUnit);
+    // Changed in the financial controls review (R10): it used to book the company's custom price against a receivable
+    // nobody paid; paid custom bottles go through POST /v1/me/custom-orders.
+    expect(app.platform.ledger.entries.filter((l) => l.kind === 'custom' && l.unitId === r.body.id)).toEqual([]);
   });
 
   it('caps one machine’s prints a minute and a day, raises an alert, and still answers a repeated order', async () => {

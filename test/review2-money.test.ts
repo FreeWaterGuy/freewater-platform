@@ -256,7 +256,7 @@ describe('7. the per-person offer limit counts all of a person’s phones', () =
     const advertiserId = [...app.platform.campaigns.values()][0]!.advertiserId;
     const id = (await call('POST', '/v1/offers', admin, { advertiserId, title: 'Two-phone test', products: ['040000004325'], retailers: ['Walmart'], reward: { kind: 'free', upToCents: 300, youGetCents: 25, causeCents: 10 }, pointsCost: 0, perPerson: 1, maxClaims: 100 })).json().id;
     await call('POST', `/v1/offers/${id}/submit`, admin);
-    expect((await call('POST', `/v1/offers/${id}/approve`, admin)).json().status).toBe('live');
+    expect((await call('POST', `/v1/offers/${id}/approve`, await session('r2-offer-owner@freewater.io', 'owner'))).json().status).toBe('live');
     for (const v of ['viewer-two-phones-a', 'viewer-two-phones-b']) { await app.data.link('freewater', ['user:usr_twophones', v], 'test'); await app.data.ageCheck('freewater', v, '1990-01-01'); }
     expect((await call('POST', `/v1/public/offers/freewater/${id}/claim`, undefined, { viewerKey: 'viewer-two-phones-a' })).statusCode).toBe(201);
     const second = await call('POST', `/v1/public/offers/freewater/${id}/claim`, undefined, { viewerKey: 'viewer-two-phones-b' });
