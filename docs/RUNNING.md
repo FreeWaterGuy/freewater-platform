@@ -30,6 +30,8 @@ with a plain explanation.
 | Setting | What it's for |
 |---|---|
 | `NODE_ENV=production` | Turns on the strict checks and caching. |
+| `FW_FEATURES` | `pilot` switches off everything outside the core loop (see *The pilot* below). Unset (or `all`): everything on. |
+| `FW_FEATURES_OFF` | Comma list of further areas to switch off, e.g. `lottery,offers` (added to the preset). The areas: `token`, `token_conversion`, `withdrawals`, `gift_cards`, `partners`, `agents_fund`, `network`, `lottery`, `video_generation`, `offers`, `games`. An unknown name stops a production start. |
 | `ALLOW_STANDINS=1` | Required in production for now: real payment, payout and email/text providers aren't wired yet, so the server runs on stand-ins (no real money moves, no message is sent) and refuses to start in production unless this says it's a staging rehearsal. It logs and alerts which stand-ins are active. Remove it once the real providers are in. |
 | `DATABASE_URL` | Postgres 13–17, e.g. `postgres://user:pass@host:5432/freewater?sslmode=require`. Use a managed one with automatic backups and point-in-time recovery. |
 | `PUBLIC_URL` | The https address of the site. It goes on every printed QR code and in every email. |
@@ -68,6 +70,45 @@ with a plain explanation.
 | `RUN_JOBS=0` | A server that answers requests but runs no background jobs (for a one-off debug copy). |
 
 Never in production: `SEED_DEMO=1`, `ECHO_CODES=1`, `ALLOW_PRIVATE_WEBHOOKS=1`. The server refuses to start with them.
+
+## The pilot (`FW_FEATURES=pilot`)
+
+The first small launch runs only the core loop, so there's less to secure, explain and watch. Set `FW_FEATURES=pilot`
+in the host's settings. Whole areas are then **gone, not refused**: their addresses aren't registered (404, and not in
+`/v1/openapi.json`), their background jobs aren't scheduled, the several-people steps that would switch them on can't
+be proposed or run, and the console, app, ads portal and ops console hide them (they read `GET /v1/public/features`).
+The server logs what's off when it starts. It's a deploy setting: to switch an area back on, change the setting and
+restart. Nothing stored is deleted.
+
+**On in the pilot:** bottles, ads and printing; scans, AR, attribution (tracked sales and coupons); the app (free
+bottle, points in the wallet, data levels); delivery, packs and the driver app; the advertiser portal and studio; the
+ops console, the owner console and the open books; giving; accounts, team and keys (and webhooks); data and privacy
+rights; transparency; machines; the games; the AI governor and the AI assistants; and launch up to **live with
+points** (testing, bots, reset, going live with points, the pause switch, the hourly seals of the wallet books).
+
+**Off in the pilot**, and why:
+
+| Area | What goes | Why off |
+|---|---|---|
+| `token` | Going live with the token, minting, switching the chain on, signing in Squads; the daily `chain-check` job | Needs the lawyer and 2 other approvers; nothing in the core loop uses it. |
+| `token_conversion` | Turning points into tokens | Comes after the token. (Sales "conversions" are attribution and stay on.) |
+| `withdrawals` | Moving tokens to one's own wallet | Comes after the token; not built yet. |
+| `gift_cards` | Spending credit on gift cards, and the step that turns exchanges on | Moves money; needs Tremendous and approvals. The team's list and settle screens for purchases already made stay. With it off, the gift-card stand-in no longer counts against `ALLOW_STANDINS`. |
+| `partners` | Exchanging points or credit through a money partner (card issuer, treasury stand-ins) | Neither partner is connected. |
+| `agents_fund` | Sharing out, spending from and unlocking with the AI agents' fund | Money for the agents waits for the trust the lawyer sets up. The governor, number line, exams, proposals and assistants keep running. |
+| `network` | Setting up licensees; archiving agents when an operator leaves (continuity) | One operator in the pilot. |
+| `lottery` | The prize game (chances on scan pages, claims, fairness, redeeming) | Off until a lawyer approves its rules. |
+| `video_generation` | Veo footage for "Show me more" and its `videos` job | Costs money per clip. Motion videos, made on the spot, stay. |
+| `offers` | Brand offers, receipts, barcode lookup, value-back tests on offers, and the `offers` job | They pay people real money from brand reserves and need receipt checking; not needed to give free water. |
+
+**Kept on, by judgment:** points and going live with points, because the app's wallet shows points, the full data
+level earns them, the games pay them, and only going live ends the test stage (where points are marked as test and
+wiped). The games, because they're how the platform learns honestly what people want and they move no money.
+
+Turning an area off is quick and safe at any time; turning one back on is a deliberate restart. Before switching off
+`gift_cards` or `offers` on a server that has used them, settle what's in flight (unknown gift-card purchases are
+settled from `GET /v1/wallet/gift-cards`, which stays; offer claims waiting for a receipt wait until offers are on
+again).
 
 ## First start
 
@@ -157,6 +198,8 @@ Each job (except the minute-by-minute watches) remembers when it last ran and wh
 one that failed or was interrupted is tried again soon (after 1 minute, then 2, 4, 8… up to its interval). A job
 never runs twice at once: one past its time limit is reported as stuck and still counts as running until it ends.
 Failures alert, and so does recovery. Run one now with `POST /v1/platform/jobs/<name>/run`.
+Jobs that belong to an area switched off with `FW_FEATURES` (`chain-check`: token, `videos`: video generation, `offers`:
+offers, `game-photos`: games) aren't scheduled at all; with the agents' fund off, `books-and-agents` skips the share-out.
 
 ## Backups by hand
 

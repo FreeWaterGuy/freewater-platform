@@ -79,7 +79,10 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   const { platform, packs, persistence, db, experiences } = app;
   for (const type of Object.keys(allowedTypes)) server.addContentTypeParser(type, { parseAs: 'buffer', bodyLimit: 64 * 1024 * 1024 }, (_req, body, done) => done(null, body));
   const routes: RouteDef[] = [];
-  const route = (r: RouteDef) => routes.push(r);
+  // A route whose area is switched off in the host's settings (FW_FEATURES, src/runtime/features.ts) is never
+  // registered: it answers 404 like any address that doesn't exist, and isn't in /v1/openapi.json.
+  const route = (r: RouteDef) => { if (app.features.routeOn(r)) routes.push(r); };
+  route({ method: 'GET', url: '/v1/public/features', scope: 'public', summary: 'Which areas of the platform this server runs (the rest are switched off in its settings and their addresses don’t exist). The screens hide what’s off.', handler: async () => ({ body: app.features.view() }) });
 
   const unitFor = (key: ApiKey, id: string) => {
     const u = platform.units.get(id);
@@ -198,7 +201,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     // The prize game, if this company runs it: only on ads (not someone's own custom bottle).
     const custom = target.kind === 'slot' && platform.units.get(target.unitId)?.kind === 'custom';
     const companyId = experiences.ownerOf(target).companyId;
-    const game = custom ? null : app.lottery.settings(companyId);
+    const game = custom || !app.features.on('lottery') ? null : app.lottery.settings(companyId);
     const environment = target.kind === 'slot' && !custom ? await app.environment.forScanPage(target.unitId, target.slot, viewer).catch(() => null) : null;
     // The person's own law applies: where they are decides what's asked first, the youngest age that may play, and
     // whether rewards are offered at all.

@@ -51,7 +51,11 @@
   const routes = [[/^\/ops\/?$/, today, 'today'], [/^\/ops\/review$/, reviewPage, 'review'], [/^\/ops\/machines$/, machinesPage, 'machines'], [/^\/ops\/machines\/([\w-]+)$/, machinePage, 'machines'], [/^\/ops\/routes$/, routesPage, 'routes'], [/^\/ops\/subscriptions$/, subsPage, 'subs'], [/^\/ops\/books$/, booksPage, 'books']];
   // The scopes each page's main call needs (from its route in src/api). 'admin' passes them all.
   const PAGE_SCOPES = { today: ['packs', 'events', 'ledger', 'campaigns'], review: ['campaigns'], machines: ['orders', 'packs', 'events'], routes: ['packs'], subs: ['packs'], books: ['ledger'] };
-  const can = (page) => { const sc = S.me?.scopes; if (!Array.isArray(sc)) return true; return sc.includes('admin') || (PAGE_SCOPES[page] ?? []).some((x) => sc.includes(x)); };
+  // The area each page belongs to, if any (src/runtime/features.ts). Every ops page is part of the core loop today, so
+  // none is listed; a page for an area that can be switched off goes here and disappears when it's off.
+  const PAGE_FEATURES = {};
+  const on = (page) => !PAGE_FEATURES[page] || !(S.features?.off ?? []).includes(PAGE_FEATURES[page]);
+  const can = (page) => { if (!on(page)) return false; const sc = S.me?.scopes; if (!Array.isArray(sc)) return true; return sc.includes('admin') || (PAGE_SCOPES[page] ?? []).some((x) => sc.includes(x)); };
   let cleanup = null;
   function go(path, replace) { S.path = path; if (!fixture) history[replace ? 'replaceState' : 'pushState'](null, '', path); render(); }
   window.addEventListener('popstate', () => { S.path = location.pathname + location.search; render(); });
@@ -59,6 +63,8 @@
   async function render() {
     if (cleanup) { cleanup(); cleanup = null; }
     if (!S.config) S.config = await api('GET', '/v1/public/app-config');
+    // Areas switched off on this server (FW_FEATURES): pages that belong to one aren't shown or opened.
+    if (!S.features) S.features = await api('GET', '/v1/public/features').catch(() => ({ off: [] }));
     if (S.token && !S.me) { try { S.me = await api('GET', '/v1/me'); } catch { S.me = null; } }
     if (!S.me) return signIn();
     if (S.me.advertiserId || S.me.role === 'consumer') return shell('', h('div', { class: 'notice err', text: 'This console is for the company’s team. Ask an owner to add you.' }));

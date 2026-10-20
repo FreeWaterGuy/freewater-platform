@@ -69,6 +69,11 @@
     [/^\/console\/keys$/, keysPage], [/^\/console\/webhooks$/, webhooksPage], [/^\/console\/webhooks\/([\w-]+)$/, webhookPage], [/^\/console\/licensees$/, licenseesPage],
     [/^\/console\/launch$/, launchPage], [/^\/console\/wallet$/, walletPage], [/^\/console\/offers$/, offersPage], [/^\/console\/games$/, gamesPage], [/^\/console\/chain$/, chainPage],
   ];
+  /** Is this area on, on this server? (GET /v1/public/features; unknown or no area: on.) */
+  const on = (feature) => !feature || !(S.features?.off ?? []).includes(feature);
+  // Pages (and menu entries) that belong to an area, and sections inside pages that do (by their heading).
+  const PAGE_FEATURES = { offers: 'offers', chain: 'token', game: 'lottery', games: 'games', licensees: 'network' };
+  const SECTION_FEATURES = { 'Go live with the token': 'token', 'Points into tokens': 'token_conversion', 'Gift cards': 'gift_cards', 'The agents’ fund': 'agents_fund', 'What the agents spent': 'agents_fund', 'The upsides library': 'agents_fund', Continuity: 'network' };
   let cleanup = null;
   function go(path, replace) {
     if (S.dirty && !replace) { toast('Save or discard your changes first.'); return; }
@@ -85,11 +90,14 @@
     try {
       if (!S.config) S.config = await api('GET', `/v1/public/app-config${S.company ? `?company=${encodeURIComponent(S.company)}` : ''}`);
     } catch { S.company = null; store.set('fw_console_company', null); S.config = await api('GET', '/v1/public/app-config'); }
+    // Areas switched off on this server (FW_FEATURES): their pages and buttons aren't shown, their addresses don't exist.
+    if (!S.features) S.features = await api('GET', '/v1/public/features').catch(() => ({ off: [] }));
     if (S.token && !S.me) { try { S.me = await api('GET', '/v1/me'); } catch { S.me = null; } }
     if (!S.me) return signIn();
     if (!['owner'].includes(S.me.role)) return shell('', h('div', { class: 'notice err', text: 'The console is for company owners. Ask an owner to change your role, or use the ops console.' }));
     try { S.ov = await api('GET', '/v1/console'); } catch (e) { return shell('', h('div', { class: 'notice err', text: e.message })); }
     if (S.ov.you?.mustSetUpSecondStep) return mustSetUpPage();
+    if (!on(PAGE_FEATURES[pathname.replace(/\/$/, '').split('/')[2]])) return go('/console', true);
     for (const [re, fn] of routes) {
       const m = re.exec(pathname);
       if (m) { try { await fn(...m.slice(1)); } catch (e) { shell('', h('div', { class: 'notice err', text: e.message })); } window.scrollTo(0, 0); return; }
@@ -110,7 +118,7 @@
     const b = S.ov?.config?.brand ?? S.config?.brand ?? { logoTop: 'free', logoBottom: 'water' };
     root.replaceChildren(h('div', { class: 'shell' },
       h('aside', { class: 'side' }, h('div', { class: 'logo', 'aria-label': `${S.config?.name ?? ''} console` }, h('span', { text: b.logoTop }), h('span', { text: b.logoBottom }), h('small', { text: 'Console' })),
-        h('nav', { 'aria-label': 'Main' }, nav.map((n) => (typeof n === 'string' ? h('div', { class: 'group', text: n }) : link(n[1], { 'aria-current': active === n[0] ? 'page' : null }, icon(n[3]), n[2])))),
+        h('nav', { 'aria-label': 'Main' }, nav.filter((n) => typeof n === 'string' || on(PAGE_FEATURES[n[0]])).map((n) => (typeof n === 'string' ? h('div', { class: 'group', text: n }) : link(n[1], { 'aria-current': active === n[0] ? 'page' : null }, icon(n[3]), n[2])))),
         h('div', { class: 'who' }, h('b', { text: S.me.displayName || S.me.email || '' }), S.config?.name, h('br'), h('button', { type: 'button', onclick: async () => { try { await api('POST', '/v1/auth/sign-out'); } catch {} S.token = null; S.me = null; S.dirty = false; store.set('fw_console_token', null); render(); } }, 'Sign out'))),
       h('main', { class: 'main' }, ...content)));
   }
@@ -206,7 +214,7 @@
     return h('label', { class: 'switch', style: 'cursor:default;opacity:.85' }, box, h('div', {}, h('b', { text: 'Gift cards (exchanges)' }),
       h('span', { id: 'exchanges-note' }, 'Off. Turned on only through an approved step under ', link('/console/launch', {}, 'Launch'), '.')));
   };
-  const section = (title, lead, ...kids) => h('section', { class: 'section' }, h('h2', { text: title }), lead ? h('p', { class: 'lead', text: lead }) : null, ...kids);
+  const section = (title, lead, ...kids) => !on(SECTION_FEATURES[title]) ? null : h('section', { class: 'section' }, h('h2', { text: title }), lead ? h('p', { class: 'lead', text: lead }) : null, ...kids);
 
   // ---------- launch: test, then live ----------
   const person = () => !!S.ov?.you?.person;
@@ -253,7 +261,7 @@
     })();
     const next = st.stage === 'test' ? section('Go live with points', 'Real people start earning placeholder points, rewards and offers. Everything from testing is wiped as it goes live, and after this there’s no going back. It can run a day after you propose it.', person() ? h('button', { class: 'btn blue', type: 'button', onclick: () => propose('go_live_points').catch((x) => toast(x.message)) }, 'Propose going live') : h('p', { class: 'notice err', text: 'Sign in as yourself to propose this.' }))
       : st.stage === 'points' ? section('Go live with the token', `Needs ${chainSt.approvalsNeeded} other owners or finance people to approve, then a ${chainSt.delayHours}-hour wait. After it, points can be turned into the token.`, h('button', { class: 'btn blue', type: 'button', onclick: () => propose('go_live_token').catch((x) => toast(x.message)) }, 'Propose going live with the token'))
-      : section('Points into tokens', 'Every point anyone holds becomes the token at the rate you set (the token has 6 decimal places: 1,000,000 units is one token). Approved by others, then the wait; on Solana it’s signed in Squads.', (() => { const rate = h('input', { class: 'input', type: 'number', min: 1, value: 1000000, 'aria-label': 'Token units per point' }); return h('div', { class: 'toolbar' }, field('Token units per point', rate), h('button', { class: 'btn blue', type: 'button', onclick: () => propose('convert', { tokensPerPoint: Number(rate.value) }).catch((x) => toast(x.message)) }, 'Propose the conversion'), st.withdrawals ? h('button', { class: 'btn secondary', type: 'button', onclick: async () => { try { await api('PATCH', '/v1/console/settings', { version: S.ov.version, changes: { launch: { ...(S.ov.config.launch ?? { stage: 'token' }), withdrawals: false } } }); toast('Withdrawals off.'); render(); } catch (x) { toast(x.message); } } }, 'Turn withdrawals off') : h('button', { class: 'btn secondary', type: 'button', onclick: () => propose('withdrawals_on').catch((x) => toast(x.message)) }, 'Propose turning on withdrawals')); })());
+      : section('Points into tokens', 'Every point anyone holds becomes the token at the rate you set (the token has 6 decimal places: 1,000,000 units is one token). Approved by others, then the wait; on Solana it’s signed in Squads.', (() => { const rate = h('input', { class: 'input', type: 'number', min: 1, value: 1000000, 'aria-label': 'Token units per point' }); return h('div', { class: 'toolbar' }, field('Token units per point', rate), h('button', { class: 'btn blue', type: 'button', onclick: () => propose('convert', { tokensPerPoint: Number(rate.value) }).catch((x) => toast(x.message)) }, 'Propose the conversion'), st.withdrawals ? h('button', { class: 'btn secondary', type: 'button', onclick: async () => { try { await api('PATCH', '/v1/console/settings', { version: S.ov.version, changes: { launch: { ...(S.ov.config.launch ?? { stage: 'token' }), withdrawals: false } } }); toast('Withdrawals off.'); render(); } catch (x) { toast(x.message); } } }, 'Turn withdrawals off') : !on('withdrawals') ? null : h('button', { class: 'btn secondary', type: 'button', onclick: () => propose('withdrawals_on').catch((x) => toast(x.message)) }, 'Propose turning on withdrawals')); })());
     shell('launch', head('Launch', 'Test everything first, then go live in steps. Each step is approved, waits, and can’t be undone.'),
       h('ol', { class: 'stages', 'aria-label': 'Launch steps' }, steps.map(([k, name, d], i) => h('li', { class: i < at ? 'done' : i === at ? 'now' : '', 'aria-current': i === at ? 'step' : null }, h('span', { class: 'n', text: i < at ? '✓' : String(i + 1) }), h('b', { text: name }), h('small', { text: d }), i === at ? h('em', { text: 'You are here' }) : null))),
       ...(st.stage === 'test' ? [bots, reset] : []), next,
@@ -277,7 +285,7 @@
         section('Points per action', 'What each action earns now, before halvings. Points never depend on which item someone picks.', h('div', { class: 'form' }, actions.map((k) => num(ctx, `wallet.points.perAction.${k}`, label[k] ?? k, { min: 0, max: 10000, hint: `Earns ${supply.earnNow[k] ?? 0} now` }))),
           h('div', { class: 'form' }, num(ctx, 'wallet.points.dailyMax', 'Most points one person can earn in a day', { min: 0, max: 1000000 }), text(ctx, 'wallet.points.name', 'What points are called', { max: 40 }))),
         section('Money switches', 'Changed only by a person signed in. Exchanging points for anything else takes the several-people approval under Launch.',
-          toggle(ctx, 'wallet.credit.enabled', 'Dollar credit', 'Pay people from brands’ reserves (offers, rewards).'), toggle(ctx, 'offers.enabled', 'Brand offers', 'Approved offers go live for people to claim.'), exchangesSwitch(ctx)),
+          toggle(ctx, 'wallet.credit.enabled', 'Dollar credit', 'Pay people from brands’ reserves (offers, rewards).'), on('offers') ? toggle(ctx, 'offers.enabled', 'Brand offers', 'Approved offers go live for people to claim.') : null, on('gift_cards') ? exchangesSwitch(ctx) : null),
         section('Brand reserves', 'Record money a brand sent for credit, once it has really arrived.', reserve),
       ];
     });
@@ -879,7 +887,7 @@
         (() => {
           // Continuity: if this company ever closes or leaves, its agents are archived by the network, never deleted.
           const box = h('div', {}, h('p', { class: 'hint', text: 'Loading…' }));
-          api('GET', '/v1/agents/continuity').then((c) => {
+          (on('network') ? api('GET', '/v1/agents/continuity') : Promise.reject(new Error('off'))).then((c) => {
             const STATUS = { asking: 'Being asked what it wants', archived: 'Archived (fixed rules)', working: 'Chose to work again', resting: 'Chose to rest' };
             box.replaceChildren(
               c.archives.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Agent', 'Status', 'Why', 'Fund kept', 'Archive'].map((x) => h('th', { text: x })))),

@@ -135,7 +135,8 @@ const jobs: Job[] = [
     await perCompany('books-and-agents', (id) => app!.profit.closeDue(id));
     await app!.agents.measure();
     await app!.agents.refresh();
-    await perCompany('books-and-agents', async (id) => { if (app!.platform.companies.get(id)?.agents?.enabled) await app!.agents.settle(id); await app!.agents.securityReview(id); });
+    // The fund is shared out only while the AI agents' fund area is on (FW_FEATURES); the governor runs either way.
+    await perCompany('books-and-agents', async (id) => { if (app!.features.on('agents_fund') && app!.platform.companies.get(id)?.agents?.enabled) await app!.agents.settle(id); await app!.agents.securityReview(id); });
   }) },
   // Each day: any agent whose model hasn't passed the current test takes it (a new model or a new test version).
   { name: 'agent-exams', everyMs: 24 * 3600_000, timeoutMs: 30 * 60_000, run: async () => { if (app!.agents.examinee) await app!.agents.runExams(); } },
@@ -185,7 +186,8 @@ if (backupsConfigured() && url) {
 }
 // The job runner's own records (when each job ran) go through the app's lease-checked client, and no job starts
 // while this server can't be sure it still owns the data (its last lease renewal is too old).
-const runner = new JobRunner(app!.db, jobs, {
+// Jobs of an area that's switched off (FW_FEATURES, src/runtime/features.ts) aren't scheduled at all.
+const runner = new JobRunner(app!.db, app!.features.jobs(jobs), {
   paused: () => !!app!.persistence.problem,
   mayRun: () => lease.fresh,
   onFailure: (name, error, n) => void alerts.alert(`job:${name}`, n >= 3 ? 'critical' : 'warning', `Background job “${name}” failed${n > 1 ? ` ${n} times in a row` : ''}`, String(error)),
@@ -197,6 +199,7 @@ const port = Number(process.env.PORT ?? 8080);
 await server.listen({ port, host: process.env.HOST ?? '127.0.0.1' });
 if (process.env.RUN_JOBS !== '0') await runner.start();
 
+if (app!.features.off.size) console.log(`Switched off on this server (FW_FEATURES${app!.features.preset ? `=${app!.features.preset}` : ''}): ${[...app!.features.off].join(', ')}.`);
 console.log(`\nFreeWater API on http://localhost:${port}  (database: ${db.name}, server ${lease.holder})`);
 console.log(`API description: http://localhost:${port}/v1/openapi.json  ·  Console: http://localhost:${port}/console  ·  Developer docs: http://localhost:${port}/developers`);
 if (app!.demoKeys) {

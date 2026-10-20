@@ -47,6 +47,7 @@ import { LotteryService } from './modules/lottery/service';
 import { VideoService } from './modules/video/service';
 import { ClaudeWriter, builtinWriter } from './modules/video/motion';
 import { VeoProvider } from './modules/video/veo';
+import { featuresFrom, type Features } from './runtime/features';
 import type { FootageProvider, StoryWriter } from './modules/video/contract';
 import { InteractionService } from './modules/interactions/service';
 import { geoFromEnv } from './modules/data/geoip';
@@ -109,6 +110,8 @@ export interface AppOptions {
    */
   lease?: InstanceLease;
   builtins?: Record<string, Creative>;
+  /** Which areas are switched off (src/runtime/features.ts). Default: read FW_FEATURES and FW_FEATURES_OFF. */
+  features?: Features;
   seedDemo?: boolean; // load FreeWater's sample catalog and print demo API keys when the database is empty
   clock?: () => Date;
   seed?: number;
@@ -163,6 +166,7 @@ export interface AppOptions {
 /** Start the platform on a database: migrate, load everything, and keep writing every change back. */
 export async function createApp(opts: AppOptions) {
   const raw = opts.db;
+  const features = opts.features ?? featuresFrom().features;
   await migrate(raw);
   // Changes a stopped server had waiting go in first, so what's read below is complete.
   await SqlPersistence.recoverSpool(raw, opts.spoolFile);
@@ -261,7 +265,8 @@ export async function createApp(opts: AppOptions) {
   const assets = opts.assets ?? new SqlAssetStore(db, opts.blobs);
   // Personalized videos behind "Show me more", and every interaction people have with a page.
   const videoWriter = opts.videoWriter ?? (aiOn ? new ClaudeWriter({ apiKey: anthropicKey, model: process.env.ANTHROPIC_MODEL }) : builtinWriter);
-  const footage = opts.footage === null ? undefined : opts.footage ?? (process.env.GEMINI_API_KEY ? new VeoProvider({ apiKey: process.env.GEMINI_API_KEY, model: process.env.VEO_MODEL, image: async (url) => {
+  // Veo footage only while video generation is on (FW_FEATURES); motion videos are made either way.
+  const footage = opts.footage === null || !features.on('video_generation') ? undefined : opts.footage ?? (process.env.GEMINI_API_KEY ? new VeoProvider({ apiKey: process.env.GEMINI_API_KEY, model: process.env.VEO_MODEL, image: async (url) => {
     const m = /^\/assets\/([A-Za-z0-9_-]+)\./.exec(url); const got = m ? await assets.get(m[1]!) : null;
     return got && got.asset.contentType.startsWith('image/') ? { mimeType: got.asset.contentType, data: Buffer.from(got.bytes).toString('base64') } : null;
   } }) : undefined);
@@ -395,6 +400,8 @@ export async function createApp(opts: AppOptions) {
   const anchors = new AnchorService(db, platform, (id) => books.days(id), publishers, (id) => delivery.today(id), opts.clock);
   // The chain layer, switched off: hourly seals of the wallet journal, actions needing several people, the daily check.
   const chain = new ChainService(db, platform, wallet, publishers, opts.clock);
+  // A step that would switch on an area that's off (FW_FEATURES) can't be proposed or run.
+  chain.kindAllowed = (kind) => features.actionOn(kind);
   chain.alert = (companyId, message) => void runtime.alerts.alert('chain', 'critical', `Chain (${companyId})`, message);
   // An ad reached its daily ceiling of billed scans or AR launches (R3): more are counted, never billed, and a person looks.
   platform.ledger.onCeiling = (h) => void runtime.alerts.alert(`billing-ceiling:${h.companyId}:${h.campaignId}:${h.kind}:${h.day}`, 'warning', `Ad ${h.campaignId} reached its daily ceiling of ${h.ceiling} billed ${h.kind === 'scan' ? 'scans' : 'AR launches'} (${h.companyId}, ${h.day})`, `More are counted but not billed today. Far more ${h.kind === 'scan' ? 'scans' : 'AR launches'} than its bottles could get usually means fake scans: check where they come from (GET /v1/books/reconciliation) before the advertiser is invoiced.`);
@@ -527,7 +534,7 @@ export async function createApp(opts: AppOptions) {
   await offers.repairCauseGifts();
   await persistence.flush();
 
-  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
+  return { ...made, features, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

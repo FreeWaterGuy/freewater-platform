@@ -12,6 +12,9 @@ import { createPgliteClient } from '../src/db/pglite';
 import type { SqlClient } from '../src/db/client';
 import { createApiKey, type Scope } from '../src/db/store';
 import { fill, routeTable, sample, type TableRow } from './access-schema';
+import { readFileSync } from 'node:fs';
+import { checkConfig, checkStandIns } from '../src/runtime/config';
+import { featuresFrom, JOB_FEATURES, ROUTE_FEATURES, type Feature } from '../src/runtime/features';
 
 let db: SqlClient;
 let app: App;
@@ -154,5 +157,105 @@ describe('who else is kept out', () => {
       if (r.status !== 403) bad.push(`${at(t)}: ${r.status} ${r.code}`);
     }
     expect(bad).toEqual([]);
+  });
+});
+
+/**
+ * The pilot (FW_FEATURES=pilot, src/runtime/features.ts): areas switched off are gone, not refused. Their routes
+ * aren't registered (404 for everyone, even the most powerful key), their jobs aren't scheduled, and the steps that
+ * would switch them on can't be proposed. Everything else is exactly the route table above.
+ */
+describe('the pilot preset switches whole areas off', () => {
+  let pDb: SqlClient;
+  let pApp: App;
+  let pServer: FastifyInstance;
+  let pRegistered: string[] = [];
+  const pilot = featuresFrom({ FW_FEATURES: 'pilot' }).features;
+  const offKeys = Object.entries(ROUTE_FEATURES).filter(([f]) => !pilot.on(f as Feature)).flatMap(([, ks]) => ks);
+  const pCall = async (method: string, url: string, key?: string, payload?: unknown) => {
+    const r = await pServer.inject({ method: method as any, url, payload: payload as any, headers: key ? { authorization: `Bearer ${key}` } : {} });
+    let body: any; try { body = r.json(); } catch { body = r.body; }
+    return { status: r.statusCode, code: body?.error?.code as string | undefined, body };
+  };
+
+  beforeAll(async () => {
+    pDb = await createPgliteClient();
+    pApp = await createApp({ db: pDb, seedDemo: true, seed: 11, clock: () => new Date('2026-11-02T16:00:00Z'), features: pilot });
+    pServer = await buildServer(pApp);
+    const spec = (await pCall('GET', '/v1/openapi.json')).body;
+    pRegistered = Object.entries<any>(spec.paths).flatMap(([path, ops]) => Object.keys(ops).map((m) => `${m.toUpperCase()} ${path.replace(/\{([a-zA-Z]+)\}/g, ':$1')}`));
+  }, 120_000);
+  afterAll(async () => { await pServer?.close(); await pDb?.close(); });
+
+  it('names only routes that exist, so a typo can’t leave a route on', () => {
+    const all = new Set(table.map(at));
+    expect(Object.values(ROUTE_FEATURES).flat().filter((k) => !all.has(k))).toEqual([]);
+    expect(offKeys.length).toBeGreaterThan(30);
+  });
+  it('registers every core route and none of the switched-off ones', () => {
+    const want = table.map(at).filter((k) => !offKeys.includes(k)).sort();
+    expect([...pRegistered].sort()).toEqual(want);
+    expect(pRegistered.length).toBe(table.length - offKeys.length);
+  });
+  it('answers 404 on every switched-off route, even to the platform’s own admin key', async () => {
+    const bad: string[] = [];
+    for (const k of offKeys) {
+      const [method, url] = k.split(' ') as [string, string];
+      for (const key of [undefined, keys['freewater-admin']]) {
+        const r = await pCall(method, fill(url, { id: unitId }), key, method === 'GET' ? undefined : {});
+        if (r.status !== 404) bad.push(`${k}${key ? ' (admin key)' : ''}: ${r.status} ${r.code}`);
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+  it('says what is off, publicly, for the screens', async () => {
+    const r = await pCall('GET', '/v1/public/features');
+    expect(r.status).toBe(200);
+    expect(r.body.preset).toBe('pilot');
+    expect(r.body.off).toEqual(expect.arrayContaining(['token', 'token_conversion', 'withdrawals', 'gift_cards', 'partners', 'agents_fund', 'network', 'lottery', 'video_generation', 'offers']));
+    expect(r.body.on).toEqual(['games']);
+    expect((await call('GET', '/v1/public/features')).body).toEqual({ preset: null, on: expect.arrayContaining(['token', 'games', 'offers']), off: [] });
+  });
+  it('doesn’t schedule the switched-off areas’ jobs (the job list in src/server/main.ts)', () => {
+    const main = readFileSync(new URL('../src/server/main.ts', import.meta.url), 'utf8');
+    const names = [...main.matchAll(/\{ name: '([a-z-]+)', everyMs/g)].map((m) => m[1]!);
+    expect(names.length).toBeGreaterThan(10);
+    expect(Object.keys(JOB_FEATURES).filter((n) => !names.includes(n))).toEqual([]); // every gated job exists
+    const scheduled = pilot.jobs(names.map((name) => ({ name }))).map((j) => j.name);
+    for (const gone of ['chain-check', 'videos', 'offers']) expect(scheduled).not.toContain(gone);
+    for (const kept of ['webhooks', 'fleet-sweep', 'books-and-agents', 'wallet-seals', 'reconciliation', 'fingerprints', 'data-purge', 'game-photos']) expect(scheduled).toContain(kept);
+    expect(featuresFrom({}).features.jobs(names.map((name) => ({ name }))).length).toBe(names.length); // default: all
+    expect(main).toMatch(/new JobRunner\(app!\.db, app!\.features\.jobs\(jobs\)/);
+  });
+  it('refuses to propose or run a step that would switch an area on; going live with points stays', async () => {
+    for (const kind of ['go_live_token', 'mint', 'switch_on', 'convert', 'withdrawals_on', 'exchanges_on'] as const) {
+      await expect(pApp.chain.propose('freewater', kind, {}, 'user:nobody')).rejects.toMatchObject({ code: 'feature_off', status: 404 });
+    }
+    await expect(pApp.chain.propose('freewater', 'go_live_points', {}, 'user:nobody')).rejects.not.toMatchObject({ code: 'feature_off' });
+  });
+});
+
+describe('reading FW_FEATURES and FW_FEATURES_OFF', () => {
+  it('is everything on by default', () => {
+    expect(featuresFrom({}).features.off.size).toBe(0);
+  });
+  it('adds FW_FEATURES_OFF to the preset, and an area is off when one it needs is', () => {
+    const f = featuresFrom({ FW_FEATURES_OFF: 'token, Lottery' }).features;
+    expect([...f.off].sort()).toEqual(['lottery', 'token', 'token_conversion', 'withdrawals']);
+    expect(featuresFrom({ FW_FEATURES: 'pilot', FW_FEATURES_OFF: 'games' }).features.on('games')).toBe(false);
+  });
+  it('stops a production start on an unknown name; elsewhere it warns and ignores it', () => {
+    const prod = featuresFrom({ NODE_ENV: 'production', FW_FEATURES_OFF: 'lotery', FW_FEATURES: 'pilott' });
+    expect(prod.errors).toHaveLength(2);
+    expect(prod.errors.join(' ')).toMatch(/lotery[\s\S]*pilott|pilott[\s\S]*lotery/);
+    const dev = featuresFrom({ FW_FEATURES_OFF: 'lotery' });
+    expect(dev.errors).toEqual([]);
+    expect(dev.warnings).toHaveLength(1);
+    expect(dev.features.off.size).toBe(0);
+    expect(checkConfig({ NODE_ENV: 'production', FW_FEATURES_OFF: 'lotery' }).errors.join(' ')).toMatch(/FW_FEATURES_OFF[^]*lotery/);
+  });
+  it('doesn’t count the gift-card stand-in when gift cards are off', () => {
+    expect(checkStandIns({}, {}).active.join(' ')).toMatch(/gift card/);
+    expect(checkStandIns({}, { FW_FEATURES: 'pilot' }).active.join(' ')).not.toMatch(/gift card/);
   });
 });
