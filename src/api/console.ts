@@ -56,6 +56,10 @@ export function consoleRoutes(app: App, route: (r: RouteDef) => void) {
   } });
   route({ method: 'DELETE', url: '/v1/team/:userId', scope: 'admin', summary: 'Take someone off the team. They are signed out everywhere.', handler: async (req, key) => {
     const k = signedInOwner(key, 'Taking someone off the team');
+    // Taking an owner or finance person off the team is an approval step too: otherwise someone with only an owner's
+    // inbox could remove everyone who would notice them, then set up their own authenticator app.
+    const target = await app.accounts.get((req.params as any).userId).catch(() => null);
+    if (target && target.companyId === k.companyId && (target.role === 'owner' || target.role === 'finance')) await approverStep(k);
     await app.accounts.removeFromTeam(k.companyId, (req.params as any).userId, k.userId);
     return { status: 204 };
   } });

@@ -90,7 +90,15 @@ export class FleetService {
     private opts: { claimTimeoutMs?: number; finishTimeoutMs?: number; offlineAfterMs?: number; bufferHours?: number } = {},
   ) {
     this.presence = new MachinePresence(db, () => platform.bus.now());
-    this.prints = new PrintCounter(() => platform.bus.now().getTime());
+    // Today's count starts from the bottles already made at this machine today, so a restart can't reset the cap.
+    this.prints = new PrintCounter(() => platform.bus.now().getTime(), (locationId, day) => {
+      const keys: string[] = [];
+      for (const u of platform.units.values()) {
+        if (u.locationId !== locationId || !u.orderId || !u.createdAt?.startsWith(day)) continue;
+        keys.push(u.orderId.startsWith('buffer:') ? `buffer:${u.id}` : u.orderId);
+      }
+      return keys;
+    });
   }
 
   private now() { return this.platform.bus.now(); }

@@ -88,6 +88,15 @@ describe('2. an inbox alone never becomes the second step', () => {
     expect((await add(stepped, 'sk-ops@freewater.io', 'finance')).status).toBe(201);
     expect((await add(emailOnly, 'sk-ops@freewater.io', 'ops')).body.error?.code).toBe('second_step_required'); // taking an approver role away too
   });
+
+  it('taking an owner or finance person off the team needs the second step; other people don’t', async () => {
+    const fin = await app.accounts.invite({ companyId: 'freewater', email: 'sk-fin-2@freewater.io', role: 'finance' });
+    const ops = await app.accounts.invite({ companyId: 'freewater', email: 'sk-ops-2@freewater.io', role: 'ops' });
+    const remove = (token: string, id: string) => call('DELETE', `/v1/team/${id}`, token);
+    expect((await remove(emailOnly, fin.id)).body.error?.code).toBe('second_step_required');
+    expect((await remove(emailOnly, ops.id)).status).toBe(204);
+    expect((await remove(stepped, fin.id)).status).toBe(204);
+  });
 });
 
 describe('3. a stolen Model 6 key can’t print past the caps with offline labels', () => {
@@ -121,6 +130,12 @@ describe('3. a stolen Model 6 key can’t print past the caps with offline label
     expect(r).toMatchObject({ billed: 0, refused: 1 });
     // And orders share the same day.
     const o = await call('POST', '/v1/orders', machine(), { orderId: 'sk-order-1', locationId: 'ATX-014', productId: 'bottle-16oz' });
+    expect([o.status, o.body.error?.code]).toEqual([429, 'print_limit']);
+  });
+
+  it('a restart doesn’t reset the day’s count: it starts from the bottles already made there today', async () => {
+    (app.fleet.prints as any).seen.clear(); // what a restart forgets
+    const o = await call('POST', '/v1/orders', machine(), { orderId: 'sk-order-2', locationId: 'ATX-014', productId: 'bottle-16oz' });
     expect([o.status, o.body.error?.code]).toEqual([429, 'print_limit']);
   });
 });

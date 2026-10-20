@@ -23,13 +23,17 @@ export function printLimits(m: CompanyConfig['machines'] | undefined) {
  */
 export class PrintCounter {
   private seen = new Map<string, { minute: Map<string, number>; day: string; today: Set<string> }>();
-  constructor(private now: () => number) {}
+  /**
+   * `seed` returns what this machine already printed or was handed today (from the bottles kept in the database), so a
+   * restart never resets the day's count to zero: online orders by their order id, offline labels as `buffer:<unit>`.
+   */
+  constructor(private now: () => number, private seed: (locationId: string, day: string) => string[] = () => []) {}
 
   private state(locationId: string) {
     const now = this.now(), day = new Date(now).toISOString().slice(0, 10);
     let s = this.seen.get(locationId);
-    if (!s) this.seen.set(locationId, (s = { minute: new Map(), day, today: new Set() }));
-    if (s.day !== day) { s.day = day; s.today.clear(); }
+    if (!s) this.seen.set(locationId, (s = { minute: new Map(), day, today: new Set(this.seed(locationId, day)) }));
+    if (s.day !== day) { s.day = day; s.today = new Set(this.seed(locationId, day)); }
     for (const [id, t] of s.minute) if (now - t >= 60_000) s.minute.delete(id);
     return s;
   }
