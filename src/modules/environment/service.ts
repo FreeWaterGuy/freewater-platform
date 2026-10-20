@@ -218,7 +218,7 @@ export class EnvironmentService {
     // Only the person holding it: whoever first scanned it (or, before any scan, the person it was printed for).
     if (person !== (await this.holderOf(unitId))) throw new EnvironmentError('not_holder', 'Only the person holding the bottle can choose where its gift goes.', 403);
     // Money already sent can't be moved.
-    const sent = (await this.db.query<any>(`select 1 from charity_transfers t join charities c on c.id = t.charity_id where t.company_id = $1 and c.name = any($2) and t.status <> 'failed' and t.covers_until >= $3 limit 1`, [u.companyId, g.from.map(([k]) => k), u.createdAt])).rows.length;
+    const sent = (await this.db.query<any>(`select 1 from charity_transfers t join charities c on c.id = t.charity_id where t.company_id = $1 and c.name = any($2) and t.status in ('sent', 'confirmed') and t.covers_until >= $3 limit 1`, [u.companyId, g.from.map(([k]) => k), u.createdAt])).rows.length;
     if (sent) throw new EnvironmentError('already_sent', 'This bottle’s gift has already been sent.', 409);
     // Claim the bottle first: only one choice per bottle ever moves money.
     const won = (await this.db.query<any>(`insert into giving_directions (unit_id, company_id, person, from_cause, to_cause, cents, at) values ($1,$2,$3,$4,$5,$6,$7) on conflict do nothing returning unit_id`, [unitId, u.companyId, person, g.current, to, g.cents, iso(this.now())])).rows.length;

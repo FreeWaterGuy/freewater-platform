@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApp, type App } from '../src/app';
 import { createPgliteClient } from '../src/db/pglite';
 import type { SqlClient } from '../src/db/client';
-import { TestGiftCards, TremendousGiftCards } from '../src/modules/wallet/giftcards';
+import { GiftCardRefused, TestGiftCards, TremendousGiftCards } from '../src/modules/wallet/giftcards';
 
 let db: SqlClient, app: App;
 let now = new Date('2026-10-19T10:15:00Z').getTime();
@@ -33,7 +33,7 @@ describe('gift cards', () => {
     const card = await app.wallet.buyGiftCard('freewater', 'user:usr_gc', { email: 'a@b.co', product: 'amazon', cents: 600 }, new TestGiftCards());
     expect(card.code).toMatch(/^TEST-AMAZON/);
     expect((await app.wallet.wallet('freewater', 'user:usr_gc')).credit.balanceCents).toBe(600);
-    const failing = { name: 'x', catalog: () => new TestGiftCards().catalog(), order: async () => { throw new Error('down'); } };
+    const failing = { name: 'x', catalog: () => new TestGiftCards().catalog(), order: async () => { throw new GiftCardRefused('Tremendous answered 400', 400); } }; // a definite no (a timeout keeps the credit held)
     await expect(app.wallet.buyGiftCard('freewater', 'user:usr_gc', { email: 'a@b.co', product: 'target', cents: 500 }, failing)).rejects.toMatchObject({ code: 'provider_failed' });
     expect((await app.wallet.wallet('freewater', 'user:usr_gc')).credit.balanceCents).toBe(600);
     await expect(app.wallet.buyGiftCard('freewater', 'user:usr_gc', { email: 'a@b.co', product: 'target', cents: 900 }, new TestGiftCards())).rejects.toMatchObject({ code: 'not_enough' });

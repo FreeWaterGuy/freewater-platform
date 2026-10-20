@@ -5,6 +5,7 @@ import { buildServer } from '../src/api/server';
 import { createPgliteClient } from '../src/db/pglite';
 import type { SqlClient } from '../src/db/client';
 import { era, pointsNow } from '../src/modules/wallet/assets';
+import type { TestOutbox } from '../src/adapters/messaging/contract';
 
 let db: SqlClient, app: App, server: FastifyInstance, keys: Record<string, string>;
 let now = new Date('2026-10-18T18:00:00Z').getTime();
@@ -18,7 +19,14 @@ beforeAll(async () => {
   app = await createApp({ db, seedDemo: true, seed: 51, clock: () => new Date(now), assumePlace: { country: 'US', state: 'TX' } });
   keys = app.demoKeys!;
   server = await buildServer(app);
+  await app.accounts.invite({ companyId: 'freewater', email: 'owner@freewater.io', role: 'owner', displayName: 'Josh' });
 });
+/** Reserves and corrections need a person signed in, not a service key. */
+async function signIn(email: string) {
+  await call('POST', '/v1/auth/start', undefined, { companyId: 'freewater', channel: 'email', to: email });
+  const code = /(\d{6})/.exec((app.messenger as TestOutbox).lastTo(email)!.text)![1];
+  return (await call('POST', '/v1/auth/verify', undefined, { companyId: 'freewater', channel: 'email', to: email, code })).body.token as string;
+}
 afterAll(async () => { await server.close(); await app.persistence.flush(); await db.close(); });
 
 describe('the points schedule', () => {
@@ -100,7 +108,8 @@ describe('credit and corrections', () => {
     await expect(app.wallet.giveCredit('freewater', 'brand-a', 'viewer-wallet-6', 100, 'c1', 'test')).rejects.toMatchObject({ code: 'switched_off' });
     const fw = app.platform.companies.get('freewater')!;
     fw.wallet = { ...app.wallet.settings('freewater'), credit: { enabled: true } };
-    expect((await call('POST', '/v1/wallet/reserve', keys['freewater-admin'], { sponsor: 'brand-a', cents: 150, ref: 'pay-1' })).status).toBe(201);
+    expect((await call('POST', '/v1/wallet/reserve', keys['freewater-admin'], { sponsor: 'brand-a', cents: 150, ref: 'pay-1' })).status).toBe(403); // a service key can't
+    expect((await call('POST', '/v1/wallet/reserve', await signIn('owner@freewater.io'), { sponsor: 'brand-a', cents: 150, ref: 'pay-1' })).status).toBe(201);
     expect((await app.wallet.giveCredit('freewater', 'brand-a', 'viewer-wallet-6', 100, 'c1', 'test')).cents).toBe(100);
     await expect(app.wallet.giveCredit('freewater', 'brand-a', 'viewer-wallet-6', 100, 'c2', 'test')).rejects.toMatchObject({ code: 'reserve_short' });
     expect((await app.wallet.wallet('freewater', 'viewer-wallet-6')).credit.balanceCents).toBe(100);
@@ -114,10 +123,11 @@ describe('credit and corrections', () => {
   it('a mistake is undone by a new entry; the old one stays, and the books still add up', async () => {
     await app.wallet.earn('freewater', 'viewer-wallet-7', 'feedback', 'w7:1');
     const entry = (await app.wallet.wallet('freewater', 'viewer-wallet-7')).history[0]!.id;
-    const r = await call('POST', '/v1/wallet/correct', keys['freewater-admin'], { entry, reason: 'bot account' });
+    const owner = await signIn('owner@freewater.io');
+    const r = await call('POST', '/v1/wallet/correct', owner, { entry, reason: 'bot account' });
     expect(r.status).toBe(200);
     expect(await app.wallet.pointsOf('freewater', 'viewer-wallet-7')).toBe(0);
-    expect((await call('POST', '/v1/wallet/correct', keys['freewater-admin'], { entry, reason: 'again' })).status).toBe(409);
+    expect((await call('POST', '/v1/wallet/correct', owner, { entry, reason: 'again' })).status).toBe(409);
     expect((await call('GET', '/v1/wallet/check', keys['freewater-admin'])).body.ok).toBe(true);
   });
 

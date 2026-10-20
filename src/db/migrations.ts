@@ -1144,6 +1144,24 @@ create table agent_lineage (id text primary key, agent_id text not null, company
 create index agent_lineage_agent on agent_lineage(agent_id, at);
 `,
   },
+  {
+    id: '042_money_safety',
+    sql: `
+-- A charity transfer is written down ('sending') before the bank is asked, with the day it belongs to: one transfer per
+-- charity per day, so a second run (or two at once) can't record money the bank never sent.
+alter table charity_transfers add column day text;
+alter table charity_transfers drop constraint if exists charity_transfers_status_check;
+alter table charity_transfers add constraint charity_transfers_status_check check (status in ('sending', 'sent', 'failed', 'confirmed'));
+create unique index charity_transfers_one_a_day on charity_transfers(charity_id, day) where status <> 'failed' and day is not null;
+-- When a mint went to Squads for signing: it can't be cancelled here for a week from then. Ones already waiting count
+-- from now (the safe side).
+alter table chain_actions add column signing_at timestamptz;
+update chain_actions set signing_at = now() where status = 'signing';
+-- Each gift-card purchase, with our reference (sent to the gift-card company, so asking twice never buys twice) and
+-- what happened: sent, refused (credit given back) or unknown (credit held until a person checks).
+create table wallet_giftcards (company_id text not null, ref text not null, subject text not null, entry text not null, product text not null, cents bigint not null, status text not null, provider_ref text, error text, at timestamptz not null, primary key (company_id, ref));
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {
