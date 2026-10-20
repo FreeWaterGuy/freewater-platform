@@ -126,3 +126,41 @@ jobs:
           docker run --rm --network host -e DATABASE_URL=postgres://fw:fw@localhost:5432/upgrade freewater:${{ github.sha }} \
             node --import tsx src/server/booksCheck.ts 2>&1 | tee books.txt \
             || { echo "::error title=upgrade::$(tail -c 900 books.txt | tr '\n' ' ')"; exit 1; }
+      - name: Outages - the database goes away briefly and for long, a server is killed, a server freezes
+        run: |
+          PG=${{ job.services.postgres.id }}
+          start() { docker run -d --name "$1" --network host -e NODE_ENV=production -e ALLOW_STANDINS=1 -e PORT="$2" -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
+            -e DATABASE_URL=postgres://fw:fw@localhost:5432/freewater -e LEASE_WAIT_MS=90000 freewater:${{ github.sha }} >/dev/null; }
+          ready() { for i in $(seq 1 45); do curl -sf "http://localhost:$1/health/ready" >/dev/null && return 0; sleep 2; done; return 1; }
+          fail() { echo "::error title=outage::$1 $(docker logs "$2" 2>&1 | tail -c 700 | tr '\n' ' ')"; exit 1; }
+          running() { [ "$(docker inspect "$1" --format '{{.State.Running}}')" = true ]; }
+          pg_up() { for i in $(seq 1 30); do docker exec "$PG" pg_isready -U fw >/dev/null 2>&1 && return 0; sleep 1; done; return 1; }
+
+          # 1. A short database outage (a restart, a failover) is ridden out by the same server.
+          start o1 8080; ready 8080 || fail "didn't start" o1
+          docker stop -t 5 "$PG"; sleep 6
+          curl -sf http://localhost:8080/health/live >/dev/null || fail "not alive during a short outage" o1
+          docker start "$PG"; pg_up || fail "postgres didn't come back" o1
+          ready 8080 || fail "not ready again after a short outage" o1
+          running o1 || fail "stopped on a short outage" o1
+
+          # 2. A long one costs the server its claim to the data: it stops (code 2) rather than guess.
+          docker stop -t 5 "$PG"; sleep 35
+          running o1 && fail "kept running 35 s without the database" o1
+          [ "$(docker inspect o1 --format '{{.State.ExitCode}}')" = 2 ] || fail "exited with the wrong code" o1
+          docker start "$PG"; pg_up || fail "postgres didn't come back" o1
+          start o2 8080; ready 8080 || fail "the next server didn't start once the database was back" o2
+
+          # 3. Killed outright (no clean stop): the next server waits for the claim to lapse, then takes over.
+          docker kill o2 >/dev/null
+          start o3 8080; ready 8080 || fail "didn't take over after a killed server" o3
+
+          # 4. Frozen: another takes over; when the frozen one wakes it stops at once instead of writing.
+          docker pause o3
+          start o4 8081; ready 8081 || fail "didn't take over from a frozen server" o4
+          docker unpause o3; sleep 8
+          running o3 && fail "a frozen server kept running after waking" o3
+          ready 8081 || fail "the new server isn't ready after the old one woke" o4
+          docker stop -t 50 o4 >/dev/null
+          [ "$(docker inspect o4 --format '{{.State.ExitCode}}')" = 0 ] || fail "didn't stop cleanly" o4
+          echo "all outages handled"

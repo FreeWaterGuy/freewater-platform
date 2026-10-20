@@ -12,7 +12,7 @@ import { posterCreative, type PosterSpec } from '../creative/poster';
 import { lotteryDefaults } from '../lottery/rules';
 import { quietTransparency } from '../transparency/service';
 import { preset } from '../data/policy';
-import { adCategories, applyChange, checkSettings, describeChange, editableKeys, fontChoices, personOnlyKeys, ratchetProblem, chainProblem, walletProblem, type EditableKey } from './settings';
+import { adCategories, applyChange, checkSettings, describeChange, editableKeys, fontChoices, personOnlyKeys, ratchetProblem, chainProblem, walletProblem, printLimitsChanged, type EditableKey } from './settings';
 
 export class ConsoleError extends Error {
   constructor(public code: string, message: string, public status = 400) {
@@ -117,15 +117,17 @@ export class ConsoleService {
   }
 
   /** Save a change. Send the version you started from; if someone saved in between, nothing is overwritten. */
-  async save(companyId: string, change: Partial<Record<EditableKey, unknown>>, by: string, expectedVersion?: number, opts: { chainApproved?: boolean } = {}) {
+  /** `person: false` (a service key) may not change the machines' print limits. */
+  async save(companyId: string, change: Partial<Record<EditableKey, unknown>>, by: string, expectedVersion?: number, opts: { chainApproved?: boolean; person?: boolean } = {}) {
     return this.serial(companyId, () => this.saveNow(companyId, change, by, expectedVersion, opts));
   }
-  private async saveNow(companyId: string, change: Partial<Record<EditableKey, unknown>>, by: string, expectedVersion: number | undefined, opts: { chainApproved?: boolean }) {
+  private async saveNow(companyId: string, change: Partial<Record<EditableKey, unknown>>, by: string, expectedVersion: number | undefined, opts: { chainApproved?: boolean; person?: boolean }) {
     const version = await this.baseline(companyId);
     const cur = this.company(companyId);
     if (expectedVersion !== undefined && expectedVersion !== version) throw new ConsoleError('version_conflict', `Someone else saved changes (now version ${version}). Reload to see them, then make your change again.`, 409);
     let next: CompanyConfig;
     try { next = applyChange(cur, change); } catch (e: any) { throw new ConsoleError('not_editable', e.message); }
+    if (opts.person === false && printLimitsChanged(cur, next)) throw new ConsoleError('person_needed', 'The machines’ print limits are a safety limit: a person signed in changes them, not a service key.', 403);
     const problem = checkSettings(next, this.registry.names()) ?? ratchetProblem(cur, next) ?? chainProblem(cur, next, opts.chainApproved) ?? walletProblem(cur, next, opts.chainApproved);
     if (problem) throw new ConsoleError('invalid_settings', problem, 422);
     const changes = describeChange(cur, next);
@@ -167,7 +169,7 @@ export class ConsoleService {
     const cur = this.company(companyId);
     const next = { ...old, id: companyId };
     // Putting back an old version passes the same checks as any other change (the chain can't come back on this way).
-    const money = personOnlyKeys.some((k) => JSON.stringify((cur as any)[k] ?? null) !== JSON.stringify((next as any)[k] ?? null));
+    const money = personOnlyKeys.some((k) => JSON.stringify((cur as any)[k] ?? null) !== JSON.stringify((next as any)[k] ?? null)) || printLimitsChanged(cur, next);
     if (money && !opts.person) throw new ConsoleError('person_needed', 'This version changes money, chain or one-way settings; a person signed in has to put it back.', 403);
     const problem = checkSettings(next, this.registry.names()) ?? ratchetProblem(cur, next) ?? chainProblem(cur, next) ?? walletProblem(cur, next);
     if (problem) throw new ConsoleError('invalid_settings', `Version ${v} can’t be put back as it is: ${problem}`, 422);

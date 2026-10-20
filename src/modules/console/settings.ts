@@ -25,6 +25,12 @@ export type EditableKey = (typeof editableKeys)[number];
 /** Settings only a person signed in may change or put back: money, the chain, and every one-way or money-adjacent promise. */
 export const personOnlyKeys: readonly EditableKey[] = ['wallet', 'offers', 'chain', 'ratchet', 'agents', 'minimumAge', 'giving', 'lottery', 'ai', 'data', 'launch', 'security'];
 
+/** The highest a machine's print limits may be set: a bottle takes several seconds, so more is a leaked key, not a busy machine. */
+export const PRINT_LIMITS = { perMinute: 20, perDay: 20_000 };
+/** The print limits are a safety governor (they keep a stolen machine key from billing advertisers at scale): a person changes them. */
+export const printLimitsChanged = (cur: CompanyConfig, next: CompanyConfig) =>
+  (cur.machines?.printsPerMinute ?? null) !== (next.machines?.printsPerMinute ?? null) || (cur.machines?.printsPerDay ?? null) !== (next.machines?.printsPerDay ?? null);
+
 const HEX = /^#[0-9a-fA-F]{6}$/;
 const isInt = (v: unknown, min: number, max: number) => Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
 const isNum = (v: unknown, min: number, max: number) => typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max;
@@ -84,6 +90,8 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
   if (c.consumer && (!isInt(c.consumer.freeBottlesPerDay, 0, 24) || !isInt(c.consumer.retailValueCents, 0, 1000))) return 'Free bottles per person per day must be 0 to 24, and the store price 0¢ to $10.';
 
   if (c.machines && (typeof c.machines.offlineWalkUp !== 'boolean' || !isInt(c.machines.offlinePerHour, 0, 120) || !isInt(c.machines.bufferSize, 0, 50))) return 'Offline bottles per hour must be 0 to 120, and labels kept ready 0 to 50.';
+  if (c.machines?.printsPerMinute !== undefined && !isInt(c.machines.printsPerMinute, 1, PRINT_LIMITS.perMinute)) return `A machine’s prints a minute must be a whole number from 1 to ${PRINT_LIMITS.perMinute} (no machine prints faster).`;
+  if (c.machines?.printsPerDay !== undefined && !isInt(c.machines.printsPerDay, 1, PRINT_LIMITS.perDay)) return `A machine’s prints a day must be a whole number from 1 to ${PRINT_LIMITS.perDay.toLocaleString('en-US')}.`;
 
   if (c.scanBaseUrl !== undefined) {
     try { const u = new URL(c.scanBaseUrl); if (u.protocol !== 'https:' || u.pathname.length > 1 || u.search) return 'The short QR address must be just https:// and a domain, like https://fw.ac'; }

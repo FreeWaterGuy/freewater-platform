@@ -20,6 +20,9 @@ import { gamesRoutes } from './games';
 import { offersRoutes } from './offers';
 import { chainRoutes } from './chain';
 import { studioRoutes } from './studio';
+import { trustProxyFrom } from '../runtime/config';
+import { UploadQuota, uploadLimitsFrom } from '../runtime/uploads';
+import { PRINT_LIMITS } from '../modules/console/settings';
 import { BadKeyGuard, classify, limits, RateLimiter, securityHeaders, SecurityLog } from './security';
 import { teamRoutes } from './team';
 import { loggerOptions } from './logging';
@@ -66,8 +69,12 @@ export const DEFAULT_PRINTS_PER_MINUTE = 6;
 export const DEFAULT_PRINTS_PER_DAY = 1500;
 
 export async function buildServer(app: App, opts: { logger?: boolean } = {}): Promise<FastifyInstance> {
-  // Behind a load balancer, set TRUST_PROXY (1, or the proxy's address) so each caller's real address is used.
-  const trustProxy = process.env.TRUST_PROXY ? (process.env.TRUST_PROXY === '1' ? true : process.env.TRUST_PROXY) : false;
+  // Behind a load balancer, TRUST_PROXY says how many hops (or which addresses) to believe, never every hop: the
+  // visitor writes X-Forwarded-For too (docs/RUNNING.md). Unsafe values stop a production start (checkConfig).
+  // A hop count believes exactly that many proxies (counted from this server outwards), so whatever the visitor wrote
+  // further left is ignored. (Fastify's own number option trusts no hop at all, so it's spelled out here.)
+  const proxySetting = trustProxyFrom(process.env.TRUST_PROXY).value;
+  const trustProxy = typeof proxySetting === 'number' ? (_addr: string, hop: number) => hop < proxySetting : proxySetting;
   const server = Fastify({ logger: opts.logger ? loggerOptions : false, bodyLimit: 3 * 1024 * 1024, routerOptions: { maxParamLength: 1000 }, trustProxy });
   const { platform, packs, persistence, db, experiences } = app;
   for (const type of Object.keys(allowedTypes)) server.addContentTypeParser(type, { parseAs: 'buffer', bodyLimit: 64 * 1024 * 1024 }, (_req, body, done) => done(null, body));
@@ -277,7 +284,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   const printsSeen = new Map<string, { minute: Map<string, number>; day: string; today: Set<string> }>();
   const printCap = (companyId: string, locationId: string, orderId: string, req: FastifyRequest) => {
     const m = platform.companies.get(companyId)?.machines;
-    const perMinute = m?.printsPerMinute ?? DEFAULT_PRINTS_PER_MINUTE, perDay = m?.printsPerDay ?? DEFAULT_PRINTS_PER_DAY;
+    // A stored value that isn't a sane whole number (saved before the settings check knew these) never turns the cap off.
+    const sane = (v: unknown, max: number, fallback: number) => (Number.isInteger(v) && (v as number) >= 1 && (v as number) <= max ? (v as number) : fallback);
+    const perMinute = sane(m?.printsPerMinute, PRINT_LIMITS.perMinute, DEFAULT_PRINTS_PER_MINUTE), perDay = sane(m?.printsPerDay, PRINT_LIMITS.perDay, DEFAULT_PRINTS_PER_DAY);
     const now = platform.bus.now().getTime(), day = new Date(now).toISOString().slice(0, 10);
     let s = printsSeen.get(locationId);
     if (!s) printsSeen.set(locationId, (s = { minute: new Map(), day, today: new Set() }));
@@ -741,6 +750,20 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const r = limiter.take(`${kind}:${who}`, l.capacity, l.perMinute);
     if (!r.ok) { securityLog.record({ kind: 'rate_limited', ip: req.ip, detail: { limit: kind, url: req.routeOptions?.url ?? req.url.split('?')[0] } }, `rl:${kind}:${who}`); throw tooMany(reply, r.retryAfterSec); }
   };
+  // Files sent by visitors without a key (feedback, receipts) are capped per network and for the whole platform each
+  // day, so nobody can fill the database with them (src/runtime/uploads.ts).
+  const uploads = new UploadQuota(uploadLimitsFrom(), { now: () => platform.bus.now().getTime(), alert: (k, sev, title, detail) => void app.runtime.alerts.alert(k, sev, title, detail) });
+  app.runtime.uploads = uploads;
+  const takesFiles = (r: RouteDef) => r.scope === 'public' && (!!r.rawBodyLimit || JSON.stringify(r.body ?? {}).includes('dataBase64'));
+  const uploadQuota = (r: RouteDef, req: FastifyRequest, reply: FastifyReply) => {
+    const declared = Number(req.headers['content-length']);
+    const bytes = Number.isFinite(declared) && declared >= 0 ? declared : (r.rawBodyLimit ?? 3 * 1024 * 1024);
+    const v = uploads.take(req.ip, bytes);
+    if (v.ok) return;
+    reply.header('retry-after', String(v.retryAfterSec));
+    securityLog.record({ kind: 'upload_capped', ip: req.ip, detail: { url: r.url, reason: v.code } }, `uc:${v.code}:${req.ip}`);
+    throw new ApiError(v.status, v.code, v.message);
+  };
   server.addHook('onRequest', async (req, reply) => {
     if (!local(req.ip) && badKeys.blocked(req.ip)) throw tooMany(reply, badKeys.retryAfterSec(req.ip));
     limit(req, reply, req.ip, 'everything');
@@ -802,6 +825,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
         const kind = classify(r.method, r.url, !!r.rawBodyLimit);
         if (kind === 'signIn' || kind === 'publicWrite' || (kind === 'heavy' && r.scope === 'public')) limit(req, reply, req.ip, kind === 'heavy' ? 'heavy' : kind);
+        if (takesFiles(r) && !local(req.ip)) uploadQuota(r, req, reply);
         let key: ApiKey | null = null;
         if (r.scope !== 'public') {
           try { key = await authenticate(req, r.scope); }

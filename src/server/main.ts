@@ -8,8 +8,8 @@ import { createApp } from '../app';
 import { buildServer } from '../api/server';
 import { createPgliteClient } from '../db/pglite';
 import { createPostgresClient } from '../db/postgres';
-import { migrate } from '../db/migrations';
-import { accessSync, constants, mkdirSync } from 'node:fs';
+import { migrate, migrations } from '../db/migrations';
+import { accessSync, constants, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { Alerter, ChatWebhookSink, EmailSink, type AlertSink } from '../runtime/alerts';
 import { checkConfig, checkSpoolDir, checkStandIns } from '../runtime/config';
@@ -19,6 +19,7 @@ import { blobStoreFromEnv } from '../modules/assets/blobs';
 import { backup, backupKey, restore } from '../runtime/backup';
 import { backupStoreFromEnv, backupsConfigured } from '../runtime/backupStore';
 import { checkBooksInChild } from '../runtime/booksCheck';
+import { checkCapacity } from '../runtime/capacity';
 
 const config = checkConfig();
 
@@ -71,12 +72,28 @@ const lease = new InstanceLease(db, { onLost: (why) => {
 try { await lease.acquire(Number(process.env.LEASE_WAIT_MS ?? 120_000), (s) => console.log(s)); }
 catch (e) { console.error(`\n${(e as Error).message}\n`); await db.close(); process.exit(1); }
 await migrate(db);
-// A database restored from a backup and then made the live one still carries the restore check's "spare" mark;
-// the live database must never look like a spare.
-await db.query(`drop table if exists restore_target`);
+// A rollback: this version is older than the database (it has changes this code doesn't know). Migrations only ever
+// add, so the older code still runs, but someone should know (docs/RUNBOOKS.md, "Roll back").
+{
+  const known = new Set(migrations.map((m) => m.id));
+  const newer = (await db.query<{ id: string }>(`select id from schema_migrations`)).rows.map((r) => r.id).filter((id) => !known.has(id));
+  if (newer.length) {
+    console.warn(`Settings: this server is an older version than its database (it doesn't know ${newer.join(', ')}). Fine for a rollback; deploy the fix forward soon.`);
+    void alerts.alert('schema-newer', 'warning', 'An older version is running on a newer database (a rollback)', `Database changes this version doesn't know: ${newer.join(', ')}. It runs, since database changes only ever add; deploy a fixed version forward soon.`);
+  }
+}
+// A database restored from a backup and then made the live one still carries the restore's "spare" mark. While it
+// does, a spool left from before the restore is set aside rather than applied (SqlPersistence.recoverSpool); then the
+// mark goes, since the live database must never look like a spare.
+const restored = !!(await db.query<{ t: string | null }>(`select to_regclass('restore_target')::text as t`)).rows[0]?.t;
+const hadSpool = !!spoolFile && existsSync(spoolFile);
 
 // With the lease passed in, every write the app makes straight to the database checks it in its own transaction.
 app = await createApp({ db, alerts, seedDemo: process.env.SEED_DEMO === '1', blobs: blobStoreFromEnv(), spoolFile, epoch: lease.holder, lease });
+if (restored) {
+  await db.query(`drop table if exists restore_target`);
+  if (hadSpool) void alerts.alert('spool-restored', 'critical', 'Changes waiting from before the restore were set aside, not applied', `This database was restored from a backup, so the changes the old server had waiting would have landed after a gap. They are kept in ${spoolDir} (waiting-changes.jsonl.restored-…) for a developer. See docs/RUNBOOKS.md ("Restore the database from a backup").`);
+}
 if (process.env.ALERT_EMAIL) alerts.addSink(new EmailSink(process.env.ALERT_EMAIL, (m) => app!.messenger.send(m)));
 app!.runtime.lease = lease;
 // Every write checks, in its own transaction, that this server still holds the lease; and this server's watermark
@@ -105,6 +122,7 @@ const companies = () => [...app!.platform.companies.values()];
 // One company's failure is reported with its id and never stops the job for the others.
 const perCompany = (job: string, step: (companyId: string) => Promise<unknown>, which: () => string[] = () => companies().map((c) => c.id)) =>
   forEachCompany(which(), step, (companyId, error) => void alerts.alert(`job:${job}:${companyId}`, 'warning', `Background job “${job}” failed for company ${companyId}`, String((error as Error)?.stack ?? error)));
+const capacityState = new Map<string, import('../runtime/alerts').Severity | 'ok'>();
 const jobs: Job[] = [
   { name: 'webhooks', everyMs: 3000, timeoutMs: 120_000, run: saved(() => app!.webhooks.drain()) },
   // Model 6 machines: open an "offline" problem for any that stopped calling in, and let go of kept offline labels
@@ -121,7 +139,6 @@ const jobs: Job[] = [
   }) },
   // Each day: any agent whose model hasn't passed the current test takes it (a new model or a new test version).
   { name: 'agent-exams', everyMs: 24 * 3600_000, timeoutMs: 30 * 60_000, run: async () => { if (app!.agents.examinee) await app!.agents.runExams(); } },
-  // Each hour, publish any finished day's books fingerprint not yet published.
   // Photos of the real products on the games' cards, a few at a time.
   { name: 'game-photos', everyMs: 6 * 3600_000, timeoutMs: 20 * 60_000, run: saved(() => perCompany('game-photos', (id) => app!.games.fillImages(id, 40))) },
   // Brand offers: close claims with no receipt after 14 days (points go back), and pay approved ones that were held.
@@ -136,8 +153,8 @@ const jobs: Job[] = [
     if (bad.length) await alerts.alert(`reconciliation:${id}`, r.ok ? 'warning' : 'critical', `Books reconciliation for ${id} (${r.day}): ${r.failed} failed, ${r.attention} need a look`, bad.map((c) => `${c.status === 'fail' ? '✗' : '!'} ${c.what}: ${c.detail}`).join('\n'));
   }) },
   { name: 'chain-check', everyMs: 24 * 3600_000, timeoutMs: 10 * 60_000, run: saved(() => perCompany('chain-check', (id) => app!.chain.reconcile(id))) },
+  // Each hour, publish any finished day's books fingerprint not yet published.
   { name: 'fingerprints', everyMs: 3600_000, timeoutMs: 10 * 60_000, run: saved(() => app!.anchors.run()) },
-  // Once a day, delete data older than each company keeps.
   // Each minute: how full memory is. The platform keeps its working state in memory (about 13 KB per bottle printed,
   // measured), so this is what tells you, weeks ahead, when to give it more memory or move to the next stage.
   { name: 'memory', everyMs: 60_000, remember: false, whilePaused: true, run: async () => {
@@ -147,7 +164,10 @@ const jobs: Job[] = [
     if (share > 0.85) await alerts.alert('memory', 'critical', `Memory is ${Math.round(share * 100)}% full`, detail);
     else if (share > 0.7) await alerts.alert('memory', 'warning', `Memory is ${Math.round(share * 100)}% full`, detail);
   } },
+  // Once a day, delete data older than each company keeps.
   { name: 'data-purge', everyMs: 24 * 3600_000, timeoutMs: 60 * 60_000, run: saved(() => app!.data.purge()) },
+  // Every ten minutes: how full the database and the spool's disk are (alerts at 70% and 85%; see src/runtime/capacity.ts).
+  { name: 'capacity', everyMs: 600_000, remember: false, whilePaused: true, timeoutMs: 60_000, run: () => checkCapacity({ db, spoolDir: spoolFile ? spoolDir : undefined, maxDatabaseGb: Number(process.env.DATABASE_MAX_GB) || undefined, alert: (k, sev, title, detail) => alerts.alert(k, sev, title, detail), state: capacityState }) },
 ];
 // Our own encrypted copy of the database each day, and each week, proof that the latest one restores.
 if (backupsConfigured() && url) {
@@ -159,7 +179,10 @@ if (backupsConfigured() && url) {
     console.log(`Restore check: ${r.ok ? 'the books check out' : 'FAILED'} (${r.findings.length} finding(s)).`);
     if (!r.ok) throw new Error(r.findings.some((f) => !f.ok) ? r.findings.filter((f) => !f.ok).map((f) => f.what).join('; ') : `the books check exited with ${r.code}: ${r.output.slice(-600)}`);
   } });
-} else if (config.production) console.warn('Settings: backups are off (set BACKUP_KEY and BACKUP_S3_BUCKET). The database host’s own backups are then the only copy.');
+} else if (config.production) {
+  console.warn('Settings: backups are off (set BACKUP_KEY and BACKUP_S3_BUCKET). The database host’s own backups are then the only copy.');
+  void alerts.alert('backups-off', 'warning', 'Our own backups are off', 'Set BACKUP_KEY and BACKUP_S3_BUCKET (and RESTORE_TEST_URL for the weekly restore check). Until then the database host’s own backups are the only copy.');
+}
 // The job runner's own records (when each job ran) go through the app's lease-checked client, and no job starts
 // while this server can't be sure it still owns the data (its last lease renewal is too old).
 const runner = new JobRunner(app!.db, jobs, {
