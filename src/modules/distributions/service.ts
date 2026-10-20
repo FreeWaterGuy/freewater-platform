@@ -88,8 +88,18 @@ export class DistributionService {
     return { totals: { batches: live.length, bottles: live.reduce((a, r) => a + r.bottles, 0), givenCents: live.reduce((a, r) => a + r.givenCents, 0), revenueCents: live.reduce((a, r) => a + r.revenueCents, 0), costCents: live.reduce((a, r) => a + r.costCents, 0) }, batches: rows };
   }
   async bottles(companyId: string) { return n((await this.db.query<any>(`select coalesce(sum(bottles),0)::bigint as n from distributions where company_id = $1 and voided_at is null`, [companyId])).rows[0]?.n); }
-  /** Batches given in one month (for the month's close): the money above the $1 base is upside. */
+  /**
+   * Batches whose lines are in one month's books (for the month's close): the money above the $1 base is upside. A
+   * batch's lines are dated when it was recorded (a month already closed is never rewritten), so it belongs to the
+   * month it was recorded in, in the company's time zone; the day it was given stays in its data.
+   */
   async inMonth(companyId: string, period: string) {
-    return (await this.db.query<any>(`select data from distributions where company_id = $1 and voided_at is null and to_char(day, 'YYYY-MM') = $2`, [companyId, period])).rows.map((r) => (typeof r.data === 'string' ? JSON.parse(r.data) : r.data) as { bottles: number; revenueCents: number });
+    const tz = this.platform.companies.get(companyId)?.timezone ?? 'UTC';
+    const month = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit' });
+    const [y, m] = period.split('-').map(Number) as [number, number];
+    // A day either side covers any time zone; the exact month is checked below.
+    const from = new Date(Date.UTC(y, m - 1, 1) - 86_400_000).toISOString(), to = new Date(Date.UTC(y, m, 1) + 86_400_000).toISOString();
+    const rows = (await this.db.query<any>(`select data, at from distributions where company_id = $1 and voided_at is null and at >= $2 and at < $3`, [companyId, from, to])).rows;
+    return rows.filter((r) => { const [a, b] = month.format(new Date(r.at)).split('-'); return `${a}-${b}` === period; }).map((r) => (typeof r.data === 'string' ? JSON.parse(r.data) : r.data) as { bottles: number; revenueCents: number });
   }
 }

@@ -1189,6 +1189,15 @@ alter table wallet_giftcards add column settled_at timestamptz;
 create index wallet_giftcards_status on wallet_giftcards(company_id, status);
 `,
   },
+  {
+    id: '045_fx3_unit_order_reprint',
+    sql: `
+-- One live bottle per order. A bottle let go because a restart cut off its print (failed, holds released) no longer
+-- holds its order id, so the same order can print anew; the failed bottle stays on record.
+drop index if exists units_order;
+create unique index units_order on units(company_id, order_id) where order_id is not null and status <> 'failed';
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

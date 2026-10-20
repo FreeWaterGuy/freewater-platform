@@ -138,7 +138,12 @@ export class Platform {
   restoreUnit(unit: Unit, label?: RenderedLabel) {
     this.units.set(unit.id, unit);
     if (label) this.keepLabel(label);
-    if (unit.orderId) this.orderUnits.set(`${unit.companyId}:${unit.orderId}`, unit.id);
+    // An order printed anew after a restart cut off its first try has two bottles: the order is the one that wasn't let go.
+    if (unit.orderId) {
+      const k = `${unit.companyId}:${unit.orderId}`;
+      const other = this.units.get(this.orderUnits.get(k) ?? '');
+      if (!(unit.status === 'failed' && other && other.id !== unit.id && other.status !== 'failed')) this.orderUnits.set(k, unit.id);
+    }
   }
 
   order(opts: OrderOptions): Promise<OrderOutcome> {
@@ -147,19 +152,29 @@ export class Platform {
     const running = this.orders.get(key);
     if (running) return running; // same order twice → same result, no second print
     const doneUnitId = this.orderUnits.get(key);
-    if (doneUnitId) return Promise.resolve(this.outcomeOf(doneUnitId));
+    const done = doneUnitId ? this.outcomeOf(doneUnitId) : null;
+    if (done) return Promise.resolve(done);
     const run = this.run({ ...opts, orderId });
     this.orders.set(key, run);
     run.finally(() => this.orders.delete(key)).catch(() => {});
     return run;
   }
 
-  private outcomeOf(unitId: string): OrderOutcome {
+  /**
+   * What an order already placed came to, or null when it should be printed anew: a bottle cut off by a restart
+   * before its print was confirmed (and not running here) is let go, its ads' holds released, as the fleet does for
+   * Model 6 machines after a restart. A Model 6's own unfinished bottles are left to the fleet (it may be holding them
+   * as offline stock), and reported as not finished.
+   */
+  private outcomeOf(unitId: string): OrderOutcome | null {
     const unit = need(this.units, unitId, 'unit');
+    if (unit.status === 'filled' || unit.status === 'rendered') {
+      const model6 = this.locations.get(unit.locationId)?.hardware === 'model6';
+      if (!model6 && this.abandonUnfinished(unit.id, 'The platform restarted before the print finished')) return null;
+      return { ok: false, unit, reason: 'Printing didn’t finish', attempts: 0 };
+    }
     const label = this.labels.get(unitId);
     if (unit.status === 'failed' || !label) return { ok: false, unit, reason: 'Printing failed after retrying', attempts: this.maxAttempts };
-    // Not running here and never confirmed (cut off by a restart): it didn't print, so it isn't reported as done.
-    if (unit.status !== 'printed' && unit.status !== 'dispensed') return { ok: false, unit, reason: 'Printing didn’t finish', attempts: 0 };
     return { ok: true, unit, label, attempts: 0 };
   }
 
