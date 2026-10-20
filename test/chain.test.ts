@@ -49,10 +49,14 @@ describe('hourly seals', () => {
 
   it('a past entry changed in the books no longer matches its seal', async () => {
     const acct = `holder:${(await db.query<any>(`select id from wallet_holders where subject = 'viewer-chain-1'`)).rows[0].id}`;
+    // The database refuses the edit (migration 052); the seals catch it even from someone who steps around that.
+    await expect(db.query(`update wallet_lines set amount = amount * 2 where account = $1`, [acct])).rejects.toThrow(/append-only/);
+    await db.query(`alter table wallet_lines disable trigger wallet_lines_append_only`);
     await db.query(`update wallet_lines set amount = amount * 2 where account = $1`, [acct]);
     const r = await app.chain.checkSeals('freewater');
     expect(r.ok).toBe(false);
     await db.query(`update wallet_lines set amount = amount / 2 where account = $1`, [acct]);
+    await db.query(`alter table wallet_lines enable trigger wallet_lines_append_only`);
   });
 });
 

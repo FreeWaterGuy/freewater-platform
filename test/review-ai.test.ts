@@ -157,8 +157,13 @@ describe('9. an archive’s fingerprint covers everything it says', () => {
     const r = await app.continuity.archiveAll('peak-spring', 'closing', 'user:test');
     const [a, b, c] = r.agents;
     expect(r.agents.every((x: any) => x.intact)).toBe(true);
+    // The database refuses this now (migration 052); the fingerprint is the second line of defence, so the test
+    // steps around the first, as someone with full control of the database could.
+    await expect(db.query(`update agent_archives set fund_cents = fund_cents + 100000 where id = $1`, [a!.id])).rejects.toThrow(/sealed/);
+    await db.query(`alter table agent_archives disable trigger agent_archives_sealed`);
     await db.query(`update agent_archives set fund_cents = fund_cents + 100000 where id = $1`, [a!.id]);
     await db.query(`update agent_archives set reason = 'left on good terms' where id = $1`, [b!.id]);
+    await db.query(`alter table agent_archives enable trigger agent_archives_sealed`);
     expect((await app.continuity.get(a!.id)).intact).toBe(false);
     expect((await app.continuity.get(b!.id)).intact).toBe(false);
     expect((await app.continuity.get(c!.id)).intact).toBe(true);

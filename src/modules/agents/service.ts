@@ -448,17 +448,24 @@ export class AgentsService {
     const p = await this.proposal(id);
     if ((await this.companyOf(id)) !== companyId) throw new AgentsError('not_found', 'Proposal not found.', 404);
     if (p.status !== 'proposed') throw new AgentsError('decided', `Already ${p.status}.`, 409);
-    if (!approve) { await this.db.query(`update agent_proposals set status = 'rejected', decided_by = $2, decided_at = $3 where id = $1`, [id, by, iso(this.now())]); return this.proposal(id); }
-    if (p.kind === 'security') {
+    // Taken once, before anything is changed: an approval and a rejection at the same moment can't both happen (a
+    // change made while the record says rejected), nor two approvals apply it twice.
+    const took = await this.db.query(`update agent_proposals set status = $4, decided_by = $2, decided_at = $3 where id = $1 and status = 'proposed'`, [id, by, iso(this.now()), approve ? 'approved' : 'rejected']);
+    if (!Number(took.rowCount ?? 0)) throw new AgentsError('decided', 'Someone else just decided this.', 409);
+    if (!approve || p.kind === 'code') return this.proposal(id); // a code change is applied when a person merges it
+    try {
+      if (p.kind !== 'security') return await this.apply(id, by);
       // Done straight away, never measured in money; it can't be undone, so it always waited for this person.
       const [, action, target] = String(p.change?.path ?? '').split(':');
       if (action === 'revoke-key' && target) await revokeApiKey(this.db, target, companyId);
       if (action === 'require-second-step') await this.deps.saveConfig(companyId, { security: { ownersNeedSecondStep: true } }, `${by}, on the security agent’s suggestion`);
       await this.db.query(`update agent_proposals set status = 'done', decided_by = $2, decided_at = $3, applied_at = $3 where id = $1`, [id, by, iso(this.now())]);
       return this.proposal(id);
+    } catch (e) {
+      // Not carried out (say, the settings refused it): it's open again, as it was.
+      await this.db.query(`update agent_proposals set status = 'proposed', decided_by = null, decided_at = null where id = $1 and status = 'approved'`, [id]);
+      throw e;
     }
-    if (p.kind === 'code') { await this.db.query(`update agent_proposals set status = 'approved', decided_by = $2, decided_at = $3 where id = $1`, [id, by, iso(this.now())]); return this.proposal(id); }
-    return this.apply(id, by);
   }
 
   /** Make the change (as a normal, versioned settings change) and take the week before as the baseline. */
@@ -905,9 +912,12 @@ export class AgentsService {
     const r = (await this.db.query<any>(`select * from agent_spends where id = $1 and company_id = $2`, [id, companyId])).rows[0];
     if (!r) throw new AgentsError('not_found', 'Not found.', 404);
     if (r.status !== 'pending') throw new AgentsError('decided', `Already ${r.status}.`, 409);
-    if (!approve) { await this.db.query(`update agent_spends set status = 'declined', decided_by = $2 where id = $1`, [id, by]); return this.spendRow(id); }
+    // Each decision is taken once: two people deciding at the same moment can't both carry it out (or undo the other).
+    const decided = async (status: string) => Number((await this.db.query(`update agent_spends set status = $3, decided_by = $2 where id = $1 and status = 'pending'`, [id, by, status])).rowCount ?? 0) > 0;
+    const taken = () => new AgentsError('decided', 'Someone else just decided this.', 409);
+    if (!approve) { if (!(await decided('declined'))) throw taken(); return this.spendRow(id); }
     if (n(r.cents) > (this.balances(companyId)[r.agent_id]?.balanceCents ?? 0)) throw new AgentsError('balance', 'Not enough in its fund any more.', 409);
-    await this.db.query(`update agent_spends set status = 'approved', decided_by = $2 where id = $1`, [id, by]);
+    if (!(await decided('approved'))) throw taken();
     await this.carryOut(id);
     return this.spendRow(id);
   }

@@ -41,6 +41,7 @@ with a plain explanation.
 | `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_ENDPOINT`, `S3_REGION`, `S3_PREFIX` | For `FILE_STORAGE=s3`. `S3_ENDPOINT` for R2, B2 or MinIO (e.g. `https://<account>.r2.cloudflarestorage.com`); leave it out for Amazon S3 and set `S3_REGION`. Give the key read, write, delete **and list** on the bucket (without list, a missing file looks like "access denied"). |
 | `FW_SPOOL_DIR` | Where changes waiting for the database are also kept. Default in the image: `/var/lib/freewater/spool`. Mount a volume. In production, an unwritable one stops the start. |
 | `DATABASE_POOL_SIZE` | Database connections (default 10). |
+| `FW_SECRET_CODES`, `FW_SECRET_SECOND_STEP`, `FW_SECRET_LINKS`, `FW_SECRET_WALLET` | Required in production: the secrets that sign printed codes, seal second-step seeds and fingerprint links and networks. Each 32+ random characters, or `hex:` and 64 hex digits (`node -e "console.log('hex:'+require('crypto').randomBytes(32).toString('hex'))"`). **A database that ran before already has them in `platform_secrets`; every printed code was signed with those, so set each to `hex:<its value>` from there (the server refuses a different one), then delete the rows.** |
 | `BACKUP_KEY` | 32 random bytes, base64. Make with `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`. **Keep a copy away from the server; without it no backup can be read.** |
 | `BACKUP_S3_BUCKET`, `BACKUP_S3_ACCESS_KEY_ID`, `BACKUP_S3_SECRET_ACCESS_KEY`, `BACKUP_S3_ENDPOINT`, `BACKUP_S3_REGION` | Where backups go: a different bucket (ideally a different account) from the files. Turn on object lock / a 30-day retention rule so they can't be deleted early. |
 | `RESTORE_TEST_URL` | A spare, empty database the weekly restore check may wipe and fill. **Never the real one.** |
@@ -164,6 +165,13 @@ its copy in the database is cleared; stopping halfway is safe. Then restart with
 The checks on GitHub (types, every test, known security holes, and the image started against a real Postgres, a
 second copy refused, a backup restored) must pass. Then start the new image and stop the old one (`docker stop -t 50`
 gives it time to finish requests, save everything and let go). The new one starts within about a second.
+
+A new migration that changes the database's own rules (triggers, checks, unique indexes) is also run on a real
+Postgres 16 over data the old version wrote: fill a database with `test/db-seed-postgres.ts` on the old code, then run
+`test/db-postgres.test.ts` on the new, and the `test/db-*.test.ts` files with `FW_TEST_PG_ADMIN_URL` set (the steps
+are at the top of `test/db-seed-postgres.ts`). The journals refuse edits and deletes from the app's own database
+user too; fixing a past entry is always a correcting entry. Indexes are built inside the migration, which holds up
+writes while it runs (about 7 seconds per million rows).
 
 ## Load test
 

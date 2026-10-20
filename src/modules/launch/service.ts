@@ -28,6 +28,8 @@ export class LaunchService {
     const run = async (name: string, sql: string, args: unknown[] = [companyId]) => { const r: any = await this.db.query(sql, args); counts[name] = (counts[name] ?? 0) + Number(r.rowCount ?? 0); };
     await this.db.transaction(async (tx) => {
       const q = async (name: string, sql: string, args: unknown[] = [companyId]) => { const r: any = await tx.query(sql, args); counts[name] = (counts[name] ?? 0) + Number(r.rowCount ?? 0); };
+      // The journals refuse deletes (migration 052) except inside this transaction, and only while still testing.
+      await tx.query(`select set_config('fw.test_reset', $1, true)`, [companyId]);
       // A mint or conversion under way may reach the chain after the wipe, leaving the books and the chain apart. Locked
       // here, so one can't start meanwhile (its claim waits for this and then finds it gone).
       const busy = (await tx.query<any>(`select status from chain_actions where company_id = $1 and kind in ('mint','convert') and status in ('approved','running','recording','signing','confirming') for update`, [companyId])).rows;
