@@ -22,11 +22,13 @@ import { chainRoutes } from './chain';
 import { studioRoutes } from './studio';
 import { BadKeyGuard, classify, limits, RateLimiter, securityHeaders, SecurityLog } from './security';
 import { teamRoutes } from './team';
+import { loggerOptions } from './logging';
 import { operationsRoutes } from './operations';
 import { VideoError } from '../modules/video/service';
 import { DataError, DataService } from '../modules/data/service';
 import { NumberLineError } from '../modules/numberline/service';
 import { LotteryError } from '../modules/lottery/service';
+import { PackStateError } from '../modules/packs/service';
 import { AttributionError } from '../modules/attribution/service';
 import { FleetError } from '../modules/fleet/service';
 import { WebhookError } from '../modules/webhooks/service';
@@ -62,7 +64,7 @@ const PLATFORM_COMPANY = process.env.PLATFORM_COMPANY ?? 'freewater';
 export async function buildServer(app: App, opts: { logger?: boolean } = {}): Promise<FastifyInstance> {
   // Behind a load balancer, set TRUST_PROXY (1, or the proxy's address) so each caller's real address is used.
   const trustProxy = process.env.TRUST_PROXY ? (process.env.TRUST_PROXY === '1' ? true : process.env.TRUST_PROXY) : false;
-  const server = Fastify({ logger: opts.logger ?? false, bodyLimit: 3 * 1024 * 1024, routerOptions: { maxParamLength: 1000 }, trustProxy });
+  const server = Fastify({ logger: opts.logger ? loggerOptions : false, bodyLimit: 3 * 1024 * 1024, routerOptions: { maxParamLength: 1000 }, trustProxy });
   const { platform, packs, persistence, db, experiences } = app;
   for (const type of Object.keys(allowedTypes)) server.addContentTypeParser(type, { parseAs: 'buffer', bodyLimit: 64 * 1024 * 1024 }, (_req, body, done) => done(null, body));
   const routes: RouteDef[] = [];
@@ -71,6 +73,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   const unitFor = (key: ApiKey, id: string) => {
     const u = platform.units.get(id);
     if (!u || u.companyId !== key.companyId) throw notFound('Bottle');
+    if (key.locationId && u.locationId !== key.locationId) throw notFound('Bottle'); // a machine's key sees only its own bottles
     return u;
   };
   const packFor = (key: ApiKey, id: string) => {
@@ -120,6 +123,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     if (bad) throw new ApiError(422, 'experience_invalid', bad);
   };
   const viewerKeyProp = { type: 'string', pattern: '^[A-Za-z0-9_-]{8,64}$' };
+  /** The one-time token the code open (/q/…) gave the scan page. Without a valid, unused one, nothing is billed. */
+  const scanTokenProp = { type: 'string', maxLength: 100 };
   const themeProp = { type: 'object', additionalProperties: false, properties: Object.fromEntries(['background', 'text', 'accent', 'button', 'buttonText'].map((k) => [k, { type: 'string', pattern: '^#[0-9a-fA-F]{6}$' }])) };
   /** A person may be signed in on a scan page; if so, their own viewer key is used. Never required. */
   const optionalUser = async (req: FastifyRequest) => {
@@ -145,13 +150,15 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     return { body: { unitId, slot: placement!.slotIndex, kind: 'ad', owner: placement!.advertiserName, campaignId: placement!.campaignId, experienceId: placement!.experienceId, isHouse: placement!.isHouse } };
   } });
 
-  route({ method: 'POST', url: '/v1/public/scans', scope: 'public', summary: 'Record a scan. Billed only if the experience loaded and it is not a repeat.', body: obj({ unitId: S.str, slot: S.int, viewerKey: S.str, experienceLoaded: S.bool, scanId: S.str, variant: { type: 'string', maxLength: 40 }, context: obj({ language: { type: 'string', maxLength: 35 }, screen: { type: 'string', maxLength: 20 }, timezone: { type: 'string', maxLength: 50 }, referrer: { type: 'string', maxLength: 500 } }) }, ['unitId', 'slot', 'viewerKey', 'experienceLoaded']), handler: async (req) => {
+  route({ method: 'POST', url: '/v1/public/scans', scope: 'public', summary: 'Record a scan. Billed only if it followed a real code open (scanToken), the experience loaded and it is not a repeat.', body: obj({ unitId: S.str, slot: S.int, viewerKey: S.str, experienceLoaded: S.bool, scanId: S.str, scanToken: scanTokenProp, variant: { type: 'string', maxLength: 40 }, context: obj({ language: { type: 'string', maxLength: 35 }, screen: { type: 'string', maxLength: 20 }, timezone: { type: 'string', maxLength: 50 }, referrer: { type: 'string', maxLength: 500 } }) }, ['unitId', 'slot', 'viewerKey', 'experienceLoaded']), handler: async (req) => {
     const b = req.body as any;
     placementFor(null, b.unitId, b.slot);
     const before = platform.ledger.entries.length;
     const pl = platform.units.get(b.unitId)?.placements.find((x) => x.slotIndex === b.slot);
     const variant = b.variant && pl && platform.campaigns.get(pl.campaignId)?.variants?.some((v) => v.id === b.variant) ? b.variant : undefined;
-    const e = platform.scan(b.unitId, b.slot, b.viewerKey, b.experienceLoaded, b.scanId ?? newId('scan'), variant);
+    // Billed only with a genuine, unused token from opening this slot's printed code: posting scans isn't enough.
+    const billable = !!b.experienceLoaded && app.scanTokens.use(b.scanToken, targetKey({ kind: 'slot', unitId: b.unitId, slot: b.slot }), 'scan');
+    const e = platform.scan(b.unitId, b.slot, b.viewerKey, b.experienceLoaded, b.scanId ?? newId('scan'), variant, billable);
     if (b.experienceLoaded) await experiences.rememberViewer({ kind: 'slot', unitId: b.unitId, slot: b.slot }, b.viewerKey);
     // Points only for a scan the platform counted (its page loaded, not a repeat), of a real printed bottle.
     let points: number | undefined;
@@ -160,11 +167,12 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     return { status: 202, body: { recorded: !!e, billed: platform.ledger.entries.length > before, ...(points ? { points } : {}) } };
   } });
 
-  route({ method: 'POST', url: '/v1/public/ar-launches', scope: 'public', summary: 'Record an AR launch. Billed only if it loaded and it is not a repeat.', body: obj({ unitId: S.str, slot: S.int, viewerKey: S.str, loaded: S.bool, launchId: S.str }, ['unitId', 'slot', 'viewerKey', 'loaded']), handler: async (req) => {
+  route({ method: 'POST', url: '/v1/public/ar-launches', scope: 'public', summary: 'Record an AR launch. Billed only if it followed a real code open (scanToken) of a page with a 3D model, it loaded and it is not a repeat.', body: obj({ unitId: S.str, slot: S.int, viewerKey: S.str, loaded: S.bool, launchId: S.str, scanToken: scanTokenProp }, ['unitId', 'slot', 'viewerKey', 'loaded']), handler: async (req) => {
     const b = req.body as any;
     placementFor(null, b.unitId, b.slot);
     const before = platform.ledger.entries.length;
-    const e = platform.launchAr(b.unitId, b.slot, b.viewerKey, b.loaded, b.launchId ?? newId('ar'));
+    const billable = !!b.loaded && app.scanTokens.use(b.scanToken, targetKey({ kind: 'slot', unitId: b.unitId, slot: b.slot }), 'ar');
+    const e = platform.launchAr(b.unitId, b.slot, b.viewerKey, b.loaded, b.launchId ?? newId('ar'), billable);
     return { status: 202, body: { recorded: !!e, billed: platform.ledger.entries.length > before } };
   } });
 
@@ -174,6 +182,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const viewer = String((req.query as any).viewer ?? '');
     if (!/^[A-Za-z0-9_-]{8,64}$/.test(viewer)) throw new ApiError(400, 'viewer_required', 'Send ?viewer=<the random id this phone keeps>.');
     const opened = await experiences.open(target, { key: viewer, user: await optionalUser(req) });
+    // The page this code open led to shows a 3D model: an AR launch from it may be billed.
+    if (opened.ar && !opened.doc.fallback) app.scanTokens.noteModel((req.query as any).t, targetKey(target));
     // The prize game, if this company runs it: only on ads (not someone's own custom bottle).
     const custom = target.kind === 'slot' && platform.units.get(target.unitId)?.kind === 'custom';
     const companyId = experiences.ownerOf(target).companyId;
@@ -197,20 +207,23 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     return openExperience(req, { kind: 'box-face', packId, face });
   } });
 
-  route({ method: 'POST', url: '/v1/public/box-scans', scope: 'public', summary: 'Record a scan of a box side. Billed to that side’s advertiser only if it loaded and is not a repeat.', body: obj({ packId: S.str, face: { type: 'string', enum: ['top', 'front', 'back', 'right', 'left'] }, viewerKey: viewerKeyProp, experienceLoaded: S.bool, scanId: S.str }, ['packId', 'face', 'viewerKey', 'experienceLoaded']), handler: async (req) => {
+  route({ method: 'POST', url: '/v1/public/box-scans', scope: 'public', summary: 'Record a scan of a box side. Billed to that side’s advertiser only if it followed a real code open (scanToken), loaded and is not a repeat.', body: obj({ packId: S.str, face: { type: 'string', enum: ['top', 'front', 'back', 'right', 'left'] }, viewerKey: viewerKeyProp, experienceLoaded: S.bool, scanId: S.str, scanToken: scanTokenProp }, ['packId', 'face', 'viewerKey', 'experienceLoaded']), handler: async (req) => {
     const b = req.body as any;
     const target: Target = { kind: 'box-face', packId: b.packId, face: b.face };
     experiences.ownerOf(target);
     const before = platform.ledger.entries.length;
-    const e = platform.scanBox(b.packId, b.face, b.viewerKey, b.experienceLoaded, b.scanId ?? newId('scan'));
+    const billable = !!b.experienceLoaded && app.scanTokens.use(b.scanToken, targetKey(target), 'scan');
+    const e = platform.scanBox(b.packId, b.face, b.viewerKey, b.experienceLoaded, b.scanId ?? newId('scan'), billable);
     if (b.experienceLoaded) await experiences.rememberViewer(target, b.viewerKey);
     return { status: 202, body: { recorded: !!e, billed: platform.ledger.entries.length > before } };
   } });
-  route({ method: 'POST', url: '/v1/public/box-ar-launches', scope: 'public', summary: 'Record an AR launch from a box side.', body: obj({ packId: S.str, face: { type: 'string', enum: ['top', 'front', 'back', 'right', 'left'] }, viewerKey: viewerKeyProp, loaded: S.bool, launchId: S.str }, ['packId', 'face', 'viewerKey', 'loaded']), handler: async (req) => {
+  route({ method: 'POST', url: '/v1/public/box-ar-launches', scope: 'public', summary: 'Record an AR launch from a box side. Billed only with a code open’s scanToken, from a page with a 3D model.', body: obj({ packId: S.str, face: { type: 'string', enum: ['top', 'front', 'back', 'right', 'left'] }, viewerKey: viewerKeyProp, loaded: S.bool, launchId: S.str, scanToken: scanTokenProp }, ['packId', 'face', 'viewerKey', 'loaded']), handler: async (req) => {
     const b = req.body as any;
-    experiences.ownerOf({ kind: 'box-face', packId: b.packId, face: b.face });
+    const target: Target = { kind: 'box-face', packId: b.packId, face: b.face };
+    experiences.ownerOf(target);
     const before = platform.ledger.entries.length;
-    const e = platform.launchBoxAr(b.packId, b.face, b.viewerKey, b.loaded, b.launchId ?? newId('ar'));
+    const billable = !!b.loaded && app.scanTokens.use(b.scanToken, targetKey(target), 'ar');
+    const e = platform.launchBoxAr(b.packId, b.face, b.viewerKey, b.loaded, b.launchId ?? newId('ar'), billable);
     return { status: 202, body: { recorded: !!e, billed: platform.ledger.entries.length > before } };
   } });
 
@@ -280,8 +293,17 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const { placement } = placementFor(key, b.unitId, b.slot);
     if (!placement || placement.isHouse) throw new ApiError(422, 'not_sold', 'That slot has no advertiser to credit.');
     if (key!.advertiserId && placement.advertiserId !== key!.advertiserId) throw notFound('Slot');
+    // Sales are kept per advertiser and order, the same key the conversions API uses, so one sale is billed once
+    // whichever way it's reported, and two advertisers' "ORDER-1" never collide.
+    const orderKey = `${placement.advertiserId}:${b.orderId}`;
+    if (refund) {
+      // Only a sale that was billed can be refunded, and only once (here or through /v1/conversions/:id/refund).
+      const sold = platform.ledger.sale(key!.companyId, placement.advertiserId, orderKey);
+      if (!sold) throw new ApiError(404, 'no_sale', `No billed sale with order ${b.orderId}.`);
+      if (sold.refunded) throw new ApiError(409, 'already_refunded', `Order ${b.orderId} was already refunded.`);
+    }
     const before = platform.ledger.entries.length;
-    const e = refund ? platform.refund(b.unitId, b.slot, b.orderId, b.amountCents) : platform.purchase(b.unitId, b.slot, b.orderId, b.amountCents);
+    const e = refund ? platform.refund(b.unitId, b.slot, orderKey, b.amountCents) : platform.purchase(b.unitId, b.slot, orderKey, b.amountCents);
     return { status: 202, body: { recorded: !!e, ledgerLines: platform.ledger.entries.length - before } };
   };
   const saleBody = obj({ unitId: S.str, slot: S.int, orderId: S.str, amountCents: S.int }, ['unitId', 'slot', 'orderId', 'amountCents']);
@@ -395,13 +417,14 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   route({ method: 'POST', url: '/v1/packs/:id/verify', scope: 'packs', summary: 'The packing line reports every bottle it scanned. Returns what is missing or does not belong.', body: obj({ scannedUnitIds: { type: 'array', items: S.str, maxItems: 48 } }, ['scannedUnitIds']), handler: async (req, key) => {
     const p = packFor(key!, (req.params as any).id);
-    return { body: packs.verify(p.id, (req.body as any).scannedUnitIds) };
+    try { return { body: packs.verify(p.id, (req.body as any).scannedUnitIds) }; } catch (e: any) { if (e instanceof PackStateError) throw new ApiError(409, 'wrong_stage', e.message); throw e; }
   } });
 
   route({ method: 'POST', url: '/v1/packs/:id/replace', scope: 'packs', summary: 'Reprint missing bottles; the new ones take their place in the pack.', body: obj({ missingUnitIds: { type: 'array', items: S.str, maxItems: 48 }, productId: S.str }, ['missingUnitIds', 'productId']), handler: async (req, key) => {
     const p = packFor(key!, (req.params as any).id);
     const b = req.body as any;
-    const fresh = await packs.replace(p.id, b.missingUnitIds, b.productId);
+    let fresh: string[];
+    try { fresh = await packs.replace(p.id, b.missingUnitIds, b.productId); } catch (e: any) { if (e instanceof PackStateError) throw new ApiError(409, 'wrong_stage', e.message); throw e; }
     return { body: { reprinted: fresh, pack: packView(p.id) } };
   } });
 
@@ -411,16 +434,18 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     return { body: packView(p.id) };
   } });
 
-  route({ method: 'POST', url: '/v1/routes/:routeId/load', scope: 'packs', summary: 'Load a van: returns the order to put packs in, last stop first.', handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/routes/:routeId/load', scope: 'packs', summary: 'Load a van: returns the order to put packs in, last stop first. Pass ?runId= for a night’s run; without it, the route’s current run. Delivered and returned packs are never loaded again.', handler: async (req, key) => {
     const routeId = (req.params as any).routeId;
+    const runId = (req.query as any)?.runId ?? (req.body as any)?.runId;
     const mine = [...packs.packs.values()].some((p) => p.routeId === routeId && p.companyId === key!.companyId);
     if (!mine) throw notFound('Route');
-    try { return { body: packs.load(routeId).map((p) => packView(p.id)) }; } catch (e: any) { throw new ApiError(409, 'not_sealed', e.message); }
+    try { return { body: packs.load(routeId, typeof runId === 'string' && runId ? runId : undefined).map((p) => packView(p.id)) }; } catch (e: any) { throw new ApiError(409, 'not_sealed', e.message); }
   } });
 
-  route({ method: 'POST', url: '/v1/deliveries', scope: 'packs', summary: 'The driver scans a box at a door. Delivered only if it is the right box at the right address.', body: obj({ routeId: S.str, stop: S.int, scannedPackId: S.str, atAddress: S.bool, photoProof: S.bool, emptiesCollected: S.int }, ['routeId', 'stop', 'scannedPackId', 'atAddress', 'photoProof', 'emptiesCollected']), handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/deliveries', scope: 'packs', summary: 'The driver scans a box at a door. Delivered only if it is the right box at the right address. Pass runId for a night’s run; without it, the route’s current run.', body: obj({ routeId: S.str, runId: S.str, stop: S.int, scannedPackId: S.str, atAddress: S.bool, photoProof: S.bool, emptiesCollected: S.int }, ['routeId', 'stop', 'scannedPackId', 'atAddress', 'photoProof', 'emptiesCollected']), handler: async (req, key) => {
     const b = req.body as any;
-    const planned = [...packs.packs.values()].find((p) => p.routeId === b.routeId && p.stop === b.stop);
+    const run = b.runId ?? packs.currentRun(b.routeId);
+    const planned = [...packs.packs.values()].find((p) => p.routeId === b.routeId && p.stop === b.stop && (p.runId ?? '') === run);
     if (!planned || planned.companyId !== key!.companyId) throw notFound('Stop');
     const r = packs.deliver(b);
     if (!r.ok) return { status: 409, body: { error: { code: 'wrong_box', message: r.reason }, grab: r.rightPack ? { packId: r.rightPack.id, stopCode: `R${r.rightPack.routeId.replace(/^route-/, '')} · ${r.rightPack.stop}` } : null } };
@@ -462,7 +487,10 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const r = await app.accounts.verify({ companyId: b.companyId, channel: b.channel, to: b.to, code: b.code });
     // One person: this account, its email or phone (as a fingerprint), and the phone it signed in on.
     const u: any = r.user;
-    await app.data.link(b.companyId, [`user:${u.id}`, DataService.emailKey(u.email), DataService.phoneKey(u.phone), u.viewerKey, b.viewerKey].filter(Boolean), 'signed in').catch(() => null);
+    const own = [`user:${u.id}`, DataService.emailKey(u.email), DataService.phoneKey(u.phone), u.viewerKey].filter(Boolean);
+    // The phone it signed in on joins only if it's provably this person's (see DataService.mayLinkDevice).
+    const phone = b.viewerKey && (await app.data.mayLinkDevice(b.companyId, u.id, b.viewerKey, req.ip, own).catch(() => false)) ? [b.viewerKey] : [];
+    await app.data.link(b.companyId, [...own, ...phone], 'signed in').catch(() => null);
     // Someone with a second step turned on gets a ticket for it, not yet a session.
     if (r.challenge) return { body: { secondStep: true, challenge: r.challenge } };
     return { body: { token: r.token, isNew: r.isNew, user: r.user } };
@@ -473,8 +501,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     try { passed = await app.secondStep.pass(b.challenge, b.code); }
     catch (e: any) { securityLog.record({ kind: 'second_step_failed', ip: req.ip, detail: { reason: e.code } }, `ssf:${req.ip}`); throw new ApiError(e.status ?? 401, e.code ?? 'wrong_code', e.message); }
     const user = (await app.accounts.get(passed.userId))!;
-    if (passed.usedRecoveryCode) securityLog.record({ kind: 'recovery_code_used', companyId: user.companyId, actor: user.displayName ?? user.email ?? user.id, ip: req.ip });
-    securityLog.record({ kind: 'signed_in', companyId: user.companyId, actor: user.displayName ?? user.email ?? user.id, ip: req.ip, detail: { secondStep: passed.usedRecoveryCode ? 'recovery code' : 'authenticator app' } });
+    const actor = user.displayName ?? (user.email ? mask(user.email) : user.id);
+    if (passed.usedRecoveryCode) securityLog.record({ kind: 'recovery_code_used', companyId: user.companyId, actor, ip: req.ip });
+    securityLog.record({ kind: 'signed_in', companyId: user.companyId, actor, ip: req.ip, detail: { secondStep: passed.usedRecoveryCode ? 'recovery code' : 'authenticator app' } });
     return { body: { token: await app.accounts.createSession(user.id), isNew: false, user } };
   } });
 
@@ -551,8 +580,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   } });
 
   route({ method: 'POST', url: '/v1/team', scope: 'admin', summary: 'Add a team member or advertiser staff. They sign in with a code sent to their email.', body: obj({ email: S.str, role: { type: 'string', enum: ['owner', 'ops', 'finance', 'reviewer', 'driver', 'advertiser'] }, advertiserId: S.str, displayName: S.str }, ['email', 'role']), handler: async (req, key) => {
-    if (key!.advertiserId) throw new ApiError(403, 'missing_scope', 'Advertisers cannot add team members.');
-    return { status: 201, body: await app.accounts.invite({ companyId: key!.companyId, ...(req.body as any) }) };
+    if (key!.advertiserId || key!.locationId) throw new ApiError(403, 'missing_scope', 'Advertisers cannot add team members.');
+    return { status: 201, body: await app.accounts.invite({ companyId: key!.companyId, ...(req.body as any), by: key!.userId }) };
   } });
 
   // ---------- payments: cards, custom bottles, advertiser invoices ----------
@@ -575,7 +604,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   } });
 
   route({ method: 'POST', url: '/v1/invoices/run', scope: 'invoices', summary: 'Invoice every advertiser for everything billed since their last invoice. Saved cards are charged; others stay open.', body: obj({ periodEnd: { type: 'string', format: 'date-time' } }), handler: async (req, key) => {
-    if (key!.advertiserId) throw new ApiError(403, 'missing_scope', 'Only the company runs invoices.');
+    if (key!.advertiserId || key!.locationId) throw new ApiError(403, 'missing_scope', 'Only the company runs invoices.');
     const end = (req.body as any)?.periodEnd ? new Date((req.body as any).periodEnd) : platform.bus.now();
     return { body: await app.payments.runInvoices(key!.companyId, end) };
   } });
@@ -619,13 +648,13 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   operationsRoutes(app, server, route);
   route({ method: 'GET', url: '/v1/security/events', scope: 'admin', summary: 'The security log: sign-ins, failed sign-ins, keys made and revoked, team changes, settings saved, callers blocked. Addresses are shortened.', handler: async (_req, key) => {
-    if (key!.advertiserId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can see this.');
+    if (key!.advertiserId || key!.locationId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can see this.');
     const events = await securityLog.list(key!.companyId, { platform: key!.scopes.includes('platform') });
     const proposals = (await app.agents.proposals(key!.companyId, 200)).filter((p) => p.agentId === 'security');
     return { body: { events, proposals, limits } };
   } });
   route({ method: 'POST', url: '/v1/security/review', scope: 'admin', summary: 'Have the security agent review things now (it also does every hour, in the background).', handler: async (_req, key) => {
-    if (key!.advertiserId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.');
+    if (key!.advertiserId || key!.locationId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.');
     await securityLog.idle();
     return { body: await app.agents.securityReview(key!.companyId) };
   } });
@@ -688,6 +717,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   };
   const logActivity = (r: RouteDef, req: FastifyRequest, key: ApiKey | null, status: number) => {
     if (r.method === 'GET' || r.url === '/v1/public/interactions' || r.rawBodyLimit) return;
+    // Erasing yourself isn't logged under you again straight after.
+    if (r.method === 'DELETE' && (r.url === '/v1/me' || r.url === '/v1/me/data')) return;
     const body: any = req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body) ? req.body : undefined;
     const companyId = key?.companyId ?? companyOfPublic(body);
     if (!companyId || !platform.companies.has(companyId)) return;
@@ -726,7 +757,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
         const what = sensitive[`${r.method} ${r.url}`];
         if (what) {
           const k = (req as any).apiKey as ApiKey | null, b: any = req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body) ? req.body : {};
-          securityLog.record({ kind: what, companyId: k?.companyId ?? (typeof b.companyId === 'string' ? b.companyId : null), actor: k ? `${k.name} (${k.userId ? 'person' : 'key'} ${k.id})` : mask(b.to), ip: req.ip, detail: { ...(req.params as object), ...(what === 'key_created' ? { name: b.name, scopes: b.scopes } : {}), ...(what === 'team_member_added' ? { email: mask(b.email), role: b.role } : {}), ...(what === 'autonomy_changed' ? { area: b.area, level: b.level } : {}) } });
+          securityLog.record({ kind: what, companyId: k?.companyId ?? (typeof b.companyId === 'string' ? b.companyId : null), actor: k ? `${/@|^\+?[\d\s().-]{7,}$/.test(k.name ?? '') ? mask(k.name) : k.name} (${k.userId ? 'person' : 'key'} ${k.id})` : mask(b.to), ip: req.ip, detail: { ...(req.params as object), ...(what === 'key_created' ? { name: b.name, scopes: b.scopes } : {}), ...(what === 'team_member_added' ? { email: mask(b.email), role: b.role } : {}), ...(what === 'autonomy_changed' ? { area: b.area, level: b.level } : {}) } });
         }
         reply.code(out.status ?? 200);
         if (out.headers) reply.headers(out.headers);

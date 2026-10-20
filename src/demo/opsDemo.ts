@@ -48,7 +48,7 @@ await db.query(`update subscriptions set next_date = $1`, [today]); // everyone 
 console.log('Planning and printing today’s routes…');
 const runs = await app.delivery.planNight('freewater', today);
 const r5 = runs.find((r) => r.routeId === 'route-5');
-if (r5) await app.delivery.packCheck(r5.id, 'freewater'); // Mueller is packed and ready; Travis Heights waits for its packing check
+if (r5) { for (const s of r5.stops) app.packs.verify(s.packId!, [...app.packs.packs.get(s.packId!)!.unitIds]); await app.delivery.packCheck(r5.id, 'freewater'); } // Mueller is packed and ready; Travis Heights waits for its packing check
 
 // An ad waiting for review.
 const tito = await person('tito@tacos.example');

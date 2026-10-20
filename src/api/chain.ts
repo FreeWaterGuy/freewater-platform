@@ -9,7 +9,7 @@ export function chainRoutes(app: App, route: (r: RouteDef) => void) {
   const company = (req: { params: unknown }) => { const id = (req.params as any).companyId as string; if (!platform.companies.has(id)) throw new ApiError(404, 'not_found', 'No such company.'); return id; };
   /** Only a person (a signed-in team member), never a service key, can propose, approve or run these. */
   const person = (key: ApiKey | null) => {
-    if (!key || key.advertiserId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.');
+    if (!key || key.advertiserId || key.locationId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.');
     if (!key.userId) throw new ApiError(403, 'person_needed', 'This needs a person signed in, not a service key.');
     return `user:${key.userId}`;
   };
@@ -34,11 +34,12 @@ export function chainRoutes(app: App, route: (r: RouteDef) => void) {
   route({ method: 'POST', url: '/v1/launch/reset', scope: 'admin', summary: 'Test stage only: wipe every wallet, game answer, offer claim, seal and bot. A person signed in must do it.', body: obj({ confirm: { type: 'string', enum: ['RESET'] } }, ['confirm']), handler: async (req, key) => ({ body: await wrap(() => app.launch.reset(key!.companyId, person(key))) }) });
   route({ method: 'POST', url: '/v1/launch/bots', scope: 'admin', summary: 'Test stage only: let bots play, scan and send feedback (each marked as a bot, wiped by a reset).', body: obj({ bots: { type: 'integer', minimum: 1, maximum: 200 }, rounds: { type: 'integer', minimum: 1, maximum: 60 } }, ['bots', 'rounds']), handler: async (req, key) => ({ body: await wrap(() => app.launch.runBots(key!.companyId, req.body as any)) }) });
   route({ method: 'GET', url: '/v1/me/wallet/gift-cards', scope: 'me', summary: 'Gift cards you can get with your credit.', handler: async (_req, key) => { const c = app.wallet.settings(key!.companyId).conversions; return { body: { cards: await app.giftCards.catalog(), on: c.enabled && !!c.approvedBy, provider: app.giftCards.name } }; } });
-  route({ method: 'POST', url: '/v1/me/wallet/gift-cards', scope: 'me', summary: 'Spend credit on a gift card, sent to your email. Switched off until exchanges are approved.', body: obj({ product: { type: 'string', maxLength: 80 }, cents: { type: 'integer', minimum: 100, maximum: 100000 } }, ['product', 'cents']), handler: async (req, key) => {
-    const me = await app.accounts.get(key!.userId!);
+  route({ method: 'POST', url: '/v1/me/wallet/gift-cards', scope: 'me', summary: 'Spend credit on a gift card, sent to your email. Switched off until exchanges are approved.', body: obj({ product: { type: 'string', maxLength: 80 }, cents: { type: 'integer', minimum: 100, maximum: 100000 }, requestId: { type: 'string', pattern: '^[A-Za-z0-9_-]{8,80}$' } }, ['product', 'cents']), handler: async (req, key) => {
+    if (!key?.userId) throw new ApiError(403, 'person_required', 'Sign in as a person to do this; API keys belong to systems.');
+    const me = await app.accounts.get(key.userId);
     if (!me?.email) throw new ApiError(400, 'email_needed', 'Add an email to your account so the card has somewhere to go.');
     const b = req.body as any;
-    return { status: 201, body: await wrap(() => app.wallet.buyGiftCard(key!.companyId, `user:${key!.userId}`, { email: me.email!, product: b.product, cents: b.cents }, app.giftCards)) };
+    return { status: 201, body: await wrap(() => app.wallet.buyGiftCard(key!.companyId, `user:${key!.userId}`, { email: me.email!, product: b.product, cents: b.cents, requestId: b.requestId ?? (req.headers['idempotency-key'] as string | undefined)?.slice(0, 80) }, app.giftCards)) };
   } });
   route({ method: 'POST', url: '/v1/me/wallet/withdraw', scope: 'me', summary: 'Move your tokens to a wallet of your own. Switched off until withdrawals are approved.', body: obj({ address: { type: 'string', pattern: '^[1-9A-HJ-NP-Za-km-z]{32,44}$' }, amount: { type: 'integer', minimum: 1 } }, ['address', 'amount']), handler: async (_req, key) => {
     if (!platform.companies.get(key!.companyId)?.launch?.withdrawals) throw new ApiError(403, 'switched_off', 'Moving tokens to your own wallet isn’t switched on yet.');

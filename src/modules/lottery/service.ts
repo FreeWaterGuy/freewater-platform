@@ -107,25 +107,33 @@ export class LotteryService {
 
     const day = this.dayKey(input.companyId);
     const { seed, rules } = await this.day(input.companyId, day, s);
-    const mine = (await this.db.query<any>(`select count(*)::int as n, count(*) filter (where status in ('waiting','won'))::int as wins from lottery_chances where company_id = $1 and day = $2 and viewer_key = $3`, [input.companyId, day, input.viewerKey])).rows[0];
-    const already = (await this.db.query<any>(`select id from lottery_chances where company_id = $1 and viewer_key = $2 and target = $3 and via = $4`, [input.companyId, input.viewerKey, input.target, input.via])).rows[0];
-    if (already) return { playing: true as const, chanceId: already.id as string, ball: null, repeat: true, rules: publicRules(rules) };
-    if (mine.n >= rules.chancesPerDay) return { playing: true as const, chanceId: null, ball: null, limit: true, rules: publicRules(rules) };
+    // Two chances at once read the same count, so get the same draw key; the unique (company, draw key) index lets only
+    // one be written, and the other is drawn again with the count (and wins) as they are now.
+    for (let tries = 0; ; tries++) {
+      const mine = (await this.db.query<any>(`select count(*)::int as n, count(*) filter (where status in ('waiting','won'))::int as wins from lottery_chances where company_id = $1 and day = $2 and viewer_key = $3`, [input.companyId, day, input.viewerKey])).rows[0];
+      const already = (await this.db.query<any>(`select id from lottery_chances where company_id = $1 and viewer_key = $2 and target = $3 and via = $4`, [input.companyId, input.viewerKey, input.target, input.via])).rows[0];
+      if (already) return { playing: true as const, chanceId: already.id as string, ball: null, repeat: true, rules: publicRules(rules) };
+      if (mine.n >= rules.chancesPerDay) return { playing: true as const, chanceId: null, ball: null, limit: true, rules: publicRules(rules) };
 
-    const drawKey = `${input.companyId}:${day}:${input.viewerKey}:${mine.n + 1}`;
-    const mac = createHmac('sha256', Buffer.from(seed, 'hex')).update(drawKey).digest();
-    const num = (i: number) => mac.readUIntBE(i, 6) / 2 ** 48;
-    const draw = num(0);
-    let prize: LotteryPrize | null = null;
-    if (draw < rules.oddsPercent / 100 && mine.wins < rules.winsPerDay) prize = await this.pickPrize(input.companyId, day, rules.prizes, num(6));
+      const drawKey = `${input.companyId}:${day}:${input.viewerKey}:${mine.n + 1}`;
+      const mac = createHmac('sha256', Buffer.from(seed, 'hex')).update(drawKey).digest();
+      const num = (i: number) => mac.readUIntBE(i, 6) / 2 ** 48;
+      const draw = num(0);
+      let prize: LotteryPrize | null = null;
+      if (draw < rules.oddsPercent / 100 && mine.wins < rules.winsPerDay) prize = await this.pickPrize(input.companyId, day, rules.prizes, num(6));
 
-    const id = `lc_${randomCode(16).toLowerCase()}`;
-    const ballSeed = mac.readUInt32BE(12);
-    const inMs = Math.round(rules.watchSeconds * 1000 + num(16) * 6000); // a few seconds in, at a random moment
-    const showAt = new Date(this.now().getTime() + inMs);
-    await this.db.query(`insert into lottery_chances (id, company_id, day, viewer_key, target, via, draw_key, draw, status, prize_id, prize, show_at, ball_seed, ball_ms, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) on conflict do nothing`,
-      [id, input.companyId, day, input.viewerKey, input.target, input.via, drawKey, draw, prize ? 'waiting' : 'none', prize?.id ?? null, prize ? JSON.stringify(prize) : null, prize ? showAt.toISOString() : null, prize ? ballSeed : null, prize ? rules.ballMs : null, this.now().toISOString()]);
-    return { playing: true as const, chanceId: id, drawKey, ball: prize ? { inMs, durationMs: rules.ballMs, seed: ballSeed } : null, rules: publicRules(rules) };
+      const id = `lc_${randomCode(16).toLowerCase()}`;
+      const ballSeed = mac.readUInt32BE(12);
+      const inMs = Math.round(rules.watchSeconds * 1000 + num(16) * 6000); // a few seconds in, at a random moment
+      const showAt = new Date(this.now().getTime() + inMs);
+      const wrote = await this.db.query<any>(`insert into lottery_chances (id, company_id, day, viewer_key, target, via, draw_key, draw, status, prize_id, prize, show_at, ball_seed, ball_ms, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) on conflict do nothing returning id`,
+        [id, input.companyId, day, input.viewerKey, input.target, input.via, drawKey, draw, prize ? 'waiting' : 'none', prize?.id ?? null, prize ? JSON.stringify(prize) : null, prize ? showAt.toISOString() : null, prize ? ballSeed : null, prize ? rules.ballMs : null, this.now().toISOString()]);
+      if (!wrote.rows.length) {
+        if (tries >= 10) throw new LotteryError('busy', 'Too many chances at once. Try again in a moment.', 409);
+        continue; // another chance took this draw key (or this very target) first
+      }
+      return { playing: true as const, chanceId: id, drawKey, ball: prize ? { inMs, durationMs: rules.ballMs, seed: ballSeed } : null, rules: publicRules(rules) };
+    }
   }
 
   /** A prize by weight, skipping any that are all given out today. None left means no win. */
@@ -145,6 +153,7 @@ export class LotteryService {
     if (r.status === 'won') return { status: 'won' as const, prize: publicPrize(r.prize), claimCode: r.claim_code as string };
     if (r.status !== 'waiting') return this.result(input.chanceId, input.viewerKey);
     const sinceShow = this.now().getTime() - new Date(r.show_at).getTime();
+    // A speed bump, not a security check: the ball's path comes from a seed the page is given, so a client can compute it.
     const { tMs, x, y } = input.tap;
     const ball = ballAt(Number(r.ball_seed), tMs, r.ball_ms);
     const inTime = tMs >= 0 && tMs <= r.ball_ms + 150 && sinceShow >= tMs - 750 && sinceShow <= r.ball_ms + 8000;

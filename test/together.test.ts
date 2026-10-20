@@ -38,8 +38,9 @@ describe('erasing someone never changes the sealed books', () => {
 
 describe('settings', () => {
   it('putting back an old version that changes money settings needs a person', async () => {
+    // The youngest age is one-way, so it's a person's change too, never a service key's.
     const r1 = await call('PATCH', '/v1/console/settings', { changes: { minimumAge: 16 } }, keys['freewater-admin']);
-    expect(r1.status).toBe(200);
+    expect(r1.status).toBe(403);
     expect((await call('PATCH', '/v1/console/settings', { changes: { offers: { enabled: true } } }, keys['freewater-admin'])).status).toBe(403);
   });
   it('the points cap can’t change, even on the first save', async () => {

@@ -91,6 +91,9 @@ describe('home delivery, from sign-up to the door', () => {
     const driver = await signIn('dana@freewater.io');
     now = new Date('2026-11-03T14:00:00Z').getTime(); // Tuesday morning
     expect((await call('POST', `/v1/driver/runs/${run.id}/start`, driver)).json().error.code).toBe('not_ready');
+    // Nothing is sealed until the packing line has scanned every box.
+    expect((await call('POST', `/v1/ops/runs/${run.id}/pack-check`, admin)).json().run.status).toBe('packing');
+    for (const s of run.stops) expect((await call('POST', `/v1/packs/${s.packId}/verify`, admin, { scannedUnitIds: app.packs.packs.get(s.packId)!.unitIds })).json().ok).toBe(true);
     expect((await call('POST', `/v1/ops/runs/${run.id}/pack-check`, admin)).json().run.status).toBe('ready');
     expect((await call('POST', `/v1/driver/runs/${run.id}/start`, driver)).json().status).toBe('ready');
     // Boxes go into the van last stop first.

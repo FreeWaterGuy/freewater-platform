@@ -8,7 +8,11 @@ it off again. Read it before going live, and keep it open the first time you fli
 - **Anything that moves money, touches the blockchain, or can't be undone starts switched off.** Nothing turns
   itself on.
 - **Turning something off is always quick.** Turning it on is the slow, careful direction.
-- **Only a person signed in can flip a money switch.** A service key (the kind a machine or a script uses) can't.
+- **Only a person signed in can flip a money or one-way switch.** That covers money, offers, the blockchain, launch,
+  giving, the giving promise, the AI agents' fund, minimum age, the prize game, data rules, security and which AI.
+  A service key (the kind a machine or a script uses) can't, and neither can it approve an AI agent's proposal,
+  fund a reserve, correct an entry, or record anything on the team page.
+- **Minimum age, the AI agents' fund and (once live) the blockchain's approval rules only ever go up.**
 - **Steps that can't be undone need people to approve them, then a wait.** Going live with the token, turning points
   into tokens, gift cards and withdrawals each need at least 2 other owners or finance people who were already on the
   team when the step was proposed. Then there's a wait of at least 24 hours (48 by default), so a mistake or a stolen

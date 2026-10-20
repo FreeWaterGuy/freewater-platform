@@ -7,7 +7,7 @@ import { ApiError, obj, S, type RouteDef } from './http';
 export function lotteryRoutes(app: App, route: (r: RouteDef) => void, parseTarget: (t: string) => Target) {
   const { lottery, experiences } = app;
   const viewerKeyProp = { type: 'string', pattern: '^[A-Za-z0-9_-]{8,64}$' };
-  const staff = (key: ApiKey | null) => { if (!key || key.advertiserId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.'); return key; };
+  const staff = (key: ApiKey | null) => { if (!key || key.advertiserId || key.locationId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.'); return key; };
 
   route({ method: 'POST', url: '/v1/public/lottery/chances', scope: 'public', summary: 'A chance in the prize game, for an ad this person really engaged with (its page loaded, its video played, or its AR opened). Returns a ball to show if it won; what was won stays hidden until the ball is tapped or missed.', body: obj({ target: { type: 'string', maxLength: 120 }, viewerKey: viewerKeyProp, via: { type: 'string', enum: ['scan', 'video', 'ar'] } }, ['target', 'viewerKey', 'via']), handler: async (req) => {
     const b = req.body as any;

@@ -10,8 +10,8 @@ export interface EventPayloads {
   'label.printed': { unitId: string; jobId: string; locationId: string; placements: Placement[]; kind: 'ad_supported' | 'custom'; customerId?: string; customPriceCents?: Cents };
   'print.failed': { unitId: string; jobId: string; reason: string; attempt: number };
   'unit.dispensed': { unitId: string; locationId: string };
-  'unit.scanned': { unitId: string; slotIndex: number; viewerKey: string; experienceLoaded: boolean; variant?: string };
-  'ar.launched': { unitId: string; slotIndex: number; viewerKey: string; loaded: boolean };
+  'unit.scanned': { unitId: string; slotIndex: number; viewerKey: string; experienceLoaded: boolean; variant?: string; /** Counted but never billed: it didn't follow a real code open (no valid scan token). */ unbilled?: true };
+  'ar.launched': { unitId: string; slotIndex: number; viewerKey: string; loaded: boolean; unbilled?: true };
   'purchase.completed': { unitId?: string; slotIndex?: number; packId?: string; face?: string; orderId: string; amountCents: Cents; /** The buyer's viewer key, when the sale came through their click or coupon. */ buyer?: string };
   'purchase.refunded': { unitId?: string; slotIndex?: number; packId?: string; face?: string; orderId: string; amountCents: Cents };
   /** Someone scanned a printed QR code (counted before the page even loads). */
@@ -26,8 +26,8 @@ export interface EventPayloads {
   'pack.delivered': { packId: string; routeId: string; stop: number; emptiesCollected: number; photoProof: boolean };
   'delivery.failed': { packId: string; routeId: string; stop: number; reason: string };
   'delivery.rejected': { packId: string; scannedPackId: string; stop: number; reason: string };
-  'box.scanned': { packId: string; face: string; viewerKey: string; experienceLoaded: boolean };
-  'box.ar_launched': { packId: string; face: string; viewerKey: string; loaded: boolean };
+  'box.scanned': { packId: string; face: string; viewerKey: string; experienceLoaded: boolean; unbilled?: true };
+  'box.ar_launched': { packId: string; face: string; viewerKey: string; loaded: boolean; unbilled?: true };
   /** Something a viewer did inside an experience (saved it, opened a link, picked a side). Counted, never billed. */
   'experience.engaged': { target: string; viewerKey: string; action: 'save' | 'link' | 'call' | 'addon' | 'room' | 'slot' | 'video'; detail?: string; advertiserId?: string; campaignId?: string };
   'charity.transferred': { transferId: string; number: string; charity: string; amountCents: Cents; provider: string; providerRef: string };

@@ -39,6 +39,9 @@ export interface ScreenState {
   testPrinting?: boolean;
 }
 
+/** The platform has the result (2xx), or has said for good it never will take it (404 unknown, 409 too late/conflict). */
+const settled = (status: number) => (status >= 200 && status < 300) || status === 404 || status === 409;
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export class MachineAgent {
@@ -224,7 +227,7 @@ export class MachineAgent {
     const body = { ...result, hardware: this.hardwareStatus() };
     try {
       const r = await this.call('POST', `/v1/machine/jobs/${jobId}/result`, body);
-      if (r.status >= 500) throw new Error('server');
+      if (!settled(r.status)) throw new Error(`server answered ${r.status}`);
     } catch {
       if (this.authError) return;
       this.journal.update((s) => { s.unsentResults.push({ jobId, body, at: new Date().toISOString() }); });
@@ -233,11 +236,19 @@ export class MachineAgent {
 
   private async flushUnsent() {
     const s = this.journal.state;
+    // Each one is let go only once the platform has it (2xx) or has said for good that it never will (404, 409).
+    // A server error or no answer keeps it, to send again later.
     for (const r of [...s.unsentResults]) {
-      try { await this.call('POST', `/v1/machine/jobs/${r.jobId}/result`, r.body); this.journal.update((x) => { x.unsentResults = x.unsentResults.filter((y) => y !== r); }); } catch { return; }
+      let status: number;
+      try { status = (await this.call('POST', `/v1/machine/jobs/${r.jobId}/result`, r.body)).status; } catch { return; }
+      if (status >= 500) return;
+      if (settled(status)) this.journal.update((x) => { x.unsentResults = x.unsentResults.filter((y) => y !== r); });
     }
     for (const c of [...s.unsentCommands]) {
-      try { await this.call('POST', `/v1/machine/commands/${c.id}/result`, { ok: c.ok, message: c.message }); this.journal.update((x) => { x.unsentCommands = x.unsentCommands.filter((y) => y !== c); }); } catch { return; }
+      let status: number;
+      try { status = (await this.call('POST', `/v1/machine/commands/${c.id}/result`, { ok: c.ok, message: c.message })).status; } catch { return; }
+      if (status >= 500) return;
+      if (settled(status)) this.journal.update((x) => { x.unsentCommands = x.unsentCommands.filter((y) => y !== c); });
     }
     if (s.offlineVends.length) {
       const items = [...s.offlineVends];
@@ -334,7 +345,8 @@ export class MachineAgent {
     await this.ack(c.id, ok, message);
   }
   private async ack(id: string, ok: boolean, message: string) {
-    try { await this.call('POST', `/v1/machine/commands/${id}/result`, { ok, message }); } catch { this.journal.update((s) => { s.unsentCommands.push({ id, ok, message }); }); }
+    try { const r = await this.call('POST', `/v1/machine/commands/${id}/result`, { ok, message }); if (!settled(r.status)) throw new Error(`server answered ${r.status}`); }
+    catch { this.journal.update((s) => { s.unsentCommands.push({ id, ok, message }); }); }
   }
 
   // ---------- the screen ----------

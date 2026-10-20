@@ -194,7 +194,7 @@ export class WalletService {
    * negative by the same amount (so the books' supply can be checked against the chain's every day).
    */
   async recordMint(companyId: string, subject: string, amount: number, ref: string, chainRef: string) {
-    if (!Number.isInteger(amount) || amount <= 0) throw new WalletError('bad_amount', 'Mint a whole, positive amount.');
+    if (!Number.isSafeInteger(amount) || amount <= 0) throw new WalletError('bad_amount', 'Mint a whole, positive amount.');
     return this.once(() => this.db.transaction(async (tx) => {
       const id = await this.post(tx, companyId, this.tokenAsset(companyId), 'mint', `mint:${ref}`, [['token_supply', -amount], [await this.accountOf(tx, companyId, subject), amount]], { chainRef });
       return { entry: id };
@@ -226,9 +226,12 @@ export class WalletService {
 
   /**
    * Spend dollar credit on a gift card. Only once exchanges are approved, only with a signed-in account (the card goes
-   * to its email), never more than the person has. If the gift-card company says no, the credit goes back.
+   * to its email), never more than the person has. The credit is taken and the purchase written down before the
+   * gift-card company is asked, under our own reference: the same `requestId` always gives the same reference, so a
+   * retry never buys twice. The credit goes back only if the gift-card company definitely said no; if we can't tell
+   * (a timeout, say), it stays held and the purchase is marked unknown for a person to check.
    */
-  async buyGiftCard(companyId: string, subject: string, o: { email: string; product: string; cents: number }, provider: GiftCardProvider) {
+  async buyGiftCard(companyId: string, subject: string, o: { email: string; product: string; cents: number; requestId?: string }, provider: GiftCardProvider) {
     const c = this.settings(companyId).conversions;
     if (!c.enabled || !c.approvedBy) throw new WalletError('switched_off', 'Gift cards are switched off until exchanges are approved.', 403);
     if (!subject.startsWith('user:')) throw new WalletError('sign_in', 'Sign in so the card can go to your email.', 401);
@@ -238,22 +241,43 @@ export class WalletService {
     if (o.cents < p.minCents || o.cents > p.maxCents) throw new WalletError('bad_amount', `This card is ${p.minCents / 100} to ${p.maxCents / 100} dollars.`);
     const asset = this.creditAsset(companyId);
     const subjects = await this.subjectsOf(companyId, subject);
-    const ref = `gc_${randomBytes(9).toString('base64url')}`;
-    const entry = await this.db.transaction(async (tx) => {
-      const rows = (await tx.query<any>(`select account, balance from wallet_balances where company_id = $1 and asset = $2 and account = any($3) and balance > 0 order by balance desc for update`, [companyId, asset, await this.accountsOf(tx, companyId, subjects)])).rows;
-      if (rows.reduce((a, r) => a + Number(r.balance), 0) < o.cents) throw new WalletError('not_enough', 'Not enough credit for that.', 409);
-      const lines: [string, number][] = [];
-      let left = o.cents;
-      for (const r of rows) { if (!left) break; const take = Math.min(left, Number(r.balance)); lines.push([r.account, -take]); left -= take; }
-      lines.push(['spent:giftcards', o.cents]);
-      return this.post(tx, companyId, asset, 'giftcard', `giftcard:${ref}`, lines, { why: `${p.name} gift card` });
-    });
+    const ref = o.requestId ? `gc_${this.hidden(companyId, `giftcard|${subject}|${o.requestId}`)}` : `gc_${randomBytes(9).toString('base64url')}`;
+    const prior = async () => (await this.db.query<any>(`select * from wallet_giftcards where company_id = $1 and ref = $2`, [companyId, ref])).rows[0];
+    let row = await prior();
+    if (row && (row.product !== p.id || Number(row.cents) !== o.cents)) throw new WalletError('request_reused', 'That request was for a different card.', 409);
+    if (row?.status === 'sent') return { card: p.name, cents: o.cents, ref: row.provider_ref as string, code: undefined as string | undefined, test: provider.name.startsWith('test'), already: true };
+    if (row?.status === 'refused') throw new WalletError('provider_failed', 'The gift-card company said no to this one. Your credit is back.', 502);
+    if (!row) {
+      try {
+        await this.db.transaction(async (tx) => {
+          const rows = (await tx.query<any>(`select account, balance from wallet_balances where company_id = $1 and asset = $2 and account = any($3) and balance > 0 order by balance desc for update`, [companyId, asset, await this.accountsOf(tx, companyId, subjects)])).rows;
+          if (rows.reduce((a, r) => a + Number(r.balance), 0) < o.cents) throw new WalletError('not_enough', 'Not enough credit for that.', 409);
+          const lines: [string, number][] = [];
+          let left = o.cents;
+          for (const r of rows) { if (!left) break; const take = Math.min(left, Number(r.balance)); lines.push([r.account, -take]); left -= take; }
+          lines.push(['spent:giftcards', o.cents]);
+          const entry = await this.post(tx, companyId, asset, 'giftcard', `giftcard:${ref}`, lines, { why: `${p.name} gift card` });
+          await tx.query(`insert into wallet_giftcards (company_id, ref, subject, entry, product, cents, status, at) values ($1,$2,$3,$4,$5,$6,'ordering',$7)`, [companyId, ref, subject, entry, p.id, o.cents, this.clock().toISOString()]);
+        });
+      } catch (e: any) {
+        if (e?.code === '23505') throw new WalletError('in_progress', 'That gift card is already being bought.', 409);
+        throw e;
+      }
+      row = await prior();
+    }
     try {
       const got = await provider.order({ product: p.id, cents: o.cents, email: o.email, ref });
+      await this.db.query(`update wallet_giftcards set status = 'sent', provider_ref = $3, error = null where company_id = $1 and ref = $2`, [companyId, ref, got.ref]);
       return { card: p.name, cents: o.cents, ...got };
     } catch (e: any) {
-      await this.correct(companyId, entry, 'gift cards', `the gift-card company said no: ${String(e?.message ?? e).slice(0, 100)}`).catch(() => {});
-      throw new WalletError('provider_failed', 'The gift-card company couldn’t send it just now. Your credit is back.', 502);
+      const why = String(e?.message ?? e).slice(0, 200);
+      if (e?.refused === true) {
+        await this.reverse(companyId, row.entry, 'gift cards', `the gift-card company said no: ${why.slice(0, 100)}`, { refuse: [] }).catch(() => {});
+        await this.db.query(`update wallet_giftcards set status = 'refused', error = $3 where company_id = $1 and ref = $2`, [companyId, ref, why]);
+        throw new WalletError('provider_failed', 'The gift-card company said no. Your credit is back.', 502);
+      }
+      await this.db.query(`update wallet_giftcards set status = 'unknown', error = $3 where company_id = $1 and ref = $2`, [companyId, ref, why]);
+      throw new WalletError('provider_unknown', 'We couldn’t tell whether the gift-card company sent it. Your credit is held until we check; trying again with the same request is safe.', 502);
     }
   }
 
@@ -264,18 +288,38 @@ export class WalletService {
     throw new WalletError('no_partner', 'No exchange partner is connected yet.', 501);
   }
 
-  /** Fix a mistake: a new entry that undoes an old one. The old one stays, marked as undone. */
+  /**
+   * Fix a mistake: a new entry that undoes an old one. The old one stays, marked as undone. Entries that match
+   * something outside the books (a mint on the chain, points turned into the token, a gift card bought) can't be undone
+   * here, and no correction may leave a person with less than nothing.
+   */
   async correct(companyId: string, txId: string, by: string, reason: string) {
+    return this.reverse(companyId, txId, by, reason, { refuse: WalletService.uncorrectable });
+  }
+  static uncorrectable = ['mint', 'convert', 'giftcard'];
+  /** Points taken for a conversion that never happened (it failed or was cancelled) go back to their people. */
+  async returnConverted(companyId: string, actionId: string, by: string, reason: string) {
+    let n = 0;
+    for (const t of (await this.db.query<any>(`select id from wallet_tx where company_id = $1 and kind = 'convert' and ref like $2 and reversed_by is null`, [companyId, `convert:${actionId}:%`])).rows) {
+      await this.reverse(companyId, t.id, by, reason, { refuse: [] }).then(() => n++).catch(() => {});
+    }
+    return n;
+  }
+  private async reverse(companyId: string, txId: string, by: string, reason: string, o: { refuse: string[] }) {
     return this.db.transaction(async (tx) => {
       const t = (await tx.query<any>(`select * from wallet_tx where id = $1 and company_id = $2 for update`, [txId, companyId])).rows[0];
       if (!t) throw new WalletError('not_found', 'No such entry.', 404);
       if (t.reversed_by) throw new WalletError('already_corrected', 'That entry was already undone.', 409);
       if (t.kind === 'correction') throw new WalletError('is_correction', 'Undo the original entry instead.');
+      if (o.refuse.includes(t.kind)) throw new WalletError('not_correctable', 'This entry matches something outside the books (a mint, a conversion or a gift card), so it can’t be undone here.', 409);
       const lines = (await tx.query<any>(`select account, amount from wallet_lines where tx_id = $1`, [txId])).rows;
-      // Undoing a payment into a reserve can't leave less in it than has already been given out as credit.
-      for (const l of lines) if (l.account.startsWith('reserve:') && Number(l.amount) > 0) {
+      // Undoing a payment into a reserve can't leave less in it than has already been given out as credit, and undoing
+      // anything can't leave a person with less than nothing (what they were given may already be spent).
+      for (const l of lines) if ((l.account.startsWith('reserve:') || l.account.startsWith('holder:')) && Number(l.amount) > 0) {
         const bal = Number((await tx.query<any>(`select balance from wallet_balances where company_id = $1 and asset = $2 and account = $3 for update`, [companyId, t.asset, l.account])).rows[0]?.balance ?? 0);
-        if (bal - Number(l.amount) < 0) throw new WalletError('reserve_used', 'Some of that reserve was already given out as credit; it can’t be undone in full.', 409);
+        if (bal - Number(l.amount) < 0) throw l.account.startsWith('reserve:')
+          ? new WalletError('reserve_used', 'Some of that reserve was already given out as credit; it can’t be undone in full.', 409)
+          : new WalletError('already_used', 'The person already used some of that; undoing it would leave them below zero.', 409);
       }
       const id = await this.post(tx, companyId, t.asset, 'correction', `correct:${txId}`, lines.map((l) => [l.account, -Number(l.amount)] as [string, number]), { by, reason: reason.slice(0, 300), corrects: txId });
       await tx.query(`update wallet_tx set reversed_by = $2 where id = $1`, [txId, id]);

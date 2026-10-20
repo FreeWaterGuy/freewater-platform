@@ -40,7 +40,7 @@ export function transparencyRoutes(app: App, server: FastifyInstance, route: (r:
     const id = (req.params as any).companyId; need(id, 'publishFingerprints');
     return { body: await anchors.list(id) };
   } });
-  route({ method: 'POST', url: '/v1/books/fingerprints/publish', scope: 'admin', summary: 'Publish every finished day’s fingerprint now (it also runs daily).', handler: async (_req, key) => { if (key!.advertiserId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.'); return { body: await anchors.run() }; } });
+  route({ method: 'POST', url: '/v1/books/fingerprints/publish', scope: 'admin', summary: 'Publish every finished day’s fingerprint now (it also runs daily).', handler: async (_req, key) => { if (key!.advertiserId || key!.locationId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.'); return { body: await anchors.run() }; } });
 
   route({ method: 'GET', url: '/v1/ads/statement', scope: 'campaigns', summary: 'Your statement: every bottle you paid for, your bid, what the auction charged and why, scans, AR, sales and commission, with each day’s books fingerprint. ?from=YYYY-MM-DD&to=YYYY-MM-DD, ?format=csv for a spreadsheet.', handler: async (req, key) => {
     const k = key as ApiKey;

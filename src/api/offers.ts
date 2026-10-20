@@ -8,7 +8,7 @@ export function offersRoutes(app: App, route: (r: RouteDef) => void) {
   const viewerKey = { type: 'string', pattern: '^[A-Za-z0-9_-]{8,64}$' };
   const wrap = async <T>(f: () => Promise<T>) => { try { return await f(); } catch (e: any) { if (e?.status && e?.code) throw new ApiError(e.status, e.code, e.message); throw e; } };
   const company = (req: { params: unknown }) => { const id = (req.params as any).companyId as string; if (!platform.companies.has(id)) throw new ApiError(404, 'not_found', 'No such company.'); return id; };
-  const staff = (key: ApiKey | null) => { if (!key || key.advertiserId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.'); return key; };
+  const staff = (key: ApiKey | null) => { if (!key || key.advertiserId || key.locationId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.'); return key; };
   const who = (key: ApiKey) => `${key.name ?? 'team'} (key ${key.id})`;
   const cents = { type: 'integer', minimum: 0, maximum: 100000 };
   const reward = obj({ kind: { type: 'string', enum: ['free', 'percent_off', 'cents_off'] }, percent: { type: 'integer', minimum: 1, maximum: 100 }, cents, upToCents: cents, youGetCents: cents, causeCents: cents }, ['kind', 'upToCents']);

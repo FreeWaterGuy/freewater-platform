@@ -85,7 +85,7 @@ describe('smart codes on every bottle', () => {
 
     const first = await call('GET', `/Q/${code}`);
     expect(first.status).toBe(302);
-    expect(first.headers.location).toBe(`/s/${unit.id}/${slot}?c=${code}`);
+    expect(first.headers.location).toMatch(new RegExp(`^/s/${unit.id}/${slot}\\?c=${code}&t=[^&]+$`)); // with its one-time scan token
     await call('GET', `/q/${code.toLowerCase()}`); // phones that lower-case it still work
     const row = (await db.query<any>(`select opens from codes where code = $1`, [code])).rows[0];
     expect(row.opens).toBe(2);

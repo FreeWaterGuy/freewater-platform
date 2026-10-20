@@ -96,6 +96,24 @@ export class FleetService {
     for (const r of (await this.db.query<any>(`select * from machines`)).rows) {
       this.machines.set(r.location_id, { locationId: r.location_id, companyId: r.company_id, mode: r.mode, modeReason: r.mode_reason, status: typeof r.status === 'string' ? JSON.parse(r.status) : r.status, version: r.software_version, lastSeen: r.last_seen_at ? new Date(r.last_seen_at).getTime() : null });
     }
+    await this.recoverAfterRestart();
+  }
+
+  /**
+   * Jobs live only in memory, so after a restart any bottle a Model 6 was still printing has nobody waiting for it.
+   * Those bottles failed (their ads' holds are let go, nothing is billed), and their jobs are marked so a late report
+   * from the machine is recognised as too late. Labels the machine keeps for offline use are left alone.
+   */
+  async recoverAfterRestart() {
+    if (this.pending.size) return; // only right after start-up, before any job is queued
+    const kept = new Set((await this.db.query<{ unit_id: string }>(`select unit_id from machine_buffer where status = 'held'`)).rows.map((r) => r.unit_id));
+    let n = 0;
+    for (const u of [...this.platform.units.values()]) {
+      if ((u.status !== 'filled' && u.status !== 'rendered') || !this.isModel6(u.locationId) || kept.has(u.id)) continue;
+      if (this.platform.abandonUnfinished(u.id, 'The platform restarted before the machine finished it')) n++;
+    }
+    await this.db.query(`update machine_jobs set status = 'expired', reason = 'The platform restarted before the machine finished it', finished_at = $1 where status in ('queued', 'claimed')`, [this.now().toISOString()]);
+    if (n) await this.flush();
   }
 
   isModel6(locationId: string) {
@@ -167,7 +185,7 @@ export class FleetService {
   }
 
   /** The machine asks for its next job, waiting up to waitMs for one. Taking it starts the clock to finish it. */
-  async nextJob(locationId: string, waitMs = 0) {
+  async nextJob(locationId: string, waitMs = 0, signal?: AbortSignal) {
     const take = () => {
       const p = (this.queues.get(locationId) ?? []).find((x) => x.status === 'queued');
       if (!p) return null;
@@ -183,14 +201,38 @@ export class FleetService {
       };
     };
     const now = take();
-    if (now || waitMs <= 0) return now;
+    if (now || waitMs <= 0 || signal?.aborted) return now;
     return new Promise<ReturnType<typeof take>>((resolve) => {
+      let done = false;
+      const finish = (get: () => ReturnType<typeof take>) => {
+        if (done) return;
+        done = true;
+        clearTimeout(t);
+        signal?.removeEventListener('abort', onAbort);
+        this.waiters.set(locationId, (this.waiters.get(locationId) ?? []).filter((w) => w !== wake));
+        resolve(get());
+      };
+      const wake = () => finish(take);
+      // The machine's request went away: stop waiting for it, so no job is handed to a request nobody will read.
+      const onAbort = () => finish(() => null);
+      const t = setTimeout(() => finish(take), waitMs);
+      signal?.addEventListener('abort', onAbort, { once: true });
       const list = this.waiters.get(locationId) ?? [];
-      const wake = () => { clearTimeout(t); resolve(take()); };
-      const t = setTimeout(() => { this.waiters.set(locationId, (this.waiters.get(locationId) ?? []).filter((w) => w !== wake)); resolve(take()); }, waitMs);
       list.push(wake);
       this.waiters.set(locationId, list);
     });
+  }
+
+  /** A job was taken by a request that closed before the machine got it: back in the queue for the next request. */
+  requeue(locationId: string, jobId: string) {
+    const p = this.pending.get(jobId);
+    if (!p || p.job.locationId !== locationId || p.status !== 'claimed') return false;
+    p.status = 'queued';
+    clearTimeout(p.timer);
+    p.timer = setTimeout(() => this.expire(jobId, 'The machine didn’t pick up the job in time.'), this.claimTimeoutMs);
+    void this.db.query(`update machine_jobs set status = 'queued', claimed_at = null where id = $1`, [jobId]);
+    for (const w of this.waiters.get(locationId)?.splice(0) ?? []) w();
+    return true;
   }
 
   /** The bottle's own biggest ad, for the machine's countdown screen. */

@@ -41,6 +41,7 @@ import { HttpWebhookSender, type WebhookSender } from './adapters/webhooks/contr
 import { ConsoleService } from './modules/console/service';
 import { FleetService, MachineFleetPrinter } from './modules/fleet/service';
 import { CodeService, loadSecret } from './modules/codes/service';
+import { ScanTokens } from './modules/codes/scanTokens';
 import { AttributionService } from './modules/attribution/service';
 import { LotteryService } from './modules/lottery/service';
 import { VideoService } from './modules/video/service';
@@ -206,12 +207,14 @@ export async function createApp(opts: AppOptions) {
   // Every QR printed carries our own signed smart code.
   const codes = new CodeService(db, () => persistence, await loadSecret(db, 'codes'), opts.clock);
   platform.codes = codes;
+  // Opening a printed code hands its page a signed, one-time token; only scans and AR launches carrying one are billed.
+  const scanTokens = new ScanTokens(await loadSecret(db, 'codes'), () => platform.bus.now());
   for (const u of state.units) platform.restoreUnit(u, state.labels.get(u.id));
   packs.restore(state.packs);
   platform.bus.restoreSeen(state.seen);
   const printedUnits = state.units.filter((u) => u.status === 'dispensed' || u.status === 'printed').map((u) => ({ unitId: u.id, placements: u.placements, locationId: u.locationId }));
   const printedBoxes = state.packs.filter((p) => p.faces.length > 0).map((p) => ({ packId: p.id, faces: p.faces }));
-  platform.ledger.restore({ entries: state.ledger, printed: printedUnits, boxes: printedBoxes, engagementEvents: state.engagementEvents });
+  platform.ledger.restore({ entries: state.ledger, printed: printedUnits, boxes: printedBoxes, engagementEvents: state.engagementEvents, saleEvents: state.saleEvents });
   // The auction picks up where it left off: what each ad has earned per bottle.
   for (const l of state.ledger) if (l.campaignId && l.unitId) { if (l.kind === 'print') platform.auctionStats.add(l.campaignId, 'prints'); if (l.kind === 'scan') platform.auctionStats.add(l.campaignId, 'scans'); if (l.kind === 'ar') platform.auctionStats.add(l.campaignId, 'arLaunches'); }
 
@@ -482,7 +485,7 @@ export async function createApp(opts: AppOptions) {
   await fleet.load();
   made.registry.registerPrinter('model6-fleet', new MachineFleetPrinter(() => fleet, made.printer));
 
-  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep };
+  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

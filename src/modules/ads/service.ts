@@ -267,7 +267,7 @@ export class AdsService {
     const existing = r.campaignId ? this.platform.campaigns.get(r.campaignId) : undefined;
     const buy: Campaign['buy'] = d.buy.type === 'guaranteed'
       ? { type: 'guaranteed', remainingPrints: d.buy.prints }
-      : { type: 'bid', dailyCapCents: d.buy.dailyCapCents, maxCentsPerLabel: Math.max(d.buy.maxCentsPerLabel ?? 0, bidFloor(company)), spentTodayCents: existing?.buy.type === 'bid' ? existing.buy.spentTodayCents : 0 };
+      : { type: 'bid', dailyCapCents: d.buy.dailyCapCents, maxCentsPerLabel: Math.max(d.buy.maxCentsPerLabel ?? 0, bidFloor(company)), spentTodayCents: existing?.buy.type === 'bid' ? existing.buy.spentTodayCents : 0, ...(existing?.buy.type === 'bid' && existing.buy.spentDay ? { spentDay: existing.buy.spentDay } : {}) };
     const c: Campaign = {
       ...(existing ?? {}),
       id: existing?.id ?? newId('cmp'), companyId: r.companyId, advertiserId: r.advertiserId, advertiserName: adv.name,

@@ -60,7 +60,9 @@ export function attributionRoutes(app: App, server: FastifyInstance, route: (r: 
     platform.bus.publish('code.opened', row.companyId, { code: row.code, kind: row.kind, ...(row.unitId ? { unitId: row.unitId } : {}), ...(row.slot !== undefined ? { slot: row.slot } : {}), ...(row.packId ? { packId: row.packId } : {}), ...(row.face ? { face: row.face } : {}), opens }, `${row.code}:${opens}`);
     await app.persistence.flushUnlessPaused();
     const to = row.kind === 'slot' ? `/s/${row.unitId}/${row.slot}` : row.kind === 'receipt' ? `/r/${row.unitId}` : row.kind === 'box' ? `/b/${row.packId}/${row.face}` : `/p/${row.packId}`;
-    return reply.header('cache-control', 'no-store').redirect(`${to}?c=${row.code}`, 302);
+    // A bottle slot or box side: its page gets a one-time signed token, so the scan it reports can be billed.
+    const t = row.kind === 'slot' ? app.scanTokens.issue(`s:${row.unitId}:${row.slot}`) : row.kind === 'box' ? app.scanTokens.issue(`b:${row.packId}:${row.face}`) : null;
+    return reply.header('cache-control', 'no-store').redirect(`${to}?c=${row.code}${t ? `&t=${t}` : ''}`, 302);
   };
   server.get('/q/:code', openCode);
   server.get('/Q/:code', openCode);
@@ -131,7 +133,7 @@ export function attributionRoutes(app: App, server: FastifyInstance, route: (r: 
 
   // ---------- the company's own view ----------
   route({ method: 'GET', url: '/v1/ops/attribution', scope: ['admin', 'ledger'], summary: 'Clicks, matched sales, commission and coupons across all advertisers, last 30 days.', handler: async (_req, key) => {
-    if (key!.advertiserId) throw new ApiError(403, 'missing_scope', 'Only the company’s team can see this.');
+    if (key!.advertiserId || key!.locationId) throw new ApiError(403, 'missing_scope', 'Only the company’s team can see this.');
     return { body: await attribution.summary(key!.companyId) };
   } });
 }

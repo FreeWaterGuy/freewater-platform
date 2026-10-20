@@ -84,7 +84,8 @@ export function rankBidders(campaigns: Campaign[], company: CompanyConfig, m: Au
     const r = stats.rates(c.id);
     const quality = r.scan * engagementPrice(company.prices.perScan, c, company) + r.ar * engagementPrice(company.prices.perArLaunch, c, company);
     return { campaign: c, adjustedBid: Math.max(bid, c.buy.type === 'bid' ? 0 : whole), quality, rank: (c.buy.type === 'guaranteed' ? 1e6 : 0) + bid + quality, applied };
-  }).sort((a, b) => b.rank - a.rank);
+  // A bid adjusted below the starting price at this moment doesn't take part: it would have to pay more than it bid.
+  }).filter((b) => b.campaign.buy.type !== 'bid' || b.adjustedBid >= whole).sort((a, b) => b.rank - a.rank);
 }
 
 /**

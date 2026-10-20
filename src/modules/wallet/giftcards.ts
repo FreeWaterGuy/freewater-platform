@@ -11,6 +11,14 @@ export interface GiftCardProvider {
   order(o: { product: string; cents: number; email: string; name?: string; ref: string }): Promise<GiftCardOrder>;
 }
 
+/**
+ * The gift-card company definitely said no (it answered, and refused the order). Only then is the person's credit given
+ * back; any other failure (a timeout, a 5xx) might still have bought the card, so the credit stays held.
+ */
+export class GiftCardRefused extends Error { readonly refused = true; constructor(message: string, public status?: number) { super(message); } }
+/** A 4xx answer is a refusal, except the ones that mean "try again" or "already have it". */
+export const isRefusal = (status: number) => status >= 400 && status < 500 && ![408, 409, 425, 429].includes(status);
+
 /** The stand-in: never buys anything; every card it makes says TEST. */
 export class TestGiftCards implements GiftCardProvider {
   readonly name = 'test-gift-cards';
@@ -43,7 +51,7 @@ export class TremendousGiftCards implements GiftCardProvider {
       method: 'POST', headers: { authorization: `Bearer ${this.o.apiKey}`, 'content-type': 'application/json' },
       body: JSON.stringify({ external_id: o.ref, payment: { funding_source_id: this.o.fundingSource }, reward: { value: { denomination: o.cents / 100, currency_code: 'USD' }, delivery: { method: 'EMAIL' }, recipient: { email: o.email, name: o.name ?? 'FreeWater friend' }, products: [o.product] } }),
     });
-    if (!r.ok) throw new Error(`Tremendous answered ${r.status}`);
+    if (!r.ok) throw isRefusal(r.status) ? new GiftCardRefused(`Tremendous answered ${r.status}`, r.status) : new Error(`Tremendous answered ${r.status}`);
     const d: any = await r.json();
     return { ref: String(d.order?.id ?? o.ref), link: d.order?.rewards?.[0]?.delivery?.link, test: !!this.o.sandbox };
   }
