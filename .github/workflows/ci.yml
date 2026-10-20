@@ -156,7 +156,7 @@ jobs:
           done
           docker stop -t 50 upg
           # And its books still check out.
-          docker run --rm --network host -e DATABASE_URL=postgres://fw:fw@localhost:5432/upgrade freewater:${{ github.sha }} \
+          docker run --rm --network host --env-file upgrade-secrets.env -e ALLOW_STANDINS=1 -e DATABASE_URL=postgres://fw:fw@localhost:5432/upgrade freewater:${{ github.sha }} \
             node --import tsx src/server/booksCheck.ts 2>&1 | tee books.txt \
             || { echo "::error title=upgrade::$(tail -c 900 books.txt | tr '\n' ' ')"; exit 1; }
       - name: Outages - the database goes away briefly and for long, a server is killed, a server freezes
