@@ -51,12 +51,20 @@
   const grabCard = (s, label = 'Box to grab') => h('div', { class: 'grab' }, h('div', { class: 'code' }, h('small', { text: 'Stop' }), h('b', { text: String(s.stop) })),
     h('div', { class: 'what' }, h('small', { text: label }), h('b', { text: `#${s.boxNumber} · ${s.packSize}-pack` }), h('span', { text: `Stop code ${s.stopCode} is printed small on the box corner` })));
 
+  async function signOut() {
+    try { if (!fixture) await api('POST', '/v1/auth/sign-out'); } catch {}
+    S.token = null; S.me = null; S.run = null; store.set('fw_driver_token', null);
+    toast('Signed out');
+    boot();
+  }
+  const signOutBtn = () => h('button', { class: 'link-btn', type: 'button', onclick: signOut }, 'Sign out');
+
   // ---------- sign in ----------
   async function boot() {
     if (!S.config) S.config = await api('GET', '/v1/public/app-config');
     if (S.token && !S.me) { try { S.me = await api('GET', '/v1/me'); } catch { S.me = null; } }
     if (!S.me) return signIn();
-    if (!S.me.scopes?.includes('packs') && !S.me.scopes?.includes('admin')) return screen(h('h1', { class: 'dtitle', text: 'This app is for drivers' }), h('p', { class: 'dsub', text: 'Ask your manager to add you as a driver, then sign in again.' }));
+    if (!S.me.scopes?.includes('packs') && !S.me.scopes?.includes('admin')) return screen(h('h1', { class: 'dtitle', text: 'This app is for drivers' }), h('p', { class: 'dsub', text: 'Ask your manager to add you as a driver, then sign in again.' }), signOutBtn());
     return routes();
   }
   function signIn() {
@@ -88,7 +96,7 @@
         r.status === 'ready' && !r.driverId ? h('button', { class: 'btn small', type: 'button', onclick: async () => { try { S.run = await api('POST', `/v1/driver/runs/${r.id}/start`); load(); } catch (x) { toast(x.message); } } }, 'Take it')
           : h('em', { class: r.status === 'done' ? 'ok' : '', text: r.driverId && r.driverId !== S.me.id ? 'Taken' : label[r.status] }))))
         : h('div', { class: 'empty', text: 'No routes today yet. They appear here once tonight’s boxes are printed and packed.' }),
-      dock(h('button', { class: 'btn secondary', type: 'button', onclick: routes }, 'Refresh')));
+      dock(h('button', { class: 'btn secondary', type: 'button', onclick: routes }, 'Refresh'), signOutBtn()));
   }
 
   // ---------- scanning a box ----------

@@ -109,15 +109,15 @@ export function agentRoutes(app: App, route: (r: RouteDef) => void) {
     const k = staff(key); person(k);
     return { body: await wrap(() => agents.decide((req.params as any).id, (req.body as any).approve, who(k), k.companyId)) };
   } });
-  route({ method: 'POST', url: '/v1/agents/proposals/:id/undo', scope: 'admin', summary: 'Put a change back the way it was. Before it’s measured, it earns the agent nothing.', handler: async (req, key) => { const k = staff(key); return { body: await wrap(() => agents.undo((req.params as any).id, who(k), k.companyId)) }; } });
-  route({ method: 'POST', url: '/v1/agents/proposals/:id/merged', scope: 'admin', summary: 'A code agent’s change was merged: record the pull request, and its effect is measured.', body: obj({ ref: { type: 'string', minLength: 3, maxLength: 300 } }, ['ref']), handler: async (req, key) => { const k = staff(key); return { body: await wrap(() => agents.merged((req.params as any).id, (req.body as any).ref, who(k), k.companyId)) }; } });
+  route({ method: 'POST', url: '/v1/agents/proposals/:id/undo', scope: 'admin', summary: 'Put a change back the way it was. Before it’s measured, it earns the agent nothing.', handler: async (req, key) => { const k = staff(key); person(k); return { body: await wrap(() => agents.undo((req.params as any).id, who(k), k.companyId)) }; } });
+  route({ method: 'POST', url: '/v1/agents/proposals/:id/merged', scope: 'admin', summary: 'A code agent’s change was merged: record the pull request, and its effect is measured.', body: obj({ ref: { type: 'string', minLength: 3, maxLength: 300 } }, ['ref']), handler: async (req, key) => { const k = staff(key); person(k); return { body: await wrap(() => agents.merged((req.params as any).id, (req.body as any).ref, who(k), k.companyId)) }; } });
 
   route({ method: 'POST', url: '/v1/agents/:agentId/spend', scope: 'admin', summary: 'Spend from an agent’s own fund, on its behalf: compute, storage, knowledge, growth, exploration, or a cause. The governor’s rules apply.', body: obj({ category: { type: 'string', enum: Object.keys(spendCategories) }, cents: S.int, purpose: { type: 'string', maxLength: 500 }, cause: { type: 'string', maxLength: 120 } }, ['category', 'cents', 'purpose']), handler: async (req, key) => {
     const k = staff(key);
     const id = (req.params as any).agentId;
     return { body: await wrap(() => agents.spend(k.companyId, id, req.body as any, `agent:${id} (through ${who(k)})`)) };
   } });
-  route({ method: 'POST', url: '/v1/agents/spends/:id/decide', scope: 'admin', summary: 'Approve or decline a spend waiting for a person.', body: obj({ approve: S.bool }, ['approve']), handler: async (req, key) => { const k = staff(key); return { body: await wrap(() => agents.decideSpend((req.params as any).id, (req.body as any).approve, who(k), k.companyId)) }; } });
+  route({ method: 'POST', url: '/v1/agents/spends/:id/decide', scope: 'admin', summary: 'Approve or decline a spend waiting for a person.', body: obj({ approve: S.bool }, ['approve']), handler: async (req, key) => { const k = staff(key); person(k); return { body: await wrap(() => agents.decideSpend((req.params as any).id, (req.body as any).approve, who(k), k.companyId)) }; } });
   route({ method: 'POST', url: '/v1/agents/:agentId/costs', scope: 'admin', summary: 'Record a running cost that isn’t an AI call (hosting, storage, a tool), so it’s on the agent’s line.', body: obj({ cents: { type: 'number', exclusiveMinimum: 0 }, memo: { type: 'string', minLength: 3, maxLength: 200 } }, ['cents', 'memo']), handler: async (req, key) => {
     const k = staff(key);
     const b = req.body as any;

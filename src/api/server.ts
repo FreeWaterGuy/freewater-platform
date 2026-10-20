@@ -28,7 +28,7 @@ import { VideoError } from '../modules/video/service';
 import { DataError, DataService } from '../modules/data/service';
 import { NumberLineError } from '../modules/numberline/service';
 import { LotteryError } from '../modules/lottery/service';
-import { PackStateError } from '../modules/packs/service';
+import { AmbiguousRunError, PackStateError } from '../modules/packs/service';
 import { AttributionError } from '../modules/attribution/service';
 import { FleetError } from '../modules/fleet/service';
 import { WebhookError } from '../modules/webhooks/service';
@@ -241,7 +241,11 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const bottles = p.unitIds.map((id) => platform.units.get(id)).filter((u) => !!u);
     const donated = bottles.reduce((sum, u) => sum + platform.ledger.receipt(u!.id).donatedCents, 0);
     const advertisers = [...new Set([...p.faces.filter((f) => !f.isHouse).map((f) => f.advertiserName), ...bottles.flatMap((u) => u!.placements.filter((x) => !x.isHouse).map((x) => x.advertiserName))])];
-    return { body: { packId: p.id, company: company.name, size: p.box.bottles, bottles: bottles.map((u) => ({ unitId: u!.id, receiptUrl: `/r/${u!.id}`, ads: u!.placements.filter((x) => !x.isHouse).length })), faces: p.faces.map((f) => ({ face: f.face, advertiser: f.advertiserName, url: `/b/${p.id}/${f.face}`, isHouse: f.isHouse })), advertisers, donatedCents: donated, givingOn: company.giving.mode !== 'none' } };
+    return { body: { packId: p.id, company: company.name, size: p.box.bottles, bottles: bottles.map((u) => ({ unitId: u!.id, receiptUrl: `/r/${u!.id}`, ads: u!.placements.filter((x) => !x.isHouse).length })), faces: p.faces.map((f) => {
+      // A box side opened from this page gets its own token (rationed like a code open), so its scan can be billed.
+      const t = f.isHouse ? null : app.scanTokens.issue(targetKey({ kind: 'box-face', packId: p.id, face: f.face }), app.wallet.sourceOf(req.ip));
+      return { face: f.face, advertiser: f.advertiserName, url: `/b/${p.id}/${f.face}${t ? `?t=${t}` : ''}`, isHouse: f.isHouse };
+    }), advertisers, donatedCents: donated, givingOn: company.giving.mode !== 'none' }, headers: { 'cache-control': 'no-store' } };
   } });
 
   route({ method: 'GET', url: '/v1/public/companies/:companyId/totals', scope: 'public', summary: "A company's open-books totals.", handler: async (req) => {
@@ -295,20 +299,35 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     if (key!.advertiserId && placement.advertiserId !== key!.advertiserId) throw notFound('Slot');
     // Sales are kept per advertiser and order, the same key the conversions API uses, so one sale is billed once
     // whichever way it's reported, and two advertisers' "ORDER-1" never collide.
-    const orderKey = `${placement.advertiserId}:${b.orderId}`;
+    let orderKey = `${placement.advertiserId}:${b.orderId}`;
     if (refund) {
-      // Only a sale that was billed can be refunded, and only once (here or through /v1/conversions/:id/refund).
-      const sold = platform.ledger.sale(key!.companyId, placement.advertiserId, orderKey);
+      // Only a sale that was billed can be refunded, in one go or in parts, never past the sale (here or through
+      // /v1/conversions/:id/refund). Sales recorded before they were kept per advertiser are under the bare order id;
+      // the ledger keeps those per advertiser too, so the fallback only ever finds this advertiser's own sale.
+      let sold = platform.ledger.sale(key!.companyId, placement.advertiserId, orderKey);
+      if (!sold) { sold = platform.ledger.sale(key!.companyId, placement.advertiserId, b.orderId); if (sold) orderKey = b.orderId; }
       if (!sold) throw new ApiError(404, 'no_sale', `No billed sale with order ${b.orderId}.`);
       if (sold.refunded) throw new ApiError(409, 'already_refunded', `Order ${b.orderId} was already refunded.`);
+      if (b.amountCents <= 0) throw new ApiError(422, 'bad_amount', 'Send the amount refunded, in cents.');
+      // Asking for more than is left gives back only what's left.
+      const already = platform.ledger.refundedCents(key!.companyId, placement.advertiserId, orderKey) ?? 0;
+      // Each part of a refund is its own event. With a refundId, a retried request is recognised and counted once.
+      // Without one, the first part keeps the order's key (as a whole refund always did, and as the conversions API
+      // uses), and later parts are keyed by how much was refunded before them: two parts sent at once count once.
+      const unit = platform.units.get(b.unitId)!;
+      const before = platform.ledger.entries.length;
+      const idem = b.refundId ? `${orderKey}:refund:${b.refundId}` : already ? `${orderKey}:refund-after:${already}` : orderKey;
+      const e = platform.bus.publish('purchase.refunded', unit.companyId, { unitId: b.unitId, slotIndex: b.slot, orderId: orderKey, amountCents: b.amountCents }, idem);
+      return { status: 202, body: { recorded: !!e, ledgerLines: platform.ledger.entries.length - before, refundedCents: platform.ledger.refundedCents(key!.companyId, placement.advertiserId, orderKey) ?? 0, amountCents: sold.amountCents } };
     }
     const before = platform.ledger.entries.length;
-    const e = refund ? platform.refund(b.unitId, b.slot, orderKey, b.amountCents) : platform.purchase(b.unitId, b.slot, orderKey, b.amountCents);
+    const e = platform.purchase(b.unitId, b.slot, orderKey, b.amountCents);
     return { status: 202, body: { recorded: !!e, ledgerLines: platform.ledger.entries.length - before } };
   };
   const saleBody = obj({ unitId: S.str, slot: S.int, orderId: S.str, amountCents: S.int }, ['unitId', 'slot', 'orderId', 'amountCents']);
   route({ method: 'POST', url: '/v1/purchases', scope: 'purchases', summary: 'A sale made from a bottle. Commission is billed once per orderId.', body: saleBody, handler: sale(false) });
-  route({ method: 'POST', url: '/v1/refunds', scope: 'purchases', summary: 'A refund. The commission is given back.', body: saleBody, handler: sale(true) });
+  const refundBody = obj({ unitId: S.str, slot: S.int, orderId: S.str, amountCents: S.int, refundId: S.str }, ['unitId', 'slot', 'orderId', 'amountCents']);
+  route({ method: 'POST', url: '/v1/refunds', scope: 'purchases', summary: 'A refund, whole or in parts (send a refundId per part so a retry counts once). The commission is given back in proportion, until the whole sale is refunded.', body: refundBody, handler: sale(true) });
 
   // ---------- campaigns: advertisers and the company ----------
 
@@ -439,12 +458,14 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const runId = (req.query as any)?.runId ?? (req.body as any)?.runId;
     const mine = [...packs.packs.values()].some((p) => p.routeId === routeId && p.companyId === key!.companyId);
     if (!mine) throw notFound('Route');
-    try { return { body: packs.load(routeId, typeof runId === 'string' && runId ? runId : undefined).map((p) => packView(p.id)) }; } catch (e: any) { throw new ApiError(409, 'not_sealed', e.message); }
+    try { return { body: packs.load(routeId, typeof runId === 'string' && runId ? runId : undefined).map((p) => packView(p.id)) }; } catch (e: any) { if (e instanceof AmbiguousRunError) throw new ApiError(400, 'run_required', e.message); throw new ApiError(409, 'not_sealed', e.message); }
   } });
 
   route({ method: 'POST', url: '/v1/deliveries', scope: 'packs', summary: 'The driver scans a box at a door. Delivered only if it is the right box at the right address. Pass runId for a night’s run; without it, the route’s current run.', body: obj({ routeId: S.str, runId: S.str, stop: S.int, scannedPackId: S.str, atAddress: S.bool, photoProof: S.bool, emptiesCollected: S.int }, ['routeId', 'stop', 'scannedPackId', 'atAddress', 'photoProof', 'emptiesCollected']), handler: async (req, key) => {
     const b = req.body as any;
-    const run = b.runId ?? packs.currentRun(b.routeId);
+    let run: string;
+    try { run = b.runId ?? packs.currentRun(b.routeId); } catch (e: any) { if (e instanceof AmbiguousRunError) throw new ApiError(400, 'run_required', e.message); throw e; }
+    if (!b.runId) b.runId = run;
     const planned = [...packs.packs.values()].find((p) => p.routeId === b.routeId && p.stop === b.stop && (p.runId ?? '') === run);
     if (!planned || planned.companyId !== key!.companyId) throw notFound('Stop');
     const r = packs.deliver(b);
@@ -488,8 +509,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     // One person: this account, its email or phone (as a fingerprint), and the phone it signed in on.
     const u: any = r.user;
     const own = [`user:${u.id}`, DataService.emailKey(u.email), DataService.phoneKey(u.phone), u.viewerKey].filter(Boolean);
-    // The phone it signed in on joins only if it's provably this person's (see DataService.mayLinkDevice).
-    const phone = b.viewerKey && (await app.data.mayLinkDevice(b.companyId, u.id, b.viewerKey, req.ip, own).catch(() => false)) ? [b.viewerKey] : [];
+    // The phone it signed in on joins (its browser sent its key), unless it's someone else's or was never used (see
+    // DataService.mayLinkDevice).
+    const phone = b.viewerKey && (await app.data.mayLinkDevice(b.companyId, u.id, b.viewerKey, own).catch(() => false)) ? [b.viewerKey] : [];
     await app.data.link(b.companyId, [...own, ...phone], 'signed in').catch(() => null);
     // Someone with a second step turned on gets a ticket for it, not yet a session.
     if (r.challenge) return { body: { secondStep: true, challenge: r.challenge } };
@@ -687,7 +709,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   const sensitive: Record<string, string> = {
     'POST /v1/auth/verify': 'signed_in', 'POST /v1/keys': 'key_created', 'DELETE /v1/keys/:id': 'key_revoked', 'POST /v1/team': 'team_member_added', 'DELETE /v1/team/:userId': 'team_member_removed',
     'PATCH /v1/console/settings': 'settings_saved', 'POST /v1/console/history/:version/restore': 'settings_restored', 'POST /v1/agents/autonomy': 'autonomy_changed', 'POST /v1/platform/companies': 'licensee_created',
-    'POST /v1/team/batches/:id/void': 'batch_voided', 'POST /v1/webhooks': 'webhook_created',
+    'POST /v1/team/batches/:id/void': 'batch_voided', 'POST /v1/webhooks': 'webhook_created', 'POST /v1/ops/runs/:id/stops/:stop/check-by-hand': 'pack_checked_by_hand',
   };
   const mask = (to: unknown) => { const s = String(to ?? ''); const at = s.indexOf('@'); return at > 0 ? `${s[0]}***${s.slice(at)}` : s.length > 4 ? `***${s.slice(-4)}` : '***'; };
 

@@ -92,14 +92,18 @@ export class AccountsService {
     const row = (await this.db.query<any>(`select * from login_codes where company_id = $1 and destination = $2 and used_at is null order by created_at desc limit 1`, [input.companyId, dest])).rows[0];
     const wrong = new AccountsError('invalid_code', 'That code is wrong or has expired. Ask for a new one.', 401);
     if (!row || new Date(row.expires_at) < now) throw wrong;
-    if (row.attempts >= MAX_ATTEMPTS) throw new AccountsError('too_many_attempts', 'Too many wrong tries. Ask for a new code.', 429);
-    const given = Buffer.from(sha(`${input.companyId}:${dest}:${String(input.code).trim()}`));
-    const expected = Buffer.from(row.code_hash);
-    if (given.length !== expected.length || !timingSafeEqual(given, expected)) {
-      await this.db.query(`update login_codes set attempts = attempts + 1 where id = $1`, [row.id]);
+    // Count the try before checking it, in one step: many guesses sent at once each take one of the few tries, and
+    // once they're gone no guess is even compared.
+    const claimed = (await this.db.query<any>(`update login_codes set attempts = attempts + 1 where id = $1 and attempts < $2 and used_at is null returning code_hash`, [row.id, MAX_ATTEMPTS])).rows[0];
+    if (!claimed) {
+      if (row.attempts >= MAX_ATTEMPTS || (await this.db.query<any>(`select 1 from login_codes where id = $1 and used_at is null and attempts >= $2`, [row.id, MAX_ATTEMPTS])).rows.length) throw new AccountsError('too_many_attempts', 'Too many wrong tries. Ask for a new code.', 429);
       throw wrong;
     }
-    await this.db.query(`update login_codes set used_at = $2 where id = $1`, [row.id, now.toISOString()]);
+    const given = Buffer.from(sha(`${input.companyId}:${dest}:${String(input.code).trim()}`));
+    const expected = Buffer.from(claimed.code_hash);
+    if (given.length !== expected.length || !timingSafeEqual(given, expected)) throw wrong;
+    // Used once: a second right answer sent at the same moment finds it already used.
+    if (!(await this.db.query(`update login_codes set used_at = $2 where id = $1 and used_at is null`, [row.id, now.toISOString()])).rowCount) throw wrong;
 
     const col = input.channel === 'email' ? 'email' : 'phone';
     let user = await this.findBy(input.companyId, col, dest);

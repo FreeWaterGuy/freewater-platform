@@ -24,7 +24,7 @@
     if (fixture) return fixture.api(url, opts);
     const res = await fetch(url, opts);
     const data = await res.json().catch(() => null);
-    if (!res.ok) throw new Error(data?.error?.message || 'Something went wrong.');
+    if (!res.ok) { const err = new Error(data?.error?.message || 'Something went wrong.'); err.status = res.status; err.code = data?.error?.code; throw err; }
     return data;
   }
   const params = () => new URLSearchParams(state.path.split('?')[1] || '');
@@ -49,20 +49,29 @@
     clearInterval(timer);
     if (stream) { stream.close(); stream = null; }
     const p = params();
-    if (p.get('company')) state.company = p.get('company');
-    if (!state.company) state.company = (await api('/v1/public/app-config')).companyId;
     const path = state.path.split('?')[0];
     try {
-      if (path === '/books/confirm') return confirmPage();
+      if (p.get('company')) state.company = p.get('company');
+      if (!state.company) state.company = (await api('/v1/public/app-config')).companyId;
+      if (path === '/books/confirm') return await confirmPage();
       const m = /^\/books\/bottle(?:\/([\w-]+))?$/.exec(path) ?? /^\/r\/([\w-]+)$/.exec(path);
-      if (m) return bottlePage(m[1] || p.get('code'));
-      if (path === '/books/months') return monthsPage();
-      if (path === '/books/donations') return donationsPage();
-      if (path === '/books/proof') return proofPage();
-      if (path === '/books/companies') return companiesPage();
-      if (path === '/books/how') return howPage();
-      return livePage();
-    } catch (e) { page('', h('div', { class: 'notice err', text: e.message })); }
+      if (m) return await bottlePage(m[1] || p.get('code'));
+      if (path === '/books/months') return await monthsPage();
+      if (path === '/books/donations') return await donationsPage();
+      if (path === '/books/proof') return await proofPage();
+      if (path === '/books/companies') return await companiesPage();
+      if (path === '/books/how') return await howPage();
+      return await livePage();
+    } catch (e) {
+      if (notPublic(e)) return notPublicPage();
+      page('', h('div', { class: 'notice err', text: e.message }));
+    }
+  }
+  // A company that keeps its books private answers 404 "Those books aren’t public."
+  const notPublic = (e) => e?.status === 404 && /aren.t public/i.test(e.message || '');
+  function notPublicPage() {
+    page('', h('h1', { class: 'lead', text: 'These books aren’t public' }),
+      h('p', { class: 'sub', text: 'This company doesn’t publish its books here. ' }, link('/books/companies', {}, 'See the companies that do'), '.'));
   }
   async function summary() { state.summary = await api(`/v1/public/books/${state.company}`); return state.summary; }
 
@@ -151,7 +160,9 @@
     if (!state.summary) await summary().catch(() => null);
     if (!code) return page('bottle', h('h1', { class: 'lead', text: 'Look up a bottle' }), h('p', { class: 'sub', text: 'Scan the QR on the black panel of any bottle, or type the code under it. You’ll see exactly what that bottle earned, what it cost, and where its donation went.' }), lookupBox());
     let b;
-    try { b = await api(`/v1/public/bottles/${encodeURIComponent(code)}`); } catch (e) { return page('bottle', h('h1', { class: 'lead', text: 'No bottle has that code' }), h('p', { class: 'sub', text: 'Check the code under the QR on the black panel and try again.' }), lookupBox()); }
+    try { b = await api(`/v1/public/bottles/${encodeURIComponent(code)}`); } catch (e) {
+      if (notPublic(e)) return page('bottle', h('h1', { class: 'lead', text: 'These books aren’t public' }), h('p', { class: 'sub', text: 'That bottle’s company doesn’t publish its books, so its numbers can’t be shown here.' }), lookupBox());
+      return page('bottle', h('h1', { class: 'lead', text: 'No bottle has that code' }), h('p', { class: 'sub', text: 'Check the code under the QR on the black panel and try again.' }), lookupBox()); }
     const uc = b.standardCosts;
     const rows = (pairs) => pairs.map(([k, v]) => h('div', { class: 'ledger-row' }, h('span', { text: k }), h('b', { text: v })));
     const earned = [];

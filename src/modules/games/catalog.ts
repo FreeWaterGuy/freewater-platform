@@ -102,12 +102,17 @@ export function frameNet(f: Frame): number {
  * The tier a choice would sit in if it were real (Abundance Engineering, chapter 10), from how it was offered: paying
  * while a free or negatively priced option was right there is brand commitment (5); the free one among free ones is
  * revealed preference (3); negatively priced, values-weighted (4a when the operator picked the cause, 4b when the
- * person gets the money); for sale against only priced options is constrained (1).
+ * person gets the money), and so is the free one picked over a negatively priced one (4b if that one would have paid
+ * the person, 4a otherwise); for sale against only priced options is constrained (1).
  */
 export function structuralTier(chosen: Frame, others: Frame[]): '1' | '3' | '4a' | '4b' | '5' {
   const net = frameNet(chosen);
   if (net > 0) return others.some((o) => frameNet(o) <= 0) ? '5' : '1';
   if (net < 0) return chosen.kind === 'negative' && chosen.youGetCents ? '4b' : '4a';
+  // Free, while a better-than-free option was right there: weighed against a cause or a payment, as classify() does
+  // (4b when the declined one would have paid the person, 4a when only a cause the operator chose would have got it).
+  const negative = others.filter((o) => frameNet(o) < 0);
+  if (negative.length) return negative.some((o) => o.kind === 'negative' && !!o.youGetCents) ? '4b' : '4a';
   return '3';
 }
 

@@ -130,6 +130,8 @@ export class OffersService {
     const usedNow = Number((await this.db.query<any>(`select count(*)::int as n from offer_claims where offer_id = $1 and status not in ('rejected','expired','void')`, [offerId])).rows[0].n);
     const cost = this.stepAt(this.data(pre), usedNow).pointsCost;
     // Points first, so a crash can never leave a claim that cost nothing; if the claim then fails, they go back.
+    // One person may have several phones and an account: the per-person limit counts them all together.
+    const mineAs = [...new Set([person, ...((await this.wallet.linked?.(companyId, person)) ?? [])])];
     const id = newId('oc');
     const spent = cost > 0 ? (await this.wallet.spendPoints(companyId, person, cost, `claim:${id}`, `Claimed: ${this.data(pre).title}`)).entry : null;
     try {
@@ -141,7 +143,7 @@ export class OffersService {
         if ((d.startsAt && Date.parse(d.startsAt) > now) || (d.endsAt && Date.parse(d.endsAt) < now)) throw new OfferError('not_live', 'That offer isn’t running now.', 410);
         const used = Number((await tx.query<any>(`select count(*)::int as n from offer_claims where offer_id = $1 and status not in ('rejected','expired','void')`, [offerId])).rows[0].n);
         if (used >= d.maxClaims) throw new OfferError('all_claimed', 'All of these have been claimed.', 410);
-        const mine = Number((await tx.query<any>(`select count(*)::int as n from offer_claims where offer_id = $1 and person = $2 and status not in ('rejected','expired','void')`, [offerId, person])).rows[0].n);
+        const mine = Number((await tx.query<any>(`select count(*)::int as n from offer_claims where offer_id = $1 and person = any($2) and status not in ('rejected','expired','void')`, [offerId, mineAs])).rows[0].n);
         if (mine >= d.perPerson) throw new OfferError('limit', 'You’ve already claimed this one.', 409);
         const step = this.stepAt(d, used);
         if (step.pointsCost !== cost) throw new OfferError('changed', 'The offer just changed. Try again.', 409);

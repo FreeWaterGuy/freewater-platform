@@ -15,7 +15,7 @@ afterAll(async () => { await app.persistence.flush(); await db.close(); });
 
 describe('gift cards', () => {
   it('stay off until exchanges are approved (and only after going live)', async () => {
-    await expect(app.wallet.buyGiftCard('freewater', 'user:usr_gc', { email: 'a@b.co', product: 'amazon', cents: 500 }, new TestGiftCards())).rejects.toMatchObject({ code: 'switched_off' });
+    await expect(app.wallet.buyGiftCard('freewater', 'user:usr_gc', { email: 'a@b.co', product: 'amazon', cents: 500, requestId: 'partners-gc-01' }, new TestGiftCards())).rejects.toMatchObject({ code: 'switched_off' });
     await expect(app.chain.propose('freewater', 'exchanges_on', {}, 'user:josh')).rejects.toMatchObject({ code: 'wrong_stage' });
   });
 
@@ -30,13 +30,13 @@ describe('gift cards', () => {
     fw.wallet = { ...app.wallet.settings('freewater'), credit: { enabled: true } };
     await app.wallet.fundReserve('freewater', 'brand-x', 2_000, 'test', 'pay-gc');
     await app.wallet.giveCredit('freewater', 'brand-x', 'user:usr_gc', 1_200, 'gc1', 'test');
-    const card = await app.wallet.buyGiftCard('freewater', 'user:usr_gc', { email: 'a@b.co', product: 'amazon', cents: 600 }, new TestGiftCards());
+    const card = await app.wallet.buyGiftCard('freewater', 'user:usr_gc', { email: 'a@b.co', product: 'amazon', cents: 600, requestId: 'partners-gc-02' }, new TestGiftCards());
     expect(card.code).toMatch(/^TEST-AMAZON/);
     expect((await app.wallet.wallet('freewater', 'user:usr_gc')).credit.balanceCents).toBe(600);
     const failing = { name: 'x', catalog: () => new TestGiftCards().catalog(), order: async () => { throw new GiftCardRefused('Tremendous answered 400', 400); } }; // a definite no (a timeout keeps the credit held)
-    await expect(app.wallet.buyGiftCard('freewater', 'user:usr_gc', { email: 'a@b.co', product: 'target', cents: 500 }, failing)).rejects.toMatchObject({ code: 'provider_failed' });
+    await expect(app.wallet.buyGiftCard('freewater', 'user:usr_gc', { email: 'a@b.co', product: 'target', cents: 500, requestId: 'partners-gc-03' }, failing)).rejects.toMatchObject({ code: 'provider_failed' });
     expect((await app.wallet.wallet('freewater', 'user:usr_gc')).credit.balanceCents).toBe(600);
-    await expect(app.wallet.buyGiftCard('freewater', 'user:usr_gc', { email: 'a@b.co', product: 'target', cents: 900 }, new TestGiftCards())).rejects.toMatchObject({ code: 'not_enough' });
+    await expect(app.wallet.buyGiftCard('freewater', 'user:usr_gc', { email: 'a@b.co', product: 'target', cents: 900, requestId: 'partners-gc-04' }, new TestGiftCards())).rejects.toMatchObject({ code: 'not_enough' });
     expect((await app.wallet.check('freewater')).ok).toBe(true);
   });
 

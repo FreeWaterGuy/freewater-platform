@@ -1,6 +1,7 @@
 import { hostname } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import type { SqlClient } from '../db/client';
+import { migrate, migrations } from '../db/migrations';
 
 /**
  * Only one server owns the data at a time.
@@ -80,6 +81,19 @@ export class InstanceLease {
     }
   }
 
+  /**
+   * Inside a write's own transaction: is the lease still this server's, and unexpired by the database's clock? The
+   * row is locked for share until the write commits, so no one can take the lease between this check and the commit.
+   */
+  async stillHeld(tx: SqlClient): Promise<boolean> {
+    if (!this.held) return false;
+    const r = await tx.query(`select 1 from instance_lease where name = $1 and holder = $2 and expires_at > now() for share`, [this.name, this.holder]);
+    return r.rows.length > 0;
+  }
+
+  /** A write found the lease gone: stop as if renewing had failed. */
+  lost(why: string) { this.lose(why); }
+
   private lose(why: string) {
     if (!this.held) return;
     this.held = false;
@@ -95,4 +109,20 @@ export class InstanceLease {
     this.held = false;
     await this.db.query(`delete from instance_lease where name = $1 and holder = $2`, [this.name, this.holder]).catch(() => {});
   }
+}
+
+/**
+ * For the helper scripts (keys, file moves, setup), which run beside a server rather than instead of one: migrate only
+ * if that can't change the tables under a running server. If another server holds a live lease and the schema is
+ * behind this code, refuse (that server is an older version; stop it, or start the new version first). Otherwise go on.
+ */
+export async function migrateIfSafe(db: SqlClient): Promise<string[]> {
+  const live = (await db.query<{ holder: string }>(`select holder from instance_lease where expires_at > now()`).catch(() => ({ rows: [] as { holder: string }[] }))).rows;
+  if (live.length) {
+    const done = new Set((await db.query<{ id: string }>(`select id from schema_migrations`).catch(() => ({ rows: [] as { id: string }[] }))).rows.map((r) => r.id));
+    const behind = migrations.filter((m) => !done.has(m.id)).map((m) => m.id);
+    if (behind.length) throw new Error(`A server (${live[0]!.holder}) is running on this database and its tables are behind this version (${behind.length} migration(s) to apply, from ${behind[0]}). Migrating now would change the tables under it. Deploy the new server version first (it migrates when it takes over), then run this again.`);
+    return [];
+  }
+  return migrate(db);
 }

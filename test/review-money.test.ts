@@ -185,8 +185,9 @@ describe('6. gift cards', () => {
     const refusing = { name: 'x', catalog: () => test.catalog(), order: async () => { throw new GiftCardRefused('Tremendous answered 422', 422); } };
     await expect(app.wallet.buyGiftCard('freewater', 'user:usr_g', { ...buy, requestId: 'req-000002' }, refusing)).rejects.toMatchObject({ code: 'provider_failed' });
     expect(await credit()).toBe(2_000); // given back
-    // The test provider still works without a request id.
-    expect((await app.wallet.buyGiftCard('freewater', 'user:usr_g', { email: 'a@b.co', product: 'target', cents: 500 }, new TestGiftCards())).code).toMatch(/^TEST-TARGET/);
+    // A request id is required (one per purchase attempt).
+    await expect(app.wallet.buyGiftCard('freewater', 'user:usr_g', { email: 'a@b.co', product: 'target', cents: 500 } as any, new TestGiftCards())).rejects.toMatchObject({ code: 'request_id_needed' });
+    expect((await app.wallet.buyGiftCard('freewater', 'user:usr_g', { email: 'a@b.co', product: 'target', cents: 500, requestId: 'req-000003' }, new TestGiftCards())).code).toMatch(/^TEST-TARGET/);
     // A gift card's entry can't be undone by a correction (that would refill credit already spent).
     const gc = (await db.query<any>(`select id from wallet_tx where kind = 'giftcard' and reversed_by is null limit 1`)).rows[0].id;
     await expect(app.wallet.correct('freewater', gc, 'user:josh', 'oops')).rejects.toMatchObject({ code: 'not_correctable' });

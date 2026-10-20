@@ -19,6 +19,14 @@ export const reinvestCategories = ['capacity', 'energy', 'routes', 'research', '
 export const ownerPayoutKinds = ['dividend', 'buyback', 'distribution'] as const;
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 const n = (v: unknown) => Number(v ?? 0);
+/**
+ * A line's amount as seen from accounts starting with `prefix`: plus when it credits one, minus when it debits one
+ * (0 when it touches neither). So a reversal, the same kind with its sides swapped, takes back what the original added.
+ */
+export const signed = (l: { debit: string; credit: string; amount_cents?: unknown; amountCents?: number }, prefix: string) => {
+  const a = n(l.amountCents ?? l.amount_cents);
+  return String(l.credit).startsWith(prefix) ? a : String(l.debit).startsWith(prefix) ? -a : 0;
+};
 
 /**
  * The open books: where the money came from, where it went, and every transfer to charity, published so anyone
@@ -197,13 +205,12 @@ export class BooksService {
     for (const r of rows) {
       const x = get(this.monthOf(companyId, new Date(r.at)));
       const a = n(r.amount_cents);
-      if (String(r.credit).startsWith('revenue:')) x.inCents += a;
-      else if (r.kind === 'commission_reversal') x.inCents -= a;
-      else if (r.kind === 'expense' || r.kind === 'prize') x.costsCents += a;
+      if (String(r.credit).startsWith('revenue:') || String(r.debit).startsWith('revenue:')) x.inCents += signed(r, 'revenue:');
+      else if (r.kind === 'expense' || r.kind === 'prize') x.costsCents -= signed(r, 'expense:');
       else if (r.kind === 'donation') x.givenCents += r.debit === 'expense:giving' ? a : r.credit === 'expense:giving' ? -a : 0;
       else if (r.kind === 'ai_fund') x.aiFundCents += r.credit === 'payable:ai_fund' ? a : -a;
-      else if (r.kind === 'reinvestment') x.reinvestedCents += a;
-      else if (r.kind === 'owner_payout') x.paidOutCents += a;
+      else if (r.kind === 'reinvestment') x.reinvestedCents -= signed(r, 'asset:');
+      else if (r.kind === 'owner_payout') x.paidOutCents -= signed(r, 'equity:');
     }
     for (const u of this.platform.units.values()) if (u.companyId === companyId && (u.status === 'printed' || u.status === 'dispensed')) get(this.monthOf(companyId, new Date(u.createdAt))).costsCents += uc;
     const list = [...months.values()].sort((a, b) => a.month.localeCompare(b.month)).map((x) => {
@@ -230,16 +237,21 @@ export class BooksService {
 
   private async totals(companyId: string) {
     await this.flush();
+    // Every total follows the side of each line, as balances() does: a line that credits an account adds to it, a line
+    // that debits it takes away. A reversal (a refund, a voided batch) is the same kind with its sides swapped, so it
+    // nets the original to zero instead of counting as more money.
+    const rev = `(case when credit like 'revenue:%' then amount_cents when debit like 'revenue:%' then -amount_cents else 0 end)`;
+    const payable = `(case when credit like 'payable:charity:%' then amount_cents when debit like 'payable:charity:%' then -amount_cents else 0 end)`;
+    const expense = `(case when debit like 'expense:%' then amount_cents when credit like 'expense:%' then -amount_cents else 0 end)`;
     const r = (await this.db.query<any>(
-      `select coalesce(sum(amount_cents) filter (where credit like 'revenue:%'),0)::bigint as revenue,
-              coalesce(sum(amount_cents) filter (where kind = 'commission_reversal'),0)::bigint as reversed,
+      `select coalesce(sum(${rev}),0)::bigint as revenue,
               count(*) filter (where kind = 'commission_reversal')::int as corrections,
-              coalesce(sum(amount_cents) filter (where kind = 'donation'),0)::bigint as donated,
-              coalesce(sum(amount_cents) filter (where kind = 'charity_transfer'),0)::bigint as sent,
-              coalesce(sum(amount_cents) filter (where kind = 'expense'),0)::bigint as costs,
-              coalesce(sum(amount_cents) filter (where kind in ('print','scan','ar','box_face')),0)::bigint as ads,
-              coalesce(sum(amount_cents) filter (where kind = 'commission'),0)::bigint as commission,
-              coalesce(sum(amount_cents) filter (where kind = 'custom'),0)::bigint as custom
+              coalesce(sum(${payable}) filter (where kind = 'donation'),0)::bigint as donated,
+              coalesce(sum(-${payable}) filter (where kind = 'charity_transfer'),0)::bigint as sent,
+              coalesce(sum(${expense}) filter (where kind = 'expense'),0)::bigint as costs,
+              coalesce(sum(${rev}) filter (where kind in ('print','scan','ar','box_face')),0)::bigint as ads,
+              coalesce(sum(${rev}) filter (where kind in ('commission','commission_reversal')),0)::bigint as commission,
+              coalesce(sum(${rev}) filter (where kind = 'custom'),0)::bigint as custom
        from ledger_entries where company_id = $1`, [companyId])).rows[0];
     return r;
   }
@@ -249,7 +261,7 @@ export class BooksService {
     const t = await this.totals(companyId);
     const p = this.platform;
     const bottles = [...p.units.values()].filter((u) => u.companyId === companyId && (u.status === 'dispensed' || u.status === 'printed')).length;
-    const revenue = n(t.revenue) - n(t.reversed);
+    const revenue = n(t.revenue);
     const givingOn = company.giving.mode !== 'none';
     const charities = givingOn ? (await this.charities(companyId)).map(({ name, website, donatedCents, sentCents, owedCents }) => ({ name, website, donatedCents, sentCents, owedCents })) : [];
     const per = (c: number) => (bottles ? Math.round((c / bottles) * 10) / 10 : 0);
@@ -257,7 +269,7 @@ export class BooksService {
     return {
       company: company.name, companyId, brand: company.brand, givingOn, giving: givingOn ? describeGiving(company) : null,
       totals: { bottles, revenueCents: revenue, donatedCents: n(t.donated), sentCents: n(t.sent), owedCents: n(t.donated) - n(t.sent), costsCents: n(t.costs), moneyOutCents: n(t.costs) + n(t.sent), corrections: n(t.corrections) },
-      revenueBy: { adsCents: n(t.ads), commissionCents: n(t.commission) - n(t.reversed), customCents: n(t.custom) },
+      revenueBy: { adsCents: n(t.ads), commissionCents: n(t.commission), customCents: n(t.custom) },
       perBottle: { revenueCents: per(revenue), givingCents: givingOn ? per(n(t.donated)) : 0, standardCosts: uc ?? null, costsAreStandard: true },
       charities,
       monthly: await this.monthly(companyId),
@@ -272,16 +284,16 @@ export class BooksService {
 
   async monthly(companyId: string) {
     await this.flush();
-    const rows = (await this.db.query<any>(`select at, kind, credit, amount_cents from ledger_entries where company_id = $1 and kind in ('print','scan','ar','box_face','commission','commission_reversal','custom','donation','charity_transfer','expense')`, [companyId])).rows;
+    const rows = (await this.db.query<any>(`select at, kind, credit, debit, amount_cents from ledger_entries where company_id = $1 and kind in ('print','scan','ar','box_face','commission','commission_reversal','custom','donation','charity_transfer','expense')`, [companyId])).rows;
     const months = new Map<string, { month: string; inCents: number; outCents: number; donatedCents: number }>();
     for (const r of rows) {
       const m = this.monthOf(companyId, new Date(r.at));
       const x = months.get(m) ?? { month: m, inCents: 0, outCents: 0, donatedCents: 0 };
       const c = n(r.amount_cents);
-      if (String(r.credit).startsWith('revenue:')) x.inCents += c;
-      if (r.kind === 'commission_reversal') x.inCents -= c;
-      if (r.kind === 'charity_transfer' || r.kind === 'expense') x.outCents += c;
-      if (r.kind === 'donation') x.donatedCents += c;
+      x.inCents += signed(r, 'revenue:');
+      if (r.kind === 'charity_transfer') x.outCents -= signed(r, 'payable:charity:');
+      if (r.kind === 'expense') x.outCents -= signed(r, 'expense:');
+      if (r.kind === 'donation') x.donatedCents += signed(r, 'payable:charity:');
       months.set(m, x);
     }
     return [...months.values()].sort((a, b) => a.month.localeCompare(b.month)).slice(-12);
@@ -390,7 +402,7 @@ export class BooksService {
     const out = [...keep];
     for (const [date, lines] of [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b))) {
       const hash = sha(`${prev}\n${lines.map(BooksService.lineText).join('\n')}`);
-      out.push({ date, lines: lines.length, inCents: lines.filter((l) => l.credit.startsWith('revenue:')).reduce((s, l) => s + l.amountCents, 0), outCents: lines.filter((l) => l.kind === 'charity_transfer' || l.kind === 'expense').reduce((s, l) => s + l.amountCents, 0), prevHash: prev, hash });
+      out.push({ date, lines: lines.length, inCents: lines.reduce((s, l) => s + signed(l, 'revenue:'), 0), outCents: lines.reduce((s, l) => s - (l.kind === 'charity_transfer' ? signed(l, 'payable:charity:') : l.kind === 'expense' ? signed(l, 'expense:') : 0), 0), prevHash: prev, hash });
       prev = hash;
     }
     const maxSeq = fresh.reduce((m, r) => Math.max(m, n(r.seq)), lastSeq);

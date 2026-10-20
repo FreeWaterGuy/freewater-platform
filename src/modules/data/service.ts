@@ -191,7 +191,6 @@ export class DataService {
   // ---------- recording ----------
 
   async recordInteraction(companyId: string, viewerKey: string, campaignId: string | undefined, item: Interaction, req?: { ip?: string; headers: Record<string, unknown> }) {
-    this.sawDevice(companyId, viewerKey, req?.ip);
     const gpc = String(req?.headers['sec-gpc'] ?? '') === '1';
     if (!(await this.allowed(companyId, 'interactions', [viewerKey, ...(await this.linkedSubjects(companyId, viewerKey))], { gpc, place: this.placeOf(req) }))) return 0;
     return this.interactions.record(companyId, viewerKey, campaignId, [item]);
@@ -199,7 +198,6 @@ export class DataService {
 
   /** One action, by anyone. Secrets are never kept; the device and IP only as the company's rules allow. */
   async activity(companyId: string, actor: Actor, kind: string, opts: { target?: string; detail?: unknown; ip?: string; device?: string; gpc?: boolean; headers?: Record<string, unknown> } = {}) {
-    if (actor.viewerKey) this.sawDevice(companyId, actor.viewerKey, opts.ip);
     const subjects = [actor.viewerKey, actor.userId ? `user:${actor.userId}` : undefined].filter((x): x is string => !!x);
     const business = !['viewer', 'consumer', 'public'].includes(actor.type);
     const o = { gpc: opts.gpc, business, place: business ? null : this.placeOf({ ip: opts.ip, headers: opts.headers }) };
@@ -371,48 +369,43 @@ export class DataService {
     }
     return person;
   }
-  // ---------- proof that a phone is yours, before joining it to your account ----------
+  // ---------- joining a phone to an account ----------
   //
-  // A phone's key is a random code the phone keeps; anyone who learns it (a shared link, a screenshot) could otherwise
-  // join it to their own account and read everything that phone did. Two checks, with what we have:
-  // 1. A phone already joined to someone (another person, or another account's own phone) is never joined to anyone
-  //    else. Whoever owns it signed in first; taking it over needs that person to erase or unlink it.
-  // 2. The phone must have done something here (a scan, a page it opened) from the same network as the request that
-  //    joins it, in the last day. Signing in happens on the phone itself, so that's normally true; a code copied out
-  //    of a log can't be claimed from somewhere else. This is kept only in memory, as a keyed fingerprint of the
-  //    network (never the address), for a day, and is used for nothing else: it's security, not data about anyone.
-  //    It can't stop someone who holds the key AND uses it from their own network first; check 1 is what protects a
-  //    phone that's already someone's.
-  private devicesSeen = new Map<string, Map<string, number>>();
-  private seenSalt = randomBytes(16);
-  static deviceSeenMs = 24 * 3600_000;
-  private netOf(ip: string) { return createHash('sha256').update(this.seenSalt).update(ip).digest('base64url').slice(0, 16); }
-  /** The phone with this key just did something from this network. */
-  sawDevice(companyId: string, viewerKey: string | undefined, ip: string | undefined) {
-    if (!viewerKey || !ip || viewerKey.includes(':')) return;
-    const k = `${companyId}|${viewerKey}`, now = this.clock().getTime();
-    const m = this.devicesSeen.get(k) ?? new Map<string, number>();
-    m.set(this.netOf(ip), now);
-    this.devicesSeen.delete(k); this.devicesSeen.set(k, m); // newest last
-    // Bounded: the oldest phones go first.
-    while (this.devicesSeen.size > 200_000) this.devicesSeen.delete(this.devicesSeen.keys().next().value!);
-  }
-  private seenFrom(companyId: string, viewerKey: string, ip: string | undefined) {
-    const at = ip ? this.devicesSeen.get(`${companyId}|${viewerKey}`)?.get(this.netOf(ip)) : undefined;
-    return at !== undefined && this.clock().getTime() - at <= DataService.deviceSeenMs;
-  }
+  // A phone's key is a random code that lives only in that phone's browser storage and is sent by that browser when
+  // it signs in, so holding the key is the proof. The rules:
+  // 1. A phone already joined to someone (another person, or another account's own phone key) is never joined to
+  //    anyone else. Whoever owns it signed in first; taking it over needs that person to erase or unlink it.
+  // 2. A key that was never used for anything (no scan, page interaction, place or wallet entry) isn't joined: there's
+  //    nothing to join, and made-up keys can't be used to probe. Sign-in attempts and other logged requests don't
+  //    count as use, so nothing approves itself.
+  // Threat model: someone who steals a phone's key before that phone is joined to anyone (a screenshot, a shared link)
+  // could join it to their own account. What they'd reach is that anonymous phone's own activity (its scans and
+  // taps), never anyone's identity: a phone that's someone's is protected by rule 1, and nothing here reaches an
+  // account through a phone.
   /**
    * May this phone be joined to this account? `own` are the account's own subjects (its user, its email and phone
-   * fingerprints, its own phone key). See the checks above.
+   * fingerprints, its own phone key). See the rules above.
    */
-  async mayLinkDevice(companyId: string, userId: string, viewerKey: string, ip: string | undefined, own: string[] = []) {
+  async mayLinkDevice(companyId: string, userId: string, viewerKey: string, own: string[] = []) {
     if (!viewerKey || viewerKey.includes(':')) return false;
     const mine = new Set<string>();
     for (const s of [`user:${userId}`, ...own]) { const p = s ? await this.personFor(companyId, s) : null; if (p) mine.add(p); }
     const theirs = await this.personFor(companyId, viewerKey);
     if (theirs) return mine.has(theirs); // already this person's: nothing new is joined; someone else's: never
     if ((await this.db.query(`select 1 from users where viewer_key = $1 and id <> $2`, [viewerKey, userId])).rows.length) return false;
-    return this.seenFrom(companyId, viewerKey, ip);
+    return this.deviceUsed(companyId, viewerKey);
+  }
+  /** Has this phone key done anything here: a scan, a page interaction, a place, a wallet entry? */
+  private async deviceUsed(companyId: string, viewerKey: string) {
+    const checks: [string, unknown[]][] = [
+      [`select 1 from interactions where company_id = $1 and viewer_key = $2 limit 1`, [companyId, viewerKey]],
+      [`select 1 from viewer_advertisers where company_id = $1 and viewer_key = $2 limit 1`, [companyId, viewerKey]],
+      [`select 1 from person_places where company_id = $1 and subject = $2 limit 1`, [companyId, viewerKey]],
+      [`select 1 from wallet_holders h where h.company_id = $1 and h.subject = $2 and exists (select 1 from wallet_lines l where l.account = 'holder:' || h.id) limit 1`, [companyId, viewerKey]],
+      [`select 1 from events where company_id = $1 and type in ('unit.scanned','box.scanned','ar.launched','box.ar_launched') and payload->>'viewerKey' = $2 limit 1`, [companyId, viewerKey]],
+    ];
+    for (const [sql, p] of checks) if ((await this.db.query(sql, p)).rows.length) return true;
+    return false;
   }
 
   /** Email and phone are joined by fingerprint only, so a consumer and an advertiser with the same email meet. */
