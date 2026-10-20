@@ -31,7 +31,9 @@ export interface Pack {
   loadPosition?: number;
   runId?: string;
   /** Checked by a person, by hand, when no packing line was there to scan it: who and when, for the record. */
-  checkedByHand?: { by: string; at: string };
+  checkedByHand?: { by: string; at: string; reason?: string };
+  /** Its run was closed out from an earlier day and never driven: who, when and why. */
+  closedOut?: { by: string; at: string; reason: string };
 }
 
 /** Asked to do something a pack can't do in the state it is in. */
@@ -182,12 +184,15 @@ export class PackService {
    * person can do this, and who and when is kept on the pack, so a box checked by hand is never mistaken for one the
    * line scanned.
    */
-  verifyByHand(packId: string, by: string): Pack {
+  verifyByHand(packId: string, by: string, reason?: string): Pack {
     const pack = this.need(packId);
     if (pack.status !== 'box_printed' && pack.status !== 'mismatch') throw new PackStateError(`Pack ${packId} is ${pack.status}; only a printed pack waiting for its check can be checked.`);
     if (!by) throw new PackStateError('A person must check a box by hand.');
+    // The line found this box wrong: overriding it takes a reason, kept with who and when.
+    const why = String(reason ?? '').trim();
+    if (pack.status === 'mismatch' && why.length < 5) throw new PackStateError('The packing line found this box wrong. Say what you fixed or why it’s right, for the record.');
     pack.status = 'verified';
-    pack.checkedByHand = { by, at: this.platform.bus.now().toISOString() };
+    pack.checkedByHand = { by, at: this.platform.bus.now().toISOString(), ...(why ? { reason: why.slice(0, 300) } : {}) };
     this.save(pack);
     this.platform.bus.publish('pack.verified', pack.companyId, { packId, scanned: pack.unitIds.length }, `${packId}:verified-by-hand:${pack.checkedByHand.at}`);
     return pack;
@@ -207,11 +212,18 @@ export class PackService {
    * the van (so tonight's planned run never takes over from the one being driven); if none has, the one run still
    * under way. If several are under way and none is sealed or loaded, it can't be guessed: name the run (runId).
    * Once everything is out, the latest run of all. Run ids are "<route>@<date>", so they sort by date; packs made
-   * outside a run ('') count as the oldest.
+   * outside a run ('') count as the oldest. A run from an earlier day (in the company's time zone) is never guessed:
+   * a box left over from it would otherwise take over every later night. The one exception is last night's run while
+   * its boxes are still on the van (a route driven past midnight). Name an old run, or close it out (closeRun).
    */
   currentRun(routeId: string): string {
     const onRoute = [...this.packs.values()].filter((p) => p.routeId === routeId);
-    const active = onRoute.filter((p) => p.status !== 'delivered' && p.status !== 'returned');
+    const companyId = onRoute[0]?.companyId;
+    const today = companyId ? this.today(companyId) : '';
+    const yesterday = today ? new Date(Date.parse(`${today}T12:00:00Z`) - 86_400_000).toISOString().slice(0, 10) : '';
+    const dateOf = (runId: string) => /@(\d{4}-\d{2}-\d{2})$/.exec(runId)?.[1];
+    const live = (p: Pack) => { const d = dateOf(p.runId ?? ''); return !d || !today || d >= today || (d === yesterday && p.status === 'loaded'); };
+    const active = onRoute.filter((p) => p.status !== 'delivered' && p.status !== 'returned' && live(p));
     const runs = (list: Pack[]) => [...new Set(list.map((p) => p.runId ?? ''))].sort();
     const out = runs(active.filter((p) => p.status === 'sealed' || p.status === 'loaded'));
     if (out.length) return out[0]!;
@@ -219,6 +231,32 @@ export class PackService {
     if (under.length === 1) return under[0]!;
     if (under.length > 1) throw new AmbiguousRunError(`${routeId} has ${under.length} runs under way (${under.map((r) => r || 'no run').join(', ')}). Say which one with runId.`);
     return runs(onRoute).at(-1) ?? '';
+  }
+
+  /** The company's date now, in its time zone. */
+  today(companyId: string, at = this.platform.bus.now()) {
+    const tz = this.platform.companies.get(companyId)?.timezone ?? 'UTC';
+    return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(at);
+  }
+
+  /**
+   * Close out a run from an earlier day that will never be driven: every box of it not delivered goes back to the
+   * micro-factory ('returned'), with who closed it, when and why kept on each box. Only a person, and only an old run:
+   * tonight's (or a later) run is never closed out this way.
+   */
+  closeRun(companyId: string, routeId: string, runId: string, by: string, reason: string): Pack[] {
+    if (!by) throw new PackStateError('A person must close out a run.');
+    if (String(reason ?? '').trim().length < 5) throw new PackStateError('Say why the run is being closed out, for the record.');
+    const date = /@(\d{4}-\d{2}-\d{2})$/.exec(runId)?.[1];
+    if (!date || date >= this.today(companyId)) throw new PackStateError(`Only a run from an earlier day can be closed out; ${runId || 'that run'} isn't one.`);
+    const open = [...this.packs.values()].filter((p) => p.companyId === companyId && p.routeId === routeId && (p.runId ?? '') === runId && p.status !== 'delivered' && p.status !== 'returned');
+    const at = this.platform.bus.now().toISOString();
+    for (const p of open) {
+      p.status = 'returned';
+      p.closedOut = { by, at, reason: reason.trim() };
+      this.save(p);
+    }
+    return open;
   }
 
   /** Load order for a van: last stop first, so stop 1 ends up by the door. Only this run's packs still to go out. */

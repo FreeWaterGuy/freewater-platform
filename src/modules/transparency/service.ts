@@ -90,9 +90,26 @@ export class TransparencyService {
     // By the side of the line: a reversal (a refund's commission_reversal, a voided batch's print line) debits revenue.
     if (l.credit.startsWith('revenue:')) x.adMoney += l.amountCents;
     else if (l.debit.startsWith('revenue:')) x.adMoney -= l.amountCents;
-    if (l.kind === 'commission') x.sales++;
-    if (l.kind === 'commission_reversal') x.sales--;
+    // A sale counts once, and comes off only when it's refunded in full: a refund in parts makes a reversal line per
+    // part, and a line that can't be matched to its sale never takes one off.
+    if (l.kind === 'commission' || l.kind === 'commission_reversal') {
+      const key = this.saleKey(l);
+      if (l.kind === 'commission') {
+        x.sales++;
+        if (key) this.openSales.set(key, (this.openSales.get(key) ?? 0) + l.amountCents);
+      } else if (key && this.openSales.has(key)) {
+        const left = this.openSales.get(key)! - l.amountCents;
+        if (left <= 0) { x.sales--; this.openSales.delete(key); } else this.openSales.set(key, left);
+      }
+    }
     x.updatedAt = l.at.toISOString();
+  }
+
+  /** Commission still standing per sale (company, order, where, ad), until it's refunded in full. */
+  private openSales = new Map<string, number>();
+  private saleKey(l: LedgerEntry) {
+    const order = /order (.+?)(?:, commission returned)?$/.exec(l.memo)?.[1];
+    return order ? `${l.companyId}\u0000${order}\u0000${l.unitId ?? ''}\u0000${l.packId ?? ''}\u0000${l.campaignId ?? ''}` : null;
   }
 
   private adOf(unitId: string, slot: number) {

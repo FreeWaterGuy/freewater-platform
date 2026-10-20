@@ -39,10 +39,14 @@ export function deliveryRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     return { status: 201, body: await Promise.all(runs.map((r) => delivery.view(r))) };
   } });
   route({ method: 'POST', url: '/v1/ops/runs/:id/pack-check', scope: ['admin', 'packs'], summary: 'Check every bottle in every box of a route and seal them.', handler: async (req, key) => { staff(key); return { body: await delivery.packCheck((req.params as any).id, key!.companyId) }; } });
-  route({ method: 'POST', url: '/v1/ops/runs/:id/stops/:stop/check-by-hand', scope: ['admin', 'packs'], summary: 'No packing line: a signed-in person counted every bottle in this stop’s box by hand. Checks and seals it, recording who and when.', handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/ops/runs/:id/stops/:stop/check-by-hand', scope: ['admin', 'packs'], summary: 'No packing line: a signed-in ops person or owner counted every bottle in this stop’s box by hand. Checks and seals it, recording who and when. A box the line found wrong needs a reason ({ reason }), kept on the record.', handler: async (req, key) => {
     staff(key);
     const p = req.params as any;
-    return { body: await delivery.checkByHand(p.id, key!.companyId, Number(p.stop), person(key)) };
+    return { body: await delivery.checkByHand(p.id, key!.companyId, Number(p.stop), person(key), typeof (req.body as any)?.reason === 'string' ? String((req.body as any).reason).slice(0, 300) : undefined) };
+  } });
+  route({ method: 'POST', url: '/v1/ops/runs/:id/close', scope: ['admin', 'packs'], summary: 'Close out a run from an earlier day that will never be driven: its boxes go back and it can’t take over a later night. A signed-in ops person or owner, with a reason.', body: obj({ reason: { type: 'string', minLength: 5, maxLength: 300 } }, ['reason']), handler: async (req, key) => {
+    staff(key);
+    return { body: await delivery.closeRun((req.params as any).id, key!.companyId, person(key), (req.body as any).reason) };
   } });
   route({ method: 'GET', url: '/v1/review/campaigns/:id/preview', scope: 'campaigns', summary: 'An ad waiting for review: every size, on a label, on a box, and its scan page.', handler: async (req, key) => { staff(key); const id = (req.params as any).id; return { body: { ...(await app.ads.campaignPreview(id, key!.companyId)), objections: await app.ads.objections(key!.companyId, id) } }; } });
 
