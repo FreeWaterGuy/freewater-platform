@@ -257,24 +257,42 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     if (!proof) throw new ApiError(422, 'proof_required', 'Review and approve your proof before printing.');
     if (new Date(proof.expires_at).getTime() < platform.bus.now().getTime()) throw new ApiError(422, 'proof_expired', 'That proof is more than a day old. Review it again before printing.');
     const orderId = `${userId}:${b.orderId}`;
-    const already = [...platform.units.values()].some((u) => u.companyId === company.id && u.orderId === orderId);
-    if (!already) await atMachine(b.locationId, b.presenceCode, company.id);
     const experience = proof.experience ? (typeof proof.experience === 'string' ? JSON.parse(proof.experience) : proof.experience) : undefined;
     const bottles = DesignService.bottlesOf(proof, app.designs.designArea());
+    // An order id belongs to the proof (and number of bottles) it was first used with: reusing it with another can't
+    // print more bottles under the old hold.
+    await app.db.query(`insert into custom_order_proofs (company_id, user_id, order_id, proof_id, bottles) values ($1,$2,$3,$4,$5) on conflict do nothing`, [company.id, userId, b.orderId, proof.id, bottles.length]);
+    const bound = (await app.db.query<any>(`select proof_id, bottles from custom_order_proofs where company_id = $1 and user_id = $2 and order_id = $3`, [company.id, userId, b.orderId])).rows[0];
+    if (!bound || bound.proof_id !== proof.id || Number(bound.bottles) !== bottles.length) throw new ApiError(409, 'order_reused', 'That order id was used for another design. Start a new order for this one.');
+    const unitIds = bottles.map((_, i) => (i === 0 ? orderId : `${orderId}:${i + 1}`));
+    const unitFor = (oid: string) => [...platform.units.values()].find((u) => u.companyId === company.id && u.orderId === oid);
+    const idempotencyKey = `custom:${company.id}:${userId}:${b.orderId}`;
+    const settled = (await app.db.query<any>(`select id, status from payments where idempotency_key = $1`, [idempotencyKey])).rows[0];
+    if (settled && (settled.status === 'captured' || settled.status === 'voided')) {
+      // Already finished: the answer it had, and nothing more prints (bottles that didn't print then aren't printed free now).
+      const done = unitIds.map(unitFor).filter((u): u is Unit => !!u && (u.status === 'printed' || u.status === 'dispensed'));
+      const payment = await app.payments.get(settled.id);
+      if (settled.status === 'voided' || !done.length) return { status: 422, body: { error: { code: 'print_failed', message: 'It did not print, so the hold on your card was released. Nothing was charged.' }, payment } };
+      const loc = platform.locations.get(done[0]!.locationId)!;
+      return { status: 201, body: { bottle: bottleView(done[0]!), bottles: done.map(bottleView), payment, already: true, countdown: { seconds: (loc.printSeconds ?? 30) * done.length, ad: countdownAd(done[0]!) } } };
+    }
+    // Any bottle not yet started needs the person at the machine, every time.
+    if (unitIds.some((oid) => !unitFor(oid))) await atMachine(b.locationId, b.presenceCode, company.id);
     const price = Number(proof.price_cents); // the price shown on the proof, set by the server
-    const hold = await app.payments.authorize({ companyId: company.id, ownerType: 'user', ownerId: userId, amountCents: price * bottles.length, purpose: 'custom_order', ref: b.orderId, idempotencyKey: `custom:${company.id}:${userId}:${b.orderId}`, description: `${bottles.length} custom ${proof.product_id}` });
+    const hold = await app.payments.authorize({ companyId: company.id, ownerType: 'user', ownerId: userId, amountCents: price * bottles.length, purpose: 'custom_order', ref: b.orderId, idempotencyKey, description: `${bottles.length} custom ${proof.product_id}` });
     if (hold.status === 'declined') return { status: 402, body: { error: { code: 'card_declined', message: `${hold.failure} Nothing was printed or charged.` } } };
+    if (hold.status !== 'authorized') throw new ApiError(409, 'in_progress', 'This order is being settled right now. Check it again in a moment.');
     // Print them one after another. Only the bottles that print are paid for.
     const printed: Unit[] = [];
     for (let i = 0; i < bottles.length; i++) {
-      const r = await platform.order({ companyId: company.id, orderId: i === 0 ? orderId : `${orderId}:${i + 1}`, locationId: b.locationId, productId: proof.product_id, consumerId: userId, custom: { customerId: userId, art: svgCreative(bottles[i]!), priceCents: price, experienceConfig: experience } });
+      const r = await platform.order({ companyId: company.id, orderId: unitIds[i]!, locationId: b.locationId, productId: proof.product_id, consumerId: userId, custom: { customerId: userId, art: svgCreative(bottles[i]!), priceCents: price, experienceConfig: experience } });
       if (r.ok) printed.push(r.unit);
     }
     if (!printed.length) {
       const voided = await app.payments.void(hold.id);
       return { status: 422, body: { error: { code: 'print_failed', message: 'It did not print, so the hold on your card was released. Nothing was charged.' }, payment: voided } };
     }
-    const paid = hold.status === 'captured' ? hold : await app.payments.capture(hold.id, price * printed.length);
+    const paid = await app.payments.capture(hold.id, price * printed.length);
     if (proof.design_id) await app.designs.markOrdered(proof.design_id);
     const loc = platform.locations.get(b.locationId)!;
     const short = bottles.length - printed.length;

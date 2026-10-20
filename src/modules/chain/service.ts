@@ -184,6 +184,12 @@ export class ChainService {
   async run(companyId: string, id: string, person: string) {
     const a = (await this.db.query<any>(`select * from chain_actions where id = $1 and company_id = $2`, [id, companyId])).rows[0];
     if (!a) throw new ChainError('not_found', 'No such action.', 404);
+    if (a.status === 'running') {
+      const moved = await this.unstick(companyId, a);
+      if (moved === 'recording') return this.finishRecording(companyId, (await this.db.query<any>(`select * from chain_actions where id = $1`, [id])).rows[0], person);
+      if (moved === 'failed') return this.action(companyId, id);
+      throw new ChainError('not_approved', 'Already running.', 409);
+    }
     if (a.status === 'recording') return this.finishRecording(companyId, a, person);
     if (a.status !== 'approved') throw new ChainError('not_approved', 'This hasn’t been approved by enough people.', 409);
     // 3: an unpause proposed before the latest pause can't undo it (that pause may be about something it never saw).
@@ -201,7 +207,7 @@ export class ChainService {
     if ((a.kind === 'go_live_points' && st !== 'test') || (a.kind === 'go_live_token' && st !== 'points') || (a.kind === 'convert' && st !== 'token') || (a.kind === 'mint' && st === 'points')) throw new ChainError('wrong_stage', 'This doesn’t fit where the company is now.', 409);
     if (onChain && !s.enabled) throw new ChainError('switched_off', 'The chain is switched off.', 403);
     if (a.kind !== 'unpause' && onChain && (await this.isPaused(companyId))) throw new ChainError('paused', 'Everything is paused.', 423);
-    const took = await this.db.query(`update chain_actions set status = 'running' where id = $1 and status = 'approved'`, [id]);
+    const took = await this.db.query(`update chain_actions set status = 'running', running_at = $2 where id = $1 and status = 'approved'`, [id, this.now()]);
     if (!Number(took.rowCount ?? 0)) throw new ChainError('not_approved', 'Already running.', 409);
     const rules: ChainSettings = { ...defaultChain, ...(typeof a.rules === 'string' ? JSON.parse(a.rules) : a.rules ?? {}) };
     try {
@@ -247,9 +253,25 @@ export class ChainService {
     }
     return this.action(companyId, id);
   }
+  /** How long an action may stay 'running' before it's taken to have been cut off (the process stopped partway). */
+  static stuckAfterMs = 15 * 60_000;
+  /**
+   * An action left 'running' for longer than that was cut off. If it reached the chain (it has a ref) it moves to
+   * 'recording', so running it again only finishes the books; otherwise it 'failed' (a conversion gives the points back).
+   * Moved once, by whichever caller gets there first. Returns what it became, or null if it isn't stuck.
+   */
+  private async unstick(companyId: string, a: any): Promise<'recording' | 'failed' | null> {
+    const cutoff = new Date(this.clock().getTime() - ChainService.stuckAfterMs).toISOString();
+    const moved = (await this.db.query<any>(`update chain_actions set status = case when ref is not null then 'recording' else 'failed' end, error = $3 where id = $1 and company_id = $2 and status = 'running' and (running_at is null or running_at < $4) returning status, kind`,
+      [a.id, companyId, 'It stopped partway (no answer for 15 minutes).', cutoff])).rows[0];
+    if (!moved) return null;
+    if (moved.status === 'failed' && moved.kind === 'convert') await this.wallet.returnConverted(companyId, a.id, 'chain', 'conversion stopped partway: points returned');
+    this.alert?.(companyId, `${a.kind} ${a.id} stopped partway and is now ${moved.status}.`);
+    return moved.status;
+  }
   /** A mint already on the chain whose books entry didn't finish: finish it (the entries are counted once each). */
   private async finishRecording(companyId: string, a: any, person: string) {
-    const took = await this.db.query(`update chain_actions set status = 'running' where id = $1 and status = 'recording'`, [a.id]);
+    const took = await this.db.query(`update chain_actions set status = 'running', running_at = $2 where id = $1 and status = 'recording'`, [a.id, this.now()]);
     if (!Number(took.rowCount ?? 0)) throw new ChainError('not_approved', 'Already running.', 409);
     const p = typeof a.params === 'string' ? JSON.parse(a.params) : a.params;
     try {

@@ -1172,6 +1172,23 @@ update lottery_chances c set draw_key = c.draw_key || '#dup:' || c.id
 create unique index lottery_chances_draw_key on lottery_chances(company_id, draw_key);
 `,
   },
+  {
+    id: '044_fx1_money_claims',
+    sql: `
+-- A payment is claimed ('capturing' / 'voiding') before the provider is asked, so a capture and a void can't both go.
+alter table payments drop constraint if exists payments_status_check;
+alter table payments add constraint payments_status_check check (status in ('authorized', 'capturing', 'voiding', 'captured', 'voided', 'declined', 'failed'));
+-- When a chain action was claimed to run: one left 'running' long after (the process died) is moved on by the next run.
+alter table chain_actions add column running_at timestamptz;
+update chain_actions set running_at = now() where status = 'running';
+-- A custom order id belongs to one proof (and its number of bottles): reusing it with another can't print more.
+create table custom_order_proofs (company_id text not null, user_id text not null, order_id text not null, proof_id text not null, bottles integer not null, created_at timestamptz not null default now(), primary key (company_id, user_id, order_id));
+-- A gift-card purchase nobody could tell was sent is settled by a person, who is written down.
+alter table wallet_giftcards add column settled_by text;
+alter table wallet_giftcards add column settled_at timestamptz;
+create index wallet_giftcards_status on wallet_giftcards(company_id, status);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

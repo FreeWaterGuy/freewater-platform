@@ -29,11 +29,14 @@ async function signIn(to: string, channel: 'email' | 'sms' = 'email', companyId 
 }
 const normalizePhone = (p: string) => (p.replace(/[^\d+]/g, '').length === 10 ? `+1${p.replace(/\D/g, '')}` : p.replace(/[^\d+]/g, ''));
 
-async function customOrder(token: string, orderId: string, svg: string, experience?: unknown) {
-  const proof = await call('POST', '/v1/me/proofs', token, { productId: 'bottle-16oz', svg, ...(experience ? { experience } : {}) });
-  if (proof.statusCode !== 201) return proof;
+async function customOrder(token: string, orderId: string, svg: string, experience?: unknown, proofId?: string) {
+  if (!proofId) {
+    const proof = await call('POST', '/v1/me/proofs', token, { productId: 'bottle-16oz', svg, ...(experience ? { experience } : {}) });
+    if (proof.statusCode !== 201) return proof;
+    proofId = proof.json().proofId as string;
+  }
   const { code } = (await call('GET', '/v1/machines/ATX-014/presence', keys['machine-ATX-014'])).json();
-  return call('POST', '/v1/me/custom-orders', token, { orderId, proofId: proof.json().proofId, locationId: 'ATX-014', presenceCode: code });
+  return call('POST', '/v1/me/custom-orders', token, { orderId, proofId, locationId: 'ATX-014', presenceCode: code });
 }
 
 beforeAll(async () => {
@@ -154,13 +157,15 @@ describe('custom bottles', () => {
 
     const card = await call('POST', '/v1/me/cards', s.token, { token: 'tok_visa' });
     expect(card.json()).toMatchObject({ brand: 'visa', last4: '4242', isDefault: true });
-    const r = await customOrder(s.token, 'maya-1', art);
+    // A retry sends the same order id with the same proof (an order id belongs to the proof it was first used with).
+    const proofId = (await call('POST', '/v1/me/proofs', s.token, { productId: 'bottle-16oz', svg: art })).json().proofId as string;
+    const r = await customOrder(s.token, 'maya-2', art, undefined, proofId);
     expect(r.statusCode).toBe(201);
     expect(r.json().payment.status).toBe('captured');
     expect(r.json().payment.amountCents).toBe(300);
     expect(r.json().bottle.kind).toBe('custom');
 
-    const again = await customOrder(s.token, 'maya-1', art);
+    const again = await customOrder(s.token, 'maya-2', art, undefined, proofId);
     expect(again.json().bottle.id).toBe(r.json().bottle.id); // same order: not printed or charged twice
     expect(again.json().payment.id).toBe(r.json().payment.id);
 

@@ -38,6 +38,17 @@ export function walletRoutes(app: App, route: (r: RouteDef) => void) {
     const by = person(key);
     return { body: await wrap(() => wallet.correct(key!.companyId, b.entry, by, b.reason)) };
   } });
+  route({ method: 'GET', url: '/v1/wallet/gift-cards', scope: ['admin', 'ledger'], summary: 'Gift-card purchases by status (?status=unknown by default: the ones nobody could tell were sent, for a person to check).', handler: async (req, key) => {
+    person(key);
+    const status = String((req.query as any).status ?? 'unknown');
+    if (!['unknown', 'ordering', 'sent', 'refused'].includes(status)) throw new ApiError(400, 'bad_status', 'Use ?status=unknown, ordering, sent or refused.');
+    return { body: { giftCards: await wallet.giftCards(key!.companyId, status as any) } };
+  } });
+  route({ method: 'POST', url: '/v1/wallet/gift-cards/:ref/settle', scope: ['admin', 'ledger'], summary: 'After checking with the gift-card company: settle an unknown purchase as sent (the credit stays spent) or refused (the credit goes back, once). An owner or finance person, signed in.', body: obj({ outcome: { type: 'string', enum: ['sent', 'refused'] }, note: { type: 'string', maxLength: 200 } }, ['outcome']), handler: async (req, key) => {
+    const by = person(key);
+    const b = req.body as any;
+    return { body: await wrap(() => wallet.settleGiftCard(key!.companyId, String((req.params as any).ref), b.outcome, by, b.note)) };
+  } });
   route({ method: 'GET', url: '/v1/wallet/check', scope: ['admin', 'ledger'], summary: 'Rebuild every wallet balance from the journal and list any that differ (there should be none).', handler: async (_req, key) => ({ body: await wallet.check(staff(key).companyId) }) });
   route({ method: 'POST', url: '/v1/public/wallet/:companyId/exchange', scope: 'public', summary: 'Exchange points or credit. Switched off until a person approves it and a partner is connected.', handler: async (req) => {
     await wrap(() => wallet.convert(company((req.params as any).companyId)));

@@ -18,6 +18,8 @@ import type { GiftCardProvider } from './giftcards';
 //   outside:<sponsor>  credit: where reserve money came from (a payment, recorded by the team)
 //   spent              what people used (switched off until conversions are approved)
 
+const giftCardView = (r: any) => ({ ref: r.ref, product: r.product, cents: Number(r.cents), status: r.status, providerRef: r.provider_ref ?? null, error: r.error ?? null, at: new Date(r.at).toISOString(), settledBy: r.settled_by ?? null, settledAt: r.settled_at ? new Date(r.settled_at).toISOString() : null });
+
 export class WalletError extends Error { constructor(public code: string, message: string, public status = 400) { super(message); } }
 
 export interface Earned { points: number; balance: number; reason?: string }
@@ -227,26 +229,32 @@ export class WalletService {
   /**
    * Spend dollar credit on a gift card. Only once exchanges are approved, only with a signed-in account (the card goes
    * to its email), never more than the person has. The credit is taken and the purchase written down before the
-   * gift-card company is asked, under our own reference: the same `requestId` always gives the same reference, so a
-   * retry never buys twice. The credit goes back only if the gift-card company definitely said no; if we can't tell
-   * (a timeout, say), it stays held and the purchase is marked unknown for a person to check.
+   * gift-card company is asked, under our own reference: the same `requestId` (one per purchase attempt, required)
+   * always gives the same reference, so a retry never buys twice, and while one order for it is out a second is
+   * refused. The credit goes back only if the gift-card company definitely said no; if we can't tell (a timeout, say),
+   * it stays held and the purchase is marked unknown for a person to check (`settleGiftCard`).
    */
-  async buyGiftCard(companyId: string, subject: string, o: { email: string; product: string; cents: number; requestId?: string }, provider: GiftCardProvider) {
+  async buyGiftCard(companyId: string, subject: string, o: { email: string; product: string; cents: number; requestId: string }, provider: GiftCardProvider) {
     const c = this.settings(companyId).conversions;
     if (!c.enabled || !c.approvedBy) throw new WalletError('switched_off', 'Gift cards are switched off until exchanges are approved.', 403);
     if (!subject.startsWith('user:')) throw new WalletError('sign_in', 'Sign in so the card can go to your email.', 401);
+    if (typeof o.requestId !== 'string' || !/^[A-Za-z0-9_-]{8,80}$/.test(o.requestId)) throw new WalletError('request_id_needed', 'Send a requestId (8 to 80 letters, digits, - or _), the same one for every retry of this purchase.');
     if (!Number.isInteger(o.cents) || o.cents < 100) throw new WalletError('bad_amount', 'Choose at least $1.');
     const p = (await provider.catalog()).find((x) => x.id === o.product);
     if (!p) throw new WalletError('not_found', 'No such gift card.', 404);
     if (o.cents < p.minCents || o.cents > p.maxCents) throw new WalletError('bad_amount', `This card is ${p.minCents / 100} to ${p.maxCents / 100} dollars.`);
     const asset = this.creditAsset(companyId);
     const subjects = await this.subjectsOf(companyId, subject);
-    const ref = o.requestId ? `gc_${this.hidden(companyId, `giftcard|${subject}|${o.requestId}`)}` : `gc_${randomBytes(9).toString('base64url')}`;
+    const ref = `gc_${this.hidden(companyId, `giftcard|${subject}|${o.requestId}`)}`;
     const prior = async () => (await this.db.query<any>(`select * from wallet_giftcards where company_id = $1 and ref = $2`, [companyId, ref])).rows[0];
+    const busy = () => new WalletError('in_progress', 'That gift card is already being bought. Check again in a moment.', 409);
     let row = await prior();
     if (row && (row.product !== p.id || Number(row.cents) !== o.cents)) throw new WalletError('request_reused', 'That request was for a different card.', 409);
     if (row?.status === 'sent') return { card: p.name, cents: o.cents, ref: row.provider_ref as string, code: undefined as string | undefined, test: provider.name.startsWith('test'), already: true };
     if (row?.status === 'refused') throw new WalletError('provider_failed', 'The gift-card company said no to this one. Your credit is back.', 502);
+    // One order out at a time for each purchase: a retry while it's out is refused, and an unknown one is claimed again.
+    if (row?.status === 'ordering') throw busy();
+    if (row?.status === 'unknown' && !Number((await this.db.query(`update wallet_giftcards set status = 'ordering' where company_id = $1 and ref = $2 and status = 'unknown'`, [companyId, ref])).rowCount ?? 0)) throw busy();
     if (!row) {
       try {
         await this.db.transaction(async (tx) => {
@@ -260,25 +268,60 @@ export class WalletService {
           await tx.query(`insert into wallet_giftcards (company_id, ref, subject, entry, product, cents, status, at) values ($1,$2,$3,$4,$5,$6,'ordering',$7)`, [companyId, ref, subject, entry, p.id, o.cents, this.clock().toISOString()]);
         });
       } catch (e: any) {
-        if (e?.code === '23505') throw new WalletError('in_progress', 'That gift card is already being bought.', 409);
+        if (e?.code === '23505') throw busy();
         throw e;
       }
       row = await prior();
     }
+    // Every change after the order is guarded: only a purchase still out (or unknown) moves, so a person's settling
+    // and a late answer can't both act, and the credit goes back at most once.
+    const move = async (status: 'sent' | 'refused' | 'unknown', set: string, args: unknown[]) =>
+      Number((await this.db.query(`update wallet_giftcards set status = '${status}', ${set} where company_id = $1 and ref = $2 and status in ('ordering','unknown')`, [companyId, ref, ...args])).rowCount ?? 0) > 0;
     try {
       const got = await provider.order({ product: p.id, cents: o.cents, email: o.email, ref });
-      await this.db.query(`update wallet_giftcards set status = 'sent', provider_ref = $3, error = null where company_id = $1 and ref = $2`, [companyId, ref, got.ref]);
+      await move('sent', 'provider_ref = $3, error = null', [got.ref]);
       return { card: p.name, cents: o.cents, ...got };
     } catch (e: any) {
       const why = String(e?.message ?? e).slice(0, 200);
       if (e?.refused === true) {
-        await this.reverse(companyId, row.entry, 'gift cards', `the gift-card company said no: ${why.slice(0, 100)}`, { refuse: [] }).catch(() => {});
-        await this.db.query(`update wallet_giftcards set status = 'refused', error = $3 where company_id = $1 and ref = $2`, [companyId, ref, why]);
+        if (await move('refused', 'error = $3', [why])) await this.giveBack(companyId, ref, row.entry, `the gift-card company said no: ${why.slice(0, 100)}`);
         throw new WalletError('provider_failed', 'The gift-card company said no. Your credit is back.', 502);
       }
-      await this.db.query(`update wallet_giftcards set status = 'unknown', error = $3 where company_id = $1 and ref = $2`, [companyId, ref, why]);
+      await move('unknown', 'error = $3', [why]);
       throw new WalletError('provider_unknown', 'We couldn’t tell whether the gift-card company sent it. Your credit is held until we check; trying again with the same request is safe.', 502);
     }
+  }
+  /** Credit back for a refused gift card. If that can't be done now, the purchase goes back to unknown for a person. */
+  private async giveBack(companyId: string, ref: string, entry: string, why: string) {
+    try { await this.reverse(companyId, entry, 'gift cards', why, { refuse: [] }); } catch (e: any) {
+      if (e?.code === 'already_corrected') return;
+      await this.db.query(`update wallet_giftcards set status = 'unknown', error = $3 where company_id = $1 and ref = $2 and status = 'refused'`, [companyId, ref, `credit not yet returned: ${String(e?.message ?? e).slice(0, 150)}`]);
+      throw e;
+    }
+  }
+
+  /** Gift-card purchases, newest first: by default the ones nobody could tell were sent (for a person to check). */
+  async giftCards(companyId: string, status: 'unknown' | 'ordering' | 'sent' | 'refused' = 'unknown') {
+    return (await this.db.query<any>(`select ref, product, cents, status, provider_ref, error, at, settled_by, settled_at from wallet_giftcards where company_id = $1 and status = $2 order by at desc limit 200`, [companyId, status])).rows
+      .map(giftCardView);
+  }
+  /**
+   * A person who checked with the gift-card company settles an unknown purchase: 'sent' (the credit stays spent) or
+   * 'refused' (the credit goes back, once). Only an unknown purchase can be settled; one being ordered right now can't.
+   */
+  async settleGiftCard(companyId: string, ref: string, outcome: 'sent' | 'refused', by: string, note?: string) {
+    if (outcome !== 'sent' && outcome !== 'refused') throw new WalletError('bad_outcome', 'Say whether it was sent or refused.');
+    const row = (await this.db.query<any>(`select * from wallet_giftcards where company_id = $1 and ref = $2`, [companyId, ref])).rows[0];
+    if (!row) throw new WalletError('not_found', 'No such gift-card purchase.', 404);
+    const took = (await this.db.query<any>(`update wallet_giftcards set status = $3, settled_by = $4, settled_at = $5, error = coalesce($6, error) where company_id = $1 and ref = $2 and status = 'unknown' returning entry`,
+      [companyId, ref, outcome, by, this.clock().toISOString(), note ? note.slice(0, 200) : null])).rows[0];
+    if (!took) throw new WalletError('not_unknown', `This purchase is ${row.status}; only one marked unknown can be settled.`, 409);
+    if (outcome === 'refused') await this.giveBack(companyId, ref, took.entry, `gift card refused (checked by ${by})`);
+    return (await this.giftCardsByRef(companyId, ref))!;
+  }
+  private async giftCardsByRef(companyId: string, ref: string) {
+    const r = (await this.db.query<any>(`select ref, product, cents, status, provider_ref, error, at, settled_by, settled_at from wallet_giftcards where company_id = $1 and ref = $2`, [companyId, ref])).rows[0];
+    return r ? giftCardView(r) : null;
   }
 
   /** Turning points or credit into something else. Switched off until a person approves it (and a partner is chosen). */

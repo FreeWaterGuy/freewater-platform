@@ -18,7 +18,7 @@ export interface Payment {
   purpose: 'custom_order' | 'invoice';
   ref: string;
   amountCents: number;
-  status: 'authorized' | 'captured' | 'voided' | 'declined' | 'failed';
+  status: 'authorized' | 'capturing' | 'voiding' | 'captured' | 'voided' | 'declined' | 'failed';
   failure: string | null;
 }
 
@@ -96,32 +96,62 @@ export class PaymentsService {
     return (await this.get(id))!;
   }
 
-  /** Take held money. Records the payment in the ledger. */
-  /** Take the money that was held, or only part of it (say, when 11 of 12 bottles printed). */
+  /**
+   * Take the money that was held, or only part of it (say, when 11 of 12 bottles printed). The payment is claimed
+   * ('capturing') before the provider is asked, so a capture and a release at the same moment can't both reach it.
+   * `payment.captured` (which records it in the ledger) is published only by the call that really took the money.
+   */
   async capture(paymentId: string, amountCents?: number): Promise<Payment> {
     const p = (await this.db.query<any>(`select p.*, c.owner_type, c.owner_id from payments p join payment_customers c on c.id = p.customer_id where p.id = $1`, [paymentId])).rows[0];
     if (!p) throw new PaymentError('not_found', 'Payment not found.', 404);
     if (p.status === 'captured') return toPayment(p);
+    if (p.status === 'capturing' || p.status === 'voiding') throw new PaymentError('in_progress', 'This payment is being settled right now. Check it again in a moment.', 409);
     if (p.status !== 'authorized') throw new PaymentError('not_held', `This payment is ${p.status}; there is nothing to take.`, 409);
     const amount = amountCents === undefined ? Number(p.amount_cents) : Math.min(amountCents, Number(p.amount_cents));
-    const r = await this.provider.capture(p.provider_ref, amount);
+    const took = await this.db.query(`update payments set status = 'capturing', updated_at = now() where id = $1 and status = 'authorized'`, [paymentId]);
+    if (!Number(took.rowCount ?? 0)) {
+      const now = (await this.get(paymentId))!;
+      if (now.status === 'captured') return now;
+      throw new PaymentError(now.status === 'capturing' || now.status === 'voiding' ? 'in_progress' : 'not_held', now.status === 'capturing' || now.status === 'voiding' ? 'This payment is being settled right now. Check it again in a moment.' : `This payment is ${now.status}; there is nothing to take.`, 409);
+    }
+    let r: Awaited<ReturnType<PaymentProvider['capture']>>;
+    try {
+      r = await this.provider.capture(p.provider_ref, amount);
+    } catch (e) {
+      // We couldn't reach the provider: the hold is still there, so it can be tried again.
+      await this.db.query(`update payments set status = 'authorized', updated_at = now() where id = $1 and status = 'capturing'`, [paymentId]);
+      throw e;
+    }
     if (r.status === 'failed') {
-      await this.db.query(`update payments set status = 'failed', failure = $2, updated_at = now() where id = $1`, [paymentId, r.reason]);
+      await this.db.query(`update payments set status = 'failed', failure = $2, updated_at = now() where id = $1 and status = 'capturing'`, [paymentId, r.reason]);
       throw new PaymentError('capture_failed', r.reason);
     }
-    await this.db.query(`update payments set status = 'captured', amount_cents = $2, updated_at = now() where id = $1`, [paymentId, amount]);
-    this.bus.publish('payment.captured', p.company_id, { paymentId, payerType: p.owner_type, payerId: p.owner_id, amountCents: amount, purpose: p.purpose, ref: p.ref, provider: this.provider.name }, paymentId);
+    const done = await this.db.query(`update payments set status = 'captured', amount_cents = $2, updated_at = now() where id = $1 and status = 'capturing'`, [paymentId, amount]);
+    if (Number(done.rowCount ?? 0)) this.bus.publish('payment.captured', p.company_id, { paymentId, payerType: p.owner_type, payerId: p.owner_id, amountCents: amount, purpose: p.purpose, ref: p.ref, provider: this.provider.name }, paymentId);
     return (await this.get(paymentId))!;
   }
 
-  /** Release a hold. Nothing is charged. */
+  /** Release a hold. Nothing is charged. Claimed ('voiding') first, so a capture can't run at the same time. */
   async void(paymentId: string): Promise<Payment> {
     const p = (await this.db.query<any>(`select * from payments where id = $1`, [paymentId])).rows[0];
     if (!p) throw new PaymentError('not_found', 'Payment not found.', 404);
+    if (p.status === 'capturing' || p.status === 'voiding') throw new PaymentError('in_progress', 'This payment is being settled right now. Check it again in a moment.', 409);
     if (p.status !== 'authorized') return toPayment(p);
-    await this.provider.void(p.provider_ref);
-    await this.db.query(`update payments set status = 'voided', updated_at = now() where id = $1`, [paymentId]);
-    this.bus.publish('payment.voided', p.company_id, { paymentId, ref: p.ref }, `${paymentId}:void`);
+    const took = await this.db.query(`update payments set status = 'voiding', updated_at = now() where id = $1 and status = 'authorized'`, [paymentId]);
+    if (!Number(took.rowCount ?? 0)) {
+      const now = (await this.get(paymentId))!;
+      if (now.status === 'capturing' || now.status === 'voiding') throw new PaymentError('in_progress', 'This payment is being settled right now. Check it again in a moment.', 409);
+      return now;
+    }
+    try {
+      await this.provider.void(p.provider_ref);
+    } catch (e) {
+      // Not released: it's still held and can be released (or taken) later.
+      await this.db.query(`update payments set status = 'authorized', updated_at = now() where id = $1 and status = 'voiding'`, [paymentId]);
+      throw e;
+    }
+    const done = await this.db.query(`update payments set status = 'voided', updated_at = now() where id = $1 and status = 'voiding'`, [paymentId]);
+    if (Number(done.rowCount ?? 0)) this.bus.publish('payment.voided', p.company_id, { paymentId, ref: p.ref }, `${paymentId}:void`);
     return (await this.get(paymentId))!;
   }
 
