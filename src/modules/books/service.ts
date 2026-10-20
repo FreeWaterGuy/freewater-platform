@@ -176,11 +176,18 @@ export class BooksService {
     const amountCents = n(t.amount_cents);
     const r = await this.payouts.send({ charityName: t.charity_name, payoutLabel: t.payout_label, amountCents, reference: `FreeWater ${t.number}`, idempotencyKey: `${companyId}:${id}` });
     const token = randomBytes(18).toString('base64url');
-    // Only the run that moves it out of 'sending' records it, so two runs retrying the same one record it once.
+    // Sent: its line goes in the books first, and is stored, before the transfer is marked sent. A crash in between
+    // leaves it 'sending' with its line already counted, and the next run asks the bank again with the same key (the
+    // bank answers with the transfer it already made) and only then marks it; the line's key is the transfer's, so it's
+    // booked once however many runs get here. A crash right after the bank call, before anything, is the same retry.
+    if (r.status === 'sent') {
+      this.platform.bus.publish('charity.transferred', companyId, { transferId: id, number: t.number, charity: t.charity_name, amountCents, provider: this.payouts.name, providerRef: r.ref }, `transfer:${id}`);
+      await this.flush();
+    }
+    // Only the run that moves it out of 'sending' tells the charity, so two runs retrying the same one tell it once.
     const moved = await this.db.query(`update charity_transfers set status = $2, provider_ref = $3, failure = $4, confirm_token_hash = $5 where id = $1 and status = 'sending'`,
       [id, r.status === 'sent' ? 'sent' : 'failed', r.status === 'sent' ? r.ref : null, r.status === 'failed' ? r.reason : null, sha(token)]);
     if (Number(moved.rowCount ?? 0) && r.status === 'sent') {
-      this.platform.bus.publish('charity.transferred', companyId, { transferId: id, number: t.number, charity: t.charity_name, amountCents, provider: this.payouts.name, providerRef: r.ref }, `transfer:${id}`);
       if (t.charity_email) await this.messenger.send({ channel: 'email', to: t.charity_email, subject: `${company(this.platform, companyId)} sent you ${(amountCents / 100).toFixed(2)} dollars`, text: `${company(this.platform, companyId)} sent ${t.charity_name} $${(amountCents / 100).toFixed(2)} (transfer ${t.number}, bank reference ${r.ref}) for ${n(t.bottles).toLocaleString()} bottles. When it arrives, please confirm it so the public books show it: ${opts.baseUrl}/books/confirm?transfer=${id}&token=${token}` });
     }
     return this.transfer(id);

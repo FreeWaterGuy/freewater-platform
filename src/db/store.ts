@@ -12,6 +12,7 @@ import type { RenderedLabel } from '../modules/print/contract';
 import { svgCreative } from '../modules/print/svgCreative';
 import { posterCreative } from '../modules/creative/poster';
 import type { SqlClient } from './client';
+import { LeaseLostError } from './leaseChecked';
 
 /**
  * Writes every change to the database, in the order it happened, and never drops one.
@@ -56,7 +57,7 @@ export class SqlPersistence implements Persistence {
   private running: Promise<void> | null = null;
   private nextSeq = 1;
   private written = 0; // every change with seq <= this is in the database
-  private waiters: { seq: number; resolve: () => void }[] = [];
+  private waiters: { seq: number; resolve: () => void; reject: (e: Error) => void }[] = [];
   private failingSince: number | null = null;
   private tries = 0;
   private lastError = '';
@@ -161,15 +162,39 @@ export class SqlPersistence implements Persistence {
    * while (the changes stay queued and will still be written) and say the platform is paused.
    */
   async flush(timeoutMs = this.opts.flushTimeoutMs ?? 15_000): Promise<void> {
-    const target = this.nextSeq - 1;
-    if (target <= this.written) return;
+    return this.flushThrough(this.nextSeq - 1, timeoutMs);
+  }
+
+  /** The number of the last change queued so far: `flushThrough(mark())` waits for exactly what was queued until now. */
+  mark(): number { return this.nextSeq - 1; }
+
+  /**
+   * Wait until every change up to `seq` is in the database (changes are written in order, so that includes everything
+   * before it). Rejects if the database refuses for longer than `timeoutMs` (the changes stay queued) or if this server
+   * no longer owns the data (they never will be written). A money step that has to know its ledger lines are stored
+   * before it records itself as done waits here: see `durably`.
+   */
+  async flushThrough(seq: number, timeoutMs = this.opts.flushTimeoutMs ?? 15_000): Promise<void> {
+    if (seq <= this.written) return;
+    if (this.fenced) throw new LeaseLostError();
     this.schedule();
     await new Promise<void>((resolve, reject) => {
       const t = setTimeout(() => { this.waiters = this.waiters.filter((w) => w.resolve !== done); reject(new PersistencePaused()); }, timeoutMs);
       t.unref?.();
       const done = () => { clearTimeout(t); resolve(); };
-      this.waiters.push({ seq: target, resolve: done });
+      const fail = (e: Error) => { clearTimeout(t); reject(e); };
+      this.waiters.push({ seq, resolve: done, reject: fail });
     });
+  }
+
+  /**
+   * Publish and wait: run `publish` (which queues events and their ledger lines), then wait until exactly those changes
+   * (and so everything before them) are stored. Only then may the caller write that the step is done.
+   */
+  async durably<T>(publish: () => T, timeoutMs?: number): Promise<T> {
+    const out = publish();
+    await this.flushThrough(this.mark(), timeoutMs);
+    return out;
   }
 
   /** For things recorded on the way past (a scan, a QR opened): wait for saving normally, but not while paused. */
@@ -267,7 +292,12 @@ export class SqlPersistence implements Persistence {
   }
 
   /** This server no longer owns the data: keep what's waiting on disk (for a person) and write nothing more. */
-  fence() { this.spoolNow(); this.fenced = true; this.pending = []; this.wakeRetry?.(); }
+  fence() {
+    this.spoolNow(); this.fenced = true; this.pending = []; this.wakeRetry?.();
+    // Whoever is waiting for those changes to be stored is told now that they won't be (not left to time out).
+    const waiting = this.waiters; this.waiters = [];
+    for (const w of waiting) w.reject(new LeaseLostError());
+  }
 
   /** Changes a person moved aside. */
   async failures() {

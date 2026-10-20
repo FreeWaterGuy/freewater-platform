@@ -104,7 +104,7 @@ export class PaymentsService {
   async capture(paymentId: string, amountCents?: number): Promise<Payment> {
     const p = (await this.db.query<any>(`select p.*, c.owner_type, c.owner_id from payments p join payment_customers c on c.id = p.customer_id where p.id = $1`, [paymentId])).rows[0];
     if (!p) throw new PaymentError('not_found', 'Payment not found.', 404);
-    if (p.status === 'captured') return toPayment(p);
+    if (p.status === 'captured') { await this.rebook(p); return toPayment(p); }
     if (p.status === 'capturing' || p.status === 'voiding') {
       // One whose answer never came is settled from what the provider says first; one still going is left alone.
       const now = await this.recover(paymentId);
@@ -132,8 +132,11 @@ export class PaymentsService {
       await this.db.query(`update payments set status = 'failed', failure = $2, updated_at = now() where id = $1 and status = 'capturing'`, [paymentId, r.reason]);
       throw new PaymentError('capture_failed', r.reason);
     }
-    const done = await this.db.query(`update payments set status = 'captured', amount_cents = $2, updated_at = now() where id = $1 and status = 'capturing'`, [paymentId, amount]);
-    if (Number(done.rowCount ?? 0)) this.bus.publish('payment.captured', p.company_id, { paymentId, payerType: p.owner_type, payerId: p.owner_id, amountCents: amount, purpose: p.purpose, ref: p.ref, provider: this.provider.name }, paymentId);
+    // The money was taken: its ledger lines are stored first, and only then is the payment marked captured. A crash in
+    // between leaves it 'capturing', which `recover` finishes from the provider's answer (the event's key is the
+    // payment's, so it's never booked twice); a crash after leaves both in step.
+    await this.saved(() => this.bus.publish('payment.captured', p.company_id, { paymentId, payerType: p.owner_type, payerId: p.owner_id, amountCents: amount, purpose: p.purpose, ref: p.ref, provider: this.provider.name }, paymentId));
+    await this.db.query(`update payments set status = 'captured', amount_cents = $2, updated_at = now() where id = $1 and status = 'capturing'`, [paymentId, amount]);
     return (await this.get(paymentId))!;
   }
 
@@ -156,8 +159,8 @@ export class PaymentsService {
       await this.db.query(`update payments set status = 'authorized', updated_at = now() where id = $1 and status = 'voiding'`, [paymentId]);
       throw e;
     }
-    const done = await this.db.query(`update payments set status = 'voided', updated_at = now() where id = $1 and status = 'voiding'`, [paymentId]);
-    if (Number(done.rowCount ?? 0)) this.bus.publish('payment.voided', p.company_id, { paymentId, ref: p.ref }, `${paymentId}:void`);
+    await this.saved(() => this.bus.publish('payment.voided', p.company_id, { paymentId, ref: p.ref }, `${paymentId}:void`));
+    await this.db.query(`update payments set status = 'voided', updated_at = now() where id = $1 and status = 'voiding'`, [paymentId]);
     return (await this.get(paymentId))!;
   }
 
@@ -179,15 +182,47 @@ export class PaymentsService {
     let st: Awaited<ReturnType<NonNullable<PaymentProvider['status']>>>;
     try { st = await this.provider.status(p.provider_ref); } catch { return toPayment(p); }
     const move = async (set: string, args: unknown[] = []) => Number((await this.db.query(`update payments set ${set}, updated_at = now() where id = $1 and status = $2`, [paymentId, p.status, ...args])).rowCount ?? 0) > 0;
+    // The provider's answer is the truth: its ledger lines are stored first (keyed by the payment, so once), then the status.
     if (st.state === 'captured') {
       const amount = st.amountCents > 0 ? st.amountCents : Number(p.amount_cents);
-      if (await move(`status = 'captured', amount_cents = $3`, [amount])) this.bus.publish('payment.captured', p.company_id, { paymentId, payerType: p.owner_type, payerId: p.owner_id, amountCents: amount, purpose: p.purpose, ref: p.ref, provider: this.provider.name }, paymentId);
+      await this.saved(() => this.bus.publish('payment.captured', p.company_id, { paymentId, payerType: p.owner_type, payerId: p.owner_id, amountCents: amount, purpose: p.purpose, ref: p.ref, provider: this.provider.name }, paymentId));
+      await move(`status = 'captured', amount_cents = $3`, [amount]);
     } else if (st.state === 'voided') {
-      if (await move(`status = 'voided'`)) this.bus.publish('payment.voided', p.company_id, { paymentId, ref: p.ref }, `${paymentId}:void`);
+      await this.saved(() => this.bus.publish('payment.voided', p.company_id, { paymentId, ref: p.ref }, `${paymentId}:void`));
+      await move(`status = 'voided'`);
     } else if (st.state === 'failed') await move(`status = 'failed', failure = $3`, [st.reason]);
     else await move(`status = 'authorized'`);
     return (await this.get(paymentId))!;
   }
+  /** Publish an event, then wait until it (and its ledger lines) are stored. */
+  private async saved(publish: () => unknown) { publish(); await this.beforeRead(); }
+
+  /**
+   * A payment already captured (or released) whose event never reached the books (a crash between the two, before
+   * events were stored first): book it now. The event's key is the payment's own, so this never books it twice.
+   */
+  private async rebook(p: any) {
+    if (p.status === 'captured' && !p.owner_type) p = (await this.db.query<any>(`select p.*, c.owner_type, c.owner_id from payments p join payment_customers c on c.id = p.customer_id where p.id = $1`, [p.id])).rows[0];
+    const e = p.status === 'captured'
+      ? this.bus.publish('payment.captured', p.company_id, { paymentId: p.id, payerType: p.owner_type, payerId: p.owner_id, amountCents: Number(p.amount_cents), purpose: p.purpose, ref: p.ref, provider: p.provider ?? this.provider.name }, p.id)
+      : p.status === 'voided' ? this.bus.publish('payment.voided', p.company_id, { paymentId: p.id, ref: p.ref }, `${p.id}:void`) : null;
+    if (e) await this.beforeRead();
+    return !!e;
+  }
+
+  /** Every captured or released payment whose event is missing from the books gets it (once). Run at start and before invoicing. */
+  async repairUnrecorded(companyId?: string) {
+    await this.beforeRead();
+    const rows = (await this.db.query<any>(
+      `select p.*, c.owner_type, c.owner_id, c.provider from payments p join payment_customers c on c.id = p.customer_id
+        where ($1::text is null or p.company_id = $1) and p.status in ('captured', 'voided')
+          and not exists (select 1 from events e where e.company_id = p.company_id and e.type = case when p.status = 'captured' then 'payment.captured' else 'payment.voided' end
+                          and e.idempotency_key = case when p.status = 'captured' then p.id else p.id || ':void' end)`, [companyId ?? null])).rows;
+    let fixed = 0;
+    for (const p of rows) if (await this.rebook(p)) fixed++;
+    return fixed;
+  }
+
   /** Recover every payment of a company left unanswered (run regularly, and before invoicing). */
   async recoverStuck(companyId: string) {
     const ids = (await this.db.query<any>(`select id from payments where company_id = $1 and status in ('capturing','voiding') and updated_at < $2`, [companyId, new Date(Date.now() - PaymentsService.stuckAfterMs).toISOString()])).rows;
@@ -219,6 +254,7 @@ export class PaymentsService {
   private async runInvoicesNow(companyId: string, periodEnd: Date): Promise<Invoice[]> {
     await this.beforeRead();
     await this.recoverStuck(companyId).catch(() => {});
+    await this.repairUnrecorded(companyId);
     const made = await this.db.transaction(async (tx) => {
       await tx.query(`select pg_advisory_xact_lock(724261, hashtext($1))`, [companyId]);
       const lines = (await tx.query<any>(

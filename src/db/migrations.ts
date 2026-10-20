@@ -1245,6 +1245,16 @@ create index conversions_click on conversions(click_id) where click_id is not nu
 create index if not exists events_scan_viewer on events(company_id, (payload->>'viewerKey')) where type in ('unit.scanned','box.scanned','ar.launched','box.ar_launched');
 `,
   },
+  {
+    id: '050_c5_settlement_plans',
+    sql: `
+-- A day of the agents' fund is written down with exactly how it's shared out (the plan) before its lines go in the
+-- books, and marked done only once they're stored, so a crash in between is finished from the plan, never worked out
+-- again differently. Days settled before this have no plan and are done.
+alter table agent_settlements add column if not exists plan jsonb;
+alter table agent_settlements add column if not exists status text not null default 'done';
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

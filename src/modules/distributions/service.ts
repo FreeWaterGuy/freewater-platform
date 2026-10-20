@@ -27,10 +27,12 @@ export interface BatchInput {
 }
 
 export class DistributionService {
-  constructor(private db: SqlClient, private platform: Platform, private deps: { today: (companyId: string) => string; charities: (companyId: string) => Promise<string[]>; onBottles: (companyId: string, n: number) => void }) {}
+  constructor(private db: SqlClient, private platform: Platform, private deps: { today: (companyId: string) => string; charities: (companyId: string) => Promise<string[]>; onBottles: (companyId: string, n: number) => void; /** Wait until every change queued so far is stored. */ flush?: () => Promise<void> }) {}
+  private async flush() { await this.deps.flush?.(); }
 
-  /** After a restart: the batches already given count in the live totals again. */
+  /** After a restart: the books and the batches agree again (see repair), and the batches given count in the live totals. */
   async init() {
+    await this.repair();
     for (const r of (await this.db.query<any>(`select company_id, sum(bottles)::bigint as n from distributions where voided_at is null group by 1`)).rows) this.deps.onBottles(r.company_id, n(r.n));
   }
 
@@ -53,10 +55,45 @@ export class DistributionService {
     const cost = input.costCents === undefined ? input.bottles * uc : Math.max(0, Math.round(input.costCents));
     const id = newId('batch');
     const batch = { batchId: id, date: input.date, bottles: input.bottles, productId, city: input.city.trim(), place: input.place.trim(), campaign: input.campaign.trim(), advertiser: input.advertiser?.trim() || c.name, revenueCents: revenue, donationPerBottleCents: perBottle, charity, costCents: cost, ...(input.notes?.trim() ? { notes: input.notes.trim().slice(0, 1000) } : {}) };
-    await this.db.query(`insert into distributions (id, company_id, day, bottles, data, recorded_by, at) values ($1,$2,$3,$4,$5,$6,$7)`, [id, companyId, input.date, input.bottles, JSON.stringify(batch), by, this.platform.bus.now().toISOString()]);
-    this.platform.bus.publish('batch.recorded', companyId, batch, `batch:${id}`);
+    // Its lines go in the books first, and are stored, before the batch is written down: a crash in between leaves
+    // lines without their batch, which `repair` writes down at the next start from the event itself.
+    const e = this.platform.bus.publish('batch.recorded', companyId, batch, `batch:${id}`);
+    await this.flush();
+    await this.db.query(`insert into distributions (id, company_id, day, bottles, data, recorded_by, at) values ($1,$2,$3,$4,$5,$6,$7)`, [id, companyId, input.date, input.bottles, JSON.stringify(batch), by, (e?.at ?? this.platform.bus.now()).toISOString()]);
     this.deps.onBottles(companyId, input.bottles);
     return this.get(companyId, id);
+  }
+
+  /**
+   * After a crash, make the batches and the books agree, without ever booking anything twice (each event's key is the
+   * batch's own):
+   *  - a batch whose lines were stored but which was never written down (the crash came between) is written down;
+   *  - a batch written down whose lines never reached the books (written before lines were stored first) gets them;
+   *  - a void whose reversal is in the books but not on the batch is marked on the batch, and the other way round.
+   */
+  async repair(companyId?: string) {
+    await this.flush();
+    const co = companyId ?? null;
+    const json = (v: unknown) => (typeof v === 'string' ? JSON.parse(v) : v) as any;
+    let fixed = 0;
+    for (const e of (await this.db.query<any>(`select company_id, payload, at from events e where type = 'batch.recorded' and ($1::text is null or company_id = $1) and not exists (select 1 from distributions d where d.id = e.payload->>'batchId')`, [co])).rows) {
+      const b = json(e.payload);
+      await this.db.query(`insert into distributions (id, company_id, day, bottles, data, recorded_by, at) values ($1,$2,$3,$4,$5,$6,$7) on conflict (id) do nothing`, [b.batchId, e.company_id, b.date, b.bottles, JSON.stringify(b), 'restored from the books after a restart', new Date(e.at).toISOString()]);
+      fixed++;
+    }
+    for (const r of (await this.db.query<any>(`select * from distributions d where ($1::text is null or company_id = $1) and not exists (select 1 from events e where e.company_id = d.company_id and e.type = 'batch.recorded' and e.idempotency_key = 'batch:' || d.id)`, [co])).rows) {
+      if (this.platform.bus.publish('batch.recorded', r.company_id, json(r.data), `batch:${r.id}`)) fixed++;
+    }
+    for (const e of (await this.db.query<any>(`select e.company_id, e.payload, e.at from events e join distributions d on d.id = e.payload->>'batchId' and d.company_id = e.company_id where e.type = 'batch.voided' and d.voided_at is null and ($1::text is null or e.company_id = $1)`, [co])).rows) {
+      const v = json(e.payload);
+      await this.db.query(`update distributions set voided_at = $2, voided_by = $3, void_reason = $4 where id = $1 and voided_at is null`, [v.batchId, new Date(e.at).toISOString(), 'restored from the books after a restart', v.reason]);
+      fixed++;
+    }
+    for (const r of (await this.db.query<any>(`select * from distributions d where voided_at is not null and ($1::text is null or company_id = $1) and not exists (select 1 from events e where e.company_id = d.company_id and e.type = 'batch.voided' and e.idempotency_key = 'batch-void:' || d.id)`, [co])).rows) {
+      if (this.platform.bus.publish('batch.voided', r.company_id, { batchId: r.id, bottles: n(r.bottles), reason: r.void_reason ?? 'voided' }, `batch-void:${r.id}`)) fixed++;
+    }
+    if (fixed) await this.flush();
+    return fixed;
   }
 
   /** A batch recorded by mistake: every line it made is reversed in the books (never deleted). */
@@ -65,10 +102,12 @@ export class DistributionService {
     if (!r) throw new DistributionError('not_found', 'Batch not found.', 404);
     if (r.voided_at) throw new DistributionError('voided', 'Already voided.', 409);
     if (String(reason ?? '').trim().length < 5) throw new DistributionError('reason', 'Say why, for the record.');
-    // Only the void that actually moves it voids it: two at once, the second finds it already voided.
-    const won = (await this.db.query<any>(`update distributions set voided_at = $2, voided_by = $3, void_reason = $4 where id = $1 and voided_at is null returning id`, [id, this.platform.bus.now().toISOString(), by, reason.trim()])).rows.length;
+    // The reversal goes in the books first (once: its key is the batch's), and is stored, before the batch is marked
+    // voided. Only the void that then marks it counts: two at once, the second finds it already voided.
+    const e = this.platform.bus.publish('batch.voided', companyId, { batchId: id, bottles: n(r.bottles), reason: reason.trim() }, `batch-void:${id}`);
+    await this.flush();
+    const won = (await this.db.query<any>(`update distributions set voided_at = $2, voided_by = $3, void_reason = $4 where id = $1 and voided_at is null returning id`, [id, (e?.at ?? this.platform.bus.now()).toISOString(), by, reason.trim()])).rows.length;
     if (!won) throw new DistributionError('voided', 'Already voided.', 409);
-    this.platform.bus.publish('batch.voided', companyId, { batchId: id, bottles: n(r.bottles), reason: reason.trim() }, `batch-void:${id}`);
     this.deps.onBottles(companyId, -n(r.bottles));
     return this.get(companyId, id);
   }

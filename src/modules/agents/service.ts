@@ -50,7 +50,12 @@ export interface AgentsDeps {
   gate?: (companyId: string) => Promise<{ open: boolean; reason: string }>;
   /** The milestone's progress (for promises that switch on at it). */
   milestone?: (companyId: string) => Promise<{ reached: boolean; reason?: string }>;
+  /** Wait until every change queued so far (events and their ledger lines) is stored. */
+  flush?: () => Promise<void>;
 }
+
+/** How one day of the agents' fund is shared out, written down before its lines are booked. */
+export interface SettlementPlan { day: string; parts: { agentId: string; paidCents: number; heldCents: number; reason: string }[] }
 
 export class AgentsService {
   private verdicts = new Map<AgentId, Verdict>();
@@ -113,6 +118,8 @@ export class AgentsService {
     aiMeter.onUsage = (u) => this.onUsage(u);
     aiMeter.allow = (agent) => this.allow(agent);
     await this.refresh();
+    await this.repairSpends();
+    for (const c of this.platform.companies.values()) await this.repairSettlements(c.id);
   }
   /** Wait for metered costs still being written. */
   idle() { return this.writes; }
@@ -733,7 +740,7 @@ export class AgentsService {
     if (!c.agents?.enabled) return [];
     await this.refresh();
     const today = this.deps.today(companyId);
-    const done = new Set((await this.db.query<any>(`select day from agent_settlements where company_id = $1`, [companyId])).rows.map((r) => r.day));
+    const done = await this.repairSettlements(companyId);
     const days = new Map<string, number>();
     for (const l of this.platform.ledger.entries) {
       if (l.companyId !== companyId || l.kind !== 'ai_fund') continue;
@@ -747,18 +754,24 @@ export class AgentsService {
     const total = credited.reduce((a, x) => a + x.cents, 0);
     const out = [];
     for (const [day, pool] of [...days.entries()].sort()) {
+      const plan: SettlementPlan = { day, parts: [] };
       if (pool > 0) {
         const parts = total ? split(pool, credited.map((x) => [x.id, x.cents] as const)) : [['common', pool] as const];
         for (const [agentId, cents] of parts) {
           const v = agentId === 'common' ? undefined : this.verdicts.get(agentId as AgentId);
           const paid = v ? Math.floor(cents * v.paidShare) : 0;
           const why = v ? `${v.standing}, ${Math.round((cents / pool) * 100)}% of the day’s fund for its share of the value measured` : 'nothing measured yet, held in common';
-          if (paid) this.platform.bus.publish('ai_fund.allocated', companyId, { day, agentId, amountCents: paid, held: false, reason: why }, `ai:${companyId}:${day}:${agentId}:paid`);
-          if (cents - paid) this.platform.bus.publish('ai_fund.allocated', companyId, { day, agentId, amountCents: cents - paid, held: true, reason: why }, `ai:${companyId}:${day}:${agentId}:held`);
-          out.push({ day, agentId, paidCents: paid, heldCents: cents - paid });
+          plan.parts.push({ agentId, paidCents: paid, heldCents: cents - paid, reason: why });
         }
       }
-      await this.db.query(`insert into agent_settlements (company_id, day, at) values ($1,$2,$3) on conflict do nothing`, [companyId, day, iso(this.now())]);
+      // Written down first with exactly how it's shared (so a crash is finished the same way, never worked out again),
+      // then its lines go in the books and are stored, and only then is the day marked done.
+      const won = (await this.db.query<any>(`insert into agent_settlements (company_id, day, at, plan, status) values ($1,$2,$3,$4,'allocating') on conflict do nothing returning day`, [companyId, day, iso(this.now()), JSON.stringify(plan)])).rows.length;
+      if (!won) continue;
+      this.allocate(companyId, plan);
+      await this.flushed();
+      await this.db.query(`update agent_settlements set status = 'done' where company_id = $1 and day = $2`, [companyId, day]);
+      for (const p of plan.parts) out.push({ day, agentId: p.agentId, paidCents: p.paidCents, heldCents: p.heldCents });
     }
     // What was held in common (earned before any value was confirmed) is shared out once some is.
     const common = this.balances(companyId).common?.heldCents ?? 0;
@@ -783,6 +796,29 @@ export class AgentsService {
     }
     return out;
   }
+
+  /**
+   * Days written down with their plan: any whose lines aren't all in the books yet (a crash before they were stored)
+   * get them now, from the plan (each line's key is the day's and the agent's, so nothing is booked twice), and a day
+   * still 'allocating' is marked done once they're stored. Returns every day settled.
+   */
+  async repairSettlements(companyId: string): Promise<Set<string>> {
+    const settled = (await this.db.query<any>(`select day, plan, status from agent_settlements where company_id = $1`, [companyId])).rows;
+    const withPlan = settled.filter((r) => r.plan);
+    for (const r of withPlan) this.allocate(companyId, (typeof r.plan === 'string' ? JSON.parse(r.plan) : r.plan) as SettlementPlan);
+    if (withPlan.length) await this.flushed();
+    for (const r of withPlan) if (r.status !== 'done') await this.db.query(`update agent_settlements set status = 'done' where company_id = $1 and day = $2`, [companyId, r.day]);
+    return new Set(settled.map((r) => r.day));
+  }
+
+  /** Book one day's share-out from its plan. Each line's key is the day's and the agent's: booking it again adds nothing. */
+  private allocate(companyId: string, plan: SettlementPlan) {
+    for (const p of plan.parts) {
+      if (p.paidCents) this.platform.bus.publish('ai_fund.allocated', companyId, { day: plan.day, agentId: p.agentId, amountCents: p.paidCents, held: false, reason: p.reason }, `ai:${companyId}:${plan.day}:${p.agentId}:paid`);
+      if (p.heldCents) this.platform.bus.publish('ai_fund.allocated', companyId, { day: plan.day, agentId: p.agentId, amountCents: p.heldCents, held: true, reason: p.reason }, `ai:${companyId}:${plan.day}:${p.agentId}:held`);
+    }
+  }
+  private async flushed() { await this.deps.flush?.(); }
 
   /** Each agent's fund, from the books: paid to it, held for it, spent, given. And the pool not yet shared out. */
   balances(companyId: string) {
@@ -877,10 +913,23 @@ export class AgentsService {
   }
   private async carryOut(id: string) {
     const r = (await this.db.query<any>(`select * from agent_spends where id = $1`, [id])).rows[0];
-    this.platform.bus.publish('ai_fund.spent', r.company_id, { spendId: id, agentId: r.agent_id, category: r.category, amountCents: n(r.cents), memo: r.purpose.slice(0, 140), ...(r.cause ? { cause: r.cause } : {}) }, `ai-spend:${id}`);
+    // The spend's lines are stored before it's marked carried out (see repairSpends for one marked before this rule).
+    this.spent(r);
+    await this.flushed();
     if (r.category === 'compute') { const left = (this.credit.get(r.agent_id) ?? 0) + n(r.cents) * 1000; this.credit.set(r.agent_id, left); await this.db.query(`update agent_state set compute_credit_millicents = $2 where agent_id = $1`, [r.agent_id, left]); }
     if (r.category === 'storage') await this.db.query(`update agent_state set storage_cents = storage_cents + $2 where agent_id = $1`, [r.agent_id, n(r.cents)]);
     await this.db.query(`update agent_spends set status = $2 where id = $1`, [id, r.category === 'compute' || r.category === 'storage' || r.category === 'cause' ? 'done' : 'approved']);
+  }
+  private spent(r: any) {
+    return this.platform.bus.publish('ai_fund.spent', r.company_id, { spendId: r.id, agentId: r.agent_id, category: r.category, amountCents: n(r.cents), memo: r.purpose.slice(0, 140), ...(r.cause ? { cause: r.cause } : {}) }, `ai-spend:${r.id}`);
+  }
+  /** Spends approved or done whose lines never reached the books (a crash between): booked now, once (the key is the spend's). */
+  async repairSpends() {
+    await this.flushed();
+    let fixed = 0;
+    for (const r of (await this.db.query<any>(`select * from agent_spends s where status in ('approved', 'done') and not exists (select 1 from events e where e.company_id = s.company_id and e.type = 'ai_fund.spent' and e.idempotency_key = 'ai-spend:' || s.id)`)).rows) if (this.spent(r)) fixed++;
+    if (fixed) await this.flushed();
+    return fixed;
   }
   private async spendRow(id: string) {
     const r = (await this.db.query<any>(`select * from agent_spends where id = $1`, [id])).rows[0];

@@ -150,7 +150,7 @@ export class LotteryService {
   /** The tap. Won only if it landed on the ball while the ball was really on screen. */
   async claim(input: { chanceId: string; viewerKey: string; tap: { tMs: number; x: number; y: number } }) {
     const r = await this.row(input.chanceId, input.viewerKey);
-    if (r.status === 'won') return { status: 'won' as const, prize: publicPrize(r.prize), claimCode: r.claim_code as string };
+    if (r.status === 'won') { this.won(r); return { status: 'won' as const, prize: publicPrize(r.prize), claimCode: r.claim_code as string }; }
     if (r.status !== 'waiting') return this.result(input.chanceId, input.viewerKey);
     const sinceShow = this.now().getTime() - new Date(r.show_at).getTime();
     // A speed bump, not a security check: the ball's path comes from a seed the page is given, so a client can compute it.
@@ -167,8 +167,24 @@ export class LotteryService {
     const after = await this.row(input.chanceId, input.viewerKey);
     if (after.claim_code !== code) return this.result(input.chanceId, input.viewerKey); // two taps at once: only one wins
     const prize = r.prize as LotteryPrize;
-    this.platform.bus.publish('lottery.won', r.company_id, { chanceId: r.id, prizeId: prize.id, prizeName: prize.name, valueCents: prize.valueCents, claimCode: code, target: r.target, ...(prize.sponsor ? { sponsor: prize.sponsor } : {}) }, `win:${r.id}`);
+    this.won({ ...r, claim_code: code });
     return { status: 'won' as const, prize: publicPrize(prize), claimCode: code };
+  }
+
+  /** The prize goes in the books, once (the key is the chance's). */
+  private won(r: any) {
+    const prize = (typeof r.prize === 'string' ? JSON.parse(r.prize) : r.prize) as LotteryPrize;
+    return this.platform.bus.publish('lottery.won', r.company_id, { chanceId: r.id, prizeId: prize.id, prizeName: prize.name, valueCents: prize.valueCents, claimCode: r.claim_code, target: r.target, ...(prize.sponsor ? { sponsor: prize.sponsor } : {}) }, `win:${r.id}`);
+  }
+
+  /**
+   * Chances won whose prize never reached the books (the win is written first, as the one-winner guard, and a crash
+   * before its line was stored loses the line): booked now, once. Run at start.
+   */
+  async repairUnrecorded() {
+    let fixed = 0;
+    for (const r of (await this.db.query<any>(`select * from lottery_chances c where status = 'won' and not exists (select 1 from events e where e.company_id = c.company_id and e.type = 'lottery.won' and e.idempotency_key = 'win:' || c.id)`)).rows) if (this.won(r)) fixed++;
+    return fixed;
   }
 
   /** How a chance went. A ball that's come and gone without a tap is a miss, and says what the prize was. */
@@ -181,7 +197,7 @@ export class LotteryService {
       await this.db.query(`update lottery_chances set status = 'missed', settled_at = $2 where id = $1 and status = 'waiting'`, [r.id, this.now().toISOString()]);
       return { status: 'missed' as const, prize: publicPrize(r.prize), reason: 'The ball went by without a tap.' };
     }
-    if (r.status === 'won') return { status: 'won' as const, prize: publicPrize(r.prize), claimCode: r.claim_code as string };
+    if (r.status === 'won') { this.won(r); return { status: 'won' as const, prize: publicPrize(r.prize), claimCode: r.claim_code as string }; }
     return { status: 'missed' as const, prize: publicPrize(r.prize) };
   }
 

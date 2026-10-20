@@ -221,6 +221,19 @@ export class OffersService {
       throw e;
     }
   }
+  /**
+   * Claims paid whose gift to the cause never reached the company's books (the wallet entry and the claim are written
+   * at once, the gift's event after; a crash in between loses the event): booked now, once (the key is the claim's).
+   * Run at start.
+   */
+  async repairCauseGifts() {
+    let fixed = 0;
+    for (const c of (await this.db.query<any>(`select c.*, o.advertiser_id from offer_claims c join offers o on o.id = c.offer_id where c.status = 'paid' and c.cause_cents > 0 and not exists (select 1 from events e where e.company_id = c.company_id and e.type = 'offer.cause_given' and e.idempotency_key = 'offer:' || c.id)`)).rows) {
+      if (this.platform.bus.publish('offer.cause_given', c.company_id, { claimId: c.id, sponsor: `advertiser:${c.advertiser_id}`, cause: this.cause(c.company_id), cents: Number(c.cause_cents) }, `offer:${c.id}`)) fixed++;
+    }
+    return fixed;
+  }
+
   /** Pay everything approved but held (credit just switched on, or a reserve topped up). Run regularly. */
   async payHeld(companyId: string) {
     if (!this.enabled(companyId)) return 0;

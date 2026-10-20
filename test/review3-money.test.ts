@@ -88,6 +88,7 @@ describe('2. finance people can propose, approve and pause; the rest stays with 
     await app.chain.cancel('freewater', proposed.body.id, `user:${owner}`);
     // (Unpaused here directly, so the tests below can run; really that takes approvals and the wait.)
     await db.query(`insert into chain_actions (id, company_id, kind, params, proposed_by, approvals, needed, status, created_at, ran_by, ran_at) values ('ca_r3_unpause','freewater','unpause','{}','test','[]',2,'done',$1::timestamptz,'test',$1::timestamptz)`, [new Date(now + 1000).toISOString()]);
+    now += 1; // after the pause, not at the same moment (the test chain orders a tie by a random ref)
     await chainFor('freewater').setPaused(false);
     expect(await app.chain.isPaused('freewater')).toBe(false);
   });
