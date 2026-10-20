@@ -488,8 +488,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     // One person: this account, its email or phone (as a fingerprint), and the phone it signed in on.
     const u: any = r.user;
     const own = [`user:${u.id}`, DataService.emailKey(u.email), DataService.phoneKey(u.phone), u.viewerKey].filter(Boolean);
-    // The phone it signed in on joins only if it's provably this person's (see DataService.mayLinkDevice).
-    const phone = b.viewerKey && (await app.data.mayLinkDevice(b.companyId, u.id, b.viewerKey, req.ip, own).catch(() => false)) ? [b.viewerKey] : [];
+    // The phone it signed in on joins (its browser sent its key), unless it's someone else's or was never used (see
+    // DataService.mayLinkDevice).
+    const phone = b.viewerKey && (await app.data.mayLinkDevice(b.companyId, u.id, b.viewerKey, own).catch(() => false)) ? [b.viewerKey] : [];
     await app.data.link(b.companyId, [...own, ...phone], 'signed in').catch(() => null);
     // Someone with a second step turned on gets a ticket for it, not yet a session.
     if (r.challenge) return { body: { secondStep: true, challenge: r.challenge } };

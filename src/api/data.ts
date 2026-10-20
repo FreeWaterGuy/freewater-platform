@@ -148,8 +148,9 @@ export function dataRoutes(app: App, route: (r: RouteDef) => void) {
   route({ method: 'POST', url: '/v1/me/link-device', scope: 'me', summary: 'This phone’s scans belong to you: join what it did before you signed in to your account (as your data choices allow).', body: obj({ viewerKey: viewerKeyProp }, ['viewerKey']), handler: async (req, key) => {
     const { companyId, userId, subject } = me(key);
     const viewerKey = (req.body as any).viewerKey as string;
-    // Only a phone that's provably this person's (see DataService.mayLinkDevice): never one already someone else's.
-    if (!(await data.mayLinkDevice(companyId, userId, viewerKey, req.ip))) throw new ApiError(409, 'not_your_phone', 'That phone can’t be joined to your account. Open this page on the phone itself and try again.');
+    // The key is the proof (only that phone's browser has it); never a phone already someone else's, nor an unused key
+    // (see DataService.mayLinkDevice).
+    if (!(await data.mayLinkDevice(companyId, userId, viewerKey))) throw new ApiError(409, 'not_your_phone', 'That phone can’t be joined to your account. Open this page on the phone itself and try again.');
     return { body: { person: await data.link(companyId, [subject, viewerKey], 'signed in on this phone') } };
   } });
   route({ method: 'POST', url: '/v1/me/stance', scope: 'me', summary: 'How you feel about the cause your bottles support, and about ads. Only used so the platform counts what you really get (the User Test).', body: obj({ cause: { type: 'string', enum: ['supports', 'indifferent', 'opposes'] }, ads: { type: 'string', enum: ['welcome', 'unwelcome'] } }), handler: async (req, key) => {

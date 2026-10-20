@@ -92,7 +92,7 @@ describe('people can see and erase what’s kept about them', () => {
   it('a phone erasing itself without signing in never reaches the account it’s linked to', async () => {
     const viewerKey = 'phone-linked-0001';
     const to = 'linked@example.com';
-    // The phone scans first, so signing in on it joins it to the account.
+    // The phone scans first (an unused key is never joined), so signing in on it joins it to the account.
     const scanned = await app.platform.order({ companyId: 'freewater', orderId: 'priv-4a', locationId: 'ATX-014', productId: 'bottle-16oz' });
     await call('POST', '/v1/public/scans', undefined, { unitId: scanned.unit.id, slot: 0, viewerKey, experienceLoaded: true });
     await call('POST', '/v1/auth/start', undefined, { companyId: 'freewater', channel: 'email', to });

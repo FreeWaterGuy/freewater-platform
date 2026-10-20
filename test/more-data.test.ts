@@ -277,7 +277,7 @@ describe('collecting everything the law allows, under each company’s switchboa
     expect((await call('POST', '/v1/public/interactions', undefined, { viewerKey: 'eu-viewer-0001', items: [{ target: t, kind: 'page_view' }] })).body.recorded).toBe(1);
     delete fw.data;
     // Download, then erase.
-    // The phone does something first, then signs in on it (a phone is joined to an account only once it's been seen).
+    // The phone does something first, then signs in on it (a phone that was never used for anything isn't joined).
     await call('POST', '/v1/public/interactions', undefined, { viewerKey: 'erase-phone-001', items: [{ target: t, kind: 'page_view' }] });
     const token = await signIn('erase-me@example.com', 'erase-phone-001');
     const mine = (await call('GET', '/v1/me/data', token)).body;
