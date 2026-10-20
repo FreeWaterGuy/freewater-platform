@@ -60,6 +60,9 @@ import { dirname, join } from 'node:path';
  */
 /** The company that runs the platform and may set up licensees. */
 const PLATFORM_COMPANY = process.env.PLATFORM_COMPANY ?? 'freewater';
+/** A machine prints a bottle in several seconds: more than this through the API is a leaked key, not a busy machine. */
+export const DEFAULT_PRINTS_PER_MINUTE = 6;
+export const DEFAULT_PRINTS_PER_DAY = 1500;
 
 export async function buildServer(app: App, opts: { logger?: boolean } = {}): Promise<FastifyInstance> {
   // Behind a load balancer, set TRUST_PROXY (1, or the proxy's address) so each caller's real address is used.
@@ -264,15 +267,49 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   // ---------- orders and bottles: machines and apps ----------
 
-  route({ method: 'POST', url: '/v1/orders', scope: 'orders', summary: 'Print one bottle. Send the same orderId again and you get the same bottle back; nothing prints twice.', body: obj({ orderId: S.str, locationId: S.str, productId: S.str, custom: obj({ customerId: S.str, svg: { type: 'string', minLength: 1, maxLength: 2_000_000 }, priceCents: S.int }, ['customerId', 'svg']) }, ['orderId', 'locationId', 'productId']), handler: async (req, key) => {
+  /**
+   * How fast one machine may print through this API: no faster than it physically can (a bottle takes several seconds),
+   * and no more in a day than a busy machine gives. A machine can always read its own screen's codes, so a stolen
+   * machine key is a compromised machine and must be revoked; this cap only keeps a leaked key from printing (and
+   * billing advertisers for) bottles at scale until it is. Hitting it raises an alert.
+   */
+  const printsSeen = new Map<string, { minute: Map<string, number>; day: string; today: Set<string> }>();
+  const printCap = (companyId: string, locationId: string, orderId: string, req: FastifyRequest) => {
+    const m = platform.companies.get(companyId)?.machines;
+    const perMinute = m?.printsPerMinute ?? DEFAULT_PRINTS_PER_MINUTE, perDay = m?.printsPerDay ?? DEFAULT_PRINTS_PER_DAY;
+    const now = platform.bus.now().getTime(), day = new Date(now).toISOString().slice(0, 10);
+    let s = printsSeen.get(locationId);
+    if (!s) printsSeen.set(locationId, (s = { minute: new Map(), day, today: new Set() }));
+    if (s.day !== day) { s.day = day; s.today.clear(); }
+    for (const [id, t] of s.minute) if (now - t >= 60_000) s.minute.delete(id);
+    // The same order sent again prints nothing new, so it isn't counted again.
+    if (s.today.has(orderId) || s.minute.has(orderId)) return;
+    const over = s.minute.size >= perMinute ? 'minute' : s.today.size >= perDay ? 'day' : null;
+    if (over) {
+      const what = over === 'minute' ? `${perMinute} bottles a minute` : `${perDay} bottles a day`;
+      securityLog.record({ kind: 'print_rate_capped', companyId, actor: locationId, ip: req.ip, detail: { locationId, limit: what } }, `pc:${locationId}:${over}`);
+      void app.runtime.alerts.alert(`print-cap:${locationId}`, 'warning', `Machine ${locationId} hit its print limit (${what})`, `More print requests came with ${locationId}'s key than the machine can print. If the machine isn't that busy, its key may be stolen: revoke it in the console.`);
+      const wait = over === 'minute' ? 60 : 3600;
+      return { status: 429, headers: { 'retry-after': String(wait) }, body: { error: { code: 'print_limit', message: `This machine can print at most ${what} through the API. Try again in ${wait} seconds.` } } };
+    }
+    s.minute.set(orderId, now);
+    s.today.add(orderId);
+    return null;
+  };
+
+  route({ method: 'POST', url: '/v1/orders', scope: 'orders', summary: 'Print one bottle. Send the same orderId again and you get the same bottle back; nothing prints twice. A custom design is priced by the company (a price sent here is ignored).', body: obj({ orderId: S.str, locationId: S.str, productId: S.str, custom: obj({ customerId: S.str, svg: { type: 'string', minLength: 1, maxLength: 2_000_000 }, priceCents: S.int }, ['customerId', 'svg']) }, ['orderId', 'locationId', 'productId']), handler: async (req, key) => {
     const b = req.body as any;
     if (!platform.locations.has(b.locationId)) throw new ApiError(422, 'unknown_location', `Location ${b.locationId} doesn't exist.`);
     if (!platform.products.has(b.productId)) throw new ApiError(422, 'unknown_product', `Product ${b.productId} doesn't exist.`);
     let custom;
     if (b.custom) {
-      try { custom = { customerId: b.custom.customerId, art: svgCreative(b.custom.svg), priceCents: b.custom.priceCents }; } catch (e: any) { throw new ApiError(422, 'artwork_refused', e.message); }
+      // Priced here, never by the caller: a price sent with the order would let a machine key make up revenue (and the
+      // charity's share of it). Custom bottles bought in the app are priced by the consumer route.
+      try { custom = { customerId: b.custom.customerId, art: svgCreative(b.custom.svg), priceCents: platform.companies.get(key!.companyId)!.prices.customUnit }; } catch (e: any) { throw new ApiError(422, 'artwork_refused', e.message); }
     }
     if (key!.locationId && key!.locationId !== b.locationId) throw new ApiError(403, 'wrong_machine', `This key belongs to ${key!.locationId} and can only print there.`);
+    const capped = key!.locationId ? printCap(key!.companyId, key!.locationId, b.orderId, req) : null;
+    if (capped) return capped;
     const r = await platform.order({ companyId: key!.companyId, orderId: b.orderId, locationId: b.locationId, productId: b.productId, custom });
     if (!r.ok) return { status: 422, body: { error: { code: 'print_failed', message: `${r.reason}. Nothing was billed.` }, unit: unitView(r.unit.id) } };
     return { status: 201, body: unitView(r.unit.id) };
@@ -311,12 +348,15 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       if (b.amountCents <= 0) throw new ApiError(422, 'bad_amount', 'Send the amount refunded, in cents.');
       // Asking for more than is left gives back only what's left.
       const already = platform.ledger.refundedCents(key!.companyId, placement.advertiserId, orderKey) ?? 0;
-      // Each part of a refund is its own event. With a refundId, a retried request is recognised and counted once.
-      // Without one, the first part keeps the order's key (as a whole refund always did, and as the conversions API
-      // uses), and later parts are keyed by how much was refunded before them: two parts sent at once count once.
+      // Each part of a refund is its own event, keyed by its refundId: a retried part counts once, and two parts sent
+      // at once are both counted (the ledger never gives back more than is left). Without a refundId we can't tell a
+      // retry from a second part, so only a refund of everything that's left may leave it out; it gets a key of its
+      // own (never the sale's, nor the conversions API's refund), and a retry of it finds the sale already refunded.
+      const left = sold.amountCents - already;
+      if (!b.refundId && b.amountCents < left) throw new ApiError(400, 'refund_id_required', `This refunds part of order ${b.orderId} (${b.amountCents}¢ of the ${left}¢ left). Send a refundId for each part, so a retried part counts once.`);
       const unit = platform.units.get(b.unitId)!;
       const before = platform.ledger.entries.length;
-      const idem = b.refundId ? `${orderKey}:refund:${b.refundId}` : already ? `${orderKey}:refund-after:${already}` : orderKey;
+      const idem = b.refundId ? `${orderKey}:refund:${b.refundId}` : `${orderKey}:refund:rest`;
       const e = platform.bus.publish('purchase.refunded', unit.companyId, { unitId: b.unitId, slotIndex: b.slot, orderId: orderKey, amountCents: b.amountCents }, idem);
       return { status: 202, body: { recorded: !!e, ledgerLines: platform.ledger.entries.length - before, refundedCents: platform.ledger.refundedCents(key!.companyId, placement.advertiserId, orderKey) ?? 0, amountCents: sold.amountCents } };
     }
@@ -327,7 +367,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   const saleBody = obj({ unitId: S.str, slot: S.int, orderId: S.str, amountCents: S.int }, ['unitId', 'slot', 'orderId', 'amountCents']);
   route({ method: 'POST', url: '/v1/purchases', scope: 'purchases', summary: 'A sale made from a bottle. Commission is billed once per orderId.', body: saleBody, handler: sale(false) });
   const refundBody = obj({ unitId: S.str, slot: S.int, orderId: S.str, amountCents: S.int, refundId: S.str }, ['unitId', 'slot', 'orderId', 'amountCents']);
-  route({ method: 'POST', url: '/v1/refunds', scope: 'purchases', summary: 'A refund, whole or in parts (send a refundId per part so a retry counts once). The commission is given back in proportion, until the whole sale is refunded.', body: refundBody, handler: sale(true) });
+  route({ method: 'POST', url: '/v1/refunds', scope: 'purchases', summary: 'A refund, whole or in parts. A part (less than what’s left of the sale) needs a refundId, so a retry counts once. The commission is given back in proportion, until the whole sale is refunded.', body: refundBody, handler: sale(true) });
 
   // ---------- campaigns: advertisers and the company ----------
 
@@ -690,7 +730,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   // The server's own machine (its tests, a reverse proxy on the same host) is never limited: behind a proxy that
   // isn't trusted every visitor would look like it, and limiting it would block everyone at once.
   const secondStepCache = new Map<string, { on: boolean; at: number }>();
-  const local = (ip: string) => ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+  // Only outside production: there, a same-host proxy without TRUST_PROXY would make every visitor look local.
+  const local = (ip: string) => process.env.NODE_ENV !== 'production' && (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1');
   const limit = (req: FastifyRequest, reply: FastifyReply, who: string, kind: keyof typeof limits) => {
     if (local(req.ip)) return;
     const l = limits[kind];

@@ -438,7 +438,11 @@ export class Ledger {
       total: 0,
     };
     earned.total = earned.print + earned.scans + earned.ar + earned.commission + earned.custom;
-    return { unitId, earned, donatedCents: sum('donation'), lines };
+    // What the bottle gave, by side: a gift is paid from expense:giving, and a refund's reversal pays it back (it is a
+    // donation line too, and must be taken off, not added). An advertiser's value-back isn't the bottle's gift.
+    const donations = lines.filter((l) => l.kind === 'donation');
+    const donatedCents = donations.filter((l) => l.debit === 'expense:giving').reduce((s, l) => s + l.amountCents, 0) - donations.filter((l) => l.credit === 'expense:giving').reduce((s, l) => s + l.amountCents, 0);
+    return { unitId, earned, donatedCents, lines };
   }
 
   /** Every account's balance. Debits and credits always net to zero. */
