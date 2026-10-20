@@ -1172,6 +1172,15 @@ update lottery_chances c set draw_key = c.draw_key || '#dup:' || c.id
 create unique index lottery_chances_draw_key on lottery_chances(company_id, draw_key);
 `,
   },
+  {
+    id: '045_fx3_unit_order_reprint',
+    sql: `
+-- One live bottle per order. A bottle let go because a restart cut off its print (failed, holds released) no longer
+-- holds its order id, so the same order can print anew; the failed bottle stays on record.
+drop index if exists units_order;
+create unique index units_order on units(company_id, order_id) where order_id is not null and status <> 'failed';
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

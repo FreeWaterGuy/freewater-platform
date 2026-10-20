@@ -241,7 +241,11 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const bottles = p.unitIds.map((id) => platform.units.get(id)).filter((u) => !!u);
     const donated = bottles.reduce((sum, u) => sum + platform.ledger.receipt(u!.id).donatedCents, 0);
     const advertisers = [...new Set([...p.faces.filter((f) => !f.isHouse).map((f) => f.advertiserName), ...bottles.flatMap((u) => u!.placements.filter((x) => !x.isHouse).map((x) => x.advertiserName))])];
-    return { body: { packId: p.id, company: company.name, size: p.box.bottles, bottles: bottles.map((u) => ({ unitId: u!.id, receiptUrl: `/r/${u!.id}`, ads: u!.placements.filter((x) => !x.isHouse).length })), faces: p.faces.map((f) => ({ face: f.face, advertiser: f.advertiserName, url: `/b/${p.id}/${f.face}`, isHouse: f.isHouse })), advertisers, donatedCents: donated, givingOn: company.giving.mode !== 'none' } };
+    return { body: { packId: p.id, company: company.name, size: p.box.bottles, bottles: bottles.map((u) => ({ unitId: u!.id, receiptUrl: `/r/${u!.id}`, ads: u!.placements.filter((x) => !x.isHouse).length })), faces: p.faces.map((f) => {
+      // A box side opened from this page gets its own token (rationed like a code open), so its scan can be billed.
+      const t = f.isHouse ? null : app.scanTokens.issue(targetKey({ kind: 'box-face', packId: p.id, face: f.face }), app.wallet.sourceOf(req.ip));
+      return { face: f.face, advertiser: f.advertiserName, url: `/b/${p.id}/${f.face}${t ? `?t=${t}` : ''}`, isHouse: f.isHouse };
+    }), advertisers, donatedCents: donated, givingOn: company.giving.mode !== 'none' }, headers: { 'cache-control': 'no-store' } };
   } });
 
   route({ method: 'GET', url: '/v1/public/companies/:companyId/totals', scope: 'public', summary: "A company's open-books totals.", handler: async (req) => {
@@ -295,20 +299,35 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     if (key!.advertiserId && placement.advertiserId !== key!.advertiserId) throw notFound('Slot');
     // Sales are kept per advertiser and order, the same key the conversions API uses, so one sale is billed once
     // whichever way it's reported, and two advertisers' "ORDER-1" never collide.
-    const orderKey = `${placement.advertiserId}:${b.orderId}`;
+    let orderKey = `${placement.advertiserId}:${b.orderId}`;
     if (refund) {
-      // Only a sale that was billed can be refunded, and only once (here or through /v1/conversions/:id/refund).
-      const sold = platform.ledger.sale(key!.companyId, placement.advertiserId, orderKey);
+      // Only a sale that was billed can be refunded, in one go or in parts, never past the sale (here or through
+      // /v1/conversions/:id/refund). Sales recorded before they were kept per advertiser are under the bare order id;
+      // the ledger keeps those per advertiser too, so the fallback only ever finds this advertiser's own sale.
+      let sold = platform.ledger.sale(key!.companyId, placement.advertiserId, orderKey);
+      if (!sold) { sold = platform.ledger.sale(key!.companyId, placement.advertiserId, b.orderId); if (sold) orderKey = b.orderId; }
       if (!sold) throw new ApiError(404, 'no_sale', `No billed sale with order ${b.orderId}.`);
       if (sold.refunded) throw new ApiError(409, 'already_refunded', `Order ${b.orderId} was already refunded.`);
+      if (b.amountCents <= 0) throw new ApiError(422, 'bad_amount', 'Send the amount refunded, in cents.');
+      // Asking for more than is left gives back only what's left.
+      const already = platform.ledger.refundedCents(key!.companyId, placement.advertiserId, orderKey) ?? 0;
+      // Each part of a refund is its own event. With a refundId, a retried request is recognised and counted once.
+      // Without one, the first part keeps the order's key (as a whole refund always did, and as the conversions API
+      // uses), and later parts are keyed by how much was refunded before them: two parts sent at once count once.
+      const unit = platform.units.get(b.unitId)!;
+      const before = platform.ledger.entries.length;
+      const idem = b.refundId ? `${orderKey}:refund:${b.refundId}` : already ? `${orderKey}:refund-after:${already}` : orderKey;
+      const e = platform.bus.publish('purchase.refunded', unit.companyId, { unitId: b.unitId, slotIndex: b.slot, orderId: orderKey, amountCents: b.amountCents }, idem);
+      return { status: 202, body: { recorded: !!e, ledgerLines: platform.ledger.entries.length - before, refundedCents: platform.ledger.refundedCents(key!.companyId, placement.advertiserId, orderKey) ?? 0, amountCents: sold.amountCents } };
     }
     const before = platform.ledger.entries.length;
-    const e = refund ? platform.refund(b.unitId, b.slot, orderKey, b.amountCents) : platform.purchase(b.unitId, b.slot, orderKey, b.amountCents);
+    const e = platform.purchase(b.unitId, b.slot, orderKey, b.amountCents);
     return { status: 202, body: { recorded: !!e, ledgerLines: platform.ledger.entries.length - before } };
   };
   const saleBody = obj({ unitId: S.str, slot: S.int, orderId: S.str, amountCents: S.int }, ['unitId', 'slot', 'orderId', 'amountCents']);
   route({ method: 'POST', url: '/v1/purchases', scope: 'purchases', summary: 'A sale made from a bottle. Commission is billed once per orderId.', body: saleBody, handler: sale(false) });
-  route({ method: 'POST', url: '/v1/refunds', scope: 'purchases', summary: 'A refund. The commission is given back.', body: saleBody, handler: sale(true) });
+  const refundBody = obj({ unitId: S.str, slot: S.int, orderId: S.str, amountCents: S.int, refundId: S.str }, ['unitId', 'slot', 'orderId', 'amountCents']);
+  route({ method: 'POST', url: '/v1/refunds', scope: 'purchases', summary: 'A refund, whole or in parts (send a refundId per part so a retry counts once). The commission is given back in proportion, until the whole sale is refunded.', body: refundBody, handler: sale(true) });
 
   // ---------- campaigns: advertisers and the company ----------
 

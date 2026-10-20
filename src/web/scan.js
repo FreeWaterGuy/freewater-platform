@@ -247,7 +247,7 @@
   }
   function sceneViewerIntent(model, buy) {
     const q = new URLSearchParams({ file: new URL(model.glbUrl, location.href).toString(), mode: 'ar_preferred', title: buy.title, link: withAttribution(buy.url, 'ar') });
-    return `intent://arvr.google.com/scene-viewer/1.0?${q.toString()}#Intent;scheme=https;package=com.google.android.googlequicksearchbox;action=android.intent.action.VIEW;S.browser_fallback_url=${encodeURIComponent(location.href)};end;`;
+    return `intent://arvr.google.com/scene-viewer/1.0?${q.toString()}#Intent;scheme=https;package=com.google.android.googlequicksearchbox;action=android.intent.action.VIEW;S.browser_fallback_url=${encodeURIComponent(location.origin + location.pathname)};end;`;
   }
 
   function modelStage(model, addOns, ctx, arLabel, buy) {

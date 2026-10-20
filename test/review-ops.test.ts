@@ -213,14 +213,16 @@ describe('packs on a route, night after night', () => {
     expect(p.status).toBe('sealed');
   });
 
-  it('8. a bottle restored half-done is not reported as printed', async () => {
+  it('8. a bottle restored half-done is not reported as printed: it is let go and the order prints anew', async () => {
     const s = setup();
     const done = await s.platform.order({ companyId: 'freewater', orderId: 'o-done', locationId: 'ATX-014', productId: bottle16oz.id });
     expect(done.ok).toBe(true);
     const u = { ...done.unit, id: 'u-half', orderId: 'o-half', status: 'rendered' as const };
     s.platform.restoreUnit(u, { ...s.platform.labels.get(done.unit.id)!, unitId: 'u-half' });
     const again = await s.platform.order({ companyId: 'freewater', orderId: 'o-half', locationId: 'ATX-014', productId: bottle16oz.id });
-    expect(again.ok).toBe(false);
+    expect(again.unit.id).not.toBe('u-half'); // never the half-done bottle reported as printed
+    expect(again.ok).toBe(true);
+    expect(s.platform.units.get('u-half')!.status).toBe('failed');
   });
 });
 

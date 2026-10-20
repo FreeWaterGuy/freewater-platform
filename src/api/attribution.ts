@@ -61,7 +61,9 @@ export function attributionRoutes(app: App, server: FastifyInstance, route: (r: 
     await app.persistence.flushUnlessPaused();
     const to = row.kind === 'slot' ? `/s/${row.unitId}/${row.slot}` : row.kind === 'receipt' ? `/r/${row.unitId}` : row.kind === 'box' ? `/b/${row.packId}/${row.face}` : `/p/${row.packId}`;
     // A bottle slot or box side: its page gets a one-time signed token, so the scan it reports can be billed.
-    const t = row.kind === 'slot' ? app.scanTokens.issue(`s:${row.unitId}:${row.slot}`) : row.kind === 'box' ? app.scanTokens.issue(`b:${row.packId}:${row.face}`) : null;
+    // Rationed per network (a fingerprint of it, never the address): reloading a code in a loop opens the page, unbilled.
+    const source = app.wallet.sourceOf(req.ip);
+    const t = row.kind === 'slot' ? app.scanTokens.issue(`s:${row.unitId}:${row.slot}`, source) : row.kind === 'box' ? app.scanTokens.issue(`b:${row.packId}:${row.face}`, source) : null;
     return reply.header('cache-control', 'no-store').redirect(`${to}?c=${row.code}${t ? `&t=${t}` : ''}`, 302);
   };
   server.get('/q/:code', openCode);

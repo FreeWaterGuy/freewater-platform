@@ -64,7 +64,10 @@ describe('FreeWater’s team page: bottles given outside the platform, receipts 
     expect(lines.find((l) => l.kind === 'print')!.amountCents).toBe(30_000);
     expect(lines.filter((l) => l.kind === 'donation').map((l) => l.amountCents).sort((a, z) => a - z)).toEqual([1000, 2000]); // 10¢ × 100, and 10% of the $200 above the base
     expect(lines.find((l) => l.kind === 'ai_fund')!.amountCents).toBe(2000);
-    expect(lines[0]!.at.toISOString().slice(0, 10)).toBe('2026-10-17'); // dated the day it was given
+    // Dated when it's recorded (a day already published is never rewritten); the day it was given stays in its data.
+    expect(lines[0]!.at.getTime()).toBe(app.platform.bus.now().getTime());
+    expect(b.date).toBe('2026-10-17');
+    expect(lines.every((l) => l.memo.includes('[given 2026-10-17]'))).toBe(true);
   });
 
   it('voids a mistake by reversing every line, and records an expense with its receipt', async () => {
