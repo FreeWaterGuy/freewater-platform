@@ -139,15 +139,16 @@ describe('review: data fixes', () => {
     expect(actor).toBe('e***@example.com');
   });
 
-  it('6. a phone joins an account only with proof: seen from this network, and never someone else’s', async () => {
+  it('6. a phone joins an account by holding its key: never someone else’s, never an unused key', async () => {
     const a = await signIn('owner-a@example.com');
     const b = await signIn('owner-b@example.com');
-    // Never seen: refused (a key copied out of a log or a link).
+    // Never used for anything: refused (a made-up key, or one probed for).
     expect((await call('POST', '/v1/me/link-device', a.token, { viewerKey: 'rd-never-seen-01' })).status).toBe(409);
-    // Seen from this network: joined.
+    // Used (it scanned a bottle): joined, from whatever network the sign-in comes from.
     await scan('rd-phone-of-a-01');
-    expect((await call('POST', '/v1/me/link-device', a.token, { viewerKey: 'rd-phone-of-a-01' })).body.person).toMatch(/^per_/);
-    // Someone else can't take it over, even from the same network; nor another account's own phone key.
+    const r = await server.inject({ method: 'POST', url: '/v1/me/link-device', payload: { viewerKey: 'rd-phone-of-a-01' }, headers: { authorization: `Bearer ${a.token}` }, remoteAddress: '198.51.100.77' });
+    expect(r.json().person).toMatch(/^per_/);
+    // Someone else can't take it over; nor another account's own phone key.
     expect((await call('POST', '/v1/me/link-device', b.token, { viewerKey: 'rd-phone-of-a-01' })).status).toBe(409);
     await scan(a.viewerKey);
     expect((await call('POST', '/v1/me/link-device', b.token, { viewerKey: a.viewerKey })).status).toBe(409);
