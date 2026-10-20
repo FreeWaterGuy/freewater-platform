@@ -9,7 +9,7 @@ import { ApiError, obj, S, type RouteDef } from './http';
  */
 export function consoleRoutes(app: App, route: (r: RouteDef) => void) {
   const { console: cons, webhooks } = app;
-  const staff = (key: ApiKey | null) => { if (!key || key.advertiserId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.'); return key; };
+  const staff = (key: ApiKey | null) => { if (!key || key.advertiserId || key.locationId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.'); return key; };
   const by = (key: ApiKey) => key.name;
   const changesProp = { type: 'object', additionalProperties: true, maxProperties: 20 };
 

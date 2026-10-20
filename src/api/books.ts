@@ -6,7 +6,7 @@ import { ApiError, obj, S, type RouteDef } from './http';
 /** The public open books, and the company's side of them: charities, transfers and costs. */
 export function booksRoutes(app: App, route: (r: RouteDef) => void) {
   const { books } = app;
-  const staff = (key: ApiKey | null) => { if (!key || key.advertiserId) throw new ApiError(403, 'missing_scope', 'Only the company’s finance team can do this.'); };
+  const staff = (key: ApiKey | null) => { if (!key || key.advertiserId || key.locationId) throw new ApiError(403, 'missing_scope', 'Only the company’s finance team can do this.'); };
   const base = (companyId: string) => app.platform.companies.get(companyId)!.receiptBaseUrl.replace(/\/$/, '');
 
   // ---------- public ----------

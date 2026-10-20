@@ -133,7 +133,7 @@ export function attributionRoutes(app: App, server: FastifyInstance, route: (r: 
 
   // ---------- the company's own view ----------
   route({ method: 'GET', url: '/v1/ops/attribution', scope: ['admin', 'ledger'], summary: 'Clicks, matched sales, commission and coupons across all advertisers, last 30 days.', handler: async (_req, key) => {
-    if (key!.advertiserId) throw new ApiError(403, 'missing_scope', 'Only the company’s team can see this.');
+    if (key!.advertiserId || key!.locationId) throw new ApiError(403, 'missing_scope', 'Only the company’s team can see this.');
     return { body: await attribution.summary(key!.companyId) };
   } });
 }

@@ -39,7 +39,9 @@ for (const [routeId, list] of Object.entries(streets)) {
 }
 await db.query(`update subscriptions set next_date = $1`, [today]);
 const runs = await app.delivery.planNight('freewater', today);
-await app.delivery.packCheck(runs.find((r) => r.routeId === 'route-5')!.id, 'freewater');
+const r5 = runs.find((r) => r.routeId === 'route-5')!;
+for (const s of r5.stops) app.packs.verify(s.packId!, [...app.packs.packs.get(s.packId!)!.unitIds]); // the packing line scans each box
+await app.delivery.packCheck(r5.id, 'freewater');
 const tito = await person('tito@tacos.example');
 await call('POST', '/v1/advertisers', tito, { businessName: "Tito's Tacos", category: 'food' });
 const d = await call('POST', '/v1/ads/drafts', tito, {});

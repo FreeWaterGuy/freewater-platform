@@ -158,6 +158,8 @@ export class Platform {
     const unit = need(this.units, unitId, 'unit');
     const label = this.labels.get(unitId);
     if (unit.status === 'failed' || !label) return { ok: false, unit, reason: 'Printing failed after retrying', attempts: this.maxAttempts };
+    // Not running here and never confirmed (cut off by a restart): it didn't print, so it isn't reported as done.
+    if (unit.status !== 'printed' && unit.status !== 'dispensed') return { ok: false, unit, reason: 'Printing didn’t finish', attempts: 0 };
     return { ok: true, unit, label, attempts: 0 };
   }
 
@@ -276,6 +278,15 @@ export class Platform {
   abandonPrepared(unitId: string, reason: string): boolean {
     const unit = need(this.units, unitId, 'unit');
     if (unit.status !== 'rendered') return false;
+    this.fail(unit, reason, unit.orderId);
+    return true;
+  }
+
+  /** A bottle whose print was cut off before it was confirmed (the platform restarted mid-job): failed, holds let go. */
+  abandonUnfinished(unitId: string, reason: string): boolean {
+    const unit = need(this.units, unitId, 'unit');
+    if (unit.status !== 'filled' && unit.status !== 'rendered') return false;
+    if (unit.orderId && this.orders.has(`${unit.companyId}:${unit.orderId}`)) return false; // still running here
     this.fail(unit, reason, unit.orderId);
     return true;
   }

@@ -7,7 +7,7 @@ export function teamRoutes(app: App, route: (r: RouteDef) => void) {
   const { team, distributions } = app;
   // FreeWater's own team (owners, operations, finance), never a licensee's.
   const TEAM: Scope[] = ['admin', 'orders', 'ledger'];
-  const fw = (key: ApiKey | null) => { if (!key || key.advertiserId || key.companyId !== (process.env.PLATFORM_COMPANY ?? 'freewater')) throw new ApiError(403, 'missing_scope', 'Only FreeWater’s own team can do this.'); return key.companyId; };
+  const fw = (key: ApiKey | null) => { if (!key || key.advertiserId || key.locationId || key.companyId !== (process.env.PLATFORM_COMPANY ?? 'freewater')) throw new ApiError(403, 'missing_scope', 'Only FreeWater’s own team can do this.'); return key.companyId; };
   const who = (key: ApiKey) => `${key.name ?? 'team'} (key ${key.id})`;
   const wrap = async <T>(f: () => Promise<T>) => { try { return await f(); } catch (e: any) { if (e?.status && e?.code) throw new ApiError(e.status, e.code, e.message); throw e; } };
   const fileProp = obj({ name: { type: 'string', maxLength: 200 }, contentType: { type: 'string', maxLength: 120 }, dataBase64: { type: 'string' } }, ['name', 'contentType', 'dataBase64']);

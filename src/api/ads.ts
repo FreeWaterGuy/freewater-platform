@@ -10,7 +10,7 @@ export function adsRoutes(app: App, route: (r: RouteDef) => void, h: { me: (key:
     return key.advertiserId;
   };
   const companyStaff = (key: ApiKey | null) => {
-    if (!key || key.advertiserId) throw new ApiError(403, 'missing_scope', 'Only the company’s team can review ads.');
+    if (!key || key.advertiserId || key.locationId) throw new ApiError(403, 'missing_scope', 'Only the company’s team can review ads.');
   };
   const attachment = { type: 'object', additionalProperties: false, properties: { dataUrl: { type: 'string', maxLength: 1_400_000, pattern: '^data:image/(png|jpeg|webp);base64,' }, name: { type: 'string', maxLength: 120 } }, required: ['dataUrl'] };
 

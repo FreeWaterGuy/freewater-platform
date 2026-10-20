@@ -9,7 +9,7 @@ export function chainRoutes(app: App, route: (r: RouteDef) => void) {
   const company = (req: { params: unknown }) => { const id = (req.params as any).companyId as string; if (!platform.companies.has(id)) throw new ApiError(404, 'not_found', 'No such company.'); return id; };
   /** Only a person (a signed-in team member), never a service key, can propose, approve or run these. */
   const person = (key: ApiKey | null) => {
-    if (!key || key.advertiserId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.');
+    if (!key || key.advertiserId || key.locationId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.');
     if (!key.userId) throw new ApiError(403, 'person_needed', 'This needs a person signed in, not a service key.');
     return `user:${key.userId}`;
   };

@@ -1162,6 +1162,16 @@ update chain_actions set signing_at = now() where status = 'signing';
 create table wallet_giftcards (company_id text not null, ref text not null, subject text not null, entry text not null, product text not null, cents bigint not null, status text not null, provider_ref text, error text, at timestamptz not null, primary key (company_id, ref));
 `,
   },
+  {
+    id: '043_lottery_draw_key_unique',
+    sql: `
+-- Each draw key is drawn once: two chances at the same moment can't both use it (and both slip under winsPerDay).
+-- Any duplicates written before this (only that race made them) keep their first row's key; later ones are marked.
+update lottery_chances c set draw_key = c.draw_key || '#dup:' || c.id
+  where exists (select 1 from lottery_chances o where o.company_id = c.company_id and o.draw_key = c.draw_key and (o.created_at, o.id) < (c.created_at, c.id));
+create unique index lottery_chances_draw_key on lottery_chances(company_id, draw_key);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

@@ -19,7 +19,7 @@ import { ApiError, notFound, obj, S, type RouteDef } from './http';
  */
 export function codesArRoutes(app: App, server: FastifyInstance, route: (r: RouteDef) => void) {
   const { platform, experiences, handoff } = app;
-  const staff = (key: ApiKey | null) => { if (!key || key.advertiserId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.'); return key; };
+  const staff = (key: ApiKey | null) => { if (!key || key.advertiserId || key.locationId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.'); return key; };
   const campaignFor = (key: ApiKey, id: string): Campaign => {
     const c = platform.campaigns.get(id);
     if (!c || c.companyId !== key.companyId || (key.advertiserId && c.advertiserId !== key.advertiserId)) throw notFound('Campaign');

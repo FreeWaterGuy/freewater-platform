@@ -8,13 +8,14 @@ export function walletRoutes(app: App, route: (r: RouteDef) => void) {
   const viewerKey = { type: 'string', pattern: '^[A-Za-z0-9_-]{8,64}$' };
   const wrap = async <T>(f: () => Promise<T>) => { try { return await f(); } catch (e: any) { if (e?.status && e?.code) throw new ApiError(e.status, e.code, e.message); throw e; } };
   const company = (id: string) => { if (!platform.companies.has(id)) throw new ApiError(404, 'not_found', 'No such company.'); return id; };
-  const staff = (key: ApiKey | null) => { if (!key || key.advertiserId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.'); return key; };
+  const staff = (key: ApiKey | null) => { if (!key || key.advertiserId || key.locationId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.'); return key; };
   /** Money and corrections need a person signed in, never a service key. */
   const person = (key: ApiKey | null) => {
     staff(key);
     if (!key!.userId) throw new ApiError(403, 'person_needed', 'This needs a person signed in, not a service key.');
     return `user:${key!.userId}`;
   };
+  const who = (key: ApiKey) => `${key.name ?? 'team'} (key ${key.id})`;
 
   route({ method: 'GET', url: '/v1/public/wallet/:companyId', scope: 'public', summary: 'This phone’s wallet: points, dollar credit, history and coupons. Send ?viewer=.', handler: async (req) => {
     const v = String((req.query as any).viewer ?? '');

@@ -28,6 +28,7 @@ import { VideoError } from '../modules/video/service';
 import { DataError, DataService } from '../modules/data/service';
 import { NumberLineError } from '../modules/numberline/service';
 import { LotteryError } from '../modules/lottery/service';
+import { PackStateError } from '../modules/packs/service';
 import { AttributionError } from '../modules/attribution/service';
 import { FleetError } from '../modules/fleet/service';
 import { WebhookError } from '../modules/webhooks/service';
@@ -72,6 +73,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   const unitFor = (key: ApiKey, id: string) => {
     const u = platform.units.get(id);
     if (!u || u.companyId !== key.companyId) throw notFound('Bottle');
+    if (key.locationId && u.locationId !== key.locationId) throw notFound('Bottle'); // a machine's key sees only its own bottles
     return u;
   };
   const packFor = (key: ApiKey, id: string) => {
@@ -415,13 +417,14 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   route({ method: 'POST', url: '/v1/packs/:id/verify', scope: 'packs', summary: 'The packing line reports every bottle it scanned. Returns what is missing or does not belong.', body: obj({ scannedUnitIds: { type: 'array', items: S.str, maxItems: 48 } }, ['scannedUnitIds']), handler: async (req, key) => {
     const p = packFor(key!, (req.params as any).id);
-    return { body: packs.verify(p.id, (req.body as any).scannedUnitIds) };
+    try { return { body: packs.verify(p.id, (req.body as any).scannedUnitIds) }; } catch (e: any) { if (e instanceof PackStateError) throw new ApiError(409, 'wrong_stage', e.message); throw e; }
   } });
 
   route({ method: 'POST', url: '/v1/packs/:id/replace', scope: 'packs', summary: 'Reprint missing bottles; the new ones take their place in the pack.', body: obj({ missingUnitIds: { type: 'array', items: S.str, maxItems: 48 }, productId: S.str }, ['missingUnitIds', 'productId']), handler: async (req, key) => {
     const p = packFor(key!, (req.params as any).id);
     const b = req.body as any;
-    const fresh = await packs.replace(p.id, b.missingUnitIds, b.productId);
+    let fresh: string[];
+    try { fresh = await packs.replace(p.id, b.missingUnitIds, b.productId); } catch (e: any) { if (e instanceof PackStateError) throw new ApiError(409, 'wrong_stage', e.message); throw e; }
     return { body: { reprinted: fresh, pack: packView(p.id) } };
   } });
 
@@ -431,16 +434,18 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     return { body: packView(p.id) };
   } });
 
-  route({ method: 'POST', url: '/v1/routes/:routeId/load', scope: 'packs', summary: 'Load a van: returns the order to put packs in, last stop first.', handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/routes/:routeId/load', scope: 'packs', summary: 'Load a van: returns the order to put packs in, last stop first. Pass ?runId= for a night’s run; without it, the route’s current run. Delivered and returned packs are never loaded again.', handler: async (req, key) => {
     const routeId = (req.params as any).routeId;
+    const runId = (req.query as any)?.runId ?? (req.body as any)?.runId;
     const mine = [...packs.packs.values()].some((p) => p.routeId === routeId && p.companyId === key!.companyId);
     if (!mine) throw notFound('Route');
-    try { return { body: packs.load(routeId).map((p) => packView(p.id)) }; } catch (e: any) { throw new ApiError(409, 'not_sealed', e.message); }
+    try { return { body: packs.load(routeId, typeof runId === 'string' && runId ? runId : undefined).map((p) => packView(p.id)) }; } catch (e: any) { throw new ApiError(409, 'not_sealed', e.message); }
   } });
 
-  route({ method: 'POST', url: '/v1/deliveries', scope: 'packs', summary: 'The driver scans a box at a door. Delivered only if it is the right box at the right address.', body: obj({ routeId: S.str, stop: S.int, scannedPackId: S.str, atAddress: S.bool, photoProof: S.bool, emptiesCollected: S.int }, ['routeId', 'stop', 'scannedPackId', 'atAddress', 'photoProof', 'emptiesCollected']), handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/deliveries', scope: 'packs', summary: 'The driver scans a box at a door. Delivered only if it is the right box at the right address. Pass runId for a night’s run; without it, the route’s current run.', body: obj({ routeId: S.str, runId: S.str, stop: S.int, scannedPackId: S.str, atAddress: S.bool, photoProof: S.bool, emptiesCollected: S.int }, ['routeId', 'stop', 'scannedPackId', 'atAddress', 'photoProof', 'emptiesCollected']), handler: async (req, key) => {
     const b = req.body as any;
-    const planned = [...packs.packs.values()].find((p) => p.routeId === b.routeId && p.stop === b.stop);
+    const run = b.runId ?? packs.currentRun(b.routeId);
+    const planned = [...packs.packs.values()].find((p) => p.routeId === b.routeId && p.stop === b.stop && (p.runId ?? '') === run);
     if (!planned || planned.companyId !== key!.companyId) throw notFound('Stop');
     const r = packs.deliver(b);
     if (!r.ok) return { status: 409, body: { error: { code: 'wrong_box', message: r.reason }, grab: r.rightPack ? { packId: r.rightPack.id, stopCode: `R${r.rightPack.routeId.replace(/^route-/, '')} · ${r.rightPack.stop}` } : null } };
@@ -575,7 +580,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   } });
 
   route({ method: 'POST', url: '/v1/team', scope: 'admin', summary: 'Add a team member or advertiser staff. They sign in with a code sent to their email.', body: obj({ email: S.str, role: { type: 'string', enum: ['owner', 'ops', 'finance', 'reviewer', 'driver', 'advertiser'] }, advertiserId: S.str, displayName: S.str }, ['email', 'role']), handler: async (req, key) => {
-    if (key!.advertiserId) throw new ApiError(403, 'missing_scope', 'Advertisers cannot add team members.');
+    if (key!.advertiserId || key!.locationId) throw new ApiError(403, 'missing_scope', 'Advertisers cannot add team members.');
     return { status: 201, body: await app.accounts.invite({ companyId: key!.companyId, ...(req.body as any), by: key!.userId }) };
   } });
 
@@ -599,7 +604,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   } });
 
   route({ method: 'POST', url: '/v1/invoices/run', scope: 'invoices', summary: 'Invoice every advertiser for everything billed since their last invoice. Saved cards are charged; others stay open.', body: obj({ periodEnd: { type: 'string', format: 'date-time' } }), handler: async (req, key) => {
-    if (key!.advertiserId) throw new ApiError(403, 'missing_scope', 'Only the company runs invoices.');
+    if (key!.advertiserId || key!.locationId) throw new ApiError(403, 'missing_scope', 'Only the company runs invoices.');
     const end = (req.body as any)?.periodEnd ? new Date((req.body as any).periodEnd) : platform.bus.now();
     return { body: await app.payments.runInvoices(key!.companyId, end) };
   } });
@@ -643,13 +648,13 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   operationsRoutes(app, server, route);
   route({ method: 'GET', url: '/v1/security/events', scope: 'admin', summary: 'The security log: sign-ins, failed sign-ins, keys made and revoked, team changes, settings saved, callers blocked. Addresses are shortened.', handler: async (_req, key) => {
-    if (key!.advertiserId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can see this.');
+    if (key!.advertiserId || key!.locationId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can see this.');
     const events = await securityLog.list(key!.companyId, { platform: key!.scopes.includes('platform') });
     const proposals = (await app.agents.proposals(key!.companyId, 200)).filter((p) => p.agentId === 'security');
     return { body: { events, proposals, limits } };
   } });
   route({ method: 'POST', url: '/v1/security/review', scope: 'admin', summary: 'Have the security agent review things now (it also does every hour, in the background).', handler: async (_req, key) => {
-    if (key!.advertiserId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.');
+    if (key!.advertiserId || key!.locationId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.');
     await securityLog.idle();
     return { body: await app.agents.securityReview(key!.companyId) };
   } });
