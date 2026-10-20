@@ -252,7 +252,7 @@ describe('alerts and settings', () => {
   });
   it('refuses to start in production with unsafe or missing settings, and explains each', () => {
     const bad = checkConfig({ NODE_ENV: 'production', SEED_DEMO: '1', PUBLIC_URL: 'http://freewater.io' } as any);
-    const secrets = Object.fromEntries(['CODES', 'SECOND_STEP', 'LINKS', 'WALLET'].map((k) => [`FW_SECRET_${k}`, `hex:${'ab'.repeat(32)}`]));
+    const secrets = Object.fromEntries(['CODES', 'SECOND_STEP', 'LINKS', 'WALLET', 'VIEWER_TAGS'].map((k) => [`FW_SECRET_${k}`, `hex:${'ab'.repeat(32)}`]));
     expect(bad.errors.join('\n')).toMatch(/DATABASE_URL/);
     expect(bad.errors.join('\n')).toMatch(/PUBLIC_URL/);
     expect(bad.errors.join('\n')).toMatch(/SEED_DEMO/);

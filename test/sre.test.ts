@@ -10,6 +10,7 @@ import type { SqlClient } from '../src/db/client';
 import { migrate, migrations } from '../src/db/migrations';
 import { SqlPersistence } from '../src/db/store';
 import { checkConfig, trustProxyFrom } from '../src/runtime/config';
+import { secretEnvName, secretNames } from '../src/modules/codes/service';
 import { networkOf, UploadQuota } from '../src/runtime/uploads';
 import { checkCapacity } from '../src/runtime/capacity';
 import type { Severity } from '../src/runtime/alerts';
@@ -59,7 +60,9 @@ describe('R2: TRUST_PROXY believes only the load balancer, never what the visito
   });
 
   it('production refuses a TRUST_PROXY that trusts every hop, and accepts a hop count', () => {
-    const base = { NODE_ENV: 'production', DATABASE_URL: 'postgres://u:p@db.example.com/fw?sslmode=require', PUBLIC_URL: 'https://freewater.io', HOST: '0.0.0.0', ALERT_WEBHOOK_URL: 'https://hooks.example.com/x', FILE_STORAGE: 's3', S3_BUCKET: 'b', S3_ACCESS_KEY_ID: 'k', S3_SECRET_ACCESS_KEY: 's' };
+    // Production also needs the internal secrets in the host settings (database engineer); set, so only TRUST_PROXY is judged here.
+    const secrets = Object.fromEntries(secretNames.map((n) => [secretEnvName(n), `hex:${'ab'.repeat(32)}`]));
+    const base = { NODE_ENV: 'production', DATABASE_URL: 'postgres://u:p@db.example.com/fw?sslmode=require', PUBLIC_URL: 'https://freewater.io', HOST: '0.0.0.0', ALERT_WEBHOOK_URL: 'https://hooks.example.com/x', FILE_STORAGE: 's3', S3_BUCKET: 'b', S3_ACCESS_KEY_ID: 'k', S3_SECRET_ACCESS_KEY: 's', ...secrets };
     expect(checkConfig({ ...base, TRUST_PROXY: 'true' } as any).errors.join('\n')).toMatch(/every hop/);
     expect(checkConfig({ ...base, TRUST_PROXY: '0.0.0.0/0' } as any).errors.join('\n')).toMatch(/TRUST_PROXY/);
     expect(checkConfig({ ...base, TRUST_PROXY: '1' } as any).errors).toEqual([]);

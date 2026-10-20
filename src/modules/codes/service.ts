@@ -48,7 +48,7 @@ export function scanBase(company: CompanyConfig) {
 }
 
 /** The internal secrets, each from the host's settings as FW_SECRET_<NAME> (e.g. FW_SECRET_SECOND_STEP). */
-export const secretNames = ['codes', 'second-step', 'links', 'wallet'] as const;
+export const secretNames = ['codes', 'second-step', 'links', 'wallet', 'viewer_tags'] as const;
 export const secretEnvName = (name: string) => `FW_SECRET_${name.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
 
 /**

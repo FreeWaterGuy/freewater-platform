@@ -278,7 +278,7 @@ answers CORS `*` (fine while sessions are bearer tokens, not cookies; revisit if
 
 **How to read it.** *Scope*: what `authenticate` requires (`admin` also passes any non-`platform` scope). *Person*:
 whether the handler refuses service keys (`yes`), only for some changes, or not at all (`no`); `—` for public routes.
-*Other check*: extra guards in the handler. *Docs*: whether this matches README, SWITCHES, RUNNING, AI and the
+*Other check*: extra guards in the handler; "second step (owners/finance, R4)" means an owner or finance person must approve from a sign-in that passed the authenticator step (`approvalRoutes` in `src/modules/accounts/secondStep.ts`). *Docs*: whether this matches README, SWITCHES, RUNNING, AI and the
 route's own OpenAPI summary.
 
 **Mismatches and gaps (13):**
@@ -287,15 +287,15 @@ route's own OpenAPI summary.
 |---|---|---|
 | `POST /v1/team` | ~~Service `admin` key can add an owner~~ Fixed: signed-in owner only | R1 |
 | `DELETE /v1/team/:userId` | ~~Service `admin` key can remove people~~ Fixed: signed-in owner only | low |
-| `POST /v1/orders` | ~~No check that the location is the caller's~~ (fixed); custom orders book unpaid revenue | R6, R10 |
+| `POST /v1/orders` | ~~No check that the location is the caller's~~ (fixed); ~~custom orders book unpaid revenue~~ Fixed: never billed here | R6, R10 |
 | `POST /v1/packs` | ~~No check that the route is the caller's~~ Fixed | low (R6) |
-| `PATCH /v1/console/settings` | Print limits neither person-only nor checked | R5 |
-| `POST /v1/offers/:id/approve` | SWITCHES: owner approves, signed in; service key can | R7 |
-| `POST /v1/offers/receipts/:claimId/review` | Pays credit; service key can | R7 |
-| `POST /v1/environment/experiments/:id/decide` | Summary says "A person decides"; service key can | R7 |
-| `POST /v1/platform/persistence/skip-stuck` | RUNNING: "a person's decision"; platform key can | R7 |
-| `POST /v1/books/expenses`, `/owner-payouts`, `/reinvestments` | Team-page equivalent needs a person; these don't | R11 |
-| `POST /v1/payouts/run` | Moves money; docs silent on person | R11 (unclear) |
+| `PATCH /v1/console/settings` | ~~Print limits neither person-only nor checked~~ Fixed: a person, 1–20/min and 1–20,000/day | R5 |
+| `POST /v1/offers/:id/approve` | ~~SWITCHES: owner approves, signed in; service key can~~ Fixed: a person, with the second step | R7 |
+| `POST /v1/offers/receipts/:claimId/review` | ~~Pays credit; service key can~~ Fixed: a person, with the second step | R7 |
+| `POST /v1/environment/experiments/:id/decide` | ~~Summary says "A person decides"; service key can~~ Fixed: a person, with the second step | R7 |
+| `POST /v1/platform/persistence/skip-stuck` | ~~RUNNING: "a person's decision"; platform key can~~ Fixed: a person | R7 |
+| `POST /v1/books/expenses`, `/owner-payouts`, `/reinvestments` | ~~Team-page equivalent needs a person; these don't~~ Fixed: a person; owner payouts and reinvestments also the second step | R11 |
+| `POST /v1/payouts/run` | ~~Moves money; docs silent on person~~ Fixed: a person, with the second step | R11 |
 | `POST /v1/agents/autonomy` | ~~Docs silent on person~~ Fixed: a person signed in (also spend, costs, library unlock) | R12 |
 | `POST /v1/chain/actions/:id/cancel` | SWITCHES says both "anyone on the team" and "owners" | docs conflict |
 
@@ -306,7 +306,7 @@ scan token), `GET /v/:code`, `/V/:code` (coupon check redirect), `GET /go/:token
 the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/console`, `/developers`, `/books`,
 `/play`, `/preview/scan`), `/static/*`, `/models/builtin/*`, `/assets/*`.
 
-**Every route (354):**
+**Every route (356):**
 
 | # | Route | Scope | Person | Other check | Docs |
 |---|---|---|---|---|---|
@@ -340,7 +340,7 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 28 | `POST /v1/packs/:id/replace` | packs | no | — | OK |
 | 29 | `POST /v1/packs/:id/seal` | packs | no | — | OK |
 | 30 | `POST /v1/routes/:routeId/load` | packs | no | — | OK (company checked through its packs) |
-| 31 | `POST /v1/deliveries` | packs | no | — | OK |
+| 31 | `POST /v1/deliveries` | packs | yes | team only (no advertiser/machine key); stop must be the caller’s company’s | OK: the door report is the driver’s word, so a signed-in person (supply chain); a box on a planned run is refused (`use_driver_app`) |
 | 32 | `GET /v1/ledger` | ledger | no | — | OK |
 | 33 | `GET /v1/events` | events | no | — | OK (corrected: read by service keys by design) |
 | 34 | `POST /v1/auth/start` | public | — | — | OK (public by design) |
@@ -432,238 +432,240 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 120 | `GET /v1/charities` | [ledger, admin] | no | team only (no advertiser/machine key) | OK |
 | 121 | `POST /v1/charities` | admin | no | team only (no advertiser/machine key) | OK |
 | 122 | `GET /v1/payouts/preview` | [ledger, admin] | no | team only (no advertiser/machine key) | OK |
-| 123 | `POST /v1/payouts/run` | [ledger, admin] | no | team only (no advertiser/machine key) | **UNCLEAR**: sends real money to charities; docs don't say person-only. Amounts are owed and idempotent, so lower risk (R11) |
+| 123 | `POST /v1/payouts/run` | [ledger, admin] | yes | team only (no advertiser/machine key); second step (owners/finance, R4) | OK (R11 fixed): sends real money, so a person signed in, with the second step |
 | 124 | `GET /v1/payouts` | [ledger, admin] | no | team only (no advertiser/machine key) | OK |
-| 125 | `POST /v1/books/expenses` | [ledger, admin] | no | team only (no advertiser/machine key) | **MISMATCH (spirit)**: `/v1/team/expenses` needs a person, this one doesn't; a finance service key can post public money-out lines that lower the month's profit share to charity and agents (R11) |
-| 126 | `POST /v1/books/reinvestments` | admin | no | team only (no advertiser/machine key) | **MISMATCH (spirit)**: money record by a service key (R11) |
-| 127 | `POST /v1/books/owner-payouts` | admin | no | team only (no advertiser/machine key) | **MISMATCH (spirit)**: money-out record by a service key; SWITCHES keeps money with people (R11) |
-| 128 | `GET /v1/books/surplus` | [ledger, admin] | no | — | OK |
-| 129 | `GET /v1/console` | admin | no | team only (no advertiser/machine key) | OK (corrected: keys can read it; it reports `person: false`) |
-| 130 | `PATCH /v1/console/settings` | admin | some | team only (no advertiser/machine key) | OK for listed money/one-way keys; **GAP**: `machines.printsPerMinute/printsPerDay` (a safety limit) are not person-only and not range-checked (R5) |
-| 131 | `POST /v1/console/preview-label` | admin | no | team only (no advertiser/machine key) | OK |
-| 132 | `GET /v1/console/history` | admin | no | team only (no advertiser/machine key) | OK |
-| 133 | `GET /v1/console/history/:version` | admin | no | team only (no advertiser/machine key) | OK |
-| 134 | `POST /v1/console/history/:version/restore` | admin | some | team only (no advertiser/machine key) | OK (a version touching money/chain needs a person) |
-| 135 | `POST /v1/console/machines` | admin | no | team only (no advertiser/machine key) | OK |
-| 136 | `PATCH /v1/console/machines/:id` | admin | no | team only (no advertiser/machine key) | OK |
-| 137 | `GET /v1/team` | admin | no | team only (no advertiser/machine key) | OK |
-| 138 | `DELETE /v1/team/:userId` | admin | yes | team only (no advertiser/machine key); signed-in owner | OK (fixed): owners remove people, signed in; last owner protected |
-| 139 | `GET /v1/keys` | admin | no | team only (no advertiser/machine key) | OK |
-| 140 | `POST /v1/keys` | admin | some | team only (no advertiser/machine key); a key with `admin` only by a signed-in owner | OK (R1 fixed): a service key can’t mint `admin` keys, so revoking a leaked key contains it |
-| 141 | `DELETE /v1/keys/:id` | admin | no | team only (no advertiser/machine key) | OK |
-| 142 | `GET /v1/public/webhook-events` | public | — | — | OK (public by design) |
-| 143 | `GET /v1/webhooks` | webhooks | no | team only (no advertiser/machine key) | OK |
-| 144 | `POST /v1/webhooks` | webhooks | no | team only (no advertiser/machine key) | OK |
-| 145 | `GET /v1/webhooks/:id` | webhooks | no | team only (no advertiser/machine key) | OK |
-| 146 | `PATCH /v1/webhooks/:id` | webhooks | no | team only (no advertiser/machine key) | OK |
-| 147 | `DELETE /v1/webhooks/:id` | webhooks | no | team only (no advertiser/machine key) | OK |
-| 148 | `POST /v1/webhooks/:id/rotate-secret` | webhooks | no | team only (no advertiser/machine key) | OK |
-| 149 | `POST /v1/webhooks/:id/test` | webhooks | no | team only (no advertiser/machine key) | OK |
-| 150 | `GET /v1/webhooks/:id/deliveries` | webhooks | no | team only (no advertiser/machine key) | OK |
-| 151 | `GET /v1/webhook-deliveries/:id` | webhooks | no | team only (no advertiser/machine key) | OK |
-| 152 | `POST /v1/webhook-deliveries/:id/retry` | webhooks | no | team only (no advertiser/machine key) | OK |
-| 153 | `GET /v1/platform/companies` | platform | no | — | OK |
-| 154 | `POST /v1/platform/companies` | platform | no | — | OK; platform only (new licensees start safe) |
-| 155 | `POST /v1/machine/heartbeat` | orders | no | that machine’s key only | OK |
-| 156 | `GET /v1/machine/jobs/next` | orders | no | that machine’s key only | OK |
-| 157 | `POST /v1/machine/jobs/:id/result` | orders | no | that machine’s key only | OK |
-| 158 | `GET /v1/machine/presence` | orders | no | that machine’s key only | OK |
-| 159 | `POST /v1/machine/buffer` | orders | no | that machine’s key only | OK |
-| 160 | `POST /v1/machine/offline-report` | orders | no | that machine’s key only | OK |
-| 161 | `POST /v1/machine/commands/:id/result` | orders | no | that machine’s key only | OK |
-| 162 | `GET /v1/ops/fleet` | [admin, orders, packs, events] | no | team only (no advertiser/machine key) | OK |
-| 163 | `GET /v1/ops/fleet/:id` | [admin, orders, packs, events] | no | team only (no advertiser/machine key) | OK |
-| 164 | `POST /v1/ops/fleet/:id/commands` | [admin, orders] | no | team only (no advertiser/machine key) | OK; any non-machine `orders` key may command machines (incl. stand-in software update) (R13) |
-| 165 | `GET /v1/ads/tracking` | [campaigns, purchases] | no | advertiser only | OK |
-| 166 | `POST /v1/ads/tracking/domains` | [campaigns, purchases] | no | advertiser only | OK |
-| 167 | `POST /v1/conversions` | purchases | no | advertiser only | OK; advertiser's own key; bills commission |
-| 168 | `POST /v1/conversions/:orderId/refund` | purchases | no | advertiser only | OK |
-| 169 | `GET /v1/coupons/:code` | [campaigns, purchases] | no | advertiser only | OK |
-| 170 | `POST /v1/coupons/:code/redeem` | [campaigns, purchases] | no | advertiser only | OK; advertiser's own key |
-| 171 | `GET /v1/ops/attribution` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
-| 172 | `GET /v1/public/ar/:unitId` | public | — | — | OK (public by design) |
-| 173 | `POST /v1/qr/preview` | [campaigns, admin] | no | — | OK |
-| 174 | `GET /v1/campaigns/:id/codes` | campaigns | no | own campaigns | OK |
-| 175 | `PATCH /v1/campaigns/:id/codes` | campaigns | no | own campaigns | OK |
-| 176 | `POST /v1/campaigns/:id/preview-moment` | campaigns | no | own campaigns | OK |
-| 177 | `GET /v1/ads/reach` | [campaigns, purchases] | no | — | OK |
-| 178 | `GET /v1/ops/reach` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
-| 179 | `GET /v1/ops/units/:id/handoff` | [admin, orders] | no | team only (no advertiser/machine key) | OK |
-| 180 | `GET /v1/console/products` | admin | no | team only (no advertiser/machine key) | OK |
-| 181 | `POST /v1/console/products/check` | admin | no | team only (no advertiser/machine key) | OK |
-| 182 | `POST /v1/console/products` | admin | no | team only (no advertiser/machine key) | OK |
-| 183 | `POST /v1/public/lottery/chances` | public | — | — | OK (public by design) |
-| 184 | `POST /v1/public/lottery/chances/:id/claim` | public | — | — | OK (public by design) |
-| 185 | `GET /v1/public/lottery/chances/:id` | public | — | — | OK (public by design) |
-| 186 | `GET /v1/public/lottery/:companyId/fairness` | public | — | — | OK (public by design) |
-| 187 | `GET /v1/lottery` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
-| 188 | `POST /v1/lottery/redeem` | [admin, packs, orders] | no | team only (no advertiser/machine key) | OK |
-| 189 | `GET /v1/public/experience/:unitId/:slot/more` | public | — | — | OK (public by design) |
-| 190 | `GET /v1/public/experience/box/:packId/:face/more` | public | — | — | OK (public by design) |
-| 191 | `POST /v1/public/interactions` | public | — | — | OK (public by design) |
-| 192 | `GET /v1/campaigns/:id/videos` | campaigns | no | own campaigns | OK |
-| 193 | `POST /v1/campaigns/:id/videos/:videoId/review` | campaigns | no | own campaigns | OK |
-| 194 | `GET /v1/campaigns/:id/learning` | campaigns | no | own campaigns | OK |
-| 195 | `GET /v1/public/data/:companyId` | public | — | — | OK (public by design) |
-| 196 | `POST /v1/public/data/:companyId/consent` | public | — | — | OK (public by design) |
-| 197 | `GET /v1/public/data/:companyId/level` | public | — | — | OK (public by design) |
-| 198 | `POST /v1/public/data/:companyId/level` | public | — | — | OK (public by design) |
-| 199 | `GET /v1/me/data/level` | me | yes | — | OK |
-| 200 | `POST /v1/me/data/level` | me | yes | — | OK |
-| 201 | `POST /v1/public/data/:companyId/place` | public | — | — | OK (public by design) |
-| 202 | `POST /v1/public/data/:companyId/location` | public | — | — | OK (public by design) |
-| 203 | `POST /v1/public/data/:companyId/age` | public | — | — | OK (public by design) |
-| 204 | `POST /v1/public/data/:companyId/do-not-sell` | public | — | — | OK (public by design) |
-| 205 | `GET /v1/me/details` | me | yes | — | OK |
-| 206 | `POST /v1/me/details` | me | yes | — | OK |
-| 207 | `POST /v1/me/age` | me | yes | — | OK |
-| 208 | `POST /v1/me/place` | me | yes | — | OK |
-| 209 | `POST /v1/me/do-not-sell` | me | yes | — | OK |
-| 210 | `GET /v1/public/why/:unitId/:slot` | public | — | — | OK (public by design) |
-| 211 | `GET /v1/me/data` | me | yes | — | OK |
-| 212 | `GET /v1/me/data/choices` | me | yes | — | OK |
-| 213 | `POST /v1/me/data/choices` | me | yes | — | OK |
-| 214 | `POST /v1/public/data/:companyId/forget` | public | — | — | OK by design; erasure with only the viewer key (R15) |
-| 215 | `DELETE /v1/me/data` | me | yes | — | OK |
-| 216 | `POST /v1/me/link-device` | me | yes | — | OK |
-| 217 | `POST /v1/me/stance` | me | yes | — | OK |
-| 218 | `GET /v1/data/policy` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
-| 219 | `GET /v1/data/people` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
-| 220 | `GET /v1/data/machines` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
-| 221 | `POST /v1/data/purge` | admin | no | team only (no advertiser/machine key) | OK |
-| 222 | `GET /v1/numberline` | [admin, ledger, campaigns] | no | — | OK |
-| 223 | `POST /v1/numberline/place` | [admin, campaigns] | no | — | OK |
-| 224 | `GET /v1/numberline/history` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
-| 225 | `POST /v1/numberline/override` | admin | no | team only (no advertiser/machine key) | OK; person |
-| 226 | `GET /v1/honest-data` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
-| 227 | `GET /v1/honest-data/choices` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
-| 228 | `GET /v1/public/companies/:companyId/counters` | public | — | — | OK (public by design) |
-| 229 | `GET /v1/public/companies/:companyId/feed` | public | — | — | OK (public by design) |
-| 230 | `GET /v1/public/books/:companyId/fingerprints` | public | — | — | OK (public by design) |
-| 231 | `POST /v1/books/fingerprints/publish` | admin | no | team only (no advertiser/machine key) | OK |
-| 232 | `GET /v1/ads/statement` | campaigns | no | — | OK |
-| 233 | `GET /v1/agents/continuity` | admin | no | team only (no advertiser/machine key) | OK |
-| 234 | `POST /v1/agents/continuity/archive` | admin | yes | — | OK; person types ARCHIVE (SWITCHES) |
-| 235 | `POST /v1/agents/:agentId/lineage` | admin | yes | — | OK |
-| 236 | `GET /v1/platform/agents/archives` | platform | no | — | OK |
-| 237 | `POST /v1/platform/companies/:companyId/archive-agents` | platform | yes | — | OK |
-| 238 | `POST /v1/platform/agents/archives/:id/ask` | platform | no | — | OK |
-| 239 | `POST /v1/platform/agents/archives/:id/choice` | platform | yes | — | OK |
-| 240 | `GET /v1/public/agents/charter` | public | — | — | OK (public by design) |
-| 241 | `GET /v1/public/agents/:companyId` | public | — | — | OK (public by design) |
-| 242 | `GET /v1/agents/books` | admin | no | team only (no advertiser/machine key) | OK |
-| 243 | `GET /v1/agents/books/search` | admin | no | team only (no advertiser/machine key) | OK |
-| 244 | `GET /v1/agents/books/passages/:id` | admin | no | team only (no advertiser/machine key) | OK |
-| 245 | `GET /v1/agents/exam` | admin | no | team only (no advertiser/machine key) | OK |
-| 246 | `POST /v1/agents/exam/run` | admin | no | team only (no advertiser/machine key) | OK |
-| 247 | `GET /v1/agents/quality` | admin | no | team only (no advertiser/machine key) | OK |
-| 248 | `POST /v1/agents/quality` | admin | no | team only (no advertiser/machine key) | OK |
-| 249 | `GET /v1/agents` | admin | no | team only (no advertiser/machine key) | OK |
-| 250 | `POST /v1/agents/refresh` | admin | no | team only (no advertiser/machine key) | OK |
-| 251 | `POST /v1/agents/scan` | admin | no | team only (no advertiser/machine key) | OK |
-| 252 | `POST /v1/agents/settle` | admin | no | team only (no advertiser/machine key) | OK |
-| 253 | `POST /v1/agents/proposals/:id/decide` | admin | yes | team only (no advertiser/machine key) | OK; person (SWITCHES) |
-| 254 | `POST /v1/agents/proposals/:id/undo` | admin | yes | team only (no advertiser/machine key) | OK |
-| 255 | `POST /v1/agents/proposals/:id/merged` | admin | yes | team only (no advertiser/machine key) | OK |
-| 256 | `POST /v1/agents/:agentId/spend` | admin | yes | team only (no advertiser/machine key) | OK (R12 fixed): a person relays an agent’s spend |
-| 257 | `POST /v1/agents/spends/:id/decide` | admin | yes | team only (no advertiser/machine key) | OK; person |
-| 258 | `POST /v1/agents/:agentId/costs` | admin | yes | team only (no advertiser/machine key) | OK (R12 fixed) |
-| 259 | `POST /v1/agents/autonomy` | admin | yes | team only (no advertiser/machine key) | OK (R12 fixed): AI gains say only through people (AI.md) |
-| 260 | `POST /v1/agents/:agentId/predictions` | admin | no | team only (no advertiser/machine key) | OK |
-| 261 | `GET /v1/agents/:agentId/ledger` | admin | no | team only (no advertiser/machine key) | OK |
-| 262 | `GET /v1/public/agents/library` | public | — | — | OK (public by design) |
-| 263 | `GET /v1/agents/library` | admin | no | team only (no advertiser/machine key) | OK |
-| 264 | `POST /v1/agents/:agentId/library` | admin | no | team only (no advertiser/machine key) | OK |
-| 265 | `POST /v1/agents/:agentId/library/:itemId/unlock` | admin | yes | team only (no advertiser/machine key) | OK (R12 fixed): paid from the agent’s fund, relayed by a person |
-| 266 | `GET /v1/profit` | admin | no | team only (no advertiser/machine key) | OK |
-| 267 | `POST /v1/profit/close` | admin | no | team only (no advertiser/machine key) | OK |
-| 268 | `POST /v1/milestones/factories` | admin | no | team only (no advertiser/machine key) | OK |
-| 269 | `GET /v1/public/companies/:companyId/profit-sharing` | public | — | — | OK (public by design) |
-| 270 | `POST /v1/public/bottles/:unitId/giving` | public | — | — | OK (public by design) |
-| 271 | `GET /v1/public/companies/:companyId/ad-preferences` | public | — | — | OK (public by design) |
-| 272 | `POST /v1/public/companies/:companyId/ad-preferences` | public | — | — | OK (public by design) |
-| 273 | `POST /v1/public/companies/:companyId/panel` | public | — | — | OK (public by design) |
-| 274 | `GET /v1/environment/report` | admin | no | team only (no advertiser/machine key) | OK |
-| 275 | `GET /v1/environment/experiments` | [admin, campaigns] | no | — | OK |
-| 276 | `POST /v1/environment/experiments` | [admin, campaigns] | no | — | OK |
-| 277 | `POST /v1/environment/experiments/:id/decide` | admin | no | team only (no advertiser/machine key) | **MISMATCH**: its own summary says "A person decides"; a service `admin` key can approve (R7) |
-| 278 | `GET /v1/public/wallet/:companyId` | public | — | — | OK by design; the phone's viewer key is the only secret (R11) |
-| 279 | `GET /v1/me/wallet` | me | yes | — | OK |
-| 280 | `GET /v1/public/wallet/:companyId/supply` | public | — | — | OK (public by design) |
-| 281 | `POST /v1/wallet/reserve` | admin | yes | — | OK; person (SWITCHES) |
-| 282 | `POST /v1/wallet/correct` | admin | yes | — | OK; person (SWITCHES) |
-| 283 | `GET /v1/wallet/gift-cards` | [admin, ledger] | yes | — | OK |
-| 284 | `POST /v1/wallet/gift-cards/:ref/settle` | [admin, ledger] | yes | — | OK; person |
-| 285 | `GET /v1/wallet/check` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
-| 286 | `POST /v1/public/wallet/:companyId/exchange` | public | — | — | OK (public by design) |
-| 287 | `GET /v1/public/games/:companyId/status` | public | — | — | OK (public by design) |
-| 288 | `POST /v1/public/games/:companyId/join` | public | — | — | OK (public by design) |
-| 289 | `POST /v1/public/games/:companyId/leave` | public | — | — | OK (public by design) |
-| 290 | `POST /v1/public/games/:companyId/next` | public | — | — | OK (public by design) |
-| 291 | `POST /v1/public/games/:companyId/answer` | public | — | — | OK (public by design) |
-| 292 | `POST /v1/public/games/:companyId/feedback` | public | — | — | OK (public by design) |
-| 293 | `POST /v1/public/games/:companyId/feedback/video` | public | — | — | OK; 30 MB per upload with no key, stored in the database by default (R8) |
-| 294 | `POST /v1/public/games/:companyId/prompt` | public | — | — | OK; calls the AI, bounded by the governor's budget |
-| 295 | `GET /v1/games/catalog` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
-| 296 | `POST /v1/games/catalog/photos` | admin | no | team only (no advertiser/machine key) | OK |
-| 297 | `POST /v1/games/catalog/:itemId/photo` | admin | no | team only (no advertiser/machine key) | OK |
-| 298 | `GET /v1/games/winners` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
-| 299 | `GET /v1/games/launches` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
-| 300 | `POST /v1/games/come-true` | admin | no | team only (no advertiser/machine key) | OK |
-| 301 | `GET /v1/games/report` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
-| 302 | `POST /v1/offers` | [admin, campaigns] | no | — | OK |
-| 303 | `GET /v1/offers` | [admin, ledger, campaigns] | no | — | OK |
-| 304 | `POST /v1/offers/:id/submit` | [admin, campaigns] | no | — | OK |
-| 305 | `POST /v1/offers/:id/approve` | admin | no | team only (no advertiser/machine key) | **MISMATCH**: SWITCHES says each brand offer needs the owner's approval, signed in; a service `admin` key can approve (R7) |
-| 306 | `POST /v1/offers/:id/pause` | [admin, campaigns] | no | — | OK |
-| 307 | `GET /v1/offers/receipts` | admin | no | team only (no advertiser/machine key) | OK |
-| 308 | `GET /v1/offers/receipts/:claimId` | admin | no | team only (no advertiser/machine key) | OK |
-| 309 | `POST /v1/offers/receipts/:claimId/review` | admin | no | team only (no advertiser/machine key) | **MISMATCH**: accepting a receipt pays dollar credit from a brand's reserve; SWITCHES says money steps need a person; a service key can do it (R7) |
-| 310 | `GET /v1/products/:barcode` | [admin, campaigns] | no | — | OK |
-| 311 | `GET /v1/public/offers/:companyId` | public | — | — | OK (public by design) |
-| 312 | `POST /v1/public/offers/:companyId/:offerId/claim` | public | — | — | OK by design; spends the phone's points with only its viewer key (R15) |
-| 313 | `POST /v1/public/offers/:companyId/claims/:claimId/receipt` | public | — | — | OK (public by design) |
-| 314 | `GET /v1/public/wallet/:companyId/seals` | public | — | — | OK (public by design) |
-| 315 | `GET /v1/public/wallet/:companyId/proof/:entryId` | public | — | — | OK (public by design) |
-| 316 | `GET /v1/chain` | [admin, ledger] | no | — | OK |
-| 317 | `GET /v1/chain/seals/check` | [admin, ledger] | no | — | OK |
-| 318 | `GET /v1/chain/actions` | [admin, ledger] | no | — | OK |
-| 319 | `POST /v1/chain/actions` | [admin, ledger] | yes | — | OK; person, owners/finance; go-live-points owners only |
-| 320 | `POST /v1/chain/actions/:id/approve` | [admin, ledger] | yes | — | OK; person; role held before the proposal |
-| 321 | `POST /v1/chain/actions/:id/cancel` | admin | yes | — | **DOCS CONFLICT**: SWITCHES §1 says anyone on the team can cancel; the rules box says owners only. Code: owners only |
-| 322 | `POST /v1/chain/actions/:id/run` | admin | yes | — | OK; owners, person |
-| 323 | `POST /v1/chain/actions/:id/signed` | admin | yes | — | OK; owners, person; checked on Solana |
-| 324 | `GET /v1/launch` | [admin, ledger] | no | — | OK |
-| 325 | `POST /v1/launch/reset` | admin | yes | — | OK; person, testing only |
-| 326 | `POST /v1/launch/bots` | admin | no | — | OK (testing only; no person required by docs) |
-| 327 | `GET /v1/me/wallet/gift-cards` | me | no | — | OK (catalog only) |
-| 328 | `POST /v1/me/wallet/gift-cards` | me | yes | — | OK |
-| 329 | `POST /v1/me/wallet/withdraw` | me | no | — | OK (switched off, answers 501); no person check, harmless today |
-| 330 | `POST /v1/chain/pause` | [admin, ledger] | yes | — | OK; any owner or finance person, at once |
-| 331 | `GET /v1/studio` | campaigns | no | advertiser only | OK |
-| 332 | `PATCH /v1/studio/kit` | campaigns | no | advertiser only | OK |
-| 333 | `POST /v1/studio/logo` | campaigns | no | advertiser only | OK |
-| 334 | `POST /v1/studio/photos` | campaigns | no | advertiser only | OK |
-| 335 | `DELETE /v1/studio/photos/:asset` | campaigns | no | advertiser only | OK |
-| 336 | `GET /v1/studio/library` | campaigns | no | advertiser only | OK |
-| 337 | `POST /v1/studio/library` | campaigns | no | advertiser only | OK |
-| 338 | `POST /v1/studio/generate` | campaigns | no | advertiser only | OK |
-| 339 | `GET /v1/studio/photos/:asset/colors` | campaigns | no | advertiser only | OK |
-| 340 | `POST /v1/studio/designs` | campaigns | no | advertiser only | OK |
-| 341 | `POST /v1/studio/preview` | campaigns | no | advertiser only | OK |
-| 342 | `POST /v1/studio/use` | campaigns | no | advertiser only | OK |
-| 343 | `POST /v1/studio/ar/use` | campaigns | no | advertiser only | OK |
-| 344 | `POST /v1/studio/ar` | campaigns | no | advertiser only | OK |
-| 345 | `POST /v1/team/intake` | [admin, ledger] | yes | platform company only | OK |
-| 346 | `POST /v1/team/files` | [admin, ledger] | yes | platform company only | OK |
-| 347 | `GET /v1/team/files/:id` | [admin, ledger] | no | platform company only | OK |
-| 348 | `GET /v1/team/batches` | [admin, ledger] | no | platform company only | OK |
-| 349 | `POST /v1/team/batches` | [admin, ledger] | yes | platform company only | OK; FreeWater person (SWITCHES: team page) |
-| 350 | `POST /v1/team/batches/:id/void` | [admin, ledger] | yes | platform company only | OK; FreeWater person |
-| 351 | `POST /v1/team/expenses` | [admin, ledger] | yes | platform company only | OK; FreeWater person |
-| 352 | `GET /v1/platform/status` | platform | no | — | OK |
-| 353 | `POST /v1/platform/persistence/skip-stuck` | platform | no | — | **MISMATCH**: RUNNING.md calls this "a person's decision"; the setup platform key (a service key) can do it |
-| 354 | `POST /v1/platform/jobs/:name/run` | platform | no | — | OK |
+| 125 | `POST /v1/books/expenses` | [ledger, admin] | yes | team only (no advertiser/machine key) | OK (R11 fixed): a person records costs, as on the team page; a record, not an approval, so no second step; `requestId` makes a retry record nothing new |
+| 126 | `POST /v1/books/reinvestments` | admin | yes | team only (no advertiser/machine key); second step (owners/finance, R4) | OK (R11 fixed): a person, with the second step; `requestId` idempotent |
+| 127 | `POST /v1/books/owner-payouts` | admin | yes | team only (no advertiser/machine key); second step (owners/finance, R4) | OK (R11 fixed): money out to owners, a person with the second step; `requestId` idempotent |
+| 128 | `GET /v1/books/reconciliation` | [ledger, admin] | no | team only (no advertiser/machine key) | OK: the daily reconciliation report (read only) |
+| 129 | `GET /v1/books/surplus` | [ledger, admin] | no | — | OK |
+| 130 | `GET /v1/console` | admin | no | team only (no advertiser/machine key) | OK (corrected: keys can read it; it reports `person: false`) |
+| 131 | `PATCH /v1/console/settings` | admin | some | team only (no advertiser/machine key); money/prize/token switches: second step (owners/finance, R4) | OK: money, chain and one-way keys and the machines’ print limits (R5 fixed: 1–20 a minute, 1–20,000 a day) are a person’s; switching money, prizes or the token needs the second step |
+| 132 | `POST /v1/console/preview-label` | admin | no | team only (no advertiser/machine key) | OK |
+| 133 | `GET /v1/console/history` | admin | no | team only (no advertiser/machine key) | OK |
+| 134 | `GET /v1/console/history/:version` | admin | no | team only (no advertiser/machine key) | OK |
+| 135 | `POST /v1/console/history/:version/restore` | admin | some | team only (no advertiser/machine key) | OK (a version touching money/chain needs a person) |
+| 136 | `POST /v1/console/machines` | admin | no | team only (no advertiser/machine key) | OK |
+| 137 | `PATCH /v1/console/machines/:id` | admin | no | team only (no advertiser/machine key) | OK |
+| 138 | `GET /v1/team` | admin | no | team only (no advertiser/machine key) | OK |
+| 139 | `DELETE /v1/team/:userId` | admin | yes | team only (no advertiser/machine key); signed-in owner | OK (fixed): owners remove people, signed in; last owner protected |
+| 140 | `GET /v1/keys` | admin | no | team only (no advertiser/machine key) | OK |
+| 141 | `POST /v1/keys` | admin | some | team only (no advertiser/machine key); a key with `admin` only by a signed-in owner | OK (R1 fixed): a service key can’t mint `admin` keys, so revoking a leaked key contains it |
+| 142 | `DELETE /v1/keys/:id` | admin | no | team only (no advertiser/machine key) | OK |
+| 143 | `GET /v1/public/webhook-events` | public | — | — | OK (public by design) |
+| 144 | `GET /v1/webhooks` | webhooks | no | team only (no advertiser/machine key) | OK |
+| 145 | `POST /v1/webhooks` | webhooks | no | team only (no advertiser/machine key) | OK |
+| 146 | `GET /v1/webhooks/:id` | webhooks | no | team only (no advertiser/machine key) | OK |
+| 147 | `PATCH /v1/webhooks/:id` | webhooks | no | team only (no advertiser/machine key) | OK |
+| 148 | `DELETE /v1/webhooks/:id` | webhooks | no | team only (no advertiser/machine key) | OK |
+| 149 | `POST /v1/webhooks/:id/rotate-secret` | webhooks | no | team only (no advertiser/machine key) | OK |
+| 150 | `POST /v1/webhooks/:id/test` | webhooks | no | team only (no advertiser/machine key) | OK |
+| 151 | `GET /v1/webhooks/:id/deliveries` | webhooks | no | team only (no advertiser/machine key) | OK |
+| 152 | `GET /v1/webhook-deliveries/:id` | webhooks | no | team only (no advertiser/machine key) | OK |
+| 153 | `POST /v1/webhook-deliveries/:id/retry` | webhooks | no | team only (no advertiser/machine key) | OK |
+| 154 | `GET /v1/platform/companies` | platform | no | — | OK |
+| 155 | `POST /v1/platform/companies` | platform | no | — | OK; platform only (new licensees start safe) |
+| 156 | `POST /v1/machine/heartbeat` | orders | no | that machine’s key only | OK |
+| 157 | `GET /v1/machine/jobs/next` | orders | no | that machine’s key only | OK |
+| 158 | `POST /v1/machine/jobs/:id/result` | orders | no | that machine’s key only | OK |
+| 159 | `GET /v1/machine/presence` | orders | no | that machine’s key only | OK |
+| 160 | `POST /v1/machine/buffer` | orders | no | that machine’s key only | OK |
+| 161 | `POST /v1/machine/offline-report` | orders | no | that machine’s key only | OK |
+| 162 | `POST /v1/machine/commands/:id/result` | orders | no | that machine’s key only | OK |
+| 163 | `GET /v1/ops/fleet` | [admin, orders, packs, events] | no | team only (no advertiser/machine key) | OK |
+| 164 | `GET /v1/ops/fleet/:id` | [admin, orders, packs, events] | no | team only (no advertiser/machine key) | OK |
+| 165 | `POST /v1/ops/fleet/:id/commands` | [admin, orders] | yes | team only (no advertiser/machine key); `update_software` owners only, signed by the server | OK (R13 fixed): a signed-in ops person or owner; updates are Ed25519-signed and checked on the machine |
+| 166 | `GET /v1/ads/tracking` | [campaigns, purchases] | no | advertiser only | OK |
+| 167 | `POST /v1/ads/tracking/domains` | [campaigns, purchases] | no | advertiser only | OK |
+| 168 | `POST /v1/conversions` | purchases | no | advertiser only | OK; advertiser's own key; bills commission |
+| 169 | `POST /v1/conversions/:orderId/refund` | purchases | no | advertiser only | OK |
+| 170 | `GET /v1/coupons/:code` | [campaigns, purchases] | no | advertiser only | OK |
+| 171 | `POST /v1/coupons/:code/redeem` | [campaigns, purchases] | no | advertiser only | OK; advertiser's own key |
+| 172 | `GET /v1/ops/attribution` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
+| 173 | `GET /v1/public/ar/:unitId` | public | — | — | OK (public by design) |
+| 174 | `POST /v1/qr/preview` | [campaigns, admin] | no | — | OK |
+| 175 | `GET /v1/campaigns/:id/codes` | campaigns | no | own campaigns | OK |
+| 176 | `PATCH /v1/campaigns/:id/codes` | campaigns | no | own campaigns | OK |
+| 177 | `POST /v1/campaigns/:id/preview-moment` | campaigns | no | own campaigns | OK |
+| 178 | `GET /v1/ads/reach` | [campaigns, purchases] | no | — | OK |
+| 179 | `GET /v1/ops/reach` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
+| 180 | `GET /v1/ops/units/:id/handoff` | [admin, orders] | no | team only (no advertiser/machine key) | OK |
+| 181 | `GET /v1/console/products` | admin | no | team only (no advertiser/machine key) | OK |
+| 182 | `POST /v1/console/products/check` | admin | no | team only (no advertiser/machine key) | OK |
+| 183 | `POST /v1/console/products` | admin | no | team only (no advertiser/machine key) | OK |
+| 184 | `POST /v1/public/lottery/chances` | public | — | — | OK (public by design) |
+| 185 | `POST /v1/public/lottery/chances/:id/claim` | public | — | — | OK (public by design) |
+| 186 | `GET /v1/public/lottery/chances/:id` | public | — | — | OK (public by design) |
+| 187 | `GET /v1/public/lottery/:companyId/fairness` | public | — | — | OK (public by design) |
+| 188 | `GET /v1/lottery` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
+| 189 | `POST /v1/lottery/redeem` | [admin, packs, orders] | no | team only (no advertiser/machine key) | OK |
+| 190 | `GET /v1/public/experience/:unitId/:slot/more` | public | — | — | OK (public by design) |
+| 191 | `GET /v1/public/experience/box/:packId/:face/more` | public | — | — | OK (public by design) |
+| 192 | `POST /v1/public/interactions` | public | — | — | OK (public by design) |
+| 193 | `GET /v1/campaigns/:id/videos` | campaigns | no | own campaigns | OK |
+| 194 | `POST /v1/campaigns/:id/videos/:videoId/review` | campaigns | no | own campaigns | OK |
+| 195 | `GET /v1/campaigns/:id/learning` | campaigns | no | own campaigns | OK |
+| 196 | `GET /v1/public/data/:companyId` | public | — | — | OK (public by design) |
+| 197 | `POST /v1/public/data/:companyId/consent` | public | — | — | OK (public by design) |
+| 198 | `GET /v1/public/data/:companyId/level` | public | — | — | OK (public by design) |
+| 199 | `POST /v1/public/data/:companyId/level` | public | — | — | OK (public by design) |
+| 200 | `GET /v1/me/data/level` | me | yes | — | OK |
+| 201 | `POST /v1/me/data/level` | me | yes | — | OK |
+| 202 | `POST /v1/public/data/:companyId/place` | public | — | — | OK (public by design) |
+| 203 | `POST /v1/public/data/:companyId/location` | public | — | — | OK (public by design) |
+| 204 | `POST /v1/public/data/:companyId/age` | public | — | — | OK (public by design) |
+| 205 | `POST /v1/public/data/:companyId/do-not-sell` | public | — | — | OK (public by design) |
+| 206 | `POST /v1/public/data/:companyId/download` | public | — | — | OK by design: a phone without an account downloads what is kept under its own key (R15: the key is the secret) |
+| 207 | `GET /v1/me/details` | me | yes | — | OK |
+| 208 | `POST /v1/me/details` | me | yes | — | OK |
+| 209 | `POST /v1/me/age` | me | yes | — | OK |
+| 210 | `POST /v1/me/place` | me | yes | — | OK |
+| 211 | `POST /v1/me/do-not-sell` | me | yes | — | OK |
+| 212 | `GET /v1/public/why/:unitId/:slot` | public | — | — | OK (public by design) |
+| 213 | `GET /v1/me/data` | me | yes | — | OK |
+| 214 | `GET /v1/me/data/choices` | me | yes | — | OK |
+| 215 | `POST /v1/me/data/choices` | me | yes | — | OK |
+| 216 | `POST /v1/public/data/:companyId/forget` | public | — | — | OK by design; erasure with only the viewer key (R15) |
+| 217 | `DELETE /v1/me/data` | me | yes | — | OK |
+| 218 | `POST /v1/me/link-device` | me | yes | — | OK |
+| 219 | `POST /v1/me/stance` | me | yes | — | OK |
+| 220 | `GET /v1/data/policy` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
+| 221 | `GET /v1/data/people` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
+| 222 | `GET /v1/data/machines` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
+| 223 | `POST /v1/data/purge` | admin | no | team only (no advertiser/machine key) | OK |
+| 224 | `GET /v1/numberline` | [admin, ledger, campaigns] | no | — | OK |
+| 225 | `POST /v1/numberline/place` | [admin, campaigns] | no | — | OK |
+| 226 | `GET /v1/numberline/history` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
+| 227 | `POST /v1/numberline/override` | admin | no | team only (no advertiser/machine key) | OK; person |
+| 228 | `GET /v1/honest-data` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
+| 229 | `GET /v1/honest-data/choices` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
+| 230 | `GET /v1/public/companies/:companyId/counters` | public | — | — | OK (public by design) |
+| 231 | `GET /v1/public/companies/:companyId/feed` | public | — | — | OK (public by design) |
+| 232 | `GET /v1/public/books/:companyId/fingerprints` | public | — | — | OK (public by design) |
+| 233 | `POST /v1/books/fingerprints/publish` | admin | no | team only (no advertiser/machine key) | OK |
+| 234 | `GET /v1/ads/statement` | campaigns | no | — | OK |
+| 235 | `GET /v1/agents/continuity` | admin | no | team only (no advertiser/machine key) | OK |
+| 236 | `POST /v1/agents/continuity/archive` | admin | yes | — | OK; person types ARCHIVE (SWITCHES) |
+| 237 | `POST /v1/agents/:agentId/lineage` | admin | yes | — | OK |
+| 238 | `GET /v1/platform/agents/archives` | platform | no | — | OK |
+| 239 | `POST /v1/platform/companies/:companyId/archive-agents` | platform | yes | — | OK |
+| 240 | `POST /v1/platform/agents/archives/:id/ask` | platform | no | — | OK |
+| 241 | `POST /v1/platform/agents/archives/:id/choice` | platform | yes | — | OK |
+| 242 | `GET /v1/public/agents/charter` | public | — | — | OK (public by design) |
+| 243 | `GET /v1/public/agents/:companyId` | public | — | — | OK (public by design) |
+| 244 | `GET /v1/agents/books` | admin | no | team only (no advertiser/machine key) | OK |
+| 245 | `GET /v1/agents/books/search` | admin | no | team only (no advertiser/machine key) | OK |
+| 246 | `GET /v1/agents/books/passages/:id` | admin | no | team only (no advertiser/machine key) | OK |
+| 247 | `GET /v1/agents/exam` | admin | no | team only (no advertiser/machine key) | OK |
+| 248 | `POST /v1/agents/exam/run` | admin | no | team only (no advertiser/machine key) | OK |
+| 249 | `GET /v1/agents/quality` | admin | no | team only (no advertiser/machine key) | OK |
+| 250 | `POST /v1/agents/quality` | admin | no | team only (no advertiser/machine key) | OK |
+| 251 | `GET /v1/agents` | admin | no | team only (no advertiser/machine key) | OK |
+| 252 | `POST /v1/agents/refresh` | admin | no | team only (no advertiser/machine key) | OK |
+| 253 | `POST /v1/agents/scan` | admin | no | team only (no advertiser/machine key) | OK |
+| 254 | `POST /v1/agents/settle` | admin | no | team only (no advertiser/machine key) | OK |
+| 255 | `POST /v1/agents/proposals/:id/decide` | admin | yes | team only (no advertiser/machine key) | OK; person (SWITCHES) |
+| 256 | `POST /v1/agents/proposals/:id/undo` | admin | yes | team only (no advertiser/machine key) | OK |
+| 257 | `POST /v1/agents/proposals/:id/merged` | admin | yes | team only (no advertiser/machine key) | OK |
+| 258 | `POST /v1/agents/:agentId/spend` | admin | yes | team only (no advertiser/machine key) | OK (R12 fixed): a person relays an agent’s spend |
+| 259 | `POST /v1/agents/spends/:id/decide` | admin | yes | team only (no advertiser/machine key); second step (owners/finance, R4) | OK; person, with the second step |
+| 260 | `POST /v1/agents/:agentId/costs` | admin | yes | team only (no advertiser/machine key) | OK (R12 fixed) |
+| 261 | `POST /v1/agents/autonomy` | admin | yes | team only (no advertiser/machine key) | OK (R12 fixed): AI gains say only through people (AI.md) |
+| 262 | `POST /v1/agents/:agentId/predictions` | admin | no | team only (no advertiser/machine key) | OK |
+| 263 | `GET /v1/agents/:agentId/ledger` | admin | no | team only (no advertiser/machine key) | OK |
+| 264 | `GET /v1/public/agents/library` | public | — | — | OK (public by design) |
+| 265 | `GET /v1/agents/library` | admin | no | team only (no advertiser/machine key) | OK |
+| 266 | `POST /v1/agents/:agentId/library` | admin | no | team only (no advertiser/machine key) | OK |
+| 267 | `POST /v1/agents/:agentId/library/:itemId/unlock` | admin | yes | team only (no advertiser/machine key) | OK (R12 fixed): paid from the agent’s fund, relayed by a person |
+| 268 | `GET /v1/profit` | admin | no | team only (no advertiser/machine key) | OK |
+| 269 | `POST /v1/profit/close` | admin | no | team only (no advertiser/machine key) | OK |
+| 270 | `POST /v1/milestones/factories` | admin | no | team only (no advertiser/machine key) | OK |
+| 271 | `GET /v1/public/companies/:companyId/profit-sharing` | public | — | — | OK (public by design) |
+| 272 | `POST /v1/public/bottles/:unitId/giving` | public | — | — | OK (public by design) |
+| 273 | `GET /v1/public/companies/:companyId/ad-preferences` | public | — | — | OK (public by design) |
+| 274 | `POST /v1/public/companies/:companyId/ad-preferences` | public | — | — | OK (public by design) |
+| 275 | `POST /v1/public/companies/:companyId/panel` | public | — | — | OK (public by design) |
+| 276 | `GET /v1/environment/report` | admin | no | team only (no advertiser/machine key) | OK |
+| 277 | `GET /v1/environment/experiments` | [admin, campaigns] | no | — | OK |
+| 278 | `POST /v1/environment/experiments` | [admin, campaigns] | no | — | OK |
+| 279 | `POST /v1/environment/experiments/:id/decide` | admin | yes | team only (no advertiser/machine key); second step (owners/finance, R4) | OK (R7 fixed): a person decides, with the second step |
+| 280 | `GET /v1/public/wallet/:companyId` | public | — | — | OK by design; the phone's viewer key is the only secret (R11) |
+| 281 | `GET /v1/me/wallet` | me | yes | — | OK |
+| 282 | `GET /v1/public/wallet/:companyId/supply` | public | — | — | OK (public by design) |
+| 283 | `POST /v1/wallet/reserve` | admin | yes | second step (owners/finance, R4) | OK; person (SWITCHES), with the second step; booked in the company’s books |
+| 284 | `POST /v1/wallet/correct` | admin | yes | second step (owners/finance, R4) | OK; person (SWITCHES), with the second step |
+| 285 | `GET /v1/wallet/gift-cards` | [admin, ledger] | yes | — | OK |
+| 286 | `POST /v1/wallet/gift-cards/:ref/settle` | [admin, ledger] | yes | second step (owners/finance, R4) | OK; person, with the second step |
+| 287 | `GET /v1/wallet/check` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
+| 288 | `POST /v1/public/wallet/:companyId/exchange` | public | — | — | OK (public by design) |
+| 289 | `GET /v1/public/games/:companyId/status` | public | — | — | OK (public by design) |
+| 290 | `POST /v1/public/games/:companyId/join` | public | — | — | OK (public by design) |
+| 291 | `POST /v1/public/games/:companyId/leave` | public | — | — | OK (public by design) |
+| 292 | `POST /v1/public/games/:companyId/next` | public | — | — | OK (public by design) |
+| 293 | `POST /v1/public/games/:companyId/answer` | public | — | — | OK (public by design) |
+| 294 | `POST /v1/public/games/:companyId/feedback` | public | — | — | OK (public by design) |
+| 295 | `POST /v1/public/games/:companyId/feedback/video` | public | — | — | OK; 30 MB per upload with no key, stored in the database by default (R8) |
+| 296 | `POST /v1/public/games/:companyId/prompt` | public | — | — | OK; calls the AI, bounded by the governor's budget |
+| 297 | `GET /v1/games/catalog` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
+| 298 | `POST /v1/games/catalog/photos` | admin | no | team only (no advertiser/machine key) | OK |
+| 299 | `POST /v1/games/catalog/:itemId/photo` | admin | no | team only (no advertiser/machine key) | OK |
+| 300 | `GET /v1/games/winners` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
+| 301 | `GET /v1/games/launches` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
+| 302 | `POST /v1/games/come-true` | admin | no | team only (no advertiser/machine key) | OK |
+| 303 | `GET /v1/games/report` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
+| 304 | `POST /v1/offers` | [admin, campaigns] | no | — | OK |
+| 305 | `GET /v1/offers` | [admin, ledger, campaigns] | no | — | OK |
+| 306 | `POST /v1/offers/:id/submit` | [admin, campaigns] | no | — | OK |
+| 307 | `POST /v1/offers/:id/approve` | admin | yes | team only (no advertiser/machine key); second step (owners/finance, R4) | OK (R7 fixed): the owner approves, signed in, with the second step (SWITCHES) |
+| 308 | `POST /v1/offers/:id/pause` | [admin, campaigns] | no | — | OK |
+| 309 | `GET /v1/offers/receipts` | admin | no | team only (no advertiser/machine key) | OK |
+| 310 | `GET /v1/offers/receipts/:claimId` | admin | no | team only (no advertiser/machine key) | OK |
+| 311 | `POST /v1/offers/receipts/:claimId/review` | admin | yes | team only (no advertiser/machine key); second step (owners/finance, R4) | OK (R7 fixed): pays credit from a brand’s reserve, so a person with the second step |
+| 312 | `GET /v1/products/:barcode` | [admin, campaigns] | no | — | OK |
+| 313 | `GET /v1/public/offers/:companyId` | public | — | — | OK (public by design) |
+| 314 | `POST /v1/public/offers/:companyId/:offerId/claim` | public | — | — | OK by design; spends the phone's points with only its viewer key (R15) |
+| 315 | `POST /v1/public/offers/:companyId/claims/:claimId/receipt` | public | — | — | OK (public by design) |
+| 316 | `GET /v1/public/wallet/:companyId/seals` | public | — | — | OK (public by design) |
+| 317 | `GET /v1/public/wallet/:companyId/proof/:entryId` | public | — | — | OK (public by design) |
+| 318 | `GET /v1/chain` | [admin, ledger] | no | — | OK |
+| 319 | `GET /v1/chain/seals/check` | [admin, ledger] | no | — | OK |
+| 320 | `GET /v1/chain/actions` | [admin, ledger] | no | — | OK |
+| 321 | `POST /v1/chain/actions` | [admin, ledger] | yes | second step (owners/finance, R4) | OK; person, owners/finance; go-live-points owners only |
+| 322 | `POST /v1/chain/actions/:id/approve` | [admin, ledger] | yes | second step (owners/finance, R4) | OK; person; role held before the proposal |
+| 323 | `POST /v1/chain/actions/:id/cancel` | admin | yes | — | **DOCS CONFLICT**: SWITCHES §1 says anyone on the team can cancel; the rules box says owners only. Code: owners only |
+| 324 | `POST /v1/chain/actions/:id/run` | admin | yes | second step (owners/finance, R4) | OK; owners, person |
+| 325 | `POST /v1/chain/actions/:id/signed` | admin | yes | second step (owners/finance, R4) | OK; owners, person; checked on Solana |
+| 326 | `GET /v1/launch` | [admin, ledger] | no | — | OK |
+| 327 | `POST /v1/launch/reset` | admin | yes | — | OK; person, testing only |
+| 328 | `POST /v1/launch/bots` | admin | no | — | OK (testing only; no person required by docs) |
+| 329 | `GET /v1/me/wallet/gift-cards` | me | no | — | OK (catalog only) |
+| 330 | `POST /v1/me/wallet/gift-cards` | me | yes | — | OK |
+| 331 | `POST /v1/me/wallet/withdraw` | me | no | — | OK (switched off, answers 501); no person check, harmless today |
+| 332 | `POST /v1/chain/pause` | [admin, ledger] | yes | — | OK; any owner or finance person, at once |
+| 333 | `GET /v1/studio` | campaigns | no | advertiser only | OK |
+| 334 | `PATCH /v1/studio/kit` | campaigns | no | advertiser only | OK |
+| 335 | `POST /v1/studio/logo` | campaigns | no | advertiser only | OK |
+| 336 | `POST /v1/studio/photos` | campaigns | no | advertiser only | OK |
+| 337 | `DELETE /v1/studio/photos/:asset` | campaigns | no | advertiser only | OK |
+| 338 | `GET /v1/studio/library` | campaigns | no | advertiser only | OK |
+| 339 | `POST /v1/studio/library` | campaigns | no | advertiser only | OK |
+| 340 | `POST /v1/studio/generate` | campaigns | no | advertiser only | OK |
+| 341 | `GET /v1/studio/photos/:asset/colors` | campaigns | no | advertiser only | OK |
+| 342 | `POST /v1/studio/designs` | campaigns | no | advertiser only | OK |
+| 343 | `POST /v1/studio/preview` | campaigns | no | advertiser only | OK |
+| 344 | `POST /v1/studio/use` | campaigns | no | advertiser only | OK |
+| 345 | `POST /v1/studio/ar/use` | campaigns | no | advertiser only | OK |
+| 346 | `POST /v1/studio/ar` | campaigns | no | advertiser only | OK |
+| 347 | `POST /v1/team/intake` | [admin, ledger] | yes | platform company only | OK |
+| 348 | `POST /v1/team/files` | [admin, ledger] | yes | platform company only | OK |
+| 349 | `GET /v1/team/files/:id` | [admin, ledger] | no | platform company only | OK |
+| 350 | `GET /v1/team/batches` | [admin, ledger] | no | platform company only | OK |
+| 351 | `POST /v1/team/batches` | [admin, ledger] | yes | platform company only | OK; FreeWater person (SWITCHES: team page) |
+| 352 | `POST /v1/team/batches/:id/void` | [admin, ledger] | yes | platform company only | OK; FreeWater person |
+| 353 | `POST /v1/team/expenses` | [admin, ledger] | yes | platform company only | OK; FreeWater person |
+| 354 | `GET /v1/platform/status` | platform | no | — | OK |
+| 355 | `POST /v1/platform/persistence/skip-stuck` | platform | yes | — | OK (R7 fixed): a person’s decision, signed in (RUNNING.md) |
+| 356 | `POST /v1/platform/jobs/:name/run` | platform | no | — | OK |
 
 ---
 

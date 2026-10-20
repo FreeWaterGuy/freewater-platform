@@ -121,7 +121,7 @@ describe('internal secrets come from the host’s settings in production', () =>
 
   it('checkConfig names each missing secret in production only', () => {
     const errors = checkConfig({ NODE_ENV: 'production' } as any).errors.join('\n');
-    for (const k of ['FW_SECRET_CODES', 'FW_SECRET_SECOND_STEP', 'FW_SECRET_LINKS', 'FW_SECRET_WALLET']) expect(errors).toContain(k);
+    for (const k of ['FW_SECRET_CODES', 'FW_SECRET_SECOND_STEP', 'FW_SECRET_LINKS', 'FW_SECRET_WALLET', 'FW_SECRET_VIEWER_TAGS']) expect(errors).toContain(k);
     expect(checkConfig({ NODE_ENV: 'production', FW_SECRET_CODES: 'short' } as any).errors.join('\n')).toContain('FW_SECRET_CODES');
     expect(checkConfig({} as any).warnings.join('\n')).not.toContain('FW_SECRET');
   });

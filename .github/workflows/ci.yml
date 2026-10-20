@@ -36,8 +36,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
           cache: npm
@@ -65,10 +67,14 @@ jobs:
           fetch-depth: 0 # the upgrade step builds the previous release too
       - name: Build the server image
         run: docker build --build-arg GIT_SHA=${{ github.sha }} -t freewater:${{ github.sha }} .
+      - name: Internal secrets for the production starts (production takes them only from the host's settings)
+        run: |
+          umask 077
+          for n in CODES SECOND_STEP LINKS WALLET VIEWER_TAGS; do echo "FW_SECRET_$n=hex:$(openssl rand -hex 32)"; done > fw-secrets.env
       - name: Start it the way production does, and wait until it's ready
         run: |
           docker run -d --name fw --network host \
-            -e NODE_ENV=production -e ALLOW_STANDINS=1 -e PORT=8080 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
+            --env-file fw-secrets.env -e NODE_ENV=production -e ALLOW_STANDINS=1 -e PORT=8080 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
             -e DATABASE_URL=postgres://fw:fw@localhost:5432/freewater \
             freewater:${{ github.sha }}
           for i in $(seq 1 60); do
@@ -78,14 +84,14 @@ jobs:
           echo "::error title=start::$(docker logs fw 2>&1 | tail -c 900 | tr '\n' ' ')"; exit 1
       - name: Production refuses the stand-ins unless told this is a rehearsal
         run: |
-          if docker run --rm --network host -e NODE_ENV=production -e PORT=8082 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
+          if docker run --rm --network host --env-file fw-secrets.env -e NODE_ENV=production -e PORT=8082 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
             -e DATABASE_URL=postgres://fw:fw@localhost:5432/freewater freewater:${{ github.sha }} > standins.txt 2>&1; then
             echo "::error title=stand-ins::started on stand-ins without ALLOW_STANDINS=1"; exit 1
           fi
           grep -q "ALLOW_STANDINS=1" standins.txt || { echo "::error title=stand-ins::$(tail -c 900 standins.txt | tr '\n' ' ')"; exit 1; }
       - name: A second copy must wait, not share the data
         run: |
-          if docker run --rm --network host -e NODE_ENV=production -e ALLOW_STANDINS=1 -e PORT=8081 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
+          if docker run --rm --network host --env-file fw-secrets.env -e NODE_ENV=production -e ALLOW_STANDINS=1 -e PORT=8081 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
             -e DATABASE_URL=postgres://fw:fw@localhost:5432/freewater -e LEASE_WAIT_MS=5000 \
             freewater:${{ github.sha }} > second.txt 2>&1; then
             echo "::error title=lease::a second server started alongside the first"; exit 1
@@ -107,7 +113,7 @@ jobs:
           code=$(docker inspect fw --format '{{.State.ExitCode}}')
           [ "$code" = "0" ] || { echo "::error title=stop::exited with $code"; exit 1; }
           # The next server takes over at once (the lease was let go, not left to lapse).
-          docker run -d --name fw2 --network host -e NODE_ENV=production -e ALLOW_STANDINS=1 -e PORT=8080 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
+          docker run -d --name fw2 --network host --env-file fw-secrets.env -e NODE_ENV=production -e ALLOW_STANDINS=1 -e PORT=8080 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
             -e DATABASE_URL=postgres://fw:fw@localhost:5432/freewater -e LEASE_WAIT_MS=10000 \
             freewater:${{ github.sha }}
           for i in $(seq 1 30); do
@@ -136,8 +142,12 @@ jobs:
             sleep 2
           done
           docker stop -t 50 prev
+          # Production refuses secrets that differ from those already in the database: move them to the settings as they are.
+          docker run --rm --network host postgres:16.10 psql postgres://fw:fw@localhost:5432/upgrade -Atc "select name, value from platform_secrets" \
+            | while IFS='|' read -r name value; do echo "FW_SECRET_$(echo "$name" | tr 'a-z' 'A-Z' | tr -c 'A-Z0-9\n' '_')=hex:$value"; done > upgrade-secrets.env
+          grep -v -F -f <(cut -d= -f1 upgrade-secrets.env | sed 's/$/=/') fw-secrets.env >> upgrade-secrets.env || true
           # This version on it: migrations apply over real data, and it starts.
-          docker run -d --name upg --network host -e NODE_ENV=production -e ALLOW_STANDINS=1 -e PORT=8091 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
+          docker run -d --name upg --network host --env-file upgrade-secrets.env -e NODE_ENV=production -e ALLOW_STANDINS=1 -e PORT=8091 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
             -e DATABASE_URL=postgres://fw:fw@localhost:5432/upgrade freewater:${{ github.sha }}
           for i in $(seq 1 60); do
             if curl -sf http://localhost:8091/health/ready; then echo; break; fi
@@ -152,7 +162,7 @@ jobs:
       - name: Outages - the database goes away briefly and for long, a server is killed, a server freezes
         run: |
           PG=${{ job.services.postgres.id }}
-          start() { docker run -d --name "$1" --network host -e NODE_ENV=production -e ALLOW_STANDINS=1 -e PORT="$2" -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
+          start() { docker run -d --name "$1" --network host --env-file fw-secrets.env -e NODE_ENV=production -e ALLOW_STANDINS=1 -e PORT="$2" -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
             -e DATABASE_URL=postgres://fw:fw@localhost:5432/freewater -e LEASE_WAIT_MS=90000 freewater:${{ github.sha }} >/dev/null; }
           ready() { for i in $(seq 1 45); do curl -sf "http://localhost:$1/health/ready" >/dev/null && return 0; sleep 2; done; return 1; }
           fail() { echo "::error title=outage::$1 $(docker logs "$2" 2>&1 | tail -c 700 | tr '\n' ' ')"; exit 1; }

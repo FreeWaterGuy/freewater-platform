@@ -25,7 +25,8 @@ beforeAll(async () => {
   app = await createApp({ db, seedDemo: true, seed: 8, clock, payouts });
   keys = app.demoKeys!;
   server = await buildServer(app);
-  finance = await app.accounts.createSession((await app.accounts.invite({ companyId: 'freewater', email: 'books-finance@freewater.io', role: 'finance' })).id);
+  // Sending payouts is an approval: this sign-in passed the second step (threat model R4).
+  finance = await app.accounts.createSession((await app.accounts.invite({ companyId: 'freewater', email: 'books-finance@freewater.io', role: 'finance' })).id, { secondStep: true });
   // These tests follow the 10¢ a bottle (the extra 10% is tested in pricing.test.ts), and give two machines'
   // and routes' bottles to other charities than Well Aware, as a company can.
   const g = app.platform.companies.get('freewater')!.giving;

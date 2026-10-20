@@ -25,7 +25,8 @@ beforeAll(async () => {
   keys = app.demoKeys!;
   admin = keys['freewater-admin']!;
   // Approving offers and accepting receipts is a person's (SWITCHES), never a service key's.
-  owner = await app.accounts.createSession((await app.accounts.invite({ companyId: 'freewater', email: 'offers-owner@freewater.io', role: 'owner' })).id);
+  // Both are approvals, so the owner's sign-in has passed the second step (threat model R4).
+  owner = await app.accounts.createSession((await app.accounts.invite({ companyId: 'freewater', email: 'offers-owner@freewater.io', role: 'owner' })).id, { secondStep: true });
   advertiserId = [...app.platform.campaigns.values()][0]!.advertiserId;
   server = await buildServer(app);
 });

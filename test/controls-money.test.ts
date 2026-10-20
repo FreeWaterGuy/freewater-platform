@@ -34,8 +34,9 @@ beforeAll(async () => {
   app = await createApp({ db, seedDemo: true, seed: 505, clock, assumePlace: { country: 'US', state: 'TX' }, productLookup: null, anchorPublishers: [] });
   keys = app.demoKeys!;
   server = await buildServer(app);
-  owner = await app.accounts.createSession((await app.accounts.invite({ companyId: CO, email: 'ctl-owner@freewater.io', role: 'owner' })).id);
-  finance = await app.accounts.createSession((await app.accounts.invite({ companyId: CO, email: 'ctl-finance@freewater.io', role: 'finance' })).id);
+  // Owners and finance people approve and send money only from a sign-in that passed the second step (threat model R4).
+  owner = await app.accounts.createSession((await app.accounts.invite({ companyId: CO, email: 'ctl-owner@freewater.io', role: 'owner' })).id, { secondStep: true });
+  finance = await app.accounts.createSession((await app.accounts.invite({ companyId: CO, email: 'ctl-finance@freewater.io', role: 'finance' })).id, { secondStep: true });
   // Joe's pays its invoices by card; another advertiser's card is declined.
   await app.payments.addMethod(CO, 'advertiser', 'adv-joes', 'tok_visa');
 });
@@ -68,6 +69,14 @@ describe('who may move money: a person, never a service key (R7, R11)', () => {
     expect((await call('POST', '/v1/books/owner-payouts', owner, money[2][1])).status).toBe(201);
     expect((await call('POST', '/v1/payouts/run', finance)).status).toBe(201);
     expect((await call('POST', '/v1/platform/persistence/skip-stuck', owner)).status).toBe(200);
+    // Sending or paying out money is an approval: an owner or finance person signed in by email alone (no second
+    // step) is refused (threat model R4). Recording a cost is a record, not an approval: a person is enough.
+    const emailOnly = await app.accounts.createSession((await app.accounts.invite({ companyId: CO, email: 'ctl-finance-2@freewater.io', role: 'finance' })).id);
+    for (const [url, body] of [money[1], money[2], money[3]]) {
+      const r = await call('POST', url, emailOnly, body);
+      expect([url, r.status, r.body.error?.code]).toEqual([url, 403, 'second_step_required']);
+    }
+    expect((await call('POST', '/v1/books/expenses', emailOnly, { ...money[0][1], memo: 'Spring water again' })).status).toBe(201);
     // Who recorded each is kept with it.
     const ev = (await db.query<any>(`select payload from events where company_id = $1 and type = 'expense.recorded' order by seq desc limit 1`, [CO])).rows[0];
     expect((typeof ev.payload === 'string' ? JSON.parse(ev.payload) : ev.payload).by).toMatch(/^user:/);

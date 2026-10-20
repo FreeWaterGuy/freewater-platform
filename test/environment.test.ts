@@ -158,7 +158,7 @@ describe('the data environment', () => {
     expect(await app.environment.valueBackFor('freewater', 'cmp-joes', 'viewer-vb-panel', u!.id, slot)).toBeNull();
     // A person decides, never a service key.
     expect((await call('POST', `/v1/environment/experiments/${e.id}/decide`, { approve: true })).body.error.code).toBe('person_needed');
-    const owner = await app.accounts.createSession((await app.accounts.invite({ companyId: 'freewater', email: 'env-owner@freewater.io', role: 'owner' })).id);
+    const owner = await app.accounts.createSession((await app.accounts.invite({ companyId: 'freewater', email: 'env-owner@freewater.io', role: 'owner' })).id, { secondStep: true }); // an approval: second step passed (R4)
     const decided = await server.inject({ method: 'POST', url: `/v1/environment/experiments/${e.id}/decide`, payload: { approve: true }, headers: { authorization: `Bearer ${owner}` } });
     expect(decided.json().status).toBe('running');
     expect(await app.environment.valueBackFor('freewater', 'cmp-joes', 'viewer-vb-outside', u!.id, slot)).toBeNull();

@@ -29,7 +29,7 @@ erase; a minimum age (13 or higher) that only goes up.
 "Phone key" is the random id a phone keeps (`fw_viewer`). It names no one, but it is a **bearer secret**: on its own it
 opens that phone's wallet, spends its points on offers, changes its data choices and erases its data (threat model
 R15). Since this review, logs and team screens see only a keyed fingerprint of it (`vkf:…`, HMAC-SHA-256 with the
-`viewer_tags` secret; set `FW_SECRET_VIEWER_TAGS` in the host to keep it out of the database).
+`viewer_tags` secret; in production it comes only from `FW_SECRET_VIEWER_TAGS` in the host settings).
 
 "Team" means a company's signed-in people with `admin` or `ledger` scope (owners, finance) unless said otherwise.
 Keep days are the US preset; EU/UK/Brazil and unknown places get the shorter strict preset, Canada its own

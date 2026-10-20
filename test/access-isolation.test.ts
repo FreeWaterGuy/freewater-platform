@@ -84,7 +84,11 @@ describe('R6: printing and packing stay inside the company', () => {
 
   it('refuses deliveries and van loading on another company’s route', async () => {
     expect((await call('POST', '/v1/routes/route-3/load', keys['peak-spring-admin'])).status).toBe(404);
-    expect((await call('POST', '/v1/deliveries', keys['peak-spring-admin'], { routeId: 'route-3', stop: 1, scannedPackId: fwIds.id![1], atAddress: true, photoProof: true, emptiesCollected: 0 })).status).toBe(404);
+    const door = { routeId: 'route-3', stop: 1, scannedPackId: fwIds.id![1], atAddress: true, photoProof: true, emptiesCollected: 0 };
+    // A door report is a person's word, so a service key is refused before anything is looked up; a Peak Spring person
+    // signed in finds no such stop.
+    expect((await call('POST', '/v1/deliveries', keys['peak-spring-admin'], door)).code).toBe('person_required');
+    expect((await call('POST', '/v1/deliveries', peakOwner, door)).status).toBe(404);
   });
 });
 
