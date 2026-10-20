@@ -25,7 +25,7 @@ export interface Subscription {
 }
 export interface RunStop {
   stop: number; subscriptionId: string; userId: string; packId: string | null; address: string; point: GeoPoint; packSize: number; notes: string | null;
-  status: 'planned' | 'delivered' | 'not_delivered'; loaded?: boolean; at?: string; emptiesCollected?: number; photoUrl?: string; atAddressBy?: 'gps' | 'driver'; reason?: string;
+  status: 'planned' | 'delivered' | 'not_delivered'; loaded?: boolean; checkedByHand?: { by: string; at: string }; at?: string; emptiesCollected?: number; photoUrl?: string; atAddressBy?: 'gps' | 'driver'; reason?: string;
 }
 export interface Run {
   id: string; companyId: string; routeId: string; date: string; status: 'printing' | 'packing' | 'ready' | 'out' | 'done';
@@ -226,7 +226,8 @@ export class DeliveryService {
 
   /**
    * After the packing line has checked every box (POST /v1/packs/:id/verify), seal the ones it passed. A box the line
-   * hasn't checked yet, or found wrong, is never sealed here: it's listed so it can be fixed and checked again.
+   * hasn't checked yet, or found wrong, is never sealed here: it's listed so it can be fixed and checked again, by the
+   * line or, when there's no line, by a person by hand (checkByHand).
    */
   async packCheck(runId: string, companyId: string) {
     const run = await this.getRun(runId, companyId);
@@ -241,6 +242,27 @@ export class DeliveryService {
     if (!problems.length) { run.status = 'ready'; await this.saveRun(run); }
     await this.flush();
     return { run: await this.view(run), problems };
+  }
+
+  /**
+   * No packing line: a signed-in person counted every bottle in one stop's box by hand. The box is checked and sealed,
+   * with who and when kept on the stop and the pack; once every box is sealed the route is ready to load.
+   */
+  async checkByHand(runId: string, companyId: string, stopNo: number, by: string) {
+    if (!by) throw new DeliveryError(403, 'person_required', 'Sign in as a person to check a box by hand.');
+    const run = await this.getRun(runId, companyId);
+    if (run.status !== 'packing') throw new DeliveryError(409, 'wrong_stage', `This route is ${run.status}, not waiting to be packed.`);
+    const s = run.stops.find((x) => x.stop === stopNo);
+    if (!s?.packId) throw new DeliveryError(404, 'not_found', 'No such stop.');
+    const pack = this.packs.packs.get(s.packId);
+    if (!pack) throw new DeliveryError(404, 'not_found', 'No box for that stop.');
+    if (pack.status === 'box_printed' || pack.status === 'mismatch') this.packs.verifyByHand(pack.id, by);
+    if (pack.status === 'verified') this.packs.seal(pack.id);
+    if (pack.status !== 'sealed') throw new DeliveryError(409, 'wrong_stage', `That box is ${pack.status}.`);
+    if (pack.checkedByHand && !s.checkedByHand) s.checkedByHand = { ...pack.checkedByHand };
+    await this.saveRun(run);
+    // The rest of the route as the packing check sees it: what's still to check, and ready once every box is sealed.
+    return this.packCheck(run.id, companyId);
   }
 
   /** A driver takes the route. Then each box is scanned into the van, last stop first, so stop 1 ends up by the door. */

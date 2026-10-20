@@ -210,10 +210,10 @@ export class GamesService {
     }
     if (points) await this.db.query(`update game_rounds set points = $2 where id = $1`, [roundId, points]);
     // What everyone else picked, for the reveal: of the times each was on a screen, how often it was chosen.
-    // Shown only once enough people have seen each one (20), so it says something real.
+    // Shown only once enough people have seen each one (20), so it says something real. People only: never the bots.
     let others: Record<string, number> | null = {};
     if (r.kind === 'choice' || r.kind === 'ad') for (const i of items) {
-      const c = (await this.db.query<any>(`select count(*) filter (where pick_item = $3)::int as picked, count(*)::int as shown from game_rounds where company_id = $1 and category = $2 and answered_at is not null and flagged is null and items @> $4::jsonb`, [companyId, r.category, i.id, JSON.stringify([{ id: i.id }])])).rows[0];
+      const c = (await this.db.query<any>(`select count(*) filter (where pick_item = $3)::int as picked, count(*)::int as shown from game_rounds where company_id = $1 and category = $2 and answered_at is not null and flagged is null and person not like 'bot\\_%' and items @> $4::jsonb`, [companyId, r.category, i.id, JSON.stringify([{ id: i.id }])])).rows[0];
       if (c.shown < GamesService.revealAfter) { others = null; break; }
       others[i.key] = Math.round((100 * c.picked) / c.shown);
     } else others = null;
@@ -252,9 +252,12 @@ export class GamesService {
 
   // ---------- picks that come true ----------
 
-  /** For one category: what people picked most (clean answers only, no bots), by share of the times each was shown. */
+  /**
+   * For one category: what people picked most (clean answers only, no bots), by share of the times each was shown.
+   * Only screens that said "picks may come true": a pick made when it was just for fun wasn't made knowing it might.
+   */
   async winners(companyId: string, category: string) {
-    const rows = (await this.db.query<any>(`select items, pick_item from game_rounds where company_id = $1 and category = $2 and kind = 'choice' and answered_at is not null and flagged is null and person not like 'bot\\_%'`, [companyId, category])).rows;
+    const rows = (await this.db.query<any>(`select items, pick_item from game_rounds where company_id = $1 and category = $2 and kind = 'choice' and realness = 'may_come_true' and answered_at is not null and flagged is null and person not like 'bot\\_%'`, [companyId, category])).rows;
     const shown = new Map<string, { label: string; shown: number; picked: number }>();
     for (const r of rows) for (const i of (typeof r.items === 'string' ? JSON.parse(r.items) : r.items) as any[]) {
       const x = shown.get(i.id) ?? { label: i.label, shown: 0, picked: 0 }; x.shown++; if (i.id === r.pick_item) x.picked++; shown.set(i.id, x);
@@ -269,8 +272,10 @@ export class GamesService {
     if (!this.settings(companyId).mayComeTrue?.includes(category)) throw new GameError('not_promised', 'Only categories marked “picks may come true” can come true.', 409);
     const w = await this.winners(companyId, category);
     if (o.offerId && !(await this.db.query(`select 1 from offers where id = $1 and company_id = $2`, [o.offerId, companyId])).rows.length) throw new GameError('not_found', 'No such offer.', 404);
-    const pick = o.itemId ? w.find((x) => x.id === o.itemId) : w[0];
+    const pick = w[0];
     if (!pick || pick.shown < 20) throw new GameError('too_few', 'Not enough people have picked in this category yet (at least 20 views of the winner).', 409);
+    // Only what people actually picked most comes true: naming another item (any with 20 views) isn't a pick coming true.
+    if (o.itemId && o.itemId !== pick.id) throw new GameError('not_winner', `Only the winner can come true: right now that’s ${pick.label}.`, 409);
     const id = newId('gl');
     await this.db.query(`insert into game_launches (id, company_id, category, item_id, label, share, answers, offer_id, by, at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [id, companyId, category, pick.id, pick.label, pick.share, pick.shown, o.offerId ?? null, by, this.now()]);
     return { id, category, item: pick.label, share: Math.round(pick.share * 1000) / 1000, offerId: o.offerId ?? null };
@@ -280,7 +285,7 @@ export class GamesService {
   }
   /** Picks this person made that came true. */
   private async cameTrue(companyId: string, person: string) {
-    return (await this.db.query<any>(`select l.label, l.offer_id from game_launches l where l.company_id = $1 and exists (select 1 from game_rounds r where r.company_id = l.company_id and r.person = $2 and r.pick_item = l.item_id and r.answered_at <= l.at) order by l.at desc limit 5`, [companyId, person])).rows.map((r) => ({ item: r.label, offerId: r.offer_id }));
+    return (await this.db.query<any>(`select l.label, l.offer_id from game_launches l where l.company_id = $1 and exists (select 1 from game_rounds r where r.company_id = l.company_id and r.person = $2 and r.pick_item = l.item_id and r.answered_at <= l.at and r.kind = 'choice' and r.flagged is null) order by l.at desc limit 5`, [companyId, person])).rows.map((r) => ({ item: r.label, offerId: r.offer_id }));
   }
 
   /** What the games have learned, for the team: picks by price setup, how fast and how sure people were, where on the screen. */

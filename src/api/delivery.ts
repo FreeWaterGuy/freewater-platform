@@ -39,6 +39,11 @@ export function deliveryRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     return { status: 201, body: await Promise.all(runs.map((r) => delivery.view(r))) };
   } });
   route({ method: 'POST', url: '/v1/ops/runs/:id/pack-check', scope: ['admin', 'packs'], summary: 'Check every bottle in every box of a route and seal them.', handler: async (req, key) => { staff(key); return { body: await delivery.packCheck((req.params as any).id, key!.companyId) }; } });
+  route({ method: 'POST', url: '/v1/ops/runs/:id/stops/:stop/check-by-hand', scope: ['admin', 'packs'], summary: 'No packing line: a signed-in person counted every bottle in this stop’s box by hand. Checks and seals it, recording who and when.', handler: async (req, key) => {
+    staff(key);
+    const p = req.params as any;
+    return { body: await delivery.checkByHand(p.id, key!.companyId, Number(p.stop), person(key)) };
+  } });
   route({ method: 'GET', url: '/v1/review/campaigns/:id/preview', scope: 'campaigns', summary: 'An ad waiting for review: every size, on a label, on a box, and its scan page.', handler: async (req, key) => { staff(key); const id = (req.params as any).id; return { body: { ...(await app.ads.campaignPreview(id, key!.companyId)), objections: await app.ads.objections(key!.companyId, id) } }; } });
 
   // ---------- drivers ----------

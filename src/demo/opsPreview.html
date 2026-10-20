@@ -59,6 +59,8 @@
     if (key === 'POST /v1/ops/runs/plan') return S.runs;
     m = /^\/v1\/ops\/runs\/([^/]+)\/pack-check$/.exec(path);
     if (m) { const r = runOf(decodeURIComponent(m[1])); r.status = 'ready'; r.stops.forEach((s) => { s.packStatus = 'sealed'; }); return { run: recount(r), problems: [] }; }
+    m = /^\/v1\/ops\/runs\/([^/]+)\/stops\/(\d+)\/check-by-hand$/.exec(path);
+    if (m) { const r = runOf(decodeURIComponent(m[1])); const s = r.stops.find((x) => x.stop === Number(m[2])); s.packStatus = 'sealed'; s.checkedByHand = { by: S.me.id, at: new Date().toISOString() }; const left = r.stops.filter((x) => x.packStatus !== 'sealed'); if (!left.length) r.status = 'ready'; return { run: recount(r), problems: left.map((x) => ({ stop: x.stop, missing: [], unexpected: [], reason: 'The packing line hasn’t checked this box yet.' })) }; }
     if (key === 'GET /v1/ops/subscriptions') return R.subs;
     if (key === `GET /v1/public/companies/${R.config.companyId}/totals`) return R.totals;
     if (key === 'GET /v1/ledger') return R.ledger;

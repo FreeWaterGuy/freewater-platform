@@ -76,15 +76,20 @@ export class TransparencyService {
       x.given.set(charityOf(l.debit), (x.given.get(charityOf(l.debit)) ?? 0) - l.amountCents);
       x.given.set(charityOf(l.credit), (x.given.get(charityOf(l.credit)) ?? 0) + l.amountCents);
     }
-    if (l.kind === 'charity_transfer') x.sent.set(charityOf(l.debit), (x.sent.get(charityOf(l.debit)) ?? 0) + l.amountCents);
-    if (l.kind === 'prize') x.prizes += l.amountCents;
+    if (l.kind === 'charity_transfer') {
+      if (l.debit.startsWith('payable:charity:')) x.sent.set(charityOf(l.debit), (x.sent.get(charityOf(l.debit)) ?? 0) + l.amountCents);
+      else if (l.credit.startsWith('payable:charity:')) x.sent.set(charityOf(l.credit), (x.sent.get(charityOf(l.credit)) ?? 0) - l.amountCents);
+    }
+    if (l.kind === 'prize') x.prizes += l.debit.startsWith('expense:') ? l.amountCents : -l.amountCents;
     // What the AI agents earn, are paid, spend and give: always counted, so it's public wherever the books are open.
     if (l.kind === 'ai_fund') x.ai.earnedCents += l.credit === 'payable:ai_fund' ? l.amountCents : -l.amountCents;
     if (l.kind === 'ai_allocation' && !l.credit.startsWith('payable:ai:held:')) x.ai.paidOutCents += l.amountCents;
     if (l.kind === 'ai_spend') x.ai.spentCents += l.amountCents;
     if (l.kind === 'donation' && l.debit.startsWith('payable:ai:')) x.ai.givenCents += l.amountCents;
+    else if (l.kind === 'donation' && l.credit.startsWith('payable:ai:')) x.ai.givenCents -= l.amountCents;
+    // By the side of the line: a reversal (a refund's commission_reversal, a voided batch's print line) debits revenue.
     if (l.credit.startsWith('revenue:')) x.adMoney += l.amountCents;
-    if (l.kind === 'commission_reversal') x.adMoney -= l.amountCents;
+    else if (l.debit.startsWith('revenue:')) x.adMoney -= l.amountCents;
     if (l.kind === 'commission') x.sales++;
     if (l.kind === 'commission_reversal') x.sales--;
     x.updatedAt = l.at.toISOString();

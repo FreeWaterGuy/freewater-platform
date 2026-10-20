@@ -55,7 +55,7 @@ Failed prints, failed AR and duplicate orders are never billed. Ledger lines are
 
 - **Every bottle is different.** The ad engine is told which labels are already in the pack and picks a different one, and no campaign can take more than its share of a pack (`maxPackShare`, 50% by default).
 - **The box is ad space.** Top, front, back and right are sold to four different advertisers (never two competitors), each with its own QR. The left face is the locked company panel with the pack's QR. The bottom stays blank. A small stop code (`R3 · 14`) sits in the corner of the front and top. Box faces are billed only when the box print is confirmed.
-- **Checked before sealing.** The packing line scans every bottle. A missing bottle or one from another pack stops the line; the missing bottle is reprinted and the pack is checked again before it can be sealed.
+- **Checked before sealing.** The packing line scans every bottle (where there's no line, a signed-in person counts the box by hand and that check is recorded with who and when). A missing bottle or one from another pack stops the line; the missing bottle is reprinted and the pack is checked again before it can be sealed.
 - **Loaded in reverse.** The last stop goes in the van first, so the next box is always by the door.
 - **Right box, right door.** A stop is marked delivered only when the driver scans the box planned for that address while at that address. Anything else is rejected with what to grab instead.
 
@@ -140,7 +140,7 @@ npm run demo:ops-preview   # builds out/ops-preview/ and out/driver-preview/, cl
 
 **The night's routes (`POST /v1/ops/runs/plan`).** Everyone due that night, grouped by route, put in driving order from the micro-factory, and a pack printed for each stop. Every bottle in a pack is different and the box carries its stop code ("R3 · 14") and its own box number. Planning the same night twice prints nothing new.
 - **Swappable pieces.** Addresses become map points through a `Geocoder` (the test geocoder stands in until a real one is chosen). Stops are ordered by a `RoutePlanner` (the simple planner goes to the nearest stop next and then untangles crossings; a real routing service with roads and traffic plugs in the same way).
-- **Packing check (`POST /v1/ops/runs/:id/pack-check`).** Every bottle in every box is checked before the box is sealed. A real packing line reports each scan through the packs API instead.
+- **Packing check (`POST /v1/ops/runs/:id/pack-check`).** Every bottle in every box is checked before the box is sealed. The packing line reports each box's scan through the packs API (`POST /v1/packs/:id/verify`); the packing check then seals every box the line passed and lists the rest. Where there's no line, a signed-in person counts a box by hand and presses **Checked by hand** next to it on the routes page (`POST /v1/ops/runs/:id/stops/:stop/check-by-hand`, a person only, never an API key): the box is sealed and the stop records who checked it and when. Once every box is sealed the route is ready to load.
 
 **The driver app (`/driver`).**
 - **Load the van.** The driver takes a route, then scans each box into the van in load order (`POST /v1/driver/runs/:id/load`), last stop first, so stop 1 ends up by the door. A box out of order is refused.

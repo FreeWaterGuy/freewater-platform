@@ -28,7 +28,7 @@ import { VideoError } from '../modules/video/service';
 import { DataError, DataService } from '../modules/data/service';
 import { NumberLineError } from '../modules/numberline/service';
 import { LotteryError } from '../modules/lottery/service';
-import { PackStateError } from '../modules/packs/service';
+import { AmbiguousRunError, PackStateError } from '../modules/packs/service';
 import { AttributionError } from '../modules/attribution/service';
 import { FleetError } from '../modules/fleet/service';
 import { WebhookError } from '../modules/webhooks/service';
@@ -439,12 +439,14 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const runId = (req.query as any)?.runId ?? (req.body as any)?.runId;
     const mine = [...packs.packs.values()].some((p) => p.routeId === routeId && p.companyId === key!.companyId);
     if (!mine) throw notFound('Route');
-    try { return { body: packs.load(routeId, typeof runId === 'string' && runId ? runId : undefined).map((p) => packView(p.id)) }; } catch (e: any) { throw new ApiError(409, 'not_sealed', e.message); }
+    try { return { body: packs.load(routeId, typeof runId === 'string' && runId ? runId : undefined).map((p) => packView(p.id)) }; } catch (e: any) { if (e instanceof AmbiguousRunError) throw new ApiError(400, 'run_required', e.message); throw new ApiError(409, 'not_sealed', e.message); }
   } });
 
   route({ method: 'POST', url: '/v1/deliveries', scope: 'packs', summary: 'The driver scans a box at a door. Delivered only if it is the right box at the right address. Pass runId for a night’s run; without it, the route’s current run.', body: obj({ routeId: S.str, runId: S.str, stop: S.int, scannedPackId: S.str, atAddress: S.bool, photoProof: S.bool, emptiesCollected: S.int }, ['routeId', 'stop', 'scannedPackId', 'atAddress', 'photoProof', 'emptiesCollected']), handler: async (req, key) => {
     const b = req.body as any;
-    const run = b.runId ?? packs.currentRun(b.routeId);
+    let run: string;
+    try { run = b.runId ?? packs.currentRun(b.routeId); } catch (e: any) { if (e instanceof AmbiguousRunError) throw new ApiError(400, 'run_required', e.message); throw e; }
+    if (!b.runId) b.runId = run;
     const planned = [...packs.packs.values()].find((p) => p.routeId === b.routeId && p.stop === b.stop && (p.runId ?? '') === run);
     if (!planned || planned.companyId !== key!.companyId) throw notFound('Stop');
     const r = packs.deliver(b);
@@ -687,7 +689,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   const sensitive: Record<string, string> = {
     'POST /v1/auth/verify': 'signed_in', 'POST /v1/keys': 'key_created', 'DELETE /v1/keys/:id': 'key_revoked', 'POST /v1/team': 'team_member_added', 'DELETE /v1/team/:userId': 'team_member_removed',
     'PATCH /v1/console/settings': 'settings_saved', 'POST /v1/console/history/:version/restore': 'settings_restored', 'POST /v1/agents/autonomy': 'autonomy_changed', 'POST /v1/platform/companies': 'licensee_created',
-    'POST /v1/team/batches/:id/void': 'batch_voided', 'POST /v1/webhooks': 'webhook_created',
+    'POST /v1/team/batches/:id/void': 'batch_voided', 'POST /v1/webhooks': 'webhook_created', 'POST /v1/ops/runs/:id/stops/:stop/check-by-hand': 'pack_checked_by_hand',
   };
   const mask = (to: unknown) => { const s = String(to ?? ''); const at = s.indexOf('@'); return at > 0 ? `${s[0]}***${s.slice(at)}` : s.length > 4 ? `***${s.slice(-4)}` : '***'; };
 
