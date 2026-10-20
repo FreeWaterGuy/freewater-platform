@@ -191,6 +191,7 @@ export class DataService {
   // ---------- recording ----------
 
   async recordInteraction(companyId: string, viewerKey: string, campaignId: string | undefined, item: Interaction, req?: { ip?: string; headers: Record<string, unknown> }) {
+    this.sawDevice(companyId, viewerKey, req?.ip);
     const gpc = String(req?.headers['sec-gpc'] ?? '') === '1';
     if (!(await this.allowed(companyId, 'interactions', [viewerKey, ...(await this.linkedSubjects(companyId, viewerKey))], { gpc, place: this.placeOf(req) }))) return 0;
     return this.interactions.record(companyId, viewerKey, campaignId, [item]);
@@ -198,6 +199,7 @@ export class DataService {
 
   /** One action, by anyone. Secrets are never kept; the device and IP only as the company's rules allow. */
   async activity(companyId: string, actor: Actor, kind: string, opts: { target?: string; detail?: unknown; ip?: string; device?: string; gpc?: boolean; headers?: Record<string, unknown> } = {}) {
+    if (actor.viewerKey) this.sawDevice(companyId, actor.viewerKey, opts.ip);
     const subjects = [actor.viewerKey, actor.userId ? `user:${actor.userId}` : undefined].filter((x): x is string => !!x);
     const business = !['viewer', 'consumer', 'public'].includes(actor.type);
     const o = { gpc: opts.gpc, business, place: business ? null : this.placeOf({ ip: opts.ip, headers: opts.headers }) };
@@ -369,6 +371,50 @@ export class DataService {
     }
     return person;
   }
+  // ---------- proof that a phone is yours, before joining it to your account ----------
+  //
+  // A phone's key is a random code the phone keeps; anyone who learns it (a shared link, a screenshot) could otherwise
+  // join it to their own account and read everything that phone did. Two checks, with what we have:
+  // 1. A phone already joined to someone (another person, or another account's own phone) is never joined to anyone
+  //    else. Whoever owns it signed in first; taking it over needs that person to erase or unlink it.
+  // 2. The phone must have done something here (a scan, a page it opened) from the same network as the request that
+  //    joins it, in the last day. Signing in happens on the phone itself, so that's normally true; a code copied out
+  //    of a log can't be claimed from somewhere else. This is kept only in memory, as a keyed fingerprint of the
+  //    network (never the address), for a day, and is used for nothing else: it's security, not data about anyone.
+  //    It can't stop someone who holds the key AND uses it from their own network first; check 1 is what protects a
+  //    phone that's already someone's.
+  private devicesSeen = new Map<string, Map<string, number>>();
+  private seenSalt = randomBytes(16);
+  static deviceSeenMs = 24 * 3600_000;
+  private netOf(ip: string) { return createHash('sha256').update(this.seenSalt).update(ip).digest('base64url').slice(0, 16); }
+  /** The phone with this key just did something from this network. */
+  sawDevice(companyId: string, viewerKey: string | undefined, ip: string | undefined) {
+    if (!viewerKey || !ip || viewerKey.includes(':')) return;
+    const k = `${companyId}|${viewerKey}`, now = this.clock().getTime();
+    const m = this.devicesSeen.get(k) ?? new Map<string, number>();
+    m.set(this.netOf(ip), now);
+    this.devicesSeen.delete(k); this.devicesSeen.set(k, m); // newest last
+    // Bounded: the oldest phones go first.
+    while (this.devicesSeen.size > 200_000) this.devicesSeen.delete(this.devicesSeen.keys().next().value!);
+  }
+  private seenFrom(companyId: string, viewerKey: string, ip: string | undefined) {
+    const at = ip ? this.devicesSeen.get(`${companyId}|${viewerKey}`)?.get(this.netOf(ip)) : undefined;
+    return at !== undefined && this.clock().getTime() - at <= DataService.deviceSeenMs;
+  }
+  /**
+   * May this phone be joined to this account? `own` are the account's own subjects (its user, its email and phone
+   * fingerprints, its own phone key). See the checks above.
+   */
+  async mayLinkDevice(companyId: string, userId: string, viewerKey: string, ip: string | undefined, own: string[] = []) {
+    if (!viewerKey || viewerKey.includes(':')) return false;
+    const mine = new Set<string>();
+    for (const s of [`user:${userId}`, ...own]) { const p = s ? await this.personFor(companyId, s) : null; if (p) mine.add(p); }
+    const theirs = await this.personFor(companyId, viewerKey);
+    if (theirs) return mine.has(theirs); // already this person's: nothing new is joined; someone else's: never
+    if ((await this.db.query(`select 1 from users where viewer_key = $1 and id <> $2`, [viewerKey, userId])).rows.length) return false;
+    return this.seenFrom(companyId, viewerKey, ip);
+  }
+
   /** Email and phone are joined by fingerprint only, so a consumer and an advertiser with the same email meet. */
   static emailKey(email?: string | null) { return email ? `email:${sha(email.trim().toLowerCase())}` : ''; }
   static phoneKey(phone?: string | null) { return phone ? `phone:${sha(phone.replace(/[^\d+]/g, ''))}` : ''; }
@@ -380,13 +426,18 @@ export class DataService {
 
   /** Everything about one person, from every direction, for the team or for the person themselves. */
   async profile(companyId: string, personOrSubject: string) {
-    const person = personOrSubject.startsWith('per_') ? personOrSubject : await this.personFor(companyId, personOrSubject);
+    // A person id is only this company's if the person was made here: another company's people are never shown.
+    const person = personOrSubject.startsWith('per_')
+      ? ((await this.db.query<any>(`select id from people where id = $1 and company_id = $2`, [personOrSubject, companyId])).rows[0]?.id as string | undefined) ?? null
+      : await this.personFor(companyId, personOrSubject);
     const links = person ? (await this.db.query<any>(`select kind, value, how, linked_at from person_links where person_id = $1 and company_id = $2`, [person, companyId])).rows : [];
     const viewers = links.filter((l) => l.kind === 'viewer').map((l) => l.value as string);
     if (!person && !personOrSubject.startsWith('per_')) viewers.push(personOrSubject);
     // An account always counts as itself, even when it isn't linked to a person (linking can be turned off).
-    const userIds = [...new Set([...links.filter((l) => l.kind === 'user').map((l) => l.value as string), ...(personOrSubject.startsWith('user:') ? [personOrSubject.slice(5)] : [])])];
-    const users = userIds.length ? (await this.db.query<any>(`select id, email, phone, role, advertiser_id, display_name, viewer_key, consents, interests, created_at from users where id = any($1)`, [userIds])).rows : [];
+    const askedIds = [...new Set([...links.filter((l) => l.kind === 'user').map((l) => l.value as string), ...(personOrSubject.startsWith('user:') ? [personOrSubject.slice(5)] : [])])];
+    const users = askedIds.length ? (await this.db.query<any>(`select id, email, phone, role, advertiser_id, display_name, viewer_key, consents, interests, created_at from users where id = any($1) and company_id = $2`, [askedIds, companyId])).rows : [];
+    // Only this company's accounts count (an account id from another company finds nothing).
+    const userIds = users.map((u) => u.id as string);
     for (const u of users) viewers.push(u.viewer_key);
     const advertiserIds = users.map((u) => u.advertiser_id).filter(Boolean);
     const q = async (sql: string, args: unknown[]) => (await this.db.query<any>(sql, args)).rows;
@@ -397,16 +448,16 @@ export class DataService {
         scans: await q(`select type, at, payload from events where company_id = $1 and type in ('unit.scanned','ar.launched','box.scanned','experience.engaged') and payload->>'viewerKey' = any($2) order by seq desc limit 200`, [companyId, viewers]),
         interactions: await q(`select target, kind, value, video_id, at from interactions where company_id = $1 and viewer_key = any($2) order by at desc limit 500`, [companyId, viewers]),
         choices: await q(`select kind, subject, position, system, tier, net_cents, at from choices where company_id = $1 and (person = any($2) or person = any($3)) order by at desc limit 500`, [companyId, viewers, userIds.map((u) => `user:${u}`)]),
-        designs: userIds.length ? await q(`select id, status, data, messages, created_at from custom_designs where user_id = any($1) order by created_at desc limit 50`, [userIds]).catch(() => []) : [],
+        designs: userIds.length ? await q(`select id, status, data, messages, created_at from custom_designs where company_id = $2 and user_id = any($1) order by created_at desc limit 50`, [userIds, companyId]).catch(() => []) : [],
         lottery: await q(`select via, status, prize, created_at from lottery_chances where company_id = $1 and viewer_key = any($2) order by created_at desc limit 100`, [companyId, viewers]),
       },
       // Everything from the wallet, the games, offers and what they told us, under all their phones and accounts.
       ...(await this.more(companyId, [...new Set([...viewers, ...userIds.map((u) => `user:${u}`)])].filter(Boolean))),
       asAdvertiser: advertiserIds.length ? {
-        campaigns: [...this.platform.campaigns.values()].filter((c) => advertiserIds.includes(c.advertiserId)).map((c) => ({ id: c.id, name: c.advertiserName, category: c.category, offering: c.offering ?? null, active: c.active })),
-        drafts: await q(`select id, status, data, messages, created_by, updated_at from ad_drafts where advertiser_id = any($1) order by updated_at desc limit 50`, [advertiserIds]).catch(() => []),
+        campaigns: [...this.platform.campaigns.values()].filter((c) => c.companyId === companyId && advertiserIds.includes(c.advertiserId)).map((c) => ({ id: c.id, name: c.advertiserName, category: c.category, offering: c.offering ?? null, active: c.active })),
+        drafts: await q(`select id, status, data, messages, created_by, updated_at from ad_drafts where company_id = $2 and advertiser_id = any($1) order by updated_at desc limit 50`, [advertiserIds, companyId]).catch(() => []),
       } : null,
-      activity: person ? await q(`select actor_type, kind, target, detail, at from activity where person_id = $1 order by at desc limit 500`, [person]) : [],
+      activity: person ? await q(`select actor_type, kind, target, detail, at from activity where person_id = $1 and company_id = $2 order by at desc limit 500`, [person, companyId]) : [],
     };
   }
 
@@ -453,7 +504,9 @@ export class DataService {
     // What's about them: gone.
     await run('interactions', `delete from interactions where company_id = $1 and viewer_key = any($2)`, [companyId, v]);
     await run('choices', `delete from choices where company_id = $1 and person = any($2)`, [companyId, [...v, ...users.map((id) => `user:${id}`)]]);
-    if (prof.person) { await run('activity', `delete from activity where person_id = $1`, [prof.person]); await this.db.query(`delete from person_links where person_id = $1`, [prof.person]); await this.db.query(`delete from people where id = $1`, [prof.person]); }
+    // What they did: under their person, and anything logged under their accounts or phones before (or without) linking.
+    await run('activity', `delete from activity where company_id = $1 and actor_type in ('viewer','consumer','public') and actor_id = any($2)`, [companyId, [...v, ...users]]);
+    if (prof.person) { await run('activity', `delete from activity where company_id = $1 and person_id = $2`, [companyId, prof.person]); await this.db.query(`delete from person_links where person_id = $1`, [prof.person]); await this.db.query(`delete from people where id = $1`, [prof.person]); }
     await run('consents', `delete from data_consents where company_id = $1 and subject = any($2)`, [companyId, [...v, ...users.map((id) => `user:${id}`)]]);
     await this.erasePersonal(companyId, [...v, ...users.map((id) => `user:${id}`)], run);
     await run('advertisers seen', `delete from viewer_advertisers where company_id = $1 and viewer_key = any($2)`, [companyId, v]);
@@ -469,6 +522,10 @@ export class DataService {
     if (users.length) {
       const contacts = (await this.db.query<any>(`select email, phone from users where id = any($1)`, [users])).rows.flatMap((r) => [r.email, r.phone]).filter(Boolean);
       if (contacts.length) await run('sign-in codes', `delete from login_codes where company_id = $1 and destination = any($2)`, [companyId, contacts]);
+      // The security log keeps who did what, but never a full email or phone number of someone who's been erased.
+      for (const c of contacts) await run('security log', `update security_events set actor = replace(actor, $2, $3) where company_id = $1 and position($2 in actor) > 0`, [companyId, c, maskContact(c)]);
+      // The account's own phone key changes, so nothing still kept under the old one (a printed bottle, say) leads back to it.
+      for (const id of users) await run('phone key', `update users set viewer_key = $3 where company_id = $1 and id = $2`, [companyId, id, `vk_${randomBytes(12).toString('base64url')}`]);
       if (this.eraseAddresses) counts['delivery boxes'] = await this.eraseAddresses(companyId, users);
       await run('saved', `delete from saved_items where company_id = $1 and user_id = any($2)`, [companyId, users]);
       await run('designs', `delete from custom_designs where company_id = $1 and user_id = any($2)`, [companyId, users]);
@@ -552,10 +609,12 @@ export class DataService {
       // or Canada gets the company's keep; everyone else (Europe, elsewhere, or unknown) the strictest.
       const strict = preset('eu').rules;
       const short = (k: DataCategory) => Math.min(p.rules[k].keepDays, strict[k].keepDays);
-      const lax = `(select subject from person_places where company_id = $1 group by subject having bool_and(country in ('US','CA')))`;
+      // Only a place seen on their connection makes someone known (what they tell us can only add stricter places), as
+      // in placesFor: someone with nothing but a declared place is unknown and gets the strictest keep.
+      const lax = `(select subject from person_places where company_id = $1 group by subject having bool_or(source <> 'declared') and bool_and(country in ('US','CA')))`;
       // Within those: the US law's keep for people only in the US, Canada's (shorter) for anyone in Canada.
-      const usOnly = `(select subject from person_places where company_id = $1 group by subject having bool_and(country = 'US'))`;
-      const withCa = `(select subject from person_places where company_id = $1 group by subject having bool_and(country in ('US','CA')) and bool_or(country = 'CA'))`;
+      const usOnly = `(select subject from person_places where company_id = $1 group by subject having bool_or(source <> 'declared') and bool_and(country = 'US'))`;
+      const withCa = `(select subject from person_places where company_id = $1 group by subject having bool_or(source <> 'declared') and bool_and(country in ('US','CA')) and bool_or(country = 'CA'))`;
       const us = preset('us_ca').rules, ca = preset('ca').rules;
       const keepIn = async (table: string, col: string, at: string, k: DataCategory, extra = '') => {
         await del(`delete from ${table} where company_id = $1 and ${at} < $2 ${extra} and ${col} in ${usOnly}`, Math.min(p.rules[k].keepDays, us[k].keepDays));
@@ -599,6 +658,8 @@ export class DataService {
   }
 }
 
+/** An email or phone number with most of it hidden (j***@example.com, ***1234). */
+export function maskContact(to: string) { const at = to.indexOf('@'); return at > 0 ? `${to[0]}***${to.slice(at)}` : to.length > 4 ? `***${to.slice(-4)}` : '***'; }
 function subjectParts(s: string): [string, string] {
   const m = /^(user|email|phone|advertiser|pack|bottle):(.+)$/.exec(s);
   return m ? [m[1]!, m[2]!] : ['viewer', s];

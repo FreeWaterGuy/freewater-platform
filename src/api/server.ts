@@ -22,6 +22,7 @@ import { chainRoutes } from './chain';
 import { studioRoutes } from './studio';
 import { BadKeyGuard, classify, limits, RateLimiter, securityHeaders, SecurityLog } from './security';
 import { teamRoutes } from './team';
+import { loggerOptions } from './logging';
 import { operationsRoutes } from './operations';
 import { VideoError } from '../modules/video/service';
 import { DataError, DataService } from '../modules/data/service';
@@ -62,7 +63,7 @@ const PLATFORM_COMPANY = process.env.PLATFORM_COMPANY ?? 'freewater';
 export async function buildServer(app: App, opts: { logger?: boolean } = {}): Promise<FastifyInstance> {
   // Behind a load balancer, set TRUST_PROXY (1, or the proxy's address) so each caller's real address is used.
   const trustProxy = process.env.TRUST_PROXY ? (process.env.TRUST_PROXY === '1' ? true : process.env.TRUST_PROXY) : false;
-  const server = Fastify({ logger: opts.logger ?? false, bodyLimit: 3 * 1024 * 1024, routerOptions: { maxParamLength: 1000 }, trustProxy });
+  const server = Fastify({ logger: opts.logger ? loggerOptions : false, bodyLimit: 3 * 1024 * 1024, routerOptions: { maxParamLength: 1000 }, trustProxy });
   const { platform, packs, persistence, db, experiences } = app;
   for (const type of Object.keys(allowedTypes)) server.addContentTypeParser(type, { parseAs: 'buffer', bodyLimit: 64 * 1024 * 1024 }, (_req, body, done) => done(null, body));
   const routes: RouteDef[] = [];
@@ -462,7 +463,10 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const r = await app.accounts.verify({ companyId: b.companyId, channel: b.channel, to: b.to, code: b.code });
     // One person: this account, its email or phone (as a fingerprint), and the phone it signed in on.
     const u: any = r.user;
-    await app.data.link(b.companyId, [`user:${u.id}`, DataService.emailKey(u.email), DataService.phoneKey(u.phone), u.viewerKey, b.viewerKey].filter(Boolean), 'signed in').catch(() => null);
+    const own = [`user:${u.id}`, DataService.emailKey(u.email), DataService.phoneKey(u.phone), u.viewerKey].filter(Boolean);
+    // The phone it signed in on joins only if it's provably this person's (see DataService.mayLinkDevice).
+    const phone = b.viewerKey && (await app.data.mayLinkDevice(b.companyId, u.id, b.viewerKey, req.ip, own).catch(() => false)) ? [b.viewerKey] : [];
+    await app.data.link(b.companyId, [...own, ...phone], 'signed in').catch(() => null);
     // Someone with a second step turned on gets a ticket for it, not yet a session.
     if (r.challenge) return { body: { secondStep: true, challenge: r.challenge } };
     return { body: { token: r.token, isNew: r.isNew, user: r.user } };
@@ -473,8 +477,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     try { passed = await app.secondStep.pass(b.challenge, b.code); }
     catch (e: any) { securityLog.record({ kind: 'second_step_failed', ip: req.ip, detail: { reason: e.code } }, `ssf:${req.ip}`); throw new ApiError(e.status ?? 401, e.code ?? 'wrong_code', e.message); }
     const user = (await app.accounts.get(passed.userId))!;
-    if (passed.usedRecoveryCode) securityLog.record({ kind: 'recovery_code_used', companyId: user.companyId, actor: user.displayName ?? user.email ?? user.id, ip: req.ip });
-    securityLog.record({ kind: 'signed_in', companyId: user.companyId, actor: user.displayName ?? user.email ?? user.id, ip: req.ip, detail: { secondStep: passed.usedRecoveryCode ? 'recovery code' : 'authenticator app' } });
+    const actor = user.displayName ?? (user.email ? mask(user.email) : user.id);
+    if (passed.usedRecoveryCode) securityLog.record({ kind: 'recovery_code_used', companyId: user.companyId, actor, ip: req.ip });
+    securityLog.record({ kind: 'signed_in', companyId: user.companyId, actor, ip: req.ip, detail: { secondStep: passed.usedRecoveryCode ? 'recovery code' : 'authenticator app' } });
     return { body: { token: await app.accounts.createSession(user.id), isNew: false, user } };
   } });
 
@@ -552,7 +557,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   route({ method: 'POST', url: '/v1/team', scope: 'admin', summary: 'Add a team member or advertiser staff. They sign in with a code sent to their email.', body: obj({ email: S.str, role: { type: 'string', enum: ['owner', 'ops', 'finance', 'reviewer', 'driver', 'advertiser'] }, advertiserId: S.str, displayName: S.str }, ['email', 'role']), handler: async (req, key) => {
     if (key!.advertiserId) throw new ApiError(403, 'missing_scope', 'Advertisers cannot add team members.');
-    return { status: 201, body: await app.accounts.invite({ companyId: key!.companyId, ...(req.body as any) }) };
+    return { status: 201, body: await app.accounts.invite({ companyId: key!.companyId, ...(req.body as any), by: key!.userId }) };
   } });
 
   // ---------- payments: cards, custom bottles, advertiser invoices ----------
@@ -688,6 +693,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   };
   const logActivity = (r: RouteDef, req: FastifyRequest, key: ApiKey | null, status: number) => {
     if (r.method === 'GET' || r.url === '/v1/public/interactions' || r.rawBodyLimit) return;
+    // Erasing yourself isn't logged under you again straight after.
+    if (r.method === 'DELETE' && (r.url === '/v1/me' || r.url === '/v1/me/data')) return;
     const body: any = req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body) ? req.body : undefined;
     const companyId = key?.companyId ?? companyOfPublic(body);
     if (!companyId || !platform.companies.has(companyId)) return;
@@ -726,7 +733,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
         const what = sensitive[`${r.method} ${r.url}`];
         if (what) {
           const k = (req as any).apiKey as ApiKey | null, b: any = req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body) ? req.body : {};
-          securityLog.record({ kind: what, companyId: k?.companyId ?? (typeof b.companyId === 'string' ? b.companyId : null), actor: k ? `${k.name} (${k.userId ? 'person' : 'key'} ${k.id})` : mask(b.to), ip: req.ip, detail: { ...(req.params as object), ...(what === 'key_created' ? { name: b.name, scopes: b.scopes } : {}), ...(what === 'team_member_added' ? { email: mask(b.email), role: b.role } : {}), ...(what === 'autonomy_changed' ? { area: b.area, level: b.level } : {}) } });
+          securityLog.record({ kind: what, companyId: k?.companyId ?? (typeof b.companyId === 'string' ? b.companyId : null), actor: k ? `${/@|^\+?[\d\s().-]{7,}$/.test(k.name ?? '') ? mask(k.name) : k.name} (${k.userId ? 'person' : 'key'} ${k.id})` : mask(b.to), ip: req.ip, detail: { ...(req.params as object), ...(what === 'key_created' ? { name: b.name, scopes: b.scopes } : {}), ...(what === 'team_member_added' ? { email: mask(b.email), role: b.role } : {}), ...(what === 'autonomy_changed' ? { area: b.area, level: b.level } : {}) } });
         }
         reply.code(out.status ?? 200);
         if (out.headers) reply.headers(out.headers);

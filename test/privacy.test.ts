@@ -92,11 +92,15 @@ describe('people can see and erase what’s kept about them', () => {
   it('a phone erasing itself without signing in never reaches the account it’s linked to', async () => {
     const viewerKey = 'phone-linked-0001';
     const to = 'linked@example.com';
+    // The phone scans first, so signing in on it joins it to the account.
+    const scanned = await app.platform.order({ companyId: 'freewater', orderId: 'priv-4a', locationId: 'ATX-014', productId: 'bottle-16oz' });
+    await call('POST', '/v1/public/scans', undefined, { unitId: scanned.unit.id, slot: 0, viewerKey, experienceLoaded: true });
     await call('POST', '/v1/auth/start', undefined, { companyId: 'freewater', channel: 'email', to });
     const code = /(\d{6})/.exec((app.messenger as TestOutbox).lastTo(to)!.text)![1];
     const t = (await call('POST', '/v1/auth/verify', undefined, { companyId: 'freewater', channel: 'email', to, code, viewerKey })).body.token as string;
     const u = await app.platform.order({ companyId: 'freewater', orderId: 'priv-4', locationId: 'ATX-014', productId: 'bottle-16oz' });
     await call('POST', '/v1/me/saved', t, { target: `s:${u.unit.id}:0` });
+    expect(await app.data.personFor('freewater', viewerKey)).toBeTruthy(); // linked
     const f = await call('POST', '/v1/public/data/freewater/forget', undefined, { viewerKey });
     expect(f.body.erased).toBe(true);
     expect((await call('GET', '/v1/me', t)).status).toBe(200); // still signed in

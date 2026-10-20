@@ -21,7 +21,10 @@ export function walletRoutes(app: App, route: (r: RouteDef) => void) {
     if (!/^[A-Za-z0-9_-]{8,64}$/.test(v)) throw new ApiError(400, 'viewer_required', 'Send ?viewer=<the random id this phone keeps>.');
     return { body: await wallet.wallet(company((req.params as any).companyId), v) };
   } });
-  route({ method: 'GET', url: '/v1/me/wallet', scope: 'me', summary: 'Your wallet: points, dollar credit, history, coupons and everything you saved, across your phones.', handler: async (_req, key) => ({ body: await wallet.wallet(key!.companyId, `user:${key!.userId}`, key!.userId) }) });
+  route({ method: 'GET', url: '/v1/me/wallet', scope: 'me', summary: 'Your wallet: points, dollar credit, history, coupons and everything you saved, across your phones.', handler: async (_req, key) => {
+    if (!key?.userId) throw new ApiError(403, 'person_required', 'Sign in as a person to do this; API keys belong to systems.');
+    return { body: await wallet.wallet(key.companyId, `user:${key.userId}`, key.userId) };
+  } });
   route({ method: 'GET', url: '/v1/public/wallet/:companyId/supply', scope: 'public', summary: 'The points supply, for anyone: how many exist, the cap, the halving era and what each action earns now.', handler: async (req) => ({ body: await wallet.supply(company((req.params as any).companyId)) }) });
 
   route({ method: 'POST', url: '/v1/wallet/reserve', scope: 'admin', summary: 'Record money a brand put in reserve for dollar credit, once it has really arrived. Credit can never exceed the reserve.', body: obj({ sponsor: { type: 'string', pattern: '^[A-Za-z0-9_:-]{1,80}$' }, cents: S.int, ref: { type: 'string', minLength: 1, maxLength: 120 } }, ['sponsor', 'cents', 'ref']), handler: async (req, key) => {
