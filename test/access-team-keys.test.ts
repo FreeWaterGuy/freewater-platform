@@ -23,7 +23,7 @@ const call = async (method: string, url: string, key?: string, payload?: unknown
 };
 const person = async (companyId: string, email: string, role: 'owner' | 'finance' | 'ops') => {
   const u = await app.accounts.invite({ companyId, email, role });
-  return { id: u.id, token: await app.accounts.createSession(u.id) };
+  return { id: u.id, token: await app.accounts.createSession(u.id, { secondStep: true }) };
 };
 const roleOf = async (email: string) => (await db.query<any>(`select role from users where email = $1`, [email])).rows[0]?.role;
 
