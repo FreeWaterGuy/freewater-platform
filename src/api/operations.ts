@@ -75,6 +75,12 @@ export function operationsRoutes(app: App, server: FastifyInstance, route: (r: R
   // from a guess. Reading still works, and so do signing in and the platform's own repair routes.
   server.addHook('onRequest', async (req) => {
     if (runtime.lost && !req.url.startsWith('/health/live')) throw new ApiError(503, 'restarting', 'FreeWater is restarting. Please try again in a moment.');
+    // The synchronous gate: a server whose last lease renewal is too old (it was frozen, or can't reach the database)
+    // can't be sure it still owns the data, so it changes nothing until a renewal succeeds again. Checked before any
+    // await, so a server waking from a freeze refuses the requests waiting for it before anything else runs.
+    if (runtime.lease && !runtime.lease.fresh && req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS') {
+      throw new ApiError(503, 'not_sure_of_ownership', 'This server can’t confirm right now that it’s the only one changing the data, so it isn’t taking changes. Please try again in a moment.');
+    }
     if (!persistence.problem) return;
     const url = req.url.split('?')[0]!;
     // Reading still works. (A QR opened or an ad's link clicked is still recorded: those changes queue up behind the

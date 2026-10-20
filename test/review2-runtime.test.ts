@@ -37,9 +37,9 @@ describe('production settings', () => {
     expect(refused.active.join(' ')).toMatch(/TestPaymentProvider.*TestPayoutProvider.*TestOutbox/);
     const rehearsal = checkStandIns({}, { NODE_ENV: 'production', ALLOW_STANDINS: '1' } as any);
     expect(rehearsal.errors).toEqual([]);
-    expect(rehearsal.active).toHaveLength(3); // still listed, so the server says so loudly
+    expect(rehearsal.active).toHaveLength(4); // still listed, so the server says so loudly (gift cards too)
     expect(checkStandIns({}, {} as any).errors).toEqual([]); // a laptop
-    expect(checkStandIns({ payments: {}, payouts: {}, messenger: {} }, { NODE_ENV: 'production' } as any)).toMatchObject({ active: [], errors: [] });
+    expect(checkStandIns({ payments: {}, payouts: {}, messenger: {}, giftCards: {} }, { NODE_ENV: 'production' } as any)).toMatchObject({ active: [], errors: [] });
   });
 
   it('an unwritable spool directory stops a production start; elsewhere it only warns', () => {
@@ -62,7 +62,7 @@ describe('writes check the lease', () => {
 
     await db.query(`update instance_lease set expires_at = now() - interval '1 second' where name = 'w1'`); // it lapsed
     p.ledgerEntry(entry('le_lease_lapsed'));
-    await expect(p.flush()).rejects.toThrow(/paused/);
+    await expect(p.flush()).rejects.toThrow(/no longer owns the data/); // fenced: told at once, not left to time out
     expect(await has(db, 'le_lease_lapsed')).toBe(false);
     expect(lost).toHaveLength(1);
     expect(lost[0]).toMatch(/lease/);
@@ -81,7 +81,7 @@ describe('writes check the lease', () => {
     p.requireLease(lease);
     await db.query(`update instance_lease set holder = 'srv-b' where name = 'w2'`);
     p.ledgerEntry(entry('le_taken'));
-    await expect(p.flush()).rejects.toThrow(/paused/);
+    await expect(p.flush()).rejects.toThrow(/no longer owns the data/);
     expect(await has(db, 'le_taken')).toBe(false);
     expect(lost).toHaveLength(1);
   });

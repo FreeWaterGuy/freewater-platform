@@ -163,10 +163,22 @@ describe('seeing the sale ourselves', () => {
     expect((await report('https://shop.joesburgers.example', { fwclid: 'FWC00000000000000000', orderId: 'A-1002', valueCents: 2500 })).status).toBe(404);
     expect((await report('https://shop.joesburgers.example', { orderId: 'A-1003', valueCents: 2500 })).status).toBe(422); // not from a bottle: not ours to count
 
-    const lines = (await db.query<any>(`select kind, amount_cents from ledger_entries where unit_id = $1 and kind = 'commission'`, [unit.id])).rows;
-    expect(lines).toEqual([{ kind: 'commission', amount_cents: 75 }]); // 3% of $25, once
-    const summary = (await call('GET', '/v1/ads/tracking', keys['advertiser-joes'])).body.summary;
-    expect(summary.sales).toMatchObject({ count: 1, valueCents: 2500, commissionCents: 75, bySource: { tag: 1 }, fromAr: { count: 0 } });
+    // The tag runs in the shopper's browser (its Origin can be forged), so its sale is shown as unverified, not billed.
+    expect(ok.body.status).toBe('unverified');
+    const commission = async () => (await db.query<any>(`select kind, amount_cents from ledger_entries where unit_id = $1 and kind = 'commission'`, [unit.id])).rows;
+    expect(await commission()).toEqual([]);
+    let summary = (await call('GET', '/v1/ads/tracking', keys['advertiser-joes'])).body.summary;
+    expect(summary.sales).toMatchObject({ count: 0, commissionCents: 0 });
+    expect(summary.unverified).toEqual({ count: 1, valueCents: 2500 });
+    // The advertiser's server confirms the order with its key: billed once, matched to the click the tag saw.
+    const confirmed = await call('POST', '/v1/conversions', keys['advertiser-joes'], { orderId: 'A-1001', valueCents: 2500 });
+    expect(confirmed.status).toBe(201);
+    expect(confirmed.body.conversion).toMatchObject({ status: 'billed', clickId: fwclid, spot: { unitId: unit.id, slot } });
+    expect((await call('POST', '/v1/conversions', keys['advertiser-joes'], { orderId: 'A-1001', valueCents: 2500 })).body.duplicate).toBe(true);
+    expect(await commission()).toEqual([{ kind: 'commission', amount_cents: 75 }]); // 3% of $25, once
+    summary = (await call('GET', '/v1/ads/tracking', keys['advertiser-joes'])).body.summary;
+    expect(summary.sales).toMatchObject({ count: 1, valueCents: 2500, commissionCents: 75, bySource: { server: 1 }, fromAr: { count: 0 } });
+    expect(summary.unverified).toEqual({ count: 0, valueCents: 0 });
   });
 
   it('takes sales from the advertiser’s server too, and gives the commission back on a refund', async () => {

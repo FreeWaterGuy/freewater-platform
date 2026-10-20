@@ -176,8 +176,8 @@ npm run demo:ops-preview   # builds out/ops-preview/ and out/driver-preview/, cl
 
 **Seeing the sale (`src/modules/attribution`).** Sales are matched to the exact bottle and ad by the platform itself, not on the advertiser's word.
 - **Click ids:** every link out of an ad goes through `/go/…` (signed, so it can't be used to send people elsewhere). We record the click and send the person on with `fwclid=FWC…`.
-- **Our tag** (`/t.js`): advertisers put it on their site. It remembers the fwclid for 30 days and reports `freewater('purchase', { orderId, value, coupon })`. It's only accepted from the advertiser's own listed websites.
-- **Server to server:** `POST /v1/conversions` with the fwclid or coupon code.
+- **Our tag** (`/t.js`): advertisers put it on their site. It remembers the fwclid for 30 days and reports `freewater('purchase', { orderId, value, coupon })`. It's only accepted from the advertiser's own listed websites. The tag runs in the shopper's browser and anyone can forge its Origin, so a sale it reports proves a click led to the site but is **unverified**: shown to the advertiser and the company, never billed on its own.
+- **Server to server:** `POST /v1/conversions` with the advertiser's key and the fwclid or coupon code. This is what bills commission, and it confirms a sale the tag reported (same order number; the tag's click is used if none is sent). A coupon redeemed at the counter confirms it too.
 - **What counts:** only sales matched to one of our clicks or coupons. The same order counts once, at most 5 sales per click, within 30 days. Refunds give the commission back.
 - **One-time coupons:** every person gets their own code (e.g. `BOTTLE2X-7F3A9Q`) with its own QR.
   - The cashier scans it with a phone camera, which opens FreeWater Ads → Check a coupon. It shows valid or already used, then the sale amount is entered and credited to that bottle.

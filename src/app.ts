@@ -6,7 +6,7 @@ import type { Creative } from './core/types';
 import { TestOutbox, type Messenger } from './adapters/messaging/contract';
 import type { PaymentProvider } from './adapters/payments/contract';
 import { TestPaymentProvider } from './adapters/payments/test';
-import { AccountsService } from './modules/accounts/service';
+import { AccountsService, heldApproverRole } from './modules/accounts/service';
 import { SecondStep } from './modules/accounts/secondStep';
 import { PaymentsService } from './modules/payments/service';
 import { ExperienceHost } from './modules/experiences/host';
@@ -82,6 +82,7 @@ import { charter as agentCharter, winCondition } from './modules/agents/charter'
 import { claudeExaminee } from './modules/agents/exam';
 import type { BlobStore } from './modules/assets/blobs';
 import type { InstanceLease } from './runtime/lease';
+import { leaseCheckedClient } from './db/leaseChecked';
 import type { JobRunner } from './runtime/jobs';
 import { boxes, builtinCreatives, freewater, locations, peakSpring, products, sampleCampaigns } from './demo/seed';
 
@@ -100,6 +101,12 @@ export interface AppOptions {
   spoolFile?: string;
   /** This server's own id (its lease holder), written with every batch so recovery knows who wrote last. */
   epoch?: string;
+  /**
+   * The single-owner lease (production). With one, every write the app makes straight to the database checks it in
+   * its own transaction (see db/leaseChecked.ts), the write queue checks it too, and the server's gate refuses changes
+   * and jobs while its last renewal is too old. Without one (tests, a laptop) nothing is checked.
+   */
+  lease?: InstanceLease;
   builtins?: Record<string, Creative>;
   seedDemo?: boolean; // load FreeWater's sample catalog and print demo API keys when the database is empty
   clock?: () => Date;
@@ -154,10 +161,13 @@ export interface AppOptions {
 
 /** Start the platform on a database: migrate, load everything, and keep writing every change back. */
 export async function createApp(opts: AppOptions) {
-  const { db } = opts;
-  await migrate(db);
+  const raw = opts.db;
+  await migrate(raw);
   // Changes a stopped server had waiting go in first, so what's read below is complete.
-  await SqlPersistence.recoverSpool(db, opts.spoolFile);
+  await SqlPersistence.recoverSpool(raw, opts.spoolFile);
+  // From here on, with a lease, every direct write proves this server still owns the data (the write queue below
+  // keeps the raw client: it checks the lease itself, and fences and spools when it's gone).
+  const db = opts.lease ? leaseCheckedClient(raw, opts.lease) : raw;
   const builtins = opts.builtins ?? builtinCreatives;
 
   let demoKeys: Record<string, string> | undefined;
@@ -184,13 +194,14 @@ export async function createApp(opts: AppOptions) {
 
   const now = opts.clock?.() ?? new Date();
   const state = await loadState(db, builtins, now);
-  const runtime: Runtime = { alerts: opts.alerts ?? new Alerter(), startedAt: new Date() };
-  const persistence = new SqlPersistence(db, {
+  const runtime: Runtime = { alerts: opts.alerts ?? new Alerter(), startedAt: new Date(), ...(opts.lease ? { lease: opts.lease } : {}) };
+  const persistence = new SqlPersistence(raw, {
     spoolFile: opts.spoolFile,
     epoch: opts.epoch,
     onProblem: (p) => void runtime.alerts.alert('persistence', 'critical', 'The database is refusing changes; the platform has paused them', `${p.waiting} change(s) waiting since ${p.since}, tried ${p.tries} times. Last answer: ${p.message}. They'll go in by themselves once the database is back. If the database answers but one change keeps failing, see docs/RUNNING.md ("If changes are waiting").`),
     onRecovered: () => void runtime.alerts.alert('persistence', 'resolved', 'The database is taking changes again; everything waiting has been saved'),
   });
+  if (opts.lease) persistence.requireLease(opts.lease);
   const made = createPlatform({
     companies: state.companies,
     products: state.products,
@@ -282,6 +293,7 @@ export async function createApp(opts: AppOptions) {
   // The data environment: choices made in a clean setting, exposure recorded, people directing gifts and choosing ads.
   numberline.keepsChoicesOf = (companyId, person) => data.allowed(companyId, 'choices', [person]);
   const environment = new EnvironmentService(db, platform, numberline, opts.clock);
+  environment.flush = () => persistence.flush();
   const wallet = new WalletService(db, platform, opts.clock);
   wallet.mayEarn = async (companyId, subject) => (await data.rewardsAllowed(companyId, [subject, ...(await data.linkedSubjects(companyId, subject))])) && (await data.ageOk(companyId, [subject])) !== false;
   wallet.linked = (companyId, subject) => data.linkedSubjects(companyId, subject);
@@ -412,18 +424,19 @@ export async function createApp(opts: AppOptions) {
   };
   chain.isMember = async (companyId, person, at) => {
     if (!person.startsWith('user:')) return false;
-    const u = (await db.query<any>(`select role, created_at from users where id = $1 and company_id = $2 and deleted_at is null`, [person.slice(5), companyId])).rows[0];
-    return !!u && ['owner', 'finance'].includes(u.role) && new Date(u.created_at).getTime() <= at.getTime();
+    // Counted from when they got the owner or finance role (and only while they still hold it), not when the account was made.
+    return heldApproverRole(db, companyId, person.slice(5), at);
   };
 
   // Bottles FreeWater gives outside the platform (before the software runs them), recorded by the team.
-  const distributions = new DistributionService(db, platform, { today: (companyId) => delivery.today(companyId), charities: async (companyId) => (await books.charities(companyId)).map((c: any) => c.name), onBottles: (companyId, n) => transparency.addBottles(companyId, n) });
+  const distributions = new DistributionService(db, platform, { today: (companyId) => delivery.today(companyId), charities: async (companyId) => (await books.charities(companyId)).map((c: any) => c.name), onBottles: (companyId, n) => transparency.addBottles(companyId, n), flush: () => persistence.flush() });
   await distributions.init();
   const team = new TeamService(db, platform, distributions, opts.intake ?? (aiOn ? new ClaudeIntake({ apiKey: anthropicKey, model: process.env.ANTHROPIC_MODEL }) : builtinIntake), { today: (companyId) => delivery.today(companyId), charities: async (companyId) => (await books.charities(companyId)).map((c: any) => c.name), recordExpense: (companyId, e) => books.recordExpense(companyId, e) }, opts.blobs);
 
   // Monthly profit sharing above the $1 base: charity and AI shares, losses carried forward, the milestone.
   const profit = new ProfitService(db, platform, {
     today: (companyId, at) => delivery.today(companyId, at),
+    flush: () => persistence.flush(),
     batches: { bottles: (companyId) => distributions.bottles(companyId), inMonth: (companyId, period) => distributions.inMonth(companyId, period) },
     aiCostsCents: async (companyId, from, to) => {
       const rows = (await db.query<any>(`select company_id, at, millicents from agent_costs where at >= $1 and at < $2`, [from.toISOString(), to.toISOString()])).rows;
@@ -452,6 +465,7 @@ export async function createApp(opts: AppOptions) {
     numberline,
     gate: (companyId) => profit.gate(companyId),
     milestone: (companyId) => profit.milestone(companyId),
+    flush: () => persistence.flush(),
   })
   // The agents whose decisions come from a model take the test before their changes take effect.
   if (opts.examModels) agents.examModels = opts.examModels;
@@ -484,6 +498,17 @@ export async function createApp(opts: AppOptions) {
   const fleet = new FleetService(db, platform, messenger, flush, opts.fleet);
   await fleet.load();
   made.registry.registerPrinter('model6-fleet', new MachineFleetPrinter(() => fleet, made.printer));
+
+  // After a crash: a money step whose status was written but whose ledger lines never reached the books (written
+  // before lines were stored first, or by a step whose status is its own guard) gets them now. Every event's key is
+  // the step's own, so nothing is booked twice; on a clean start this books nothing. (Batches and the agents' fund
+  // repair themselves as they start, above.)
+  await payments.repairUnrecorded();
+  for (const c of platform.companies.values()) { await books.repairUnrecorded(c.id); await profit.repairShares(c.id); }
+  await lottery.repairUnrecorded();
+  await environment.repairDirections();
+  await offers.repairCauseGifts();
+  await persistence.flush();
 
   return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens };
 }

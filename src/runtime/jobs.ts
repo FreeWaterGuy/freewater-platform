@@ -38,7 +38,7 @@ export class JobRunner {
   constructor(
     private db: SqlClient,
     private jobs: Job[],
-    private opts: { tickMs?: number; onFailure?: (job: string, error: unknown, consecutive: number) => void; onRecovered?: (job: string) => void; onStuck?: (job: string, ms: number) => void; paused?: () => boolean; now?: () => number } = {},
+    private opts: { tickMs?: number; onFailure?: (job: string, error: unknown, consecutive: number) => void; onRecovered?: (job: string) => void; onStuck?: (job: string, ms: number) => void; paused?: () => boolean; now?: () => number; /** False while this server can't be sure it owns the data: no job starts, not even the ones that run while paused. */ mayRun?: () => boolean } = {},
   ) {
     for (const j of jobs) this.state.set(j.name, { lastStarted: null, lastFinished: null, lastOk: null, lastError: null, runs: 0, failures: 0, consecutive: 0, running: null, stuck: false });
   }
@@ -77,6 +77,8 @@ export class JobRunner {
   /** Start every job that's due. */
   tick() {
     if (this.stopping) return;
+    if (this.opts.mayRun && !this.opts.mayRun()) return; // checked first, synchronously, on every tick
+
     const paused = this.opts.paused?.() ?? false;
     for (const j of this.jobs) {
       const s = this.state.get(j.name)!;
@@ -93,6 +95,7 @@ export class JobRunner {
     if (!j) return Promise.reject(new Error(`No job called ${name}`));
     const s = this.state.get(name)!;
     if (s.running) return s.running;
+    if (this.opts.mayRun && !this.opts.mayRun()) return Promise.reject(new Error('This server can’t be sure it still owns the data right now, so no job runs.'));
     s.running = (async () => {
       const started = this.now();
       s.lastStarted = started; s.stuck = false;

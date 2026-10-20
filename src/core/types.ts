@@ -190,6 +190,9 @@ export interface CompanyConfig {
     offlineWalkUp: boolean; // offer a free bottle at the screen while offline, from labels prepared in advance
     offlinePerHour: number; // the most bottles one machine gives that way in an hour
     bufferSize: number; // labels each machine keeps prepared for that
+    /** The most bottles one machine's key may print through the API a minute, and a day (defaults 6 and 1,500). */
+    printsPerMinute?: number;
+    printsPerDay?: number;
   };
   /** Rules for people getting bottles from the app. */
   consumer?: {

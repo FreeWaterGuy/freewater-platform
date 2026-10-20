@@ -5,6 +5,7 @@ import type { CompanyConfig } from '../../core/types';
 import { newId } from '../../core/ids';
 import type { NumberLineService } from '../numberline/service';
 import type { OfferingFacts } from '../numberline/placement';
+import { withCharityLock } from '../books/charityLock';
 
 /**
  * The data environment: how FreeWater is set up so the choices people make in it measure what they actually want.
@@ -182,6 +183,28 @@ export class EnvironmentService {
     return { cents: from.reduce((a, [, v]) => a + v, 0), from, current: done?.to_cause ?? from.map(([k]) => k).join(' & '), directed: !!done, causes };
   }
 
+  /** Wait until every change queued so far is stored (set by the app). */
+  flush?: () => Promise<void>;
+
+  /**
+   * Choices written down whose move never reached the books (the choice is written first, as the once-per-bottle
+   * guard; a crash before the move was stored loses it): moved now, from the bottle's gift lines (which a move never
+   * changes), once per cause it came from (the key is the bottle's and that cause's). Run at start.
+   */
+  async repairDirections() {
+    let fixed = 0;
+    for (const r of (await this.db.query<any>(`select d.* from giving_directions d where not exists (select 1 from events e where e.company_id = d.company_id and e.type = 'giving.directed' and e.idempotency_key like 'giving:' || d.unit_id || ':%')`)).rows) {
+      const parts = new Map<string, number>();
+      for (const l of this.platform.ledger.receipt(r.unit_id).lines) {
+        if (l.kind !== 'donation') continue;
+        if (l.debit === 'expense:giving' && l.credit.startsWith('payable:charity:')) parts.set(l.credit.slice(16), (parts.get(l.credit.slice(16)) ?? 0) + l.amountCents);
+        else if (l.credit === 'expense:giving' && l.debit.startsWith('payable:charity:')) parts.set(l.debit.slice(16), (parts.get(l.debit.slice(16)) ?? 0) - l.amountCents);
+      }
+      for (const [from, cents] of parts) if (cents > 0 && from !== r.to_cause && this.platform.bus.publish('giving.directed', r.company_id, { unitId: r.unit_id, from, to: r.to_cause, cents, person: r.person }, `giving:${r.unit_id}:${from}`)) fixed++;
+    }
+    return fixed;
+  }
+
   /** The first person to scan each bottle holds it (kept in the database, so a restart changes nothing). */
   watchScans() {
     this.platform.bus.on('unit.scanned', (e) => {
@@ -217,13 +240,19 @@ export class EnvironmentService {
     if (this.now().getTime() - new Date(u.createdAt).getTime() > 30 * DAY) throw new EnvironmentError('too_late', 'A bottle’s gift can be directed within 30 days of it being printed.', 409);
     // Only the person holding it: whoever first scanned it (or, before any scan, the person it was printed for).
     if (person !== (await this.holderOf(unitId))) throw new EnvironmentError('not_holder', 'Only the person holding the bottle can choose where its gift goes.', 403);
-    // Money already sent can't be moved.
-    const sent = (await this.db.query<any>(`select 1 from charity_transfers t join charities c on c.id = t.charity_id where t.company_id = $1 and c.name = any($2) and t.status in ('sent', 'confirmed') and t.covers_until >= $3 limit 1`, [u.companyId, g.from.map(([k]) => k), u.createdAt])).rows.length;
-    if (sent) throw new EnvironmentError('already_sent', 'This bottle’s gift has already been sent.', 409);
-    // Claim the bottle first: only one choice per bottle ever moves money.
-    const won = (await this.db.query<any>(`insert into giving_directions (unit_id, company_id, person, from_cause, to_cause, cents, at) values ($1,$2,$3,$4,$5,$6,$7) on conflict do nothing returning unit_id`, [unitId, u.companyId, person, g.current, to, g.cents, iso(this.now())])).rows.length;
-    if (!won) throw new EnvironmentError('already', 'This bottle’s gift has already been directed.', 409);
-    for (const [from, cents] of g.from) if (from !== to) this.platform.bus.publish('giving.directed', u.companyId, { unitId, from, to, cents, person }, `giving:${unitId}:${from}`);
+    // Money already sent, or being sent, can't be moved. A payout run writes its transfer down under the same lock, so
+    // a redirect lands either before the run reads what's owed (and the run sends it to the new cause) or after the
+    // transfer is written down (and is refused here): never both.
+    await withCharityLock(this.platform, u.companyId, async () => {
+      const sent = (await this.db.query<any>(`select 1 from charity_transfers t join charities c on c.id = t.charity_id where t.company_id = $1 and c.name = any($2) and t.status in ('sending', 'sent', 'confirmed') and t.covers_until >= $3 limit 1`, [u.companyId, g.from.map(([k]) => k), u.createdAt])).rows.length;
+      if (sent) throw new EnvironmentError('already_sent', 'This bottle’s gift has already been sent (or is being sent).', 409);
+      // Claim the bottle first: only one choice per bottle ever moves money.
+      const won = (await this.db.query<any>(`insert into giving_directions (unit_id, company_id, person, from_cause, to_cause, cents, at) values ($1,$2,$3,$4,$5,$6,$7) on conflict do nothing returning unit_id`, [unitId, u.companyId, person, g.current, to, g.cents, iso(this.now())])).rows.length;
+      if (!won) throw new EnvironmentError('already', 'This bottle’s gift has already been directed.', 409);
+      for (const [from, cents] of g.from) if (from !== to) this.platform.bus.publish('giving.directed', u.companyId, { unitId, from, to, cents, person }, `giving:${unitId}:${from}`);
+      // Stored before the choice is answered (and before the lock lets a payout run read what's owed).
+      await this.flush?.();
+    });
     // The choice itself, user-directed (Tier 4b), among the causes on offer.
     const facts = (cause: string): OfferingFacts => ({ kind: 'bottle', name: `This bottle’s gift to ${cause}`, priceCents: 0, valueBack: { donationCents: g.cents, paymentCents: 0, cause, directedBy: 'person' } });
     const place = async (cause: string) => ({ subject: `cause:${cause}`, placed: await this.numberline.placementOf(u.companyId, `cause:${cause}`, facts(cause)) });
@@ -350,11 +379,17 @@ export class EnvironmentService {
   /** A refunded sale: its value-back is taken back too (from the cause, back to the advertiser). */
   async onRefund(companyId: string, orderId: string, refundedCents?: number) {
     // A partial refund keeps the sale (and its value-back): only a full refund takes it back.
-    const r = (await this.db.query<any>(`update value_sales set refunded_at = $3 where order_id = $1 and company_id = $2 and refunded_at is null and ($4::int is null or $4::int >= sale_cents) returning *`, [orderId, companyId, iso(this.now()), refundedCents ?? null])).rows[0];
-    if (!r || !(n(r.step) > 0)) return;
-    const e = await this.experiment(r.experiment_id);
-    const camp = this.platform.campaigns.get(e.campaignId)!;
-    this.platform.bus.publish('value_back.reversed', companyId, { experimentId: e.id, unitId: r.unit_id, campaignId: e.campaignId, advertiserId: camp.advertiserId, advertiserName: camp.advertiserName, cause: r.cause, cents: n(r.step), orderId }, `vb-back:${orderId}`);
+    const r = (await this.db.query<any>(`select * from value_sales where order_id = $1 and company_id = $2 and refunded_at is null and ($3::int is null or $3::int >= sale_cents)`, [orderId, companyId, refundedCents ?? null])).rows[0];
+    if (!r) return;
+    // The books first (once: the key is the order's), stored, then the sale is marked refunded: a crash between them
+    // leaves the sale unmarked, and the refund reported again books nothing twice.
+    if (n(r.step) > 0) {
+      const e = await this.experiment(r.experiment_id);
+      const camp = this.platform.campaigns.get(e.campaignId)!;
+      this.platform.bus.publish('value_back.reversed', companyId, { experimentId: e.id, unitId: r.unit_id, campaignId: e.campaignId, advertiserId: camp.advertiserId, advertiserName: camp.advertiserName, cause: r.cause, cents: n(r.step), orderId }, `vb-back:${orderId}`);
+      await this.flush?.();
+    }
+    await this.db.query(`update value_sales set refunded_at = $3 where order_id = $1 and company_id = $2 and refunded_at is null`, [orderId, companyId, iso(this.now())]);
   }
 
   /** What each step did: people shown it, clicks through to the offer, and sales kept. Where the line crosses is distance. */

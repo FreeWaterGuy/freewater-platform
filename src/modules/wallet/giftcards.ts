@@ -6,6 +6,8 @@ export interface GiftCardProduct { id: string; name: string; minCents: number; m
 export interface GiftCardOrder { ref: string; code?: string; link?: string; test: boolean }
 export interface GiftCardProvider {
   readonly name: string;
+  /** True when no real card is bought (the stand-in, or a gift-card company's sandbox). */
+  readonly test?: boolean;
   catalog(): Promise<GiftCardProduct[]>;
   /** Buy one card. `ref` is ours, so asking twice never buys twice. */
   order(o: { product: string; cents: number; email: string; name?: string; ref: string }): Promise<GiftCardOrder>;
@@ -22,6 +24,7 @@ export const isRefusal = (status: number) => status >= 400 && status < 500 && ![
 /** The stand-in: never buys anything; every card it makes says TEST. */
 export class TestGiftCards implements GiftCardProvider {
   readonly name = 'test-gift-cards';
+  readonly test = true;
   async catalog() {
     return [['amazon', 'Amazon'], ['target', 'Target'], ['walmart', 'Walmart'], ['starbucks', 'Starbucks'], ['visa-prepaid', 'Prepaid Visa']].map(([id, name]) => ({ id: id!, name: name!, minCents: 500, maxCents: 10_000 }));
   }
@@ -38,6 +41,7 @@ export class TestGiftCards implements GiftCardProvider {
 export class TremendousGiftCards implements GiftCardProvider {
   readonly name = 'tremendous';
   constructor(private o: { apiKey: string; fundingSource: string; sandbox?: boolean; fetch?: typeof fetch; products?: { id: string; name: string }[] }) {}
+  get test() { return !!this.o.sandbox; }
   private get base() { return this.o.sandbox ? 'https://testflight.tremendous.com/api/v2' : 'https://www.tremendous.com/api/v2'; }
   async catalog() {
     if (this.o.products?.length) return this.o.products.map((p) => ({ ...p, minCents: 500, maxCents: 10_000 }));

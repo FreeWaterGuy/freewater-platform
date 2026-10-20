@@ -17,6 +17,13 @@ it off again. Read it before going live, and keep it open the first time you fli
   into tokens, gift cards and withdrawals each need at least 2 other owners or finance people who were already on the
   team when the step was proposed. Then there's a wait of at least 24 hours (48 by default), so a mistake or a stolen
   login can be caught. Approvals expire after two weeks.
+- **Approvers count from when they got the role.** Only people who already held the owner or finance role when a
+  step was proposed (and still hold it) can approve it. Finance people can propose, approve and press pause; running a
+  step, cancelling it and going live with points stay with owners.
+- **New companies always start safe.** A new licensee starts in testing with every money, blockchain, offer and AI
+  fund switch off, whatever FreeWater's own switches are.
+- **Machines have a print limit** (6 a minute and 1,500 a day by default; *Machines* settings), so a stolen machine key
+  can't bill advertisers at scale. Revoke a lost machine's key at once.
 - **The safety limits never come off.** The pause switch, the daily check of the books, the approval rules and the
   points cap can be made stricter, never weaker, while things are live.
 

@@ -4,7 +4,11 @@ import type { ApiKey } from '../db/store';
 import { AttributionError, CLICK_WINDOW_DAYS } from '../modules/attribution/service';
 import { ApiError, obj, S, type RouteDef } from './http';
 
-/** The tag advertisers put on their website. It keeps our click id and reports purchases. Nothing else. */
+/**
+ * The tag advertisers put on their website. It keeps our click id and reports purchases. Nothing else.
+ * It runs in the shopper's browser, so what it reports proves a click led to the site but is never billed on its own:
+ * a tag-reported sale is unverified until the advertiser's server confirms it (POST /v1/conversions) or a coupon is redeemed.
+ */
 const tagScript = `/* FreeWater tag: remembers the FreeWater click id (fwclid) and reports purchases from FreeWater bottles. */
 (function () {
   var s = document.currentScript, tag = s && s.getAttribute('data-tag'), base = s ? new URL(s.src).origin : '';
@@ -95,10 +99,12 @@ export function attributionRoutes(app: App, server: FastifyInstance, route: (r: 
     cors(reply);
     try {
       const b = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body as any);
+      // The Origin header keeps honest mistakes out but is easy to forge outside a browser: what the tag reports is
+      // kept as unverified and never billed until the advertiser's server (or the counter) confirms it.
       const origin = (req.headers.origin as string | undefined) ?? (req.headers.referer as string | undefined) ?? null;
       const r = await attribution.conversion({ source: 'tag', tagId: String(b?.tag ?? ''), origin, clickId: b?.fwclid ?? undefined, couponCode: b?.coupon ?? undefined, bottleCode: b?.fwb ?? undefined, orderId: String(b?.orderId ?? ''), valueCents: Number(b?.valueCents) });
       await app.persistence.flushUnlessPaused();
-      return reply.code(r.duplicate ? 200 : 201).send({ ok: true, duplicate: r.duplicate });
+      return reply.code(r.duplicate ? 200 : 201).send({ ok: true, duplicate: r.duplicate, status: r.conversion.status });
     } catch (e) {
       if (e instanceof SyntaxError) return reply.code(400).send({ error: { code: 'bad_json', message: 'Send JSON.' } });
       return fail(reply, e);
@@ -121,16 +127,16 @@ export function attributionRoutes(app: App, server: FastifyInstance, route: (r: 
     }, summary: await attribution.summary(key!.companyId, adv) } };
   } });
   route({ method: 'POST', url: '/v1/ads/tracking/domains', scope: ['campaigns', 'purchases'], summary: 'The websites your tag may report sales from (like shop.joesburgers.com). Reports from anywhere else are refused.', body: obj({ domains: { type: 'array', maxItems: 10, items: { type: 'string', maxLength: 120 } } }, ['domains']), handler: async (req, key) => ({ body: await attribution.setTagDomains(key!.companyId, advertiser(key), (req.body as any).domains) }) });
-  route({ method: 'POST', url: '/v1/conversions', scope: 'purchases', summary: 'Your server reports a sale: the fwclid from the link (or the bottle reference fwb from a static code, or the coupon code), your order number and the amount in cents. Matched to the exact bottle; commission is billed once per order.', body: obj({ fwclid: { type: 'string', maxLength: 40 }, fwb: { type: 'string', maxLength: 20 }, couponCode: { type: 'string', maxLength: 40 }, orderId: S.str, valueCents: S.int }, ['orderId', 'valueCents']), handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/conversions', scope: 'purchases', summary: 'Your server reports (or confirms) a sale: the fwclid from the link (or the bottle reference fwb from a static code, or the coupon code), your order number and the amount in cents. Matched to the exact bottle; commission is billed once per order. A sale your website tag reported stays unverified (never billed) until confirmed here; send just its orderId and valueCents to confirm it with the click the tag saw.', body: obj({ fwclid: { type: 'string', maxLength: 40 }, fwb: { type: 'string', maxLength: 20 }, couponCode: { type: 'string', maxLength: 40 }, orderId: S.str, valueCents: S.int }, ['orderId', 'valueCents']), handler: async (req, key) => {
     const b = req.body as any;
-    const r = await attribution.conversion({ source: 'server', advertiserId: advertiser(key), clickId: b.fwclid, couponCode: b.couponCode, bottleCode: b.fwb, orderId: b.orderId, valueCents: b.valueCents });
+    const r = await attribution.conversion({ source: 'server', companyId: key!.companyId, advertiserId: advertiser(key), clickId: b.fwclid, couponCode: b.couponCode, bottleCode: b.fwb, orderId: b.orderId, valueCents: b.valueCents });
     return { status: r.duplicate ? 200 : 201, body: r };
   } });
-  route({ method: 'POST', url: '/v1/conversions/:orderId/refund', scope: 'purchases', summary: 'A sale was refunded. Its commission is given back.', handler: async (req, key) => ({ body: await attribution.refund(advertiser(key), decodeURIComponent((req.params as any).orderId)) }) });
-  route({ method: 'GET', url: '/v1/coupons/:code', scope: ['campaigns', 'purchases'], summary: 'Check a customer’s coupon: valid, or already used (and when).', handler: async (req, key) => ({ body: await attribution.checkCoupon(String((req.params as any).code), advertiser(key)) }) });
+  route({ method: 'POST', url: '/v1/conversions/:orderId/refund', scope: 'purchases', summary: 'A sale was refunded. Its commission is given back.', handler: async (req, key) => ({ body: await attribution.refund(advertiser(key), decodeURIComponent((req.params as any).orderId), key!.companyId) }) });
+  route({ method: 'GET', url: '/v1/coupons/:code', scope: ['campaigns', 'purchases'], summary: 'Check a customer’s coupon: valid, or already used (and when).', handler: async (req, key) => ({ body: await attribution.checkCoupon(String((req.params as any).code), advertiser(key), key!.companyId) }) });
   route({ method: 'POST', url: '/v1/coupons/:code/redeem', scope: ['campaigns', 'purchases'], summary: 'Use a customer’s coupon (once). Send the sale amount; it’s credited to the bottle the coupon came from.', body: obj({ valueCents: S.int, orderId: { type: 'string', maxLength: 80 } }, ['valueCents']), handler: async (req, key) => {
     const b = req.body as any;
-    return { body: await attribution.redeem(String((req.params as any).code), advertiser(key), { valueCents: b.valueCents, orderId: b.orderId, by: key!.name }) };
+    return { body: await attribution.redeem(String((req.params as any).code), advertiser(key), { valueCents: b.valueCents, orderId: b.orderId, by: key!.name }, key!.companyId) };
   } });
 
   // ---------- the company's own view ----------

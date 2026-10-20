@@ -1198,6 +1198,63 @@ drop index if exists units_order;
 create unique index units_order on units(company_id, order_id) where order_id is not null and status <> 'failed';
 `,
   },
+  {
+    id: '046_c1_role_grants_and_stuck_money',
+    sql: `
+-- When a person got the role that lets them approve token steps (owner or finance). Only people who held it before a
+-- step was proposed can approve it: an account made long ago and promoted afterwards doesn't count.
+alter table users add column role_granted_at timestamptz;
+update users set role_granted_at = created_at;
+create function users_role_granted() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'INSERT' then
+    if new.role_granted_at is null then new.role_granted_at := new.created_at; end if;
+  elsif new.role in ('owner','finance') and old.role not in ('owner','finance') and new.role_granted_at is not distinct from old.role_granted_at then
+    -- Made an owner or finance person without saying when (a direct update): it counts from now.
+    new.role_granted_at := now();
+  end if;
+  return new;
+end $$;
+create trigger users_role_granted before insert or update on users for each row execute function users_role_granted();
+-- When a gift-card order was last sent out: one still 'ordering' long after (a crash, a hang) becomes unknown.
+alter table wallet_giftcards add column ordering_at timestamptz;
+`,
+  },
+  {
+    id: '047_c2_attribution_company_unverified',
+    sql: `
+-- Tags, sales and coupons are kept per company as well as per advertiser: two companies' advertisers can share an id.
+alter table advertiser_tags drop constraint if exists advertiser_tags_advertiser_id_key;
+create unique index if not exists advertiser_tags_company_advertiser on advertiser_tags(company_id, advertiser_id);
+alter table conversions drop constraint if exists conversions_advertiser_id_order_id_key;
+create unique index if not exists conversions_company_advertiser_order on conversions(company_id, advertiser_id, order_id);
+alter table coupon_codes drop constraint if exists coupon_codes_viewer_key_advertiser_id_campaign_id_key;
+create unique index if not exists coupon_codes_company_viewer on coupon_codes(company_id, viewer_key, advertiser_id, campaign_id);
+-- A sale only the tag reported (in the shopper's browser, so anyone could send one) is unverified: shown, never
+-- billed, until the advertiser's server confirms it with its key or the coupon is redeemed. Earlier sales were billed.
+alter table conversions add column status text not null default 'billed' check (status in ('billed', 'unverified'));
+alter table conversions add column verified_at timestamptz;
+create index conversions_click on conversions(click_id) where click_id is not null;
+`,
+  },
+  {
+    id: '049_c4_scan_viewer_index',
+    sql: `
+-- "Has this phone scanned anything here?" is asked at sign-in and when a phone is joined to an account; without this
+-- it read every scan the company ever had. Only scan and AR events, which carry the phone's key.
+create index if not exists events_scan_viewer on events(company_id, (payload->>'viewerKey')) where type in ('unit.scanned','box.scanned','ar.launched','box.ar_launched');
+`,
+  },
+  {
+    id: '050_c5_settlement_plans',
+    sql: `
+-- A day of the agents' fund is written down with exactly how it's shared out (the plan) before its lines go in the
+-- books, and marked done only once they're stored, so a crash in between is finished from the plan, never worked out
+-- again differently. Days settled before this have no plan and are done.
+alter table agent_settlements add column if not exists plan jsonb;
+alter table agent_settlements add column if not exists status text not null default 'done';
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

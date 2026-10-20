@@ -10,7 +10,9 @@ be signed up for and connected first.
 - **Only one server may own the data at a time.** A second copy waits (up to `LEASE_WAIT_MS`, 2 minutes by default)
   and starts the moment the first lets go; only then does it change any tables. So a deploy means: start the new
   one, stop the old one. The hand-over takes about a second. A server that can't renew its claim within about 18
-  seconds stops writing and answering at once, and exits.
+  seconds stops writing and answering at once, and exits. Every write checks the claim in its own transaction (the
+  write queue's and the direct ones alike), and a server whose last renewal is older than about 22 seconds (frozen,
+  say, and just resumed) refuses every change (503) and runs no job until a renewal succeeds.
 - **Files** (pictures, 3D models, videos, receipts) go to S3-compatible storage, or stay in the database for a pilot.
 - **Backups**: the database host's own, plus our own encrypted copy each day, plus a weekly proof that the latest
   copy restores and its books check out.

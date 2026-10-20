@@ -104,6 +104,8 @@ export class Ledger {
     // An advertiser's value-back test: what the offer returned, paid by the advertiser, to the cause.
     bus.on('value_back.given', (e) => this.add(e, { unitId: e.payload.unitId, campaignId: e.payload.campaignId, debit: `receivable:advertiser:${e.payload.advertiserId}`, credit: `payable:charity:${e.payload.cause}`, amountCents: e.payload.cents, kind: 'donation', memo: `Value-back on ${e.payload.advertiserName}’s offer (a measured test, step ${e.payload.cents}¢), paid by the advertiser` }));
     bus.on('value_back.reversed', (e) => this.add(e, { unitId: e.payload.unitId, campaignId: e.payload.campaignId, debit: `payable:charity:${e.payload.cause}`, credit: `receivable:advertiser:${e.payload.advertiserId}`, amountCents: e.payload.cents, kind: 'donation', memo: `Value-back on ${e.payload.advertiserName}’s offer taken back: the sale was refunded` }));
+    // A brand's offer gave to a cause: paid from the money the brand put in reserve (held for it), owed to the charity.
+    bus.on('offer.cause_given', (e) => this.add(e, { debit: `payable:reserve:${e.payload.sponsor}`, credit: `payable:charity:${e.payload.cause}`, amountCents: e.payload.cents, kind: 'donation', memo: `Given to ${e.payload.cause} by an offer (claim ${e.payload.claimId}), from ${e.payload.sponsor}’s reserve` }));
     bus.on('owner_payout.recorded', (e) => this.add(e, { debit: `equity:payout:${e.payload.kind}`, credit: 'cash:bank', amountCents: e.payload.amountCents, kind: 'owner_payout', memo: e.payload.memo }));
     // 'print.failed' is deliberately not subscribed: nothing to bill.
   }
@@ -436,7 +438,11 @@ export class Ledger {
       total: 0,
     };
     earned.total = earned.print + earned.scans + earned.ar + earned.commission + earned.custom;
-    return { unitId, earned, donatedCents: sum('donation'), lines };
+    // What the bottle gave, by side: a gift is paid from expense:giving, and a refund's reversal pays it back (it is a
+    // donation line too, and must be taken off, not added). An advertiser's value-back isn't the bottle's gift.
+    const donations = lines.filter((l) => l.kind === 'donation');
+    const donatedCents = donations.filter((l) => l.debit === 'expense:giving').reduce((s, l) => s + l.amountCents, 0) - donations.filter((l) => l.credit === 'expense:giving').reduce((s, l) => s + l.amountCents, 0);
+    return { unitId, earned, donatedCents, lines };
   }
 
   /** Every account's balance. Debits and credits always net to zero. */

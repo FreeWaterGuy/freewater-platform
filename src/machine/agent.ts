@@ -91,6 +91,7 @@ export class MachineAgent {
 
   start() {
     if (this.running) return;
+    this.recoverInFlight();
     this.running = true;
     this.startedAt = Date.now();
     this.override = { kind: 'starting' };
@@ -195,6 +196,28 @@ export class MachineAgent {
     t.unref?.();
   }
 
+  /**
+   * After a power cut or a restart in the middle of a bottle: say what happened to it, as far as the machine can tell.
+   * If it was dropping and the dispenser now holds fewer bottles than before the drop, the bottle came out (billed);
+   * otherwise it's reported failed (nothing billed). Either way it goes in the results waiting to be sent, so it's
+   * reported even if the platform can't be reached yet.
+   */
+  private recoverInFlight() {
+    const f = this.journal.state.inFlight;
+    if (!f) return;
+    let now: { state: string; bottlesLeft: number } | undefined;
+    try { now = this.o.hardware.dispenser.status(); } catch {}
+    // Fewer bottles in the dispenser than before the drop, and none stuck on the way: it reached the tray.
+    const dropped = f.step === 'dropping' && f.bottlesBefore !== undefined && !!now && now.bottlesLeft < f.bottlesBefore && now.state !== 'stuck' && now.state !== 'error';
+    const result: Record<string, unknown> = dropped
+      ? { status: 'dispensed', ...(f.printMs !== undefined ? { printMs: f.printMs } : {}) }
+      : { status: 'failed', stage: f.step === 'dropping' ? 'drop' : 'print', reason: 'The machine restarted in the middle of this bottle.', ...(f.printMs !== undefined ? { printMs: f.printMs } : {}) };
+    let hardware: unknown;
+    try { hardware = this.hardwareStatus(); } catch {}
+    this.journal.update((s) => { s.unsentResults.push({ jobId: f.jobId, body: { ...result, ...(hardware ? { hardware } : {}) }, at: new Date().toISOString() }); delete s.inFlight; });
+    this.log(`restarted mid-job ${f.jobId}: reporting it ${dropped ? 'dispensed' : 'failed'}`);
+  }
+
   /** Print, drop, and say exactly what happened. */
   private async runJob(job: { jobId: string; unitId: string; svg: string; widthIn: number; heightIn: number; countdown: { seconds: number; ad: any } }) {
     this.busy = true;
@@ -202,6 +225,8 @@ export class MachineAgent {
     const shown: ScreenState['job'] = { seconds: job.countdown.seconds, startedAt: Date.now(), ad: job.countdown.ad, step: 'printing' };
     this.override = { kind: 'printing', job: shown };
     try {
+      // Written down before anything happens, so a power cut from here on is reported when the machine comes back.
+      this.journal.update((s) => { s.inFlight = { jobId: job.jobId, unitId: job.unitId, step: 'printing', at: new Date().toISOString() }; });
       const p = await hw.printer.print(job);
       if (!p.ok) {
         await this.sendResult(job.jobId, { status: 'failed', stage: 'print', reason: p.reason });
@@ -209,6 +234,9 @@ export class MachineAgent {
         return;
       }
       shown.step = 'dropping';
+      // How many bottles were in before the drop: after a power cut mid-drop, fewer means it came out.
+      const before = hw.dispenser.status().bottlesLeft;
+      this.journal.update((s) => { s.inFlight = { jobId: job.jobId, unitId: job.unitId, step: 'dropping', at: new Date().toISOString(), printMs: p.ms, bottlesBefore: before }; });
       const d = await hw.dispenser.drop();
       if (!d.ok) {
         await this.sendResult(job.jobId, { status: 'failed', stage: 'drop', reason: d.reason, printMs: p.ms });
@@ -222,27 +250,33 @@ export class MachineAgent {
     }
   }
 
-  /** Send a result now, or keep it to send when the internet is back. */
+  /**
+   * Say what happened. The result is written down first (with the job no longer in flight), and let go only once the
+   * platform has it (2xx) or has said for good it never will (404, 409): a power cut, a restart or a dropped connection
+   * at any moment leaves it waiting to be sent, never lost.
+   */
+  private sending = new Set<string>();
   private async sendResult(jobId: string, result: Record<string, unknown>) {
     const body = { ...result, hardware: this.hardwareStatus() };
+    this.journal.update((s) => { s.unsentResults.push({ jobId, body, at: new Date().toISOString() }); if (s.inFlight?.jobId === jobId) delete s.inFlight; });
+    this.sending.add(jobId);
     try {
       const r = await this.call('POST', `/v1/machine/jobs/${jobId}/result`, body);
-      if (!settled(r.status)) throw new Error(`server answered ${r.status}`);
-    } catch {
-      if (this.authError) return;
-      this.journal.update((s) => { s.unsentResults.push({ jobId, body, at: new Date().toISOString() }); });
+      if (settled(r.status)) this.journal.update((s) => { s.unsentResults = s.unsentResults.filter((y) => y.jobId !== jobId); });
+    } catch { /* kept, sent again with the next heartbeat */ } finally {
+      this.sending.delete(jobId);
     }
   }
 
   private async flushUnsent() {
     const s = this.journal.state;
     // Each one is let go only once the platform has it (2xx) or has said for good that it never will (404, 409).
-    // A server error or no answer keeps it, to send again later.
-    for (const r of [...s.unsentResults]) {
+    // A server error or no answer keeps it, to send again later. One being sent right now is left to that send.
+    for (const r of s.unsentResults.filter((x) => !this.sending.has(x.jobId))) {
       let status: number;
       try { status = (await this.call('POST', `/v1/machine/jobs/${r.jobId}/result`, r.body)).status; } catch { return; }
       if (status >= 500) return;
-      if (settled(status)) this.journal.update((x) => { x.unsentResults = x.unsentResults.filter((y) => y !== r); });
+      if (settled(status)) this.journal.update((x) => { x.unsentResults = x.unsentResults.filter((y) => y.jobId !== r.jobId); });
     }
     for (const c of [...s.unsentCommands]) {
       let status: number;

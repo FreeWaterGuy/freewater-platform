@@ -10,12 +10,15 @@ export interface KeptLabel { unitId: string; svg: string; widthIn: number; heigh
 export interface OfflineVend { unitId: string; status: 'dispensed' | 'failed'; at: string; reason?: string }
 export interface UnsentResult { jobId: string; body: Record<string, unknown>; at: string }
 export interface UnsentCommand { id: string; ok: boolean; message?: string }
+/** A bottle being made right now: written before printing starts, so a power cut mid-job is reported, not forgotten. */
+export interface InFlightJob { jobId: string; unitId: string; step: 'printing' | 'dropping'; at: string; printMs?: number; bottlesBefore?: number }
 
 export interface JournalState {
   buffer: KeptLabel[];
   offlineVends: OfflineVend[];
   unsentResults: UnsentResult[];
   unsentCommands: UnsentCommand[];
+  inFlight?: InFlightJob;
   screenVersion?: string;
   screen?: any;
   softwareVersion?: string;

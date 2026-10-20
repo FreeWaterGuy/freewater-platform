@@ -5,7 +5,7 @@ import type { Platform } from '../../platform';
 import type { Messenger } from '../../adapters/messaging/contract';
 import { distanceKm, type GeoPoint, type Geocoder } from '../../adapters/geocoding/contract';
 import type { AccountsService } from '../accounts/service';
-import type { PackService } from '../packs/service';
+import { PackStateError, type PackService } from '../packs/service';
 import { boxNumber, stopCode } from '../packs/boxRenderer';
 import type { RoutePlanner } from './planner';
 
@@ -25,7 +25,7 @@ export interface Subscription {
 }
 export interface RunStop {
   stop: number; subscriptionId: string; userId: string; packId: string | null; address: string; point: GeoPoint; packSize: number; notes: string | null;
-  status: 'planned' | 'delivered' | 'not_delivered'; loaded?: boolean; checkedByHand?: { by: string; at: string }; at?: string; emptiesCollected?: number; photoUrl?: string; atAddressBy?: 'gps' | 'driver'; reason?: string;
+  status: 'planned' | 'delivered' | 'not_delivered'; loaded?: boolean; checkedByHand?: { by: string; at: string; reason?: string }; at?: string; emptiesCollected?: number; photoUrl?: string; atAddressBy?: 'gps' | 'driver'; reason?: string;
 }
 export interface Run {
   id: string; companyId: string; routeId: string; date: string; status: 'printing' | 'packing' | 'ready' | 'out' | 'done';
@@ -248,21 +248,53 @@ export class DeliveryService {
    * No packing line: a signed-in person counted every bottle in one stop's box by hand. The box is checked and sealed,
    * with who and when kept on the stop and the pack; once every box is sealed the route is ready to load.
    */
-  async checkByHand(runId: string, companyId: string, stopNo: number, by: string) {
+  async checkByHand(runId: string, companyId: string, stopNo: number, by: string, reason?: string) {
     if (!by) throw new DeliveryError(403, 'person_required', 'Sign in as a person to check a box by hand.');
+    await this.needOpsPerson(companyId, by, 'check a box by hand');
     const run = await this.getRun(runId, companyId);
     if (run.status !== 'packing') throw new DeliveryError(409, 'wrong_stage', `This route is ${run.status}, not waiting to be packed.`);
     const s = run.stops.find((x) => x.stop === stopNo);
     if (!s?.packId) throw new DeliveryError(404, 'not_found', 'No such stop.');
     const pack = this.packs.packs.get(s.packId);
     if (!pack) throw new DeliveryError(404, 'not_found', 'No box for that stop.');
-    if (pack.status === 'box_printed' || pack.status === 'mismatch') this.packs.verifyByHand(pack.id, by);
+    if (pack.status === 'box_printed' || pack.status === 'mismatch') {
+      try { this.packs.verifyByHand(pack.id, by, reason); } catch (e) { if (e instanceof PackStateError) throw new DeliveryError(409, 'reason_required', e.message); throw e; }
+    }
     if (pack.status === 'verified') this.packs.seal(pack.id);
     if (pack.status !== 'sealed') throw new DeliveryError(409, 'wrong_stage', `That box is ${pack.status}.`);
     if (pack.checkedByHand && !s.checkedByHand) s.checkedByHand = { ...pack.checkedByHand };
     await this.saveRun(run);
     // The rest of the route as the packing check sees it: what's still to check, and ready once every box is sealed.
     return this.packCheck(run.id, companyId);
+  }
+
+  /** Only the company's ops team or an owner, signed in as a person (never a driver, never an API key). */
+  private async needOpsPerson(companyId: string, by: string, what: string) {
+    const u = await this.accounts.get(by);
+    if (!u || u.companyId !== companyId || (u.role !== 'ops' && u.role !== 'owner')) throw new DeliveryError(403, 'ops_only', `Only the company’s ops team or an owner can ${what}.`);
+  }
+
+  /**
+   * A run from an earlier day that will never be driven (left over: a box never sealed, a van never loaded) is closed
+   * out so it can't take over a later night: its boxes not delivered go back ('returned'), its stops not delivered are
+   * marked so with the reason, and the run is done. Only an ops person or an owner, with a reason.
+   */
+  async closeRun(runId: string, companyId: string, by: string, reason: string) {
+    if (!by) throw new DeliveryError(403, 'person_required', 'Sign in as a person to close out a run.');
+    await this.needOpsPerson(companyId, by, 'close out a run');
+    const run = (await this.db.query<any>(`select * from route_runs where id = $1 and company_id = $2`, [runId, companyId])).rows[0];
+    const routeId = run ? String(run.route_id) : runId.replace(/@.*$/, '');
+    if (!run && ![...this.packs.packs.values()].some((p) => p.companyId === companyId && p.routeId === routeId && (p.runId ?? '') === runId)) throw new DeliveryError(404, 'not_found', 'Route run not found.');
+    let closed;
+    try { closed = this.packs.closeRun(companyId, routeId, runId, by, reason); } catch (e) { if (e instanceof PackStateError) throw new DeliveryError(409, 'not_closable', e.message); throw e; }
+    if (run) {
+      const r = this.run(run);
+      for (const st of r.stops) if (st.status === 'planned') { st.status = 'not_delivered'; st.reason = `Run closed out: ${reason.trim()}`; }
+      r.status = 'done';
+      await this.saveRun(r);
+    }
+    await this.flush();
+    return { runId, routeId, closedOut: closed.map((p) => ({ packId: p.id, stop: p.stop })) };
   }
 
   /** A driver takes the route. Then each box is scanned into the van, last stop first, so stop 1 ends up by the door. */

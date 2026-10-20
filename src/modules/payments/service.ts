@@ -104,9 +104,14 @@ export class PaymentsService {
   async capture(paymentId: string, amountCents?: number): Promise<Payment> {
     const p = (await this.db.query<any>(`select p.*, c.owner_type, c.owner_id from payments p join payment_customers c on c.id = p.customer_id where p.id = $1`, [paymentId])).rows[0];
     if (!p) throw new PaymentError('not_found', 'Payment not found.', 404);
-    if (p.status === 'captured') return toPayment(p);
-    if (p.status === 'capturing' || p.status === 'voiding') throw new PaymentError('in_progress', 'This payment is being settled right now. Check it again in a moment.', 409);
-    if (p.status !== 'authorized') throw new PaymentError('not_held', `This payment is ${p.status}; there is nothing to take.`, 409);
+    if (p.status === 'captured') { await this.rebook(p); return toPayment(p); }
+    if (p.status === 'capturing' || p.status === 'voiding') {
+      // One whose answer never came is settled from what the provider says first; one still going is left alone.
+      const now = await this.recover(paymentId);
+      if (now.status === 'captured') return now;
+      if (now.status === 'capturing' || now.status === 'voiding') throw new PaymentError('in_progress', 'This payment is being settled right now. Check it again in a moment.', 409);
+      if (now.status !== 'authorized') throw new PaymentError('not_held', `This payment is ${now.status}; there is nothing to take.`, 409);
+    } else if (p.status !== 'authorized') throw new PaymentError('not_held', `This payment is ${p.status}; there is nothing to take.`, 409);
     const amount = amountCents === undefined ? Number(p.amount_cents) : Math.min(amountCents, Number(p.amount_cents));
     const took = await this.db.query(`update payments set status = 'capturing', updated_at = now() where id = $1 and status = 'authorized'`, [paymentId]);
     if (!Number(took.rowCount ?? 0)) {
@@ -118,16 +123,20 @@ export class PaymentsService {
     try {
       r = await this.provider.capture(p.provider_ref, amount);
     } catch (e) {
-      // We couldn't reach the provider: the hold is still there, so it can be tried again.
-      await this.db.query(`update payments set status = 'authorized', updated_at = now() where id = $1 and status = 'capturing'`, [paymentId]);
+      // No answer (a timeout, a dropped connection): the provider may have taken the money, so the payment stays
+      // 'capturing'. `recover` asks the provider where it really stands and finishes or reverts it; it's never put back
+      // to 'authorized' on a guess, and an invoice never gets a second hold meanwhile.
       throw e;
     }
     if (r.status === 'failed') {
       await this.db.query(`update payments set status = 'failed', failure = $2, updated_at = now() where id = $1 and status = 'capturing'`, [paymentId, r.reason]);
       throw new PaymentError('capture_failed', r.reason);
     }
-    const done = await this.db.query(`update payments set status = 'captured', amount_cents = $2, updated_at = now() where id = $1 and status = 'capturing'`, [paymentId, amount]);
-    if (Number(done.rowCount ?? 0)) this.bus.publish('payment.captured', p.company_id, { paymentId, payerType: p.owner_type, payerId: p.owner_id, amountCents: amount, purpose: p.purpose, ref: p.ref, provider: this.provider.name }, paymentId);
+    // The money was taken: its ledger lines are stored first, and only then is the payment marked captured. A crash in
+    // between leaves it 'capturing', which `recover` finishes from the provider's answer (the event's key is the
+    // payment's, so it's never booked twice); a crash after leaves both in step.
+    await this.saved(() => this.bus.publish('payment.captured', p.company_id, { paymentId, payerType: p.owner_type, payerId: p.owner_id, amountCents: amount, purpose: p.purpose, ref: p.ref, provider: this.provider.name }, paymentId));
+    await this.db.query(`update payments set status = 'captured', amount_cents = $2, updated_at = now() where id = $1 and status = 'capturing'`, [paymentId, amount]);
     return (await this.get(paymentId))!;
   }
 
@@ -150,9 +159,76 @@ export class PaymentsService {
       await this.db.query(`update payments set status = 'authorized', updated_at = now() where id = $1 and status = 'voiding'`, [paymentId]);
       throw e;
     }
-    const done = await this.db.query(`update payments set status = 'voided', updated_at = now() where id = $1 and status = 'voiding'`, [paymentId]);
-    if (Number(done.rowCount ?? 0)) this.bus.publish('payment.voided', p.company_id, { paymentId, ref: p.ref }, `${paymentId}:void`);
+    await this.saved(() => this.bus.publish('payment.voided', p.company_id, { paymentId, ref: p.ref }, `${paymentId}:void`));
+    await this.db.query(`update payments set status = 'voided', updated_at = now() where id = $1 and status = 'voiding'`, [paymentId]);
     return (await this.get(paymentId))!;
+  }
+
+  /** How long a capture or release may go unanswered before `recover` asks the provider what happened. */
+  static stuckAfterMs = 2 * 60_000;
+
+  /**
+   * A payment left 'capturing' or 'voiding' (no answer came, or the process stopped): ask the provider where the hold
+   * really stands and finish it (captured, released, failed) or put it back to 'authorized' (still held). Only once it's
+   * been unanswered for `stuckAfterMs`, so a call still waiting on the provider isn't overtaken. Without the provider's
+   * status lookup (or if it can't be reached) the payment stays as it is, for a person to check.
+   */
+  async recover(paymentId: string): Promise<Payment> {
+    const p = (await this.db.query<any>(`select p.*, c.owner_type, c.owner_id from payments p join payment_customers c on c.id = p.customer_id where p.id = $1`, [paymentId])).rows[0];
+    if (!p) throw new PaymentError('not_found', 'Payment not found.', 404);
+    if (p.status !== 'capturing' && p.status !== 'voiding') return toPayment(p);
+    if (new Date(p.updated_at).getTime() > Date.now() - PaymentsService.stuckAfterMs) return toPayment(p);
+    if (!this.provider.status || !p.provider_ref) return toPayment(p);
+    let st: Awaited<ReturnType<NonNullable<PaymentProvider['status']>>>;
+    try { st = await this.provider.status(p.provider_ref); } catch { return toPayment(p); }
+    const move = async (set: string, args: unknown[] = []) => Number((await this.db.query(`update payments set ${set}, updated_at = now() where id = $1 and status = $2`, [paymentId, p.status, ...args])).rowCount ?? 0) > 0;
+    // The provider's answer is the truth: its ledger lines are stored first (keyed by the payment, so once), then the status.
+    if (st.state === 'captured') {
+      const amount = st.amountCents > 0 ? st.amountCents : Number(p.amount_cents);
+      await this.saved(() => this.bus.publish('payment.captured', p.company_id, { paymentId, payerType: p.owner_type, payerId: p.owner_id, amountCents: amount, purpose: p.purpose, ref: p.ref, provider: this.provider.name }, paymentId));
+      await move(`status = 'captured', amount_cents = $3`, [amount]);
+    } else if (st.state === 'voided') {
+      await this.saved(() => this.bus.publish('payment.voided', p.company_id, { paymentId, ref: p.ref }, `${paymentId}:void`));
+      await move(`status = 'voided'`);
+    } else if (st.state === 'failed') await move(`status = 'failed', failure = $3`, [st.reason]);
+    else await move(`status = 'authorized'`);
+    return (await this.get(paymentId))!;
+  }
+  /** Publish an event, then wait until it (and its ledger lines) are stored. */
+  private async saved(publish: () => unknown) { publish(); await this.beforeRead(); }
+
+  /**
+   * A payment already captured (or released) whose event never reached the books (a crash between the two, before
+   * events were stored first): book it now. The event's key is the payment's own, so this never books it twice.
+   */
+  private async rebook(p: any) {
+    if (p.status === 'captured' && !p.owner_type) p = (await this.db.query<any>(`select p.*, c.owner_type, c.owner_id from payments p join payment_customers c on c.id = p.customer_id where p.id = $1`, [p.id])).rows[0];
+    const e = p.status === 'captured'
+      ? this.bus.publish('payment.captured', p.company_id, { paymentId: p.id, payerType: p.owner_type, payerId: p.owner_id, amountCents: Number(p.amount_cents), purpose: p.purpose, ref: p.ref, provider: p.provider ?? this.provider.name }, p.id)
+      : p.status === 'voided' ? this.bus.publish('payment.voided', p.company_id, { paymentId: p.id, ref: p.ref }, `${p.id}:void`) : null;
+    if (e) await this.beforeRead();
+    return !!e;
+  }
+
+  /** Every captured or released payment whose event is missing from the books gets it (once). Run at start and before invoicing. */
+  async repairUnrecorded(companyId?: string) {
+    await this.beforeRead();
+    const rows = (await this.db.query<any>(
+      `select p.*, c.owner_type, c.owner_id, c.provider from payments p join payment_customers c on c.id = p.customer_id
+        where ($1::text is null or p.company_id = $1) and p.status in ('captured', 'voided')
+          and not exists (select 1 from events e where e.company_id = p.company_id and e.type = case when p.status = 'captured' then 'payment.captured' else 'payment.voided' end
+                          and e.idempotency_key = case when p.status = 'captured' then p.id else p.id || ':void' end)`, [companyId ?? null])).rows;
+    let fixed = 0;
+    for (const p of rows) if (await this.rebook(p)) fixed++;
+    return fixed;
+  }
+
+  /** Recover every payment of a company left unanswered (run regularly, and before invoicing). */
+  async recoverStuck(companyId: string) {
+    const ids = (await this.db.query<any>(`select id from payments where company_id = $1 and status in ('capturing','voiding') and updated_at < $2`, [companyId, new Date(Date.now() - PaymentsService.stuckAfterMs).toISOString()])).rows;
+    const out: Payment[] = [];
+    for (const r of ids) out.push(await this.recover(r.id));
+    return out;
   }
 
   async get(paymentId: string): Promise<Payment | null> {
@@ -165,35 +241,54 @@ export class PaymentsService {
    * less any refunds. Charges their saved card if they have one; otherwise the invoice stays open.
    */
   async runInvoices(companyId: string, periodEnd: Date): Promise<Invoice[]> {
+    // One run at a time per company in this process (a second waits, then finds the lines already invoiced); across
+    // servers, the database lock below does the same for choosing and writing the lines.
+    const prev = this.invoiceRuns.get(companyId) ?? Promise.resolve();
+    const mine = prev.catch(() => {}).then(() => this.runInvoicesNow(companyId, periodEnd));
+    const tail = mine.catch(() => {});
+    this.invoiceRuns.set(companyId, tail);
+    void tail.then(() => { if (this.invoiceRuns.get(companyId) === tail) this.invoiceRuns.delete(companyId); });
+    return mine;
+  }
+  private invoiceRuns = new Map<string, Promise<unknown>>();
+  private async runInvoicesNow(companyId: string, periodEnd: Date): Promise<Invoice[]> {
     await this.beforeRead();
-    const lines = (await this.db.query<any>(
-      `select l.id, l.debit, l.credit, l.amount_cents from ledger_entries l
-       left join invoice_lines il on il.ledger_entry_id = l.id
-       where l.company_id = $1 and il.ledger_entry_id is null and l.kind <> 'payment' and l.at <= $2
-         and (l.debit like 'receivable:advertiser:%' or l.credit like 'receivable:advertiser:%')
-       order by l.seq`,
-      [companyId, periodEnd.toISOString()],
-    )).rows;
-    const byAdvertiser = new Map<string, { id: string; signed: number }[]>();
-    for (const l of lines) {
-      const owes = (l.debit as string).startsWith('receivable:advertiser:');
-      const adv = (owes ? l.debit : l.credit).slice('receivable:advertiser:'.length);
-      const list = byAdvertiser.get(adv) ?? [];
-      list.push({ id: l.id, signed: owes ? Number(l.amount_cents) : -Number(l.amount_cents) });
-      byAdvertiser.set(adv, list);
-    }
-    const out: Invoice[] = [];
-    for (const [advertiserId, items] of byAdvertiser) {
-      const total = items.reduce((s, i) => s + i.signed, 0);
-      if (total <= 0) continue; // nothing owed yet; these lines roll into the next invoice
-      const id = newId('inv');
-      await this.db.transaction(async (tx) => {
+    await this.recoverStuck(companyId).catch(() => {});
+    await this.repairUnrecorded(companyId);
+    const made = await this.db.transaction(async (tx) => {
+      await tx.query(`select pg_advisory_xact_lock(724261, hashtext($1))`, [companyId]);
+      const lines = (await tx.query<any>(
+        `select l.id, l.debit, l.credit, l.amount_cents from ledger_entries l
+         left join invoice_lines il on il.ledger_entry_id = l.id
+         where l.company_id = $1 and il.ledger_entry_id is null and l.kind <> 'payment' and l.at <= $2
+           and (l.debit like 'receivable:advertiser:%' or l.credit like 'receivable:advertiser:%')
+         order by l.seq`,
+        [companyId, periodEnd.toISOString()],
+      )).rows;
+      const byAdvertiser = new Map<string, { id: string; signed: number }[]>();
+      for (const l of lines) {
+        const owes = (l.debit as string).startsWith('receivable:advertiser:');
+        const adv = (owes ? l.debit : l.credit).slice('receivable:advertiser:'.length);
+        const list = byAdvertiser.get(adv) ?? [];
+        list.push({ id: l.id, signed: owes ? Number(l.amount_cents) : -Number(l.amount_cents) });
+        byAdvertiser.set(adv, list);
+      }
+      const made: { id: string; advertiserId: string; total: number; lines: number }[] = [];
+      for (const [advertiserId, items] of byAdvertiser) {
+        const total = items.reduce((s, i) => s + i.signed, 0);
+        if (total <= 0) continue; // nothing owed yet; these lines roll into the next invoice
+        const id = newId('inv');
         await tx.query(`insert into invoices (id, company_id, advertiser_id, period_end, total_cents, status) values ($1,$2,$3,$4,$5,'open')`, [id, companyId, advertiserId, periodEnd.toISOString(), total]);
         for (const i of items) await tx.query(`insert into invoice_lines (invoice_id, ledger_entry_id, amount_cents) values ($1,$2,$3)`, [id, i.id, i.signed]);
-      });
-      this.bus.publish('invoice.issued', companyId, { invoiceId: id, advertiserId, totalCents: total, lines: items.length }, id);
-      await this.payInvoice(id);
-      out.push((await this.invoice(id))!);
+        made.push({ id, advertiserId, total, lines: items.length });
+      }
+      return made;
+    });
+    const out: Invoice[] = [];
+    for (const m of made) {
+      this.bus.publish('invoice.issued', companyId, { invoiceId: m.id, advertiserId: m.advertiserId, totalCents: m.total, lines: m.lines }, m.id);
+      await this.payInvoice(m.id);
+      out.push((await this.invoice(m.id))!);
     }
     return out;
   }
@@ -205,6 +300,15 @@ export class PaymentsService {
     if (inv.status === 'paid') return (await this.invoice(invoiceId))!;
     const hasCard = (await this.methods(inv.company_id, 'advertiser', inv.advertiser_id)).some((m) => m.isDefault);
     if (!hasCard) return (await this.invoice(invoiceId))!; // stays open: pay later or by transfer
+    // A hold already made for this invoice is used (or finished), never a second one: a capture whose answer never came
+    // may have taken the money already.
+    for (const r of (await this.db.query<any>(`select id from payments where purpose = 'invoice' and ref = $1 and status in ('capturing','voiding')`, [invoiceId])).rows) await this.recover(r.id);
+    const live = (await this.db.query<any>(`select id, status from payments where purpose = 'invoice' and ref = $1 and status in ('authorized','capturing','voiding','captured') order by created_at desc limit 1`, [invoiceId])).rows[0];
+    if (live) {
+      if (live.status === 'capturing' || live.status === 'voiding') throw new PaymentError('in_progress', 'This invoice’s payment is being settled right now. Check it again in a moment.', 409);
+      if (live.status === 'authorized') await this.capture(live.id);
+      return this.markPaid(inv, live.id);
+    }
     const attempt = (await this.db.query<{ n: number }>(`select count(*)::int as n from payments where purpose = 'invoice' and ref = $1`, [invoiceId])).rows[0]!.n + 1;
     const p = await this.authorize({ companyId: inv.company_id, ownerType: 'advertiser', ownerId: inv.advertiser_id, amountCents: Number(inv.total_cents), purpose: 'invoice', ref: invoiceId, idempotencyKey: `invoice:${invoiceId}:${attempt}`, description: `Invoice ${invoiceId}` });
     if (p.status === 'declined') {
@@ -213,9 +317,12 @@ export class PaymentsService {
       return (await this.invoice(invoiceId))!;
     }
     await this.capture(p.id);
-    await this.db.query(`update invoices set status = 'paid', payment_id = $2 where id = $1`, [invoiceId, p.id]);
-    this.bus.publish('invoice.paid', inv.company_id, { invoiceId, advertiserId: inv.advertiser_id, paymentId: p.id, totalCents: Number(inv.total_cents) }, `${invoiceId}:paid`);
-    return (await this.invoice(invoiceId))!;
+    return this.markPaid(inv, p.id);
+  }
+  private async markPaid(inv: any, paymentId: string): Promise<Invoice> {
+    await this.db.query(`update invoices set status = 'paid', payment_id = $2 where id = $1`, [inv.id, paymentId]);
+    this.bus.publish('invoice.paid', inv.company_id, { invoiceId: inv.id, advertiserId: inv.advertiser_id, paymentId, totalCents: Number(inv.total_cents) }, `${inv.id}:paid`);
+    return (await this.invoice(inv.id))!;
   }
 
   async invoice(id: string): Promise<(Invoice & { companyId: string; items: { ledgerEntryId: string; amountCents: number; memo: string }[] }) | null> {

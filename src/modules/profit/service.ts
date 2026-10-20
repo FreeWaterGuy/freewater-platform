@@ -31,7 +31,8 @@ export interface Period {
 }
 
 export class ProfitService {
-  constructor(private db: SqlClient, private platform: Platform, private deps: { today: (companyId: string, at?: Date) => string; aiCostsCents: (companyId: string, from: Date, to: Date) => Promise<number>; batches?: { bottles: (companyId: string) => Promise<number>; inMonth: (companyId: string, period: string) => Promise<{ bottles: number; revenueCents: number }[]> } }) {}
+  constructor(private db: SqlClient, private platform: Platform, private deps: { today: (companyId: string, at?: Date) => string; aiCostsCents: (companyId: string, from: Date, to: Date) => Promise<number>; batches?: { bottles: (companyId: string) => Promise<number>; inMonth: (companyId: string, period: string) => Promise<{ bottles: number; revenueCents: number; voided?: boolean }[]> }; /** Wait until every change queued so far is stored. */ flush?: () => Promise<void> }) {}
+  private async flush() { await this.deps.flush?.(); }
   private now() { return this.platform.bus.now(); }
   private company(id: string): CompanyConfig { const c = this.platform.companies.get(id); if (!c) throw new ProfitError('not_found', 'Company not found.', 404); return c; }
   private month(companyId: string, at: Date | string) { return this.deps.today(companyId, new Date(at)).slice(0, 7); }
@@ -72,8 +73,18 @@ export class ProfitService {
   /** Close every finished month not yet closed, oldest first. */
   async closeDue(companyId: string) {
     this.company(companyId);
+    // One close at a time per company (the next waits, then finds the months already closed).
+    const prev = this.closing.get(companyId) ?? Promise.resolve();
+    const run = prev.catch(() => {}).then(() => this.closeDueNow(companyId));
+    const tail = run.catch(() => {});
+    this.closing.set(companyId, tail);
+    void tail.then(() => { if (this.closing.get(companyId) === tail) this.closing.delete(companyId); });
+    return run;
+  }
+  private closing = new Map<string, Promise<unknown>>();
+  private async closeDueNow(companyId: string) {
     const current = this.month(companyId, this.now());
-    const done = new Set((await this.db.query<any>(`select period from profit_periods where company_id = $1`, [companyId])).rows.map((r) => r.period));
+    const done = await this.repairShares(companyId);
     const months = new Set<string>();
     for (const l of this.platform.ledger.entries) if (l.companyId === companyId && !SHARE_MEMO.test(l.memo)) months.add(this.month(companyId, l.at));
     const out: Period[] = [];
@@ -96,7 +107,8 @@ export class ProfitService {
     const perUnit = new Map<string, number>();
     for (const l of lines) if ((l.kind === 'print' || l.kind === 'custom') && l.unitId) perUnit.set(l.unitId, (perUnit.get(l.unitId) ?? 0) + rev(l));
     // Batches given outside the platform: their money above the $1 base per bottle is upside too.
-    const batchUpside = this.deps.batches ? (await this.deps.batches.inMonth(companyId, period)).reduce((a, b) => a + Math.max(0, b.revenueCents - b.bottles * base), 0) : 0;
+    // A batch voided in a later month than it was recorded takes its upside back in the month of the void.
+    const batchUpside = this.deps.batches ? (await this.deps.batches.inMonth(companyId, period)).reduce((a, b) => a + (b.voided ? -1 : 1) * Math.max(0, b.revenueCents - b.bottles * base), 0) : 0;
     const upside = batchUpside + [...perUnit.values()].reduce((a, v) => a + Math.max(0, v - base), 0) + net((l) => ['scan', 'ar', 'box_face', 'commission', 'commission_reversal'].includes(l.kind), rev);
     const total = net(() => true, rev);
     const bottles = [...this.platform.units.values()].filter((u) => u.companyId === companyId && (u.status === 'printed' || u.status === 'dispensed') && inMonth(u.createdAt)).length;
@@ -126,9 +138,42 @@ export class ProfitService {
     const aiPercent = c.agents?.enabled ? c.agents.percentOfProfit ?? 0 : 0;
     const aiCents = Math.round((profit * aiPercent) / 100);
     const row: Period = { period, upsideRevenueCents: upside, totalRevenueCents: total, costsCents: costs, costShareCents: costShare, carriedInCents: carriedIn, profitCents: profit, carriedOutCents: carriedOut, charityPercent, charityFloorCents: floor, charityTopUpCents: topUp, charityTotalCents: floor + topUp, aiPercent, aiCents, milestoneReached: reached, bottles, closedAt: this.now().toISOString() };
-    await this.db.query(`insert into profit_periods (company_id, period, data, carried_out, closed_at) values ($1,$2,$3,$4,$5)`, [companyId, period, JSON.stringify(row), carriedOut, row.closedAt]);
-    if (topUp > 0 || aiCents > 0) this.platform.bus.publish('profit.shared', companyId, { period, profitCents: profit, charityPercent, charityCents: topUp, alreadyGivenCents: floor, aiPercent, aiCents, milestoneReached: reached }, `profit:${period}`);
+    // The share goes in the books first, and is stored, before the month is written as closed: a crash in between
+    // leaves the month open, and the next close books nothing twice (the share's key is the month's) and writes the
+    // month with the share that's in the books.
+    this.share(companyId, row);
+    await this.flush();
+    const booked = (await this.db.query<any>(`select payload from events where company_id = $1 and type = 'profit.shared' and idempotency_key = $2`, [companyId, `profit:${period}`])).rows[0];
+    if (booked) {
+      const b = (typeof booked.payload === 'string' ? JSON.parse(booked.payload) : booked.payload) as { profitCents: number; charityPercent: number; charityCents: number; alreadyGivenCents: number; aiPercent: number; aiCents: number; milestoneReached: boolean };
+      Object.assign(row, { profitCents: b.profitCents, charityPercent: b.charityPercent, charityTopUpCents: b.charityCents, charityFloorCents: b.alreadyGivenCents, charityTotalCents: b.alreadyGivenCents + b.charityCents, aiPercent: b.aiPercent, aiCents: b.aiCents, milestoneReached: b.milestoneReached });
+    }
+    // Two closes at once: only one writes the month; the other returns the month as closed.
+    const won = (await this.db.query<any>(`insert into profit_periods (company_id, period, data, carried_out, closed_at) values ($1,$2,$3,$4,$5) on conflict do nothing returning period`, [companyId, period, JSON.stringify(row), row.carriedOutCents, row.closedAt])).rows.length;
+    if (!won) {
+      const r = (await this.db.query<any>(`select data from profit_periods where company_id = $1 and period = $2`, [companyId, period])).rows[0];
+      return (typeof r.data === 'string' ? JSON.parse(r.data) : r.data) as Period;
+    }
     return row;
+  }
+
+  /**
+   * A month closed whose share never reached the books (its row stored, its event lost to a crash, before shares were
+   * stored first): book it now, from the month's own row. The key is the month's, so it's never booked twice. Returns
+   * every month closed.
+   */
+  async repairShares(companyId: string): Promise<Set<string>> {
+    const closed = (await this.db.query<any>(`select period, data from profit_periods where company_id = $1`, [companyId])).rows;
+    let rebooked = 0;
+    for (const r of closed) if (this.share(companyId, (typeof r.data === 'string' ? JSON.parse(r.data) : r.data) as Period)) rebooked++;
+    if (rebooked) await this.flush();
+    return new Set(closed.map((r) => r.period));
+  }
+
+  /** Publish a closed month's share (its charity top-up and the agents' share), once: the key is the month's. */
+  private share(companyId: string, row: Period): boolean {
+    if (!(row.charityTopUpCents > 0 || row.aiCents > 0)) return false;
+    return !!this.platform.bus.publish('profit.shared', companyId, { period: row.period, profitCents: row.profitCents, charityPercent: row.charityPercent, charityCents: row.charityTopUpCents, alreadyGivenCents: row.charityFloorCents, aiPercent: row.aiPercent, aiCents: row.aiCents, milestoneReached: row.milestoneReached }, `profit:${row.period}`);
   }
 
   async periods(companyId: string, limit = 24): Promise<Period[]> {

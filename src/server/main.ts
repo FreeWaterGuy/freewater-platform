@@ -75,7 +75,8 @@ await migrate(db);
 // the live database must never look like a spare.
 await db.query(`drop table if exists restore_target`);
 
-app = await createApp({ db, alerts, seedDemo: process.env.SEED_DEMO === '1', blobs: blobStoreFromEnv(), spoolFile, epoch: lease.holder });
+// With the lease passed in, every write the app makes straight to the database checks it in its own transaction.
+app = await createApp({ db, alerts, seedDemo: process.env.SEED_DEMO === '1', blobs: blobStoreFromEnv(), spoolFile, epoch: lease.holder, lease });
 if (process.env.ALERT_EMAIL) alerts.addSink(new EmailSink(process.env.ALERT_EMAIL, (m) => app!.messenger.send(m)));
 app!.runtime.lease = lease;
 // Every write checks, in its own transaction, that this server still holds the lease; and this server's watermark
@@ -152,8 +153,11 @@ if (backupsConfigured() && url) {
     if (!r.ok) throw new Error(r.findings.some((f) => !f.ok) ? r.findings.filter((f) => !f.ok).map((f) => f.what).join('; ') : `the books check exited with ${r.code}: ${r.output.slice(-600)}`);
   } });
 } else if (config.production) console.warn('Settings: backups are off (set BACKUP_KEY and BACKUP_S3_BUCKET). The database host’s own backups are then the only copy.');
-const runner = new JobRunner(db, jobs, {
+// The job runner's own records (when each job ran) go through the app's lease-checked client, and no job starts
+// while this server can't be sure it still owns the data (its last lease renewal is too old).
+const runner = new JobRunner(app!.db, jobs, {
   paused: () => !!app!.persistence.problem,
+  mayRun: () => lease.fresh,
   onFailure: (name, error, n) => void alerts.alert(`job:${name}`, n >= 3 ? 'critical' : 'warning', `Background job “${name}” failed${n > 1 ? ` ${n} times in a row` : ''}`, String(error)),
   onRecovered: (name) => void alerts.alert(`job:${name}`, 'resolved', `Background job “${name}” is working again`),
 });

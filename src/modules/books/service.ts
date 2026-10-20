@@ -6,6 +6,7 @@ import type { Platform } from '../../platform';
 import type { Messenger } from '../../adapters/messaging/contract';
 import type { PayoutProvider } from '../../adapters/payouts/contract';
 import type { PackService } from '../packs/service';
+import { withCharityLock } from './charityLock';
 
 export class BooksError extends Error {
   constructor(public status: number, public code: string, message: string) {
@@ -75,8 +76,31 @@ export class BooksService {
     for (const r of rows) out.set(r.charity, { donatedCents: n(r.cents), sentCents: 0, owedCents: 0, bottles: n(r.lines) });
     const get = (c: string) => { let b = out.get(c); if (!b) out.set(c, (b = { donatedCents: 0, sentCents: 0, owedCents: 0, bottles: 0 })); return b; };
     for (const r of sent) get(r.charity).sentCents = n(r.cents);
+    // A transfer the bank already sent whose line isn't in the books yet (a crash between the two) is sent all the same:
+    // what's owed counts it, so the next run never pays it again. repairUnrecorded() writes its line.
+    for (const t of await this.unrecorded(companyId)) get(t.charity_name).sentCents += n(t.amount_cents);
     for (const b of out.values()) b.owedCents = b.donatedCents - b.sentCents;
     return out;
+  }
+
+  /** Transfers marked sent (or confirmed) whose 'charity.transferred' line was never stored. */
+  private async unrecorded(companyId: string) {
+    return (await this.db.query<any>(
+      `select t.id, t.number, t.amount_cents, t.provider, t.provider_ref, c.name as charity_name from charity_transfers t join charities c on c.id = t.charity_id
+        where t.company_id = $1 and t.status in ('sent', 'confirmed')
+          and not exists (select 1 from events e where e.company_id = t.company_id and e.type = 'charity.transferred' and e.idempotency_key = 'transfer:' || t.id)
+        order by t.created_at`, [companyId])).rows;
+  }
+
+  /** Write the missing line for every transfer sent but never recorded (once: the event's key is the transfer's). */
+  async repairUnrecorded(companyId: string) {
+    await this.flush();
+    let fixed = 0;
+    for (const t of await this.unrecorded(companyId)) {
+      if (this.platform.bus.publish('charity.transferred', companyId, { transferId: t.id, number: t.number, charity: t.charity_name, amountCents: n(t.amount_cents), provider: t.provider, providerRef: t.provider_ref ?? '' }, `transfer:${t.id}`)) fixed++;
+    }
+    if (fixed) await this.flush();
+    return fixed;
   }
 
   // ---------- transfers ----------
@@ -97,37 +121,47 @@ export class BooksService {
       const t = await this.sendTransfer(companyId, r.id, opts).catch(() => null);
       if (t) results.push(t);
     }
-    await this.flush();
-    const preview = await this.payoutPreview(companyId);
-    const skipped: (typeof preview[number])[] = preview.filter((x) => !x.willSend);
-    const day = this.today(companyId);
-    for (const p of preview.filter((x) => x.willSend)) {
-      // One transfer per charity per day, and none while an earlier one is still unanswered: what it owes doesn't yet
-      // count that one, so sending now could pay twice.
-      if ((await this.db.query(`select 1 from charity_transfers where charity_id = $1 and (status = 'sending' or (day = $2 and status <> 'failed'))`, [p.charityId, day])).rows.length) {
-        skipped.push({ ...p, willSend: false, why: 'Already sent today (or still waiting for the bank); the rest goes in the next transfer' });
-        continue;
-      }
-      const charity = (await this.db.query<any>(`select * from charities where id = $1`, [p.charityId])).rows[0];
-      const coversUntil = this.platform.bus.now();
-      const last = (await this.db.query<any>(`select max(covers_until) as t from charity_transfers where charity_id = $1 and status <> 'failed'`, [p.charityId])).rows[0]?.t;
-      const bottles = n((await this.db.query<any>(`select count(*)::int as n from ledger_entries where company_id = $1 and kind = 'donation' and credit = $2 and ($3::timestamptz is null or at > $3) and at <= $4`, [companyId, `payable:charity:${charity.name}`, last ?? null, coversUntil.toISOString()])).rows[0]?.n);
-      // Written down before the bank is asked. The unique index (one a day per charity) makes two runs at once safe:
-      // the second can't write its row, so it never asks the bank.
-      let id: string | null = null;
-      for (let attempt = 0; attempt < 5 && !id; attempt++) {
-        const count = n((await this.db.query<any>(`select count(*)::int as n from charity_transfers where company_id = $1`, [companyId])).rows[0]?.n);
-        const tid = newId('tr');
-        try {
-          await this.db.query(`insert into charity_transfers (id, company_id, number, charity_id, amount_cents, covers_until, bottles, status, provider, created_at, day) values ($1,$2,$3,$4,$5,$6,$7,'sending',$8,$9,$10)`,
-            [tid, companyId, `T-${1001 + count + attempt}`, p.charityId, p.owedCents, coversUntil.toISOString(), bottles, this.payouts.name, coversUntil.toISOString(), day]);
-          id = tid;
-        } catch (e: any) {
-          if (e?.code !== '23505') throw e;
-          if ((await this.db.query(`select 1 from charity_transfers where charity_id = $1 and day = $2 and status <> 'failed'`, [p.charityId, day])).rows.length) break;
+    await this.repairUnrecorded(companyId);
+    // What's owed is read and every transfer written down under the charity lock, so a person redirecting a bottle's
+    // gift can't slip in between (see environment.directGiving). The bank is asked after, outside the lock.
+    const { skipped, ids } = await withCharityLock(this.platform, companyId, async () => {
+      await this.flush();
+      const preview = await this.payoutPreview(companyId);
+      const skipped: (typeof preview[number])[] = preview.filter((x) => !x.willSend);
+      const ids: string[] = [];
+      const day = this.today(companyId);
+      for (const p of preview.filter((x) => x.willSend)) {
+        // One transfer per charity per day, and none while an earlier one is still unanswered: what it owes doesn't yet
+        // count that one, so sending now could pay twice.
+        if ((await this.db.query(`select 1 from charity_transfers where charity_id = $1 and (status = 'sending' or (day = $2 and status <> 'failed'))`, [p.charityId, day])).rows.length) {
+          skipped.push({ ...p, willSend: false, why: 'Already sent today (or still waiting for the bank); the rest goes in the next transfer' });
+          continue;
         }
+        const charity = (await this.db.query<any>(`select * from charities where id = $1`, [p.charityId])).rows[0];
+        const coversUntil = this.platform.bus.now();
+        const last = (await this.db.query<any>(`select max(covers_until) as t from charity_transfers where charity_id = $1 and status <> 'failed'`, [p.charityId])).rows[0]?.t;
+        const bottles = n((await this.db.query<any>(`select count(*)::int as n from ledger_entries where company_id = $1 and kind = 'donation' and credit = $2 and ($3::timestamptz is null or at > $3) and at <= $4`, [companyId, `payable:charity:${charity.name}`, last ?? null, coversUntil.toISOString()])).rows[0]?.n);
+        // Written down before the bank is asked. The unique index (one a day per charity) makes two runs at once safe:
+        // the second can't write its row, so it never asks the bank.
+        let id: string | null = null;
+        for (let attempt = 0; attempt < 5 && !id; attempt++) {
+          const count = n((await this.db.query<any>(`select count(*)::int as n from charity_transfers where company_id = $1`, [companyId])).rows[0]?.n);
+          const tid = newId('tr');
+          try {
+            await this.db.query(`insert into charity_transfers (id, company_id, number, charity_id, amount_cents, covers_until, bottles, status, provider, created_at, day) values ($1,$2,$3,$4,$5,$6,$7,'sending',$8,$9,$10)`,
+              [tid, companyId, `T-${1001 + count + attempt}`, p.charityId, p.owedCents, coversUntil.toISOString(), bottles, this.payouts.name, coversUntil.toISOString(), day]);
+            id = tid;
+          } catch (e: any) {
+            if (e?.code !== '23505') throw e;
+            if ((await this.db.query(`select 1 from charity_transfers where charity_id = $1 and day = $2 and status <> 'failed'`, [p.charityId, day])).rows.length) break;
+          }
+        }
+        if (!id) { skipped.push({ ...p, willSend: false, why: 'Already being sent today' }); continue; }
+        ids.push(id);
       }
-      if (!id) { skipped.push({ ...p, willSend: false, why: 'Already being sent today' }); continue; }
+      return { skipped, ids };
+    });
+    for (const id of ids) {
       const t = await this.sendTransfer(companyId, id, opts).catch(() => null);
       results.push(t ?? (await this.transfer(id)));
     }
@@ -142,11 +176,18 @@ export class BooksService {
     const amountCents = n(t.amount_cents);
     const r = await this.payouts.send({ charityName: t.charity_name, payoutLabel: t.payout_label, amountCents, reference: `FreeWater ${t.number}`, idempotencyKey: `${companyId}:${id}` });
     const token = randomBytes(18).toString('base64url');
-    // Only the run that moves it out of 'sending' records it, so two runs retrying the same one record it once.
+    // Sent: its line goes in the books first, and is stored, before the transfer is marked sent. A crash in between
+    // leaves it 'sending' with its line already counted, and the next run asks the bank again with the same key (the
+    // bank answers with the transfer it already made) and only then marks it; the line's key is the transfer's, so it's
+    // booked once however many runs get here. A crash right after the bank call, before anything, is the same retry.
+    if (r.status === 'sent') {
+      this.platform.bus.publish('charity.transferred', companyId, { transferId: id, number: t.number, charity: t.charity_name, amountCents, provider: this.payouts.name, providerRef: r.ref }, `transfer:${id}`);
+      await this.flush();
+    }
+    // Only the run that moves it out of 'sending' tells the charity, so two runs retrying the same one tell it once.
     const moved = await this.db.query(`update charity_transfers set status = $2, provider_ref = $3, failure = $4, confirm_token_hash = $5 where id = $1 and status = 'sending'`,
       [id, r.status === 'sent' ? 'sent' : 'failed', r.status === 'sent' ? r.ref : null, r.status === 'failed' ? r.reason : null, sha(token)]);
     if (Number(moved.rowCount ?? 0) && r.status === 'sent') {
-      this.platform.bus.publish('charity.transferred', companyId, { transferId: id, number: t.number, charity: t.charity_name, amountCents, provider: this.payouts.name, providerRef: r.ref }, `transfer:${id}`);
       if (t.charity_email) await this.messenger.send({ channel: 'email', to: t.charity_email, subject: `${company(this.platform, companyId)} sent you ${(amountCents / 100).toFixed(2)} dollars`, text: `${company(this.platform, companyId)} sent ${t.charity_name} $${(amountCents / 100).toFixed(2)} (transfer ${t.number}, bank reference ${r.ref}) for ${n(t.bottles).toLocaleString()} bottles. When it arrives, please confirm it so the public books show it: ${opts.baseUrl}/books/confirm?transfer=${id}&token=${token}` });
     }
     return this.transfer(id);

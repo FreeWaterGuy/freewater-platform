@@ -402,6 +402,7 @@ export class DataService {
       [`select 1 from viewer_advertisers where company_id = $1 and viewer_key = $2 limit 1`, [companyId, viewerKey]],
       [`select 1 from person_places where company_id = $1 and subject = $2 limit 1`, [companyId, viewerKey]],
       [`select 1 from wallet_holders h where h.company_id = $1 and h.subject = $2 and exists (select 1 from wallet_lines l where l.account = 'holder:' || h.id) limit 1`, [companyId, viewerKey]],
+      // Last, and on its own index (events_scan_viewer, migration 049): the scan kinds below must match that index's.
       [`select 1 from events where company_id = $1 and type in ('unit.scanned','box.scanned','ar.launched','box.ar_launched') and payload->>'viewerKey' = $2 limit 1`, [companyId, viewerKey]],
     ];
     for (const [sql, p] of checks) if ((await this.db.query(sql, p)).rows.length) return true;

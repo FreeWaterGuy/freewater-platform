@@ -29,16 +29,19 @@ export function checkConfig(env: NodeJS.ProcessEnv = process.env) {
 }
 
 /**
- * The stand-ins: the test payment provider, the test payout provider and the test outbox move no real money and send
- * no real messages. In production they're only allowed for a staging rehearsal, by saying so (ALLOW_STANDINS=1);
+ * The stand-ins: the test payment provider, the test payout provider, the test outbox and the test gift cards move no
+ * real money, send no real messages and buy no real cards. In production they're only allowed for a staging rehearsal, by saying so (ALLOW_STANDINS=1);
  * otherwise the server refuses to start rather than look live while doing nothing.
  */
-export function checkStandIns(wired: { payments?: unknown; payouts?: unknown; messenger?: unknown }, env: NodeJS.ProcessEnv = process.env) {
+export function checkStandIns(wired: { payments?: unknown; payouts?: unknown; messenger?: unknown; giftCards?: unknown }, env: NodeJS.ProcessEnv = process.env) {
   const production = env.NODE_ENV === 'production';
+  // Gift cards come from the host's settings: without Tremendous's keys (or with its sandbox) the stand-in answers.
+  const realGiftCards = !!wired.giftCards || (!!env.TREMENDOUS_API_KEY && !!env.TREMENDOUS_FUNDING_SOURCE && env.TREMENDOUS_SANDBOX !== '1');
   const active = [
     !wired.payments && 'TestPaymentProvider (no real money is taken)',
     !wired.payouts && 'TestPayoutProvider (no real money is sent to charities)',
     !wired.messenger && 'TestOutbox (no email or text is sent)',
+    !realGiftCards && 'test gift cards (no real gift card is bought; set TREMENDOUS_API_KEY and TREMENDOUS_FUNDING_SOURCE)',
   ].filter((s): s is string => !!s);
   const allowed = env.ALLOW_STANDINS === '1';
   const errors = production && active.length && !allowed
