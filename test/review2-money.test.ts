@@ -238,13 +238,14 @@ describe('6. capture and void at the same time', () => {
     expect(calls).toEqual(['capture']);
     expect(events.filter((e) => e === 'payment.captured')).toHaveLength(1);
 
-    // The provider can't be reached: still held, and can be taken later.
+    // No answer from the provider: it may have taken the money, so the payment stays 'capturing' (never put back to
+    // 'authorized' on a guess); a retry right away is refused, and without the provider's status lookup it waits for a person.
     failCapture = true;
     const r = await hold('c');
     await expect(payments.capture(r.id)).rejects.toThrow('network');
-    expect((await payments.get(r.id))!.status).toBe('authorized');
+    expect((await payments.get(r.id))!.status).toBe('capturing');
     failCapture = false;
-    expect((await payments.capture(r.id)).status).toBe('captured');
+    await expect(payments.capture(r.id)).rejects.toMatchObject({ code: 'in_progress' });
   });
 });
 

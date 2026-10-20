@@ -28,6 +28,12 @@ export class LaunchService {
     const run = async (name: string, sql: string, args: unknown[] = [companyId]) => { const r: any = await this.db.query(sql, args); counts[name] = (counts[name] ?? 0) + Number(r.rowCount ?? 0); };
     await this.db.transaction(async (tx) => {
       const q = async (name: string, sql: string, args: unknown[] = [companyId]) => { const r: any = await tx.query(sql, args); counts[name] = (counts[name] ?? 0) + Number(r.rowCount ?? 0); };
+      // A mint or conversion under way may reach the chain after the wipe, leaving the books and the chain apart. Locked
+      // here, so one can't start meanwhile (its claim waits for this and then finds it gone).
+      const busy = (await tx.query<any>(`select status from chain_actions where company_id = $1 and kind in ('mint','convert') and status in ('approved','running','recording','signing','confirming') for update`, [companyId])).rows;
+      if (busy.some((r) => r.status !== 'approved')) {
+        throw new LaunchError('minting', 'A mint or conversion is under way. Let it finish (or cancel it) before resetting.', 409);
+      }
       await q('offer claims', `delete from offer_claims where company_id = $1`);
       // Money a brand really sent into a reserve stays (and anything correcting it); everything people earned, got or
       // spent while testing goes. Balances are then rebuilt from what's left, so the books still add up.

@@ -1,5 +1,5 @@
 import { newId } from '../../core/ids';
-import type { AuthorizeResult, PaymentProvider, SavedMethod } from './contract';
+import type { AuthorizeResult, PaymentProvider, PaymentState, SavedMethod } from './contract';
 
 const cards: Record<string, { brand: string; last4: string; outcome?: string; saveError?: string }> = {
   tok_visa: { brand: 'visa', last4: '4242' },
@@ -17,7 +17,7 @@ const cards: Record<string, { brand: string; last4: string; outcome?: string; sa
 export class TestPaymentProvider implements PaymentProvider {
   readonly name = 'test-payments';
   private methods = new Map<string, { outcome?: string }>();
-  private holds = new Map<string, { amountCents: number; state: 'held' | 'captured' | 'voided' }>();
+  private holds = new Map<string, { amountCents: number; state: 'held' | 'captured' | 'voided'; capturedCents?: number }>();
   private byKey = new Map<string, AuthorizeResult>();
 
   async createCustomer() {
@@ -54,7 +54,15 @@ export class TestPaymentProvider implements PaymentProvider {
     if (!h || h.state === 'voided') return { status: 'failed' as const, reason: 'The hold is no longer valid.' };
     if (amountCents > h.amountCents) return { status: 'failed' as const, reason: 'Cannot take more than was held.' };
     h.state = 'captured';
+    h.capturedCents = amountCents;
     return { status: 'captured' as const };
+  }
+
+  async status(ref: string): Promise<PaymentState> {
+    const h = this.holds.get(ref);
+    if (!h) return { state: 'failed', reason: 'No such hold.' };
+    if (h.state === 'captured') return { state: 'captured', amountCents: h.capturedCents ?? h.amountCents };
+    return { state: h.state };
   }
 
   async void(ref: string) {

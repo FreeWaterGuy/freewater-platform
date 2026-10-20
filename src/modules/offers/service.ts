@@ -202,7 +202,9 @@ export class OffersService {
     const c = (await this.db.query<any>(`select * from offer_claims where id = $1`, [claimId])).rows[0];
     const offer = await this.row(companyId, c.offer_id);
     const t: OfferReward = typeof c.terms === 'string' ? JSON.parse(c.terms) : c.terms;
-    const back = t.kind === 'free' ? Math.min(paidCents, t.upToCents) : t.kind === 'percent_off' ? Math.min(Math.round(paidCents * (t.percent ?? 0) / 100), t.upToCents) : Math.min(t.cents ?? 0, paidCents);
+    // An older claim saved without a most (upToCents) is capped by what the receipt shows.
+    const cap = Number.isInteger(t.upToCents) ? t.upToCents! : paidCents;
+    const back = t.kind === 'free' ? Math.min(paidCents, cap) : t.kind === 'percent_off' ? Math.min(Math.round(paidCents * (t.percent ?? 0) / 100), cap) : Math.min(t.cents ?? 0, paidCents);
     const toPerson = Math.max(0, back) + (t.youGetCents ?? 0);
     const cause = t.causeCents ? { name: this.cause(companyId), cents: t.causeCents } : null;
     // Only a claim waiting on its receipt moves on, once: a second request at the same moment changes nothing.
@@ -294,6 +296,8 @@ export class OffersService {
       if (!['free', 'percent_off', 'cents_off'].includes(r?.kind)) bad('The deal is free, a percent off, or an amount off.');
       if (r.kind === 'percent_off' && !(Number.isInteger(r.percent) && r.percent! >= 1 && r.percent! <= 100)) bad('The percent off is 1 to 100.');
       if (r.kind === 'cents_off' && !(Number.isInteger(r.cents) && r.cents! > 0)) bad('Say how much off, in cents.');
+      // A free product or a percent off pays back what the receipt shows, so it needs a most it can pay.
+      if ((r.kind === 'free' || r.kind === 'percent_off') && !(Number.isInteger(r.upToCents) && r.upToCents! > 0)) bad('Say the most it pays back (upToCents), in cents.');
       for (const k of ['upToCents', 'youGetCents', 'causeCents'] as const) if (r[k] !== undefined && !(Number.isInteger(r[k]) && r[k]! >= 0 && r[k]! <= 100_000)) bad('Amounts are whole cents, up to $1,000.');
     };
     reward(i.reward);

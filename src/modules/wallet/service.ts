@@ -177,7 +177,7 @@ export class WalletService {
     const total = toPersonCents + (cause?.cents ?? 0);
     if (!Number.isInteger(total) || total <= 0) throw new WalletError('bad_amount', 'Nothing to pay.');
     const asset = this.creditAsset(companyId);
-    return this.once(() => this.db.transaction(async (tx) => {
+    const paid = await this.once(() => this.db.transaction(async (tx) => {
       if ((await tx.query(`select 1 from wallet_tx where company_id = $1 and ref = $2`, [companyId, `offer:${ref}`])).rows.length) return { paid: 0, reason: 'already_paid' };
       await tx.query(`insert into wallet_balances (company_id, asset, account, balance) values ($1,$2,$3,0) on conflict do nothing`, [companyId, asset, `reserve:${sponsor}`]);
       const reserve = Number((await tx.query<any>(`select balance from wallet_balances where company_id = $1 and asset = $2 and account = $3 for update`, [companyId, asset, `reserve:${sponsor}`])).rows[0].balance);
@@ -188,6 +188,11 @@ export class WalletService {
       await this.post(tx, companyId, asset, 'offer', `offer:${ref}`, lines, { why: why.slice(0, 200) });
       return { paid: total, reason: undefined as string | undefined };
     }), () => ({ paid: 0, reason: 'already_paid' }));
+    // The cause's share also goes in the company's books as a gift owed to the charity, so it's paid out like any
+    // other giving. Published under the payout's own reference (also when this payout was already made, in case the
+    // books missed it), so it's counted once.
+    if (cause && cause.cents > 0) this.platform.bus.publish('offer.cause_given', companyId, { claimId: ref, sponsor, cause: cause.name, cents: cause.cents }, `offer:${ref}`);
+    return paid;
   }
 
   tokenAsset(companyId: string) { return `token:${companyId}`; }
@@ -234,12 +239,16 @@ export class WalletService {
    * refused. The credit goes back only if the gift-card company definitely said no; if we can't tell (a timeout, say),
    * it stays held and the purchase is marked unknown for a person to check (`settleGiftCard`).
    */
+  /** The stand-in (its cards say TEST), or a gift-card company's sandbox. */
+  static isTestGiftCards(provider: GiftCardProvider) { return provider.test === true || provider.name.startsWith('test'); }
   async buyGiftCard(companyId: string, subject: string, o: { email: string; product: string; cents: number; requestId: string }, provider: GiftCardProvider) {
     const c = this.settings(companyId).conversions;
     if (!c.enabled || !c.approvedBy) throw new WalletError('switched_off', 'Gift cards are switched off until exchanges are approved.', 403);
     if (!subject.startsWith('user:')) throw new WalletError('sign_in', 'Sign in so the card can go to your email.', 401);
     if (typeof o.requestId !== 'string' || !/^[A-Za-z0-9_-]{8,80}$/.test(o.requestId)) throw new WalletError('request_id_needed', 'Send a requestId (8 to 80 letters, digits, - or _), the same one for every retry of this purchase.');
     if (!Number.isInteger(o.cents) || o.cents < 100) throw new WalletError('bad_amount', 'Choose at least $1.');
+    // Real credit is never spent on a stand-in card in production, unless this is a staging rehearsal said out loud.
+    if (WalletService.isTestGiftCards(provider) && process.env.NODE_ENV === 'production' && process.env.ALLOW_STANDINS !== '1') throw new WalletError('no_provider', 'Gift cards aren’t connected to a gift-card company yet.', 503);
     const p = (await provider.catalog()).find((x) => x.id === o.product);
     if (!p) throw new WalletError('not_found', 'No such gift card.', 404);
     if (o.cents < p.minCents || o.cents > p.maxCents) throw new WalletError('bad_amount', `This card is ${p.minCents / 100} to ${p.maxCents / 100} dollars.`);
@@ -248,13 +257,14 @@ export class WalletService {
     const ref = `gc_${this.hidden(companyId, `giftcard|${subject}|${o.requestId}`)}`;
     const prior = async () => (await this.db.query<any>(`select * from wallet_giftcards where company_id = $1 and ref = $2`, [companyId, ref])).rows[0];
     const busy = () => new WalletError('in_progress', 'That gift card is already being bought. Check again in a moment.', 409);
+    await this.unstickGiftCards(companyId, ref);
     let row = await prior();
     if (row && (row.product !== p.id || Number(row.cents) !== o.cents)) throw new WalletError('request_reused', 'That request was for a different card.', 409);
     if (row?.status === 'sent') return { card: p.name, cents: o.cents, ref: row.provider_ref as string, code: undefined as string | undefined, test: provider.name.startsWith('test'), already: true };
     if (row?.status === 'refused') throw new WalletError('provider_failed', 'The gift-card company said no to this one. Your credit is back.', 502);
     // One order out at a time for each purchase: a retry while it's out is refused, and an unknown one is claimed again.
     if (row?.status === 'ordering') throw busy();
-    if (row?.status === 'unknown' && !Number((await this.db.query(`update wallet_giftcards set status = 'ordering' where company_id = $1 and ref = $2 and status = 'unknown'`, [companyId, ref])).rowCount ?? 0)) throw busy();
+    if (row?.status === 'unknown' && !Number((await this.db.query(`update wallet_giftcards set status = 'ordering', ordering_at = $3 where company_id = $1 and ref = $2 and status = 'unknown'`, [companyId, ref, this.clock().toISOString()])).rowCount ?? 0)) throw busy();
     if (!row) {
       try {
         await this.db.transaction(async (tx) => {
@@ -265,7 +275,7 @@ export class WalletService {
           for (const r of rows) { if (!left) break; const take = Math.min(left, Number(r.balance)); lines.push([r.account, -take]); left -= take; }
           lines.push(['spent:giftcards', o.cents]);
           const entry = await this.post(tx, companyId, asset, 'giftcard', `giftcard:${ref}`, lines, { why: `${p.name} gift card` });
-          await tx.query(`insert into wallet_giftcards (company_id, ref, subject, entry, product, cents, status, at) values ($1,$2,$3,$4,$5,$6,'ordering',$7)`, [companyId, ref, subject, entry, p.id, o.cents, this.clock().toISOString()]);
+          await tx.query(`insert into wallet_giftcards (company_id, ref, subject, entry, product, cents, status, at, ordering_at) values ($1,$2,$3,$4,$5,$6,'ordering',$7,$7)`, [companyId, ref, subject, entry, p.id, o.cents, this.clock().toISOString()]);
         });
       } catch (e: any) {
         if (e?.code === '23505') throw busy();
@@ -300,8 +310,21 @@ export class WalletService {
     }
   }
 
+  /** How long an order may stay out before it's taken to have been cut off (a crash, a hang). */
+  static giftCardStuckAfterMs = 10 * 60_000;
+  /**
+   * An order still 'ordering' that long after it went out never got an answer: it becomes unknown, so a person can
+   * check with the gift-card company and settle it (or a retry with the same request can claim it again). A late
+   * answer still lands: every later change accepts an unknown purchase too.
+   */
+  async unstickGiftCards(companyId: string, ref?: string) {
+    const cutoff = new Date(this.clock().getTime() - WalletService.giftCardStuckAfterMs).toISOString();
+    const r = await this.db.query(`update wallet_giftcards set status = 'unknown', error = 'No answer from the gift-card company for 10 minutes.' where company_id = $1 and status = 'ordering' and coalesce(ordering_at, at) < $2 and ($3::text is null or ref = $3)`, [companyId, cutoff, ref ?? null]);
+    return Number(r.rowCount ?? 0);
+  }
   /** Gift-card purchases, newest first: by default the ones nobody could tell were sent (for a person to check). */
   async giftCards(companyId: string, status: 'unknown' | 'ordering' | 'sent' | 'refused' = 'unknown') {
+    await this.unstickGiftCards(companyId);
     return (await this.db.query<any>(`select ref, product, cents, status, provider_ref, error, at, settled_by, settled_at from wallet_giftcards where company_id = $1 and status = $2 order by at desc limit 200`, [companyId, status])).rows
       .map(giftCardView);
   }
@@ -311,6 +334,7 @@ export class WalletService {
    */
   async settleGiftCard(companyId: string, ref: string, outcome: 'sent' | 'refused', by: string, note?: string) {
     if (outcome !== 'sent' && outcome !== 'refused') throw new WalletError('bad_outcome', 'Say whether it was sent or refused.');
+    await this.unstickGiftCards(companyId, ref);
     const row = (await this.db.query<any>(`select * from wallet_giftcards where company_id = $1 and ref = $2`, [companyId, ref])).rows[0];
     if (!row) throw new WalletError('not_found', 'No such gift-card purchase.', 404);
     const took = (await this.db.query<any>(`update wallet_giftcards set status = $3, settled_by = $4, settled_at = $5, error = coalesce($6, error) where company_id = $1 and ref = $2 and status = 'unknown' returning entry`,

@@ -37,9 +37,9 @@ describe('production settings', () => {
     expect(refused.active.join(' ')).toMatch(/TestPaymentProvider.*TestPayoutProvider.*TestOutbox/);
     const rehearsal = checkStandIns({}, { NODE_ENV: 'production', ALLOW_STANDINS: '1' } as any);
     expect(rehearsal.errors).toEqual([]);
-    expect(rehearsal.active).toHaveLength(3); // still listed, so the server says so loudly
+    expect(rehearsal.active).toHaveLength(4); // still listed, so the server says so loudly (gift cards too)
     expect(checkStandIns({}, {} as any).errors).toEqual([]); // a laptop
-    expect(checkStandIns({ payments: {}, payouts: {}, messenger: {} }, { NODE_ENV: 'production' } as any)).toMatchObject({ active: [], errors: [] });
+    expect(checkStandIns({ payments: {}, payouts: {}, messenger: {}, giftCards: {} }, { NODE_ENV: 'production' } as any)).toMatchObject({ active: [], errors: [] });
   });
 
   it('an unwritable spool directory stops a production start; elsewhere it only warns', () => {

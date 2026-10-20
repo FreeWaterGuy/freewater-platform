@@ -50,6 +50,8 @@ export interface EventPayloads {
   /** The value an offer returned to a cause in a measured test, paid by the advertiser. */
   'value_back.given': { experimentId: string; unitId: string; campaignId: string; advertiserId: string; advertiserName: string; cause: string; cents: Cents; person: string };
   'value_back.reversed': { experimentId: string; unitId: string; campaignId: string; advertiserId: string; advertiserName: string; cause: string; cents: number; orderId: string };
+  /** A brand's offer gave to a cause, out of the money the brand put in reserve: owed to the charity like any gift. */
+  'offer.cause_given': { claimId: string; sponsor: string; cause: string; cents: Cents };
   /** Money paid out to the company's owners (a dividend, a buyback, a distribution). */
   'owner_payout.recorded': { payoutId: string; kind: string; amountCents: Cents; memo: string; date: string };
   'machine.incident_opened': { incidentId: string; locationId: string; kind: string; severity: 'warning' | 'critical'; message: string };

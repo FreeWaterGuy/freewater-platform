@@ -104,6 +104,8 @@ export class Ledger {
     // An advertiser's value-back test: what the offer returned, paid by the advertiser, to the cause.
     bus.on('value_back.given', (e) => this.add(e, { unitId: e.payload.unitId, campaignId: e.payload.campaignId, debit: `receivable:advertiser:${e.payload.advertiserId}`, credit: `payable:charity:${e.payload.cause}`, amountCents: e.payload.cents, kind: 'donation', memo: `Value-back on ${e.payload.advertiserName}’s offer (a measured test, step ${e.payload.cents}¢), paid by the advertiser` }));
     bus.on('value_back.reversed', (e) => this.add(e, { unitId: e.payload.unitId, campaignId: e.payload.campaignId, debit: `payable:charity:${e.payload.cause}`, credit: `receivable:advertiser:${e.payload.advertiserId}`, amountCents: e.payload.cents, kind: 'donation', memo: `Value-back on ${e.payload.advertiserName}’s offer taken back: the sale was refunded` }));
+    // A brand's offer gave to a cause: paid from the money the brand put in reserve (held for it), owed to the charity.
+    bus.on('offer.cause_given', (e) => this.add(e, { debit: `payable:reserve:${e.payload.sponsor}`, credit: `payable:charity:${e.payload.cause}`, amountCents: e.payload.cents, kind: 'donation', memo: `Given to ${e.payload.cause} by an offer (claim ${e.payload.claimId}), from ${e.payload.sponsor}’s reserve` }));
     bus.on('owner_payout.recorded', (e) => this.add(e, { debit: `equity:payout:${e.payload.kind}`, credit: 'cash:bank', amountCents: e.payload.amountCents, kind: 'owner_payout', memo: e.payload.memo }));
     // 'print.failed' is deliberately not subscribed: nothing to bill.
   }

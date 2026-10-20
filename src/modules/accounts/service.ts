@@ -17,6 +17,18 @@ export const roleScopes: Record<Role, Scope[]> = {
   advertiser: ['campaigns', 'purchases', 'invoices', 'me'],
 };
 
+/** The roles that may propose and approve token steps (going live with the token, conversions, gift cards…). */
+export const APPROVER_ROLES: Role[] = ['owner', 'finance'];
+
+/**
+ * Did this person hold an approver role (owner or finance) since at or before `at`, and do they still? Counted from
+ * when the role was granted, not when the account was made: someone promoted after a step was proposed can't approve it.
+ */
+export async function heldApproverRole(db: SqlClient, companyId: string, userId: string, at: Date): Promise<boolean> {
+  const u = (await db.query<any>(`select role, coalesce(role_granted_at, created_at) as granted from users where id = $1 and company_id = $2 and deleted_at is null`, [userId, companyId])).rows[0];
+  return !!u && APPROVER_ROLES.includes(u.role) && new Date(u.granted).getTime() <= at.getTime();
+}
+
 export interface Consents {
   /** Offers on scan pages can be picked using the interests below. */
   personalizedOffers: boolean;
@@ -213,7 +225,10 @@ export class AccountsService {
         const owners = (await this.db.query<{ n: number }>(`select count(*)::int as n from users where company_id = $1 and role = 'owner' and deleted_at is null`, [input.companyId])).rows[0]!.n;
         if (owners <= 1) throw new AccountsError('last_owner', 'Every company needs at least one owner.', 409);
       }
-      await this.db.query(`update users set role = $2, advertiser_id = $3 where id = $1`, [existing.id, input.role, input.advertiserId ?? null]);
+      // A role that may approve token steps counts from now: moving between owner and finance keeps the time it was
+      // first held; becoming one from anything else starts it afresh.
+      const grantedAt = existing.role === input.role || (APPROVER_ROLES.includes(existing.role) && APPROVER_ROLES.includes(input.role)) ? null : this.clock().toISOString();
+      await this.db.query(`update users set role = $2, advertiser_id = $3, role_granted_at = coalesce($4, role_granted_at) where id = $1`, [existing.id, input.role, input.advertiserId ?? null, grantedAt]);
       return (await this.get(existing.id))!;
     }
     return this.createUser({ companyId: input.companyId, email, role: input.role, advertiserId: input.advertiserId, displayName: input.displayName });
@@ -234,7 +249,7 @@ export class AccountsService {
       const owners = (await this.db.query<{ n: number }>(`select count(*)::int as n from users where company_id = $1 and role = 'owner' and deleted_at is null`, [companyId])).rows[0]!.n;
       if (owners <= 1) throw new AccountsError('last_owner', 'Every company needs at least one owner.', 409);
     }
-    await this.db.query(`update users set role = 'consumer', advertiser_id = null where id = $1`, [userId]);
+    await this.db.query(`update users set role = 'consumer', advertiser_id = null, role_granted_at = $2 where id = $1`, [userId, this.clock().toISOString()]);
     await this.db.query(`update sessions set revoked_at = $2 where user_id = $1 and revoked_at is null`, [userId, this.clock().toISOString()]);
   }
 
@@ -246,7 +261,7 @@ export class AccountsService {
   private async createUser(input: { companyId: string; email?: string; phone?: string; role: Role; advertiserId?: string; displayName?: string }): Promise<User> {
     const id = newId('usr');
     await this.db.query(
-      `insert into users (id, company_id, email, phone, role, advertiser_id, display_name, consents, interests, viewer_key, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,'[]',$9,$10)`,
+      `insert into users (id, company_id, email, phone, role, advertiser_id, display_name, consents, interests, viewer_key, created_at, role_granted_at) values ($1,$2,$3,$4,$5,$6,$7,$8,'[]',$9,$10,$10)`,
       [id, input.companyId, input.email ?? null, input.phone ?? null, input.role, input.advertiserId ?? null, input.displayName ?? null, JSON.stringify(defaultConsents), `vk_${randomBytes(12).toString('base64url')}`, this.clock().toISOString()],
     );
     return (await this.get(id))!;

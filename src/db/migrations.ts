@@ -1198,6 +1198,28 @@ drop index if exists units_order;
 create unique index units_order on units(company_id, order_id) where order_id is not null and status <> 'failed';
 `,
   },
+  {
+    id: '046_c1_role_grants_and_stuck_money',
+    sql: `
+-- When a person got the role that lets them approve token steps (owner or finance). Only people who held it before a
+-- step was proposed can approve it: an account made long ago and promoted afterwards doesn't count.
+alter table users add column role_granted_at timestamptz;
+update users set role_granted_at = created_at;
+create function users_role_granted() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'INSERT' then
+    if new.role_granted_at is null then new.role_granted_at := new.created_at; end if;
+  elsif new.role in ('owner','finance') and old.role not in ('owner','finance') and new.role_granted_at is not distinct from old.role_granted_at then
+    -- Made an owner or finance person without saying when (a direct update): it counts from now.
+    new.role_granted_at := now();
+  end if;
+  return new;
+end $$;
+create trigger users_role_granted before insert or update on users for each row execute function users_role_granted();
+-- When a gift-card order was last sent out: one still 'ordering' long after (a crash, a hang) becomes unknown.
+alter table wallet_giftcards add column ordering_at timestamptz;
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

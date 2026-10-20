@@ -153,6 +153,11 @@ export class ChainService {
     return this.action(companyId, id);
   }
   async approve(companyId: string, id: string, person: string) {
+    // Only people who held the owner or finance role before it was proposed (and still do) count: no account promoted,
+    // or made, to approve it. Checked before the action is locked (the check reads the team, outside that lock).
+    const proposed = (await this.db.query<any>(`select created_at from chain_actions where id = $1 and company_id = $2`, [id, companyId])).rows[0];
+    if (!proposed) throw new ChainError('not_found', 'No such action.', 404);
+    if (this.isMember && !(await this.isMember(companyId, person, new Date(proposed.created_at)))) throw new ChainError('not_member', 'Only owners and finance people who held that role when this was proposed can approve it.', 403);
     return this.db.transaction(async (tx) => {
       const a = (await tx.query<any>(`select * from chain_actions where id = $1 and company_id = $2 for update`, [id, companyId])).rows[0];
       if (!a) throw new ChainError('not_found', 'No such action.', 404);
@@ -160,8 +165,6 @@ export class ChainService {
       if (a.proposed_by === person) throw new ChainError('own_proposal', 'Someone other than the person who proposed it must approve it.', 403);
       const approvals: { by: string; at: string }[] = typeof a.approvals === 'string' ? JSON.parse(a.approvals) : a.approvals;
       if (approvals.some((x) => x.by === person)) throw new ChainError('already_approved', 'You already approved this.', 409);
-      // Only people who were already on the team when it was proposed count (no new accounts made to approve it).
-      if (this.isMember && !(await this.isMember(companyId, person, new Date(a.created_at)))) throw new ChainError('not_member', 'Only people who were on the team when this was proposed can approve it.', 403);
       approvals.push({ by: person, at: this.now() });
       const ready = approvals.length >= a.needed;
       const rules: ChainSettings = { ...defaultChain, ...(typeof a.rules === 'string' ? JSON.parse(a.rules) : a.rules ?? {}) };
@@ -207,9 +210,14 @@ export class ChainService {
     if ((a.kind === 'go_live_points' && st !== 'test') || (a.kind === 'go_live_token' && st !== 'points') || (a.kind === 'convert' && st !== 'token') || (a.kind === 'mint' && st === 'points')) throw new ChainError('wrong_stage', 'This doesn’t fit where the company is now.', 409);
     if (onChain && !s.enabled) throw new ChainError('switched_off', 'The chain is switched off.', 403);
     if (a.kind !== 'unpause' && onChain && (await this.isPaused(companyId))) throw new ChainError('paused', 'Everything is paused.', 423);
-    const took = await this.db.query(`update chain_actions set status = 'running', running_at = $2 where id = $1 and status = 'approved'`, [id, this.now()]);
+    const runAt = this.now();
+    const took = await this.db.query(`update chain_actions set status = 'running', running_at = $2 where id = $1 and status = 'approved'`, [id, runAt]);
     if (!Number(took.rowCount ?? 0)) throw new ChainError('not_approved', 'Already running.', 409);
     const rules: ChainSettings = { ...defaultChain, ...(typeof a.rules === 'string' ? JSON.parse(a.rules) : a.rules ?? {}) };
+    // Every later change is guarded: it lands only while this call still holds the action. One that ran so long it was
+    // taken to have stopped (see `unstick`) has been moved on by someone else, and this call must not undo that.
+    const held = async (set: string, args: unknown[] = []) => Number((await this.db.query(`update chain_actions set ${set} where id = $1 and status = 'running' and running_at = $2`, [id, runAt, ...args])).rowCount ?? 0) > 0;
+    const cutOff = () => new ChainError('cut_off', 'This was taken to have stopped partway while it ran, and was moved on. Check its status.', 409);
     try {
       const chain = this.chainFor(companyId);
       let ref = '';
@@ -217,18 +225,28 @@ export class ChainService {
         const plan = a.kind === 'mint' ? await this.mintPlan(companyId, p) : (p.plan ?? await this.convertPlan(companyId, p.tokensPerPoint));
         if (!plan.total) throw new Error('Nothing to mint.');
         // Points are taken now (once), so nothing spent or converted meanwhile can be counted twice.
-        if (a.kind === 'convert' && !p.plan) for (const x of plan.to) await this.wallet.convertPoints(companyId, x.subject, x.points, `${id}:${x.subject}`);
-        await this.db.query(`update chain_actions set params = $2 where id = $1`, [id, JSON.stringify({ ...p, plan })]);
+        if (a.kind === 'convert' && !p.plan) {
+          if (!(await held('running_at = running_at'))) throw cutOff();
+          for (const x of plan.to) await this.wallet.convertPoints(companyId, x.subject, x.points, `${id}:${x.subject}`);
+        }
+        // Still ours right before the chain is asked; if not, nothing was minted and any points taken go back.
+        if (!(await held('params = $3', [JSON.stringify({ ...p, plan })]))) {
+          if (a.kind === 'convert') await this.wallet.returnConverted(companyId, id, 'chain', 'conversion stopped partway: points returned');
+          throw cutOff();
+        }
         if (!a.ref) {
           const r = await chain.mint(await this.custody.addressFor(companyId, 'custody'), plan.total, id);
           if (r.prepared) {
             // The real network: people sign this in Squads; then `confirmSigned` checks it and finishes the books.
-            await this.db.query(`update chain_actions set status = 'signing', prepared = $2, signing_at = $3 where id = $1`, [id, r.prepared, this.now()]);
+            // Nothing is on the chain yet, so if this was moved on meanwhile, the prepared transaction is simply dropped.
+            if (!(await held(`status = 'signing', prepared = $3, signing_at = $4`, [r.prepared, this.now()]))) throw cutOff();
             this.alert?.(companyId, `${a.kind} ${id} is ready to sign in Squads (${plan.total} token units).`);
             return this.action(companyId, id);
           }
           ref = r.ref;
-          await this.db.query(`update chain_actions set ref = $2 where id = $1`, [id, ref]);
+          // The mint happened: its ref is always written down. If this call was taken to have stopped meanwhile, the
+          // action goes to 'recording' (never 'done', never points back), and running it again finishes the books.
+          if (!(await held('ref = $3', [ref]))) { await this.lateMint(companyId, id, a.kind, plan, ref); return this.action(companyId, id); }
         } else ref = a.ref;
         await this.finishMint(companyId, id, plan, ref);
       } else if (a.kind === 'unpause') ref = (await chain.setPaused(false)).ref;
@@ -241,17 +259,39 @@ export class ChainService {
         if (a.kind === 'go_live_token') await this.db.query(`insert into chain_state (company_id, key, value) values ($1,'baseline','0') on conflict (company_id, key) do update set value = '0'`, [companyId]);
         ref = 'settings';
       }
-      await this.db.query(`update chain_actions set status = 'done', ran_by = $2, ran_at = $3, ref = $4 where id = $1`, [id, person, this.now(), ref]);
+      if (!(await held(`status = 'done', ran_by = $3, ran_at = $4, ref = $5`, [person, this.now(), ref]))) {
+        // Moved on while it ran. A mint has its ref, so it's 'recording' and the next run finishes it (each entry is
+        // counted once). Anything else really did run, so it's written down as done rather than failed.
+        if (!onChain) await this.db.query(`update chain_actions set status = 'done', ran_by = $2, ran_at = $3, ref = $4 where id = $1 and status = 'failed'`, [id, person, this.now(), ref]);
+        this.alert?.(companyId, `${a.kind} ${id} finished after it was taken to have stopped partway; check it.`);
+      }
     } catch (e: any) {
+      if (e instanceof ChainError && e.code === 'cut_off') throw e;
       // A mint that reached the chain but not the books is 'recording': it can't be cancelled or expire, and running it
       // again only finishes the books (never mints again).
-      const reached = (a.kind === 'mint' || a.kind === 'convert') && (await this.db.query<any>(`select ref from chain_actions where id = $1`, [id])).rows[0]?.ref;
-      // A conversion that never reached the chain gives the points back.
-      if (a.kind === 'convert' && !reached) await this.wallet.returnConverted(companyId, id, 'chain', 'conversion didn’t reach the chain');
-      await this.db.query(`update chain_actions set status = $3, error = $2 where id = $1`, [id, String(e?.message ?? e).slice(0, 300), reached ? 'recording' : 'failed']);
+      const reached = onChain && (await this.db.query<any>(`select ref from chain_actions where id = $1`, [id])).rows[0]?.ref;
+      const moved = await held('status = $3, error = $4', [reached ? 'recording' : 'failed', String(e?.message ?? e).slice(0, 300)]);
+      // A conversion that never reached the chain gives the points back (once: only the call that moved it does).
+      if (moved && a.kind === 'convert' && !reached) await this.wallet.returnConverted(companyId, id, 'chain', 'conversion didn’t reach the chain');
       throw new ChainError('failed', `It didn’t run: ${e?.message ?? e}`, 502);
     }
     return this.action(companyId, id);
+  }
+  /**
+   * A mint that reached the chain after its action was taken to have stopped (and marked failed): it's written down and
+   * moved to 'recording', so the books catch up with the chain. A conversion's points were given back when it was marked
+   * failed; they're taken again, since the tokens for them now exist.
+   */
+  private async lateMint(companyId: string, id: string, kind: string, plan: { to: { subject: string; points: number; tokens: number }[] }, ref: string) {
+    const moved = (await this.db.query<any>(`update chain_actions set ref = $2, status = 'recording', error = $3 where id = $1 and ref is null and status in ('failed','running') returning id`, [id, ref, 'It reached the chain after it was taken to have stopped; recording it.'])).rows[0];
+    const short: string[] = [];
+    if (moved && kind === 'convert') {
+      for (const x of plan.to) {
+        if (!x.points) continue;
+        await this.wallet.convertPoints(companyId, x.subject, x.points, `${id}:${x.subject}:again`).catch(() => short.push(x.subject));
+      }
+    }
+    this.alert?.(companyId, `${kind} ${id} reached the chain (${ref}) after it was taken to have stopped partway. It is now ${moved ? 'recording' : 'unchanged'}; run it again to finish the books.${short.length ? ` ${short.length} people no longer had the points it converted: check them.` : ''}`);
   }
   /** How long an action may stay 'running' before it's taken to have been cut off (the process stopped partway). */
   static stuckAfterMs = 15 * 60_000;
@@ -271,16 +311,18 @@ export class ChainService {
   }
   /** A mint already on the chain whose books entry didn't finish: finish it (the entries are counted once each). */
   private async finishRecording(companyId: string, a: any, person: string) {
-    const took = await this.db.query(`update chain_actions set status = 'running', running_at = $2 where id = $1 and status = 'recording'`, [a.id, this.now()]);
+    const runAt = this.now();
+    const took = await this.db.query(`update chain_actions set status = 'running', running_at = $2 where id = $1 and status = 'recording'`, [a.id, runAt]);
     if (!Number(took.rowCount ?? 0)) throw new ChainError('not_approved', 'Already running.', 409);
     const p = typeof a.params === 'string' ? JSON.parse(a.params) : a.params;
     try {
       await this.finishMint(companyId, a.id, p.plan, a.ref);
     } catch (e: any) {
-      await this.db.query(`update chain_actions set status = 'recording', error = $2 where id = $1`, [a.id, String(e?.message ?? e).slice(0, 300)]);
+      await this.db.query(`update chain_actions set status = 'recording', error = $3 where id = $1 and status = 'running' and running_at = $2`, [a.id, runAt, String(e?.message ?? e).slice(0, 300)]);
       throw new ChainError('failed', `It didn’t finish: ${e?.message ?? e}`, 502);
     }
-    await this.db.query(`update chain_actions set status = 'done', ran_by = $2, ran_at = $3 where id = $1`, [a.id, person, this.now()]);
+    // Guarded like a run: if it was moved back to 'recording' meanwhile, the next run finishes it (entries count once).
+    await this.db.query(`update chain_actions set status = 'done', ran_by = $3, ran_at = $4 where id = $1 and status = 'running' and running_at = $2`, [a.id, runAt, person, this.now()]);
     return this.action(companyId, a.id);
   }
   /** After people signed a mint in Squads: check it on the chain, then record it in the books. */

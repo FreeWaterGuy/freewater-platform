@@ -6,7 +6,7 @@ import type { Creative } from './core/types';
 import { TestOutbox, type Messenger } from './adapters/messaging/contract';
 import type { PaymentProvider } from './adapters/payments/contract';
 import { TestPaymentProvider } from './adapters/payments/test';
-import { AccountsService } from './modules/accounts/service';
+import { AccountsService, heldApproverRole } from './modules/accounts/service';
 import { SecondStep } from './modules/accounts/secondStep';
 import { PaymentsService } from './modules/payments/service';
 import { ExperienceHost } from './modules/experiences/host';
@@ -412,8 +412,8 @@ export async function createApp(opts: AppOptions) {
   };
   chain.isMember = async (companyId, person, at) => {
     if (!person.startsWith('user:')) return false;
-    const u = (await db.query<any>(`select role, created_at from users where id = $1 and company_id = $2 and deleted_at is null`, [person.slice(5), companyId])).rows[0];
-    return !!u && ['owner', 'finance'].includes(u.role) && new Date(u.created_at).getTime() <= at.getTime();
+    // Counted from when they got the owner or finance role (and only while they still hold it), not when the account was made.
+    return heldApproverRole(db, companyId, person.slice(5), at);
   };
 
   // Bottles FreeWater gives outside the platform (before the software runs them), recorded by the team.
