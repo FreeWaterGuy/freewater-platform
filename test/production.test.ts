@@ -252,11 +252,12 @@ describe('alerts and settings', () => {
   });
   it('refuses to start in production with unsafe or missing settings, and explains each', () => {
     const bad = checkConfig({ NODE_ENV: 'production', SEED_DEMO: '1', PUBLIC_URL: 'http://freewater.io' } as any);
+    const secrets = Object.fromEntries(['CODES', 'SECOND_STEP', 'LINKS', 'WALLET'].map((k) => [`FW_SECRET_${k}`, `hex:${'ab'.repeat(32)}`]));
     expect(bad.errors.join('\n')).toMatch(/DATABASE_URL/);
     expect(bad.errors.join('\n')).toMatch(/PUBLIC_URL/);
     expect(bad.errors.join('\n')).toMatch(/SEED_DEMO/);
     expect(bad.errors.join('\n')).toMatch(/TRUST_PROXY/);
-    const good = checkConfig({ NODE_ENV: 'production', DATABASE_URL: 'postgres://u:p@db.example.com/fw?sslmode=require', PUBLIC_URL: 'https://freewater.io', TRUST_PROXY: '1', HOST: '0.0.0.0', ALERT_WEBHOOK_URL: 'https://hooks.example.com/x', FILE_STORAGE: 's3', S3_BUCKET: 'b', S3_ACCESS_KEY_ID: 'k', S3_SECRET_ACCESS_KEY: 's' } as any);
+    const good = checkConfig({ NODE_ENV: 'production', DATABASE_URL: 'postgres://u:p@db.example.com/fw?sslmode=require', PUBLIC_URL: 'https://freewater.io', TRUST_PROXY: '1', HOST: '0.0.0.0', ALERT_WEBHOOK_URL: 'https://hooks.example.com/x', FILE_STORAGE: 's3', S3_BUCKET: 'b', S3_ACCESS_KEY_ID: 'k', S3_SECRET_ACCESS_KEY: 's', ...secrets } as any);
     expect(good.errors).toEqual([]);
     expect(checkConfig({} as any).errors).toEqual([]); // on a laptop, only warnings
   });

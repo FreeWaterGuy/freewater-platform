@@ -47,12 +47,36 @@ export function scanBase(company: CompanyConfig) {
   return (company.scanBaseUrl ?? company.receiptBaseUrl).replace(/\/$/, '').toUpperCase();
 }
 
-export async function loadSecret(db: SqlClient, name: string): Promise<Buffer> {
-  const env = process.env[`FW_SECRET_${name.toUpperCase()}`];
-  if (env) return Buffer.from(env, 'utf8');
+/** The internal secrets, each from the host's settings as FW_SECRET_<NAME> (e.g. FW_SECRET_SECOND_STEP). */
+export const secretNames = ['codes', 'second-step', 'links', 'wallet'] as const;
+export const secretEnvName = (name: string) => `FW_SECRET_${name.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
+
+/**
+ * An internal secret (signing printed codes, sealing second-step seeds, fingerprinting links and networks). It comes from
+ * the host's settings: FW_SECRET_<NAME>, as text, or as "hex:<hex>" for the exact bytes. Only outside production is
+ * one made up and kept in the database (platform_secrets) when it isn't set. In production a missing one stops the
+ * start, as does one that differs from a copy already in the database: everything printed and sealed so far was made
+ * with that copy, so it has to be moved to the host's settings as it is (hex:<its value>).
+ */
+export async function loadSecret(db: SqlClient, name: string, env: NodeJS.ProcessEnv = process.env): Promise<Buffer> {
+  const key = secretEnvName(name);
+  const raw = env[key] ?? env[`FW_SECRET_${name.toUpperCase()}`]; // the old spelling (FW_SECRET_SECOND-STEP), if a host could set it
+  const production = env.NODE_ENV === 'production';
+  const stored = async () => (await db.query<{ value: string }>(`select value from platform_secrets where name = $1`, [name])).rows[0]?.value;
+  if (raw) {
+    if (/^hex:/i.test(raw) && !/^hex:([0-9a-f]{2}){16,}$/i.test(raw)) throw new Error(`${key} starts with "hex:" but isn't 32 or more hex bytes.`);
+    const secret = /^hex:/i.test(raw) ? Buffer.from(raw.slice(4), 'hex') : Buffer.from(raw, 'utf8');
+    if (production) {
+      const old = await stored();
+      if (old !== undefined && !Buffer.from(old, 'hex').equals(secret)) throw new Error(`${key} differs from the ${name} secret already in the database (platform_secrets), which everything so far was made with. Set ${key}=hex:<its value>, then delete that row.`);
+      if (old !== undefined) console.warn(`${key} is set; the copy in platform_secrets ('${name}') can now be deleted.`);
+    }
+    return secret;
+  }
+  if (production) throw new Error(`${key} is not set. In production every internal secret comes from the host's settings (32+ random characters, or hex:<64 hex digits>); a database that already has one in platform_secrets must use that one: ${key}=hex:<its value>.`);
   const fresh = randomBytes(32).toString('hex');
   await db.query(`insert into platform_secrets (name, value) values ($1,$2) on conflict do nothing`, [name, fresh]);
-  return Buffer.from((await db.query<{ value: string }>(`select value from platform_secrets where name = $1`, [name])).rows[0]!.value, 'hex');
+  return Buffer.from((await stored())!, 'hex');
 }
 
 export class CodeService implements CodeMinter {

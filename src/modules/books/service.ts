@@ -208,7 +208,8 @@ export class BooksService {
   async confirm(id: string, token: string) {
     const r = (await this.db.query<any>(`select confirm_token_hash, status from charity_transfers where id = $1`, [id])).rows[0];
     if (!r || r.confirm_token_hash !== sha(token)) throw new BooksError(404, 'not_found', 'That confirmation link isn’t valid.');
-    if (r.status === 'sent') await this.db.query(`update charity_transfers set status = 'confirmed', confirmed_at = $2 where id = $1`, [id, this.platform.bus.now().toISOString()]);
+    // Once: the charity clicking twice at the same moment confirms it once (the database refuses a second change).
+    if (r.status === 'sent') await this.db.query(`update charity_transfers set status = 'confirmed', confirmed_at = $2 where id = $1 and status = 'sent'`, [id, this.platform.bus.now().toISOString()]);
     return this.transfer(id);
   }
 

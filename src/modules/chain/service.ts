@@ -147,8 +147,10 @@ export class ChainService {
     const s = this.settings(companyId);
     const needed = kind === 'go_live_points' ? 0 : s.approvalsNeeded;
     const delay = kind === 'go_live_points' ? 24 : s.delayHours;
+    // Two conversions proposed at the same moment both pass the check above; the database keeps one (053).
     await this.db.query(`insert into chain_actions (id, company_id, kind, params, proposed_by, approvals, needed, status, created_at, rules, not_before) values ($1,$2,$3,$4,$5,'[]',$6,$7,$8,$9,$10)`,
-      [id, companyId, kind, JSON.stringify(params), person, needed, needed === 0 ? 'approved' : 'proposed', this.now(), JSON.stringify({ ...s, delayHours: delay }), needed === 0 ? new Date(this.clock().getTime() + delay * 3600_000).toISOString() : null]);
+      [id, companyId, kind, JSON.stringify(params), person, needed, needed === 0 ? 'approved' : 'proposed', this.now(), JSON.stringify({ ...s, delayHours: delay }), needed === 0 ? new Date(this.clock().getTime() + delay * 3600_000).toISOString() : null])
+      .catch((e: any) => { throw e?.code === '23505' && kind === 'convert' ? new ChainError('one_at_a_time', 'A conversion is already under way.', 409) : e; });
     this.alert?.(companyId, `${person} proposed: ${kind} ${JSON.stringify(params)}. ${needed ? `It needs ${needed} other people to approve, then` : 'It runs after'} a ${delay}-hour wait.`);
     return this.action(companyId, id);
   }
@@ -202,7 +204,7 @@ export class ChainService {
     }
     if (new Date(a.not_before).getTime() > this.clock().getTime()) throw new ChainError('waiting', `This can run after ${new Date(a.not_before).toISOString()}.`, 409);
     // Approvals don't last forever: two weeks after it could first run, it must be proposed again.
-    if (new Date(a.not_before).getTime() + 14 * 86_400_000 < this.clock().getTime()) { await this.db.query(`update chain_actions set status = 'expired' where id = $1`, [id]); throw new ChainError('expired', 'This approval ran out. Propose it again.', 410); }
+    if (new Date(a.not_before).getTime() + 14 * 86_400_000 < this.clock().getTime()) { await this.db.query(`update chain_actions set status = 'expired' where id = $1 and status = 'approved'`, [id]); throw new ChainError('expired', 'This approval ran out. Propose it again.', 410); }
     const s = this.settings(companyId);
     const p = typeof a.params === 'string' ? JSON.parse(a.params) : a.params;
     const onChain = a.kind === 'mint' || a.kind === 'convert';
@@ -335,7 +337,9 @@ export class ChainService {
     if (!chain.confirmMint || !(await chain.confirmMint(signature, id, p.plan.total))) throw new ChainError('not_found_on_chain', 'That signature isn’t a finished mint of this amount, into custody, for this action.', 422);
     if ((await this.db.query(`select 1 from chain_actions where company_id = $1 and ref = $2 and id <> $3`, [companyId, signature, id])).rows.length) throw new ChainError('used', 'That signature was already used.', 409);
     // Taken once: a second request at the same moment waits out, and a retry after a failure finishes the books.
-    const took = await this.db.query(`update chain_actions set status = 'confirming', ref = $2 where id = $1 and (status = 'signing' or (status = 'confirming' and ref = $2))`, [id, signature]);
+    // One signature records one mint: two actions confirmed with it at once can't both take it (053).
+    const took = await this.db.query(`update chain_actions set status = 'confirming', ref = $2 where id = $1 and (status = 'signing' or (status = 'confirming' and ref = $2))`, [id, signature])
+      .catch((e: any) => { throw e?.code === '23505' ? new ChainError('used', 'That signature was already used.', 409) : e; });
     if (!Number(took.rowCount ?? 0)) throw new ChainError('not_signing', 'This is already being recorded.', 409);
     await this.finishMint(companyId, id, p.plan, signature);
     await this.db.query(`update chain_actions set status = 'done', ran_by = $2, ran_at = $3 where id = $1`, [id, person, this.now()]);

@@ -60,6 +60,8 @@ export function checkConfig(env: NodeJS.ProcessEnv = process.env) {
   if (files !== 'database' && files !== 's3' && files !== 'disk') errors.push(`FILE_STORAGE must be database, disk or s3 (it is "${files}").`);
   if (production) advise(Number(env.DATABASE_MAX_GB) > 0, 'DATABASE_MAX_GB is not set: set it to the size of the database plan, so an alert goes out before the database fills.');
   advise(files !== 'database' || !production, 'Files are stored in the database. That works, but makes the database and its backups large; file storage (FILE_STORAGE=s3) is better.');
+  // Internal secrets live only in the host's settings in production (see loadSecret).
+  if (production) for (const k of ['FW_SECRET_CODES', 'FW_SECRET_SECOND_STEP', 'FW_SECRET_LINKS', 'FW_SECRET_WALLET']) need((env[k]?.length ?? 0) >= 32, `${k} must be set to 32 or more random characters (or hex:<64 hex digits>). If the database already has it in platform_secrets, use that value: ${k}=hex:<value>.`);
   for (const [k, v] of Object.entries(env)) if (/_(KEY|SECRET|TOKEN)$/.test(k) && v && /^(changeme|test|xxx+|todo)$/i.test(v)) need(false, `${k} looks like a placeholder.`);
   return { production, errors, warnings };
 }

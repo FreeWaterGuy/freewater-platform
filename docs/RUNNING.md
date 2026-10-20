@@ -43,6 +43,7 @@ with a plain explanation.
 | `DATABASE_POOL_SIZE` | Database connections (default 10). |
 | `DATABASE_MAX_GB` | The size of the database plan. An alert goes out at 70% and 85% of it. |
 | `PUBLIC_UPLOAD_MB_PER_NETWORK`, `PUBLIC_UPLOAD_MB_PER_DAY` | Ceilings on files sent by visitors without a key (feedback pictures and videos, offer receipts): per network (an IPv4 /24 or IPv6 /48) a day (default 100 MB), and for the whole platform a day (default 1 GB with files in the database, 10 GB with file storage). An alert goes out at 80% and when the ceiling is reached; past it, those uploads are refused until the next day (UTC) and everything else carries on. |
+| `FW_SECRET_CODES`, `FW_SECRET_SECOND_STEP`, `FW_SECRET_LINKS`, `FW_SECRET_WALLET` | Required in production: the secrets that sign printed codes, seal second-step seeds and fingerprint links and networks. Each 32+ random characters, or `hex:` and 64 hex digits (`node -e "console.log('hex:'+require('crypto').randomBytes(32).toString('hex'))"`). **A database that ran before already has them in `platform_secrets`; every printed code was signed with those, so set each to `hex:<its value>` from there (the server refuses a different one), then delete the rows.** |
 | `BACKUP_KEY` | 32 random bytes, base64. Make with `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`. **Keep a copy away from the server; without it no backup can be read.** |
 | `BACKUP_S3_BUCKET`, `BACKUP_S3_ACCESS_KEY_ID`, `BACKUP_S3_SECRET_ACCESS_KEY`, `BACKUP_S3_ENDPOINT`, `BACKUP_S3_REGION` | Where backups go: a different bucket (ideally a different account) from the files. Turn on object lock / a 30-day retention rule so they can't be deleted early. |
 | `RESTORE_TEST_URL` | A spare, empty database the weekly restore check may wipe and fill. **Never the real one.** |
@@ -188,6 +189,13 @@ starts within about a second.
 **Rolling back** is starting the previous image the same way. Database changes only ever add tables and columns, so
 the previous version runs on the newer database; it says so in an alert ("an older version is running on a newer
 database"). Never restore the database to roll back code: that loses everything since the backup. Fix forward.
+
+A new migration that changes the database's own rules (triggers, checks, unique indexes) is also run on a real
+Postgres 16 over data the old version wrote: fill a database with `test/db-seed-postgres.ts` on the old code, then run
+`test/db-postgres.test.ts` on the new, and the `test/db-*.test.ts` files with `FW_TEST_PG_ADMIN_URL` set (the steps
+are at the top of `test/db-seed-postgres.ts`). The journals refuse edits and deletes from the app's own database
+user too; fixing a past entry is always a correcting entry. Indexes are built inside the migration, which holds up
+writes while it runs (about 7 seconds per million rows).
 
 ## Load test
 
