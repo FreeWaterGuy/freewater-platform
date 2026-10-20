@@ -66,7 +66,8 @@ describe('orders and scans', () => {
     for (const s of a.body.slots) {
       const r = await server.inject({ method: 'GET', url: new URL(s.qrUrl.toLowerCase()).pathname.replace('/q/', '/Q/') + '' });
       expect(r.statusCode).toBe(302);
-      expect(r.headers.location).toBe(`/s/${a.body.id}/${s.slot}?c=${s.qrUrl.split('/').pop()}`);
+      // With a one-time scan token: only a scan that followed a real code open is billed.
+      expect(r.headers.location).toMatch(new RegExp(`^/s/${a.body.id}/${s.slot}\\?c=${s.qrUrl.split('/').pop()}&t=[0-9a-z]+\\.[A-Za-z0-9_-]{16}\\.[A-Za-z0-9_-]{22}$`));
     }
     const svg = await call('GET', `/v1/units/${a.body.id}/label.svg`, keys['machine-ATX-014']);
     expect(svg.headers['content-type']).toContain('image/svg+xml');
@@ -84,7 +85,7 @@ describe('orders and scans', () => {
     expect(receipt.headers['access-control-allow-origin']).toBe('*');
 
     expect((await call('GET', `/v1/public/scan/${unit.id}/${slot}`)).json().experienceId).toBeTruthy();
-    const scan = (viewerKey: string, loaded = true) => call('POST', '/v1/public/scans', undefined, { unitId: unit.id, slot, viewerKey, experienceLoaded: loaded });
+    const scan = (viewerKey: string, loaded = true) => call('POST', '/v1/public/scans', undefined, { unitId: unit.id, slot, viewerKey, experienceLoaded: loaded, scanToken: app.scanTokens.issue(`s:${unit.id}:${slot}`) });
     expect((await scan('sam')).json().billed).toBe(true);
     expect((await scan('sam')).json().billed).toBe(false); // repeat
     expect((await scan('ava', false)).json().billed).toBe(false); // didn't load
@@ -187,7 +188,7 @@ describe('restarts', () => {
   it('picks up exactly where it left off', async () => {
     const { body: unit } = await orderOne('ord-before-restart');
     const slot = unit.slots.find((s: any) => !s.isHouse).slot;
-    await call('POST', '/v1/public/scans', undefined, { unitId: unit.id, slot, viewerKey: 'kim', experienceLoaded: true });
+    expect((await call('POST', '/v1/public/scans', undefined, { unitId: unit.id, slot, viewerKey: 'kim', experienceLoaded: true, scanToken: app.scanTokens.issue(`s:${unit.id}:${slot}`) })).json().billed).toBe(true);
     const linesBefore = app.platform.ledger.entries.length;
 
     // A new process on the same database.
@@ -198,7 +199,7 @@ describe('restarts', () => {
     expect(app2.platform.ledger.entries.length).toBe(linesBefore);
     const again = await call2('POST', '/v1/orders', keys['machine-ATX-014'], { orderId: 'ord-before-restart', locationId: 'ATX-014', productId: 'bottle-16oz' });
     expect(again.json().id).toBe(unit.id); // no second print
-    const repeat = await call2('POST', '/v1/public/scans', undefined, { unitId: unit.id, slot, viewerKey: 'kim', experienceLoaded: true });
+    const repeat = await call2('POST', '/v1/public/scans', undefined, { unitId: unit.id, slot, viewerKey: 'kim', experienceLoaded: true, scanToken: app2.scanTokens.issue(`s:${unit.id}:${slot}`) });
     expect(repeat.json().billed).toBe(false); // still inside the repeat window
     expect((await call2('GET', `/v1/public/receipts/${unit.id}`)).statusCode).toBe(200);
     const joes = app2.platform.campaigns.get('cmp-joes')!;

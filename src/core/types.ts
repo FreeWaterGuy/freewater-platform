@@ -362,6 +362,8 @@ export interface Placement {
   advertiserName: string;
   experienceId: string;
   priceCents: Cents; // what the advertiser pays if, and only if, the print is confirmed
+  /** For a bid: the campaign's spend day (its own time zone) the price was held against. */
+  spentDay?: string;
   isHouse: boolean;
   /** Why this ad was chosen for this person ("likes coffee", "new customer"), when it targets people. */
   audienceMatch?: string[];

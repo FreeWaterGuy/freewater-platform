@@ -121,9 +121,13 @@ export class AttributionService {
     } else if (input.couponCode) {
       const c = (await this.db.query<any>(`select * from coupon_codes where code = $1`, [input.couponCode.toUpperCase()])).rows[0];
       if (!c || c.advertiser_id !== advertiserId) throw new AttributionError('unknown_coupon', 'That coupon isn’t one of this advertiser’s.', 404);
-      if (c.redeemed_at && c.order_id !== input.orderId) throw new AttributionError('coupon_used', `That coupon was already used${c.order_id ? ` on order ${c.order_id}` : ''}.`, 409);
-      spot = spotOf(c); companyId = c.company_id; coupon = c.code; buyer = c.viewer_key ?? undefined;
-      await this.db.query(`update coupon_codes set redeemed_at = coalesce(redeemed_at, $2), redeemed_by = coalesce(redeemed_by, $3), order_id = $4, value_cents = $5 where code = $1`, [c.code, this.now().toISOString(), input.source, input.orderId, input.valueCents]);
+      // Used up in one step: of two redemptions at the same moment, only one gets the row back.
+      const won = (await this.db.query<any>(`update coupon_codes set redeemed_at = $2, redeemed_by = coalesce(redeemed_by, $3), order_id = $4, value_cents = $5 where code = $1 and redeemed_at is null returning *`, [c.code, this.now().toISOString(), input.source, input.orderId, input.valueCents])).rows[0];
+      if (!won) {
+        const used = (await this.db.query<any>(`select order_id from coupon_codes where code = $1`, [c.code])).rows[0];
+        throw new AttributionError('coupon_used', `That coupon was already used${used?.order_id ? ` on order ${used.order_id}` : ''}.`, 409);
+      }
+      spot = spotOf(won); companyId = won.company_id; coupon = won.code; buyer = won.viewer_key ?? undefined;
     } else if (input.bottleCode && this.codes) {
       // A static code opened the advertiser's site directly, carrying the bottle's own signed reference (fwb).
       const row = await this.codes.find(input.bottleCode);

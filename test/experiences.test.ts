@@ -147,7 +147,9 @@ describe('scan pages over the API', () => {
   it('opens a bottle slot, bills the scan once it shows, and counts the viewer as a regular after that', async () => {
     const { unitId, slot } = await slotOf('cmp-joes');
     const viewer = 'phone-key-0001';
-    const first = (await call('GET', `/v1/public/experience/${unitId}/${slot}?viewer=${viewer}`)).json();
+    // Opening the printed code gives the page a one-time token; the scan and AR launch it reports are billed with it.
+    const scanToken = app.scanTokens.issue(`s:${unitId}:${slot}`);
+    const first = (await call('GET', `/v1/public/experience/${unitId}/${slot}?viewer=${viewer}&t=${scanToken}`)).json();
     expect(first.doc.pluginId).toBe('ar-3d-menu');
     expect(first.doc.owner.theme.button).toBe('#D7262E');
     expect(first.ar).toBe(true);
@@ -158,12 +160,12 @@ describe('scan pages over the API', () => {
     expect((await call('GET', `/v1/public/experience/${unitId}/${slot}?viewer=${viewer}`)).statusCode).toBe(200);
     expect(app.platform.ledger.entries.length).toBe(before); // opening the page alone bills nothing
 
-    const s = (await call('POST', '/v1/public/scans', undefined, { unitId, slot, viewerKey: viewer, experienceLoaded: true })).json();
+    const s = (await call('POST', '/v1/public/scans', undefined, { unitId, slot, viewerKey: viewer, experienceLoaded: true, scanToken })).json();
     expect(s.billed).toBe(true);
     const again = (await call('GET', `/v1/public/experience/${unitId}/${slot}?viewer=${viewer}`)).json();
     expect(again.doc.blocks.find((b: any) => b.type === 'offer').headline).toMatch(/Welcome back/);
 
-    const ar = (await call('POST', '/v1/public/ar-launches', undefined, { unitId, slot, viewerKey: viewer, loaded: true })).json();
+    const ar = (await call('POST', '/v1/public/ar-launches', undefined, { unitId, slot, viewerKey: viewer, loaded: true, scanToken })).json();
     expect(ar.billed).toBe(true);
     expect((await call('GET', `/v1/public/experience/${unitId}/${slot}`)).statusCode).toBe(400); // a viewer key is required
   });
@@ -174,17 +176,19 @@ describe('scan pages over the API', () => {
     const page = (await call('GET', `/v1/public/experience/box/${pack.id}/${face.face}?viewer=boxviewer01`)).json();
     expect(page.doc.owner.name).toBe(face.advertiserName);
     expect(page.footer.packUrl).toBe(`/p/${pack.id}`);
-    const body = { packId: pack.id, face: face.face, viewerKey: 'boxviewer01', experienceLoaded: true };
-    expect((await call('POST', '/v1/public/box-scans', undefined, body)).json().billed).toBe(true);
-    expect((await call('POST', '/v1/public/box-scans', undefined, body)).json().billed).toBe(false);
+    // Each post carries a fresh code-open token, so only the repeat window decides.
+    const body0 = { packId: pack.id, face: face.face, viewerKey: 'boxviewer01', experienceLoaded: true };
+    const withToken = (b: Record<string, unknown>) => ({ ...b, scanToken: app.scanTokens.issue(`b:${pack.id}:${face.face}`) });
+    expect((await call('POST', '/v1/public/box-scans', undefined, withToken(body0))).json().billed).toBe(true);
+    expect((await call('POST', '/v1/public/box-scans', undefined, withToken(body0))).json().billed).toBe(false);
     const line = app.platform.ledger.entries.filter((l) => l.kind === 'scan').at(-1)!;
     const premium = targetingPremium(app.platform.campaigns.get(face.campaignId), app.platform.companies.get('freewater')!).percent;
     expect(line).toMatchObject({ packId: pack.id, debit: `receivable:advertiser:${face.advertiserId}`, kind: 'scan', amountCents: Math.round(25 * (1 + premium / 100)) });
     // 10% of it goes to charity too.
     expect(app.platform.ledger.entries.filter((l) => l.kind === 'donation').at(-1)).toMatchObject({ packId: pack.id, kind: 'donation', amountCents: Math.round(line.amountCents / 10) });
     now += 11 * 60 * 1000;
-    expect((await call('POST', '/v1/public/box-scans', undefined, body)).json().billed).toBe(true);
-    expect((await call('POST', '/v1/public/box-scans', undefined, { ...body, viewerKey: 'boxviewer02', experienceLoaded: false })).json().billed).toBe(false);
+    expect((await call('POST', '/v1/public/box-scans', undefined, withToken(body0))).json().billed).toBe(true);
+    expect((await call('POST', '/v1/public/box-scans', undefined, withToken({ ...body0, viewerKey: 'boxviewer02', experienceLoaded: false }))).json().billed).toBe(false);
 
     const pub = (await call('GET', `/v1/public/packs/${pack.id}`)).json();
     expect(pub.bottles).toHaveLength(6);

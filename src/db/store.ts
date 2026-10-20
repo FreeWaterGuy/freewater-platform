@@ -329,6 +329,8 @@ export interface LoadedState {
   ledger: LedgerEntry[];
   seen: { companyId: string; type: EventType; idempotencyKey: string }[];
   engagementEvents: PlatformEvent[];
+  /** Every sale and refund, so the ledger knows which orders it billed and which were already refunded. */
+  saleEvents: PlatformEvent[];
 }
 
 const json = <T>(v: unknown): T => (typeof v === 'string' ? JSON.parse(v) : v) as T;
@@ -356,7 +358,10 @@ export async function loadState(db: SqlClient, builtins: Record<string, Creative
   const engagementEvents = (await rows<any>(`select * from events where type in ('unit.scanned','ar.launched','box.scanned','box.ar_launched') and at >= $1 order by seq`, [since])).map(
     (r): PlatformEvent => ({ id: r.id, type: r.type, companyId: r.company_id, at: new Date(r.at), idempotencyKey: r.idempotency_key, payload: json(r.payload) }),
   );
-  return { companies, products, boxes, locations, campaigns, units, labels, packs, ledger, seen, engagementEvents };
+  const saleEvents = (await rows<any>(`select * from events where type in ('purchase.completed','purchase.refunded') order by seq`)).map(
+    (r): PlatformEvent => ({ id: r.id, type: r.type, companyId: r.company_id, at: new Date(r.at), idempotencyKey: r.idempotency_key, payload: json(r.payload) }),
+  );
+  return { companies, products, boxes, locations, campaigns, units, labels, packs, ledger, seen, engagementEvents, saleEvents };
 }
 
 /** Save companies, products, boxes, locations and campaigns (used for the first setup and the demo). */
