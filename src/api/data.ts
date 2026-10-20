@@ -10,7 +10,7 @@ import { ApiError, obj, S, type RouteDef } from './http';
 /** The data switchboard, people's own data choices and rights, one person across roles, and the number line. */
 export function dataRoutes(app: App, route: (r: RouteDef) => void) {
   const { data, numberline, platform } = app;
-  const staff = (key: ApiKey | null) => { if (!key || key.advertiserId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.'); return key; };
+  const staff = (key: ApiKey | null) => { if (!key || key.advertiserId || key.locationId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.'); return key; };
   const wrap = async <T>(f: () => Promise<T>) => { try { return await f(); } catch (e: any) { if (e?.status && e?.code) throw new ApiError(e.status, e.code, e.message); throw e; } };
   const viewerKeyProp = { type: 'string', pattern: '^[A-Za-z0-9_-]{8,64}$' };
   const choicesProp = obj(Object.fromEntries(dataCategories.map((k) => [k, S.bool])));

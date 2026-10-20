@@ -1144,6 +1144,16 @@ create table agent_lineage (id text primary key, agent_id text not null, company
 create index agent_lineage_agent on agent_lineage(agent_id, at);
 `,
   },
+  {
+    id: '042_lottery_draw_key_unique',
+    sql: `
+-- Each draw key is drawn once: two chances at the same moment can't both use it (and both slip under winsPerDay).
+-- Any duplicates written before this (only that race made them) keep their first row's key; later ones are marked.
+update lottery_chances c set draw_key = c.draw_key || '#dup:' || c.id
+  where exists (select 1 from lottery_chances o where o.company_id = c.company_id and o.draw_key = c.draw_key and (o.created_at, o.id) < (c.created_at, c.id));
+create unique index lottery_chances_draw_key on lottery_chances(company_id, draw_key);
+`,
+  },
 ];
 
 export async function migrate(db: SqlClient): Promise<string[]> {

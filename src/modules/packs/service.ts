@@ -32,6 +32,9 @@ export interface Pack {
   runId?: string;
 }
 
+/** Asked to do something a pack can't do in the state it is in. */
+export class PackStateError extends Error {}
+
 export type DeliveryResult =
   | { ok: true; pack: Pack }
   | { ok: false; reason: string; rightPack?: Pack };
@@ -43,6 +46,7 @@ export type DeliveryResult =
  */
 export class PackService {
   readonly packs = new Map<string, Pack>();
+  private boxTries = new Map<string, number>();
 
   constructor(private platform: Platform, private boxes: Map<string, BoxProduct>) {}
 
@@ -60,23 +64,47 @@ export class PackService {
     this.packs.set(pack.id, pack);
     this.save(pack);
 
+    await this.finish(pack.id, order.productId);
+    return pack;
+  }
+
+  /**
+   * Print whatever a pack still needs: bottles not yet printed, then the box. compose() does this for a new pack;
+   * after a failure (a bottle or the box wouldn't print) running it again picks up where it stopped.
+   */
+  async finish(packId: string, productId: string): Promise<Pack> {
+    const p = this.platform;
+    const pack = this.need(packId);
+    if (pack.status !== 'composed') return pack; // its box is printed already
+    const company = p.companies.get(pack.companyId)!;
+    const box = pack.box;
+
     // 1. Bottles. Spread ads across the pack so no campaign takes over the box.
-    const counts = new Map<string, number>();
-    const max = Math.max(1, Math.floor(box.bottles * company.adRules.maxPackShare));
-    for (let i = 0; i < box.bottles; i++) {
-      const unitId = await this.printBottle(pack, order.productId, counts, max);
-      pack.unitIds.push(unitId);
+    if (pack.unitIds.length < box.bottles) {
+      const counts = new Map<string, number>();
+      for (const id of pack.unitIds) for (const pl of p.units.get(id)?.placements ?? []) if (!pl.isHouse) counts.set(pl.campaignId, (counts.get(pl.campaignId) ?? 0) + 1);
+      const max = Math.max(1, Math.floor(box.bottles * company.adRules.maxPackShare));
+      while (pack.unitIds.length < box.bottles) {
+        const unitId = await this.printBottle(pack, productId, counts, max);
+        pack.unitIds.push(unitId);
+        this.save(pack);
+      }
+      p.bus.publish('pack.composed', company.id, { packId: pack.id, size: box.bottles, routeId: pack.routeId, stop: pack.stop, unitIds: [...pack.unitIds] }, pack.id);
     }
-    p.bus.publish('pack.composed', company.id, { packId: pack.id, size: box.bottles, routeId: pack.routeId, stop: pack.stop, unitIds: [...pack.unitIds] }, pack.id);
 
     // 2. The box itself.
-    pack.faces = fillBoxFaces({ company, box, routeId: pack.routeId, campaigns: [...p.campaigns.values()], random: p.random });
-    pack.rendered = renderBox({ packId: pack.id, box, company, faces: pack.faces, campaigns: p.campaigns, routeId: pack.routeId, stop: pack.stop, codes: p.codes });
+    if (!pack.rendered) {
+      pack.faces = fillBoxFaces({ company, box, routeId: pack.routeId, campaigns: [...p.campaigns.values()], random: p.random });
+      pack.rendered = renderBox({ packId: pack.id, box, company, faces: pack.faces, campaigns: p.campaigns, routeId: pack.routeId, stop: pack.stop, codes: p.codes });
+      this.save(pack);
+    }
     const printer = p.registry.printerFor(company);
     const boxSvg = await p.forPrint(pack.rendered.svg); // studio photos go inside the file the printer gets
     for (let attempt = 1; attempt <= 2; attempt++) {
       const jobId = newId('job');
-      const r = await printer.print({ jobId, idempotencyKey: `${pack.id}:box:${attempt}`, unitId: `${pack.id}-box`, locationId: pack.routeId, svg: boxSvg, widthIn: pack.rendered.widthIn, heightIn: pack.rendered.heightIn });
+      const n = (this.boxTries.get(pack.id) ?? 0) + 1; // a fresh key each try, also across a resumed finish()
+      this.boxTries.set(pack.id, n);
+      const r = await printer.print({ jobId, idempotencyKey: `${pack.id}:box:${n}`, unitId: `${pack.id}-box`, locationId: pack.routeId, svg: boxSvg, widthIn: pack.rendered.widthIn, heightIn: pack.rendered.heightIn });
       if (r.status === 'printed') {
         pack.status = 'box_printed';
         this.save(pack);
@@ -104,6 +132,7 @@ export class PackService {
   /** The packing line scans every bottle before the box closes. Returns what is missing or doesn't belong. */
   verify(packId: string, scannedUnitIds: string[]): { ok: boolean; missing: string[]; unexpected: string[] } {
     const pack = this.need(packId);
+    if (pack.status !== 'box_printed' && pack.status !== 'mismatch') throw new PackStateError(`Pack ${packId} is ${pack.status}; only a printed pack waiting for its check can be checked.`);
     const expected = new Set(pack.unitIds);
     const scanned = new Set(scannedUnitIds);
     const missing = pack.unitIds.filter((u) => !scanned.has(u));
@@ -124,6 +153,7 @@ export class PackService {
   /** Reprint the bottles a check found missing. The new bottle takes the old one's place in the pack. */
   async replace(packId: string, missingUnitIds: string[], productId: string): Promise<string[]> {
     const pack = this.need(packId);
+    if (pack.status !== 'box_printed' && pack.status !== 'mismatch') throw new PackStateError(`Pack ${packId} is ${pack.status}; bottles can only be replaced before it is checked and sealed.`);
     const company = this.platform.companies.get(pack.companyId)!;
     const counts = new Map<string, number>();
     for (const id of pack.unitIds) for (const pl of this.platform.units.get(id)?.placements ?? []) if (!pl.isHouse) counts.set(pl.campaignId, (counts.get(pl.campaignId) ?? 0) + 1);
@@ -138,6 +168,8 @@ export class PackService {
       this.save(pack);
       this.platform.bus.publish('unit.replaced', pack.companyId, { packId, oldUnitId: old, newUnitId: id }, `${packId}:${old}`);
     }
+    // What is in the box changed: it needs a new check before it can be sealed.
+    if (fresh.length) { pack.status = 'mismatch'; this.save(pack); }
     return fresh;
   }
 
@@ -150,10 +182,22 @@ export class PackService {
     return pack;
   }
 
-  /** Load order for a van: last stop first, so stop 1 ends up by the door. */
+  /**
+   * The run a route is on now: the latest run among its packs still to be delivered (or, once everything is out,
+   * the latest run of all). Run ids are "<route>@<date>", so the latest sorts last; packs made outside a run ('')
+   * count as the oldest.
+   */
+  currentRun(routeId: string): string {
+    const onRoute = [...this.packs.values()].filter((p) => p.routeId === routeId);
+    const active = onRoute.filter((p) => p.status !== 'delivered' && p.status !== 'returned');
+    return (active.length ? active : onRoute).map((p) => p.runId ?? '').sort().at(-1) ?? '';
+  }
+
+  /** Load order for a van: last stop first, so stop 1 ends up by the door. Only this run's packs still to go out. */
   load(routeId: string, runId?: string): Pack[] {
-    const route = [...this.packs.values()].filter((p) => p.routeId === routeId && (runId ? p.runId === runId : true) && p.status !== 'returned');
-    const unsealed = route.filter((p) => p.status !== 'sealed' && p.status !== 'loaded' && p.status !== 'delivered');
+    const run = runId ?? this.currentRun(routeId);
+    const route = [...this.packs.values()].filter((p) => p.routeId === routeId && (p.runId ?? '') === run && p.status !== 'returned' && p.status !== 'delivered');
+    const unsealed = route.filter((p) => p.status !== 'sealed' && p.status !== 'loaded');
     if (unsealed.length) throw new Error(`${unsealed.length} pack(s) on ${routeId} aren't sealed yet.`);
     const order = route.sort((a, b) => b.stop - a.stop);
     order.forEach((p, i) => {
@@ -167,7 +211,9 @@ export class PackService {
 
   /** At the door: the stop is marked delivered only when the box scanned is the box for this address. */
   deliver(input: { routeId: string; runId?: string; stop: number; scannedPackId: string; atAddress: boolean; photoProof: boolean; emptiesCollected: number }): DeliveryResult {
-    const right = [...this.packs.values()].find((p) => p.routeId === input.routeId && p.stop === input.stop && (input.runId ? p.runId === input.runId : true));
+    const run = input.runId ?? this.currentRun(input.routeId);
+    const forStop = [...this.packs.values()].filter((p) => p.routeId === input.routeId && p.stop === input.stop && (p.runId ?? '') === run);
+    const right = forStop.find((p) => p.status !== 'delivered' && p.status !== 'returned') ?? forStop[0];
     if (!right) return { ok: false, reason: `No pack is planned for stop ${input.stop}.` };
     const reject = (reason: string): DeliveryResult => {
       this.platform.bus.publish('delivery.rejected', right.companyId, { packId: right.id, scannedPackId: input.scannedPackId, stop: input.stop, reason }, newId('rej'));

@@ -69,6 +69,9 @@ const saved = (f: () => Promise<unknown>) => async () => { await f(); await app!
 const companies = () => [...app!.platform.companies.values()];
 const jobs: Job[] = [
   { name: 'webhooks', everyMs: 3000, timeoutMs: 120_000, run: saved(() => app!.webhooks.drain()) },
+  // Model 6 machines: open an "offline" problem for any that stopped calling in, and let go of kept offline labels
+  // past their time (their ads' holds are released).
+  { name: 'fleet-sweep', everyMs: 15_000, timeoutMs: 120_000, run: () => app!.fleet.sweep() },
   { name: 'videos', everyMs: 10_000, timeoutMs: 120_000, run: saved(() => app!.videos.tick()) },
   // Each hour: close any month that's due, measure changes whose week is up, read every agent's standing, share out
   // the AI fund, and have the security agent look around.

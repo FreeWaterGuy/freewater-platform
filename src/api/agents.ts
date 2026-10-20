@@ -9,7 +9,7 @@ import { EXAM_VERSION, questions } from '../modules/agents/exam';
 export function agentRoutes(app: App, route: (r: RouteDef) => void) {
   const { agents, platform, profit, continuity } = app;
   const person = (key: ApiKey | null) => { const k = staff(key); if (!k.userId) throw new ApiError(403, 'person_needed', 'This needs a person signed in, not a service key.'); return `user:${k.userId}`; };
-  const staff = (key: ApiKey | null) => { if (!key || key.advertiserId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.'); return key; };
+  const staff = (key: ApiKey | null) => { if (!key || key.advertiserId || key.locationId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.'); return key; };
   const who = (key: ApiKey) => `${key.name ?? 'team'} (key ${key.id})`;
   const wrap = async <T>(f: () => Promise<T>) => { try { return await f(); } catch (e: any) { if (e?.status && e?.code) throw new ApiError(e.status, e.code, e.message); throw e; } };
   const agentId = { type: 'string', enum: agentIds };

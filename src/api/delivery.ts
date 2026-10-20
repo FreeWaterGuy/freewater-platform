@@ -5,7 +5,7 @@ import { ApiError, obj, S, type RouteDef } from './http';
 /** Home delivery for people, the night's routes for ops, and the driver's day. */
 export function deliveryRoutes(app: App, route: (r: RouteDef) => void, h: { me: (key: ApiKey | null) => string }) {
   const { delivery, ops } = app;
-  const staff = (key: ApiKey | null) => { if (!key || key.advertiserId) throw new ApiError(403, 'missing_scope', 'Only the company’s team can do this.'); };
+  const staff = (key: ApiKey | null) => { if (!key || key.advertiserId || key.locationId) throw new ApiError(403, 'missing_scope', 'Only the company’s team can do this.'); };
   const person = (key: ApiKey | null) => { if (!key?.userId) throw new ApiError(403, 'person_required', 'Sign in as a person to do this.'); return key.userId; };
   const packSize = { type: 'integer', enum: [6, 12, 24] };
   const frequency = { type: 'string', enum: ['weekly', 'biweekly', 'every4weeks'] };

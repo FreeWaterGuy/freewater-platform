@@ -160,11 +160,13 @@ export class DeliveryService {
 
   /**
    * Plan and print the night: everyone due on `date`, grouped by route, put in driving order, and a pack printed
-   * for each stop with its stop code on the box. Running it twice for the same night does nothing new.
+   * for each stop with its stop code on the box. Running it twice for the same night does nothing new, except that a
+   * run left 'printing' (a box or bottle wouldn't print) picks up its unprinted stops again.
    */
   async planNight(companyId: string, date: string) {
     const due = (await this.db.query<any>(`select * from subscriptions where company_id = $1 and status = 'active' and next_date = $2`, [companyId, date])).rows.map((r) => this.sub(r));
     const out: Run[] = await this.runs(companyId, date); // already planned routes stay as they are
+    for (const run of out) if (run.status === 'printing') await this.printRun(run);
     const byRoute = new Map<string, Subscription[]>();
     for (const s of due) byRoute.set(s.routeId, [...(byRoute.get(s.routeId) ?? []), s]);
     for (const [routeId, subs] of byRoute) {
@@ -176,31 +178,65 @@ export class DeliveryService {
       const run: Run = { id, companyId, routeId, date, status: 'printing', driverId: null, distanceKm: plan.distanceKm, minutes: plan.minutes,
         stops: ordered.map((s, i) => ({ stop: i + 1, subscriptionId: s.id, userId: s.userId, packId: null, address: s.address, point: s.point, packSize: s.packSize, notes: s.notes, status: 'planned' })) };
       await this.db.query(`insert into route_runs (id, company_id, route_id, run_date, status, distance_km, minutes, stops) values ($1,$2,$3,$4,'printing',$5,$6,$7)`, [id, companyId, routeId, date, run.distanceKm, run.minutes, JSON.stringify(run.stops)]);
-      const product = this.platform.standardProduct(companyId);
-      for (const stop of run.stops) {
-        const pack = await this.packs.compose({ companyId, customerId: stop.userId, address: stop.address, routeId, stop: stop.stop, boxId: `box-${stop.packSize}`, productId: product.id, runId: id });
-        stop.packId = pack.id;
-        await this.saveRun(run);
-      }
-      run.status = 'packing';
-      await this.saveRun(run);
-      for (const s of subs) await this.db.query(`update subscriptions set next_date = $2, updated_at = now() where id = $1`, [s.id, addDays(date, STEP[s.frequency])]);
+      await this.printRun(run);
       out.push(run);
     }
     await this.flush();
     return out;
   }
 
-  /** The packing line checks every bottle in every box, then seals them. (A real line reports each scan through the packs API.) */
+  /**
+   * Print every stop's pack that isn't printed yet. A stop that fails is noted and the others still print; the run
+   * stays 'printing' until every box is printed (plan the night again to retry), then moves on to packing.
+   */
+  private async printRun(run: Run & { printFailures?: { stop: number; reason: string }[] }) {
+    const product = this.platform.standardProduct(run.companyId);
+    const failures: { stop: number; reason: string }[] = [];
+    for (const stop of run.stops) {
+      try {
+        let pack = stop.packId ? this.packs.packs.get(stop.packId) : undefined;
+        if (!pack) {
+          // A pack made for this stop before a crash, but not yet written on the run, is picked up rather than made again.
+          pack = [...this.packs.packs.values()].find((p) => p.runId === run.id && p.stop === stop.stop && p.status !== 'returned');
+        }
+        if (pack) {
+          if (stop.packId !== pack.id) { stop.packId = pack.id; await this.saveRun(run); }
+          await this.packs.finish(pack.id, pack.unitIds[0] ? this.platform.units.get(pack.unitIds[0])?.productId ?? product.id : product.id);
+        } else {
+          // If its box (or a bottle) then fails, the pack is still written on the stop, so a retry finishes that one.
+          try { stop.packId = (await this.packs.compose({ companyId: run.companyId, customerId: stop.userId, address: stop.address, routeId: run.routeId, stop: stop.stop, boxId: `box-${stop.packSize}`, productId: product.id, runId: run.id })).id; }
+          catch (e) { stop.packId = [...this.packs.packs.values()].find((p) => p.runId === run.id && p.stop === stop.stop && p.status !== 'returned')?.id ?? null; throw e; }
+          finally { await this.saveRun(run); }
+        }
+      } catch (e: any) {
+        failures.push({ stop: stop.stop, reason: String(e?.message ?? e) });
+      }
+    }
+    if (failures.length) { run.printFailures = failures; return; }
+    delete run.printFailures;
+    run.status = 'packing';
+    await this.saveRun(run);
+    for (const st of run.stops) {
+      const r = (await this.db.query<any>(`select * from subscriptions where id = $1`, [st.subscriptionId])).rows[0];
+      if (!r) continue;
+      const s = this.sub(r);
+      if (s.nextDate === run.date) await this.db.query(`update subscriptions set next_date = $2, updated_at = now() where id = $1`, [s.id, addDays(run.date, STEP[s.frequency])]);
+    }
+  }
+
+  /**
+   * After the packing line has checked every box (POST /v1/packs/:id/verify), seal the ones it passed. A box the line
+   * hasn't checked yet, or found wrong, is never sealed here: it's listed so it can be fixed and checked again.
+   */
   async packCheck(runId: string, companyId: string) {
     const run = await this.getRun(runId, companyId);
     if (run.status !== 'packing') throw new DeliveryError(409, 'wrong_stage', `This route is ${run.status}, not waiting to be packed.`);
-    const problems: { stop: number; missing: string[]; unexpected: string[] }[] = [];
+    const problems: { stop: number; missing: string[]; unexpected: string[]; reason: string }[] = [];
     for (const s of run.stops) {
       const pack = this.packs.packs.get(s.packId!)!;
       if (pack.status === 'sealed') continue;
-      const v = this.packs.verify(pack.id, [...pack.unitIds]);
-      if (v.ok) this.packs.seal(pack.id); else problems.push({ stop: s.stop, missing: v.missing, unexpected: v.unexpected });
+      if (pack.status === 'verified') { this.packs.seal(pack.id); continue; }
+      problems.push({ stop: s.stop, missing: [], unexpected: [], reason: pack.status === 'mismatch' ? 'The packing line found this box wrong. Replace what’s missing and scan it again.' : 'The packing line hasn’t checked this box yet.' });
     }
     if (!problems.length) { run.status = 'ready'; await this.saveRun(run); }
     await this.flush();

@@ -25,7 +25,15 @@ export function machineRoutes(app: App, route: (r: RouteDef) => void) {
   route({ method: 'POST', url: '/v1/machine/heartbeat', scope: 'orders', summary: 'Model 6: say how the machine is (printer, bottles, door, temperature). The answer has its mode, commands to run, the code for its screen, and its screen settings when they change.', body: obj({ status: statusSchema, softwareVersion: { type: 'string', maxLength: 40 }, bufferHeld: { type: 'array', maxItems: 200, items: { type: 'string', maxLength: 60 } }, screenVersion: { type: 'string', maxLength: 40 } }, ['status', 'softwareVersion']), handler: async (req, key) => ({ body: await fleet.heartbeat(mine(key), req.body as any) }) });
   route({ method: 'GET', url: '/v1/machine/jobs/next', scope: 'orders', summary: 'Model 6: the next bottle to print, waiting up to ?wait= seconds (max 25) for one. Taking it starts the clock to finish it.', handler: async (req, key) => {
     const wait = Math.max(0, Math.min(25, Number((req.query as any).wait ?? 0))) * 1000;
-    const job = await fleet.nextJob(mine(key), wait);
+    const locationId = mine(key);
+    // If the machine's request goes away while it waits, stop waiting; a job taken for it goes back in the queue.
+    const gone = new AbortController();
+    const socket = req.raw.socket;
+    const onClose = () => gone.abort();
+    socket?.once('close', onClose);
+    let job: Awaited<ReturnType<typeof fleet.nextJob>>;
+    try { job = await fleet.nextJob(locationId, wait, gone.signal); } finally { socket?.off('close', onClose); }
+    if (job && (gone.signal.aborted || socket?.destroyed)) { fleet.requeue(locationId, job.jobId); return { status: 204 }; }
     return job ? { body: job } : { status: 204 };
   } });
   route({ method: 'POST', url: '/v1/machine/jobs/:id/result', scope: 'orders', summary: 'Model 6: what happened. "dispensed" means the bottle reached the tray, and only then is it billed.', body: obj({ status: { type: 'string', enum: ['dispensed', 'failed'] }, stage: { type: 'string', enum: ['print', 'drop'] }, reason: { type: 'string', maxLength: 200 }, printMs: S.int, dropMs: S.int, hardware: obj({ printer: statusSchema.properties.printer, dispenser: statusSchema.properties.dispenser, door: statusSchema.properties.door, temperatureC: statusSchema.properties.temperatureC }) }, ['status']), handler: async (req, key) => ({ body: await fleet.report(mine(key), (req.params as any).id, req.body as any) }) });

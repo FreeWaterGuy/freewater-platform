@@ -74,6 +74,15 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     return { advertiser: c.advertiserName, campaignId: c.id, art: `<svg xmlns="http://www.w3.org/2000/svg" width="360" height="440" viewBox="0 0 360 440">${c.creative.svg(360, 440)}</svg>`, onThisBottle: !!own, url: own ? `/s/${u.id}/${own.slotIndex}` : null, target: own ? `s:${u.id}:${own.slotIndex}` : null };
   };
 
+  // Per-person queue (the platform runs as one process): taps from the same person run one after another.
+  const queues = new Map<string, Promise<unknown>>();
+  const oneAtATime = async <T>(k: string, fn: () => Promise<T>): Promise<T> => {
+    const run = (queues.get(k) ?? Promise.resolve()).then(fn, fn);
+    const tail = run.catch(() => {});
+    queues.set(k, tail);
+    try { return await run; } finally { if (queues.get(k) === tail) queues.delete(k); }
+  };
+
   const limitCheck = (userId: string, companyId: string) => {
     const max = rules(companyId).freeBottlesPerDay;
     const since = platform.bus.now().getTime() - 24 * 3600 * 1000;
@@ -129,6 +138,8 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
 
   route({ method: 'GET', url: '/v1/machines/:locationId/presence', scope: 'orders', summary: "The code the machine's screen shows right now, so people at the machine can order from their phone. It changes every 30 seconds.", handler: async (req, key) => {
     const { location } = machine((req.params as any).locationId, key!.companyId);
+    // A machine's own key reads only its own screen code, never another machine's.
+    if (key!.locationId && key!.locationId !== location.id) throw notFound('Machine');
     const c = await presence.current(location.id);
     const company = platform.companies.get(key!.companyId)!;
     return { body: { ...c, url: `${company.receiptBaseUrl.replace(/\/$/, '')}/app/m/${location.id}?c=${c.code}` } };
@@ -153,8 +164,10 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     const userId = h.me(key);
     const b = req.body as any;
     const orderId = `vend:${userId}:${b.vendId}`;
+    // One tap at a time per person: the daily limit is checked and the bottle created with no other tap in between.
+    const started = await oneAtATime(`${key!.companyId}:${userId}`, async () => {
     const existing = [...platform.units.values()].find((u) => u.companyId === key!.companyId && u.orderId === orderId);
-    if (existing) return { status: existing.status === 'failed' ? 422 : 200, body: existing.status === 'failed' ? { error: { code: 'print_failed', message: vendView(existing, userId).message } } : vendView(existing, userId) };
+    if (existing) return { done: { status: existing.status === 'failed' ? 422 : 200, body: existing.status === 'failed' ? { error: { code: 'print_failed', message: vendView(existing, userId).message } } : vendView(existing, userId) } };
     await atMachine(b.locationId, b.presenceCode, key!.companyId);
     limitCheck(userId, key!.companyId);
     const a = app.fleet.availability(b.locationId);
@@ -165,7 +178,12 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     if (stocked && !stocked.includes(productId)) throw new ApiError(422, 'not_stocked', `This machine doesn't have that. It has: ${stocked.map((id) => platform.products.get(id)?.name ?? id).join(', ')}.`);
     // The bottle is printed for this person: ads that target people can be chosen, and their first scan confirms it reached them.
     const audience = await app.accounts.audienceFor(userId, key!.companyId);
-    const running = platform.order({ companyId: key!.companyId, orderId, locationId: b.locationId, productId, consumerId: userId, audience });
+    limitCheck(userId, key!.companyId); // again, right before ordering: nothing can have slipped in, but be sure
+    // The unit exists as soon as order() returns, so the next tap's limit check counts it.
+    return { running: platform.order({ companyId: key!.companyId, orderId, locationId: b.locationId, productId, consumerId: userId, audience }), audience, productId };
+    });
+    if ('done' in started) return started.done as { status: number; body: unknown };
+    const { running, audience, productId } = started;
     // Chosen from this machine's options (shown in a random order, no ads on the choosing): recorded as that choice,
     // once the bottle is actually printed.
     if (b.choiceSetId && audience) void running.then((o) => (o.ok ? app.environment.choose(b.choiceSetId, `bottle:${productId}`, audience.personKey, orderId, `machine:${b.locationId}`) : null)).catch(() => {});
