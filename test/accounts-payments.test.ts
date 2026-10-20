@@ -134,14 +134,17 @@ describe('privacy', () => {
 
 describe('team', () => {
   it('invites staff whose role decides what they can do', async () => {
-    const r = await call('POST', '/v1/team', keys['freewater-admin'], { email: 'dana@freewater.io', role: 'driver' });
+    // Owners add people, signed in; a service key can't (see test/access-team-keys.test.ts).
+    const owner = await app.accounts.createSession((await app.accounts.invite({ companyId: 'freewater', email: 'owner.team@freewater.io', role: 'owner' })).id);
+    expect((await call('POST', '/v1/team', keys['freewater-admin'], { email: 'dana@freewater.io', role: 'driver' })).statusCode).toBe(403);
+    const r = await call('POST', '/v1/team', owner, { email: 'dana@freewater.io', role: 'driver' });
     expect(r.statusCode).toBe(201);
     const dana = await signIn('dana@freewater.io');
     expect(dana.user.role).toBe('driver');
     expect((await call('GET', '/v1/me', dana.token)).json().scopes).toContain('packs');
     expect((await call('GET', '/v1/ledger', dana.token)).statusCode).toBe(403);
 
-    await call('POST', '/v1/team', keys['freewater-admin'], { email: 'joe@joesburgers.example', role: 'advertiser', advertiserId: 'adv-joes' });
+    await call('POST', '/v1/team', owner, { email: 'joe@joesburgers.example', role: 'advertiser', advertiserId: 'adv-joes' });
     const joe = await signIn('joe@joesburgers.example');
     const camps = (await call('GET', '/v1/campaigns', joe.token)).json();
     expect(camps.every((c: any) => c.advertiserId === 'adv-joes')).toBe(true);

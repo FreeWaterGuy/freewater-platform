@@ -1,5 +1,5 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
-import { ApiError, notFound, obj, S, type Handler, type RouteDef } from './http';
+import { ApiError, notFound, obj, S, signedInOwner, type Handler, type RouteDef } from './http';
 import { consumerRoutes } from './consumer';
 import { adsRoutes } from './ads';
 import { deliveryRoutes } from './delivery';
@@ -310,7 +310,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   route({ method: 'POST', url: '/v1/orders', scope: 'orders', summary: 'Print one bottle. Send the same orderId again and you get the same bottle back; nothing prints twice. A custom design printed here is never billed (a price sent is ignored); paid custom bottles go through POST /v1/me/custom-orders.', body: obj({ orderId: S.str, locationId: S.str, productId: S.str, custom: obj({ customerId: S.str, svg: { type: 'string', minLength: 1, maxLength: 2_000_000 }, priceCents: S.int }, ['customerId', 'svg']) }, ['orderId', 'locationId', 'productId']), handler: async (req, key) => {
     const b = req.body as any;
-    if (!platform.locations.has(b.locationId)) throw new ApiError(422, 'unknown_location', `Location ${b.locationId} doesn't exist.`);
+    const loc = platform.locations.get(b.locationId);
+    // Another company's machine is, to this key, a machine that doesn't exist.
+    if (!loc || (loc.companyId ?? PLATFORM_COMPANY) !== key!.companyId) throw new ApiError(422, 'unknown_location', `Location ${b.locationId} doesn't exist.`);
     if (!platform.products.has(b.productId)) throw new ApiError(422, 'unknown_product', `Product ${b.productId} doesn't exist.`);
     let custom;
     if (b.custom) {
@@ -474,7 +476,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   route({ method: 'POST', url: '/v1/packs', scope: 'packs', summary: 'Print a 6, 12 or 24 pack for a delivery stop. Every bottle is different; the box is printed too.', body: obj({ customerId: S.str, address: S.str, routeId: S.str, stop: S.int, boxId: S.str, productId: S.str }, ['customerId', 'address', 'routeId', 'stop', 'boxId', 'productId']), handler: async (req, key) => {
     const b = req.body as any;
-    if (!platform.locations.has(b.routeId)) throw new ApiError(422, 'unknown_route', `Route ${b.routeId} doesn't exist.`);
+    const loc = platform.locations.get(b.routeId);
+    if (!loc || (loc.companyId ?? PLATFORM_COMPANY) !== key!.companyId) throw new ApiError(422, 'unknown_route', `Route ${b.routeId} doesn't exist.`);
     try {
       const p = await packs.compose({ companyId: key!.companyId, ...b });
       return { status: 201, body: packView(p.id) };
@@ -668,7 +671,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   route({ method: 'POST', url: '/v1/team', scope: 'admin', summary: 'Add a team member or advertiser staff. They sign in with a code sent to their email.', body: obj({ email: S.str, role: { type: 'string', enum: ['owner', 'ops', 'finance', 'reviewer', 'driver', 'advertiser'] }, advertiserId: S.str, displayName: S.str }, ['email', 'role']), handler: async (req, key) => {
     if (key!.advertiserId || key!.locationId) throw new ApiError(403, 'missing_scope', 'Advertisers cannot add team members.');
-    return { status: 201, body: await app.accounts.invite({ companyId: key!.companyId, ...(req.body as any), by: key!.userId }) };
+    const k = signedInOwner(key, 'Adding someone to the team');
+    return { status: 201, body: await app.accounts.invite({ companyId: k.companyId, ...(req.body as any), by: k.userId }) };
   } });
 
   // ---------- payments: cards, custom bottles, advertiser invoices ----------

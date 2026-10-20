@@ -1,7 +1,7 @@
 import type { App } from '../app';
 import { createApiKey, revokeApiKey, scopeInfo, type ApiKey, type Scope } from '../db/store';
 import { publicEvents, testEvent } from '../modules/webhooks/catalog';
-import { ApiError, obj, S, type RouteDef } from './http';
+import { ApiError, obj, S, signedInOwner, type RouteDef } from './http';
 import { personOnlyKeys } from '../modules/console/settings';
 import { approvalSettings, approverStepProblem } from '../modules/accounts/secondStep';
 
@@ -49,7 +49,8 @@ export function consoleRoutes(app: App, route: (r: RouteDef) => void) {
     return { body: people.map((u) => ({ id: u.id, email: u.email, displayName: u.displayName, role: u.role, advertiserId: u.advertiserId, addedAt: u.createdAt, lastSignInAt: u.lastSignInAt })) };
   } });
   route({ method: 'DELETE', url: '/v1/team/:userId', scope: 'admin', summary: 'Take someone off the team. They are signed out everywhere.', handler: async (req, key) => {
-    await app.accounts.removeFromTeam(staff(key).companyId, (req.params as any).userId, key!.userId);
+    const k = signedInOwner(key, 'Taking someone off the team');
+    await app.accounts.removeFromTeam(k.companyId, (req.params as any).userId, k.userId);
     return { status: 204 };
   } });
 
@@ -59,6 +60,9 @@ export function consoleRoutes(app: App, route: (r: RouteDef) => void) {
   route({ method: 'POST', url: '/v1/keys', scope: 'admin', summary: 'Make an API key. It is shown only in this answer; store it somewhere safe.', body: obj({ name: { type: 'string', minLength: 1, maxLength: 60 }, scopes: { type: 'array', minItems: 1, maxItems: 10, uniqueItems: true, items: { type: 'string', enum: grantable } }, advertiserId: S.str }, ['name', 'scopes']), handler: async (req, key) => {
     staff(key);
     const b = req.body as any;
+    // An admin key can do everything a company does for itself, so only an owner signed in makes one; otherwise a
+    // leaked admin key could mint its own replacements and outlive being revoked.
+    if ((b.scopes as Scope[]).includes('admin')) signedInOwner(key, 'Making a key with admin');
     if (b.advertiserId) {
       const known = (await app.db.query(`select 1 from advertisers where id = $1 and company_id = $2`, [b.advertiserId, key!.companyId])).rows.length;
       if (!known) throw new ApiError(404, 'not_found', 'Advertiser not found.');

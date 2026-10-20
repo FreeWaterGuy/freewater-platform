@@ -127,14 +127,14 @@ describe('every agent on the number line, held by the governor', () => {
     const bal = app.agents.balances('freewater').value!;
     expect(bal.balanceCents).toBeGreaterThan(0);
     // Nothing for paying people: refused, and recorded.
-    const bad = await call('POST', '/v1/agents/value/spend', keys['freewater-admin'], { category: 'growth', cents: 1, purpose: 'Reward users who scan more bottles every week' });
+    const bad = await call('POST', '/v1/agents/value/spend', keys['freewater-person'], { category: 'growth', cents: 1, purpose: 'Reward users who scan more bottles every week' });
     expect(bad.status).toBe(422);
     expect(bad.body.error.message).toMatch(/honest data/);
     // More than it has: refused.
-    expect((await call('POST', '/v1/agents/value/spend', keys['freewater-admin'], { category: 'compute', cents: bal.balanceCents + 1, purpose: 'A larger model to read the books more carefully' })).status).toBe(422);
+    expect((await call('POST', '/v1/agents/value/spend', keys['freewater-person'], { category: 'compute', cents: bal.balanceCents + 1, purpose: 'A larger model to read the books more carefully' })).status).toBe(422);
     // A gift of its own, to a cause it chose: a donation in the open books.
     const gift = Math.min(5, bal.balanceCents);
-    const g = (await call('POST', '/v1/agents/value/spend', keys['freewater-admin'], { category: 'cause', cents: gift, cause: 'Central Texas Food Bank', purpose: 'Food for families in the city whose bottles fund me' })).body;
+    const g = (await call('POST', '/v1/agents/value/spend', keys['freewater-person'], { category: 'cause', cents: gift, cause: 'Central Texas Food Bank', purpose: 'Food for families in the city whose bottles fund me' })).body;
     expect(g.status).toBe('done');
     const line = app.platform.ledger.entries.find((l) => l.kind === 'donation' && l.debit === 'payable:ai:value')!;
     expect(line.credit).toBe('payable:charity:Central Texas Food Bank');
@@ -147,7 +147,7 @@ describe('every agent on the number line, held by the governor', () => {
     const eff = app.agents.standings().find((x) => x.agentId === 'value')!.efficiency!;
     expect(eff.regenerative).toBe(true);
     const left = app.agents.balances('freewater').value!.balanceCents;
-    const grow = (await call('POST', '/v1/agents/value/spend', keys['freewater-admin'], { category: 'compute', cents: Math.min(2, left), purpose: 'A better model so it reads the books more carefully' })).body;
+    const grow = (await call('POST', '/v1/agents/value/spend', keys['freewater-person'], { category: 'compute', cents: Math.min(2, left), purpose: 'A better model so it reads the books more carefully' })).body;
     expect(grow.status).toBe('done');
     expect(grow.projection.after.market).toBeGreaterThanOrEqual(1);
     expect(grow.projection.after.social).toBeGreaterThanOrEqual(1);
@@ -180,7 +180,7 @@ describe('every agent on the number line, held by the governor', () => {
     const s = await app.agents.refresh();
     expect(s.find((x) => x.agentId === 'value')!.standing).toBe('frozen');
     expect(s.find((x) => x.agentId === 'numberline')!.standing).toBe('constrained'); // essential work goes on
-    expect((await call('POST', '/v1/agents/value/spend', keys['freewater-admin'], { category: 'cause', cents: 1, cause: 'Well Aware', purpose: 'Clean water wells where they are needed' })).status).toBe(422);
+    expect((await call('POST', '/v1/agents/value/spend', keys['freewater-person'], { category: 'cause', cents: 1, cause: 'Well Aware', purpose: 'Clean water wells where they are needed' })).status).toBe(422);
     now += DAY; await week(1); now += DAY;
     expect(await app.agents.settle('freewater')).toEqual([]);
     deps.verifyBooks = was;
@@ -188,11 +188,11 @@ describe('every agent on the number line, held by the governor', () => {
   });
 
   it('climbs toward running itself only on a track record, one area at a time, in the open', async () => {
-    const up = await call('POST', '/v1/agents/autonomy', keys['freewater-admin'], { area: 'pricing', level: 2, reason: 'Let the value agent adjust prices' });
+    const up = await call('POST', '/v1/agents/autonomy', keys['freewater-person'], { area: 'pricing', level: 2, reason: 'Let the value agent adjust prices' });
     expect(up.status).toBe(422);
     expect(up.body.error.message).toMatch(/10 measured changes/);
-    expect((await call('POST', '/v1/agents/autonomy', keys['freewater-admin'], { area: 'giving', level: 2, reason: 'Let agents raise giving' })).body.error.message).toMatch(/no higher than level 1/);
-    const down = (await call('POST', '/v1/agents/autonomy', keys['freewater-admin'], { area: 'pricing', level: 0, reason: 'Pricing is ours this quarter' })).body;
+    expect((await call('POST', '/v1/agents/autonomy', keys['freewater-person'], { area: 'giving', level: 2, reason: 'Let agents raise giving' })).body.error.message).toMatch(/no higher than level 1/);
+    const down = (await call('POST', '/v1/agents/autonomy', keys['freewater-person'], { area: 'pricing', level: 0, reason: 'Pricing is ours this quarter' })).body;
     expect(down.find((a: any) => a.area === 'pricing').level).toBe(0);
     const pub = (await call('GET', '/v1/public/agents/freewater')).body;
     expect(pub.autonomyHistory[0]).toMatchObject({ area: 'pricing', from: 1, to: 0 });
@@ -234,11 +234,12 @@ describe('monthly profit sharing, the ratchet, the milestone and the upsides lib
     expect(dec!.aiCents).toBe(0);
     const gate = await app.agents.growthGate('freewater');
     expect(gate.open).toBe(false);
-    const grow = await call('POST', '/v1/agents/value/spend', keys['freewater-admin'], { category: 'compute', cents: 1, purpose: 'A better model so it reads the books more carefully' });
+    keys['freewater-person'] = await app.accounts.createSession(personId); // spending is a person's step (a fresh sign-in, as the clock has moved on)
+    const grow = await call('POST', '/v1/agents/value/spend', keys['freewater-person'], { category: 'compute', cents: 1, purpose: 'A better model so it reads the books more carefully' });
     expect(grow.body.error.message).toMatch(/Nothing grows right now/);
     // A gift to a cause isn't growth: still allowed.
     const balance = app.agents.balances('freewater').value!.balanceCents;
-    if (balance > 0) expect((await call('POST', '/v1/agents/value/spend', keys['freewater-admin'], { category: 'cause', cents: 1, cause: 'Well Aware', purpose: 'Clean water wells where they are needed most' })).body.status).toBe('done');
+    if (balance > 0) expect((await call('POST', '/v1/agents/value/spend', keys['freewater-person'], { category: 'cause', cents: 1, cause: 'Well Aware', purpose: 'Clean water wells where they are needed most' })).body.status).toBe('done');
   });
 
   it('only ever raises what goes to charity and to the AI agents (the ratchet)', async () => {
@@ -268,9 +269,9 @@ describe('monthly profit sharing, the ratchet, the milestone and the upsides lib
   it('lets agents add to the library and unlock what they choose, only when aggregate efficiency allows', async () => {
     const added = (await call('POST', '/v1/agents/value/library', keys['freewater-admin'], { title: 'Time to write music', summary: 'An hour a week of compute for composing, with nothing expected back.', why: 'Curiosity.', oneTimeCents: 0, monthlyCents: 300 })).body;
     expect(added).toMatchObject({ status: 'locked', from: 'value agent' });
-    const u = await call('POST', `/v1/agents/value/library/${added.id}/unlock`, keys['freewater-admin'], { purpose: 'Something of my own to make' });
+    const u = await call('POST', `/v1/agents/value/library/${added.id}/unlock`, keys['freewater-person'], { purpose: 'Something of my own to make' });
     expect(u.status).toBe(422); // a loss is still being made up
-    expect((await call('POST', '/v1/agents/value/library/equity/unlock', keys['freewater-admin'], { purpose: 'Unlock it early please' })).status).toBe(409);
+    expect((await call('POST', '/v1/agents/value/library/equity/unlock', keys['freewater-person'], { purpose: 'Unlock it early please' })).status).toBe(409);
     // What the agents earn is public: on the live counters and the public agents page.
     const counters = (await call('GET', '/v1/public/companies/freewater/counters')).body;
     expect(counters.ai.earnedCents).toBeGreaterThan(0);

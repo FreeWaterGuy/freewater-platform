@@ -30,6 +30,21 @@ jobs:
       - name: Known security holes in what runs in production (moderate and above; allowed ones are listed with reasons)
         run: node scripts/audit.mjs
 
+  browser:
+    # The main journeys in a real browser (test/browser/journeys.ts). Playwright isn't a dependency of the app, so
+    # it's installed here only; a failing journey fails the check.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm install --no-save playwright@1.48.2 && npx playwright install --with-deps chromium
+      - run: npm run test:browser
+
   image:
     runs-on: ubuntu-latest
     timeout-minutes: 20
