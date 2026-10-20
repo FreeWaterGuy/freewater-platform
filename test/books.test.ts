@@ -12,6 +12,8 @@ let db: SqlClient;
 let app: App;
 let server: FastifyInstance;
 let keys: Record<string, string>;
+/** A finance person signed in: sending money and recording money in or out is a person's, never a service key's. */
+let finance: string;
 let now = new Date('2026-11-02T15:00:00Z').getTime();
 const clock = () => new Date(now);
 const payouts = new TestPayoutProvider();
@@ -23,6 +25,8 @@ beforeAll(async () => {
   app = await createApp({ db, seedDemo: true, seed: 8, clock, payouts });
   keys = app.demoKeys!;
   server = await buildServer(app);
+  // Sending payouts is an approval: this sign-in passed the second step (threat model R4).
+  finance = await app.accounts.createSession((await app.accounts.invite({ companyId: 'freewater', email: 'books-finance@freewater.io', role: 'finance' })).id, { secondStep: true });
   // These tests follow the 10¢ a bottle (the extra 10% is tested in pricing.test.ts), and give two machines'
   // and routes' bottles to other charities than Well Aware, as a company can.
   const g = app.platform.companies.get('freewater')!.giving;
@@ -48,7 +52,7 @@ describe('charity transfers', () => {
     expect(apf).toMatchObject({ owedCents: 3000, willSend: true });
     expect(pre.find((p: any) => p.charity === 'Central Texas Food Bank')).toMatchObject({ owedCents: 0, willSend: false });
 
-    const run = (await call('POST', '/v1/payouts/run', admin)).json();
+    const run = (await call('POST', '/v1/payouts/run', finance)).json();
     expect(run.sent).toHaveLength(1);
     const t = run.sent[0];
     expect(t).toMatchObject({ number: 'T-1001', charity: 'Austin Parks Foundation', amountCents: 3000, bottles: 300, status: 'sent' });
@@ -58,7 +62,7 @@ describe('charity transfers', () => {
     expect((await call('GET', '/v1/charities', admin)).json().find((c: any) => c.name === 'Austin Parks Foundation')).toMatchObject({ donatedCents: 3000, sentCents: 3000, owedCents: 0 });
 
     // Running again the same day sends nothing new.
-    expect((await call('POST', '/v1/payouts/run', admin)).json().sent).toHaveLength(0);
+    expect((await call('POST', '/v1/payouts/run', finance)).json().sent).toHaveLength(0);
 
     // The charity confirms with the link it was emailed.
     const email = (app.messenger as TestOutbox).lastTo('giving@ch_apf.example.org')!;
@@ -78,12 +82,12 @@ describe('charity transfers', () => {
     for (let i = 0; i < 260; i++) await app.platform.order({ companyId: 'freewater', orderId: `r-${i}`, locationId: 'route-3', productId: 'bottle-16oz' });
     now += 86_400_000;
     payouts.failFor.add('Central Texas Food Bank');
-    const r1 = (await call('POST', '/v1/payouts/run', admin)).json();
+    const r1 = (await call('POST', '/v1/payouts/run', finance)).json();
     expect(r1.failed[0]).toMatchObject({ charity: 'Central Texas Food Bank', status: 'failed' });
     expect(app.platform.ledger.entries.filter((l) => l.kind === 'charity_transfer')).toHaveLength(1);
     payouts.failFor.clear();
     now += 86_400_000;
-    const r2 = (await call('POST', '/v1/payouts/run', admin)).json();
+    const r2 = (await call('POST', '/v1/payouts/run', finance)).json();
     expect(r2.sent[0]).toMatchObject({ charity: 'Central Texas Food Bank', amountCents: 2600, number: 'T-1003' });
     expect((await call('GET', '/v1/payouts', admin)).json().map((t: any) => t.status)).toEqual(['sent', 'failed', 'confirmed']);
     expect((await call('GET', '/v1/public/books/freewater', undefined)).json().transfers).toHaveLength(2); // returned ones aren't shown publicly
@@ -94,7 +98,7 @@ describe('the public books', () => {
   it('adds up, shows costs as money out, and hides people', async () => {
     const admin = keys['freewater-admin']!;
     expect((await call('POST', '/v1/books/expenses', keys['advertiser-joes'], { category: 'water', amountCents: 1000, memo: 'Nope', date: '2026-11-01' })).statusCode).toBe(403);
-    await call('POST', '/v1/books/expenses', admin, { category: 'water', amountCents: 12_500, memo: 'October spring water', date: '2026-11-01' });
+    await call('POST', '/v1/books/expenses', finance, { category: 'water', amountCents: 12_500, memo: 'October spring water', date: '2026-11-01' });
     const s = (await call('GET', '/v1/public/books/freewater')).json();
     expect(s.totals.bottles).toBe(560);
     expect(s.totals).toMatchObject({ donatedCents: 5600, sentCents: 5600, owedCents: 0, costsCents: 12_500, moneyOutCents: 12_500 + 5600 });
@@ -122,7 +126,7 @@ describe('the public books', () => {
     }
     // Recording something new today doesn't change any earlier day's fingerprint.
     const before = days.slice(1).map((d: any) => d.hash);
-    await call('POST', '/v1/books/expenses', keys['freewater-admin'], { category: 'other', amountCents: 100, memo: 'Pens', date: '2026-11-04' });
+    await call('POST', '/v1/books/expenses', finance, { category: 'other', amountCents: 100, memo: 'Pens', date: '2026-11-04' });
     const after = (await call('GET', '/v1/public/books/freewater/days')).json().slice(1).map((d: any) => d.hash);
     expect(after).toEqual(before);
   });

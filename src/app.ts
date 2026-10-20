@@ -78,6 +78,7 @@ import { DistributionService } from './modules/distributions/service';
 import { TeamService } from './modules/team/service';
 import { builtinIntake, ClaudeIntake, type IntakeAssistant } from './modules/team/intake';
 import { Alerter } from './runtime/alerts';
+import { Reconciliation } from './modules/books/reconciliation';
 import { charter as agentCharter, winCondition } from './modules/agents/charter';
 import { claudeExaminee } from './modules/agents/exam';
 import type { BlobStore } from './modules/assets/blobs';
@@ -87,7 +88,7 @@ import type { JobRunner } from './runtime/jobs';
 import { boxes, builtinCreatives, freewater, locations, peakSpring, products, sampleCampaigns } from './demo/seed';
 
 /** What the running server adds around the app: alerts, and (in production) the lease and the job runner. */
-export interface Runtime { alerts: Alerter; startedAt: Date; lease?: InstanceLease; jobs?: JobRunner; /** Lost its claim to the data: answers nothing more. */ lost?: boolean }
+export interface Runtime { alerts: Alerter; startedAt: Date; lease?: InstanceLease; jobs?: JobRunner; /** Lost its claim to the data: answers nothing more. */ lost?: boolean; /** Today's public uploads against their ceilings (set by the API server). */ uploads?: import('./runtime/uploads').UploadQuota }
 
 export interface AppOptions {
   db: SqlClient;
@@ -268,6 +269,9 @@ export async function createApp(opts: AppOptions) {
   experiences.videos = videos;
   const interactions = new InteractionService(db, platform, opts.clock);
   const data = new DataService(db, platform, interactions, opts.clock);
+  // Phones' keys are secrets: the activity log and the team's screens keep only a keyed fingerprint of each.
+  data.tagKey = await loadSecret(db, 'viewer_tags');
+  await data.retagActivity();
   // Where each person is decides which law applies to them. Unknown: the strictest.
   data.geo = opts.geo === null ? undefined : opts.geo ?? geoFromEnv(process.env);
   data.trustGeoHeaders = process.env.TRUST_GEO_HEADERS === '1';
@@ -298,6 +302,8 @@ export async function createApp(opts: AppOptions) {
   wallet.mayEarn = async (companyId, subject) => (await data.rewardsAllowed(companyId, [subject, ...(await data.linkedSubjects(companyId, subject))])) && (await data.ageOk(companyId, [subject])) !== false;
   wallet.linked = (companyId, subject) => data.linkedSubjects(companyId, subject);
   wallet.sourceSecret = await loadSecret(db, 'wallet');
+  lottery.tagOf = (k) => data.viewerTag(k);
+  data.pointsForFull = (companyId) => wallet.settings(companyId).points.perAction?.data_full ?? null;
   const prompter = opts.prompter ?? (aiOn ? new ClaudePrompter({ apiKey: anthropicKey, model: process.env.ANTHROPIC_PROMPT_MODEL }) : builtinPrompter);
   const games = new GamesService(db, platform, wallet, data, assets, prompter, opts.clock, opts.seed !== undefined ? seededRandom(opts.seed + 101) : Math.random);
   numberline.environmentOf = (companyId, person, subject, unitId) => environment.environmentOf(companyId, person, subject, unitId);
@@ -390,6 +396,8 @@ export async function createApp(opts: AppOptions) {
   // The chain layer, switched off: hourly seals of the wallet journal, actions needing several people, the daily check.
   const chain = new ChainService(db, platform, wallet, publishers, opts.clock);
   chain.alert = (companyId, message) => void runtime.alerts.alert('chain', 'critical', `Chain (${companyId})`, message);
+  // An ad reached its daily ceiling of billed scans or AR launches (R3): more are counted, never billed, and a person looks.
+  platform.ledger.onCeiling = (h) => void runtime.alerts.alert(`billing-ceiling:${h.companyId}:${h.campaignId}:${h.kind}:${h.day}`, 'warning', `Ad ${h.campaignId} reached its daily ceiling of ${h.ceiling} billed ${h.kind === 'scan' ? 'scans' : 'AR launches'} (${h.companyId}, ${h.day})`, `More are counted but not billed today. Far more ${h.kind === 'scan' ? 'scans' : 'AR launches'} than its bottles could get usually means fake scans: check where they come from (GET /v1/books/reconciliation) before the advertiser is invoiced.`);
   // Solana: the free test network before going live with the token, the real network after. Keys live in the host's
   // settings. Without them, the stand-in runs (and says so).
   const solana = solanaFromEnv(process.env);
@@ -403,6 +411,7 @@ export async function createApp(opts: AppOptions) {
     if (solana.custody) chain.custody = solana.custody;
   }
   const launch = new LaunchService(db, platform, data, games, wallet, chain, opts.clock, opts.seed !== undefined ? seededRandom(opts.seed + 202) : Math.random);
+  launch.flush = () => persistence.flush();
   wallet.stageOf = (companyId) => chain.stage(companyId);
   const giftCards = opts.giftCards ?? giftCardsFromEnv(process.env);
   chain.beforeGoLive = (companyId, by) => launch.reset(companyId, by);
@@ -497,20 +506,28 @@ export async function createApp(opts: AppOptions) {
   // Model 6 machines: bottles ordered there print at the machine; everything else uses the company's other printer.
   const fleet = new FleetService(db, platform, messenger, flush, opts.fleet);
   await fleet.load();
+  fleet.alert = (key, title, detail) => void runtime.alerts.alert(key, 'warning', title, detail);
   made.registry.registerPrinter('model6-fleet', new MachineFleetPrinter(() => fleet, made.printer));
 
   // After a crash: a money step whose status was written but whose ledger lines never reached the books (written
   // before lines were stored first, or by a step whose status is its own guard) gets them now. Every event's key is
   // the step's own, so nothing is booked twice; on a clean start this books nothing. (Batches and the agents' fund
   // repair themselves as they start, above.)
+  // The daily reconciliation report: the books against themselves and their outside counterparts.
+  const reconciliation = new Reconciliation(db, platform, {
+    wallet, flush: () => persistence.flush(), today: (companyId, at) => delivery.today(companyId, at),
+    anchors: (companyId) => anchors.list(companyId), days: (companyId) => books.days(companyId),
+    charities: async (companyId) => (await books.charities(companyId)).map((c: any) => c.name),
+  });
   await payments.repairUnrecorded();
   for (const c of platform.companies.values()) { await books.repairUnrecorded(c.id); await profit.repairShares(c.id); }
   await lottery.repairUnrecorded();
   await environment.repairDirections();
+  await wallet.repairReserveLines();
   await offers.repairCauseGifts();
   await persistence.flush();
 
-  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens };
+  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

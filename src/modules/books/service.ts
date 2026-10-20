@@ -208,27 +208,42 @@ export class BooksService {
   async confirm(id: string, token: string) {
     const r = (await this.db.query<any>(`select confirm_token_hash, status from charity_transfers where id = $1`, [id])).rows[0];
     if (!r || r.confirm_token_hash !== sha(token)) throw new BooksError(404, 'not_found', 'That confirmation link isn’t valid.');
-    if (r.status === 'sent') await this.db.query(`update charity_transfers set status = 'confirmed', confirmed_at = $2 where id = $1`, [id, this.platform.bus.now().toISOString()]);
+    // Once: the charity clicking twice at the same moment confirms it once (the database refuses a second change).
+    if (r.status === 'sent') await this.db.query(`update charity_transfers set status = 'confirmed', confirmed_at = $2 where id = $1 and status = 'sent'`, [id, this.platform.bus.now().toISOString()]);
     return this.transfer(id);
   }
 
   // ---------- costs ----------
 
   /** Surplus put back into the system: a new machine or factory, energy, routes, research, or held in reserve. */
-  async recordReinvestment(companyId: string, input: { category: string; amountCents: number; memo: string; date: string }) {
+  async recordReinvestment(companyId: string, input: { category: string; amountCents: number; memo: string; date: string; requestId?: string }, by?: string) {
     this.company(companyId, true);
-    const id = newId('ri');
-    this.platform.bus.publish('reinvestment.recorded', companyId, { reinvestmentId: id, ...input }, `reinvestment:${id}`);
-    await this.flush();
-    return { id, ...input };
+    return this.recordOnce(companyId, 'reinvestment.recorded', 'reinvestment', 'ri', 'reinvestmentId', input, by);
   }
   /** Money paid out to the owners. Shown in the open books beside what was put back in. */
-  async recordOwnerPayout(companyId: string, input: { kind: string; amountCents: number; memo: string; date: string }) {
+  async recordOwnerPayout(companyId: string, input: { kind: string; amountCents: number; memo: string; date: string; requestId?: string }, by?: string) {
     this.company(companyId, true);
-    const id = newId('op');
-    this.platform.bus.publish('owner_payout.recorded', companyId, { payoutId: id, ...input }, `owner_payout:${id}`);
+    return this.recordOnce(companyId, 'owner_payout.recorded', 'owner_payout', 'op', 'payoutId', input, by);
+  }
+
+  /**
+   * Record money in or out, once per request: with a requestId, a retried request (a timeout, a double click) finds the
+   * line already recorded and answers with it, never a second line. Who recorded it is kept with the event.
+   */
+  private async recordOnce(companyId: string, type: 'expense.recorded' | 'reinvestment.recorded' | 'owner_payout.recorded', keyPrefix: string, idPrefix: string, idField: string, input: { requestId?: string; amountCents: number; memo: string; date: string } & Record<string, unknown>, by?: string) {
+    const { requestId, ...rest } = input;
+    if (requestId !== undefined && !/^[A-Za-z0-9_-]{8,80}$/.test(requestId)) throw new BooksError(400, 'bad_request_id', 'A requestId is 8 to 80 letters, digits, - or _.');
+    const id = requestId ? `${idPrefix}_${sha(`${companyId}|${keyPrefix}|${requestId}`).slice(0, 20)}` : newId(idPrefix);
+    const key = requestId ? `${keyPrefix}:req:${requestId}` : `${keyPrefix}:${id}`;
+    const e = this.platform.bus.publish(type, companyId, { [idField]: id, ...rest, ...(by ? { by } : {}) } as any, key);
     await this.flush();
-    return { id, ...input };
+    if (!e && requestId) {
+      const prior = (await this.db.query<any>(`select payload from events where company_id = $1 and type = $2 and idempotency_key = $3`, [companyId, type, key])).rows[0];
+      const p = prior ? (typeof prior.payload === 'string' ? JSON.parse(prior.payload) : prior.payload) : { [idField]: id, ...rest };
+      const { [idField]: pid, by: _by, ...was } = p;
+      return { id: pid as string, ...was, duplicate: true };
+    }
+    return { id, ...rest };
   }
 
   /**
@@ -267,11 +282,8 @@ export class BooksService {
     };
   }
 
-  async recordExpense(companyId: string, input: { category: string; amountCents: number; memo: string; date: string }) {
-    const id = newId('ex');
-    this.platform.bus.publish('expense.recorded', companyId, { expenseId: id, ...input }, `expense:${id}`);
-    await this.flush();
-    return { id, ...input };
+  async recordExpense(companyId: string, input: { category: string; amountCents: number; memo: string; date: string; requestId?: string }, by?: string) {
+    return this.recordOnce(companyId, 'expense.recorded', 'expense', 'ex', 'expenseId', input, by);
   }
 
   // ---------- the public books ----------

@@ -343,7 +343,9 @@ describe('B. statuses and their ledger lines never disagree after a crash', () =
     await restart();
     expect(await lines('batch.recorded', `batch:${c.id}`)).toHaveLength(n);
     // Lines stored, the batch never written (a crash between, in the new ordering): written back from the books.
+    await raw.query(`alter table distributions disable trigger distributions_void_only`); // batches can't be deleted (052)
     await raw.query(`delete from distributions where id = $1`, [c.id]);
+    await raw.query(`alter table distributions enable trigger distributions_void_only`);
     await crashAndRestart();
     expect((await app.distributions.get('freewater', c.id)).bottles).toBe(50);
     expect(await lines('batch.recorded', `batch:${c.id}`)).toHaveLength(n);

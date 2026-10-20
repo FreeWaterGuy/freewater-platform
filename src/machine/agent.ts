@@ -1,6 +1,7 @@
 import { qrSvg } from '../modules/print/qr';
 import type { Model6Hardware } from './hardware';
 import { Journal, type KeptLabel } from './journal';
+import { checkUpdate } from './updates';
 
 // The Model 6 machine software. It runs inside the machine and:
 //  - says how the machine is every few seconds (heartbeat) and hears back its mode, commands and the screen's code;
@@ -18,6 +19,8 @@ export interface AgentOptions {
   hardware: Model6Hardware;
   journal?: Journal;
   softwareVersion?: string;
+  /** The public half of the update signing key (base64 SPKI or PEM). Without it, every software update is refused. */
+  updatePublicKey?: string;
   heartbeatMs?: number;
   jobWaitSec?: number;
   takeScreenMs?: number;
@@ -365,9 +368,11 @@ export class MachineAgent {
         case 'refresh_screen': this.journal.update((s) => { delete s.screenVersion; }); message = 'Screen will refresh'; break;
         case 'sync_buffer': await this.topUpBuffer(); message = `${this.journal.state.buffer.length} labels kept ready`; break;
         case 'update_software': {
-          const v = String(c.args?.version ?? '').trim();
-          if (!/^\d+\.\d+\.\d+$/.test(v)) { ok = false; message = 'Send a version like 1.0.1'; break; }
-          // Stand-in: a real update downloads a signed package, checks it, and restarts into it.
+          // Only an update signed by the key this machine trusts, for this machine, current and newer (see updates.ts).
+          const check = checkUpdate(c.args, { publicKey: this.o.updatePublicKey, locationId: this.o.locationId, runningVersion: this.version, now: new Date() });
+          if (!check.ok) { ok = false; message = check.reason; this.log(message); break; }
+          const v = check.manifest.version;
+          // Stand-in for the install: a real update downloads the package, checks it against manifest.sha256, and restarts into it.
           this.version = v;
           this.journal.update((s) => { s.softwareVersion = v; });
           message = `Now running ${v}`;

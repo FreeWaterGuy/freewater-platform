@@ -48,6 +48,7 @@ export function environmentRoutes(app: App, route: (r: RouteDef) => void) {
   } });
   route({ method: 'POST', url: '/v1/environment/experiments/:id/decide', scope: 'admin', summary: 'Approve a value-back test (it starts) or stop it. A person decides.', body: obj({ approve: S.bool }, ['approve']), handler: async (req, key) => {
     staff(key);
-    return { body: await wrap(() => environment.decideExperiment(key!.companyId, (req.params as any).id, !!(req.body as any).approve, who(key!))) };
+    if (!key!.userId) throw new ApiError(403, 'person_needed', 'A person signed in decides value-back tests, not a service key.');
+    return { body: await wrap(() => environment.decideExperiment(key!.companyId, (req.params as any).id, !!(req.body as any).approve, `user:${key!.userId}`)) };
   } });
 }

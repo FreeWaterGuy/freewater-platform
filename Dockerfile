@@ -3,12 +3,16 @@
 #   docker run -p 8080:8080 --env-file .env freewater
 # Settings are explained in docs/RUNNING.md. The server checks them at start and refuses unsafe ones.
 
-FROM node:22-bookworm-slim AS deps
+# The base image is pinned to an exact release so a rebuild can't quietly pick up different code.
+# TODO(digest): pin it by digest too (a tag can be re-pointed). On a machine with Docker:
+#   docker buildx imagetools inspect node:22.22.0-bookworm-slim --format '{{json .Manifest.Digest}}'
+# then write both FROM lines as node:22.22.0-bookworm-slim@sha256:<digest>. Dependabot (docker) keeps it current.
+FROM node:22.22.0-bookworm-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json .npmrc ./
 RUN npm ci --omit=dev && npm cache clean --force
 
-FROM node:22-bookworm-slim
+FROM node:22.22.0-bookworm-slim
 # pg_dump and psql (version 17, from PostgreSQL's own packages: it can back up any database from 13 to 17), for the
 # daily backups and the weekly restore check run from inside the container.
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
@@ -35,4 +39,6 @@ EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=3 CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||8080)+'/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 # SIGTERM lets it finish requests, save everything and hand the data to the next server (within 45 seconds).
 STOPSIGNAL SIGTERM
+# Runs the TypeScript through tsx (pinned in the lockfile). Building to JavaScript first is planned, not done: see
+# docs/SUPPLY-CHAIN.md ("TypeScript at runtime"). No secret is baked in: every key comes from the host at run time.
 CMD ["node", "--import", "tsx", "src/server/main.ts"]

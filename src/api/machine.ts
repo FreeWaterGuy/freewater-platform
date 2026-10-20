@@ -1,6 +1,7 @@
 import type { App } from '../app';
 import type { ApiKey } from '../db/store';
 import { commandKinds, type CommandKind } from '../modules/fleet/service';
+import { readUpdatePrivateKey, signUpdate } from '../machine/updates';
 import { ApiError, obj, S, type RouteDef } from './http';
 
 /**
@@ -46,8 +47,29 @@ export function machineRoutes(app: App, route: (r: RouteDef) => void) {
   const staff = (key: ApiKey | null) => { if (!key || key.advertiserId || key.locationId) throw new ApiError(403, 'missing_scope', 'Only the company’s team can do this.'); return key; };
   route({ method: 'GET', url: '/v1/ops/fleet', scope: ['admin', 'orders', 'packs', 'events'], summary: 'Every machine: online or not, bottles and labels left, open problems, the last day’s prints.', handler: async (_req, key) => ({ body: await fleet.list(staff(key).companyId) }) });
   route({ method: 'GET', url: '/v1/ops/fleet/:id', scope: ['admin', 'orders', 'packs', 'events'], summary: 'One machine: its health, recent prints, commands and problems.', handler: async (req, key) => ({ body: await fleet.detail(staff(key).companyId, (req.params as any).id) }) });
-  route({ method: 'POST', url: '/v1/ops/fleet/:id/commands', scope: ['admin', 'orders'], summary: 'Ask a machine to do something: test_print, restart, out_of_service (with a reason), in_service, refresh_screen, sync_buffer or update_software.', body: obj({ kind: { type: 'string', enum: [...commandKinds] }, args: { type: 'object', maxProperties: 5 } }, ['kind']), handler: async (req, key) => {
+  // Commands move real hardware, so they come from a signed-in ops person or owner, never from a service key (an
+  // `orders` key is for systems placing orders). New software is an owner's call, and the server signs it with the
+  // update key from the host's settings; the machine runs nothing that key didn't sign (src/machine/updates.ts).
+  const commander = (key: ApiKey | null, kind: CommandKind) => {
+    const k = staff(key);
+    if (!k.userId) throw new ApiError(403, 'person_required', 'Machine commands need an ops person or owner signed in, not a service key.');
+    if (kind === 'update_software' && !k.scopes.includes('admin')) throw new ApiError(403, 'owner_required', 'Only an owner can put new software on a machine.');
+    return k;
+  };
+  const signedUpdate = (locationId: string, args: Record<string, unknown> | undefined, now: Date) => {
+    const secret = process.env.MACHINE_UPDATE_SIGNING_KEY;
+    if (!secret) throw new ApiError(409, 'updates_not_set_up', 'Software updates need MACHINE_UPDATE_SIGNING_KEY in the server’s settings (npm run key:machine-updates).');
+    let privateKey;
+    try { privateKey = readUpdatePrivateKey(secret); } catch { throw new ApiError(500, 'update_key_unreadable', 'MACHINE_UPDATE_SIGNING_KEY isn’t an Ed25519 private key.'); }
+    const version = String(args?.version ?? '').trim();
+    const sha256 = args?.sha256 == null ? null : String(args.sha256);
+    try { return { version, ...signUpdate(privateKey, { locationId, version, sha256, now }) }; } catch (e) { throw new ApiError(400, 'bad_update', (e as Error).message); }
+  };
+  route({ method: 'POST', url: '/v1/ops/fleet/:id/commands', scope: ['admin', 'orders'], summary: 'Ask a machine to do something: test_print, restart, out_of_service (with a reason), in_service, refresh_screen, sync_buffer, or update_software ({ version, sha256? }; owners only, signed by the server). A signed-in ops person or owner only.', body: obj({ kind: { type: 'string', enum: [...commandKinds] }, args: { type: 'object', maxProperties: 5 } }, ['kind']), handler: async (req, key) => {
     const b = req.body as { kind: CommandKind; args?: Record<string, unknown> };
-    return { status: 201, body: await fleet.command(staff(key).companyId, (req.params as any).id, b.kind, b.args, key!.name) };
+    const k = commander(key, b.kind);
+    const id = (req.params as any).id as string;
+    const args = b.kind === 'update_software' ? signedUpdate(id, b.args, app.platform.bus.now()) : b.args;
+    return { status: 201, body: await fleet.command(k.companyId, id, b.kind, args, k.name) };
   } });
 }

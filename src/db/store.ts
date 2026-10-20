@@ -233,6 +233,13 @@ export class SqlPersistence implements Persistence {
     const lines = readFileSync(spoolFile, 'utf8').split('\n').filter(Boolean);
     const aside = (why: string) => { const to = `${spoolFile}.${why}-${Date.now()}`; renameSync(spoolFile, to); return to; };
     if (process.env.FW_SPOOL_SKIP === '1') { const to = aside('skipped'); log(`Set the spool aside without applying it (FW_SPOOL_SKIP=1): ${to}`); return { applied: 0, setAside: to }; }
+    // A database just restored from a backup is older than the one this spool was waiting for: its changes would land
+    // on top of a gap (everything since the backup), so a person decides what to do with them.
+    if ((await db.query<{ t: string | null }>(`select to_regclass('restore_target')::text as t`)).rows[0]?.t) {
+      const to = aside('restored');
+      log(`A spool was set aside, not applied: this database was restored from a backup, so the changes in it would land after a gap. A person should look at ${to}.`);
+      return { applied: 0, setAside: to };
+    }
     let header: { epoch?: string } = {};
     try { header = JSON.parse(lines[0] ?? '{}'); } catch {}
     const ops: Op[] = lines.slice(1).map((l) => { try { return JSON.parse(l) as Op; } catch { return null; } }).filter((o): o is Op => !!o && typeof o.seq === 'number');

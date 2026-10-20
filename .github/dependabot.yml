@@ -1,0 +1,17 @@
+# Keeps dependencies, the pinned GitHub Actions and the pinned base image current. Each update is a pull request
+# that runs every check in ci.yml before anyone merges it. See docs/SUPPLY-CHAIN.md.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 10
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+  - package-ecosystem: docker
+    directory: /
+    schedule: { interval: weekly }

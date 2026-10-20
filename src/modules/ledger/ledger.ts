@@ -7,6 +7,13 @@ import type { BoxFacePlacement, Cents, CompanyConfig, Placement } from '../../co
 
 /** The most scans (and, separately, AR launches) of one ad on one bottle or box side billed in a day. */
 export const MAX_BILLED_PER_SLOT_PER_DAY = 10;
+/**
+ * One ad's ceiling across all its bottles and box sides, per day and per kind (scans, AR launches): this many billed
+ * engagements per bottle or box side printed with it, and never fewer than the floor. Real bottles are scanned far less
+ * than once a day each; past the ceiling more are counted, never billed, and a person is alerted.
+ */
+export const CAMPAIGN_BILLED_PER_PRINTED_PER_DAY = 1;
+export const CAMPAIGN_BILLED_FLOOR_PER_DAY = 50;
 
 /** One balanced line: money moves from `debit` to `credit`. Lines are only ever added, never edited or deleted. */
 export interface LedgerEntry {
@@ -21,9 +28,12 @@ export interface LedgerEntry {
   debit: string;
   credit: string;
   amountCents: Cents;
-  kind: 'print' | 'scan' | 'ar' | 'commission' | 'commission_reversal' | 'custom' | 'donation' | 'box_face' | 'payment' | 'charity_transfer' | 'expense' | 'prize' | 'ai_fund' | 'ai_allocation' | 'ai_spend' | 'reinvestment' | 'owner_payout' | 'giving_redirect';
+  kind: 'print' | 'scan' | 'ar' | 'commission' | 'commission_reversal' | 'custom' | 'donation' | 'box_face' | 'payment' | 'charity_transfer' | 'expense' | 'prize' | 'ai_fund' | 'ai_allocation' | 'ai_spend' | 'reinvestment' | 'owner_payout' | 'giving_redirect' | 'reserve';
   memo: string;
 }
+
+/** An ad reached its daily ceiling of billed scans or AR launches: more are counted, not billed. */
+export interface CeilingHit { companyId: string; day: string; campaignId: string; advertiserId: string; kind: 'scan' | 'ar'; ceiling: number; unbilled: number }
 
 export interface UnitReceipt {
   unitId: string;
@@ -50,14 +60,17 @@ export class Ledger {
   private printedBoxes = new Map<string, BoxFacePlacement[]>();
 
   private onEntry: (entry: LedgerEntry) => void;
+  /** Told when an ad first reaches its daily ceiling (the app alerts a person). */
+  onCeiling: (hit: CeilingHit) => void;
   private listeners: ((entry: LedgerEntry) => void)[] = [];
   /** Hear about every new line (the live feed, counters, sales counts). */
   set onAdd(f: (entry: LedgerEntry) => void) { this.listeners.push(f); }
   listen(f: (entry: LedgerEntry) => void) { this.listeners.push(f); return () => { this.listeners = this.listeners.filter((x) => x !== f); }; }
 
   private premium: (campaignId: string) => number;
-  constructor(bus: EventBus, private companies: Map<string, CompanyConfig>, hooks: { onEntry?: (entry: LedgerEntry) => void; engagementPremium?: (campaignId: string) => number } = {}) {
+  constructor(bus: EventBus, private companies: Map<string, CompanyConfig>, hooks: { onEntry?: (entry: LedgerEntry) => void; engagementPremium?: (campaignId: string) => number; onCeiling?: (hit: CeilingHit) => void } = {}) {
     this.onEntry = hooks.onEntry ?? (() => {});
+    this.onCeiling = hooks.onCeiling ?? (() => {});
     this.premium = hooks.engagementPremium ?? (() => 0);
     bus.on('label.printed', (e) => this.onPrinted(e));
     bus.on('unit.scanned', (e) => this.onEngagement(e, 'scan'));
@@ -106,6 +119,12 @@ export class Ledger {
     bus.on('value_back.reversed', (e) => this.add(e, { unitId: e.payload.unitId, campaignId: e.payload.campaignId, debit: `payable:charity:${e.payload.cause}`, credit: `receivable:advertiser:${e.payload.advertiserId}`, amountCents: e.payload.cents, kind: 'donation', memo: `Value-back on ${e.payload.advertiserName}’s offer taken back: the sale was refunded` }));
     // A brand's offer gave to a cause: paid from the money the brand put in reserve (held for it), owed to the charity.
     bus.on('offer.cause_given', (e) => this.add(e, { debit: `payable:reserve:${e.payload.sponsor}`, credit: `payable:charity:${e.payload.cause}`, amountCents: e.payload.cents, kind: 'donation', memo: `Given to ${e.payload.cause} by an offer (claim ${e.payload.claimId}), from ${e.payload.sponsor}’s reserve` }));
+    // A test-stage reset puts the brand's reserve back as it was funded (src/modules/launch/service.ts): the gifts its
+    // offers made while testing are undone here too, with new lines dated today (a published day is never rewritten).
+    bus.on('offer.cause_undone', (e) => this.add(e, { debit: `payable:charity:${e.payload.cause}`, credit: `payable:reserve:${e.payload.sponsor}`, amountCents: e.payload.cents, kind: 'donation', memo: `Undone by the test-stage reset: a test gift to ${e.payload.cause} by an offer (claim ${e.payload.claimId}), back to ${e.payload.sponsor}’s reserve` }));
+    // A brand's reserve for dollar credit: the money arrived and is held for it (a liability), until it's given out.
+    bus.on('reserve.funded', (e) => this.add(e, { debit: 'cash:bank', credit: `payable:reserve:${e.payload.sponsor}`, amountCents: e.payload.cents, kind: 'reserve', memo: `${e.payload.sponsor} put money in reserve for dollar credit` }));
+    bus.on('reserve.returned', (e) => this.add(e, { debit: `payable:reserve:${e.payload.sponsor}`, credit: 'cash:bank', amountCents: e.payload.cents, kind: 'reserve', memo: `A reserve payment from ${e.payload.sponsor} recorded by mistake, undone` }));
     bus.on('owner_payout.recorded', (e) => this.add(e, { debit: `equity:payout:${e.payload.kind}`, credit: 'cash:bank', amountCents: e.payload.amountCents, kind: 'owner_payout', memo: e.payload.memo }));
     // 'print.failed' is deliberately not subscribed: nothing to bill.
   }
@@ -133,6 +152,7 @@ export class Ledger {
     const company = this.company(e.companyId);
     const { unitId, placements, locationId } = e.payload;
     this.printedUnits.set(unitId, { placements, locationId });
+    for (const p of placements) if (!p.isHouse) this.countPrinted(p.campaignId);
 
     let revenue = 0;
     if (e.payload.kind === 'custom') {
@@ -215,6 +235,7 @@ export class Ledger {
 
   private onBoxPrinted(e: PlatformEvent<'box.printed'>) {
     this.printedBoxes.set(e.payload.packId, e.payload.faces);
+    for (const f of e.payload.faces) if (!f.isHouse) this.countPrinted(f.campaignId);
     for (const f of e.payload.faces) {
       if (f.isHouse) continue;
       this.add(e, { packId: e.payload.packId, campaignId: f.campaignId, debit: `receivable:advertiser:${f.advertiserId}`, credit: 'revenue:box', amountCents: f.priceCents, kind: 'box_face', memo: `${f.advertiserName}, ${f.face} of the box, printed` });
@@ -235,6 +256,7 @@ export class Ledger {
 
     if (this.isRepeat(`${kind}:${p.unitId}:${p.slotIndex}:${p.viewerKey}`, e.at.getTime(), company)) return; // repeat, free
     if (this.overDailyCap(`${kind}:${p.unitId}:${placement.campaignId}`, e.at, company)) return; // more than a bottle's few holders: free
+    if (this.overCampaignCeiling(e.companyId, placement.campaignId, placement.advertiserId, kind, e.at, company)) { this.uncount(`${kind}:${p.unitId}:${placement.campaignId}`, e.at, company); return; } // more than the whole ad could plausibly get: free, and a person is told
 
     // Targeted ads pay more per engagement: the base price plus the campaign's targeting premium.
     const pct = this.premium(placement.campaignId);
@@ -263,6 +285,7 @@ export class Ledger {
     if (!face || face.isHouse) return;
     if (this.isRepeat(`box-${kind}:${p.packId}:${p.face}:${p.viewerKey}`, e.at.getTime(), company)) return;
     if (this.overDailyCap(`box-${kind}:${p.packId}:${face.campaignId}`, e.at, company)) return;
+    if (this.overCampaignCeiling(e.companyId, face.campaignId, face.advertiserId, kind, e.at, company)) { this.uncount(`box-${kind}:${p.packId}:${face.campaignId}`, e.at, company); return; }
     const pct = this.premium(face.campaignId);
     const amount = Math.round((kind === 'scan' ? company.prices.perScan : company.prices.perArLaunch) * (1 + pct / 100));
     this.add(e, { packId: p.packId, campaignId: face.campaignId, debit: `receivable:advertiser:${face.advertiserId}`, credit: `revenue:${kind}`, amountCents: amount, kind, memo: `${face.advertiserName}, ${kind === 'scan' ? 'scan' : 'AR launch'} from the ${p.face} of a box` });
@@ -289,6 +312,47 @@ export class Ledger {
     if (this.dailyCount.size > 200_000) for (const k of this.dailyCount.keys()) if (!k.endsWith(`:${day}`)) this.dailyCount.delete(k);
     this.dailyCount.set(key, n + 1);
     return false;
+  }
+
+  /** Bottles and box sides printed with each ad (all time), for its daily ceiling. */
+  private printedPerCampaign = new Map<string, number>();
+  private countPrinted(campaignId: string) { this.printedPerCampaign.set(campaignId, (this.printedPerCampaign.get(campaignId) ?? 0) + 1); }
+  /** One ad's billed scans (or AR launches) a day, across every bottle and box side: past its ceiling, free. */
+  campaignCeiling(campaignId: string) { return Math.max(CAMPAIGN_BILLED_FLOOR_PER_DAY, (this.printedPerCampaign.get(campaignId) ?? 0) * CAMPAIGN_BILLED_PER_PRINTED_PER_DAY); }
+  private campaignCount = new Map<string, number>();
+  /** Engagements that would have been billed but were over their ad's ceiling: "<company>|<day>|<campaign>|<kind>" → how many. */
+  private ceilingHits = new Map<string, { companyId: string; day: string; campaignId: string; advertiserId: string; kind: 'scan' | 'ar'; ceiling: number; unbilled: number }>();
+  private overCampaignCeiling(companyId: string, campaignId: string, advertiserId: string, kind: 'scan' | 'ar', at: Date, company: CompanyConfig) {
+    const day = this.dayOf(at, company);
+    const key = `${kind}:${campaignId}:${day}`;
+    const n = this.campaignCount.get(key) ?? 0;
+    const ceiling = this.campaignCeiling(campaignId);
+    if (n < ceiling) {
+      if (this.campaignCount.size > 50_000) for (const k of this.campaignCount.keys()) if (!k.endsWith(`:${day}`)) this.campaignCount.delete(k);
+      this.campaignCount.set(key, n + 1);
+      return false;
+    }
+    const hk = `${companyId}|${day}|${campaignId}|${kind}`;
+    let hit = this.ceilingHits.get(hk);
+    if (!hit) {
+      if (this.ceilingHits.size > 10_000) for (const [k, h] of this.ceilingHits) if (h.day !== day) this.ceilingHits.delete(k);
+      this.ceilingHits.set(hk, (hit = { companyId, day, campaignId, advertiserId, kind, ceiling, unbilled: 0 }));
+    }
+    hit.unbilled++;
+    // Told once per ad, kind and day (the alerter also holds back repeats).
+    if (hit.unbilled === 1) { try { this.onCeiling({ ...hit }); } catch { /* an alert never stops billing */ } }
+    return true;
+  }
+  /** Ads that reached their daily ceiling (on a day, or every day still remembered), with how many engagements went unbilled. */
+  ceilingsHit(companyId: string, day?: string): CeilingHit[] {
+    return [...this.ceilingHits.values()].filter((h) => h.companyId === companyId && (!day || h.day === day)).map((h) => ({ ...h }));
+  }
+
+  /** Take back a bottle's count for an engagement that wasn't billed after all (its ad was over its ceiling). */
+  private uncount(spot: string, at: Date, company: CompanyConfig) {
+    const key = `${spot}:${this.dayOf(at, company)}`;
+    const n = this.dailyCount.get(key) ?? 0;
+    if (n > 0) this.dailyCount.set(key, n - 1);
   }
 
   private isRepeat(key: string, t: number, company: CompanyConfig) {
@@ -388,13 +452,20 @@ export class Ledger {
       // Today's billed scans and AR launches per ad, so the daily cap carries on after a restart.
       if ((l.kind === 'scan' || l.kind === 'ar') && l.campaignId && l.at.getTime() >= recent && (l.unitId || l.packId)) {
         const company = this.companies.get(l.companyId);
-        if (company) { const k = `${l.unitId ? l.kind : `box-${l.kind}`}:${l.unitId ?? l.packId}:${l.campaignId}:${this.dayOf(l.at, company)}`; this.dailyCount.set(k, (this.dailyCount.get(k) ?? 0) + 1); }
+        if (company) {
+          const day = this.dayOf(l.at, company);
+          const k = `${l.unitId ? l.kind : `box-${l.kind}`}:${l.unitId ?? l.packId}:${l.campaignId}:${day}`;
+          this.dailyCount.set(k, (this.dailyCount.get(k) ?? 0) + 1);
+          // And each ad's day across all its bottles, so its ceiling carries on too. A refund never reverses a scan.
+          const ck = `${l.kind}:${l.campaignId}:${day}`;
+          this.campaignCount.set(ck, (this.campaignCount.get(ck) ?? 0) + 1);
+        }
       }
       // Bottles whose gift a person directed: what they give later still goes where the person chose.
       if (l.kind === 'giving_redirect' && l.unitId) this.directedTo.set(l.unitId, l.credit.replace(/^payable:charity:/, ''));
     }
-    for (const p of input.printed) this.printedUnits.set(p.unitId, { placements: p.placements, locationId: p.locationId });
-    for (const b of input.boxes ?? []) this.printedBoxes.set(b.packId, b.faces);
+    for (const p of input.printed) { this.printedUnits.set(p.unitId, { placements: p.placements, locationId: p.locationId }); for (const x of p.placements) if (!x.isHouse) this.countPrinted(x.campaignId); }
+    for (const b of input.boxes ?? []) { this.printedBoxes.set(b.packId, b.faces); for (const f of b.faces) if (!f.isHouse) this.countPrinted(f.campaignId); }
     // Sales billed and refunded before the restart (in order, with the same rules as when they happened), so later
     // refunds still reverse exactly what's left of what was billed.
     if (input.saleEvents?.length) {

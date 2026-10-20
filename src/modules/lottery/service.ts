@@ -34,6 +34,8 @@ interface Engaged { at: number; kinds: Set<Via>; companyId: string }
 export class LotteryService {
   private engaged = new Map<string, Engaged>(); // "viewer|target" → what they did, recently
 
+  /** A phone's fingerprint (set by the app to the data layer's keyed one). */
+  tagOf: (viewerKey: string) => string = (k) => `vkf:${createHmac('sha256', 'lottery').update(k).digest('base64url').slice(0, 22)}`;
   constructor(private db: SqlClient, private platform: Platform, private clock: () => Date = () => new Date()) {
     const mark = (viewerKey: string, target: string, kind: Via, companyId: string) => {
       const k = `${viewerKey}|${target}`;
@@ -87,8 +89,11 @@ export class LotteryService {
     if (day && day < today) {
       const r = (await this.db.query<any>(`select * from lottery_days where company_id = $1 and day = $2`, [companyId, day])).rows[0];
       if (!r) throw new LotteryError('not_found', 'No game was played that day.', 404);
-      const draws = (await this.db.query<any>(`select draw_key, draw, status, prize_id from lottery_chances where company_id = $1 and day = $2 order by created_at`, [companyId, day])).rows;
-      out.day = { day, seed: r.seed, commitment: r.commitment, rules: typeof r.rules === 'string' ? JSON.parse(r.rules) : r.rules, draws: draws.map((d) => ({ drawKey: d.draw_key, draw: Number(d.draw), won: d.status !== 'none', status: d.status, prizeId: d.prize_id })) };
+      const draws = (await this.db.query<any>(`select draw_key, viewer_key, draw, status, prize_id from lottery_chances where company_id = $1 and day = $2 order by created_at`, [companyId, day])).rows;
+      // A draw made before fingerprints named the phone by its key: that key is never published (the draw can't then be
+      // re-checked by anyone but its player, who knows their own key).
+      const shown = (d: any) => (d.viewer_key && String(d.draw_key).includes(`:${d.viewer_key}:`) ? { drawKey: String(d.draw_key).split(`:${d.viewer_key}:`).join(`:${this.tagOf(d.viewer_key)}:`), keyHidden: true } : { drawKey: d.draw_key });
+      out.day = { day, seed: r.seed, commitment: r.commitment, rules: typeof r.rules === 'string' ? JSON.parse(r.rules) : r.rules, draws: draws.map((d) => ({ ...shown(d), draw: Number(d.draw), won: d.status !== 'none', status: d.status, prizeId: d.prize_id })) };
     }
     return out;
   }
@@ -115,7 +120,9 @@ export class LotteryService {
       if (already) return { playing: true as const, chanceId: already.id as string, ball: null, repeat: true, rules: publicRules(rules) };
       if (mine.n >= rules.chancesPerDay) return { playing: true as const, chanceId: null, ball: null, limit: true, rules: publicRules(rules) };
 
-      const drawKey = `${input.companyId}:${day}:${input.viewerKey}:${mine.n + 1}`;
+      // Draw keys are published once the day is over, so they name the phone by a fingerprint, never by its key (which
+      // alone opens its wallet).
+      const drawKey = `${input.companyId}:${day}:${this.tagOf(input.viewerKey)}:${mine.n + 1}`;
       const mac = createHmac('sha256', Buffer.from(seed, 'hex')).update(drawKey).digest();
       const num = (i: number) => mac.readUIntBE(i, 6) / 2 ** 48;
       const draw = num(0);

@@ -5,30 +5,54 @@ on:
   push:
     branches: [main]
   pull_request:
+# Least privilege: the token can only read the code. No job writes to the repository, packages or releases.
 permissions:
   contents: read
+# Every action is pinned to a full commit (a tag can be moved to other code); Dependabot keeps the pins current
+# (.github/dependabot.yml). See docs/SUPPLY-CHAIN.md.
 jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci # exactly the lockfile, with its integrity hashes
+      - name: Every installed package is signed by the registry
+        run: npm audit signatures
+      - run: npm run typecheck
+      - run: npx vitest run --reporter=default --reporter=github-actions # failures show as annotations
+      - name: Known security holes in what runs in production (moderate and above; allowed ones are listed with reasons)
+        run: node scripts/audit.mjs
+
+  browser:
+    # The main journeys in a real browser (test/browser/journeys.ts). Playwright isn't a dependency of the app, so
+    # it's installed here only; a failing journey fails the check.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run typecheck
-      - run: npx vitest run --reporter=default --reporter=github-actions # failures show as annotations
-      - name: Known security holes in what runs in production
-        run: npm audit --omit=dev --audit-level=high
+      - run: npm install --no-save playwright@1.48.2 && npx playwright install --with-deps chromium
+      - run: npm run test:browser
 
   image:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16.10 # TODO(digest): pin as postgres:16.10@sha256:… (docker buildx imagetools inspect postgres:16.10)
         env:
           POSTGRES_USER: fw
           POSTGRES_PASSWORD: fw
@@ -37,15 +61,20 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U fw" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          persist-credentials: false
           fetch-depth: 0 # the upgrade step builds the previous release too
       - name: Build the server image
         run: docker build --build-arg GIT_SHA=${{ github.sha }} -t freewater:${{ github.sha }} .
+      - name: Internal secrets for the production starts (production takes them only from the host's settings)
+        run: |
+          umask 077
+          for n in CODES SECOND_STEP LINKS WALLET VIEWER_TAGS; do echo "FW_SECRET_$n=hex:$(openssl rand -hex 32)"; done > fw-secrets.env
       - name: Start it the way production does, and wait until it's ready
         run: |
           docker run -d --name fw --network host \
-            -e NODE_ENV=production -e ALLOW_STANDINS=1 -e PORT=8080 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
+            --env-file fw-secrets.env -e NODE_ENV=production -e ALLOW_STANDINS=1 -e PORT=8080 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
             -e DATABASE_URL=postgres://fw:fw@localhost:5432/freewater \
             freewater:${{ github.sha }}
           for i in $(seq 1 60); do
@@ -55,14 +84,14 @@ jobs:
           echo "::error title=start::$(docker logs fw 2>&1 | tail -c 900 | tr '\n' ' ')"; exit 1
       - name: Production refuses the stand-ins unless told this is a rehearsal
         run: |
-          if docker run --rm --network host -e NODE_ENV=production -e PORT=8082 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
+          if docker run --rm --network host --env-file fw-secrets.env -e NODE_ENV=production -e PORT=8082 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
             -e DATABASE_URL=postgres://fw:fw@localhost:5432/freewater freewater:${{ github.sha }} > standins.txt 2>&1; then
             echo "::error title=stand-ins::started on stand-ins without ALLOW_STANDINS=1"; exit 1
           fi
           grep -q "ALLOW_STANDINS=1" standins.txt || { echo "::error title=stand-ins::$(tail -c 900 standins.txt | tr '\n' ' ')"; exit 1; }
       - name: A second copy must wait, not share the data
         run: |
-          if docker run --rm --network host -e NODE_ENV=production -e ALLOW_STANDINS=1 -e PORT=8081 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
+          if docker run --rm --network host --env-file fw-secrets.env -e NODE_ENV=production -e ALLOW_STANDINS=1 -e PORT=8081 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
             -e DATABASE_URL=postgres://fw:fw@localhost:5432/freewater -e LEASE_WAIT_MS=5000 \
             freewater:${{ github.sha }} > second.txt 2>&1; then
             echo "::error title=lease::a second server started alongside the first"; exit 1
@@ -84,7 +113,7 @@ jobs:
           code=$(docker inspect fw --format '{{.State.ExitCode}}')
           [ "$code" = "0" ] || { echo "::error title=stop::exited with $code"; exit 1; }
           # The next server takes over at once (the lease was let go, not left to lapse).
-          docker run -d --name fw2 --network host -e NODE_ENV=production -e ALLOW_STANDINS=1 -e PORT=8080 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
+          docker run -d --name fw2 --network host --env-file fw-secrets.env -e NODE_ENV=production -e ALLOW_STANDINS=1 -e PORT=8080 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
             -e DATABASE_URL=postgres://fw:fw@localhost:5432/freewater -e LEASE_WAIT_MS=10000 \
             freewater:${{ github.sha }}
           for i in $(seq 1 30); do
@@ -103,7 +132,7 @@ jobs:
           echo "Previous release: $prev"
           git worktree add /tmp/prev "$prev"
           docker build -t freewater:prev /tmp/prev
-          docker run --rm --network host postgres:16 psql postgres://fw:fw@localhost:5432/freewater -qc "create database upgrade"
+          docker run --rm --network host postgres:16.10 psql postgres://fw:fw@localhost:5432/freewater -qc "create database upgrade"
           # The previous release, filled with the sample data (not production mode: that refuses SEED_DEMO).
           docker run -d --name prev --network host -e NODE_ENV=development -e HOST=127.0.0.1 -e PORT=8090 -e SEED_DEMO=1 \
             -e DATABASE_URL=postgres://fw:fw@localhost:5432/upgrade freewater:prev
@@ -113,8 +142,12 @@ jobs:
             sleep 2
           done
           docker stop -t 50 prev
+          # Production refuses secrets that differ from those already in the database: move them to the settings as they are.
+          docker run --rm --network host postgres:16.10 psql postgres://fw:fw@localhost:5432/upgrade -Atc "select name, value from platform_secrets" \
+            | while IFS='|' read -r name value; do echo "FW_SECRET_$(echo "$name" | tr 'a-z' 'A-Z' | tr -c 'A-Z0-9\n' '_')=hex:$value"; done > upgrade-secrets.env
+          grep -v -F -f <(cut -d= -f1 upgrade-secrets.env | sed 's/$/=/') fw-secrets.env >> upgrade-secrets.env || true
           # This version on it: migrations apply over real data, and it starts.
-          docker run -d --name upg --network host -e NODE_ENV=production -e ALLOW_STANDINS=1 -e PORT=8091 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
+          docker run -d --name upg --network host --env-file upgrade-secrets.env -e NODE_ENV=production -e ALLOW_STANDINS=1 -e PORT=8091 -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
             -e DATABASE_URL=postgres://fw:fw@localhost:5432/upgrade freewater:${{ github.sha }}
           for i in $(seq 1 60); do
             if curl -sf http://localhost:8091/health/ready; then echo; break; fi
@@ -123,6 +156,44 @@ jobs:
           done
           docker stop -t 50 upg
           # And its books still check out.
-          docker run --rm --network host -e DATABASE_URL=postgres://fw:fw@localhost:5432/upgrade freewater:${{ github.sha }} \
+          docker run --rm --network host --env-file upgrade-secrets.env -e ALLOW_STANDINS=1 -e DATABASE_URL=postgres://fw:fw@localhost:5432/upgrade freewater:${{ github.sha }} \
             node --import tsx src/server/booksCheck.ts 2>&1 | tee books.txt \
             || { echo "::error title=upgrade::$(tail -c 900 books.txt | tr '\n' ' ')"; exit 1; }
+      - name: Outages - the database goes away briefly and for long, a server is killed, a server freezes
+        run: |
+          PG=${{ job.services.postgres.id }}
+          start() { docker run -d --name "$1" --network host --env-file fw-secrets.env -e NODE_ENV=production -e ALLOW_STANDINS=1 -e PORT="$2" -e TRUST_PROXY=1 -e PUBLIC_URL=https://ci.example.org \
+            -e DATABASE_URL=postgres://fw:fw@localhost:5432/freewater -e LEASE_WAIT_MS=90000 freewater:${{ github.sha }} >/dev/null; }
+          ready() { for i in $(seq 1 45); do curl -sf "http://localhost:$1/health/ready" >/dev/null && return 0; sleep 2; done; return 1; }
+          fail() { echo "::error title=outage::$1 $(docker logs "$2" 2>&1 | tail -c 700 | tr '\n' ' ')"; exit 1; }
+          running() { [ "$(docker inspect "$1" --format '{{.State.Running}}')" = true ]; }
+          pg_up() { for i in $(seq 1 30); do docker exec "$PG" pg_isready -U fw >/dev/null 2>&1 && return 0; sleep 1; done; return 1; }
+
+          # 1. A short database outage (a restart, a failover) is ridden out by the same server.
+          start o1 8080; ready 8080 || fail "didn't start" o1
+          docker stop -t 5 "$PG"; sleep 6
+          curl -sf http://localhost:8080/health/live >/dev/null || fail "not alive during a short outage" o1
+          docker start "$PG"; pg_up || fail "postgres didn't come back" o1
+          ready 8080 || fail "not ready again after a short outage" o1
+          running o1 || fail "stopped on a short outage" o1
+
+          # 2. A long one costs the server its claim to the data: it stops (code 2) rather than guess.
+          docker stop -t 5 "$PG"; sleep 35
+          running o1 && fail "kept running 35 s without the database" o1
+          [ "$(docker inspect o1 --format '{{.State.ExitCode}}')" = 2 ] || fail "exited with the wrong code" o1
+          docker start "$PG"; pg_up || fail "postgres didn't come back" o1
+          start o2 8080; ready 8080 || fail "the next server didn't start once the database was back" o2
+
+          # 3. Killed outright (no clean stop): the next server waits for the claim to lapse, then takes over.
+          docker kill o2 >/dev/null
+          start o3 8080; ready 8080 || fail "didn't take over after a killed server" o3
+
+          # 4. Frozen: another takes over; when the frozen one wakes it stops at once instead of writing.
+          docker pause o3
+          start o4 8081; ready 8081 || fail "didn't take over from a frozen server" o4
+          docker unpause o3; sleep 8
+          running o3 && fail "a frozen server kept running after waking" o3
+          ready 8081 || fail "the new server isn't ready after the old one woke" o4
+          docker stop -t 50 o4 >/dev/null
+          [ "$(docker inspect o4 --format '{{.State.ExitCode}}')" = 0 ] || fail "didn't stop cleanly" o4
+          echo "all outages handled"

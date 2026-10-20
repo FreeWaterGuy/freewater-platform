@@ -33,7 +33,7 @@ with a plain explanation.
 | `ALLOW_STANDINS=1` | Required in production for now: real payment, payout and email/text providers aren't wired yet, so the server runs on stand-ins (no real money moves, no message is sent) and refuses to start in production unless this says it's a staging rehearsal. It logs and alerts which stand-ins are active. Remove it once the real providers are in. |
 | `DATABASE_URL` | Postgres 13–17, e.g. `postgres://user:pass@host:5432/freewater?sslmode=require`. Use a managed one with automatic backups and point-in-time recovery. |
 | `PUBLIC_URL` | The https address of the site. It goes on every printed QR code and in every email. |
-| `TRUST_PROXY` | `1` (or the load balancer's address) so rate limits see each visitor's real address. |
+| `TRUST_PROXY` | Which proxies' word to take for a visitor's address. The number of proxies in front of the server (`1` for one load balancer, `2` with a CDN such as Cloudflare in front of it), or their addresses or ranges (`10.0.0.0/8`), or `none` when nothing is in front. Never `true`: every visitor writes `X-Forwarded-For` too, so trusting every hop lets anyone pose as any address and walk past sign-in limits, request limits and points-per-network rules. The server refuses `true`, `*`, `all` and ranges like `0.0.0.0/0`. With a hop count, make sure the server can only be reached through the load balancer (the usual set-up on hosting platforms); if it can also be reached directly, give the load balancer's addresses instead. |
 | `HOST`, `PORT` | `0.0.0.0` and `8080` in the container (already set in the image). |
 | `ALERT_WEBHOOK_URL` | A chat channel's incoming webhook (Slack, Discord, Google Chat). Alerts go there. |
 | `ALERT_EMAIL` | Also email alerts (once email is connected). |
@@ -41,7 +41,11 @@ with a plain explanation.
 | `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_ENDPOINT`, `S3_REGION`, `S3_PREFIX` | For `FILE_STORAGE=s3`. `S3_ENDPOINT` for R2, B2 or MinIO (e.g. `https://<account>.r2.cloudflarestorage.com`); leave it out for Amazon S3 and set `S3_REGION`. Give the key read, write, delete **and list** on the bucket (without list, a missing file looks like "access denied"). |
 | `FW_SPOOL_DIR` | Where changes waiting for the database are also kept. Default in the image: `/var/lib/freewater/spool`. Mount a volume. In production, an unwritable one stops the start. |
 | `DATABASE_POOL_SIZE` | Database connections (default 10). |
+| `DATABASE_MAX_GB` | The size of the database plan. An alert goes out at 70% and 85% of it. |
+| `PUBLIC_UPLOAD_MB_PER_NETWORK`, `PUBLIC_UPLOAD_MB_PER_DAY` | Ceilings on files sent by visitors without a key (feedback pictures and videos, offer receipts): per network (an IPv4 /24 or IPv6 /48) a day (default 100 MB), and for the whole platform a day (default 1 GB with files in the database, 10 GB with file storage). An alert goes out at 80% and when the ceiling is reached; past it, those uploads are refused until the next day (UTC) and everything else carries on. |
+| `FW_SECRET_CODES`, `FW_SECRET_SECOND_STEP`, `FW_SECRET_LINKS`, `FW_SECRET_WALLET`, `FW_SECRET_VIEWER_TAGS` | Required in production: the secrets that sign printed codes, seal second-step seeds, fingerprint links and networks, and fingerprint phones' keys in the activity log and team screens. Each 32+ random characters, or `hex:` and 64 hex digits (`node -e "console.log('hex:'+require('crypto').randomBytes(32).toString('hex'))"`). **A database that ran before already has them in `platform_secrets`; every printed code was signed with those, so set each to `hex:<its value>` from there (the server refuses a different one), then delete the rows.** |
 | `BACKUP_KEY` | 32 random bytes, base64. Make with `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`. **Keep a copy away from the server; without it no backup can be read.** |
+| `MACHINE_UPDATE_SIGNING_KEY` | The Ed25519 key that signs Model 6 software updates. Make the pair with `npm run key:machine-updates`; this half lives only here, the public half goes in each machine as `FW_UPDATE_PUBLIC_KEY`. Without it, software updates are refused. See `docs/SUPPLY-CHAIN.md`. |
 | `BACKUP_S3_BUCKET`, `BACKUP_S3_ACCESS_KEY_ID`, `BACKUP_S3_SECRET_ACCESS_KEY`, `BACKUP_S3_ENDPOINT`, `BACKUP_S3_REGION` | Where backups go: a different bucket (ideally a different account) from the files. Turn on object lock / a 30-day retention rule so they can't be deleted early. |
 | `RESTORE_TEST_URL` | A spare, empty database the weekly restore check may wipe and fill. **Never the real one.** |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `ANTHROPIC_PERSONALIZE_MODEL` | Claude, for the agents, ad assistant, designer, video writer and team assistant. Without it the built-in rules run. |
@@ -71,8 +75,12 @@ Never in production: `SEED_DEMO=1`, `ECHO_CODES=1`, `ALLOW_PRIVATE_WEBHOOKS=1`. 
 docker build -t freewater .
 docker run --env-file .env freewater npm run setup -- --owner you@freewater.io   # once, on the empty database
 docker volume create freewater-spool                                               # once: keeps waiting changes across restarts and deploys
-docker run -d -p 8080:8080 --env-file .env -v freewater-spool:/var/lib/freewater --name freewater freewater
+docker run -d --restart unless-stopped -p 8080:8080 --env-file .env -v freewater-spool:/var/lib/freewater --name freewater freewater
 ```
+
+**Restart it automatically** (`--restart unless-stopped`, or the hosting platform's "restart on failure"). On purpose,
+the server stops itself when it can't be sure it's the only one owning the data (a long database outage, a freeze):
+the restart is what brings it back once the database is.
 
 Always run the server with that same named volume (on hosting platforms: a persistent disk mounted at
 `/var/lib/freewater`), including the new copy during a deploy.
@@ -89,8 +97,11 @@ with the owner's email, turn on the second sign-in step, and add team, machines 
 - `GET /v1/platform/status` (platform key): the background jobs, saving, which server owns the data, memory,
   recent alerts.
 - Alerts go out for: a change that couldn't be saved, a job failing (and again when it recovers), a server error,
-  memory at 70% and 85%, the server losing its claim to the data, a crash. The same alert repeats at most every
-  30 minutes.
+  memory at 70% and 85%, the database at 70% and 85% of `DATABASE_MAX_GB`, less than 2 GB (then 0.5 GB) free on the
+  spool's disk, visitors' uploads at 80% of the day's ceiling and when it's reached, the server losing its claim to
+  the data, a crash, our own backups being off, and an older version running on a newer database (a rollback). The
+  same alert repeats at most every 30 minutes.
+- What to do about each, step by step: `docs/RUNBOOKS.md`.
 
 ## If changes are waiting (the database refusing them)
 
@@ -108,7 +119,9 @@ memory exactly. While changes wait:
   **mount a volume there**). If the server stops before the database is back, the next server writes them first,
   before it reads anything: exactly the ones past what was already saved (every batch records how far it got). If a
   different server has written since, the spool is not applied; it's renamed `….stale-<time>` for a person to look
-  at, and the server starts normally.
+  at, and the server starts normally. On a database restored with `npm run backup -- restore` (it still carries the
+  restore's mark), the spool is set aside as `….restored-<time>` with an alert: those changes would land after a gap.
+  After a provider's point-in-time restore, start once with `FW_SPOOL_SKIP=1` (docs/RUNBOOKS.md).
 - An outage longer than about 18 seconds also costs the server its claim to the data, so it stops; whichever server
   starts next writes the spool. That's expected during a long database failover.
 
@@ -122,18 +135,25 @@ decision start once with `FW_SPOOL_SKIP=1` to set it aside unapplied (`….skipp
 
 ## Background jobs
 
-| Job | How often | What it does |
-|---|---|---|
-| `webhooks` | 3 s | Sends webhooks to companies' systems, with retries. |
-| `videos` | 10 s | Checks on footage being made. |
-| `books-and-agents` | hourly | Closes any month that's due, measures agents' changes, reads every agent's standing, shares out the AI fund, security review. |
-| `fingerprints` | hourly | Publishes each finished day's books fingerprint. |
-| `memory` | 1 min | Alerts when memory is filling. |
-| `data-purge` | daily | Deletes data older than each company keeps. |
-| `backup` | daily | Our own encrypted copy of the database (when `BACKUP_KEY` and a backup bucket are set). |
-| `restore-check` | weekly | Restores the latest backup into `RESTORE_TEST_URL` and checks its books. |
+| Job | How often | What it does | Safe to run again? |
+|---|---|---|---|
+| `webhooks` | 3 s | Sends webhooks to companies' systems, with retries. | Yes: each delivery is tracked. |
+| `fleet-sweep` | 15 s | Opens an "offline" problem for Model 6 machines that stopped calling in; lets go of kept offline labels past their time. | Yes. |
+| `videos` | 10 s | Checks on footage being made. | Yes. |
+| `books-and-agents` | hourly | Closes any month that's due, measures agents' changes, reads every agent's standing, shares out the AI fund, security review. Company by company. | Yes: a month closes once, a day's share-out once (crash-tested). |
+| `agent-exams` | daily | Any agent whose model hasn't passed the current test takes it. | Yes. |
+| `game-photos` | 6 hours | Finds photos of the real products for the games' cards, a few at a time. | Yes. |
+| `offers` | hourly | Closes brand-offer claims with no receipt after 14 days (points go back); pays approved ones that were held. | Yes: each claim once. |
+| `wallet-seals` | 10 min | Seals each finished hour of the wallet journal. | Yes: an hour is sealed once. |
+| `chain-check` | daily | Checks the books against the chain; pauses on a mismatch. | Yes. |
+| `fingerprints` | hourly | Publishes each finished day's books fingerprint. | Yes: a day is published once. |
+| `memory` | 1 min | Alerts when memory is filling. Runs while paused. | Yes. |
+| `data-purge` | daily | Deletes data older than each company keeps. | Yes. |
+| `capacity` | 10 min | Alerts when the database or the spool's disk is filling. Runs while paused. | Yes. |
+| `backup` | daily | Our own encrypted copy of the database (when `BACKUP_KEY` and a backup bucket are set). Runs while paused. | Yes: each copy is new. |
+| `restore-check` | weekly | Restores the latest backup into `RESTORE_TEST_URL` and checks its books. | Yes: only ever wipes the spare. |
 
-Each job remembers when it last ran and whether it worked. After a restart, one that worked waits out its interval;
+Each job (except the minute-by-minute watches) remembers when it last ran and whether it worked. After a restart, one that worked waits out its interval;
 one that failed or was interrupted is tried again soon (after 1 minute, then 2, 4, 8… up to its interval). A job
 never runs twice at once: one past its time limit is reported as stuck and still counts as running until it ends.
 Failures alert, and so does recovery. Run one now with `POST /v1/platform/jobs/<name>/run`.
@@ -162,8 +182,69 @@ its copy in the database is cleared; stopping halfway is safe. Then restart with
 ## Deploying a new version
 
 The checks on GitHub (types, every test, known security holes, and the image started against a real Postgres, a
-second copy refused, a backup restored) must pass. Then start the new image and stop the old one (`docker stop -t 50`
-gives it time to finish requests, save everything and let go). The new one starts within about a second.
+second copy refused, a backup restored, the previous release's database migrated, and outages ridden out: the
+database away for a few seconds and for longer, a server killed, a server frozen) must pass. Then start the new image
+and stop the old one (`docker stop -t 50` gives it time to finish requests, save everything and let go). The new one
+starts within about a second.
+
+**Rolling back** is starting the previous image the same way. Database changes only ever add tables and columns, so
+the previous version runs on the newer database; it says so in an alert ("an older version is running on a newer
+database"). Never restore the database to roll back code: that loses everything since the backup. Fix forward.
+
+A new migration that changes the database's own rules (triggers, checks, unique indexes) is also run on a real
+Postgres 16 over data the old version wrote: fill a database with `test/db-seed-postgres.ts` on the old code, then run
+`test/db-postgres.test.ts` on the new, and the `test/db-*.test.ts` files with `FW_TEST_PG_ADMIN_URL` set (the steps
+are at the top of `test/db-seed-postgres.ts`). The journals refuse edits and deletes from the app's own database
+user too; fixing a past entry is always a correcting entry. Indexes are built inside the migration, which holds up
+writes while it runs (about 7 seconds per million rows).
+
+### Two database users: one owns the tables, the app only uses them
+
+The journals' rules (append-only ledger and events, the wallet journal, settings history, and the other triggers) are
+enforced by triggers. Postgres lets the **owner** of a table drop or disable its triggers, so if the server connects
+as the user that owns the tables, anyone who takes over the server can switch those rules off. In production, keep
+the two apart:
+
+- **`fw_owner`** owns the database and every table. It runs the migrations, and is used for nothing else (not by the
+  server, not by people day to day). Keep its password in your secrets manager, not in the server's settings.
+- **`fw_app`** is what `DATABASE_URL` uses. It can read and write rows, but owns no table, so it can't drop, disable or
+  replace a trigger (`must be owner of table`), nor alter or drop a table.
+
+Set it up once, as the managed database's admin user (`psql "$ADMIN_URL"`):
+
+```sql
+create role fw_owner login password '…';
+create role fw_app login password '…';
+create database freewater owner fw_owner;
+\c freewater
+revoke create on schema public from public;
+grant usage, create on schema public to fw_owner;
+-- The server runs `create table if not exists` for schema_migrations and instance_lease when it starts. Those
+-- already exist (see below), but Postgres checks the right to create before it checks they exist. CREATE here lets
+-- fw_app make new tables of its own; it never gives it any power over fw_owner's tables or their triggers.
+grant usage, create on schema public to fw_app;
+alter default privileges for role fw_owner in schema public grant select, insert, update, delete on tables to fw_app;
+alter default privileges for role fw_owner in schema public grant usage, select on sequences to fw_app;
+```
+
+Then, **before each deploy** (and before the very first start), run the migrations as `fw_owner` from the new image,
+and only then start the server as `fw_app`:
+
+```sh
+docker run --rm -e OWNER_URL="postgres://fw_owner:…@host:5432/freewater?sslmode=require" <new image> \
+  node --import tsx --input-type=module -e "const {createPostgresClient}=await import('./src/db/postgres.ts');const {migrate}=await import('./src/db/migrations.ts');const db=createPostgresClient(process.env.OWNER_URL);console.log('migrated:',await migrate(db));await db.query('create table if not exists instance_lease (name text primary key, holder text not null, expires_at timestamptz not null, started_at timestamptz not null default now())');await db.close()"
+# then, the first time and after any migration that adds tables made before the default privileges above:
+psql "$OWNER_URL" -c "grant select, insert, update, delete on all tables in schema public to fw_app" \
+                  -c "grant usage, select on all sequences in schema public to fw_app"
+```
+
+Migrations only ever add, so running them while the old version still serves is safe (the same rule as rolling back).
+When the server starts as `fw_app` it finds nothing left to migrate and carries on; if a migration was missed it stops
+with a permission error rather than half-applying it, so run the step above and start it again. Backups and restores
+by hand (`npm run backup`, below) are run with `DATABASE_URL` set to the owner's address, since only the owner can
+dump and recreate the triggers.
+`fw.test_reset`, which lets a test-stage reset delete journal rows, still works as `fw_app`: the triggers allow it only
+inside that reset's own transaction and only while the company is still testing.
 
 ## Load test
 

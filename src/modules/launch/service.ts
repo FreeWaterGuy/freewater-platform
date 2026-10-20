@@ -17,6 +17,9 @@ export class LaunchService {
   constructor(private db: SqlClient, private platform: Platform, private data: DataService, private games: GamesService, private wallet: WalletService, private chain: ChainService,
     private clock: () => Date = () => new Date(), private random: () => number = Math.random) {}
 
+  /** Set by the app: saves events still on their way to the database (the reset reads the gifts from there). */
+  flush?: () => Promise<void>;
+
   private testOnly(companyId: string) {
     if (this.chain.stage(companyId) !== 'test') throw new LaunchError('live', 'This only works before going live.', 409);
   }
@@ -24,16 +27,25 @@ export class LaunchService {
   /** Wipe everything the test stage made: wallets, game answers, offer claims, seals, the test chain, and every bot. */
   async reset(companyId: string, person: string) {
     this.testOnly(companyId);
+    await this.flush?.();
     const counts: Record<string, number> = {};
+    let gifts: { claimId: string; sponsor: string; cause: string; cents: number }[] = [];
     const run = async (name: string, sql: string, args: unknown[] = [companyId]) => { const r: any = await this.db.query(sql, args); counts[name] = (counts[name] ?? 0) + Number(r.rowCount ?? 0); };
     await this.db.transaction(async (tx) => {
       const q = async (name: string, sql: string, args: unknown[] = [companyId]) => { const r: any = await tx.query(sql, args); counts[name] = (counts[name] ?? 0) + Number(r.rowCount ?? 0); };
+      // The journals refuse deletes (migration 052) except inside this transaction, and only while still testing.
+      await tx.query(`select set_config('fw.test_reset', $1, true)`, [companyId]);
       // A mint or conversion under way may reach the chain after the wipe, leaving the books and the chain apart. Locked
       // here, so one can't start meanwhile (its claim waits for this and then finds it gone).
       const busy = (await tx.query<any>(`select status from chain_actions where company_id = $1 and kind in ('mint','convert') and status in ('approved','running','recording','signing','confirming') for update`, [companyId])).rows;
       if (busy.some((r) => r.status !== 'approved')) {
         throw new LaunchError('minting', 'A mint or conversion is under way. Let it finish (or cancel it) before resetting.', 409);
       }
+      // The books are append-only, so the gifts offers made to causes from a brand's reserve while testing can't be
+      // deleted from them; but the wallet's reserve is put back below. So each gift still standing in the books is
+      // undone there with a new line (after this transaction), and the books and the wallet agree again.
+      gifts = (await tx.query<any>(`select e.payload from events e where e.company_id = $1 and e.type = 'offer.cause_given' and not exists (select 1 from events u where u.company_id = e.company_id and u.type = 'offer.cause_undone' and u.idempotency_key = 'reset:' || e.idempotency_key)`, [companyId])).rows
+        .map((r) => (typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload));
       await q('offer claims', `delete from offer_claims where company_id = $1`);
       // Money a brand really sent into a reserve stays (and anything correcting it); everything people earned, got or
       // spent while testing goes. Balances are then rebuilt from what's left, so the books still add up.
@@ -57,6 +69,8 @@ export class LaunchService {
     for (const [name, table, col] of [['bot consents', 'data_consents', 'subject'], ['bot places', 'person_places', 'subject'], ['bot details', 'person_details', 'subject'], ['bot locations', 'precise_locations', 'subject'], ['bot interactions', 'interactions', 'viewer_key'], ['bot choices', 'choices', 'person'], ['bot activity', 'activity', 'actor_id']] as const) {
       await run(name, `delete from ${table} where company_id = $1 and ${col} like 'bot\\_%'`).catch(() => {});
     }
+    for (const g of gifts) if (this.platform.bus.publish('offer.cause_undone', companyId, { claimId: g.claimId, sponsor: g.sponsor, cause: g.cause, cents: Number(g.cents), by: person }, `reset:offer:${g.claimId}`)) counts['test gifts undone in the books'] = (counts['test gifts undone in the books'] ?? 0) + 1;
+    await this.flush?.();
     await this.chain.resetBaseline(companyId);
     await this.db.query(`insert into launch_resets (company_id, at, by, counts) values ($1,$2,$3,$4)`, [companyId, this.clock().toISOString(), person, JSON.stringify(counts)]);
     return { reset: true, counts };

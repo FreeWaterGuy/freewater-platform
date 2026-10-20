@@ -52,14 +52,16 @@ export function operationsRoutes(app: App, server: FastifyInstance, route: (r: R
       lease: runtime.lease ? { held: runtime.lease.held, holder: runtime.lease.holder, current: await runtime.lease.current().catch(() => null) } : null,
       jobs: runtime.jobs?.status() ?? [],
       alerts: runtime.alerts.recent,
+      uploads: runtime.uploads?.status() ?? null,
       memoryMb: { rss: Math.round(mem.rss / 1048576), heap: Math.round(mem.heapUsed / 1048576), heapLimit: Math.round(heap.heap_size_limit / 1048576), bottlesInMemory: app.platform.units.size, ledgerLinesInMemory: app.platform.ledger.entries.length },
       node: process.version,
     } };
   } });
 
-  route({ method: 'POST', url: '/v1/platform/persistence/skip-stuck', scope: 'platform', summary: 'A person’s decision, only when one change keeps being refused while the database itself answers (a bug): move it aside, kept word for word, so the rest can be saved. Fix the bug, then put it back by hand.', handler: async () => {
+  route({ method: 'POST', url: '/v1/platform/persistence/skip-stuck', scope: 'platform', summary: 'A person’s decision, only when one change keeps being refused while the database itself answers (a bug): move it aside, kept word for word, so the rest can be saved. Fix the bug, then put it back by hand.', handler: async (_req, key) => {
+    if (!key?.userId) throw new ApiError(403, 'person_needed', 'Moving a change aside is a person’s decision: sign in, not a service key.');
     const r = await persistence.skipStuck();
-    if (r.skipped) void runtime.alerts.alert('persistence-skip', 'warning', `A stuck change (${r.skipped}) was moved aside by a person`, 'It is kept word for word in persistence_failures. Restart the server once everything else is saved, so memory matches the database.');
+    if (r.skipped) void runtime.alerts.alert('persistence-skip', 'warning', `A stuck change (${r.skipped}) was moved aside by a person (user:${key.userId})`, 'It is kept word for word in persistence_failures. Restart the server once everything else is saved, so memory matches the database.');
     return { body: { ...r, paused: !!persistence.problem } };
   } });
 

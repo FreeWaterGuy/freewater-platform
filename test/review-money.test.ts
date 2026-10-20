@@ -32,7 +32,10 @@ const call = async (method: string, url: string, token?: string, payload?: unkno
 async function signIn(email: string) {
   await call('POST', '/v1/auth/start', undefined, { companyId: 'freewater', channel: 'email', to: email });
   const code = /(\d{6})/.exec((app.messenger as TestOutbox).lastTo(email)!.text)![1];
-  return (await call('POST', '/v1/auth/verify', undefined, { companyId: 'freewater', channel: 'email', to: email, code })).body.token as string;
+  const user = (await call('POST', '/v1/auth/verify', undefined, { companyId: 'freewater', channel: 'email', to: email, code })).body.user;
+  // Owners and finance people approve only from a sign-in that passed the second step (threat model R4).
+  // Test-only shortcut: a session that passed it (setting the app up never marks the sign-in it was set up from).
+  return app.accounts.createSession(user.id, { secondStep: true });
 }
 const approveTwice = async (id: string) => { await app.chain.approve('freewater', id, 'user:amy'); await app.chain.approve('freewater', id, 'user:raj'); };
 const status = async (id: string) => (await db.query<any>(`select status from chain_actions where id = $1`, [id])).rows[0].status as string;
@@ -98,6 +101,11 @@ describe('1. charity payouts', () => {
 });
 
 describe('3 and 9. an old unpause can’t undo a later pause', () => {
+  // The database now refuses moving a cancelled action back (migration 052); these stage a row left from before that.
+  const asBefore052 = async (sql: string, args: unknown[]) => {
+    await db.query(`alter table chain_actions disable trigger chain_actions_record`);
+    try { await db.query(sql, args); } finally { await db.query(`alter table chain_actions enable trigger chain_actions_record`); }
+  };
   it('pausing cancels unpauses on their way, and run refuses one proposed before the latest pause', async () => {
     await app.chain.pause('freewater', 'user:josh', 'first pause');
     const u = await app.chain.propose('freewater', 'unpause', {}, 'user:josh');
@@ -108,7 +116,7 @@ describe('3 and 9. an old unpause can’t undo a later pause', () => {
     now += 49 * 3600_000;
     await expect(app.chain.run('freewater', u.id, 'user:josh')).rejects.toMatchObject({ code: 'not_approved' });
     // Even one left approved (from before this fix) is refused.
-    await db.query(`update chain_actions set status = 'approved' where id = $1`, [u.id]);
+    await asBefore052(`update chain_actions set status = 'approved' where id = $1`, [u.id]);
     await expect(app.chain.run('freewater', u.id, 'user:josh')).rejects.toMatchObject({ code: 'paused_after' });
     expect(await app.chain.isPaused('freewater')).toBe(true);
   });
@@ -118,7 +126,7 @@ describe('3 and 9. an old unpause can’t undo a later pause', () => {
     await approveTwice(u.id);
     now += 60_000;
     await app.chain.pause('freewater', 'user:amy', 'paused again');
-    await db.query(`update chain_actions set status = 'approved' where id = $1`, [u.id]); // as if kept from before
+    await asBefore052(`update chain_actions set status = 'approved' where id = $1`, [u.id]); // as if kept from before
     await app.launch.reset('freewater', 'user:josh');
     now += 49 * 3600_000;
     await expect(app.chain.run('freewater', u.id, 'user:josh')).rejects.toMatchObject({ code: 'paused_after' });

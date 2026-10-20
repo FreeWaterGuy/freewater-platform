@@ -65,7 +65,8 @@ describe('the prize game', () => {
     await call('POST', '/v1/public/scans', undefined, { unitId, slot, viewerKey: 'viewer-a0000000', experienceLoaded: true });
     const first = (await chance(target, 'viewer-a0000000')).json();
     expect(first.chanceId).toMatch(/^lc_/);
-    expect(first.drawKey).toMatch(/^freewater:2026-10-19:viewer-a0000000:1$/);
+    // Draw keys are published after the day: the phone is named by its fingerprint, never its key (privacy review, R15).
+    expect(first.drawKey).toBe(`freewater:2026-10-19:${app.data.viewerTag('viewer-a0000000')}:1`);
     expect((await chance(target, 'viewer-a0000000')).json()).toMatchObject({ chanceId: first.chanceId, repeat: true, ball: null }); // same ad again: no new chance
     // Watching its video is another chance, but only once the video really played.
     expect((await chance(target, 'viewer-a0000000', 'video')).statusCode).toBe(409);

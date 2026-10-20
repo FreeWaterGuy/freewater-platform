@@ -7,10 +7,12 @@
   "scripts": {
     "demo": "tsx src/demo/run.ts",
     "test": "vitest run",
+    "test:browser": "tsx test/browser/journeys.ts",
     "typecheck": "tsc --noEmit",
     "demo:packs": "tsx src/demo/night.ts",
     "start": "node --import tsx src/server/main.ts",
     "key": "tsx src/server/keys.ts",
+    "key:machine-updates": "tsx src/server/updateKey.ts",
     "demo:scan": "tsx src/demo/scanDemo.ts",
     "demo:scan-preview": "tsx src/demo/scanPreview.ts",
     "demo:app": "tsx src/demo/appDemo.ts",
@@ -57,5 +59,10 @@
     "@types/three": "0.163.0",
     "typescript": "^5.6.3",
     "vitest": "^4.1.11"
+  },
+  "overrides": {
+    "jayson": {
+      "uuid": "^11.1.1"
+    }
   }
 }

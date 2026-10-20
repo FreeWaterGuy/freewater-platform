@@ -7,6 +7,7 @@ import type { CompanyConfig, Location } from '../../core/types';
 import { newId } from '../../core/ids';
 import { givingLine } from '../print/renderer';
 import { MachinePresence } from '../machines/presence';
+import { PrintCounter, printLimits } from './printCap';
 
 export class FleetError extends Error {
   constructor(public code: string, message: string, public status = 400) {
@@ -76,6 +77,10 @@ export class FleetService {
   private waiters = new Map<string, (() => void)[]>();
   private timer: NodeJS.Timeout | null = null;
   readonly presence: MachinePresence;
+  /** What each machine's key printed, or was handed to print, today: one count for orders and offline labels. */
+  readonly prints: PrintCounter;
+  /** Set by the app: tells a person (the platform's alerts) when a machine goes past its limits. */
+  alert?: (key: string, title: string, detail: string) => void;
 
   constructor(
     private db: SqlClient,
@@ -85,6 +90,15 @@ export class FleetService {
     private opts: { claimTimeoutMs?: number; finishTimeoutMs?: number; offlineAfterMs?: number; bufferHours?: number } = {},
   ) {
     this.presence = new MachinePresence(db, () => platform.bus.now());
+    // Today's count starts from the bottles already made at this machine today, so a restart can't reset the cap.
+    this.prints = new PrintCounter(() => platform.bus.now().getTime(), (locationId, day) => {
+      const keys: string[] = [];
+      for (const u of platform.units.values()) {
+        if (u.locationId !== locationId || !u.orderId || !u.createdAt?.startsWith(day)) continue;
+        keys.push(u.orderId.startsWith('buffer:') ? `buffer:${u.id}` : u.orderId);
+      }
+      return keys;
+    });
   }
 
   private now() { return this.platform.bus.now(); }
@@ -422,39 +436,87 @@ export class FleetService {
     const l = this.location(locationId);
     const s = this.settings(l.companyId!);
     if (!s.offlineWalkUp) return { labels: [], target: 0 };
-    const held = Number((await this.db.query<{ n: number }>(`select count(*)::int as n from machine_buffer where location_id = $1 and status = 'held' and expires_at > $2`, [locationId, this.now().toISOString()])).rows[0]!.n);
-    const n = Math.max(0, Math.min(want, s.bufferSize - held));
+    const now = this.now();
+    const held = Number((await this.db.query<{ n: number }>(`select count(*)::int as n from machine_buffer where location_id = $1 and status = 'held' and expires_at > $2`, [locationId, now.toISOString()])).rows[0]!.n);
+    // Every label handed out could become a billed bottle, so it counts toward the machine's daily print cap with its
+    // orders: a stolen machine key can't print past the cap by filling and reporting offline labels instead.
+    const { perDay } = printLimits(this.platform.companies.get(l.companyId!)?.machines);
+    const dayStart = `${now.toISOString().slice(0, 10)}T00:00:00.000Z`;
+    const handedToday = Number((await this.db.query<{ n: number }>(`select count(*)::int as n from machine_buffer where location_id = $1 and created_at >= $2`, [locationId, dayStart])).rows[0]!.n);
+    const leftToday = Math.max(0, perDay - this.prints.ordersToday(locationId) - Math.max(handedToday, this.prints.bufferToday(locationId)));
+    const gap = Math.max(0, Math.min(want, s.bufferSize - held));
+    const n = Math.min(gap, leftToday);
+    if (n < gap) this.alert?.(`print-cap:${locationId}:buffer`, `Machine ${locationId} hit its print limit (${perDay} bottles a day)`, `${locationId} asked for more labels for offline use than its daily print limit leaves (${gap} asked, ${n} given). If the machine isn't that busy, its key may be stolen: revoke it in the console.`);
     const product = (l.products?.[0] ? l.products[0] : this.platform.standardProduct(l.companyId).id);
     const labels = [];
-    const expires = new Date(this.now().getTime() + (this.opts.bufferHours ?? 24) * 3600_000);
+    const expires = new Date(now.getTime() + (this.opts.bufferHours ?? 24) * 3600_000);
     for (let i = 0; i < n; i++) {
       const { unit, label } = await this.platform.prepare({ companyId: l.companyId!, locationId, productId: product, orderId: `buffer:${locationId}:${newId('b')}` });
       let svg: string;
       try { svg = await this.platform.forPrint(label.svg); } catch { this.platform.abandonPrepared(unit.id, 'artwork_missing'); continue; }
       await this.db.query(`insert into machine_buffer (unit_id, location_id, company_id, status, created_at, expires_at) values ($1,$2,$3,'held',$4,$5)`, [unit.id, locationId, l.companyId, this.now().toISOString(), expires.toISOString()]);
+      this.prints.addBuffer(locationId, unit.id);
       labels.push({ unitId: unit.id, svg, widthIn: label.widthIn, heightIn: label.heightIn, expiresAt: expires.toISOString(), countdownAd: this.countdownAd(unit.id) });
     }
     await this.flush();
     return { labels, target: s.bufferSize };
   }
 
-  /** After the internet comes back: which prepared labels were printed (billed now) and which were spoiled (let go). */
+  /**
+   * After the internet comes back: which prepared labels were printed (billed now) and which were spoiled (let go).
+   *
+   * The machine keeps to its offline bottles an hour itself, but a stolen key could say anything, so the server holds
+   * it to the same rule: each reported time is taken as no earlier than the label was handed out (nor later than
+   * now), and a bottle that would put more than the limit in any hour is refused: let go unbilled, and an alert raised.
+   */
   async offlineReport(locationId: string, items: { unitId: string; status: 'dispensed' | 'failed'; at: string; reason?: string }[]) {
-    let billed = 0, released = 0, ignored = 0;
+    const l = this.location(locationId);
+    const { offlinePerHour } = printLimits(this.platform.companies.get(l.companyId!)?.machines);
+    const nowMs = this.now().getTime();
+    const HOUR = 3600_000;
+    let billed = 0, released = 0, ignored = 0, refused = 0;
+    const rows = new Map<string, { status: string; created: number }>();
     for (const it of items) {
-      const row = (await this.db.query<any>(`select status from machine_buffer where unit_id = $1 and location_id = $2`, [it.unitId, locationId])).rows[0];
-      if (!row || row.status !== 'held') { ignored++; continue; }
-      if (it.status === 'dispensed' && this.platform.confirmPrepared(it.unitId, `offline:${it.unitId}`)) {
-        billed++;
-        await this.db.query(`update machine_buffer set status = 'used', used_at = $2 where unit_id = $1`, [it.unitId, it.at]);
-      } else {
-        this.platform.abandonPrepared(it.unitId, it.reason ?? 'Spoiled while offline');
-        released++;
-        await this.db.query(`update machine_buffer set status = 'released' where unit_id = $1`, [it.unitId]);
-      }
+      const row = (await this.db.query<any>(`select status, created_at from machine_buffer where unit_id = $1 and location_id = $2`, [it.unitId, locationId])).rows[0];
+      if (row) rows.set(it.unitId, { status: row.status, created: new Date(row.created_at).getTime() });
     }
+    const when = (it: { unitId: string; at: string }) => {
+      const created = rows.get(it.unitId)?.created ?? nowMs;
+      const said = Date.parse(it.at);
+      return Math.min(nowMs, Math.max(created, Number.isFinite(said) ? said : nowMs));
+    };
+    // Oldest first, so the bottles kept are the ones given out first.
+    const ordered = [...items].sort((a, b) => when(a) - when(b));
+    const seen = new Set<string>();
+    for (const it of ordered) {
+      const row = rows.get(it.unitId);
+      if (!row || row.status !== 'held' || seen.has(it.unitId)) { ignored++; continue; }
+      seen.add(it.unitId);
+      if (it.status === 'dispensed') {
+        const at = when(it);
+        // Offline bottles already accepted from this machine near that time, with this one: no hour may hold more than the limit.
+        const near = (await this.db.query<{ used_at: string }>(`select used_at from machine_buffer where location_id = $1 and status = 'used' and used_at > $2 and used_at < $3`, [locationId, new Date(at - HOUR).toISOString(), new Date(at + HOUR).toISOString()])).rows.map((r) => new Date(r.used_at).getTime());
+        const times = [...near, at].sort((a, b) => a - b);
+        const tooMany = times.some((x) => times.filter((y) => y > x - HOUR && y <= x).length > offlinePerHour);
+        if (tooMany) {
+          this.platform.abandonPrepared(it.unitId, 'Over the machine’s offline bottles an hour');
+          await this.db.query(`update machine_buffer set status = 'released' where unit_id = $1`, [it.unitId]);
+          refused++;
+          continue;
+        }
+        if (this.platform.confirmPrepared(it.unitId, `offline:${it.unitId}`)) {
+          billed++;
+          await this.db.query(`update machine_buffer set status = 'used', used_at = $2 where unit_id = $1`, [it.unitId, new Date(at).toISOString()]);
+          continue;
+        }
+      }
+      this.platform.abandonPrepared(it.unitId, it.reason ?? 'Spoiled while offline');
+      released++;
+      await this.db.query(`update machine_buffer set status = 'released' where unit_id = $1`, [it.unitId]);
+    }
+    if (refused) this.alert?.(`offline-cap:${locationId}`, `Machine ${locationId} reported more offline bottles than its limit`, `${refused} of ${items.length} reported offline bottles would have passed ${offlinePerHour} an hour. They were not billed. If the machine wasn't really offline and busy, its key may be stolen: revoke it in the console.`);
     await this.flush();
-    return { billed, released, ignored };
+    return { billed, released, ignored, refused };
   }
 
   // ---------- what ops sees ----------

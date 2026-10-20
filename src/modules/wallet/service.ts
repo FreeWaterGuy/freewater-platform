@@ -120,11 +120,34 @@ export class WalletService {
   private async fundOnce(companyId: string, sponsor: string, cents: number, by: string, ref: string) {
     if (!Number.isInteger(cents) || cents <= 0 || cents > 100_000_000) throw new WalletError('bad_amount', 'Put in 1¢ to $1,000,000.');
     const asset = this.creditAsset(companyId);
-    return this.db.transaction(async (tx) => {
+    const r = await this.db.transaction(async (tx) => {
       if ((await tx.query(`select 1 from wallet_tx where company_id = $1 and ref = $2`, [companyId, `fund:${ref}`])).rows.length) throw new WalletError('duplicate', 'That payment was already recorded.', 409);
-      await this.post(tx, companyId, asset, 'fund', `fund:${ref}`, [[`outside:${sponsor}`, -cents], [`reserve:${sponsor}`, cents]], { by });
-      return { reserve: await this.balance(tx, companyId, asset, `reserve:${sponsor}`) };
+      const entry = await this.post(tx, companyId, asset, 'fund', `fund:${ref}`, [[`outside:${sponsor}`, -cents], [`reserve:${sponsor}`, cents]], { by });
+      return { entry, reserve: await this.balance(tx, companyId, asset, `reserve:${sponsor}`) };
     });
+    // The money also goes in the company's books (cash in, held for the brand), keyed by the wallet entry's reference,
+    // so it's booked once; repairReserveLines books any a crash lost in between.
+    this.platform.bus.publish('reserve.funded', companyId, { sponsor, cents, ref, entry: r.entry, by }, `fund:${ref}`);
+    return { reserve: r.reserve };
+  }
+
+  /**
+   * Reserve payments in the wallet whose line never reached the company's books (recorded before reserves were in the
+   * books, or a crash between the two), and undone ones whose reversal is missing: booked now, once. Run at start.
+   */
+  async repairReserveLines(companyId?: string) {
+    let fixed = 0;
+    const rows = (await this.db.query<any>(
+      `select t.id, t.company_id, t.ref, t.kind, t.memo, t.reversed_by, l.account, l.amount from wallet_tx t join wallet_lines l on l.tx_id = t.id
+        where ($1::text is null or t.company_id = $1) and t.kind = 'fund' and l.account like 'reserve:%' order by t.at`, [companyId ?? null])).rows;
+    for (const r of rows) {
+      const memo = (typeof r.memo === 'string' ? JSON.parse(r.memo) : r.memo) ?? {};
+      const sponsor = String(r.account).slice('reserve:'.length);
+      const cents = Number(r.amount);
+      if (this.platform.bus.publish('reserve.funded', r.company_id, { sponsor, cents, ref: String(r.ref).slice('fund:'.length), entry: r.id, by: String(memo.by ?? 'unknown') }, r.ref)) fixed++;
+      if (r.reversed_by && this.platform.bus.publish('reserve.returned', r.company_id, { sponsor, cents, entry: r.id, by: 'repair', reason: 'undone in the wallet' }, `correct:${r.id}`)) fixed++;
+    }
+    return fixed;
   }
 
   /** Give a person dollar credit out of a sponsor's reserve. Only when credit is on, and never more than the reserve holds. */
@@ -373,7 +396,7 @@ export class WalletService {
     return n;
   }
   private async reverse(companyId: string, txId: string, by: string, reason: string, o: { refuse: string[] }) {
-    return this.db.transaction(async (tx) => {
+    const r = await this.db.transaction(async (tx) => {
       const t = (await tx.query<any>(`select * from wallet_tx where id = $1 and company_id = $2 for update`, [txId, companyId])).rows[0];
       if (!t) throw new WalletError('not_found', 'No such entry.', 404);
       if (t.reversed_by) throw new WalletError('already_corrected', 'That entry was already undone.', 409);
@@ -390,8 +413,12 @@ export class WalletService {
       }
       const id = await this.post(tx, companyId, t.asset, 'correction', `correct:${txId}`, lines.map((l) => [l.account, -Number(l.amount)] as [string, number]), { by, reason: reason.slice(0, 300), corrects: txId });
       await tx.query(`update wallet_tx set reversed_by = $2 where id = $1`, [txId, id]);
-      return { corrected: txId, by: id };
+      const reserve = t.kind === 'fund' ? lines.find((l) => String(l.account).startsWith('reserve:')) : undefined;
+      return { corrected: txId, by: id, reserve: reserve ? { sponsor: String(reserve.account).slice('reserve:'.length), cents: Number(reserve.amount) } : undefined };
     });
+    // A reserve payment undone leaves the company's books too (once: keyed by the entry it undoes).
+    if (r.reserve) this.platform.bus.publish('reserve.returned', companyId, { ...r.reserve, entry: txId, by, reason: reason.slice(0, 300) }, `correct:${txId}`);
+    return { corrected: r.corrected, by: r.by };
   }
 
   // ---------- reading ----------

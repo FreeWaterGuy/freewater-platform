@@ -156,7 +156,11 @@ describe('the data environment', () => {
     expect(slot).toBeGreaterThanOrEqual(0);
     // Before approval, and for people outside the panel, nothing changes.
     expect(await app.environment.valueBackFor('freewater', 'cmp-joes', 'viewer-vb-panel', u!.id, slot)).toBeNull();
-    expect((await call('POST', `/v1/environment/experiments/${e.id}/decide`, { approve: true })).body.status).toBe('running');
+    // A person decides, never a service key.
+    expect((await call('POST', `/v1/environment/experiments/${e.id}/decide`, { approve: true })).body.error.code).toBe('person_needed');
+    const owner = await app.accounts.createSession((await app.accounts.invite({ companyId: 'freewater', email: 'env-owner@freewater.io', role: 'owner' })).id, { secondStep: true }); // an approval: second step passed (R4)
+    const decided = await server.inject({ method: 'POST', url: `/v1/environment/experiments/${e.id}/decide`, payload: { approve: true }, headers: { authorization: `Bearer ${owner}` } });
+    expect(decided.json().status).toBe('running');
     expect(await app.environment.valueBackFor('freewater', 'cmp-joes', 'viewer-vb-outside', u!.id, slot)).toBeNull();
     expect((await call('POST', '/v1/public/companies/freewater/panel', { viewerKey: 'viewer-vb-panel', join: true }, false)).body.inPanel).toBe(true);
     // Each panel member keeps one step for the whole test; find one who gets 100¢, each on a fresh bottle with Joe's.

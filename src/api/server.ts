@@ -1,5 +1,5 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
-import { ApiError, notFound, obj, S, type Handler, type RouteDef } from './http';
+import { ApiError, notFound, obj, S, signedInOwner, type Handler, type RouteDef } from './http';
 import { consumerRoutes } from './consumer';
 import { adsRoutes } from './ads';
 import { deliveryRoutes } from './delivery';
@@ -20,7 +20,10 @@ import { gamesRoutes } from './games';
 import { offersRoutes } from './offers';
 import { chainRoutes } from './chain';
 import { studioRoutes } from './studio';
-import { BadKeyGuard, classify, limits, RateLimiter, securityHeaders, SecurityLog } from './security';
+import { trustProxyFrom } from '../runtime/config';
+import { UploadQuota, uploadLimitsFrom } from '../runtime/uploads';
+import { printLimits } from '../modules/fleet/printCap';
+import { BadKeyGuard, classify, limits, RateLimiter, securityHeaders, SecurityLog, shortIp } from './security';
 import { teamRoutes } from './team';
 import { loggerOptions } from './logging';
 import { operationsRoutes } from './operations';
@@ -44,6 +47,7 @@ import type { Campaign, Share } from '../core/types';
 import { svgCreative } from '../modules/print/svgCreative';
 import { newId } from '../core/ids';
 import { AccountsError, roleScopes, type Role } from '../modules/accounts/service';
+import { approvalRoutes, approverStepProblem } from '../modules/accounts/secondStep';
 import { PaymentError } from '../modules/payments/service';
 import { ExperienceError, targetKey, type Target } from '../modules/experiences/service';
 import { AssetError, allowedTypes } from '../modules/assets/store';
@@ -62,12 +66,15 @@ import { dirname, join } from 'node:path';
 /** The company that runs the platform and may set up licensees. */
 const PLATFORM_COMPANY = process.env.PLATFORM_COMPANY ?? 'freewater';
 /** A machine prints a bottle in several seconds: more than this through the API is a leaked key, not a busy machine. */
-export const DEFAULT_PRINTS_PER_MINUTE = 6;
-export const DEFAULT_PRINTS_PER_DAY = 1500;
+export { DEFAULT_PRINTS_PER_MINUTE, DEFAULT_PRINTS_PER_DAY } from '../modules/fleet/printCap';
 
 export async function buildServer(app: App, opts: { logger?: boolean } = {}): Promise<FastifyInstance> {
-  // Behind a load balancer, set TRUST_PROXY (1, or the proxy's address) so each caller's real address is used.
-  const trustProxy = process.env.TRUST_PROXY ? (process.env.TRUST_PROXY === '1' ? true : process.env.TRUST_PROXY) : false;
+  // Behind a load balancer, TRUST_PROXY says how many hops (or which addresses) to believe, never every hop: the
+  // visitor writes X-Forwarded-For too (docs/RUNNING.md). Unsafe values stop a production start (checkConfig).
+  // A hop count believes exactly that many proxies (counted from this server outwards), so whatever the visitor wrote
+  // further left is ignored. (Fastify's own number option trusts no hop at all, so it's spelled out here.)
+  const proxySetting = trustProxyFrom(process.env.TRUST_PROXY).value;
+  const trustProxy = typeof proxySetting === 'number' ? (_addr: string, hop: number) => hop < proxySetting : proxySetting;
   const server = Fastify({ logger: opts.logger ? loggerOptions : false, bodyLimit: 3 * 1024 * 1024, routerOptions: { maxParamLength: 1000 }, trustProxy });
   const { platform, packs, persistence, db, experiences } = app;
   for (const type of Object.keys(allowedTypes)) server.addContentTypeParser(type, { parseAs: 'buffer', bodyLimit: 64 * 1024 * 1024 }, (_req, body, done) => done(null, body));
@@ -274,18 +281,10 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
    * machine key is a compromised machine and must be revoked; this cap only keeps a leaked key from printing (and
    * billing advertisers for) bottles at scale until it is. Hitting it raises an alert.
    */
-  const printsSeen = new Map<string, { minute: Map<string, number>; day: string; today: Set<string> }>();
   const printCap = (companyId: string, locationId: string, orderId: string, req: FastifyRequest) => {
-    const m = platform.companies.get(companyId)?.machines;
-    const perMinute = m?.printsPerMinute ?? DEFAULT_PRINTS_PER_MINUTE, perDay = m?.printsPerDay ?? DEFAULT_PRINTS_PER_DAY;
-    const now = platform.bus.now().getTime(), day = new Date(now).toISOString().slice(0, 10);
-    let s = printsSeen.get(locationId);
-    if (!s) printsSeen.set(locationId, (s = { minute: new Map(), day, today: new Set() }));
-    if (s.day !== day) { s.day = day; s.today.clear(); }
-    for (const [id, t] of s.minute) if (now - t >= 60_000) s.minute.delete(id);
-    // The same order sent again prints nothing new, so it isn't counted again.
-    if (s.today.has(orderId) || s.minute.has(orderId)) return;
-    const over = s.minute.size >= perMinute ? 'minute' : s.today.size >= perDay ? 'day' : null;
+    const { perMinute, perDay } = printLimits(platform.companies.get(companyId)?.machines);
+    // One count per machine, shared with the labels it's handed for offline use (FleetService.refillBuffer).
+    const over = app.fleet.prints.takeOrder(locationId, orderId, { perMinute, perDay });
     if (over) {
       const what = over === 'minute' ? `${perMinute} bottles a minute` : `${perDay} bottles a day`;
       securityLog.record({ kind: 'print_rate_capped', companyId, actor: locationId, ip: req.ip, detail: { locationId, limit: what } }, `pc:${locationId}:${over}`);
@@ -293,20 +292,22 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       const wait = over === 'minute' ? 60 : 3600;
       return { status: 429, headers: { 'retry-after': String(wait) }, body: { error: { code: 'print_limit', message: `This machine can print at most ${what} through the API. Try again in ${wait} seconds.` } } };
     }
-    s.minute.set(orderId, now);
-    s.today.add(orderId);
     return null;
   };
 
-  route({ method: 'POST', url: '/v1/orders', scope: 'orders', summary: 'Print one bottle. Send the same orderId again and you get the same bottle back; nothing prints twice. A custom design is priced by the company (a price sent here is ignored).', body: obj({ orderId: S.str, locationId: S.str, productId: S.str, custom: obj({ customerId: S.str, svg: { type: 'string', minLength: 1, maxLength: 2_000_000 }, priceCents: S.int }, ['customerId', 'svg']) }, ['orderId', 'locationId', 'productId']), handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/orders', scope: 'orders', summary: 'Print one bottle. Send the same orderId again and you get the same bottle back; nothing prints twice. A custom design printed here is never billed (a price sent is ignored); paid custom bottles go through POST /v1/me/custom-orders.', body: obj({ orderId: S.str, locationId: S.str, productId: S.str, custom: obj({ customerId: S.str, svg: { type: 'string', minLength: 1, maxLength: 2_000_000 }, priceCents: S.int }, ['customerId', 'svg']) }, ['orderId', 'locationId', 'productId']), handler: async (req, key) => {
     const b = req.body as any;
-    if (!platform.locations.has(b.locationId)) throw new ApiError(422, 'unknown_location', `Location ${b.locationId} doesn't exist.`);
+    const loc = platform.locations.get(b.locationId);
+    // Another company's machine is, to this key, a machine that doesn't exist.
+    if (!loc || (loc.companyId ?? PLATFORM_COMPANY) !== key!.companyId) throw new ApiError(422, 'unknown_location', `Location ${b.locationId} doesn't exist.`);
     if (!platform.products.has(b.productId)) throw new ApiError(422, 'unknown_product', `Product ${b.productId} doesn't exist.`);
     let custom;
     if (b.custom) {
-      // Priced here, never by the caller: a price sent with the order would let a machine key make up revenue (and the
-      // charity's share of it). Custom bottles bought in the app are priced by the consumer route.
-      try { custom = { customerId: b.custom.customerId, art: svgCreative(b.custom.svg), priceCents: platform.companies.get(key!.companyId)!.prices.customUnit }; } catch (e: any) { throw new ApiError(422, 'artwork_refused', e.message); }
+      // Never billed here: nobody's money is held for it, so booking its price would be revenue no one pays, and the
+      // charity's and the AI fund's shares of it would be owed (and sent) in real money. A custom bottle someone pays
+      // for goes through POST /v1/me/custom-orders, where the money is held first and taken once it prints. A price
+      // sent here is ignored.
+      try { custom = { customerId: b.custom.customerId, art: svgCreative(b.custom.svg), priceCents: 0 }; } catch (e: any) { throw new ApiError(422, 'artwork_refused', e.message); }
     }
     if (key!.locationId && key!.locationId !== b.locationId) throw new ApiError(403, 'wrong_machine', `This key belongs to ${key!.locationId} and can only print there.`);
     const capped = key!.locationId ? printCap(key!.companyId, key!.locationId, b.orderId, req) : null;
@@ -462,7 +463,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   route({ method: 'POST', url: '/v1/packs', scope: 'packs', summary: 'Print a 6, 12 or 24 pack for a delivery stop. Every bottle is different; the box is printed too.', body: obj({ customerId: S.str, address: S.str, routeId: S.str, stop: S.int, boxId: S.str, productId: S.str }, ['customerId', 'address', 'routeId', 'stop', 'boxId', 'productId']), handler: async (req, key) => {
     const b = req.body as any;
-    if (!platform.locations.has(b.routeId)) throw new ApiError(422, 'unknown_route', `Route ${b.routeId} doesn't exist.`);
+    const loc = platform.locations.get(b.routeId);
+    if (!loc || (loc.companyId ?? PLATFORM_COMPANY) !== key!.companyId) throw new ApiError(422, 'unknown_route', `Route ${b.routeId} doesn't exist.`);
     try {
       const p = await packs.compose({ companyId: key!.companyId, ...b });
       return { status: 201, body: packView(p.id) };
@@ -502,13 +504,17 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     try { return { body: packs.load(routeId, typeof runId === 'string' && runId ? runId : undefined).map((p) => packView(p.id)) }; } catch (e: any) { if (e instanceof AmbiguousRunError) throw new ApiError(400, 'run_required', e.message); throw new ApiError(409, 'not_sealed', e.message); }
   } });
 
-  route({ method: 'POST', url: '/v1/deliveries', scope: 'packs', summary: 'The driver scans a box at a door. Delivered only if it is the right box at the right address. Pass runId for a night’s run; without it, the route’s current run.', body: obj({ routeId: S.str, runId: S.str, stop: S.int, scannedPackId: S.str, atAddress: S.bool, photoProof: S.bool, emptiesCollected: S.int }, ['routeId', 'stop', 'scannedPackId', 'atAddress', 'photoProof', 'emptiesCollected']), handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/deliveries', scope: 'packs', summary: 'A signed-in driver (or ops person) scans a box at a door. Delivered only if it is the right box at the right address. Pass runId for a run; without it, the route’s current run. Planned night runs go through /v1/driver instead.', body: obj({ routeId: S.str, runId: S.str, stop: S.int, scannedPackId: S.str, atAddress: S.bool, photoProof: S.bool, emptiesCollected: S.int }, ['routeId', 'stop', 'scannedPackId', 'atAddress', 'photoProof', 'emptiesCollected']), handler: async (req, key) => {
+    // The door report is the driver's word (atAddress, photoProof), so it must come from a person signed in, not a key.
+    if (!key?.userId || key.advertiserId || key.locationId) throw new ApiError(403, 'person_required', 'Sign in as the driver to mark a box delivered.');
     const b = req.body as any;
     let run: string;
     try { run = b.runId ?? packs.currentRun(b.routeId); } catch (e: any) { if (e instanceof AmbiguousRunError) throw new ApiError(400, 'run_required', e.message); throw e; }
     if (!b.runId) b.runId = run;
     const planned = [...packs.packs.values()].find((p) => p.routeId === b.routeId && p.stop === b.stop && (p.runId ?? '') === run);
     if (!planned || planned.companyId !== key!.companyId) throw notFound('Stop');
+    // A planned night run has its own driver, GPS check and photo: it can't be marked delivered around them here.
+    if (await app.delivery.getRun(run, key.companyId).then(() => true, () => false)) throw new ApiError(409, 'use_driver_app', 'This box is on a planned run. Its driver delivers it in the driver app (/v1/driver/runs).');
     const r = packs.deliver(b);
     if (!r.ok) return { status: 409, body: { error: { code: 'wrong_box', message: r.reason }, grab: r.rightPack ? { packId: r.rightPack.id, stopCode: `R${r.rightPack.routeId.replace(/^route-/, '')} · ${r.rightPack.stop}` } : null } };
     return { body: packView(r.pack.id) };
@@ -527,7 +533,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const q = req.query as any;
     const after = Number(q.after ?? 0), limit = Math.min(500, Number(q.limit ?? 100));
     const rows = (await db.query<any>(`select seq, id, type, at, payload from events where company_id = $1 and seq > $2 and ($3::text is null or type = $3) order by seq limit $4`, [key!.companyId, after, q.type ?? null, limit])).rows;
-    return { body: rows.map((r) => ({ seq: Number(r.seq), id: r.id, type: r.type, at: r.at, payload: typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload })) };
+    // A phone's key is a secret (it opens its wallet): events are read with its fingerprint instead (R15).
+    return { body: rows.map((r) => ({ seq: Number(r.seq), id: r.id, type: r.type, at: r.at, payload: app.data.eventForTeam(typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload) })) };
   } });
 
   // ---------- accounts: people sign in with a code, no passwords ----------
@@ -567,13 +574,17 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const actor = user.displayName ?? (user.email ? mask(user.email) : user.id);
     if (passed.usedRecoveryCode) securityLog.record({ kind: 'recovery_code_used', companyId: user.companyId, actor, ip: req.ip });
     securityLog.record({ kind: 'signed_in', companyId: user.companyId, actor, ip: req.ip, detail: { secondStep: passed.usedRecoveryCode ? 'recovery code' : 'authenticator app' } });
-    return { body: { token: await app.accounts.createSession(user.id), isNew: false, user } };
+    return { body: { token: await app.accounts.createSession(user.id, { secondStep: true }), isNew: false, user } };
   } });
 
   // ---------- your second sign-in step ----------
   const person = (key: ApiKey | null) => { if (!key?.userId) throw new ApiError(403, 'people_only', 'A second sign-in step is for people who sign in, not API keys.'); return key.userId; };
   const ss = async <T>(f: () => Promise<T>) => { try { return await f(); } catch (e: any) { if (e?.status && e?.code) throw new ApiError(e.status, e.code, e.message); throw e; } };
-  route({ method: 'GET', url: '/v1/me/second-step', scope: 'me', summary: 'Whether your second sign-in step is on, and how many recovery codes are left.', handler: async (_req, key) => ({ body: await app.secondStep.status(person(key)) }) });
+  route({ method: 'GET', url: '/v1/me/second-step', scope: 'me', summary: 'Whether your second sign-in step is on, how many recovery codes are left, and whether you need it to approve money or token steps (owners and finance people do).', handler: async (_req, key) => {
+    const id = person(key);
+    const problem = await approverStepProblem(app.accounts, app.secondStep, key!);
+    return { body: { ...(await app.secondStep.status(id)), neededToApprove: ['owner', 'finance'].includes((await app.accounts.get(id))?.role ?? ''), ...(problem ? { toApprove: problem } : {}) } };
+  } });
   route({ method: 'POST', url: '/v1/me/second-step/start', scope: 'me', summary: 'Start setting up an authenticator app: scan the QR code (or type the key) into the app.', handler: async (_req, key) => {
     const id = person(key);
     const company = platform.companies.get(key!.companyId)?.name ?? 'FreeWater';
@@ -581,9 +592,21 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   } });
   route({ method: 'POST', url: '/v1/me/second-step/confirm', scope: 'me', summary: 'Finish with a code from the app. Returns 8 recovery codes, shown once: keep them somewhere safe.', body: obj({ code: { type: 'string', minLength: 6, maxLength: 8 } }, ['code']), handler: async (req, key) => {
     const out = await ss(() => app.secondStep.confirm(person(key), (req.body as any).code));
+    // Setting it up never counts as passing it: this sign-in came from the inbox alone, and whoever holds the inbox
+    // could have set up an app of their own. They sign in again with the app's code, and a new app approves money or
+    // token steps only after a day, while the company's other owners are told (threat model R4).
     secondStepCache.delete(key!.userId!);
-    securityLog.record({ kind: 'second_step_on', companyId: key!.companyId, actor: key!.name, ip: req.ip });
-    return { body: out };
+    const user = await app.accounts.get(key!.userId!);
+    const approver = ['owner', 'finance'].includes(user?.role ?? '');
+    const from = await app.secondStep.approvableFrom(key!.userId!);
+    securityLog.record({ kind: 'second_step_on', companyId: key!.companyId, actor: key!.name, ip: req.ip, detail: { role: user?.role, ...(approver && from ? { approvesFrom: from.toISOString() } : {}) } });
+    if (approver) {
+      const others = (await db.query<{ email: string }>(`select email from users where company_id = $1 and role = 'owner' and email is not null and deleted_at is null and id <> $2`, [key!.companyId, key!.userId])).rows;
+      const text = `${key!.name} (${user!.role}) set up a new authenticator app for signing in to ${platform.companies.get(key!.companyId)?.name ?? 'FreeWater'} at ${platform.bus.now().toISOString()}, from network ${shortIp(req.ip)}. It can approve money or token steps from ${from?.toISOString() ?? 'now'}.\n\nIf that wasn't them, take them off the team in the console now (and check the security log).`;
+      for (const o of others) await app.messenger.send({ channel: 'email', to: o.email, subject: 'A new authenticator app was set up', text }).catch(() => {});
+      void app.runtime.alerts.alert(`second-step-on:${key!.userId}`, 'warning', `New authenticator app for an approver at ${key!.companyId}`, text);
+    }
+    return { body: { ...out, signInAgain: true, ...(approver && from ? { approvesFrom: from.toISOString() } : {}) } };
   } });
   route({ method: 'POST', url: '/v1/me/second-step/recovery-codes', scope: 'me', summary: 'New recovery codes (the old ones stop working). Needs a code from the app.', body: obj({ code: { type: 'string', minLength: 6, maxLength: 8 } }, ['code']), handler: async (req, key) => {
     const id = person(key);
@@ -592,6 +615,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   } });
   route({ method: 'POST', url: '/v1/me/second-step/off', scope: 'me', summary: 'Turn the second sign-in step off. Needs a code from the app (or a recovery code).', body: obj({ code: { type: 'string', minLength: 6, maxLength: 16 } }, ['code']), handler: async (req, key) => {
     const out = await ss(() => app.secondStep.turnOff(person(key), (req.body as any).code));
+    await app.accounts.clearSecondStep(key!.userId!);
     secondStepCache.delete(key!.userId!);
     securityLog.record({ kind: 'second_step_off', companyId: key!.companyId, actor: key!.name, ip: req.ip });
     return { body: out };
@@ -644,7 +668,13 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   route({ method: 'POST', url: '/v1/team', scope: 'admin', summary: 'Add a team member or advertiser staff. They sign in with a code sent to their email.', body: obj({ email: S.str, role: { type: 'string', enum: ['owner', 'ops', 'finance', 'reviewer', 'driver', 'advertiser'] }, advertiserId: S.str, displayName: S.str }, ['email', 'role']), handler: async (req, key) => {
     if (key!.advertiserId || key!.locationId) throw new ApiError(403, 'missing_scope', 'Advertisers cannot add team members.');
-    return { status: 201, body: await app.accounts.invite({ companyId: key!.companyId, ...(req.body as any), by: key!.userId }) };
+    const k = signedInOwner(key, 'Adding someone to the team');
+    // Making someone an owner or finance person (or changing one's role) hands out the power to approve money and
+    // token steps: it's an approval itself, so the second step (R4).
+    const b = req.body as any;
+    const existing = (await db.query<{ role: string }>(`select role from users where company_id = $1 and lower(email) = lower($2) and deleted_at is null`, [k.companyId, String(b.email ?? '').trim()])).rows[0];
+    if (['owner', 'finance'].includes(b.role) || ['owner', 'finance'].includes(existing?.role ?? '')) await approverStep(key!);
+    return { status: 201, body: await app.accounts.invite({ companyId: k.companyId, ...(req.body as any), by: k.userId }) };
   } });
 
   // ---------- payments: cards, custom bottles, advertiser invoices ----------
@@ -739,6 +769,20 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const r = limiter.take(`${kind}:${who}`, l.capacity, l.perMinute);
     if (!r.ok) { securityLog.record({ kind: 'rate_limited', ip: req.ip, detail: { limit: kind, url: req.routeOptions?.url ?? req.url.split('?')[0] } }, `rl:${kind}:${who}`); throw tooMany(reply, r.retryAfterSec); }
   };
+  // Files sent by visitors without a key (feedback, receipts) are capped per network and for the whole platform each
+  // day, so nobody can fill the database with them (src/runtime/uploads.ts).
+  const uploads = new UploadQuota(uploadLimitsFrom(), { now: () => platform.bus.now().getTime(), alert: (k, sev, title, detail) => void app.runtime.alerts.alert(k, sev, title, detail) });
+  app.runtime.uploads = uploads;
+  const takesFiles = (r: RouteDef) => r.scope === 'public' && (!!r.rawBodyLimit || JSON.stringify(r.body ?? {}).includes('dataBase64'));
+  const uploadQuota = (r: RouteDef, req: FastifyRequest, reply: FastifyReply) => {
+    const declared = Number(req.headers['content-length']);
+    const bytes = Number.isFinite(declared) && declared >= 0 ? declared : (r.rawBodyLimit ?? 3 * 1024 * 1024);
+    const v = uploads.take(req.ip, bytes);
+    if (v.ok) return;
+    reply.header('retry-after', String(v.retryAfterSec));
+    securityLog.record({ kind: 'upload_capped', ip: req.ip, detail: { url: r.url, reason: v.code } }, `uc:${v.code}:${req.ip}`);
+    throw new ApiError(v.status, v.code, v.message);
+  };
   server.addHook('onRequest', async (req, reply) => {
     if (!local(req.ip) && badKeys.blocked(req.ip)) throw tooMany(reply, badKeys.retryAfterSec(req.ip));
     limit(req, reply, req.ip, 'everything');
@@ -800,6 +844,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
         const kind = classify(r.method, r.url, !!r.rawBodyLimit);
         if (kind === 'signIn' || kind === 'publicWrite' || (kind === 'heavy' && r.scope === 'public')) limit(req, reply, req.ip, kind === 'heavy' ? 'heavy' : kind);
+        if (takesFiles(r) && !local(req.ip)) uploadQuota(r, req, reply);
         let key: ApiKey | null = null;
         if (r.scope !== 'public') {
           try { key = await authenticate(req, r.scope); }
@@ -945,6 +990,12 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     return reply.code(500).send({ error: { code: 'server_error', message: 'Something went wrong on our side. It has been logged.' } });
   });
 
+  /** An owner or finance person about to approve money or token steps: this sign-in must have passed the second step. */
+  async function approverStep(key: ApiKey) {
+    const problem = await approverStepProblem(app.accounts, app.secondStep, key);
+    if (problem) throw new ApiError(403, 'second_step_required', problem);
+  }
+
   /** A caller is either a system with an API key (fwk_…) or a signed-in person with a session (fws_…). */
   async function authenticate(req: FastifyRequest, scope: Scope | Scope[]): Promise<ApiKey> {
     const h = req.headers.authorization ?? '';
@@ -975,6 +1026,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
         }
       }
     }
+    // Owners and finance people approve money and token steps only from a sign-in that passed the second step (R4).
+    if (key.userId && raw.startsWith('fws_') && approvalRoutes.has(`${req.method} ${req.routeOptions?.url ?? ''}`)) await approverStep(key);
     const need = Array.isArray(scope) ? scope : [scope];
     // 'admin' covers everything a company does for itself, never the platform operator's own powers.
     if (!need.some((s) => key.scopes.includes(s)) && !(key.scopes.includes('admin') && !need.includes('platform'))) throw new ApiError(403, 'missing_scope', `This key can't do that. It needs one of: ${need.join(', ')}.`);

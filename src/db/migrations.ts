@@ -1255,18 +1255,285 @@ alter table agent_settlements add column if not exists plan jsonb;
 alter table agent_settlements add column if not exists status text not null default 'done';
 `,
   },
+  {
+    id: '052_db_journals_append_only',
+    sql: `
+-- The other money journals and logs can't be rewritten either: the database refuses an edit or a delete, and lets
+-- through only the changes the platform really makes (a status moving forward, a fingerprint cleared, an entry marked
+-- undone once). A mistake is fixed with a correcting entry, as in the ledger. TRUNCATE is refused too.
+
+-- True only inside the test-stage reset's own transaction (it sets fw.test_reset to the company), and only while the
+-- company is still in the test stage: once live, nothing can wipe its journal.
+create function fw_test_reset(company text) returns boolean language sql stable as $$
+  select coalesce(current_setting('fw.test_reset', true), '') = company
+     and coalesce((select config->'launch'->>'stage' from companies where id = company), 'test') = 'test'
+$$;
+-- Did only these columns change?
+create function fw_only_changed(o jsonb, n jsonb, cols text[]) returns boolean language sql immutable as $$
+  select (o - cols) = (n - cols)
+$$;
+create function fw_refuse(what text, why text) returns void language plpgsql as $$
+begin
+  raise exception '% %', what, why using errcode = 'P0001', hint = 'Fix a mistake with a correcting entry, never an edit.';
+end $$;
+
+-- Wallet journal: an entry is only ever marked undone (once) or has its network fingerprint cleared after two days.
+create function wallet_tx_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then
+    if fw_test_reset(old.company_id) then return old; end if;
+    perform fw_refuse('wallet_tx', 'is append-only.');
+  end if;
+  if not fw_only_changed(to_jsonb(old), to_jsonb(new), array['reversed_by', 'source'])
+     or (old.reversed_by is not null and new.reversed_by is distinct from old.reversed_by)
+     or (new.source is not null and new.source is distinct from old.source) then
+    perform fw_refuse('wallet_tx', 'entries can''t be edited: only marked undone once, or their network fingerprint cleared.');
+  end if;
+  return new;
+end $$;
+create trigger wallet_tx_append_only before update or delete on wallet_tx for each row execute function wallet_tx_guard();
+
+create function wallet_lines_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' and fw_test_reset((select company_id from wallet_tx where id = old.tx_id)) then return old; end if;
+  perform fw_refuse('wallet_lines', 'is append-only.');
+  return null;
+end $$;
+create trigger wallet_lines_append_only before update or delete on wallet_lines for each row execute function wallet_lines_guard();
+
+-- Double entry: each entry's lines add to zero, checked when its transaction commits.
+create function wallet_tx_adds_to_zero() returns trigger language plpgsql as $$
+begin
+  if (select sum(amount) from wallet_lines where tx_id = new.tx_id) <> 0 then
+    raise exception 'wallet entry % doesn''t add to zero', new.tx_id using errcode = '23514';
+  end if;
+  return null;
+end $$;
+create constraint trigger wallet_lines_add_to_zero after insert on wallet_lines deferrable initially deferred for each row execute function wallet_tx_adds_to_zero();
+
+-- Hourly seals: written once; a seal only gains places it was published to.
+create function chain_seals_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then
+    if fw_test_reset(old.company_id) then return old; end if;
+    perform fw_refuse('chain_seals', 'is append-only.');
+  end if;
+  if not fw_only_changed(to_jsonb(old), to_jsonb(new), array['refs']) or not (new.refs @> old.refs) then
+    perform fw_refuse('chain_seals', 'can only gain places it was published to.');
+  end if;
+  return new;
+end $$;
+create trigger chain_seals_append_only before update or delete on chain_seals for each row execute function chain_seals_guard();
+
+create function chain_checks_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' and fw_test_reset(old.company_id) then return old; end if;
+  perform fw_refuse('chain_checks', 'is append-only.');
+  return null;
+end $$;
+create trigger chain_checks_append_only before update or delete on chain_checks for each row execute function chain_checks_guard();
+
+-- Chain actions: who proposed what, under which rules, is fixed; approvals only grow, and only while it's proposed;
+-- the status only moves forward; a chain reference, once written, stays; and a finished action (done, cancelled,
+-- expired) never changes again, except that an erased person's key in it is replaced by "erased".
+create function chain_actions_guard() returns trigger language plpgsql as $$
+declare
+  moves constant jsonb := '{"proposed":["approved","cancelled"],"approved":["cancelled","expired","running"],"running":["signing","done","failed","recording"],"failed":["done","recording"],"recording":["running"],"signing":["confirming","cancelled"],"confirming":["done"]}';
+  erased boolean;
+begin
+  if tg_op = 'DELETE' then
+    if fw_test_reset(old.company_id) and old.kind not in ('go_live_points', 'pause', 'unpause', 'switch_on') then return old; end if;
+    perform fw_refuse('chain_actions', 'is a permanent record: cancel an action instead.');
+  end if;
+  erased := old.params ? 'to' and new.params = jsonb_set(old.params, '{to}', '"erased"');
+  if not fw_only_changed(to_jsonb(old), to_jsonb(new), array['params', 'approvals', 'status', 'not_before', 'ran_by', 'ran_at', 'ref', 'error', 'cancelled_by', 'prepared', 'signing_at', 'running_at'])
+     or (new.status <> old.status and not coalesce(moves->old.status ? new.status, false))
+     or (old.status in ('done', 'cancelled', 'expired') and not (erased or to_jsonb(new) = to_jsonb(old)))
+     or (new.approvals is distinct from old.approvals and (old.status <> 'proposed' or not (new.approvals @> old.approvals)))
+     or (new.not_before is distinct from old.not_before and old.status <> 'proposed')
+     or (old.ref is not null and new.ref is distinct from old.ref)
+     or (new.params is distinct from old.params and not erased and not (old.status = 'running' and (new.params - 'plan') = (old.params - 'plan'))) then
+    perform fw_refuse('chain_actions', format('can''t change that way (%s to %s).', old.status, new.status));
+  end if;
+  return new;
+end $$;
+create trigger chain_actions_record before update or delete on chain_actions for each row execute function chain_actions_guard();
+
+-- Charity transfers: the amount, charity and day are fixed; 'sending' becomes sent or failed once, and a sent one
+-- becomes confirmed once. Nothing after that.
+create function charity_transfers_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then perform fw_refuse('charity_transfers', 'is a permanent record.'); end if;
+  if to_jsonb(new) = to_jsonb(old) then return new; end if;
+  if not ((old.status = 'sending' and new.status in ('sending', 'sent', 'failed') and new.confirmed_at is null
+           and fw_only_changed(to_jsonb(old), to_jsonb(new), array['status', 'provider_ref', 'failure', 'confirm_token_hash']))
+       or (old.status = 'sent' and new.status = 'confirmed' and fw_only_changed(to_jsonb(old), to_jsonb(new), array['status', 'confirmed_at']))) then
+    perform fw_refuse('charity_transfers', format('can''t change that way (%s to %s).', old.status, new.status));
+  end if;
+  return new;
+end $$;
+create trigger charity_transfers_record before update or delete on charity_transfers for each row execute function charity_transfers_guard();
+
+-- Gift-card purchases: what was bought, for how much, from which entry, is fixed; a sent one stays sent.
+create function wallet_giftcards_guard() returns trigger language plpgsql as $$
+declare
+  moves constant jsonb := '{"ordering":["sent","refused","unknown"],"unknown":["ordering","sent","refused"],"refused":["unknown"]}';
+begin
+  if tg_op = 'DELETE' then perform fw_refuse('wallet_giftcards', 'is a permanent record.'); end if;
+  if (new.company_id, new.ref, new.entry, new.product, new.cents, new.at) is distinct from (old.company_id, old.ref, old.entry, old.product, old.cents, old.at)
+     or (new.status <> old.status and not coalesce(moves->old.status ? new.status, false)) then
+    perform fw_refuse('wallet_giftcards', format('can''t change that way (%s to %s).', old.status, new.status));
+  end if;
+  return new;
+end $$;
+create trigger wallet_giftcards_record before update or delete on wallet_giftcards for each row execute function wallet_giftcards_guard();
+
+-- The security log keeps what happened; only who and where can be masked (an erased person's email, an old address).
+create function security_events_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' or not fw_only_changed(to_jsonb(old), to_jsonb(new), array['actor', 'ip', 'ip_tag']) then
+    perform fw_refuse('security_events', 'is append-only (only who and where can be masked).');
+  end if;
+  return new;
+end $$;
+create trigger security_events_append_only before update or delete on security_events for each row execute function security_events_guard();
+
+-- An agent's archive: what it was sealed with stays; only the agent's choice afterwards is written in.
+create function agent_archives_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' or not fw_only_changed(to_jsonb(old), to_jsonb(new), array['status', 'choice', 'choice_reason', 'chosen_by', 'decided_at']) then
+    perform fw_refuse('agent_archives', 'is sealed (only the agent''s choice can be written in).');
+  end if;
+  return new;
+end $$;
+create trigger agent_archives_sealed before update or delete on agent_archives for each row execute function agent_archives_guard();
+
+-- Bottles given outside the platform: voided (once), never edited or deleted.
+create function distributions_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' or old.voided_at is not null and to_jsonb(new) <> to_jsonb(old)
+     or not fw_only_changed(to_jsonb(old), to_jsonb(new), array['voided_at', 'voided_by', 'void_reason']) then
+    perform fw_refuse('distributions', 'batches are only ever voided, once.');
+  end if;
+  return new;
+end $$;
+create trigger distributions_void_only before update or delete on distributions for each row execute function distributions_guard();
+
+-- Wholly append-only: closed months, settings history, resets, autonomy changes, agents' lineage.
+create trigger profit_periods_append_only before update or delete on profit_periods for each row execute function forbid_change();
+create trigger company_config_versions_append_only before update or delete on company_config_versions for each row execute function forbid_change();
+create trigger launch_resets_append_only before update or delete on launch_resets for each row execute function forbid_change();
+create trigger autonomy_changes_append_only before update or delete on autonomy_changes for each row execute function forbid_change();
+create trigger agent_lineage_append_only before update or delete on agent_lineage for each row execute function forbid_change();
+
+do $$
+declare t text;
+begin
+  foreach t in array array['ledger_entries', 'events', 'wallet_tx', 'wallet_lines', 'chain_seals', 'chain_checks', 'chain_actions', 'charity_transfers',
+    'wallet_giftcards', 'security_events', 'agent_archives', 'distributions', 'profit_periods', 'company_config_versions', 'launch_resets',
+    'autonomy_changes', 'agent_lineage'] loop
+    execute format('create trigger %I before truncate on %I for each statement execute function forbid_change()', t || '_no_truncate', t);
+  end loop;
+end $$;
+`,
+  },
+  {
+    id: '053_db_money_rules',
+    sql: `
+-- Money rules the database now keeps too, not only the code. Each check is added for new rows at once, then checked
+-- against what's already stored; if an old row breaks it, it stays unchecked for old rows (and a person can look).
+do $$
+declare c record;
+begin
+  for c in select * from (values
+    ('wallet_lines', 'wallet_lines_not_zero', 'check (amount <> 0)'),
+    ('charity_transfers', 'charity_transfers_amount_positive', 'check (amount_cents > 0 and bottles >= 0)'),
+    ('wallet_giftcards', 'wallet_giftcards_cents_positive', 'check (cents > 0)'),
+    ('wallet_giftcards', 'wallet_giftcards_status_check', 'check (status in (''ordering'', ''sent'', ''refused'', ''unknown''))'),
+    ('chain_actions', 'chain_actions_status_check', 'check (status in (''proposed'', ''approved'', ''running'', ''signing'', ''confirming'', ''recording'', ''failed'', ''done'', ''cancelled'', ''expired''))'),
+    ('chain_actions', 'chain_actions_needed_check', 'check (needed >= 0)'),
+    ('invoice_lines', 'invoice_lines_amount_not_zero', 'check (amount_cents <> 0)'),
+    ('invoices', 'invoices_total_positive', 'check (total_cents > 0)')
+  ) as v(tbl, name, def) loop
+    execute format('alter table %I add constraint %I %s not valid', c.tbl, c.name, c.def);
+    begin
+      execute format('alter table %I validate constraint %I', c.tbl, c.name);
+    exception when check_violation then
+      raise warning 'Rows already in % break %; it applies to new rows only until they''re corrected.', c.tbl, c.name;
+    end;
+  end loop;
+end $$;
+
+-- Nobody's wallet and no brand's reserve goes below zero. A trigger after the row is written, not a check: balances are
+-- kept with "insert ... on conflict do update", whose would-be new row (the amount alone) a check would see.
+create function wallet_balance_not_negative() returns trigger language plpgsql as $$
+begin
+  -- (An old row already below zero may still move up toward zero.)
+  if new.balance < 0 and (new.account like 'holder:%' or new.account like 'reserve:%') and (tg_op = 'INSERT' or new.balance < old.balance) then
+    raise exception 'wallet balance % % would go below zero (%)', new.asset, new.account, new.balance using errcode = '23514';
+  end if;
+  return null;
+end $$;
+create constraint trigger wallet_balances_never_below_zero after insert or update on wallet_balances for each row execute function wallet_balance_not_negative();
+do $$
+begin
+  if exists (select 1 from wallet_balances where balance < 0 and (account like 'holder:%' or account like 'reserve:%')) then
+    raise warning 'Some wallet balances are already below zero; new changes to them are refused until they''re corrected.';
+  end if;
+end $$;
+
+-- Once-only rules, as unique indexes: at most one transfer per charity still waiting for the bank; one conversion
+-- under way per company; a signature on the chain recorded for one mint only. Skipped (with a warning) if old rows
+-- already break them.
+do $$
+declare i record;
+begin
+  for i in select * from (values
+    ('create unique index charity_transfers_one_sending on charity_transfers(charity_id) where status = ''sending'''),
+    ('create unique index chain_actions_one_convert on chain_actions(company_id) where kind = ''convert'' and status in (''proposed'', ''approved'', ''running'', ''signing'', ''confirming'', ''recording'')'),
+    ('create unique index chain_actions_chain_ref on chain_actions(company_id, ref) where ref is not null and kind in (''mint'', ''convert'')')
+  ) as v(def) loop
+    begin
+      execute i.def;
+    exception when unique_violation then
+      raise warning 'Not added (old rows break it): %', i.def;
+    end;
+  end loop;
+end $$;
+`,
+  },
+  {
+    id: '054_db_hot_indexes',
+    sql: `
+-- Indexes for reads that scanned the whole table (checked with EXPLAIN on real Postgres, 1M events and ledger lines):
+-- a bottle's story on every scan page and the first scans of a pack (events by unit: 290 ms to 0.1 ms), and a day's
+-- lines for the daily fingerprint and the ops summary (ledger by time). Not added: indexes by debit/credit account for
+-- an advertiser's all-time overview, which were slower than the plain scan they'd replace and cost every ledger write.
+create index if not exists events_unit_scans on events((payload->>'unitId'), seq) where type = 'unit.scanned';
+create index if not exists ledger_company_at on ledger_entries(company_id, at);
+`,
+  },
+  {
+    id: '055_priv_second_step_sessions',
+    sql: `
+-- Which sign-ins passed the authenticator app's step: owners and finance people need one that did before they approve
+-- money or token steps (threat model R4).
+alter table sessions add column if not exists second_step_at timestamptz;
+`,
+  },
 ];
 
-export async function migrate(db: SqlClient): Promise<string[]> {
+/** Runs every migration not yet run (or, for tests that start from an older schema, those in `list`). */
+export async function migrate(db: SqlClient, list = migrations): Promise<string[]> {
   await db.exec(`create table if not exists schema_migrations (id text primary key, applied_at timestamptz not null default now())`);
   const done = new Set((await db.query<{ id: string }>(`select id from schema_migrations`)).rows.map((r) => r.id));
-  if (migrations.every((m) => done.has(m.id))) return [];
+  if (list.every((m) => done.has(m.id))) return [];
   // All pending migrations in one transaction, holding a lock, so two servers starting at once can't both run them.
   return db.transaction(async (tx) => {
     await tx.query(`select pg_advisory_xact_lock(724260)`);
     const now = new Set((await tx.query<{ id: string }>(`select id from schema_migrations`)).rows.map((r) => r.id));
     const applied: string[] = [];
-    for (const m of migrations) {
+    for (const m of list) {
       if (now.has(m.id)) continue;
       await tx.exec(m.sql);
       await tx.query(`insert into schema_migrations (id) values ($1)`, [m.id]);
