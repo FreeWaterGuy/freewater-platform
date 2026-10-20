@@ -56,6 +56,9 @@ export class BadKeyGuard {
   }
 }
 
+/** The policy every SVG response is sent with: no script, nothing fetched, only its own inline styles and data: images. */
+export const SVG_CSP = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:";
+
 /** Headers every response gets unless the page set its own. */
 export function securityHeaders(h: { get: (k: string) => unknown; set: (k: string, v: string) => void }, https: boolean) {
   if (!h.get('x-content-type-options')) h.set('x-content-type-options', 'nosniff');
@@ -65,6 +68,8 @@ export function securityHeaders(h: { get: (k: string) => unknown; set: (k: strin
   // Pages say who may frame them in their own policy; everything else can't be framed at all.
   if (!/frame-ancestors/.test(csp) && !h.get('x-frame-options')) h.set('x-frame-options', 'DENY');
   if (!csp && /json/.test(type)) h.set('content-security-policy', "default-src 'none'; frame-ancestors 'none'");
+  // An SVG opened on its own is a document that could run script: every one is locked down, whatever route sent it.
+  if (/image\/svg\+xml/i.test(type)) h.set('content-security-policy', SVG_CSP);
   if (/text\/html/.test(type) && !h.get('cross-origin-opener-policy')) h.set('cross-origin-opener-policy', 'same-origin');
   if (https && !h.get('strict-transport-security')) h.set('strict-transport-security', 'max-age=31536000; includeSubDomains');
 }

@@ -84,7 +84,7 @@ export class Platform {
     this.bus.on('label.printed', (e) => { for (const p of e.payload.placements) if (!p.isHouse) this.auctionStats.add(p.campaignId, 'prints'); });
     const engaged = (kind: 'scans' | 'arLaunches') => (e: any) => {
       const loaded = e.payload.experienceLoaded ?? e.payload.loaded;
-      const p = loaded ? this.units.get(e.payload.unitId)?.placements.find((x) => x.slotIndex === e.payload.slotIndex) : undefined;
+      const p = loaded && !e.payload.unbilled ? this.units.get(e.payload.unitId)?.placements.find((x) => x.slotIndex === e.payload.slotIndex) : undefined;
       if (p && !p.isHouse) this.auctionStats.add(p.campaignId, kind);
     };
     this.bus.on('unit.scanned', engaged('scans'));
@@ -288,21 +288,22 @@ export class Platform {
   }
 
   // Things that happen after a unit is out in the world.
-  scan(unitId: string, slotIndex: number, viewerKey: string, experienceLoaded = true, scanId = newId('scan'), variant?: string) {
+  // `billable: false` records the engagement without billing it (it didn't follow a real code open).
+  scan(unitId: string, slotIndex: number, viewerKey: string, experienceLoaded = true, scanId = newId('scan'), variant?: string, billable = true) {
     const unit = need(this.units, unitId, 'unit');
-    return this.bus.publish('unit.scanned', unit.companyId, { unitId, slotIndex, viewerKey, experienceLoaded, ...(variant ? { variant } : {}) }, scanId);
+    return this.bus.publish('unit.scanned', unit.companyId, { unitId, slotIndex, viewerKey, experienceLoaded, ...(variant ? { variant } : {}), ...(billable ? {} : { unbilled: true as const }) }, scanId);
   }
-  launchAr(unitId: string, slotIndex: number, viewerKey: string, loaded = true, launchId = newId('ar')) {
+  launchAr(unitId: string, slotIndex: number, viewerKey: string, loaded = true, launchId = newId('ar'), billable = true) {
     const unit = need(this.units, unitId, 'unit');
-    return this.bus.publish('ar.launched', unit.companyId, { unitId, slotIndex, viewerKey, loaded }, launchId);
+    return this.bus.publish('ar.launched', unit.companyId, { unitId, slotIndex, viewerKey, loaded, ...(billable ? {} : { unbilled: true as const }) }, launchId);
   }
-  scanBox(packId: string, face: string, viewerKey: string, experienceLoaded = true, scanId = newId('scan')) {
+  scanBox(packId: string, face: string, viewerKey: string, experienceLoaded = true, scanId = newId('scan'), billable = true) {
     const companyId = this.packCompany(packId);
-    return this.bus.publish('box.scanned', companyId, { packId, face, viewerKey, experienceLoaded }, scanId);
+    return this.bus.publish('box.scanned', companyId, { packId, face, viewerKey, experienceLoaded, ...(billable ? {} : { unbilled: true as const }) }, scanId);
   }
-  launchBoxAr(packId: string, face: string, viewerKey: string, loaded = true, launchId = newId('ar')) {
+  launchBoxAr(packId: string, face: string, viewerKey: string, loaded = true, launchId = newId('ar'), billable = true) {
     const companyId = this.packCompany(packId);
-    return this.bus.publish('box.ar_launched', companyId, { packId, face, viewerKey, loaded }, launchId);
+    return this.bus.publish('box.ar_launched', companyId, { packId, face, viewerKey, loaded, ...(billable ? {} : { unbilled: true as const }) }, launchId);
   }
   engaged(companyId: string, payload: import('./core/events').EventPayloads['experience.engaged'], id = newId('eng')) {
     return this.bus.publish('experience.engaged', companyId, payload, id);

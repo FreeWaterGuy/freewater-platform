@@ -120,6 +120,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     if (bad) throw new ApiError(422, 'experience_invalid', bad);
   };
   const viewerKeyProp = { type: 'string', pattern: '^[A-Za-z0-9_-]{8,64}$' };
+  /** The one-time token the code open (/q/…) gave the scan page. Without a valid, unused one, nothing is billed. */
+  const scanTokenProp = { type: 'string', maxLength: 100 };
   const themeProp = { type: 'object', additionalProperties: false, properties: Object.fromEntries(['background', 'text', 'accent', 'button', 'buttonText'].map((k) => [k, { type: 'string', pattern: '^#[0-9a-fA-F]{6}$' }])) };
   /** A person may be signed in on a scan page; if so, their own viewer key is used. Never required. */
   const optionalUser = async (req: FastifyRequest) => {
@@ -145,13 +147,15 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     return { body: { unitId, slot: placement!.slotIndex, kind: 'ad', owner: placement!.advertiserName, campaignId: placement!.campaignId, experienceId: placement!.experienceId, isHouse: placement!.isHouse } };
   } });
 
-  route({ method: 'POST', url: '/v1/public/scans', scope: 'public', summary: 'Record a scan. Billed only if the experience loaded and it is not a repeat.', body: obj({ unitId: S.str, slot: S.int, viewerKey: S.str, experienceLoaded: S.bool, scanId: S.str, variant: { type: 'string', maxLength: 40 }, context: obj({ language: { type: 'string', maxLength: 35 }, screen: { type: 'string', maxLength: 20 }, timezone: { type: 'string', maxLength: 50 }, referrer: { type: 'string', maxLength: 500 } }) }, ['unitId', 'slot', 'viewerKey', 'experienceLoaded']), handler: async (req) => {
+  route({ method: 'POST', url: '/v1/public/scans', scope: 'public', summary: 'Record a scan. Billed only if it followed a real code open (scanToken), the experience loaded and it is not a repeat.', body: obj({ unitId: S.str, slot: S.int, viewerKey: S.str, experienceLoaded: S.bool, scanId: S.str, scanToken: scanTokenProp, variant: { type: 'string', maxLength: 40 }, context: obj({ language: { type: 'string', maxLength: 35 }, screen: { type: 'string', maxLength: 20 }, timezone: { type: 'string', maxLength: 50 }, referrer: { type: 'string', maxLength: 500 } }) }, ['unitId', 'slot', 'viewerKey', 'experienceLoaded']), handler: async (req) => {
     const b = req.body as any;
     placementFor(null, b.unitId, b.slot);
     const before = platform.ledger.entries.length;
     const pl = platform.units.get(b.unitId)?.placements.find((x) => x.slotIndex === b.slot);
     const variant = b.variant && pl && platform.campaigns.get(pl.campaignId)?.variants?.some((v) => v.id === b.variant) ? b.variant : undefined;
-    const e = platform.scan(b.unitId, b.slot, b.viewerKey, b.experienceLoaded, b.scanId ?? newId('scan'), variant);
+    // Billed only with a genuine, unused token from opening this slot's printed code: posting scans isn't enough.
+    const billable = !!b.experienceLoaded && app.scanTokens.use(b.scanToken, targetKey({ kind: 'slot', unitId: b.unitId, slot: b.slot }), 'scan');
+    const e = platform.scan(b.unitId, b.slot, b.viewerKey, b.experienceLoaded, b.scanId ?? newId('scan'), variant, billable);
     if (b.experienceLoaded) await experiences.rememberViewer({ kind: 'slot', unitId: b.unitId, slot: b.slot }, b.viewerKey);
     // Points only for a scan the platform counted (its page loaded, not a repeat), of a real printed bottle.
     let points: number | undefined;
@@ -160,11 +164,12 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     return { status: 202, body: { recorded: !!e, billed: platform.ledger.entries.length > before, ...(points ? { points } : {}) } };
   } });
 
-  route({ method: 'POST', url: '/v1/public/ar-launches', scope: 'public', summary: 'Record an AR launch. Billed only if it loaded and it is not a repeat.', body: obj({ unitId: S.str, slot: S.int, viewerKey: S.str, loaded: S.bool, launchId: S.str }, ['unitId', 'slot', 'viewerKey', 'loaded']), handler: async (req) => {
+  route({ method: 'POST', url: '/v1/public/ar-launches', scope: 'public', summary: 'Record an AR launch. Billed only if it followed a real code open (scanToken) of a page with a 3D model, it loaded and it is not a repeat.', body: obj({ unitId: S.str, slot: S.int, viewerKey: S.str, loaded: S.bool, launchId: S.str, scanToken: scanTokenProp }, ['unitId', 'slot', 'viewerKey', 'loaded']), handler: async (req) => {
     const b = req.body as any;
     placementFor(null, b.unitId, b.slot);
     const before = platform.ledger.entries.length;
-    const e = platform.launchAr(b.unitId, b.slot, b.viewerKey, b.loaded, b.launchId ?? newId('ar'));
+    const billable = !!b.loaded && app.scanTokens.use(b.scanToken, targetKey({ kind: 'slot', unitId: b.unitId, slot: b.slot }), 'ar');
+    const e = platform.launchAr(b.unitId, b.slot, b.viewerKey, b.loaded, b.launchId ?? newId('ar'), billable);
     return { status: 202, body: { recorded: !!e, billed: platform.ledger.entries.length > before } };
   } });
 
@@ -174,6 +179,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const viewer = String((req.query as any).viewer ?? '');
     if (!/^[A-Za-z0-9_-]{8,64}$/.test(viewer)) throw new ApiError(400, 'viewer_required', 'Send ?viewer=<the random id this phone keeps>.');
     const opened = await experiences.open(target, { key: viewer, user: await optionalUser(req) });
+    // The page this code open led to shows a 3D model: an AR launch from it may be billed.
+    if (opened.ar && !opened.doc.fallback) app.scanTokens.noteModel((req.query as any).t, targetKey(target));
     // The prize game, if this company runs it: only on ads (not someone's own custom bottle).
     const custom = target.kind === 'slot' && platform.units.get(target.unitId)?.kind === 'custom';
     const companyId = experiences.ownerOf(target).companyId;
@@ -197,20 +204,23 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     return openExperience(req, { kind: 'box-face', packId, face });
   } });
 
-  route({ method: 'POST', url: '/v1/public/box-scans', scope: 'public', summary: 'Record a scan of a box side. Billed to that side’s advertiser only if it loaded and is not a repeat.', body: obj({ packId: S.str, face: { type: 'string', enum: ['top', 'front', 'back', 'right', 'left'] }, viewerKey: viewerKeyProp, experienceLoaded: S.bool, scanId: S.str }, ['packId', 'face', 'viewerKey', 'experienceLoaded']), handler: async (req) => {
+  route({ method: 'POST', url: '/v1/public/box-scans', scope: 'public', summary: 'Record a scan of a box side. Billed to that side’s advertiser only if it followed a real code open (scanToken), loaded and is not a repeat.', body: obj({ packId: S.str, face: { type: 'string', enum: ['top', 'front', 'back', 'right', 'left'] }, viewerKey: viewerKeyProp, experienceLoaded: S.bool, scanId: S.str, scanToken: scanTokenProp }, ['packId', 'face', 'viewerKey', 'experienceLoaded']), handler: async (req) => {
     const b = req.body as any;
     const target: Target = { kind: 'box-face', packId: b.packId, face: b.face };
     experiences.ownerOf(target);
     const before = platform.ledger.entries.length;
-    const e = platform.scanBox(b.packId, b.face, b.viewerKey, b.experienceLoaded, b.scanId ?? newId('scan'));
+    const billable = !!b.experienceLoaded && app.scanTokens.use(b.scanToken, targetKey(target), 'scan');
+    const e = platform.scanBox(b.packId, b.face, b.viewerKey, b.experienceLoaded, b.scanId ?? newId('scan'), billable);
     if (b.experienceLoaded) await experiences.rememberViewer(target, b.viewerKey);
     return { status: 202, body: { recorded: !!e, billed: platform.ledger.entries.length > before } };
   } });
-  route({ method: 'POST', url: '/v1/public/box-ar-launches', scope: 'public', summary: 'Record an AR launch from a box side.', body: obj({ packId: S.str, face: { type: 'string', enum: ['top', 'front', 'back', 'right', 'left'] }, viewerKey: viewerKeyProp, loaded: S.bool, launchId: S.str }, ['packId', 'face', 'viewerKey', 'loaded']), handler: async (req) => {
+  route({ method: 'POST', url: '/v1/public/box-ar-launches', scope: 'public', summary: 'Record an AR launch from a box side. Billed only with a code open’s scanToken, from a page with a 3D model.', body: obj({ packId: S.str, face: { type: 'string', enum: ['top', 'front', 'back', 'right', 'left'] }, viewerKey: viewerKeyProp, loaded: S.bool, launchId: S.str, scanToken: scanTokenProp }, ['packId', 'face', 'viewerKey', 'loaded']), handler: async (req) => {
     const b = req.body as any;
-    experiences.ownerOf({ kind: 'box-face', packId: b.packId, face: b.face });
+    const target: Target = { kind: 'box-face', packId: b.packId, face: b.face };
+    experiences.ownerOf(target);
     const before = platform.ledger.entries.length;
-    const e = platform.launchBoxAr(b.packId, b.face, b.viewerKey, b.loaded, b.launchId ?? newId('ar'));
+    const billable = !!b.loaded && app.scanTokens.use(b.scanToken, targetKey(target), 'ar');
+    const e = platform.launchBoxAr(b.packId, b.face, b.viewerKey, b.loaded, b.launchId ?? newId('ar'), billable);
     return { status: 202, body: { recorded: !!e, billed: platform.ledger.entries.length > before } };
   } });
 
@@ -280,8 +290,17 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const { placement } = placementFor(key, b.unitId, b.slot);
     if (!placement || placement.isHouse) throw new ApiError(422, 'not_sold', 'That slot has no advertiser to credit.');
     if (key!.advertiserId && placement.advertiserId !== key!.advertiserId) throw notFound('Slot');
+    // Sales are kept per advertiser and order, the same key the conversions API uses, so one sale is billed once
+    // whichever way it's reported, and two advertisers' "ORDER-1" never collide.
+    const orderKey = `${placement.advertiserId}:${b.orderId}`;
+    if (refund) {
+      // Only a sale that was billed can be refunded, and only once (here or through /v1/conversions/:id/refund).
+      const sold = platform.ledger.sale(key!.companyId, placement.advertiserId, orderKey);
+      if (!sold) throw new ApiError(404, 'no_sale', `No billed sale with order ${b.orderId}.`);
+      if (sold.refunded) throw new ApiError(409, 'already_refunded', `Order ${b.orderId} was already refunded.`);
+    }
     const before = platform.ledger.entries.length;
-    const e = refund ? platform.refund(b.unitId, b.slot, b.orderId, b.amountCents) : platform.purchase(b.unitId, b.slot, b.orderId, b.amountCents);
+    const e = refund ? platform.refund(b.unitId, b.slot, orderKey, b.amountCents) : platform.purchase(b.unitId, b.slot, orderKey, b.amountCents);
     return { status: 202, body: { recorded: !!e, ledgerLines: platform.ledger.entries.length - before } };
   };
   const saleBody = obj({ unitId: S.str, slot: S.int, orderId: S.str, amountCents: S.int }, ['unitId', 'slot', 'orderId', 'amountCents']);

@@ -27,6 +27,17 @@
   let viewerKey = store.get('fw_viewer');
   if (!viewerKey || !/^[A-Za-z0-9_-]{8,64}$/.test(viewerKey)) { viewerKey = randomKey(); store.set('fw_viewer', viewerKey); }
   const token = store.get('fw_token'); // set by the FreeWater app when someone signs in
+  // The one-time token that opening the printed code gave this page (?t=). The scan it reports, and an AR launch from
+  // it, are billed only with it. Kept for this tab, so a reload still has it (the server bills each token once).
+  const scanToken = (() => {
+    if (fixture) return undefined;
+    const k = `fw_st:${path}`;
+    let t = null;
+    try { t = new URLSearchParams(location.search).get('t'); } catch {}
+    try { if (t) sessionStorage.setItem(k, t); else t = sessionStorage.getItem(k); } catch {}
+    return t && /^[A-Za-z0-9._-]{1,100}$/.test(t) ? t : undefined;
+  })();
+  const withToken = (body) => (scanToken ? { ...body, scanToken } : body);
   const auth = token ? { authorization: `Bearer ${token}` } : {};
   const api = async (method, url, body) => {
     if (fixture) return fixture.api(method, url, body);
@@ -76,7 +87,7 @@
   async function experiencePage(target) {
     const url = target.kind === 'slot' ? `/v1/public/experience/${target.unitId}/${target.slot}` : `/v1/public/experience/box/${target.packId}/${target.face}`;
     let opened;
-    try { opened = await api('GET', `${url}?viewer=${encodeURIComponent(viewerKey)}`); }
+    try { opened = await api('GET', `${url}?viewer=${encodeURIComponent(viewerKey)}${scanToken ? `&t=${encodeURIComponent(scanToken)}` : ''}`); }
     catch (e) { return fail(e.status === 404 ? 'We couldn’t find that' : 'That didn’t open', e.status === 404 ? 'This code may be from a bottle that was never printed.' : 'Check your connection and scan again.'); }
     viewerKey = opened.viewerKey; // a signed-in person uses their own key
     renderExperience(opened, target, true);
@@ -106,8 +117,8 @@
     if (record) requestAnimationFrame(() => setTimeout(() => {
       const loaded = !doc.fallback;
       const rec = target.kind === 'slot'
-        ? api('POST', '/v1/public/scans', { unitId: target.unitId, slot: target.slot, viewerKey, experienceLoaded: loaded, ...(opened.variant ? { variant: opened.variant.id } : {}), ...(store.get('fw_no_tracking') === '1' ? {} : { context: visitContext() }) })
-        : api('POST', '/v1/public/box-scans', { packId: target.packId, face: target.face, viewerKey, experienceLoaded: loaded });
+        ? api('POST', '/v1/public/scans', withToken({ unitId: target.unitId, slot: target.slot, viewerKey, experienceLoaded: loaded, ...(opened.variant ? { variant: opened.variant.id } : {}), ...(store.get('fw_no_tracking') === '1' ? {} : { context: visitContext() }) }))
+        : api('POST', '/v1/public/box-scans', withToken({ packId: target.packId, face: target.face, viewerKey, experienceLoaded: loaded }));
       rec.then((r) => { if (loaded) play('scan', ctx); if (r?.points) toast(`+${r.points} points · they’re in your wallet`); }).catch(() => {});
     }, 0));
   }
@@ -263,8 +274,8 @@
       // Billed only once the model actually loaded on this phone.
       const loaded = !!mv.loaded;
       const body = ctx.target.kind === 'slot'
-        ? ['/v1/public/ar-launches', { unitId: ctx.target.unitId, slot: ctx.target.slot, viewerKey, loaded }]
-        : ['/v1/public/box-ar-launches', { packId: ctx.target.packId, face: ctx.target.face, viewerKey, loaded }];
+        ? ['/v1/public/ar-launches', withToken({ unitId: ctx.target.unitId, slot: ctx.target.slot, viewerKey, loaded })]
+        : ['/v1/public/box-ar-launches', withToken({ packId: ctx.target.packId, face: ctx.target.face, viewerKey, loaded })];
       api('POST', ...body).then(() => { if (loaded) playWhenBack('ar', ctx); }).catch(() => {});
       setTimeout(() => (launched = false), 1500);
     };
@@ -301,7 +312,7 @@
       getMap: () => api('GET', `/v1/public/ar/${ctx.target.unitId}`),
       getLabelSvg: (url) => (fixture ? fixture.text(url) : fetch(url).then((r) => { if (!r.ok) throw new Error('label'); return r.text(); })),
       // An AR launch is billed only once it has actually loaded on this phone.
-      onReady: (loaded) => { if (reported || previewMode) return; reported = true; api('POST', '/v1/public/ar-launches', { unitId: ctx.target.unitId, slot: ctx.target.slot, viewerKey, loaded }).then(() => { if (loaded) play('ar', ctx); }).catch(() => {}); },
+      onReady: (loaded) => { if (reported || previewMode) return; reported = true; api('POST', '/v1/public/ar-launches', withToken({ unitId: ctx.target.unitId, slot: ctx.target.slot, viewerKey, loaded })).then(() => { if (loaded) play('ar', ctx); }).catch(() => {}); },
       onLink: (url) => { engage(ctx, 'link', 'from AR'); track(ctx, 'offer_tap'); location.href = withAttribution(url, 'ar'); },
       onClose: ((t0) => () => track(ctx, 'ar_seconds', (performance.now() - t0) / 1000))(performance.now()),
     });

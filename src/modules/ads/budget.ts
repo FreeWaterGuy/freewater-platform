@@ -36,16 +36,23 @@ export function reserve(placements: Placement[], campaigns: Map<string, Campaign
     const c = campaigns.get(p.campaignId);
     if (!c || p.isHouse) continue;
     if (c.buy.type === 'guaranteed') c.buy.remainingPrints -= 1;
-    else c.buy.spentTodayCents += p.priceCents;
+    else {
+      c.buy.spentTodayCents += p.priceCents;
+      // Which day's budget this came out of, so giving it back later only touches that day.
+      if (c.buy.spentDay) p.spentDay = c.buy.spentDay;
+    }
   }
 }
 
-/** Give budget back when a print fails. A failed print is never billed. */
+/**
+ * Give budget back when a print fails. A failed print is never billed. A bid's money goes back only to the day it
+ * was held on: once the campaign's day has moved on, yesterday's hold is gone already and today's spend is untouched.
+ */
 export function release(placements: Placement[], campaigns: Map<string, Campaign>): void {
   for (const p of placements) {
     const c = campaigns.get(p.campaignId);
     if (!c || p.isHouse) continue;
     if (c.buy.type === 'guaranteed') c.buy.remainingPrints += 1;
-    else c.buy.spentTodayCents -= p.priceCents;
+    else if (p.spentDay === c.buy.spentDay) c.buy.spentTodayCents = Math.max(0, c.buy.spentTodayCents - p.priceCents);
   }
 }

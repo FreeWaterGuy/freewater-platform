@@ -5,6 +5,9 @@ type BoxEngagement = EventPayloads['box.scanned'] | EventPayloads['box.ar_launch
 import { newId } from '../../core/ids';
 import type { BoxFacePlacement, Cents, CompanyConfig, Placement } from '../../core/types';
 
+/** The most scans (and, separately, AR launches) of one ad on one bottle or box side billed in a day. */
+export const MAX_BILLED_PER_SLOT_PER_DAY = 10;
+
 /** One balanced line: money moves from `debit` to `credit`. Lines are only ever added, never edited or deleted. */
 export interface LedgerEntry {
   id: string;
@@ -220,6 +223,7 @@ export class Ledger {
     const p = e.payload;
     const loaded = 'experienceLoaded' in p ? p.experienceLoaded : p.loaded;
     if (!loaded) return; // didn't load, not billed
+    if (p.unbilled) return; // didn't follow a real code open: counted, never billed
 
     const unit = this.printedUnits.get(p.unitId);
     const placement = unit?.placements.find((x) => x.slotIndex === p.slotIndex);
@@ -230,6 +234,7 @@ export class Ledger {
     const last = this.lastEngagement.get(key);
     this.lastEngagement.set(key, t);
     if (last !== undefined && t - last < company.adRules.repeatScanWindowSec * 1000) return; // repeat, free
+    if (this.overDailyCap(`${kind}:${p.unitId}:${placement.campaignId}`, e.at, company)) return; // more than a bottle's few holders: free
 
     // Targeted ads pay more per engagement: the base price plus the campaign's targeting premium.
     const pct = this.premium(placement.campaignId);
@@ -253,14 +258,37 @@ export class Ledger {
     const company = this.company(e.companyId);
     const p = e.payload;
     const loaded = 'experienceLoaded' in p ? p.experienceLoaded : p.loaded;
-    if (!loaded) return;
+    if (!loaded || p.unbilled) return;
     const face = this.printedBoxes.get(p.packId)?.find((f) => f.face === p.face);
     if (!face || face.isHouse) return;
     if (this.isRepeat(`box-${kind}:${p.packId}:${p.face}:${p.viewerKey}`, e.at.getTime(), company)) return;
+    if (this.overDailyCap(`box-${kind}:${p.packId}:${face.campaignId}`, e.at, company)) return;
     const pct = this.premium(face.campaignId);
     const amount = Math.round((kind === 'scan' ? company.prices.perScan : company.prices.perArLaunch) * (1 + pct / 100));
     this.add(e, { packId: p.packId, campaignId: face.campaignId, debit: `receivable:advertiser:${face.advertiserId}`, credit: `revenue:${kind}`, amountCents: amount, kind, memo: `${face.advertiserName}, ${kind === 'scan' ? 'scan' : 'AR launch'} from the ${p.face} of a box` });
     this.giveShare(e, company, amount, { packId: p.packId }, undefined, kind === 'scan' ? 'a scan' : 'an AR launch');
+  }
+
+  /**
+   * A bottle is held by a few people: past this many billed scans (or AR launches) of one ad on it in a day, more
+   * are counted but not billed, whatever viewer keys they carry.
+   */
+  private dailyCount = new Map<string, number>();
+  private dayFormats = new Map<string, Intl.DateTimeFormat>();
+  private dayOf(at: Date, company: CompanyConfig) {
+    const tz = company.timezone ?? 'UTC';
+    let f = this.dayFormats.get(tz);
+    if (!f) { f = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }); this.dayFormats.set(tz, f); }
+    return f.format(at);
+  }
+  private overDailyCap(spot: string, at: Date, company: CompanyConfig) {
+    const day = this.dayOf(at, company);
+    const key = `${spot}:${day}`;
+    const n = this.dailyCount.get(key) ?? 0;
+    if (n >= MAX_BILLED_PER_SLOT_PER_DAY) return true;
+    if (this.dailyCount.size > 200_000) for (const k of this.dailyCount.keys()) if (!k.endsWith(`:${day}`)) this.dailyCount.delete(k);
+    this.dailyCount.set(key, n + 1);
+    return false;
   }
 
   private isRepeat(key: string, t: number, company: CompanyConfig) {
@@ -269,42 +297,92 @@ export class Ledger {
     return last !== undefined && t - last < company.adRules.repeatScanWindowSec * 1000;
   }
 
+  /**
+   * Sales the ledger billed, per advertiser and order: what was sold, the lines it added, and whether it's been
+   * refunded. A refund only reverses a sale found here, once, and never for more than was billed.
+   */
+  private sales = new Map<string, { amountCents: number; lines: LedgerEntry[]; refunded: boolean }>();
+  private saleKey(companyId: string, advertiserId: string, orderId: string) { return `${companyId}:${advertiserId}:${orderId}`; }
+  /** A billed sale, if there is one for this advertiser's order. */
+  sale(companyId: string, advertiserId: string, orderId: string): { amountCents: number; refunded: boolean } | undefined {
+    const s = this.sales.get(this.saleKey(companyId, advertiserId, orderId));
+    return s ? { amountCents: s.amountCents, refunded: s.refunded } : undefined;
+  }
+  private placementForSale(p: EventPayloads['purchase.completed'] | EventPayloads['purchase.refunded']) {
+    return p.unitId !== undefined
+      ? this.printedUnits.get(p.unitId)?.placements.find((x) => x.slotIndex === p.slotIndex)
+      : p.packId ? this.printedBoxes.get(p.packId)?.find((f) => f.face === p.face) : undefined;
+  }
+
   private onPurchase(e: PlatformEvent<'purchase.completed'> | PlatformEvent<'purchase.refunded'>, refund: boolean) {
     const company = this.company(e.companyId);
     const p = e.payload;
-    const placement = p.unitId !== undefined
-      ? this.printedUnits.get(p.unitId)?.placements.find((x) => x.slotIndex === p.slotIndex)
-      : p.packId ? this.printedBoxes.get(p.packId)?.find((f) => f.face === p.face) : undefined;
+    const placement = this.placementForSale(p);
     if (!placement || placement.isHouse) return;
+    const key = this.saleKey(e.companyId, placement.advertiserId, p.orderId);
+    if (refund) {
+      // Only a sale we billed, only once, and for no more than it was: the original lines are given back as they were.
+      const sale = this.sales.get(key);
+      if (!sale || sale.refunded) return;
+      sale.refunded = true;
+      const share = sale.amountCents > 0 ? Math.min(1, Math.max(0, p.amountCents) / sale.amountCents) : 0;
+      for (const l of sale.lines) {
+        const amount = share >= 1 ? l.amountCents : Math.round(l.amountCents * share);
+        const memo = l.kind === 'commission' ? `Refund on order ${p.orderId}, commission returned` : `Refund: ${l.memo}`;
+        this.add(e, { unitId: l.unitId, packId: l.packId, campaignId: l.campaignId, debit: l.credit, credit: l.debit, amountCents: amount, kind: l.kind === 'commission' ? 'commission_reversal' : l.kind, memo });
+      }
+      return;
+    }
+    if (this.sales.has(key)) return; // the same order again: billed once
     const amount = Math.round((p.amountCents * company.prices.commissionPercent) / 100);
     const adv = `receivable:advertiser:${placement.advertiserId}`;
     const where = p.unitId !== undefined ? { unitId: p.unitId } : { packId: p.packId };
     const loc = p.unitId !== undefined ? this.printedUnits.get(p.unitId)?.locationId : undefined;
-    if (refund) this.add(e, { ...where, campaignId: placement.campaignId, debit: 'revenue:commission', credit: adv, amountCents: amount, kind: 'commission_reversal', memo: `Refund on order ${e.payload.orderId}, commission returned` });
-    else this.add(e, { ...where, campaignId: placement.campaignId, debit: adv, credit: 'revenue:commission', amountCents: amount, kind: 'commission', memo: `Commission on order ${e.payload.orderId}` });
-    this.giveShare(e, company, amount, where, loc, 'a sales commission', refund);
+    const start = this.entries.length;
+    this.add(e, { ...where, campaignId: placement.campaignId, debit: adv, credit: 'revenue:commission', amountCents: amount, kind: 'commission', memo: `Commission on order ${e.payload.orderId}` });
+    this.giveShare(e, company, amount, where, loc, 'a sales commission');
+    this.sales.set(key, { amountCents: p.amountCents, lines: this.entries.slice(start), refunded: false });
   }
 
   /** After a restart: reload past lines and what the billing rules need to remember. Nothing is billed again. */
-  restore(input: { entries: LedgerEntry[]; printed: { unitId: string; placements: Placement[]; locationId: string }[]; boxes?: { packId: string; faces: BoxFacePlacement[] }[]; engagementEvents: PlatformEvent[] }) {
+  restore(input: { entries: LedgerEntry[]; printed: { unitId: string; placements: Placement[]; locationId: string }[]; boxes?: { packId: string; faces: BoxFacePlacement[] }[]; engagementEvents: PlatformEvent[]; saleEvents?: PlatformEvent[] }) {
     // One at a time: spreading hundreds of thousands of lines into push() overflows the stack.
+    const recent = (input.entries.at(-1)?.at.getTime() ?? 0) - 2 * 86_400_000;
     for (const l of input.entries) {
       this.entries.push(l); this.index(l);
+      // Today's billed scans and AR launches per ad, so the daily cap carries on after a restart.
+      if ((l.kind === 'scan' || l.kind === 'ar') && l.campaignId && l.at.getTime() >= recent && (l.unitId || l.packId)) {
+        const company = this.companies.get(l.companyId);
+        if (company) { const k = `${l.unitId ? l.kind : `box-${l.kind}`}:${l.unitId ?? l.packId}:${l.campaignId}:${this.dayOf(l.at, company)}`; this.dailyCount.set(k, (this.dailyCount.get(k) ?? 0) + 1); }
+      }
       // Bottles whose gift a person directed: what they give later still goes where the person chose.
       if (l.kind === 'giving_redirect' && l.unitId) this.directedTo.set(l.unitId, l.credit.replace(/^payable:charity:/, ''));
     }
     for (const p of input.printed) this.printedUnits.set(p.unitId, { placements: p.placements, locationId: p.locationId });
     for (const b of input.boxes ?? []) this.printedBoxes.set(b.packId, b.faces);
+    // Sales billed and refunded before the restart, so a refund still reverses exactly what was billed, once.
+    if (input.saleEvents?.length) {
+      const byEvent = new Map<string, LedgerEntry[]>();
+      for (const l of input.entries) { const a = byEvent.get(l.eventId); if (a) a.push(l); else byEvent.set(l.eventId, [l]); }
+      for (const e of input.saleEvents) {
+        const p = e.payload as EventPayloads['purchase.completed'];
+        const placement = this.placementForSale(p);
+        if (!placement || placement.isHouse) continue;
+        const key = this.saleKey(e.companyId, placement.advertiserId, p.orderId);
+        if (e.type === 'purchase.completed') { if (!this.sales.has(key)) this.sales.set(key, { amountCents: p.amountCents, lines: byEvent.get(e.id) ?? [], refunded: false }); }
+        else if (e.type === 'purchase.refunded' && byEvent.has(e.id)) { const s = this.sales.get(key); if (s) s.refunded = true; }
+      }
+    }
     for (const e of input.engagementEvents) {
       if (e.type === 'box.scanned' || e.type === 'box.ar_launched') {
         const p = e.payload as BoxEngagement;
-        if (!('experienceLoaded' in p ? p.experienceLoaded : p.loaded)) continue;
+        if (!('experienceLoaded' in p ? p.experienceLoaded : p.loaded) || p.unbilled) continue;
         this.lastEngagement.set(`box-${e.type === 'box.scanned' ? 'scan' : 'ar'}:${p.packId}:${p.face}:${p.viewerKey}`, e.at.getTime());
         continue;
       }
       const p = e.payload as EventPayloadsEngagement;
       const loaded = 'experienceLoaded' in p ? p.experienceLoaded : p.loaded;
-      if (!loaded) continue;
+      if (!loaded || p.unbilled) continue;
       const kind = e.type === 'unit.scanned' ? 'scan' : 'ar';
       this.lastEngagement.set(`${kind}:${p.unitId}:${p.slotIndex}:${p.viewerKey}`, e.at.getTime());
     }
