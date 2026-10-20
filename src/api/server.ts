@@ -1,5 +1,5 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
-import { ApiError, notFound, obj, S, signedInOwner, type Handler, type RouteDef } from './http';
+import { ApiError, notFound, obj, S, signedInOwner, type Handler, type RouteDef, Q } from './http';
 import { consumerRoutes } from './consumer';
 import { adsRoutes } from './ads';
 import { deliveryRoutes } from './delivery';
@@ -75,9 +75,20 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   // further left is ignored. (Fastify's own number option trusts no hop at all, so it's spelled out here.)
   const proxySetting = trustProxyFrom(process.env.TRUST_PROXY).value;
   const trustProxy = typeof proxySetting === 'number' ? (_addr: string, hop: number) => hop < proxySetting : proxySetting;
-  const server = Fastify({ logger: opts.logger ? loggerOptions : false, bodyLimit: 3 * 1024 * 1024, routerOptions: { maxParamLength: 1000 }, trustProxy });
+  // Schemas refuse a value of the wrong type rather than repair it: Fastify's default turns "0x10", true or [30] into
+  // an amount of cents. Path and query schemas are strings with patterns, so nothing needs coercing. (Fields a schema
+  // doesn't list are still dropped before any code sees them; clients rely on that.)
+  const ajv = { customOptions: { coerceTypes: false } } as const;
+  const server = Fastify({ logger: opts.logger ? loggerOptions : false, bodyLimit: 3 * 1024 * 1024, routerOptions: { maxParamLength: 1000 }, trustProxy, ajv });
   const { platform, packs, persistence, db, experiences } = app;
   for (const type of Object.keys(allowedTypes)) server.addContentTypeParser(type, { parseAs: 'buffer', bodyLimit: 64 * 1024 * 1024 }, (_req, body, done) => done(null, body));
+  // Postgres can't store the NUL character in text: refuse it anywhere in the path, query or JSON body, before any
+  // code (and the database) sees it, rather than fail the save with a 500.
+  server.addHook('preValidation', async (req, reply) => {
+    if (hasNul(req.params) || hasNul(req.query) || (!Buffer.isBuffer(req.body) && hasNul(req.body))) {
+      return reply.code(400).send({ error: { code: 'invalid_request', message: 'Text can’t contain the NUL character (\\u0000).' } });
+    }
+  });
   const routes: RouteDef[] = [];
   const route = (r: RouteDef) => routes.push(r);
 
@@ -522,14 +533,14 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   // ---------- books and events ----------
 
-  route({ method: 'GET', url: '/v1/ledger', scope: 'ledger', summary: "Your company's ledger lines, oldest first. Page with ?after=<seq>.", handler: async (req, key) => {
+  route({ method: 'GET', url: '/v1/ledger', query: { after: Q.seq, limit: Q.count }, scope: 'ledger', summary: "Your company's ledger lines, oldest first. Page with ?after=<seq>.", handler: async (req, key) => {
     const q = req.query as any;
     const after = Number(q.after ?? 0), limit = Math.min(500, Number(q.limit ?? 100));
     const rows = (await db.query<any>(`select seq, id, at, unit_id, pack_id, debit, credit, amount_cents, kind, memo from ledger_entries where company_id = $1 and seq > $2 order by seq limit $3`, [key!.companyId, after, limit])).rows;
     return { body: rows.map((r) => ({ seq: Number(r.seq), id: r.id, at: r.at, unitId: r.unit_id, packId: r.pack_id, debit: r.debit, credit: r.credit, amountCents: Number(r.amount_cents), kind: r.kind, memo: r.memo })) };
   } });
 
-  route({ method: 'GET', url: '/v1/events', scope: 'events', summary: "Your company's events, oldest first. Page with ?after=<seq>; filter with ?type=.", handler: async (req, key) => {
+  route({ method: 'GET', url: '/v1/events', query: { after: Q.seq, limit: Q.count, type: Q.text }, scope: 'events', summary: "Your company's events, oldest first. Page with ?after=<seq>; filter with ?type=.", handler: async (req, key) => {
     const q = req.query as any;
     const after = Number(q.after ?? 0), limit = Math.min(500, Number(q.limit ?? 100));
     const rows = (await db.query<any>(`select seq, id, type, at, payload from events where company_id = $1 and seq > $2 and ($3::text is null or type = $3) order by seq limit $4`, [key!.companyId, after, q.type ?? null, limit])).rows;
@@ -838,7 +849,11 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     server.route({
       method: r.method,
       url: r.url,
-      schema: r.body ? { body: r.body } : undefined,
+      schema: r.body || r.query || r.params ? {
+        ...(r.body ? { body: r.body } : {}),
+        ...(r.query ? { querystring: { type: 'object', properties: r.query } } : {}),
+        ...(r.params ? { params: { type: 'object', properties: r.params } } : {}),
+      } : undefined,
       ...(r.rawBodyLimit ? { bodyLimit: r.rawBodyLimit } : {}),
       // Check the key before the body is even read, so a caller without access learns nothing and uploads nothing.
       onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
@@ -980,6 +995,11 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     if (err.code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE') return reply.code(415).send({ error: { code: 'unsupported_type', message: 'Send JSON, or for uploads a .glb, PNG, JPEG, WebP or MP4 file.' } });
     if (err.code === 'FST_ERR_CTP_BODY_TOO_LARGE') return reply.code(413).send({ error: { code: 'too_large', message: 'That is too big to upload.' } });
     if (err.validation) return reply.code(400).send({ error: { code: 'invalid_request', message: err.message } });
+    // Fastify's own refusals of a malformed request (bad JSON, empty body with a JSON type, a body method with no
+    // type, a bad URL): the caller's mistake, so its 4xx and a plain message, never a 500 and an alert.
+    if (typeof err.code === 'string' && err.code.startsWith('FST_') && err.statusCode >= 400 && err.statusCode < 500) {
+      return reply.code(err.statusCode).send({ error: { code: err.statusCode === 415 ? 'unsupported_type' : 'invalid_request', message: err.message } });
+    }
     if (/^Unknown (bottle|unit|pack)/i.test(err.message)) return reply.code(404).send({ error: { code: 'not_found', message: err.message } });
     // The database unreachable (restarting, failing over): say so plainly, and leave the alerting to the saving check.
     if (/ECONNREFUSED|ECONNRESET|ETIMEDOUT|Connection terminated|terminating connection|the database system is (starting up|shutting down)|timeout exceeded when trying to connect|Client has encountered a connection error/i.test(String(err?.message ?? '') + String(err?.code ?? ''))) {
@@ -1037,8 +1057,17 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   return server;
 }
 
+/** Is there a NUL character in this text, or in any key or text inside this JSON value? */
+function hasNul(v: unknown, depth = 0): boolean {
+  if (typeof v === 'string') return v.includes('\u0000');
+  if (!v || typeof v !== 'object' || depth > 64) return false;
+  if (Array.isArray(v)) return v.some((x) => hasNul(x, depth + 1));
+  return Object.entries(v).some(([k, x]) => k.includes('\u0000') || hasNul(x, depth + 1));
+}
+
 function openapi(routes: RouteDef[]) {
   const paths: Record<string, any> = {};
+  const refusal = { description: 'Not done: { error: { code, message } }.', content: { 'application/json': { schema: { type: 'object', required: ['error'], properties: { error: { type: 'object', properties: { code: { type: 'string' }, message: { type: 'string' } }, required: ['code', 'message'] } } } } } };
   for (const r of routes) {
     const p = r.url.replace(/:([a-zA-Z]+)/g, '{$1}');
     paths[p] ??= {};
@@ -1046,8 +1075,13 @@ function openapi(routes: RouteDef[]) {
       summary: r.summary,
       security: r.scope === 'public' ? [] : [{ apiKey: [] }],
       'x-scopes': r.scope === 'public' ? [] : [r.scope].flat(),
-      parameters: [...r.url.matchAll(/:([a-zA-Z]+)/g)].map((m) => ({ name: m[1], in: 'path', required: true, schema: { type: 'string' } })),
+      parameters: [
+        ...[...r.url.matchAll(/:([a-zA-Z]+)/g)].map((m) => ({ name: m[1], in: 'path', required: true, schema: r.params?.[m[1]!] ?? { type: 'string' } })),
+        ...Object.entries(r.query ?? {}).map(([name, schema]) => ({ name, in: 'query', required: false, schema })),
+      ],
       requestBody: r.body ? { required: true, content: { 'application/json': { schema: r.body } } } : undefined,
+      // Every refusal and failure has the same shape, so clients (and fuzzers) can check it.
+      responses: { '2XX': { description: 'Done.' }, '4XX': refusal, '5XX': refusal },
     };
   }
   return {

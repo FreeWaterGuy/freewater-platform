@@ -1,0 +1,97 @@
+{
+  "operation": "POST /v1/me/age",
+  "method": "POST",
+  "path_template": "/v1/me/age",
+  "fingerprint": "c87054d0",
+  "case_id": "W4SW4e",
+  "code_sample": "curl -X POST -H 'Authorization: [Filtered]' -H 'Content-Type: application/json' -d '{\"birthDate\": \"2000-01-01\", \"x-schemathesis-unknown-property\": 42}' http://127.0.0.1:4651/v1/me/age",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:4651/v1/me/age",
+      "url_template": "http://127.0.0.1:4651/v1/me/age",
+      "headers": {
+        "User-Agent": "schemathesis/4.32.2",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "Authorization": "[Filtered]",
+        "X-Schemathesis-TestCaseId": "W4SW4e",
+        "Content-Type": "application/json",
+        "Content-Length": "66"
+      },
+      "response": {
+        "status_code": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "strict-origin-when-cross-origin",
+          "x-frame-options": "DENY",
+          "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+          "content-length": "27",
+          "date": "Tue, 20 Oct 2026 23:37:38 GMT",
+          "connection": "keep-alive",
+          "keep-alive": "timeout=72"
+        },
+        "body": "{\"ok\":true,\"minimumAge\":16}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "negative_data_rejection",
+          "status": "failure",
+          "message": "Schema-violating request accepted\n\nInvalid data should have been rejected\nExpected: 400, 401, 403, 404, 405, 406, 409, 415, 422, 428, 429, 5xx\nInvalid component: in body - object with unexpected properties"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 0.00011157599965372356,
+          "mode": "negative"
+        },
+        "components": {
+          "HEADER": "positive",
+          "BODY": "negative"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Object with unexpected properties",
+            "location": "/additionalProperties",
+            "parameter": "application/json",
+            "parameter_location": "BODY",
+            "scenario": "object_unexpected_properties"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "HEADER": {
+            "Authorization": "Bearer "
+          }
+        }
+      },
+      "path": "/v1/me/age",
+      "path_parameters": {},
+      "query": {},
+      "case_headers": {
+        "Authorization": "[Filtered]"
+      },
+      "cookies": {},
+      "case_body": {
+        "encoding": "json",
+        "value": {
+          "birthDate": "2000-01-01",
+          "x-schemathesis-unknown-property": 42
+        }
+      },
+      "media_type": "application/json",
+      "parent_index": null,
+      "auth_identity": null,
+      "operation": "POST /v1/me/age"
+    }
+  ]
+}

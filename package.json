@@ -8,6 +8,7 @@
     "demo": "tsx src/demo/run.ts",
     "test": "vitest run",
     "test:browser": "tsx test/browser/journeys.ts",
+    "fuzz:api": "node scripts/fuzz-api.mjs",
     "typecheck": "tsc --noEmit",
     "demo:packs": "tsx src/demo/night.ts",
     "start": "node --import tsx src/server/main.ts",

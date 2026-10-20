@@ -1,0 +1,97 @@
+{
+  "operation": "POST /v1/launch/reset",
+  "method": "POST",
+  "path_template": "/v1/launch/reset",
+  "fingerprint": "9a69c4ea",
+  "case_id": "nfIwVV",
+  "code_sample": "curl -X POST -H 'Authorization: [Filtered]' -H 'Content-Type: application/json' -d '{\"confirm\": \"RESET\", \"x-schemathesis-unknown-property\": 42}' http://127.0.0.1:4651/v1/launch/reset",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:4651/v1/launch/reset",
+      "url_template": "http://127.0.0.1:4651/v1/launch/reset",
+      "headers": {
+        "User-Agent": "schemathesis/4.32.2",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "Authorization": "[Filtered]",
+        "X-Schemathesis-TestCaseId": "nfIwVV",
+        "Content-Type": "application/json",
+        "Content-Length": "59"
+      },
+      "response": {
+        "status_code": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "strict-origin-when-cross-origin",
+          "x-frame-options": "DENY",
+          "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+          "content-length": "365",
+          "date": "Tue, 20 Oct 2026 23:37:37 GMT",
+          "connection": "keep-alive",
+          "keep-alive": "timeout=72"
+        },
+        "body": "{\"reset\":true,\"counts\":{\"offer claims\":0,\"wallet lines\":1066,\"wallet entries\":533,\"wallets\":54,\"game screens\":638,\"feedback and questions\":10,\"players\":59,\"seals\":1,\"chain checks\":0,\"chain actions\":0,\"picks that came true\":0,\"test chain\":5,\"bot consents\":118,\"bot places\":59,\"bot details\":59,\"bot locations\":0,\"bot interactions\":0,\"bot choices\":0,\"bot activity\":0}}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "negative_data_rejection",
+          "status": "failure",
+          "message": "Schema-violating request accepted\n\nInvalid data should have been rejected\nExpected: 400, 401, 403, 404, 405, 406, 409, 415, 422, 428, 429, 5xx\nInvalid component: in body - object with unexpected properties"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 6.502999985968927e-05,
+          "mode": "negative"
+        },
+        "components": {
+          "HEADER": "positive",
+          "BODY": "negative"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Object with unexpected properties",
+            "location": "/additionalProperties",
+            "parameter": "application/json",
+            "parameter_location": "BODY",
+            "scenario": "object_unexpected_properties"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "HEADER": {
+            "Authorization": "Bearer "
+          }
+        }
+      },
+      "path": "/v1/launch/reset",
+      "path_parameters": {},
+      "query": {},
+      "case_headers": {
+        "Authorization": "[Filtered]"
+      },
+      "cookies": {},
+      "case_body": {
+        "encoding": "json",
+        "value": {
+          "confirm": "RESET",
+          "x-schemathesis-unknown-property": 42
+        }
+      },
+      "media_type": "application/json",
+      "parent_index": null,
+      "auth_identity": null,
+      "operation": "POST /v1/launch/reset"
+    }
+  ]
+}

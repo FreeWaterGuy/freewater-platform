@@ -1,7 +1,7 @@
 import type { App } from '../app';
 import type { ApiKey } from '../db/store';
 import { agentIds, autonomyAreas, charter, governor, spendCategories, winCondition } from '../modules/agents/charter';
-import { ApiError, obj, S, type RouteDef } from './http';
+import { ApiError, obj, S, type RouteDef, Q } from './http';
 import { approvalSettings, approverStepProblem } from '../modules/accounts/secondStep';
 import { books } from '../modules/knowledge/library';
 import { EXAM_VERSION, questions } from '../modules/agents/exam';
@@ -69,7 +69,7 @@ export function agentRoutes(app: App, route: (r: RouteDef) => void) {
     const L = books();
     return { body: { about: L.info.about, rules: L.info.rules, books: L.info.books.map((b) => ({ ...b, passages: L.passages.filter((p) => p.book === b.id).length, chapters: [...new Set(L.passages.filter((p) => p.book === b.id).map((p) => p.chapter))] })) } };
   } });
-  route({ method: 'GET', url: '/v1/agents/books/search', scope: 'admin', summary: 'Search the books: the best passages for a question, each with the id to cite it by.', handler: async (req, key) => {
+  route({ method: 'GET', url: '/v1/agents/books/search', query: { q: Q.text, book: Q.text, k: Q.count }, scope: 'admin', summary: 'Search the books: the best passages for a question, each with the id to cite it by.', handler: async (req, key) => {
     staff(key);
     const q = req.query as any;
     if (!q.q || String(q.q).length < 2) throw new ApiError(400, 'invalid_request', 'Ask something: ?q=consecutive delivery');
@@ -131,7 +131,7 @@ export function agentRoutes(app: App, route: (r: RouteDef) => void) {
     return { body: await wrap(() => agents.spend(k.companyId, id, req.body as any, `agent:${id} (through ${who(k)})`)) };
   } });
   route({ method: 'POST', url: '/v1/agents/spends/:id/decide', scope: 'admin', summary: 'Approve or decline a spend waiting for a person.', body: obj({ approve: S.bool }, ['approve']), handler: async (req, key) => { const k = staff(key); person(k); return { body: await wrap(() => agents.decideSpend((req.params as any).id, (req.body as any).approve, who(k), k.companyId)) }; } });
-  route({ method: 'POST', url: '/v1/agents/:agentId/costs', scope: 'admin', summary: 'Record a running cost that isn’t an AI call (hosting, storage, a tool), so it’s on the agent’s line.', body: obj({ cents: { type: 'number', exclusiveMinimum: 0 }, memo: { type: 'string', minLength: 3, maxLength: 200 } }, ['cents', 'memo']), handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/agents/:agentId/costs', scope: 'admin', summary: 'Record a running cost that isn’t an AI call (hosting, storage, a tool), so it’s on the agent’s line.', body: obj({ cents: { type: 'number', exclusiveMinimum: 0, maximum: 100_000_000 }, memo: { type: 'string', minLength: 3, maxLength: 200 } }, ['cents', 'memo']), handler: async (req, key) => {
     const k = staff(key); person(k);
     const b = req.body as any;
     return { body: await wrap(() => agents.recordCost((req.params as any).agentId, b.cents, b.memo, who(k), k.companyId)) };
@@ -166,7 +166,7 @@ export function agentRoutes(app: App, route: (r: RouteDef) => void) {
 
   route({ method: 'GET', url: '/v1/profit', scope: 'admin', summary: 'Each closed month: the upside’s revenue, its share of costs, the profit, what the charity and the AI agents got, and losses carried forward. With the milestone’s progress.', handler: async (_req, key) => { const k = staff(key); return { body: { periods: await profit.periods(k.companyId), milestone: await profit.milestone(k.companyId), gate: await agents.growthGate(k.companyId) } }; } });
   route({ method: 'POST', url: '/v1/profit/close', scope: 'admin', summary: 'Close every finished month not yet closed (it also runs every hour).', handler: async (_req, key) => ({ body: await wrap(() => profit.closeDue(staff(key).companyId)) }) });
-  route({ method: 'POST', url: '/v1/milestones/factories', scope: 'admin', summary: 'Record a micro factory that has opened. Counts toward the milestone.', body: obj({ name: S.str, city: S.str, openedOn: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' } }, ['name', 'city', 'openedOn']), handler: async (req, key) => { const k = staff(key); return { body: await wrap(() => profit.recordFactory(k.companyId, req.body as any, who(k))) }; } });
+  route({ method: 'POST', url: '/v1/milestones/factories', scope: 'admin', summary: 'Record a micro factory that has opened. Counts toward the milestone.', body: obj({ name: S.str, city: S.str, openedOn: S.day }, ['name', 'city', 'openedOn']), handler: async (req, key) => { const k = staff(key); return { body: await wrap(() => profit.recordFactory(k.companyId, req.body as any, who(k))) }; } });
   route({ method: 'GET', url: '/v1/public/companies/:companyId/profit-sharing', scope: 'public', summary: 'Each closed month’s profit above the $1 base and how it was shared with the charity and the AI agents, and the milestone’s progress. For companies with open books.', handler: async (req) => {
     const c = platform.companies.get((req.params as any).companyId);
     if (!c || c.openBooks === false) throw new ApiError(404, 'not_shared', 'Not shared.');

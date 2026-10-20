@@ -23,7 +23,7 @@ export function offersRoutes(app: App, route: (r: RouteDef) => void) {
     advertiserId: { type: 'string', maxLength: 80 }, title: { type: 'string', minLength: 1, maxLength: 80 }, details: { type: 'string', maxLength: 500 },
     products: { type: 'array', minItems: 1, maxItems: 50, items: { type: 'string', maxLength: 20 } }, retailers: { type: 'array', minItems: 1, maxItems: 30, items: { type: 'string', maxLength: 60 } },
     reward, pointsCost: { type: 'integer', minimum: 0, maximum: 1000000 }, perPerson: { type: 'integer', minimum: 1, maximum: 100 }, maxClaims: { type: 'integer', minimum: 1, maximum: 10000000 },
-    steps: { type: 'array', maxItems: 10, items: obj({ upToClaims: { type: 'integer', minimum: 1 }, reward, pointsCost: { type: 'integer', minimum: 0, maximum: 1000000 } }, ['upToClaims', 'reward', 'pointsCost']) },
+    steps: { type: 'array', maxItems: 10, items: obj({ upToClaims: { type: 'integer', minimum: 1, maximum: 1_000_000 }, reward, pointsCost: { type: 'integer', minimum: 0, maximum: 1000000 } }, ['upToClaims', 'reward', 'pointsCost']) },
     startsAt: { type: 'string', format: 'date-time' }, endsAt: { type: 'string', format: 'date-time' },
   }, ['title', 'products', 'retailers', 'reward', 'pointsCost', 'perPerson', 'maxClaims']);
   const image = obj({ contentType: { type: 'string', enum: ['image/png', 'image/jpeg', 'image/webp'] }, dataBase64: { type: 'string', maxLength: 2_800_000 } }, ['contentType', 'dataBase64']);

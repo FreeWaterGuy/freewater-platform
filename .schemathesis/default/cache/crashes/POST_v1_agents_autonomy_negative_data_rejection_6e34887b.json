@@ -1,0 +1,99 @@
+{
+  "operation": "POST /v1/agents/autonomy",
+  "method": "POST",
+  "path_template": "/v1/agents/autonomy",
+  "fingerprint": "6e34887b",
+  "case_id": "GBB66r",
+  "code_sample": "curl -X POST -H 'Authorization: [Filtered]' -H 'Content-Type: application/json' -d '{\"area\": \"code\", \"level\": 0, \"reason\": \"0000000000\", \"x-schemathesis-unknown-property\": 42}' http://127.0.0.1:4651/v1/agents/autonomy",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:4651/v1/agents/autonomy",
+      "url_template": "http://127.0.0.1:4651/v1/agents/autonomy",
+      "headers": {
+        "User-Agent": "schemathesis/4.32.2",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "Authorization": "[Filtered]",
+        "X-Schemathesis-TestCaseId": "GBB66r",
+        "Content-Type": "application/json",
+        "Content-Length": "91"
+      },
+      "response": {
+        "status_code": 200,
+        "headers": {
+          "content-type": "application/json; charset=utf-8",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "strict-origin-when-cross-origin",
+          "x-frame-options": "DENY",
+          "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+          "content-length": "1394",
+          "date": "Tue, 20 Oct 2026 23:37:24 GMT",
+          "connection": "keep-alive",
+          "keep-alive": "timeout=72"
+        },
+        "body": "[{\"area\":\"pricing\",\"name\":\"Prices for ads, scans, AR and commissions\",\"max\":3,\"start\":1,\"level\":1,\"means\":\"AI proposes, a person approves.\",\"next\":{\"level\":2,\"eligible\":false,\"missing\":[\"10 measured changes in this area (0 so far)\",\"4 weeks with agents regenerative (0 so far)\"]}},{\"area\":\"surfaces\",\"name\":\"How many ads a bottle carries, and which surfaces are on\",\"max\":3,\"start\":1,\"level\":1,\"means\":\"AI proposes, a person approves.\",\"next\":{\"level\":2,\"eligible\":false,\"missing\":[\"10 measured changes in this area (0 so far)\",\"4 weeks with agents regenerative (0 so far)\"]}},{\"area\":\"costs\",\"name\":\"Recording lower supplier costs\",\"max\":1,\"start\":1,\"level\":1,\"means\":\"AI proposes, a person approves.\",\"next\":null},{\"area\":\"giving\",\"name\":\"How much goes to charity\",\"max\":1,\"start\":1,\"level\":1,\"means\":\"AI proposes, a person approves.\",\"next\":null},{\"area\":\"code\",\"name\":\"Changes to the platform\u2019s code\",\"max\":2,\"start\":1,\"level\":0,\"means\":\"People do it.\",\"next\":{\"level\":1,\"eligible\":true,\"missing\":[]}},{\"area\":\"spending\",\"name\":\"Agents spending their own funds\",\"max\":3,\"start\":2,\"level\":2,\"means\":\"AI acts; a person can undo it within 3 days.\",\"next\":{\"level\":3,\"eligible\":false,\"missing\":[\"12 weeks with agents regenerative (0 so far)\"]}},{\"area\":\"security\",\"name\":\"Security changes (turning off keys)\",\"max\":1,\"start\":1,\"level\":1,\"means\":\"AI proposes, a person approves.\",\"next\":null}]"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "negative_data_rejection",
+          "status": "failure",
+          "message": "Schema-violating request accepted\n\nInvalid data should have been rejected\nExpected: 400, 401, 403, 404, 405, 406, 409, 415, 422, 428, 429, 5xx\nInvalid component: in body - object with unexpected properties"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 7.843900039006257e-05,
+          "mode": "negative"
+        },
+        "components": {
+          "HEADER": "positive",
+          "BODY": "negative"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Object with unexpected properties",
+            "location": "/additionalProperties",
+            "parameter": "application/json",
+            "parameter_location": "BODY",
+            "scenario": "object_unexpected_properties"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "HEADER": {
+            "Authorization": "Bearer "
+          }
+        }
+      },
+      "path": "/v1/agents/autonomy",
+      "path_parameters": {},
+      "query": {},
+      "case_headers": {
+        "Authorization": "[Filtered]"
+      },
+      "cookies": {},
+      "case_body": {
+        "encoding": "json",
+        "value": {
+          "area": "code",
+          "level": 0,
+          "reason": "0000000000",
+          "x-schemathesis-unknown-property": 42
+        }
+      },
+      "media_type": "application/json",
+      "parent_index": null,
+      "auth_identity": null,
+      "operation": "POST /v1/agents/autonomy"
+    }
+  ]
+}

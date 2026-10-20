@@ -2,7 +2,7 @@ import type { App } from '../app';
 import type { ApiKey } from '../db/store';
 import { commandKinds, type CommandKind } from '../modules/fleet/service';
 import { readUpdatePrivateKey, signUpdate } from '../machine/updates';
-import { ApiError, obj, S, type RouteDef } from './http';
+import { ApiError, obj, S, type RouteDef, Q } from './http';
 
 /**
  * Model 6 machines talk to the platform here, each with its own key that belongs to that one machine.
@@ -24,7 +24,7 @@ export function machineRoutes(app: App, route: (r: RouteDef) => void) {
 
   // ---------- the machine itself ----------
   route({ method: 'POST', url: '/v1/machine/heartbeat', scope: 'orders', summary: 'Model 6: say how the machine is (printer, bottles, door, temperature). The answer has its mode, commands to run, the code for its screen, and its screen settings when they change.', body: obj({ status: statusSchema, softwareVersion: { type: 'string', maxLength: 40 }, bufferHeld: { type: 'array', maxItems: 200, items: { type: 'string', maxLength: 60 } }, screenVersion: { type: 'string', maxLength: 40 } }, ['status', 'softwareVersion']), handler: async (req, key) => ({ body: await fleet.heartbeat(mine(key), req.body as any) }) });
-  route({ method: 'GET', url: '/v1/machine/jobs/next', scope: 'orders', summary: 'Model 6: the next bottle to print, waiting up to ?wait= seconds (max 25) for one. Taking it starts the clock to finish it.', handler: async (req, key) => {
+  route({ method: 'GET', url: '/v1/machine/jobs/next', query: { wait: Q.count }, scope: 'orders', summary: 'Model 6: the next bottle to print, waiting up to ?wait= seconds (max 25) for one. Taking it starts the clock to finish it.', handler: async (req, key) => {
     const wait = Math.max(0, Math.min(25, Number((req.query as any).wait ?? 0))) * 1000;
     const locationId = mine(key);
     // If the machine's request goes away while it waits, stop waiting; a job taken for it goes back in the queue.
