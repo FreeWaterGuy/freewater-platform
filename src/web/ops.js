@@ -231,7 +231,9 @@
           h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Stop', 'Address', 'Box', 'Pack', 'Status', ''].map((x) => h('th', { text: x })))),
             h('tbody', {}, r.stops.map((s) => h('tr', {}, h('td', {}, h('b', { text: s.stopCode })), h('td', { text: s.address }), h('td', { text: `#${s.boxNumber ?? '—'}` }), h('td', { text: `${s.packSize}` }),
               h('td', {}, s.status === 'delivered' ? h('span', { class: 'pill ok', text: `Delivered${s.atAddressBy === 'driver' ? ' (driver confirmed)' : ''}` }) : s.status === 'not_delivered' ? h('span', { class: 'pill bad', text: `Not delivered: ${s.reason}` }) : h('span', { class: 'pill', text: s.packStatus === 'loaded' ? 'On the van' : s.packStatus === 'sealed' ? 'Sealed' : s.packStatus ?? 'Planned' })),
-              h('td', { style: 'color:var(--muted);font-size:13px', text: s.emptiesCollected ? `${s.emptiesCollected} empties` : '' })))))));
+              h('td', { style: 'color:var(--muted);font-size:13px' }, s.emptiesCollected ? `${s.emptiesCollected} empties` : '', s.checkedByHand ? `Checked by hand, ${ago(s.checkedByHand.at)}` : '',
+                // No packing line for this box: a signed-in person counts every bottle and checks it by hand (who and when are kept).
+                r.status === 'packing' && (s.packStatus === 'box_printed' || s.packStatus === 'mismatch') ? h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { if (!confirm(`Did you count all ${s.packSize} bottles in box #${s.boxNumber ?? '—'} and check each one belongs? It's sealed and recorded under your name.`)) return; try { const x = await api('POST', `/v1/ops/runs/${encodeURIComponent(r.id)}/stops/${s.stop}/check-by-hand`); toast(x.problems.length ? `Checked and sealed. ${x.problems.length} box(es) still need a check` : 'Checked and sealed. Every box is ready to load'); } catch (e) { toast(e.message); } render(); } }, 'Checked by hand') : null)))))));
       })) : h('div', { class: 'empty', text: 'No routes planned for this night yet. Plan and print it when the day’s orders are in.' }));
   }
 

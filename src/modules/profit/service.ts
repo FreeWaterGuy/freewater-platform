@@ -87,27 +87,31 @@ export class ProfitService {
     const inMonth = (at: Date | string) => this.month(companyId, at) === period;
     const lines = this.platform.ledger.entries.filter((l) => l.companyId === companyId && inMonth(l.at) && !SHARE_MEMO.test(l.memo));
     const sum = (f: (l: (typeof lines)[number]) => boolean) => lines.filter(f).reduce((a, l) => a + l.amountCents, 0);
+    // Money in and costs follow each line's side: a reversal (a refund, a voided batch) takes back what the original added.
+    const rev = (l: (typeof lines)[number]) => (l.credit.startsWith('revenue:') ? l.amountCents : l.debit.startsWith('revenue:') ? -l.amountCents : 0);
+    const cost = (l: (typeof lines)[number]) => (l.debit.startsWith('expense:') ? l.amountCents : l.credit.startsWith('expense:') ? -l.amountCents : 0);
+    const net = (f: (l: (typeof lines)[number]) => boolean, by: typeof rev) => lines.filter(f).reduce((a, l) => a + by(l), 0);
     const base = c.giving.extraAboveCents ?? 100;
     // Each bottle's print (and custom) money above the base, plus every other kind of revenue.
     const perUnit = new Map<string, number>();
-    for (const l of lines) if ((l.kind === 'print' || l.kind === 'custom') && l.unitId) perUnit.set(l.unitId, (perUnit.get(l.unitId) ?? 0) + l.amountCents);
+    for (const l of lines) if ((l.kind === 'print' || l.kind === 'custom') && l.unitId) perUnit.set(l.unitId, (perUnit.get(l.unitId) ?? 0) + rev(l));
     // Batches given outside the platform: their money above the $1 base per bottle is upside too.
     const batchUpside = this.deps.batches ? (await this.deps.batches.inMonth(companyId, period)).reduce((a, b) => a + Math.max(0, b.revenueCents - b.bottles * base), 0) : 0;
-    const upside = batchUpside + [...perUnit.values()].reduce((a, v) => a + Math.max(0, v - base), 0) + sum((l) => ['scan', 'ar', 'box_face', 'commission'].includes(l.kind)) - sum((l) => l.kind === 'commission_reversal');
-    const total = sum((l) => l.credit.startsWith('revenue:')) - sum((l) => l.kind === 'commission_reversal');
+    const upside = batchUpside + [...perUnit.values()].reduce((a, v) => a + Math.max(0, v - base), 0) + net((l) => ['scan', 'ar', 'box_face', 'commission', 'commission_reversal'].includes(l.kind), rev);
+    const total = net(() => true, rev);
     const bottles = [...this.platform.units.values()].filter((u) => u.companyId === companyId && (u.status === 'printed' || u.status === 'dispensed') && inMonth(u.createdAt)).length;
     const uc = c.unitCosts ? c.unitCosts.water + c.unitCosts.bottle + c.unitCosts.label + c.unitCosts.machine : 0;
     const [y, m] = period.split('-').map(Number) as [number, number];
     const from = new Date(Date.UTC(y, m - 1, 1) - DAY), to = new Date(Date.UTC(y, m, 1) + DAY);
     const ai = await this.deps.aiCostsCents(companyId, from, to);
-    const costs = Math.round(bottles * uc + sum((l) => l.kind === 'expense' || l.kind === 'prize') + ai);
+    const costs = Math.round(bottles * uc + net((l) => l.kind === 'expense' || l.kind === 'prize', cost) + ai);
     // Costs come out of the $1 base first; only what the base didn't cover comes out of the upside.
     const baseRevenue = total - upside;
     const costShare = Math.max(0, costs - baseRevenue);
     const prev = (await this.db.query<any>(`select carried_out from profit_periods where company_id = $1 and period < $2 order by period desc limit 1`, [companyId, period])).rows[0];
     const carriedIn = n(prev?.carried_out);
-    const net = upside - costShare - carriedIn;
-    const profit = Math.max(0, net), carriedOut = Math.max(0, -net);
+    const left = upside - costShare - carriedIn;
+    const profit = Math.max(0, left), carriedOut = Math.max(0, -left);
     // The charity: what it already got from the upside as it was earned, topped up to its share of the profit.
     const g = c.giving;
     // A batch's gift per bottle isn't upside giving; its share of the money above the base is.

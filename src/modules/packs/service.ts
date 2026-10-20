@@ -30,10 +30,14 @@ export interface Pack {
   status: 'composed' | 'box_printed' | 'mismatch' | 'verified' | 'sealed' | 'loaded' | 'delivered' | 'returned';
   loadPosition?: number;
   runId?: string;
+  /** Checked by a person, by hand, when no packing line was there to scan it: who and when, for the record. */
+  checkedByHand?: { by: string; at: string };
 }
 
 /** Asked to do something a pack can't do in the state it is in. */
 export class PackStateError extends Error {}
+/** More than one run of a route is under way and none was named: the caller must say which (runId). */
+export class AmbiguousRunError extends Error {}
 
 export type DeliveryResult =
   | { ok: true; pack: Pack }
@@ -173,6 +177,22 @@ export class PackService {
     return fresh;
   }
 
+  /**
+   * No packing line to scan it: a signed-in person counted every bottle in the box by hand and says it's right. Only a
+   * person can do this, and who and when is kept on the pack, so a box checked by hand is never mistaken for one the
+   * line scanned.
+   */
+  verifyByHand(packId: string, by: string): Pack {
+    const pack = this.need(packId);
+    if (pack.status !== 'box_printed' && pack.status !== 'mismatch') throw new PackStateError(`Pack ${packId} is ${pack.status}; only a printed pack waiting for its check can be checked.`);
+    if (!by) throw new PackStateError('A person must check a box by hand.');
+    pack.status = 'verified';
+    pack.checkedByHand = { by, at: this.platform.bus.now().toISOString() };
+    this.save(pack);
+    this.platform.bus.publish('pack.verified', pack.companyId, { packId, scanned: pack.unitIds.length }, `${packId}:verified-by-hand:${pack.checkedByHand.at}`);
+    return pack;
+  }
+
   seal(packId: string): Pack {
     const pack = this.need(packId);
     if (pack.status !== 'verified') throw new Error(`Pack ${packId} can't be sealed until every bottle is checked.`);
@@ -183,14 +203,22 @@ export class PackService {
   }
 
   /**
-   * The run a route is on now: the latest run among its packs still to be delivered (or, once everything is out,
-   * the latest run of all). Run ids are "<route>@<date>", so the latest sorts last; packs made outside a run ('')
-   * count as the oldest.
+   * The run a route is on now, when the caller didn't name one. The earliest run that still has boxes sealed or out on
+   * the van (so tonight's planned run never takes over from the one being driven); if none has, the one run still
+   * under way. If several are under way and none is sealed or loaded, it can't be guessed: name the run (runId).
+   * Once everything is out, the latest run of all. Run ids are "<route>@<date>", so they sort by date; packs made
+   * outside a run ('') count as the oldest.
    */
   currentRun(routeId: string): string {
     const onRoute = [...this.packs.values()].filter((p) => p.routeId === routeId);
     const active = onRoute.filter((p) => p.status !== 'delivered' && p.status !== 'returned');
-    return (active.length ? active : onRoute).map((p) => p.runId ?? '').sort().at(-1) ?? '';
+    const runs = (list: Pack[]) => [...new Set(list.map((p) => p.runId ?? ''))].sort();
+    const out = runs(active.filter((p) => p.status === 'sealed' || p.status === 'loaded'));
+    if (out.length) return out[0]!;
+    const under = runs(active);
+    if (under.length === 1) return under[0]!;
+    if (under.length > 1) throw new AmbiguousRunError(`${routeId} has ${under.length} runs under way (${under.map((r) => r || 'no run').join(', ')}). Say which one with runId.`);
+    return runs(onRoute).at(-1) ?? '';
   }
 
   /** Load order for a van: last stop first, so stop 1 ends up by the door. Only this run's packs still to go out. */
