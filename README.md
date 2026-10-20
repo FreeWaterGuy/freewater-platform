@@ -340,7 +340,7 @@ FW_MACHINE=ATX-014 FW_API=https://… FW_KEY=fwk_… npm run machine   # run the
 **Ops (`/ops/machines`).**
 - **Fleet:** every machine's status, bottles and labels left, the last day's prints, and open problems.
 - **Problems:** they open and close by themselves: offline, jammed, out of labels, low ink, sold out, low bottles, stuck bottle, door open, too warm, late print. Serious ones email the owners and ops team, and reach webhooks as `machine.problem` and `machine.problem_fixed`.
-- **Each machine:** recent bottles with print and drop times, and buttons for test print, out of service (with a reason shown on the machine and in the app), back in service, restart, refresh screen, top up offline labels, and update software (a stand-in until signed updates are set up).
+- **Each machine:** recent bottles with print and drop times, and buttons for test print, out of service (with a reason shown on the machine and in the app), back in service, restart, refresh screen, top up offline labels, and update software (owners only; signed by the server, and the machine refuses anything unsigned; the install itself is a stand-in until packages exist).
 - **Machine keys:** each machine's key belongs to that machine. It can only print there and can't read anything else.
 
 ## The console, developer portal and webhooks
@@ -517,7 +517,7 @@ All prices in `src/demo/seed.ts` are placeholders.
 
 - Going live (step 10): real providers for payments, payouts, messages, maps and routing; hosting, backups and monitoring
 - Real printer and dispenser drivers for the Model 6 (`src/machine/hardware.ts`) and a printer adapter for the micro-factory lines, once the printers are chosen
-- Signed software updates for machines
+- Software update packages for machines (signing and checking are done; downloading and installing a package is not)
 - Withdrawals to people's own wallets (the switch exists; the sending isn't built yet and answers "not built yet")
 - Approvers: invite at least 2 other owners or finance people before any token step
 - The network (`docs/NETWORK.md`): cross-checking seals, federated learning, open-sourcing, a membership that pays operators

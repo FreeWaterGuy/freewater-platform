@@ -1,3 +1,5 @@
+import { readUpdatePrivateKey } from '../machine/updates';
+
 /**
  * Checking the server's settings before it starts. In production a missing or unsafe setting stops the start with a
  * plain explanation, rather than a platform that half works. Elsewhere the same findings are only warnings.
@@ -24,6 +26,7 @@ export function checkConfig(env: NodeJS.ProcessEnv = process.env) {
   if (files === 'disk') need(!!env.FILE_DIR, 'FILE_STORAGE=disk needs FILE_DIR (a folder that is backed up).');
   if (files !== 'database' && files !== 's3' && files !== 'disk') errors.push(`FILE_STORAGE must be database, disk or s3 (it is "${files}").`);
   advise(files !== 'database' || !production, 'Files are stored in the database. That works, but makes the database and its backups large; file storage (FILE_STORAGE=s3) is better.');
+  if (env.MACHINE_UPDATE_SIGNING_KEY) { try { readUpdatePrivateKey(env.MACHINE_UPDATE_SIGNING_KEY); } catch { errors.push('MACHINE_UPDATE_SIGNING_KEY is not an Ed25519 private key. Make one with npm run key:machine-updates.'); } }
   for (const [k, v] of Object.entries(env)) if (/_(KEY|SECRET|TOKEN)$/.test(k) && v && /^(changeme|test|xxx+|todo)$/i.test(v)) need(false, `${k} looks like a placeholder.`);
   return { production, errors, warnings };
 }

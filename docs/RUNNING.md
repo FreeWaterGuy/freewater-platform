@@ -42,6 +42,7 @@ with a plain explanation.
 | `FW_SPOOL_DIR` | Where changes waiting for the database are also kept. Default in the image: `/var/lib/freewater/spool`. Mount a volume. In production, an unwritable one stops the start. |
 | `DATABASE_POOL_SIZE` | Database connections (default 10). |
 | `BACKUP_KEY` | 32 random bytes, base64. Make with `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`. **Keep a copy away from the server; without it no backup can be read.** |
+| `MACHINE_UPDATE_SIGNING_KEY` | The Ed25519 key that signs Model 6 software updates. Make the pair with `npm run key:machine-updates`; this half lives only here, the public half goes in each machine as `FW_UPDATE_PUBLIC_KEY`. Without it, software updates are refused. See `docs/SUPPLY-CHAIN.md`. |
 | `BACKUP_S3_BUCKET`, `BACKUP_S3_ACCESS_KEY_ID`, `BACKUP_S3_SECRET_ACCESS_KEY`, `BACKUP_S3_ENDPOINT`, `BACKUP_S3_REGION` | Where backups go: a different bucket (ideally a different account) from the files. Turn on object lock / a 30-day retention rule so they can't be deleted early. |
 | `RESTORE_TEST_URL` | A spare, empty database the weekly restore check may wipe and fill. **Never the real one.** |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `ANTHROPIC_PERSONALIZE_MODEL` | Claude, for the agents, ad assistant, designer, video writer and team assistant. Without it the built-in rules run. |

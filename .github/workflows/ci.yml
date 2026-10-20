@@ -5,30 +5,37 @@ on:
   push:
     branches: [main]
   pull_request:
+# Least privilege: the token can only read the code. No job writes to the repository, packages or releases.
 permissions:
   contents: read
+# Every action is pinned to a full commit (a tag can be moved to other code); Dependabot keeps the pins current
+# (.github/dependabot.yml). See docs/SUPPLY-CHAIN.md.
 jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      - run: npm ci # exactly the lockfile, with its integrity hashes
+      - name: Every installed package is signed by the registry
+        run: npm audit signatures
       - run: npm run typecheck
       - run: npx vitest run --reporter=default --reporter=github-actions # failures show as annotations
-      - name: Known security holes in what runs in production
-        run: npm audit --omit=dev --audit-level=high
+      - name: Known security holes in what runs in production (moderate and above; allowed ones are listed with reasons)
+        run: node scripts/audit.mjs
 
   image:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16.10 # TODO(digest): pin as postgres:16.10@sha256:… (docker buildx imagetools inspect postgres:16.10)
         env:
           POSTGRES_USER: fw
           POSTGRES_PASSWORD: fw
@@ -37,8 +44,9 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U fw" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          persist-credentials: false
           fetch-depth: 0 # the upgrade step builds the previous release too
       - name: Build the server image
         run: docker build --build-arg GIT_SHA=${{ github.sha }} -t freewater:${{ github.sha }} .
@@ -103,7 +111,7 @@ jobs:
           echo "Previous release: $prev"
           git worktree add /tmp/prev "$prev"
           docker build -t freewater:prev /tmp/prev
-          docker run --rm --network host postgres:16 psql postgres://fw:fw@localhost:5432/freewater -qc "create database upgrade"
+          docker run --rm --network host postgres:16.10 psql postgres://fw:fw@localhost:5432/freewater -qc "create database upgrade"
           # The previous release, filled with the sample data (not production mode: that refuses SEED_DEMO).
           docker run -d --name prev --network host -e NODE_ENV=development -e HOST=127.0.0.1 -e PORT=8090 -e SEED_DEMO=1 \
             -e DATABASE_URL=postgres://fw:fw@localhost:5432/upgrade freewater:prev

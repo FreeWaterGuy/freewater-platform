@@ -65,7 +65,15 @@ export function deliveryRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
   route({ method: 'POST', url: '/v1/driver/runs/:id/stops/:stop/deliver', scope: 'packs', summary: 'Scan the box at the door. Delivered only if it’s this stop’s box and you’re at the address (by GPS, or you confirm it).', body: obj({ scannedPackId: S.str, lat: { type: 'number' }, lng: { type: 'number' }, confirmedAtDoor: S.bool, photoUrl: { type: 'string', pattern: '^/assets/', maxLength: 200 }, emptiesCollected: { type: 'integer', minimum: 0, maximum: 200 } }, ['scannedPackId', 'emptiesCollected']), handler: async (req, key) => {
     const b = req.body as any;
     const p = req.params as any;
-    const r = await delivery.deliver({ runId: p.id, companyId: key!.companyId, driverId: person(key), stop: Number(p.stop), scannedPackId: b.scannedPackId, point: typeof b.lat === 'number' && typeof b.lng === 'number' ? { lat: b.lat, lng: b.lng } : undefined, confirmedAtDoor: b.confirmedAtDoor, photoUrl: b.photoUrl, emptiesCollected: b.emptiesCollected });
+    const driverId = person(key);
+    // A photo counts as proof only if this driver took it for this company through /v1/driver/photos.
+    if (b.photoUrl) {
+      const id = /^\/assets\/([A-Za-z0-9_-]+)\.[a-z0-9]+$/.exec(b.photoUrl)?.[1];
+      const found = id ? await app.assets.get(id).catch(() => null) : null;
+      const a = found?.asset;
+      if (!a || a.companyId !== key!.companyId || a.userId !== driverId || a.name !== 'delivery-photo') throw new ApiError(400, 'not_your_photo', 'Take the delivery photo in the driver app, then send its address.');
+    }
+    const r = await delivery.deliver({ runId: p.id, companyId: key!.companyId, driverId, stop: Number(p.stop), scannedPackId: b.scannedPackId, point: typeof b.lat === 'number' && typeof b.lng === 'number' ? { lat: b.lat, lng: b.lng } : undefined, confirmedAtDoor: b.confirmedAtDoor, photoUrl: b.photoUrl, emptiesCollected: b.emptiesCollected });
     return r.ok ? { body: r.run } : { status: 409, body: { error: { code: 'wrong_box_or_place', message: r.reason }, grab: r.grab, metersAway: r.metersAway } };
   } });
   route({ method: 'POST', url: '/v1/driver/runs/:id/stops/:stop/fail', scope: 'packs', summary: 'Couldn’t deliver (no safe place, locked gate). The box comes back and the customer is told.', body: obj({ reason: { type: 'string', minLength: 3, maxLength: 120 } }, ['reason']), handler: async (req, key) => {

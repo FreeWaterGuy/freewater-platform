@@ -153,7 +153,8 @@ describe('3. the route’s current run', () => {
     const compose = (stop: number, runId: string) => app.packs.compose({ companyId: 'freewater', customerId: `c-${runId}`, address: `${1400 + stop} Mueller Blvd`, routeId: 'route-5', stop, boxId: 'box-6', productId: 'bottle-16oz', runId });
     const a = await compose(1, 'route-5@2026-11-03');
     await compose(1, 'route-5@2026-11-06');
-    const r = await call('POST', '/v1/deliveries', keys['freewater-admin'], { routeId: 'route-5', stop: 1, scannedPackId: a.id, atAddress: true, photoProof: true, emptiesCollected: 0 });
+    const driver = await app.accounts.createSession((await app.accounts.invite({ companyId: 'freewater', email: 'driver-r2@freewater.io', role: 'driver' })).id);
+    const r = await call('POST', '/v1/deliveries', driver, { routeId: 'route-5', stop: 1, scannedPackId: a.id, atAddress: true, photoProof: true, emptiesCollected: 0 });
     expect(r.status).toBe(400);
     expect(r.body.error.code).toBe('run_required');
     expect(r.body.error.message).toMatch(/runId/);

@@ -1,0 +1,29 @@
+{
+  "$comment": "Known advisories CI accepts in what runs in production. Each needs a reason it can't reach us, a date it was reviewed, and an expiry after which CI fails until someone looks again. See docs/SUPPLY-CHAIN.md. The fourth known moderate one (GHSA-w5hq-g745-h8pq, uuid under jayson) is fixed by the overrides entry in package.json, not allowed here.",
+  "advisories": [
+    {
+      "id": "GHSA-528h-pc64-c93x",
+      "package": "stream-json",
+      "path": "@solana/web3.js > jayson > stream-json",
+      "reason": "Only jayson's server/stream helpers (lib/utils.js) load stream-json; @solana/web3.js uses jayson/lib/client/browser, which never requires it. The fixed stream-json (3.6+) is ESM-only and can't be required by jayson, so there is no safe override.",
+      "reviewed": "2026-10-20",
+      "expires": "2027-01-31"
+    },
+    {
+      "id": "GHSA-hqr4-qq8f-hg3x",
+      "package": "stream-json",
+      "path": "@solana/web3.js > jayson > stream-json",
+      "reason": "Same as GHSA-528h-pc64-c93x: the JSONC parser and verifier are never loaded by the RPC client we use.",
+      "reviewed": "2026-10-20",
+      "expires": "2027-01-31"
+    },
+    {
+      "id": "GHSA-mjw6-4jj6-33hc",
+      "package": "stream-json",
+      "path": "@solana/web3.js > jayson > stream-json",
+      "reason": "Same as GHSA-528h-pc64-c93x: the Assembler is never loaded by the RPC client we use.",
+      "reviewed": "2026-10-20",
+      "expires": "2027-01-31"
+    }
+  ]
+}
