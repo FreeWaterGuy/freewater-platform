@@ -139,6 +139,11 @@ export function dataRoutes(app: App, route: (r: RouteDef) => void) {
   route({ method: 'GET', url: '/v1/me/data', scope: 'me', summary: 'Everything kept about you, from every direction: your accounts, scans, page interactions, choices, designs, ads you made and what you did. Download it any time.', handler: async (_req, key) => ({ body: await data.profile(me(key).companyId, me(key).subject) }) });
   route({ method: 'GET', url: '/v1/me/data/choices', scope: 'me', summary: 'Your choices about each kind of data.', handler: async (_req, key) => ({ body: await data.consents(me(key).companyId, me(key).subject) }) });
   route({ method: 'POST', url: '/v1/me/data/choices', scope: 'me', summary: 'Say yes or no to each kind of data.', body: obj({ choices: choicesProp }, ['choices']), handler: async (req, key) => ({ body: await data.consent(me(key).companyId, me(key).subject, (req.body as any).choices, 'account') }) });
+  // Sent in the body, never the address, so the phone's key stays out of links and logs.
+  route({ method: 'POST', url: '/v1/public/data/:companyId/download', scope: 'public', summary: 'Without an account: everything kept under this phone’s random code (what it did, its choices, wallet, games, places and data choices). An account linked to the phone isn’t included: that takes signing in (GET /v1/me/data).', body: obj({ viewerKey: viewerKeyProp }, ['viewerKey']), handler: async (req) => {
+    const companyId = company(req);
+    return { body: await data.phoneData(companyId, (req.body as any).viewerKey) };
+  } });
   route({ method: 'POST', url: '/v1/public/data/:companyId/forget', scope: 'public', summary: 'Without an account: erase what’s kept under this phone’s random code (what it did on pages, its choices, consents). Scans stay in the books as counts; the phone gets a new code. An account linked to the phone isn’t touched: that takes signing in.', body: obj({ viewerKey: viewerKeyProp }, ['viewerKey']), handler: async (req) => {
     const companyId = (req.params as any).companyId as string;
     if (!app.platform.companies.has(companyId)) throw new ApiError(404, 'not_found', 'No such company.');
@@ -167,7 +172,8 @@ export function dataRoutes(app: App, route: (r: RouteDef) => void) {
     const q = req.query as any;
     const subject = q.email ? DataService.emailKey(q.email) : q.phone ? DataService.phoneKey(q.phone) : q.user ? `user:${q.user}` : q.viewer ? String(q.viewer) : q.person ? String(q.person) : '';
     if (!subject) throw new ApiError(400, 'what', 'Send ?email=, ?phone=, ?user=, ?viewer= or ?person=.');
-    return { body: await data.profile(k, subject) };
+    // A phone's key opens its wallet: the team sees a fingerprint of it, never the key (R15).
+    return { body: data.forTeam(await data.profile(k, subject), q.viewer ? [String(q.viewer)] : []) };
   } });
   route({ method: 'GET', url: '/v1/data/machines', scope: ['admin', 'ledger'], summary: 'What works at each machine, from counts only (no one’s personal data): scans and AR by kind of ad and time of day, last ?days= (default 30).', handler: async (req, key) => ({ body: await data.machineLearning(staff(key).companyId, Math.min(365, Math.max(1, Number((req.query as any).days ?? 30) || 30))) }) });
   route({ method: 'POST', url: '/v1/data/purge', scope: 'admin', summary: 'Delete everything older than your settings keep (it also runs daily).', handler: async (_req, key) => { staff(key); return { body: { deleted: await data.purge() } }; } });

@@ -25,7 +25,10 @@ const call = async (method: string, url: string, token?: string, payload?: unkno
 async function signIn(companyId: string, email: string) {
   await call('POST', '/v1/auth/start', undefined, { companyId, channel: 'email', to: email });
   const code = /(\d{6})/.exec(outbox.lastTo(email)!.text)![1];
-  return (await call('POST', '/v1/auth/verify', undefined, { companyId, channel: 'email', to: email, code })).body.token as string;
+  const token = (await call('POST', '/v1/auth/verify', undefined, { companyId, channel: 'email', to: email, code })).body.token as string;
+  // Owners and finance people change money settings only from a sign-in that passed the second step (threat model R4).
+  await app.accounts.markSecondStep(token);
+  return token;
 }
 let orderSeq = 0;
 const printBottle = async (companyId = 'freewater', locationId = 'ATX-014') => (await app.platform.order({ companyId, orderId: `o-${orderSeq++}`, locationId, productId: 'bottle-16oz' })).unit;

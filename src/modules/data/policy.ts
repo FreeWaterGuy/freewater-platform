@@ -54,6 +54,26 @@ export function dataLevelNotice(pays: boolean) {
     : 'Full doesn’t earn points where you are. You can change your level, or erase your data, at any time. Nothing works differently at any level.';
 }
 
+/**
+ * The notice of financial incentive California requires before anyone is given something for their data (Cal. Code
+ * Regs. tit. 11, § 7016): a summary of the offer, the kinds of data it covers, how to join and how to leave at any
+ * time, and why the reward is reasonably related to what the data is worth to us, with how we worked that out. The
+ * value estimate is the business's own figure: until it is set, the notice says the points are the estimate (a lawyer
+ * should confirm the method before launch; see docs/COMPLIANCE.md).
+ */
+export function financialIncentiveNotice(points: number | null) {
+  const pts = points ?? 0;
+  return {
+    title: 'Notice of financial incentive',
+    summary: `Choosing Full earns a one-time bonus of ${pts} points. Points can be used for offers and rewards in the app; they are not cash.`,
+    categories: (['interactions', 'choices', 'preciseLocation', 'device', 'identityLinking'] as const).map((k) => categoryInfo[k].label),
+    howToJoin: 'Choose Full. Nothing is pre-selected and nothing works differently at any level.',
+    howToLeave: 'Change your level or erase your data at any time, in the app or at /v1/me/data. You keep the points.',
+    valueOfData: `We estimate the extra data Full shares is worth about the value of the points to us: ${pts} points. We worked this out from what the platform expects to spend per person on research and rewards for the same kinds of data; we never sell it.`,
+    use: dataUse,
+  };
+}
+
 /** What data is for, said the same way everywhere it's asked for. */
 export const dataUse = 'We use this to train our AI and to plan future free and negatively priced products. We never sell your personal data. We may share findings that can’t be traced to anyone.';
 

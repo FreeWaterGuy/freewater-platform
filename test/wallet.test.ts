@@ -25,7 +25,10 @@ beforeAll(async () => {
 async function signIn(email: string) {
   await call('POST', '/v1/auth/start', undefined, { companyId: 'freewater', channel: 'email', to: email });
   const code = /(\d{6})/.exec((app.messenger as TestOutbox).lastTo(email)!.text)![1];
-  return (await call('POST', '/v1/auth/verify', undefined, { companyId: 'freewater', channel: 'email', to: email, code })).body.token as string;
+  const token = (await call('POST', '/v1/auth/verify', undefined, { companyId: 'freewater', channel: 'email', to: email, code })).body.token as string;
+  // Owners and finance people approve only from a sign-in that passed the second step (threat model R4).
+  await app.accounts.markSecondStep(token);
+  return token;
 }
 afterAll(async () => { await server.close(); await app.persistence.flush(); await db.close(); });
 

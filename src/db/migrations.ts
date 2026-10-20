@@ -1513,6 +1513,14 @@ create index if not exists events_unit_scans on events((payload->>'unitId'), seq
 create index if not exists ledger_company_at on ledger_entries(company_id, at);
 `,
   },
+  {
+    id: '055_priv_second_step_sessions',
+    sql: `
+-- Which sign-ins passed the authenticator app's step: owners and finance people need one that did before they approve
+-- money or token steps (threat model R4).
+alter table sessions add column if not exists second_step_at timestamptz;
+`,
+  },
 ];
 
 /** Runs every migration not yet run (or, for tests that start from an older schema, those in `list`). */

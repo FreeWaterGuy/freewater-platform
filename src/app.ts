@@ -269,6 +269,9 @@ export async function createApp(opts: AppOptions) {
   experiences.videos = videos;
   const interactions = new InteractionService(db, platform, opts.clock);
   const data = new DataService(db, platform, interactions, opts.clock);
+  // Phones' keys are secrets: the activity log and the team's screens keep only a keyed fingerprint of each.
+  data.tagKey = await loadSecret(db, 'viewer_tags');
+  await data.retagActivity();
   // Where each person is decides which law applies to them. Unknown: the strictest.
   data.geo = opts.geo === null ? undefined : opts.geo ?? geoFromEnv(process.env);
   data.trustGeoHeaders = process.env.TRUST_GEO_HEADERS === '1';
@@ -299,6 +302,8 @@ export async function createApp(opts: AppOptions) {
   wallet.mayEarn = async (companyId, subject) => (await data.rewardsAllowed(companyId, [subject, ...(await data.linkedSubjects(companyId, subject))])) && (await data.ageOk(companyId, [subject])) !== false;
   wallet.linked = (companyId, subject) => data.linkedSubjects(companyId, subject);
   wallet.sourceSecret = await loadSecret(db, 'wallet');
+  lottery.tagOf = (k) => data.viewerTag(k);
+  data.pointsForFull = (companyId) => wallet.settings(companyId).points.perAction?.data_full ?? null;
   const prompter = opts.prompter ?? (aiOn ? new ClaudePrompter({ apiKey: anthropicKey, model: process.env.ANTHROPIC_PROMPT_MODEL }) : builtinPrompter);
   const games = new GamesService(db, platform, wallet, data, assets, prompter, opts.clock, opts.seed !== undefined ? seededRandom(opts.seed + 101) : Math.random);
   numberline.environmentOf = (companyId, person, subject, unitId) => environment.environmentOf(companyId, person, subject, unitId);

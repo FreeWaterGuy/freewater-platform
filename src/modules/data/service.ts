@@ -1,10 +1,9 @@
-import { randomBytes } from 'node:crypto';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 import type { SqlClient } from '../../db/client';
 import type { Platform } from '../../platform';
 import type { InteractionService, Interaction } from '../interactions/service';
 import { newId } from '../../core/ids';
-import { categoryInfo, dataCategories, dataLevelInfo, dataLevelNotice, dataLevels, levelChoices, preset, type DataCategory, type DataLevel, type DataPolicy } from './policy';
+import { categoryInfo, dataCategories, dataLevelInfo, dataLevelNotice, financialIncentiveNotice, dataLevels, levelChoices, preset, type DataCategory, type DataLevel, type DataPolicy } from './policy';
 import { defaultSanctioned, effectivePolicy, minimumAgeAll, placeFromHeaders, regionOf, sanctionedAny, strictestPlace, type GeoIp, type Place } from './jurisdiction';
 
 // Collect every drop the law allows, from every direction, under each company's own switchboard:
@@ -19,12 +18,60 @@ import { defaultSanctioned, effectivePolicy, minimumAgeAll, placeFromHeaders, re
 export class DataError extends Error { constructor(public code: string, message: string, public status = 400) { super(message); } }
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 /** Never kept in the activity log, whatever the setting: codes, tokens, card details, passwords, secrets. */
-const SECRET = /code|token|password|secret|card|cvc|cvv|iban|account_?number|authorization|signature/i;
+const SECRET = /code|token|password|secret|card|cvc|cvv|iban|account_?number|authorization|signature|^viewer(_?key)?$/i;
 
 export interface Actor { type: 'viewer' | 'consumer' | 'advertiser' | 'staff' | 'machine' | 'driver' | 'platform' | 'public'; id?: string; userId?: string; viewerKey?: string }
 
 export class DataService {
   constructor(private db: SqlClient, private platform: Platform, private interactions: InteractionService, private clock: () => Date = () => new Date()) {}
+
+  // ---------- a phone's key is a secret: logs and the team's screens get its fingerprint ----------
+
+  /**
+   * The key for phone-key fingerprints (FW_SECRET_VIEWER_TAGS, or one kept by the platform). A phone's key alone opens
+   * its wallet, spends its points and erases its data, so it is never written to the activity log or shown to the team:
+   * they see `vkf:<fingerprint>`, which can't be turned back into the key (threat model R15).
+   */
+  tagKey: Buffer = randomBytes(32);
+  viewerTag(viewerKey: string) { return `vkf:${createHmac('sha256', this.tagKey).update(viewerKey).digest('base64url').slice(0, 22)}`; }
+  /** Subjects as the activity log names them: phones by fingerprint, accounts by their id. */
+  private actorIds(subjects: string[]) {
+    return subjects.flatMap((s) => (s.startsWith('user:') ? [s.slice(5)] : s.includes(':') ? [] : [this.viewerTag(s)]));
+  }
+  /** A copy of a profile for the team: every phone key in it replaced by its fingerprint. */
+  forTeam<T>(profile: T, extraKeys: string[] = []): T {
+    const keys = new Set<string>(extraKeys.filter((k) => k && !k.includes(':')));
+    const collect = (v: any, depth = 0): void => {
+      if (depth > 8 || !v || typeof v !== 'object') return;
+      if (Array.isArray(v)) { v.forEach((x) => collect(x, depth + 1)); return; }
+      if (v.kind === 'viewer' && typeof v.value === 'string') keys.add(v.value);
+      for (const [k, x] of Object.entries(v)) { if (/^viewer_?key$/i.test(k) && typeof x === 'string') keys.add(x); else collect(x, depth + 1); }
+    };
+    collect(profile);
+    const hide = (v: any, depth = 0): any => {
+      if (typeof v === 'string') return keys.has(v) ? this.viewerTag(v) : v;
+      if (depth > 8 || !v || typeof v !== 'object' || v instanceof Date) return v;
+      if (Array.isArray(v)) return v.map((x) => hide(x, depth + 1));
+      return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, hide(x, depth + 1)]));
+    };
+    return hide(profile);
+  }
+  /** An event as the team reads it: the phone's key replaced by its fingerprint. */
+  eventForTeam(payload: any) {
+    return payload && typeof payload === 'object' && typeof payload.viewerKey === 'string' ? { ...payload, viewerKey: this.viewerTag(payload.viewerKey) } : payload;
+  }
+  /** Activity written before fingerprints: phone keys replaced in place (runs at start and with the daily purge). */
+  async retagActivity(batch = 1000) {
+    let n = 0;
+    for (;;) {
+      const rows = (await this.db.query<any>(`select distinct actor_id from activity where actor_type in ('viewer','public') and actor_id is not null and actor_id not like 'vkf:%' limit $1`, [batch])).rows;
+      for (const r of rows) {
+        const res: any = await this.db.query(`update activity set actor_id = $2, detail = case when detail #> '{body,viewerKey}' is not null then jsonb_set(detail, '{body,viewerKey}', '"[kept secret]"') else detail end where actor_type in ('viewer','public') and actor_id = $1`, [r.actor_id, this.viewerTag(r.actor_id)]);
+        n += Number(res.rowCount ?? 0);
+      }
+      if (rows.length < batch) return n;
+    }
+  }
 
   policy(companyId: string): DataPolicy {
     return this.platform.companies.get(companyId)?.data ?? preset('us');
@@ -116,6 +163,19 @@ export class DataService {
     return said?.granted !== false;
   }
 
+  /**
+   * Global Privacy Control: a browser sending it has said "don't sell or share", and the law (California's, and
+   * others') treats that as the person's own request. It's kept as their do-not-sell choice, so what's recorded later
+   * without the request in hand (game answers, choices) honors it too. A person who has since said yes themselves
+   * keeps their own answer.
+   */
+  async honorGpc(companyId: string, subjects: string[]) {
+    for (const s of subjects.filter(Boolean)) {
+      const r = (await this.db.query<any>(`select granted from data_consents where company_id = $1 and subject = $2 and category = 'sellShare'`, [companyId, s])).rows[0];
+      if (!r) await this.setDoNotSell(companyId, s, true, 'Global Privacy Control');
+    }
+  }
+
   /** "Do not sell or share my personal information." FreeWater never sells personal data; this also stops sharing and cross-site use. */
   async setDoNotSell(companyId: string, subject: string, on: boolean, source: string) {
     await this.db.query(`insert into data_consents (company_id, subject, category, granted, source, at) values ($1,$2,'sellShare',$3,$4,$5) on conflict (company_id, subject, category) do update set granted = excluded.granted, source = excluded.source, at = excluded.at`, [companyId, subject, !on, source, this.clock().toISOString()]);
@@ -157,6 +217,9 @@ export class DataService {
     return places.every((p) => { const r = regionOf(p); return r === 'us' || r === 'us_ca'; }) && (await this.ageOk(companyId, subjects)) === true;
   }
 
+  /** Points for choosing full, from the company's wallet settings. Set by the app. */
+  pointsForFull?: (companyId: string) => number | null;
+
   /** This person's level (null until they choose: then they're asked once), what each level means, and what applies here. */
   async level(companyId: string, subject: string, live?: Place | null) {
     const subjects = await this.linkedSubjects(companyId, subject).catch(() => [subject]);
@@ -170,6 +233,7 @@ export class DataService {
       levels: dataLevels.map((l) => ({ level: l, ...dataLevelInfo[l], earnsPoints: l === 'full' && pays, locationHere: p.rules.preciseLocation.collect && levelChoices[l].preciseLocation === true })),
       notice: dataLevelNotice(pays),
       use: 'We use this to train our AI and to plan future free and negatively priced products. We never sell your personal data.',
+      ...(pays ? { financialIncentive: financialIncentiveNotice(this.pointsForFull?.(companyId) ?? null) } : {}),
     };
   }
 
@@ -192,7 +256,11 @@ export class DataService {
 
   async recordInteraction(companyId: string, viewerKey: string, campaignId: string | undefined, item: Interaction, req?: { ip?: string; headers: Record<string, unknown> }) {
     const gpc = String(req?.headers['sec-gpc'] ?? '') === '1';
-    if (!(await this.allowed(companyId, 'interactions', [viewerKey, ...(await this.linkedSubjects(companyId, viewerKey))], { gpc, place: this.placeOf(req) }))) return 0;
+    if (gpc) await this.honorGpc(companyId, [viewerKey]);
+    const subjects = [viewerKey, ...(await this.linkedSubjects(companyId, viewerKey))];
+    if (!(await this.allowed(companyId, 'interactions', subjects, { gpc, place: this.placeOf(req) }))) return 0;
+    // Someone who told us they're under the minimum age isn't profiled: how they use pages isn't kept (COPPA).
+    if ((await this.ageOk(companyId, subjects)) === false) return 0;
     return this.interactions.record(companyId, viewerKey, campaignId, [item]);
   }
 
@@ -200,14 +268,18 @@ export class DataService {
   async activity(companyId: string, actor: Actor, kind: string, opts: { target?: string; detail?: unknown; ip?: string; device?: string; gpc?: boolean; headers?: Record<string, unknown> } = {}) {
     const subjects = [actor.viewerKey, actor.userId ? `user:${actor.userId}` : undefined].filter((x): x is string => !!x);
     const business = !['viewer', 'consumer', 'public'].includes(actor.type);
+    if (opts.gpc && !business) await this.honorGpc(companyId, subjects);
     const o = { gpc: opts.gpc, business, place: business ? null : this.placeOf({ ip: opts.ip, headers: opts.headers }) };
     if (!(await this.allowed(companyId, 'activity', subjects, o))) return false;
     const p = business ? this.policy(companyId) : await this.policyFor(companyId, subjects, o.place);
     const ip = opts.ip && (await this.allowed(companyId, 'ipAddress', subjects, o)) ? (p.truncateIp ? shortIp(opts.ip) : opts.ip) : null;
     const device = opts.device && (await this.allowed(companyId, 'device', subjects, o)) ? opts.device.slice(0, 200) : null;
     const person = subjects.length ? await this.personFor(companyId, subjects[subjects.length - 1]!) : null;
+    // The phone's key is a secret: the log keeps its fingerprint, wherever the key turns up.
+    const vk = actor.viewerKey, tag = vk ? this.viewerTag(vk) : null;
+    const hideKey = (t: string | null) => (t && vk ? t.split(vk).join(tag!) : t);
     await this.db.query(`insert into activity (company_id, actor_type, actor_id, person_id, kind, target, detail, ip, device, at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-      [companyId, actor.type, actor.id ?? actor.userId ?? actor.viewerKey ?? null, person, kind.slice(0, 120), opts.target?.slice(0, 200) ?? null, opts.detail === undefined ? null : JSON.stringify(redact(opts.detail)), ip, device, this.clock().toISOString()]);
+      [companyId, actor.type, actor.id ?? actor.userId ?? tag, person, hideKey(kind.slice(0, 120)), hideKey(opts.target?.slice(0, 200) ?? null), hideKey(opts.detail === undefined ? null : JSON.stringify(redact(opts.detail))), ip, device, this.clock().toISOString()]);
     return true;
   }
 
@@ -273,6 +345,21 @@ export class DataService {
     return r ? (r.age_ok as boolean) : null;
   }
 
+  /**
+   * Old enough for something with its own, higher age (the prize game's, say)? false when they told us an age under
+   * it, or a birth year that might be (only the year is kept, so someone turning that age this year counts as not yet);
+   * null when they haven't told us.
+   */
+  async oldEnough(companyId: string, subjects: string[], age: number): Promise<boolean | null> {
+    const ok = await this.ageOk(companyId, subjects);
+    if (ok === false) return false;
+    if (ok === null) return null;
+    const all = [...new Set([...subjects, ...(await Promise.all(subjects.map((s) => this.linkedSubjects(companyId, s)))).flat()])];
+    const r = (await this.db.query<any>(`select birth_year from person_details where company_id = $1 and subject = any($2) and birth_year is not null order by updated_at desc limit 1`, [companyId, all])).rows[0];
+    if (!r) return null;
+    return this.clock().getUTCFullYear() - Number(r.birth_year) - 1 >= age;
+  }
+
   /** Optional things a person may tell us: their zip code, how many people live with them, their language. */
   async setDetails(companyId: string, subject: string, d: { zip?: string | null; household?: number | null; language?: string | null }) {
     if ((await this.ageOk(companyId, [subject])) === false) throw new DataError('too_young', 'Nothing more is kept for people under the minimum age.', 403);
@@ -298,6 +385,7 @@ export class DataService {
    */
   async scanContext(companyId: string, viewerKey: string, ctx: { language?: string; screen?: string; timezone?: string; referrer?: string; target?: string }, req?: { ip?: string; headers: Record<string, unknown> }) {
     const gpc = String(req?.headers['sec-gpc'] ?? '') === '1';
+    if (gpc) await this.honorGpc(companyId, [viewerKey]);
     const place = this.placeOf(req);
     await this.notePlace(companyId, viewerKey, place);
     const subjects = [viewerKey, ...(await this.linkedSubjects(companyId, viewerKey))];
@@ -451,7 +539,28 @@ export class DataService {
         campaigns: [...this.platform.campaigns.values()].filter((c) => c.companyId === companyId && advertiserIds.includes(c.advertiserId)).map((c) => ({ id: c.id, name: c.advertiserName, category: c.category, offering: c.offering ?? null, active: c.active })),
         drafts: await q(`select id, status, data, messages, created_by, updated_at from ad_drafts where company_id = $2 and advertiser_id = any($1) order by updated_at desc limit 50`, [advertiserIds, companyId]).catch(() => []),
       } : null,
-      activity: person ? await q(`select actor_type, kind, target, detail, at from activity where person_id = $1 and company_id = $2 order by at desc limit 500`, [person, companyId]) : [],
+      // What they did: under their person, and anything logged under their phones (by fingerprint) or accounts before
+      // (or without) linking, as erasing covers.
+      activity: await q(`select actor_type, kind, target, detail, at from activity where company_id = $1 and (person_id = $2 or (actor_type in ('viewer','consumer','public') and actor_id = any($3))) order by at desc limit 500`, [companyId, person, [...viewers.filter((v) => v && !v.includes(':')).map((v) => this.viewerTag(v)), ...userIds]]),
+    };
+  }
+
+  /**
+   * What's kept under one phone's own key, for the phone itself (no account needed). Like erasing without signing in,
+   * it never reaches an account or other phones linked to it: those take signing in.
+   */
+  async phoneData(companyId: string, viewerKey: string) {
+    const q = async (sql: string, args: unknown[]) => (await this.db.query<any>(sql, args)).rows;
+    const keys = [viewerKey];
+    return {
+      asConsumer: {
+        scans: await q(`select type, at, payload from events where company_id = $1 and type in ('unit.scanned','ar.launched','box.scanned','experience.engaged') and payload->>'viewerKey' = $2 order by seq desc limit 200`, [companyId, viewerKey]),
+        interactions: await q(`select target, kind, value, video_id, at from interactions where company_id = $1 and viewer_key = $2 order by at desc limit 500`, [companyId, viewerKey]),
+        choices: await q(`select kind, subject, position, system, tier, net_cents, at from choices where company_id = $1 and person = $2 order by at desc limit 500`, [companyId, viewerKey]),
+        lottery: await q(`select via, status, prize, created_at from lottery_chances where company_id = $1 and viewer_key = $2 order by created_at desc limit 100`, [companyId, viewerKey]),
+      },
+      ...(await this.more(companyId, keys)),
+      activity: await q(`select actor_type, kind, target, detail, at from activity where company_id = $1 and actor_type in ('viewer','public') and actor_id = $2 order by at desc limit 500`, [companyId, this.viewerTag(viewerKey)]),
     };
   }
 
@@ -466,6 +575,19 @@ export class DataService {
       locationsShared: await q(`select lat, lng, accuracy_m, at from precise_locations where company_id = $1 and subject = any($2) order by at desc limit 200`, [companyId, keys]),
       aboutYou: await q(`select birth_year, age_ok, zip, household, language from person_details where company_id = $1 and subject = any($2)`, [companyId, keys]),
       dataChoices: await q(`select category, granted, source, at from data_consents where company_id = $1 and subject = any($2)`, [companyId, keys]),
+      dataLevel: await q(`select level, source, at from data_levels where company_id = $1 and subject = any($2)`, [companyId, keys]),
+      gamesJoined: await q(`select joined_at, left_at, notice from game_players where company_id = $1 and person = any($2)`, [companyId, keys]),
+      choiceScreens: await q(`select context, options, chosen, created_at, chosen_at from choice_sets where company_id = $1 and person = any($2) order by created_at desc limit 500`, [companyId, keys]),
+      adPreferences: await q(`select avoid, updated_at from ad_preferences where company_id = $1 and person = any($2)`, [companyId, keys]),
+      measurementPanel: await q(`select joined_at, left_at from research_panel where company_id = $1 and person = any($2)`, [companyId, keys]),
+      bottlesHeld: await q(`select unit_id, at from bottle_holders where company_id = $1 and person = any($2)`, [companyId, keys]),
+      giftsDirected: await q(`select unit_id, from_cause, to_cause, cents, at from giving_directions where company_id = $1 and person = any($2)`, [companyId, keys]),
+      valueTests: await q(`select experiment_id, unit_id, slot, step, at from value_arms where company_id = $1 and person = any($2)`, [companyId, keys]),
+      videosSeen: await q(`select v.campaign_id, v.video_id, v.at from video_seen v join campaigns c on c.id = v.campaign_id and c.company_id = $1 where v.viewer_key = any($2)`, [companyId, keys]),
+      advertisersSeen: await q(`select advertiser_id, first_at from viewer_advertisers where company_id = $1 and viewer_key = any($2)`, [companyId, keys]),
+      linksOpened: await q(`select advertiser_id, campaign_id, url, created_at from clicks where company_id = $1 and viewer_key = any($2) order by created_at desc limit 500`, [companyId, keys]),
+      coupons: await q(`select code, advertiser_id, headline, created_at, redeemed_at from coupon_codes where company_id = $1 and viewer_key = any($2) order by created_at desc limit 200`, [companyId, keys]),
+      giftCards: await q(`select product, cents, status, at from wallet_giftcards where company_id = $1 and subject = any($2) order by at desc limit 200`, [companyId, keys]),
     };
   }
 
@@ -499,7 +621,7 @@ export class DataService {
     await run('interactions', `delete from interactions where company_id = $1 and viewer_key = any($2)`, [companyId, v]);
     await run('choices', `delete from choices where company_id = $1 and person = any($2)`, [companyId, [...v, ...users.map((id) => `user:${id}`)]]);
     // What they did: under their person, and anything logged under their accounts or phones before (or without) linking.
-    await run('activity', `delete from activity where company_id = $1 and actor_type in ('viewer','consumer','public') and actor_id = any($2)`, [companyId, [...v, ...users]]);
+    await run('activity', `delete from activity where company_id = $1 and actor_type in ('viewer','consumer','public') and actor_id = any($2)`, [companyId, [...v, ...v.map((k) => this.viewerTag(k)), ...users]]);
     if (prof.person) { await run('activity', `delete from activity where company_id = $1 and person_id = $2`, [companyId, prof.person]); await this.db.query(`delete from person_links where person_id = $1`, [prof.person]); await this.db.query(`delete from people where id = $1`, [prof.person]); }
     await run('consents', `delete from data_consents where company_id = $1 and subject = any($2)`, [companyId, [...v, ...users.map((id) => `user:${id}`)]]);
     await this.erasePersonal(companyId, [...v, ...users.map((id) => `user:${id}`)], run);
@@ -538,7 +660,7 @@ export class DataService {
     const code = `erased_${randomBytes(9).toString('base64url')}`;
     await run('interactions', `delete from interactions where company_id = $1 and viewer_key = $2`, [companyId, viewerKey]);
     await run('choices', `delete from choices where company_id = $1 and person = $2`, [companyId, viewerKey]);
-    await run('activity', `delete from activity where company_id = $1 and actor_id = $2`, [companyId, viewerKey]);
+    await run('activity', `delete from activity where company_id = $1 and actor_id = any($2)`, [companyId, [viewerKey, this.viewerTag(viewerKey)]]);
     await run('consents', `delete from data_consents where company_id = $1 and subject = $2`, [companyId, viewerKey]);
     await this.erasePersonal(companyId, [viewerKey], run);
     await run('advertisers seen', `delete from viewer_advertisers where company_id = $1 and viewer_key = $2`, [companyId, viewerKey]);
@@ -565,6 +687,8 @@ export class DataService {
     await run('wallet link', `delete from wallet_holders where company_id = $1 and subject = any($2)`, [companyId, keys]);
     await run('chain actions', `update chain_actions set params = jsonb_set(params, '{to}', '"erased"') where company_id = $1 and params->>'to' = any($2)`, [companyId, keys]);
     await run('measurement panel', `delete from research_panel where company_id = $1 and person = any($2)`, [companyId, keys]);
+    // Gift cards bought with credit stay in the books, under a code that leads nowhere.
+    for (const k of keys) await run('gift cards', `update wallet_giftcards set subject = $3 where company_id = $1 and subject = $2`, [companyId, k, code()]);
     for (const k of keys) {
       const c = code();
       // The bottle stays held (by a code that leads nowhere), so nobody else can take over its gift.
@@ -594,6 +718,7 @@ export class DataService {
 
   /** Delete what's older than each company keeps, for each kind. Run daily. */
   async purge() {
+    await this.retagActivity().catch(() => 0);
     let n = 0;
     for (const c of this.platform.companies.values()) {
       const p = c.data ?? preset('us');
@@ -615,7 +740,13 @@ export class DataService {
         await del(`delete from ${table} where company_id = $1 and ${at} < $2 ${extra} and ${col} in ${withCa}`, Math.min(p.rules[k].keepDays, ca[k].keepDays));
       };
       await keepIn('interactions', 'viewer_key', 'at', 'interactions');
-      await keepIn('activity', 'actor_id', 'at', 'activity', `and actor_type in ('viewer','consumer','public')`);
+      // The activity log names phones by fingerprint and accounts by id: the same groups, named that way.
+      const named = async (sql: string) => this.actorIds((await this.db.query<any>(sql, [c.id])).rows.map((r) => r.subject as string));
+      const people = `and actor_type in ('viewer','consumer','public')`;
+      const actUs = await named(usOnly), actCa = await named(withCa), actLax = await named(lax);
+      const delIn = async (days: number, ids: string[], not = false) => { const r: any = await this.db.query(`delete from activity where company_id = $1 and at < $2 ${people} and ${not ? 'not (coalesce(actor_id, \'\') = any($3))' : 'actor_id = any($3)'}`, [c.id, before(days), ids]); n += Number(r.rowCount ?? 0); };
+      await delIn(Math.min(p.rules.activity.keepDays, us.activity.keepDays), actUs);
+      await delIn(Math.min(p.rules.activity.keepDays, ca.activity.keepDays), actCa);
       await keepIn('choices', 'person', 'at', 'choices');
       await keepIn('choice_sets', 'person', 'created_at', 'choices');
       await keepIn('game_rounds', 'person', 'served_at', 'choices');
@@ -623,7 +754,7 @@ export class DataService {
       await del(`delete from interactions where company_id = $1 and at < $2`, p.rules.interactions.keepDays);
       await del(`delete from interactions where company_id = $1 and at < $2 and viewer_key not in ${lax}`, short('interactions'));
       await del(`delete from activity where company_id = $1 and at < $2`, p.rules.activity.keepDays);
-      await del(`delete from activity where company_id = $1 and at < $2 and actor_type in ('viewer','consumer','public') and coalesce(actor_id, '') not in ${lax}`, short('activity'));
+      await delIn(short('activity'), actLax, true);
       await del(`delete from choices where company_id = $1 and at < $2`, p.rules.choices.keepDays);
       await del(`delete from choices where company_id = $1 and at < $2 and person not in ${lax}`, short('choices'));
       await del(`delete from choice_sets where company_id = $1 and created_at < $2`, p.rules.choices.keepDays);
@@ -646,6 +777,13 @@ export class DataService {
     }
     // Network fingerprints on rewards are only needed for the day's limits: gone after two days.
     await this.db.query(`update wallet_tx set source = null where source is not null and at < $1`, [new Date(this.clock().getTime() - 2 * 86_400_000).toISOString()]).catch(() => {});
+    // Sign-in codes and second-step tickets that are over: kept a week for security checks, then gone. Ended sign-ins
+    // go after a year (the team page shows each person's last sign-in).
+    const ago = (days: number) => new Date(this.clock().getTime() - days * 86_400_000).toISOString();
+    for (const [sql, days] of [[`delete from login_codes where expires_at < $1`, 7], [`delete from second_step_challenges where expires_at < $1`, 7], [`delete from sessions where expires_at < $1 or revoked_at < $1`, 365]] as const) {
+      const r: any = await this.db.query(sql, [ago(days)]).catch(() => ({ rowCount: 0 }));
+      n += Number(r.rowCount ?? 0);
+    }
     // Changes a person moved aside hold raw data; once dealt with (or after 90 days), they go.
     await this.db.query(`delete from persistence_failures where at < now() - interval '90 days'`).catch(() => {});
     return n;
