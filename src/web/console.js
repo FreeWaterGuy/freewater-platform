@@ -1020,7 +1020,7 @@
         amount.replaceChildren(...(g.mode === 'none' ? [h('p', { class: 'full muted', style: 'margin:0', text: 'Nothing is given and the giving line disappears from your bottles.' })] : [
           g.mode === 'per_unit' ? num(ctx, 'giving.centsPerUnit', 'Each bottle gives', { min: 1, max: 100, suffix: '¢' }) : num(ctx, 'giving.percentOfRevenue', 'Share of ad money given', { min: 0.5, max: 50, step: 0.5, int: false, suffix: '%' }),
           num(ctx, 'giving.percentOfExtra', 'Plus this share of every other dollar', { min: 0, max: 50, step: 0.5, int: false, suffix: '%', hint: 'Bids above the starting price, more ads on a bottle, scans, AR launches, box sides, custom bottles and sales commissions. 0 for none.' }),
-          g.mode === 'per_unit' ? num(ctx, 'giving.extraAboveCents', 'The per-bottle gift covers the first', { min: 0, max: 100000, suffix: '¢', hint: (v) => `Print money on a bottle above ${dollars(v ?? 0)} gives the extra share. Usually your whole-label starting price.` }) : null,
+          g.mode === 'per_unit' ? num(ctx, 'giving.extraAboveCents', 'The per-bottle gift covers the first', { min: 0, max: 100000, suffix: '¢', hint: (v) => `Print money on a bottle above ${dollars(v ?? 100)} gives the extra share. Usually your whole-label starting price.` }) : null,
           charityOpts().length ? select(ctx, 'giving.defaultCharity', 'Charity', charityOpts(), { hint: 'Add charities below.' }) : text(ctx, 'giving.defaultCharity', 'Charity', { max: 80 }),
           (() => {
             // Splitting between charities: each gets its percent of every gift.

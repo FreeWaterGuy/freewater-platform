@@ -30,8 +30,9 @@ const CONSENT_AGE: Record<string, number> = {
 };
 /** The youngest age that may take part in the games and earn rewards, where the person is. Never under 13 anywhere. */
 export function minimumAge(place: Place | null, companyMin = 13) {
-  // Unknown: the oldest GDPR age. US (COPPA), UK and most others: 13.
-  const law = !place ? 16 : GDPR.has(place.country) ? (CONSENT_AGE[place.country] ?? 16) : 13;
+  // Unknown (the same as regionOf: no place, no source or no country): the oldest GDPR age. US (COPPA), UK and most others: 13.
+  const c = place && place.source !== 'none' ? (place.country ?? '').toUpperCase() : '';
+  const law = !c ? 16 : GDPR.has(c) ? (CONSENT_AGE[c] ?? 16) : 13;
   return Math.max(13, law, companyMin);
 }
 

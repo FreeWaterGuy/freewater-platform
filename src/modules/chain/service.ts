@@ -132,7 +132,7 @@ export class ChainService {
     if (kind === 'mint' && !(typeof params.to === 'string' && Number.isSafeInteger(params.amount) && (params.amount as number) > 0)) throw new ChainError('bad_params', 'A mint needs who it’s for and a whole amount.');
     if (kind === 'convert' && !(Number.isSafeInteger(params.tokensPerPoint) && (params.tokensPerPoint as number) > 0)) throw new ChainError('bad_params', 'Say how many token units each point becomes (a whole number).');
     // Every point there could ever be, at this rate, must still be a whole number the books can hold exactly.
-    if (kind === 'convert' && !Number.isSafeInteger(this.wallet.settings(companyId).points.cap * (params.tokensPerPoint as number))) throw new ChainError('bad_params', 'That rate is too high: every point at that rate would be more token units than the books can count exactly.');
+    if (kind === 'convert' && !rateFitsCap(this.wallet.settings(companyId).points.cap, params.tokensPerPoint as number)) throw new ChainError('bad_params', 'That rate is too high: every point at that rate would be more token units than the books can count exactly.');
     const stage = this.stage(companyId);
     if (kind === 'go_live_points' && stage !== 'test') throw new ChainError('wrong_stage', 'Already live.', 409);
     if (kind === 'go_live_token' && stage !== 'points') throw new ChainError('wrong_stage', 'Go live with points first.', 409);
@@ -351,11 +351,7 @@ export class ChainService {
     return { total: p.amount as number, to: [{ subject: p.to as string, points: 0, tokens: p.amount as number }] };
   }
   private async convertPlan(companyId: string, rate: number) {
-    const holders = await this.wallet.pointHolders(companyId);
-    const to = holders.map((h) => ({ subject: h.subject, points: h.points, tokens: h.points * rate }));
-    const total = to.reduce((a, x) => a + x.tokens, 0);
-    if (!Number.isSafeInteger(total) || to.some((x) => !Number.isSafeInteger(x.tokens))) throw new Error('At this rate the total is more token units than the books can count exactly.');
-    return { total, to };
+    return convertTotals(await this.wallet.pointHolders(companyId), rate);
   }
   private async finishMint(companyId: string, id: string, plan: { to: { subject: string; points: number; tokens: number }[] }, ref: string) {
     for (const x of plan.to) {
@@ -423,4 +419,17 @@ export class ChainService {
     const chain = this.chainFor(companyId);
     return { ...s, stage: this.stage(companyId), chain: chain.name, network: chain.network, custody: this.custody.name, paused: await this.isPaused(companyId), lastCheck: last ? { at: new Date(last.at).toISOString(), ok: last.ok, books: Number(last.books), chain: Number(last.chain) } : null, tokenSupply: await this.wallet.tokenSupply(companyId) };
   }
+}
+
+/** Every point there could ever be (the cap), at this many token units a point, is still a whole number the books hold exactly. */
+export function rateFitsCap(cap: number, tokensPerPoint: number) {
+  return Number.isSafeInteger(tokensPerPoint) && tokensPerPoint > 0 && Number.isSafeInteger(cap * tokensPerPoint);
+}
+
+/** Who gets how many token units at this rate, and the total; refused when any figure can't be held exactly. */
+export function convertTotals(holders: { subject: string; points: number }[], rate: number) {
+  const to = holders.map((h) => ({ subject: h.subject, points: h.points, tokens: h.points * rate }));
+  const total = to.reduce((a, x) => a + x.tokens, 0);
+  if (!Number.isSafeInteger(total) || to.some((x) => !Number.isSafeInteger(x.tokens))) throw new Error('At this rate the total is more token units than the books can count exactly.');
+  return { total, to };
 }

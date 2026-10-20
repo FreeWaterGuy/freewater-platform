@@ -59,9 +59,13 @@ export function adjustment(adj: BidAdjustments | undefined, m: AuctionMoment, ad
   return { factor: Math.max(0.1, Math.min(5, factor)), applied };
 }
 
-/** A new day in the company's time zone: yesterday's spend no longer counts against today's budget. */
+/**
+ * A new day in the company's time zone: yesterday's spend no longer counts against today's budget. Days only move
+ * forward (keys are YYYY-MM-DD, so they compare as text): a moment from an earlier day (the clock stepped back, the
+ * company's time zone changed) must not wipe today's spend, or the same day could be charged its cap twice.
+ */
 export function rollDay(c: Campaign, dayKey: string) {
-  if (c.buy.type === 'bid' && c.buy.spentDay !== dayKey) { c.buy.spentTodayCents = 0; c.buy.spentDay = dayKey; }
+  if (c.buy.type === 'bid' && (!c.buy.spentDay || dayKey > c.buy.spentDay)) { c.buy.spentTodayCents = 0; c.buy.spentDay = dayKey; }
 }
 
 /** Even pacing: by this point in the day, at most this share of the budget (plus a little room) should be spent. */
