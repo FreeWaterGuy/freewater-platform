@@ -283,9 +283,9 @@ export class GamesService {
   async launches(companyId: string) {
     return (await this.db.query<any>(`select id, category, item_id, label, share, answers, offer_id, at from game_launches where company_id = $1 order by at desc`, [companyId])).rows.map((r) => ({ id: r.id, category: r.category, item: r.label, share: Number(r.share), answers: r.answers, offerId: r.offer_id, at: new Date(r.at).toISOString() }));
   }
-  /** Picks this person made that came true. */
+  /** Picks this person made that came true: only picks made on a screen that said they may (as winners() counts). */
   private async cameTrue(companyId: string, person: string) {
-    return (await this.db.query<any>(`select l.label, l.offer_id from game_launches l where l.company_id = $1 and exists (select 1 from game_rounds r where r.company_id = l.company_id and r.person = $2 and r.pick_item = l.item_id and r.answered_at <= l.at and r.kind = 'choice' and r.flagged is null) order by l.at desc limit 5`, [companyId, person])).rows.map((r) => ({ item: r.label, offerId: r.offer_id }));
+    return (await this.db.query<any>(`select l.label, l.offer_id from game_launches l where l.company_id = $1 and exists (select 1 from game_rounds r where r.company_id = l.company_id and r.person = $2 and r.pick_item = l.item_id and r.answered_at <= l.at and r.kind = 'choice' and r.category = l.category and r.realness = 'may_come_true' and r.flagged is null) order by l.at desc limit 5`, [companyId, person])).rows.map((r) => ({ item: r.label, offerId: r.offer_id }));
   }
 
   /** What the games have learned, for the team: picks by price setup, how fast and how sure people were, where on the screen. */

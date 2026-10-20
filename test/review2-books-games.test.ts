@@ -123,7 +123,7 @@ describe('2. the packing check without a packing line: checked by hand, by a per
 
 describe('3. the route’s current run', () => {
   const setup = () => {
-    const made = createPlatform({ companies: [freewater, peakSpring], products: [bottle16oz], locations, campaigns: sampleCampaigns(), boxes, seed: 4 });
+    const made = createPlatform({ companies: [freewater, peakSpring], products: [bottle16oz], locations, campaigns: sampleCampaigns(), boxes, seed: 4, clock: () => new Date('2026-11-03T20:00:00Z') }); // the night of the first run (an older run is never guessed)
     const compose = (stop: number, runId: string) => made.packs.compose({ companyId: 'freewater', customerId: `cust-${stop}`, address: `${1300 + stop} Kenwood Ave`, routeId: 'route-3', stop, boxId: 'box-6', productId: bottle16oz.id, runId });
     const ready = async (stop: number, runId: string) => { const p = await compose(stop, runId); made.packs.verify(p.id, [...p.unitIds]); made.packs.seal(p.id); return p; };
     return { ...made, compose, ready };

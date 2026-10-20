@@ -2,6 +2,7 @@ import type { SqlClient } from '../../db/client';
 import type { Platform } from '../../platform';
 import type { ExperienceHost } from '../experiences/host';
 import type { DeliveryService } from '../delivery/service';
+import { signed } from '../books/service';
 
 /** What the company's team sees: today at a glance, and how every machine is doing. */
 export class OpsService {
@@ -18,7 +19,7 @@ export class OpsService {
     const units = [...p.units.values()].filter((u) => u.companyId === companyId && this.dayOf(companyId, u.createdAt) === today);
     const events = (await this.db.query<any>(`select type, at, payload from events where company_id = $1 and at >= $2 and type in ('unit.scanned','ar.launched','box.scanned','print.failed','delivery.rejected')`, [companyId, since])).rows
       .filter((e) => this.dayOf(companyId, new Date(e.at)) === today);
-    const lines = (await this.db.query<any>(`select at, kind, credit, amount_cents from ledger_entries where company_id = $1 and at >= $2`, [companyId, since])).rows
+    const lines = (await this.db.query<any>(`select at, kind, debit, credit, amount_cents from ledger_entries where company_id = $1 and at >= $2`, [companyId, since])).rows
       .filter((l) => this.dayOf(companyId, new Date(l.at)) === today);
     const count = (t: string) => events.filter((e) => e.type === t).length;
     const runs = await this.delivery.runs(companyId, today);
@@ -28,7 +29,8 @@ export class OpsService {
       date: today,
       bottles: { printed: units.filter((u) => u.status === 'dispensed' || u.status === 'printed').length, failed: units.filter((u) => u.status === 'failed').length, custom: units.filter((u) => u.kind === 'custom' && u.status !== 'failed').length, inPacks: units.filter((u) => u.packId && u.status !== 'failed').length },
       engagement: { scans: count('unit.scanned') + count('box.scanned'), arLaunches: count('ar.launched') },
-      money: { revenueCents: lines.filter((l) => String(l.credit).startsWith('revenue:')).reduce((s, l) => s + Number(l.amount_cents), 0) - lines.filter((l) => l.kind === 'commission_reversal').reduce((s, l) => s + Number(l.amount_cents), 0), donatedCents: lines.filter((l) => l.kind === 'donation').reduce((s, l) => s + Number(l.amount_cents), 0) },
+      // By each line's side, as the open books count it: a reversal (a refund, a voided batch) takes back what it added.
+      money: { revenueCents: lines.reduce((s, l) => s + signed(l, 'revenue:'), 0), donatedCents: lines.filter((l) => l.kind === 'donation').reduce((s, l) => s + signed(l, 'payable:charity:'), 0) },
       delivery: { routes: runs.length, stops: stops.length, delivered: stops.filter((s) => s.status === 'delivered').length, notDelivered: stops.filter((s) => s.status === 'not_delivered').length, wrongBoxScans: count('delivery.rejected') },
       attention: { adsToReview: review, printFailures: count('print.failed'), pluginFailures: this.host.failures.length },
     };

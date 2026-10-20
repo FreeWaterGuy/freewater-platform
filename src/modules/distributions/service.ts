@@ -65,7 +65,9 @@ export class DistributionService {
     if (!r) throw new DistributionError('not_found', 'Batch not found.', 404);
     if (r.voided_at) throw new DistributionError('voided', 'Already voided.', 409);
     if (String(reason ?? '').trim().length < 5) throw new DistributionError('reason', 'Say why, for the record.');
-    await this.db.query(`update distributions set voided_at = $2, voided_by = $3, void_reason = $4 where id = $1`, [id, this.platform.bus.now().toISOString(), by, reason.trim()]);
+    // Only the void that actually moves it voids it: two at once, the second finds it already voided.
+    const won = (await this.db.query<any>(`update distributions set voided_at = $2, voided_by = $3, void_reason = $4 where id = $1 and voided_at is null returning id`, [id, this.platform.bus.now().toISOString(), by, reason.trim()])).rows.length;
+    if (!won) throw new DistributionError('voided', 'Already voided.', 409);
     this.platform.bus.publish('batch.voided', companyId, { batchId: id, bottles: n(r.bottles), reason: reason.trim() }, `batch-void:${id}`);
     this.deps.onBottles(companyId, -n(r.bottles));
     return this.get(companyId, id);
@@ -91,15 +93,27 @@ export class DistributionService {
   /**
    * Batches whose lines are in one month's books (for the month's close): the money above the $1 base is upside. A
    * batch's lines are dated when it was recorded (a month already closed is never rewritten), so it belongs to the
-   * month it was recorded in, in the company's time zone; the day it was given stays in its data.
+   * month it was recorded in, in the company's time zone; the day it was given stays in its data. A void is dated when
+   * it's recorded too: a batch voided in a later month still counts in the month it was recorded (its share may already
+   * have been paid), and comes back out, `voided: true`, in the month of the void. Recorded and voided in the same
+   * month, it's in neither.
    */
   async inMonth(companyId: string, period: string) {
     const tz = this.platform.companies.get(companyId)?.timezone ?? 'UTC';
     const month = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit' });
+    const monthOf = (at: unknown) => { const [a, b] = month.format(new Date(at as string)).split('-'); return `${a}-${b}`; };
     const [y, m] = period.split('-').map(Number) as [number, number];
     // A day either side covers any time zone; the exact month is checked below.
     const from = new Date(Date.UTC(y, m - 1, 1) - 86_400_000).toISOString(), to = new Date(Date.UTC(y, m, 1) + 86_400_000).toISOString();
-    const rows = (await this.db.query<any>(`select data, at from distributions where company_id = $1 and voided_at is null and at >= $2 and at < $3`, [companyId, from, to])).rows;
-    return rows.filter((r) => { const [a, b] = month.format(new Date(r.at)).split('-'); return `${a}-${b}` === period; }).map((r) => (typeof r.data === 'string' ? JSON.parse(r.data) : r.data) as { bottles: number; revenueCents: number });
+    const rows = (await this.db.query<any>(`select data, at, voided_at from distributions where company_id = $1 and ((at >= $2 and at < $3) or (voided_at >= $2 and voided_at < $3))`, [companyId, from, to])).rows;
+    const out: { bottles: number; revenueCents: number; voided?: boolean }[] = [];
+    for (const r of rows) {
+      const d = (typeof r.data === 'string' ? JSON.parse(r.data) : r.data) as { bottles: number; revenueCents: number };
+      const recorded = monthOf(r.at) === period, voided = r.voided_at ? monthOf(r.voided_at) === period : false;
+      if (recorded && voided) continue;
+      if (recorded) out.push(d);
+      else if (voided) out.push({ ...d, voided: true });
+    }
+    return out;
   }
 }

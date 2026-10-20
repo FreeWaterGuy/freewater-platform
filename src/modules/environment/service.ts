@@ -5,6 +5,7 @@ import type { CompanyConfig } from '../../core/types';
 import { newId } from '../../core/ids';
 import type { NumberLineService } from '../numberline/service';
 import type { OfferingFacts } from '../numberline/placement';
+import { withCharityLock } from '../books/charityLock';
 
 /**
  * The data environment: how FreeWater is set up so the choices people make in it measure what they actually want.
@@ -217,13 +218,17 @@ export class EnvironmentService {
     if (this.now().getTime() - new Date(u.createdAt).getTime() > 30 * DAY) throw new EnvironmentError('too_late', 'A bottle’s gift can be directed within 30 days of it being printed.', 409);
     // Only the person holding it: whoever first scanned it (or, before any scan, the person it was printed for).
     if (person !== (await this.holderOf(unitId))) throw new EnvironmentError('not_holder', 'Only the person holding the bottle can choose where its gift goes.', 403);
-    // Money already sent can't be moved.
-    const sent = (await this.db.query<any>(`select 1 from charity_transfers t join charities c on c.id = t.charity_id where t.company_id = $1 and c.name = any($2) and t.status in ('sent', 'confirmed') and t.covers_until >= $3 limit 1`, [u.companyId, g.from.map(([k]) => k), u.createdAt])).rows.length;
-    if (sent) throw new EnvironmentError('already_sent', 'This bottle’s gift has already been sent.', 409);
-    // Claim the bottle first: only one choice per bottle ever moves money.
-    const won = (await this.db.query<any>(`insert into giving_directions (unit_id, company_id, person, from_cause, to_cause, cents, at) values ($1,$2,$3,$4,$5,$6,$7) on conflict do nothing returning unit_id`, [unitId, u.companyId, person, g.current, to, g.cents, iso(this.now())])).rows.length;
-    if (!won) throw new EnvironmentError('already', 'This bottle’s gift has already been directed.', 409);
-    for (const [from, cents] of g.from) if (from !== to) this.platform.bus.publish('giving.directed', u.companyId, { unitId, from, to, cents, person }, `giving:${unitId}:${from}`);
+    // Money already sent, or being sent, can't be moved. A payout run writes its transfer down under the same lock, so
+    // a redirect lands either before the run reads what's owed (and the run sends it to the new cause) or after the
+    // transfer is written down (and is refused here): never both.
+    await withCharityLock(this.platform, u.companyId, async () => {
+      const sent = (await this.db.query<any>(`select 1 from charity_transfers t join charities c on c.id = t.charity_id where t.company_id = $1 and c.name = any($2) and t.status in ('sending', 'sent', 'confirmed') and t.covers_until >= $3 limit 1`, [u.companyId, g.from.map(([k]) => k), u.createdAt])).rows.length;
+      if (sent) throw new EnvironmentError('already_sent', 'This bottle’s gift has already been sent (or is being sent).', 409);
+      // Claim the bottle first: only one choice per bottle ever moves money.
+      const won = (await this.db.query<any>(`insert into giving_directions (unit_id, company_id, person, from_cause, to_cause, cents, at) values ($1,$2,$3,$4,$5,$6,$7) on conflict do nothing returning unit_id`, [unitId, u.companyId, person, g.current, to, g.cents, iso(this.now())])).rows.length;
+      if (!won) throw new EnvironmentError('already', 'This bottle’s gift has already been directed.', 409);
+      for (const [from, cents] of g.from) if (from !== to) this.platform.bus.publish('giving.directed', u.companyId, { unitId, from, to, cents, person }, `giving:${unitId}:${from}`);
+    });
     // The choice itself, user-directed (Tier 4b), among the causes on offer.
     const facts = (cause: string): OfferingFacts => ({ kind: 'bottle', name: `This bottle’s gift to ${cause}`, priceCents: 0, valueBack: { donationCents: g.cents, paymentCents: 0, cause, directedBy: 'person' } });
     const place = async (cause: string) => ({ subject: `cause:${cause}`, placed: await this.numberline.placementOf(u.companyId, `cause:${cause}`, facts(cause)) });
