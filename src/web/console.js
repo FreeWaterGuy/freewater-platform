@@ -197,6 +197,15 @@
     box.addEventListener('change', () => { setP(ctx.draft, path, o.invert ? !box.checked : box.checked); ctx.changed(); });
     return h('label', { class: `switch${o.full ? ' full' : ''}` }, box, h('div', {}, h('b', { text: title }), h('span', { text: desc })));
   };
+  // Gift cards (exchanges) are turned on only by an approved launch action; saving them on here is refused. So the switch
+  // can only turn them off. When off, it's shown read-only with the way to turn them on.
+  const exchangesSwitch = (ctx) => {
+    const savedOn = getP(S.ov.config, 'wallet.conversions.enabled') === true;
+    if (savedOn) return toggle(ctx, 'wallet.conversions.enabled', 'Gift cards (exchanges)', 'On. Can be switched off here any time. Switching on again needs approvals under Launch.');
+    const box = h('input', { type: 'checkbox', disabled: true, 'aria-describedby': 'exchanges-note' });
+    return h('label', { class: 'switch', style: 'cursor:default;opacity:.85' }, box, h('div', {}, h('b', { text: 'Gift cards (exchanges)' }),
+      h('span', { id: 'exchanges-note' }, 'Off. Turned on only through an approved step under ', link('/console/launch', {}, 'Launch'), '.')));
+  };
   const section = (title, lead, ...kids) => h('section', { class: 'section' }, h('h2', { text: title }), lead ? h('p', { class: 'lead', text: lead }) : null, ...kids);
 
   // ---------- launch: test, then live ----------
@@ -268,7 +277,7 @@
         section('Points per action', 'What each action earns now, before halvings. Points never depend on which item someone picks.', h('div', { class: 'form' }, actions.map((k) => num(ctx, `wallet.points.perAction.${k}`, label[k] ?? k, { min: 0, max: 10000, hint: `Earns ${supply.earnNow[k] ?? 0} now` }))),
           h('div', { class: 'form' }, num(ctx, 'wallet.points.dailyMax', 'Most points one person can earn in a day', { min: 0, max: 1000000 }), text(ctx, 'wallet.points.name', 'What points are called', { max: 40 }))),
         section('Money switches', 'Changed only by a person signed in. Exchanging points for anything else takes the several-people approval under Launch.',
-          toggle(ctx, 'wallet.credit.enabled', 'Dollar credit', 'Pay people from brands’ reserves (offers, rewards).'), toggle(ctx, 'offers.enabled', 'Brand offers', 'Approved offers go live for people to claim.'), toggle(ctx, 'wallet.conversions.enabled', 'Gift cards (exchanges)', 'Can be switched off here any time. Switching on again needs approvals under Launch.')),
+          toggle(ctx, 'wallet.credit.enabled', 'Dollar credit', 'Pay people from brands’ reserves (offers, rewards).'), toggle(ctx, 'offers.enabled', 'Brand offers', 'Approved offers go live for people to claim.'), exchangesSwitch(ctx)),
         section('Brand reserves', 'Record money a brand sent for credit, once it has really arrived.', reserve),
       ];
     });
@@ -835,7 +844,7 @@
 
   // ---------- the AI agents ----------
   async function agentsPage() {
-    const [o, pr, exam, quality, surplus, env, tests] = await Promise.all([api('GET', '/v1/agents'), api('GET', '/v1/profit'), api('GET', '/v1/agents/exam'), api('GET', '/v1/agents/quality'), api('GET', '/v1/books/surplus'), api('GET', '/v1/environment/report'), api('GET', '/v1/environment/experiments')]);
+    const [o, pr, exam, quality, surplus, env, tests] = await Promise.all([api('GET', '/v1/agents'), api('GET', '/v1/profit'), api('GET', '/v1/agents/exam'), api('GET', '/v1/agents/quality'), api('GET', '/v1/books/surplus').catch(() => null), api('GET', '/v1/environment/report'), api('GET', '/v1/environment/experiments')]);
     const EXAM = { rules: 'Fixed rules (tested in code)', not_taken: 'Not taken yet', passed: 'Passed', failed: 'Not passed' };
     const STAND = { regenerative: 'Regenerative', building: 'Building', constrained: 'Near the line', paused: 'Paused', frozen: 'Frozen (books not verified)' };
     const cents = (c) => (c == null ? '–' : Math.abs(c) < 100 ? `${Math.round(c * 100) / 100}¢` : dollars(Math.round(c)));
@@ -886,7 +895,8 @@
         })(),
         section('What winning means', `${o.winCondition.goal} ${o.winCondition.definition}`,
           h('ul', {}, o.winCondition.notAWin.map((x) => h('li', { text: x })))),
-        section('Where the surplus went', `${surplus.note} Nothing here is a rule: it shows the choice each month, whenever it’s made.`,
+        // Hidden when the books can’t be read (e.g. this company’s books aren’t public to this view).
+        surplus ? section('Where the surplus went', `${surplus.note} Nothing here is a rule: it shows the choice each month, whenever it’s made.`,
           h('div', { class: 'kpis', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' },
             h('div', { class: 'kpi' }, h('span', { text: 'Surplus, all time' }), h('b', { text: cents(surplus.totals.surplusCents) })),
             h('div', { class: 'kpi' }, h('span', { text: 'Put back into the system' }), h('b', { text: cents(surplus.totals.reinvestedCents) }), h('small', { class: 'muted', text: surplus.totals.reinvestedShare == null ? '' : `${surplus.totals.reinvestedShare}% of it` })),
@@ -901,7 +911,7 @@
             return h('div', { class: 'toolbar' }, kind, amt, memo, day, h('button', { class: 'btn secondary small', type: 'button', onclick: save }, 'Record'));
           })(),
           surplus.months.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Month', 'Surplus', 'Put back', 'Paid to owners', 'Held'].map((x) => h('th', { text: x })))),
-            h('tbody', {}, surplus.months.slice().reverse().map((m) => h('tr', {}, h('td', { text: m.month }), h('td', { text: cents(m.surplusCents) }), h('td', { text: cents(m.reinvestedCents) }), h('td', { text: cents(m.paidOutCents) }), h('td', { text: cents(m.heldCents) })))))) : null),
+            h('tbody', {}, surplus.months.slice().reverse().map((m) => h('tr', {}, h('td', { text: m.month }), h('td', { text: cents(m.surplusCents) }), h('td', { text: cents(m.reinvestedCents) }), h('td', { text: cents(m.paidOutCents) }), h('td', { text: cents(m.heldCents) })))))) : null) : null,
         section('How choices are measured', 'Where people choose (which free product, which cause) there are no ads and nothing pays to sit higher; the order is random and recorded, with what each person had been shown before. People can direct their bottle’s gift and turn off kinds of ads.',
           h('div', { class: 'kpis' },
             h('div', { class: 'kpi' }, h('span', { text: 'Choices in clean sets (30 days)' }), h('b', { text: String(env.choicesInCleanSets) })),
