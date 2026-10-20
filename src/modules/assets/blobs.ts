@@ -1,3 +1,4 @@
+/* eslint-disable security/detect-non-literal-fs-filename -- keys pass safeKey() and must resolve inside the root; file paths are the operator's (backups) */
 import { createHash, createHmac } from 'node:crypto';
 import { copyFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createReadStream, createWriteStream } from 'node:fs';

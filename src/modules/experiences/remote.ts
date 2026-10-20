@@ -25,6 +25,7 @@ export interface RemotePluginOptions {
 }
 
 export function remotePlugin(o: RemotePluginOptions): ExperiencePlugin {
+  // eslint-disable-next-line security/detect-unsafe-regex -- anchored, no nested repeats; the input is an operator's plug-in URL
   if (!/^https:\/\//.test(o.url) && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//.test(o.url)) throw new Error('A partner plug-in must use https');
   const doFetch = o.fetch ?? fetch;
   return {

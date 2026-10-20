@@ -1346,7 +1346,8 @@ function verify(secret, header = '', body) {
   const t = Number(parts.t);
   if (!t || Math.abs(Date.now() / 1000 - t) > 300) return false;
   const want = crypto.createHmac('sha256', secret).update(\`\${t}.\`).update(body).digest('hex');
-  return want.length === (parts.v1 || '').length && crypto.timingSafeEqual(Buffer.from(want), Buffer.from(parts.v1));
+  const a = Buffer.from(want), b = Buffer.from(parts.v1 || ''); // compare bytes: timingSafeEqual throws on unequal lengths
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }`),
         h('h3', { text: 'Python' }),
         pre(`import hashlib, hmac, time
@@ -1357,7 +1358,8 @@ def verify(secret: str, header: str, body: bytes) -> bool:
     if abs(time.time() - t) > 300:
         return False
     want = hmac.new(secret.encode(), f"{t}.".encode() + body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(want, parts.get("v1", ""))`),
+    # As bytes: compare_digest raises TypeError on a str with non-ASCII characters.
+    return hmac.compare_digest(want.encode(), parts.get("v1", "").encode())`),
         h('h2', { text: 'Answer quickly, and expect repeats' }),
         h('ul', {}, h('li', {}, 'Answer with any ', c('2xx'), ' within 10 seconds. Do slow work afterwards.'),
           h('li', {}, 'Anything else, or no answer, is tried again after 1 minute, 5 minutes, 30 minutes, 2 hours, 6 hours, 12 hours and 24 hours: eight tries over about two days.'),

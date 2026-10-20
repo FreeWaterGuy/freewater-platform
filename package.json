@@ -9,6 +9,8 @@
     "test": "vitest run",
     "test:browser": "tsx test/browser/journeys.ts",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint src test",
+    "lint:semgrep": "semgrep scan --config .semgrep/rules.yml --error --metrics=off --disable-version-check src",
     "demo:packs": "tsx src/demo/night.ts",
     "start": "node --import tsx src/server/main.ts",
     "key": "tsx src/server/keys.ts",

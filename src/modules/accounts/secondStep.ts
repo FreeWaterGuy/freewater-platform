@@ -16,7 +16,7 @@ const unbase32 = (s: string) => { let bits = 0, v = 0; const out: number[] = [];
 /** The code an authenticator shows for a 30-second step. */
 export function totp(secretB32: string, step: number) {
   const msg = Buffer.alloc(8); msg.writeBigUInt64BE(BigInt(step));
-  const h = createHmac('sha1', unbase32(secretB32)).update(msg).digest();
+  const h = createHmac('sha1', unbase32(secretB32)).update(msg).digest(); // nosemgrep: fw-weak-hash -- TOTP (RFC 6238) is HMAC-SHA1 by definition; HMAC-SHA1 is not broken
   const o = h[h.length - 1]! & 15;
   return String(((h.readUInt32BE(o) & 0x7fffffff) % 1_000_000)).padStart(6, '0');
 }

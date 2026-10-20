@@ -331,7 +331,7 @@ export class ChainService {
   async confirmSigned(companyId: string, id: string, signature: string, person: string) {
     const a = (await this.db.query<any>(`select * from chain_actions where id = $1 and company_id = $2`, [id, companyId])).rows[0];
     if (!a || !['signing', 'confirming'].includes(a.status)) throw new ChainError('not_signing', 'This isn’t waiting for signatures.', 409);
-    if (a.status === 'confirming' && a.ref && a.ref !== signature) throw new ChainError('not_signing', 'This is being recorded with another signature.', 409);
+    if (a.status === 'confirming' && a.ref && a.ref !== signature) throw new ChainError('not_signing', 'This is being recorded with another signature.', 409); // nosemgrep: fw-timing-unsafe-compare -- a public transaction signature, not a secret
     const p = typeof a.params === 'string' ? JSON.parse(a.params) : a.params;
     const chain = this.chainFor(companyId);
     if (!chain.confirmMint || !(await chain.confirmMint(signature, id, p.plan.total))) throw new ChainError('not_found_on_chain', 'That signature isn’t a finished mint of this amount, into custody, for this action.', 422);

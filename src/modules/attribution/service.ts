@@ -48,7 +48,9 @@ export class AttributionService {
   /** Someone tapped a link: record it and return where to send them, with our click id added. */
   async click(token: string, viewerKey?: string, via?: string): Promise<{ url: string; clickId: string }> {
     const [body, sig] = token.split('.');
-    if (!body || !sig || sig.length !== 16 || !timingSafeEqual(Buffer.from(sig), Buffer.from(this.sig(body)))) throw new AttributionError('bad_link', 'That link isn’t one of ours.', 404);
+    // Compared as bytes: 16 characters can be more than 16 bytes, and timingSafeEqual throws on unequal lengths.
+    const got = Buffer.from(sig ?? ''), want = Buffer.from(body ? this.sig(body) : '');
+    if (!body || !want.length || got.length !== want.length || !timingSafeEqual(got, want)) throw new AttributionError('bad_link', 'That link isn’t one of ours.', 404);
     const t = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as { s: AdSpot; a: string; c: string | null; k: string; u: string };
     const clickId = `FWC${randomCode(17)}`;
     const cols = spotCols(t.s);

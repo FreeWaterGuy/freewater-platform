@@ -1,3 +1,4 @@
+/* eslint-disable security/detect-non-literal-fs-filename -- the machine's own state folder, from its settings */
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 

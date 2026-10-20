@@ -213,6 +213,19 @@ describe('review: SVG artwork and SVG responses (4)', () => {
     expect(checkSvg(wrap('<rect width="1" height="1" x:onclick="alert(1)"/>'))).toMatch(/event handlers/);
   });
 
+  it('checks a hostile upload in linear time (a long run of spaces once took minutes and froze the server)', () => {
+    // Static analysis (security/detect-unsafe-regex): `<\s*\/?\s*` and `=\s*["']?\s*` backtracked quadratically.
+    const spaces = ' '.repeat(200_000); // ~20 s on the old patterns; the 2 MB limit allowed half an hour
+    for (const art of [wrap(`<${spaces}!`), wrap(`<set attributeName=${spaces}!></set>`)]) {
+      const t = performance.now();
+      checkSvg(art);
+      expect(performance.now() - t).toBeLessThan(1000);
+    }
+    // Same answers as before for the spaced-out forms the patterns are there for.
+    expect(checkSvg(wrap('< / script>'))).toMatch(/scripts/);
+    expect(checkSvg(wrap('<set attributeName= " href" to="#y"/>'))).toMatch(/animations/);
+  });
+
   it('sends every SVG with a policy that forbids scripts', async () => {
     const { unit } = await bottleWith('adv-joes');
     const csp = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:";

@@ -68,6 +68,7 @@
   // ---------- routing ----------
   const routes = [
     [/^\/ads\/?$/, overview], [/^\/ads\/new$/, newAd], [/^\/ads\/drafts\/([\w-]+)$/, builder], [/^\/ads\/drafts\/([\w-]+)\/review$/, review],
+    // eslint-disable-next-line security/detect-unsafe-regex -- route patterns, anchored and linear; the input is this page's own path
     [/^\/ads\/campaigns\/([\w-]+)\/change$/, changeAd], [/^\/ads\/campaigns\/([\w-]+)\/code$/, codePage], [/^\/ads\/billing$/, billing], [/^\/ads\/studio(?:\?.*)?$/, studioPage], [/^\/ads\/tracking$/, tracking], [/^\/ads\/redeem(?:\/([\w-]+))?$/, redeem], [/^\/ads\/statement$/, statementPage], [/^\/ads\/offers$/, offersPage],
   ];
   let cleanup = null;
@@ -104,7 +105,8 @@
     let data = await api('GET', '/v1/studio');
     let designs = [], made3d = null;
     const out = h('div', { class: 'studio' });
-    const inline = (svg) => { const d = h('div', { class: 'art' }); d.innerHTML = svg; return d; }; // our own drawing (it loads your photos from this site)
+    // eslint-disable-next-line no-unsanitized/property -- our own server-drawn SVG (text escaped, colours and photos validated); the page's CSP blocks inline script
+    const inline = (svg) => { const d = h('div', { class: 'art' }); d.innerHTML = svg; return d; }; // our own drawing (it loads your photos from this site); nosemgrep: fw-web-unsafe-html -- our own server-drawn SVG; see the ESLint note above
     const field = (label, control, hint) => { const fid = `s${Math.random().toString(36).slice(2, 8)}`; control.id ||= fid; return h('div', { class: 'field' }, h('label', { for: control.id, text: label }), control, hint ? h('div', { class: 'hint', text: hint }) : null); };
     const upload = async (url, file) => {
       const res = await fetch(url, { method: 'POST', headers: { 'content-type': file.type, authorization: `Bearer ${state.token}` }, body: file });

@@ -76,6 +76,7 @@ export class ClaudeWriter implements StoryWriter {
       if (scenes.length < 4 || scenes.at(-1)!.layout !== 'end') throw new Error('incomplete');
       // A price or offer Claude wrote must appear in the advertiser's own words.
       const words = JSON.stringify(b.facts).toLowerCase();
+      // eslint-disable-next-line security/detect-unsafe-regex -- no nested repeats; scene titles are short and ours
       for (const s of scenes) for (const m of `${s.title} ${s.sub ?? ''}`.match(/\$\s?\d+(?:\.\d+)?|\d+\s?%/g) ?? []) if (!words.includes(m.replace(/\s/g, '').toLowerCase())) throw new Error('invented a number');
       return { ...base, scenes };
     } catch {

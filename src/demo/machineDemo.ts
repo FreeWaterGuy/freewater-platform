@@ -35,6 +35,7 @@ await app.accounts.startSignIn({ companyId: 'freewater', channel: 'email', to: '
 const code = /(\d{6})/.exec(outbox.lastTo('maya@example.com')!.text)![1]!;
 const maya = (await app.accounts.verify({ companyId: 'freewater', channel: 'email', to: 'maya@example.com', code })).token;
 
+// eslint-disable-next-line security/detect-non-literal-fs-filename -- demo script: a file next to this one
 const page = readFileSync(new URL('./machineSim.html', import.meta.url), 'utf8');
 for (const [id, screenPort] of [['ATX-014', 7014], ['ATX-022', 7022]] as const) {
   const hw = new SimulatedModel6({ printMs: 12000, dropMs: 2500, bottles: 40 });

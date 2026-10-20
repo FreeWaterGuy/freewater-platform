@@ -1,3 +1,4 @@
+/* eslint-disable security/detect-non-literal-fs-filename -- journal and spool paths come from the server's own settings, never a request */
 import { studioCreative } from '../modules/studio/layout';
 import { shareFromSixths } from '../modules/ads/layouts';
 import { createHash, randomBytes } from 'node:crypto';
@@ -91,6 +92,7 @@ export class SqlPersistence implements Persistence {
   private schedule() {
     if (this.running) return;
     this.running = (async () => {
+      // eslint-disable-next-line @typescript-eslint/await-thenable -- deliberate: yields one microtask so changes made in the same moment batch together
       await null; // let changes made in the same moment gather into one batch
       try {
         while (this.pending.length && !this.fenced) {

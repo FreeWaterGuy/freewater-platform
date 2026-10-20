@@ -257,7 +257,7 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     if (!proof) throw new ApiError(422, 'proof_required', 'Review and approve your proof before printing.');
     if (new Date(proof.expires_at).getTime() < platform.bus.now().getTime()) throw new ApiError(422, 'proof_expired', 'That proof is more than a day old. Review it again before printing.');
     const orderId = `${userId}:${b.orderId}`;
-    const experience = proof.experience ? (typeof proof.experience === 'string' ? JSON.parse(proof.experience) : proof.experience) : undefined;
+    const experience = proof.experience ? (typeof proof.experience === 'string' ? JSON.parse(proof.experience) : proof.experience) : undefined; // nosemgrep: fw-json-parse-request-without-try -- parses the stored proof row (written by us), not the request
     const bottles = DesignService.bottlesOf(proof, app.designs.designArea());
     // An order id belongs to the proof (and number of bottles) it was first used with: reusing it with another can't
     // print more bottles under the old hold.

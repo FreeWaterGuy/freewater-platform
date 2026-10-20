@@ -120,13 +120,13 @@ export class JobRunner {
     return this.jobs.map((j) => {
       const s = this.state.get(j.name)!;
       const iso = (t: number | null) => (t === null ? null : new Date(t).toISOString());
-      return { name: j.name, everyMs: j.everyMs, running: !!s.running, stuck: s.stuck, nextAt: s.running ? null : iso(Math.max(this.now(), this.dueAt(j, s))), lastStartedAt: iso(s.lastStarted), lastFinishedAt: iso(s.lastFinished), lastOk: s.lastOk, lastError: s.lastError, runs: s.runs, failures: s.failures, consecutiveFailures: s.consecutive,
+      return { name: j.name, everyMs: j.everyMs, running: s.running !== null, stuck: s.stuck, nextAt: s.running ? null : iso(Math.max(this.now(), this.dueAt(j, s))), lastStartedAt: iso(s.lastStarted), lastFinishedAt: iso(s.lastFinished), lastOk: s.lastOk, lastError: s.lastError, runs: s.runs, failures: s.failures, consecutiveFailures: s.consecutive,
         overdue: s.stuck || (!this.stopping && this.timer !== null && !(this.opts.paused?.() && !j.whilePaused) && !s.running && this.now() - Math.max(this.dueAt(j, s), this.startedAt) > j.everyMs + 60_000) };
     });
   }
 
   /** Is anything still running? */
-  get busy() { return [...this.state.values()].some((s) => s.running); }
+  get busy() { return [...this.state.values()].some((s) => s.running !== null); }
 
   /** Stop starting jobs, and wait (up to `waitMs`) for running ones to finish. Returns the ones still running. */
   async stop(waitMs = 30_000): Promise<string[]> {
@@ -135,7 +135,7 @@ export class JobRunner {
     this.timer = null;
     const running = [...this.state.values()].map((s) => s.running).filter(Boolean) as Promise<void>[];
     await Promise.race([Promise.allSettled(running), new Promise((r) => setTimeout(r, waitMs).unref?.())]);
-    return [...this.state.entries()].filter(([, s]) => s.running).map(([n]) => n);
+    return [...this.state.entries()].filter(([, s]) => s.running !== null).map(([n]) => n);
   }
 }
 

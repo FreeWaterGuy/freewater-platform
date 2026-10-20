@@ -25,16 +25,21 @@ export const builtinIntake: IntakeAssistant = {
       if (iso) return iso;
       const d = new Date(`${i.today}T12:00:00Z`);
       if (/\byesterday\b/.test(low)) { d.setUTCDate(d.getUTCDate() - 1); return d.toISOString().slice(0, 10); }
+      // eslint-disable-next-line security/detect-non-literal-regexp -- built from the fixed month names, not from input
       const m = new RegExp(`\\b(${MONTHS.join('|')})\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s+(\\d{4}))?`).exec(low);
       if (m) { const y = m[3] ? Number(m[3]) : Number(i.today.slice(0, 4)); return `${y}-${String(MONTHS.indexOf(m[1]!) + 1).padStart(2, '0')}-${m[2]!.padStart(2, '0')}`; }
       return /\btoday\b/.test(low) || !/\d{4}/.test(t) ? i.today : undefined;
     })();
+    // eslint-disable-next-line security/detect-unsafe-regex -- one digit run then optional words, no nested repeat; at worst quadratic on the 4,000-character cap (TeamService.intake)
     const bottles = /\b(\d[\d,]*)\s*(?:free\s+)?(?:bottles?|cans?|waters?|beverages?|drinks?)\b/.exec(low)?.[1];
+    // eslint-disable-next-line security/detect-unsafe-regex -- at most two capitalised words, no nested repeat; the message is capped at 4,000 characters
     const city = i.cities.find((c) => low.includes(c.toLowerCase())) ?? /\bin ([A-Z][a-zA-Z]+(?: [A-Z][a-zA-Z]+)?)/.exec(t)?.[1];
     const place = /\bat (?:the )?([A-Z0-9][^,.;]{1,60}?)(?=[,.;]| for | in | on | today| yesterday|$)/.exec(t)?.[1]?.trim();
     const campaign = /\bwefund(?:e)?r\b/i.test(t) ? 'WeFunder campaign' : /\bfor (?:the |our )?([^,.;]{3,60}?) campaign\b/i.exec(t)?.[1]?.replace(/^\w/, (c) => c.toUpperCase()).concat(' campaign');
     const charity = i.charities.find((c) => low.includes(c.toLowerCase()));
+    // eslint-disable-next-line security/detect-unsafe-regex -- no nested repeats that can overlap (bounded {0,30} gaps); the message is capped at 4,000 characters
     const paid = /\b(?:paid|sponsor(?:ed)?(?: us)?|bought)\b[^$]{0,30}\$\s?([\d,]+(?:\.\d{1,2})?)/i.exec(t)?.[1];
+    // eslint-disable-next-line security/detect-unsafe-regex -- no nested repeats that can overlap (bounded {0,30} gaps); the message is capped at 4,000 characters
     const cost = /\b(?:cost|spent|receipt|invoice|bill)\b[^$]{0,30}\$\s?([\d,]+(?:\.\d{1,2})?)/i.exec(t)?.[1] ?? /\$\s?([\d,]+(?:\.\d{1,2})?)[^.]{0,30}\b(?:cost|receipt|invoice|to make)\b/i.exec(t)?.[1];
     const drafts: Draft[] = [];
     if (bottles) {

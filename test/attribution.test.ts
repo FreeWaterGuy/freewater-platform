@@ -137,6 +137,8 @@ describe('seeing the sale ourselves', () => {
     const [body] = order.action.url.slice(4).split('.');
     const evil = Buffer.from(JSON.stringify({ ...JSON.parse(Buffer.from(body, 'base64url').toString()), u: 'https://evil.example' })).toString('base64url');
     expect((await call('GET', `/go/${evil}.${order.action.url.split('.').pop()}`)).status).toBe(404);
+    // A signature of 16 characters but more bytes (non-ASCII) is refused too, not a 500 from timingSafeEqual.
+    expect((await call('GET', `/go/${body}.${encodeURIComponent('é'.repeat(16))}`)).status).toBe(404);
   });
 
   it('credits a sale reported by the advertiser’s website to the exact bottle, once, and only from their own site', async () => {

@@ -64,6 +64,7 @@ export async function loadSecret(db: SqlClient, name: string, env: NodeJS.Proces
   const production = env.NODE_ENV === 'production';
   const stored = async () => (await db.query<{ value: string }>(`select value from platform_secrets where name = $1`, [name])).rows[0]?.value;
   if (raw) {
+    // eslint-disable-next-line security/detect-unsafe-regex -- a fixed-width group, linear; the input is the host's setting
     if (/^hex:/i.test(raw) && !/^hex:([0-9a-f]{2}){16,}$/i.test(raw)) throw new Error(`${key} starts with "hex:" but isn't 32 or more hex bytes.`);
     const secret = /^hex:/i.test(raw) ? Buffer.from(raw.slice(4), 'hex') : Buffer.from(raw, 'utf8');
     if (production) {
