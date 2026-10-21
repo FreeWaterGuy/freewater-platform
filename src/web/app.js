@@ -194,9 +194,9 @@
           h('div', {}, h('b', { text: money(stats.savedCents) }), h('span', { text: 'saved' })))
           : h('p', { style: 'margin:0;opacity:.85', text: 'Free spring water, paid for by the ads on the bottle. Every bottle gives to charity.' })),
       link('/app/scan', { class: 'tile blue' }, h('span', { class: 'tile-ico' }, icon(I.scan)), h('span', { class: 'grow' }, h('b', { text: 'Scan a bottle' }), h('span', { text: 'Open the AR printed on any FreeWater' }))),
-      link('/app/wallet', { class: 'tile ice' }, h('span', { class: 'grow' }, h('b', { text: 'Your wallet' }), h('span', { class: 'muted small', text: 'Points, offers, coupons and what you saved' })), h('span', { class: 'go', text: 'Open' })),
-      deliveryCard(delivery),
-      m0 && link(`/app/m/${m0.id}`, { class: 'tile ice' }, h('span', { class: 'grow' }, h('b', { text: `${m0.id} on ${m0.name}` }), h('span', { class: 'muted small', text: m0.address || m0.city })), h('span', { class: 'go', text: 'Get one' })),
+      on('rewards') ? link('/app/wallet', { class: 'tile ice' }, h('span', { class: 'grow' }, h('b', { text: 'Your wallet' }), h('span', { class: 'muted small', text: 'Points, offers, coupons and what you saved' })), h('span', { class: 'go', text: 'Open' })) : null,
+      on('delivery') ? deliveryCard(delivery) : null,
+      on('app_free_bottle') && m0 && link(`/app/m/${m0.id}`, { class: 'tile ice' }, h('span', { class: 'grow' }, h('b', { text: `${m0.id} on ${m0.name}` }), h('span', { class: 'muted small', text: m0.address || m0.city })), h('span', { class: 'go', text: 'Get one' })),
       me && h('h2', { class: 'section' }, 'Your bottles'),
       me && (mine?.bottles.length
         ? h('div', { class: 'rail' }, mine.bottles.slice(0, 8).map((b) => bottleCard(b)))
@@ -547,7 +547,7 @@
       });
       return h('label', { class: 'field' }, h('span', { class: 'small muted', text: 'Bought it? Add a photo of the receipt' }), f);
     };
-    const lvl = await levelInfo(me).catch(() => null);
+    const lvl = on('data_levels') ? await levelInfo(me).catch(() => null) : null;
     const said = { claimed: 'Buy it, then add the receipt', receipt_sent: 'Checking your receipt', verified: 'Approved', paid: 'Paid', rejected: 'Receipt not accepted (points returned)', expired: 'Ran out (points returned)', void: 'Closed' };
     screen({ nav: 'wallet' },
       h('h1', { class: 'display', style: 'font-size:26px', text: 'Wallet' }),
@@ -597,7 +597,7 @@
       screen({ nav: 'me' }, h('h1', { class: 'display', style: 'font-size:26px', text: 'Me' }), h('p', { class: 'muted', text: 'Sign in to keep your bottles, saved offers and your own designs in one place.' }), h('button', { class: 'btn', type: 'button', onclick: async () => { if (await signIn()) render(); } }, 'Sign in'));
       return;
     }
-    const [cards, lvl] = await Promise.all([api('GET', '/v1/me/cards').catch(() => []), levelInfo(me).catch(() => null)]);
+    const [cards, lvl] = await Promise.all([on('card_payments') ? api('GET', '/v1/me/cards').catch(() => []) : [], on('data_levels') ? levelInfo(me).catch(() => null) : null]);
     const name = h('input', { class: 'input', id: 'me-name', value: me.displayName || '', placeholder: 'What should we call you?', autocomplete: 'name' });
     const consent = (key, title, text) => {
       const input = h('input', { type: 'checkbox', id: `c-${key}`, role: 'switch', onchange: async () => {
@@ -811,7 +811,8 @@
     try {
       state.config = await api('GET', '/v1/public/app-config');
       // Areas switched off on this server (FW_FEATURES): their tiles and buttons aren't shown.
-      state.features = await api('GET', '/v1/public/features').catch(() => ({ off: [] }));
+      // And what this company switched off on its Features page (?company=): those aren't shown either.
+      state.features = await api('GET', `/v1/public/features?company=${encodeURIComponent(state.config.companyId)}`).catch(() => ({ off: [] }));
     }
     catch { root.replaceChildren(h('div', { class: 'boot' }, h('p', { text: 'Can’t reach FreeWater. Check your connection and try again.' }))); return; }
     render();

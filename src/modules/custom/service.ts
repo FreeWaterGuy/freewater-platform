@@ -96,7 +96,7 @@ export class DesignService {
       design: r.design, history: r.messages.map(({ role, text }) => ({ role, text })), message: input.text,
       attachments: files.map((f) => ({ kind: f.kind, name: f.name, dataUrl: f.dataUrl })),
       context: { company: company.name, priceCents: company.prices.customUnit, maxBottles: 24, fonts: Object.keys(keepsakeFonts), decorations: keepsakeDecorations, missing: designMissing(r.design), hasPhoto: !!r.design.label?.photo, hasVideo: !!r.design.scan?.videoUrl },
-    }));
+    }), 'ai_bottle_designer');
     const { design, problems } = applyDesignPatch(r.design, out.patch ?? {}, files);
     let reply = out.reply;
     if (problems.length) reply += `\n\nI couldn’t do part of that: ${problems.join(' ')}`;

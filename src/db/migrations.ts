@@ -1749,6 +1749,45 @@ end $$;
 create trigger ad_prepaid_balance after insert on ledger_entries for each row execute function ad_prepaid_balance();
 `,
   },
+  {
+    id: '063_company_features',
+    sql: `
+-- Each company's switches on the Features page (src/runtime/registry.ts). A switch already kept in the company's
+-- settings (the games, the prize game, offers paying out…) is never copied here: it is read from the settings.
+-- One row per company and switch, its current state.
+create table company_features (
+  company_id text not null references companies(id),
+  feature_id text not null,
+  is_on boolean not null,
+  set_by text not null,
+  set_at timestamptz not null,
+  primary key (company_id, feature_id)
+);
+-- Which catalogue a company's choices were first written from: switches added later are "new" for it, and off until
+-- its own people decide (FreeWater, the platform company, gets its own choice).
+create table company_feature_baselines (
+  company_id text primary key references companies(id),
+  catalogue integer not null,
+  at timestamptz not null
+);
+-- Every change to a switch, from either place (the Features page or a settings page): who, when, from, to, why.
+-- Append-only, like the settings history: a reset keeps it, and nothing can edit or delete it.
+create table company_feature_log (
+  seq bigint generated always as identity primary key,
+  company_id text not null,
+  feature_id text not null,
+  was_on boolean,
+  is_on boolean not null,
+  by text not null,
+  reason text check (reason is null or length(reason) <= 300),
+  via text not null,
+  at timestamptz not null
+);
+create index company_feature_log_company on company_feature_log(company_id, seq desc);
+create trigger company_feature_log_append_only before update or delete on company_feature_log for each row execute function forbid_change();
+create trigger company_feature_log_no_truncate before truncate on company_feature_log for each statement execute function forbid_change();
+`,
+  },
 ];
 
 /** Runs every migration not yet run (or, for tests that start from an older schema, those in `list`). */

@@ -36,6 +36,8 @@ const tidy = (s?: string | null) => (typeof s === 'string' ? s.trim().toUpperCas
  * Each sale is matched to the exact bottle and ad, and the commission is billed from that.
  */
 export class AttributionService {
+  /** Set by the app: is this switch on for this company (its Features page)? */
+  featureOn?: (companyId: string, id: string) => boolean;
   constructor(private db: SqlClient, private platform: Platform, private secret: Buffer, private clock: () => Date = () => new Date()) {}
 
   private now() { return this.clock(); }
@@ -121,6 +123,9 @@ export class AttributionService {
     }
     if (!advertiserId) throw new AttributionError('advertiser_required', 'Which advertiser is this for?');
     if (!companyId) throw new AttributionError('company_required', 'Which company is this for?');
+    // A company that switched sales tracking off (its Features page) takes no sale reports, from anywhere. (Coupons
+    // redeemed at the counter are their own switch.)
+    if (this.featureOn && !this.featureOn(companyId, input.source === 'coupon' ? 'coupons' : 'sales_tracking')) throw new AttributionError('feature_off', 'Sales tracking is switched off here.', 404);
     // A sale reported by the tag runs in the shopper's browser, so anyone holding a click id could report one. It is
     // kept as unverified (shown to the advertiser and the company, never billed) until the advertiser's server confirms
     // it with its key (POST /v1/conversions, same order) or the coupon is redeemed at the counter.

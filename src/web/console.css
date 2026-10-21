@@ -149,3 +149,44 @@ pre.code .c { color: #8A96A0; }
 .stages li.now .n { background: var(--ink); color: #fff; box-shadow: none; }
 .stages li.done .n { background: var(--ok); color: #fff; box-shadow: none; }
 @media (max-width: 760px) { .stages { grid-template-columns: 1fr; } }
+
+/* Features: every switch, in categories. */
+.feat-starts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.feat-start { display: flex; flex-direction: column; gap: 6px; text-align: left; border: 0; border-radius: 14px; padding: 14px; background: var(--soft); cursor: pointer; font: inherit; color: inherit; }
+.feat-start span { font-size: 13px; color: var(--muted); }
+.feat-start em { font-style: normal; font-weight: 700; color: var(--link); font-size: 14px; margin-top: auto; }
+.feat-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+.feat-card { border-radius: var(--r); box-shadow: inset 0 0 0 1.5px var(--line); padding: 16px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.feat-card h3 { margin: 0; font-size: 16px; }
+.feat-card p { margin: 0; font-size: 14px; color: var(--muted); }
+.feat-card.off { background: var(--soft); }
+.feat-foot { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; margin-top: auto; }
+.feat-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: space-between; }
+.feat-row .feat-title { justify-content: flex-start; }
+.feat-group { display: flex; flex-direction: column; gap: 8px; }
+.feat-group h3 { margin: 8px 0 0; font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.feat-row { display: flex; gap: 14px; align-items: flex-start; padding: 14px; border-radius: 14px; background: #fff; box-shadow: inset 0 0 0 1.5px var(--line); }
+.feat-row.off { background: var(--soft); }
+.feat-row .grow { flex: 1; min-width: 0; }
+.feat-row p { margin: 4px 0 0; font-size: 14px; }
+.feat-row p.why, .feat-card p.why { color: var(--warn); font-size: 13px; }
+.feat-row details { margin-top: 6px; font-size: 13px; }
+.feat-row summary { cursor: pointer; color: var(--link); }
+.feat-row dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 8px 0 0; }
+.feat-row dt { color: var(--muted); }
+.feat-row dd { margin: 0; }
+.feat-tools { display: flex; flex-direction: column; gap: 10px; position: sticky; top: 0; background: var(--bg); padding: 8px 0; z-index: 3; }
+.feat-confirm { border-radius: var(--r); box-shadow: 0 0 0 2px var(--black), 0 12px 40px rgba(0,0,0,.12); padding: 18px; display: flex; flex-direction: column; gap: 10px; background: #fff; position: sticky; top: 8px; z-index: 5; max-height: 70vh; overflow: auto; }
+.feat-confirm h2 { margin: 0; font-size: 18px; }
+.feat-confirm ul { margin: 4px 0 0; padding-left: 20px; font-size: 14px; }
+.feat-locked, .feat-history { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+/* A real switch, big enough for a thumb. */
+.tog { position: relative; display: inline-block; width: 52px; height: 30px; flex: none; }
+.tog input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; z-index: 1; }
+.tog span { position: absolute; inset: 0; border-radius: 999px; background: #C9D2DA; transition: background .15s; }
+.tog span::after { content: ''; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: transform .15s; }
+.tog input:checked + span { background: var(--ok); }
+.tog input:checked + span::after { transform: translateX(22px); }
+.tog input:focus-visible + span { outline: 3px solid var(--link); outline-offset: 2px; }
+@media (max-width: 900px) { .feat-starts { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .feat-starts { grid-template-columns: minmax(0, 1fr); } .feat-row { padding: 12px; } .feat-row dl { grid-template-columns: minmax(0, 1fr); } }

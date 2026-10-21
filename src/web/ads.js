@@ -84,7 +84,7 @@
     if (cleanup) { cleanup(); cleanup = null; }
     if (!(await signedIn())) return;
     // Areas switched off on this server (FW_FEATURES): their pages and menu entries aren't shown.
-    if (!state.features) state.features = await api('GET', '/v1/public/features').catch(() => ({ off: [] }));
+    if (!state.features) state.features = await api('GET', `/v1/public/features${state.me?.companyId ? `?company=${encodeURIComponent(state.me.companyId)}` : ''}`).catch(() => ({ off: [] }));
     if (!on('offers') && /^\/ads\/offers/.test(state.path)) return go('/ads', true);
     for (const [re, fn] of routes) { const m = re.exec(state.path); if (m) { try { await fn(...m.slice(1)); } catch (e) { shell('', h('div', { class: 'notice err', text: e.message })); } window.scrollTo(0, 0); return; } }
     go('/ads', true);
@@ -97,13 +97,13 @@
         h('div', { class: 'logo', 'aria-label': 'FreeWater Ads' }, h('span', { text: 'free' }), h('span', { text: 'water' }), h('small', { text: 'Ads' })),
         h('nav', { 'aria-label': 'Main' },
           link('/ads', { 'aria-current': active === 'overview' ? 'page' : null }, icon(I.chart), 'Overview'),
-          link('/ads/new', { 'aria-current': active === 'new' ? 'page' : null }, icon(I.plus), 'New ad'),
-          link('/ads/studio', { 'aria-current': active === 'studio' ? 'page' : null }, icon(I.plus), 'Ad studio'),
+          !on('ad_chat') ? null : link('/ads/new', { 'aria-current': active === 'new' ? 'page' : null }, icon(I.plus), 'New ad'),
+          !on('studio') ? null : link('/ads/studio', { 'aria-current': active === 'studio' ? 'page' : null }, icon(I.plus), 'Ad studio'),
           !on('offers') ? null : link('/ads/offers', { 'aria-current': active === 'offers' ? 'page' : null }, icon(I.ticket), 'Offers'),
-          link('/ads/tracking', { 'aria-current': active === 'tracking' ? 'page' : null }, icon(I.target), 'Sales tracking'),
-          link('/ads/redeem', { 'aria-current': active === 'redeem' ? 'page' : null }, icon(I.ticket), 'Check a coupon'),
-          link('/ads/statement', { 'aria-current': active === 'statement' ? 'page' : null }, icon(I.chart), 'Statement'),
-          link('/ads/billing', { 'aria-current': active === 'billing' ? 'page' : null }, icon(I.card), 'Billing')),
+          !on('sales_tracking') ? null : link('/ads/tracking', { 'aria-current': active === 'tracking' ? 'page' : null }, icon(I.target), 'Sales tracking'),
+          !on('coupons') ? null : link('/ads/redeem', { 'aria-current': active === 'redeem' ? 'page' : null }, icon(I.ticket), 'Check a coupon'),
+          !on('advertiser_statements') ? null : link('/ads/statement', { 'aria-current': active === 'statement' ? 'page' : null }, icon(I.chart), 'Statement'),
+          !on('advertiser_billing') ? null : link('/ads/billing', { 'aria-current': active === 'billing' ? 'page' : null }, icon(I.card), 'Billing')),
         h('div', { class: 'who' }, h('b', { text: state.business?.name ?? '' }), me?.email || me?.phone || '', h('br'), h('button', { type: 'button', onclick: async () => { try { await api('POST', '/v1/auth/sign-out'); } catch {} state.token = null; state.me = null; state.business = null; store.set('fw_ads_token', null); render(); } }, 'Sign out'))),
       h('main', { class: 'main' }, ...content)));
   }
