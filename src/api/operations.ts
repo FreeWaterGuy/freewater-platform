@@ -74,6 +74,7 @@ export function operationsRoutes(app: App, server: FastifyInstance, route: (r: R
     ]).catch(() => null);
     const spool = persistence.spool;
     let spoolBytes: number | null = null;
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- the spool path comes from host settings, never a request
     if (spool.file) { try { spoolBytes = statSync(spool.file).size; } catch { spoolBytes = 0; } }
     const ready = await readiness();
     const problems = [...ready.problems, ...jobs.filter((j) => j.lastOk === false && !ready.problems.some((p) => p.includes(j.name))).map((j) => `job ${j.name} failed last time`)];

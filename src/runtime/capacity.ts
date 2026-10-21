@@ -62,6 +62,7 @@ export async function checkCapacity(o: { db: SqlClient; spoolDir?: string; maxDa
  */
 export async function checkSpool(o: { waiting: number; spoolFile?: string | null; alert: Alert; state: Map<string, Severity | 'ok'> }): Promise<{ waiting: number; spoolBytes: number | null; level: Severity | 'ok' }> {
   let spoolBytes: number | null = null;
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- the spool path comes from host settings, never a request
   if (o.spoolFile) { try { spoolBytes = (await stat(o.spoolFile)).size; } catch { spoolBytes = 0; } }
   const mb = (spoolBytes ?? 0) / 1048576;
   const level: Severity | 'ok' = o.waiting >= 20_000 || mb >= 500 ? 'critical' : o.waiting >= 1000 || mb >= 50 ? 'warning' : 'ok';

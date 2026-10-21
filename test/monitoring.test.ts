@@ -364,3 +364,17 @@ describe('health endpoints and the server’s error reporting', () => {
     expect(alertsSeen).toEqual(['critical:chain:freewater', 'critical:chain:peak-spring']);
   });
 });
+
+describe('scrubbing hostile text stays quick', () => {
+  it('takes well under a second on the worst inputs found', () => {
+    const worst = ['a@' + 'a.'.repeat(50_000) + '!', '1.'.repeat(50_000), 'a'.repeat(100_000) + '!', '1 '.repeat(50_000)];
+    for (const w of worst) {
+      const t = performance.now();
+      scrubText(w, 2000);
+      expect(performance.now() - t).toBeLessThan(500);
+    }
+    const t = performance.now();
+    stackFrames('    at ' + 'a:1:'.repeat(50_000));
+    expect(performance.now() - t).toBeLessThan(500);
+  });
+});

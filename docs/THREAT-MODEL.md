@@ -308,11 +308,11 @@ can't be proposed.
 **Endpoints outside the route table** (no key, by design): `GET /q/:code`, `/Q/:code` (smart code open; issues the
 scan token), `GET /v/:code`, `/V/:code` (coupon check redirect), `GET /go/:token` (signed click redirect), `GET /t.js`,
 `POST /v1/public/conversions` (tag sales, unverified), `GET /v1/public/labels/:file`,
-`GET /v1/public/companies/:companyId/live`, `GET /health`, `/health/live`, `/health/ready`, `GET /v1/openapi.json`,
+`GET /v1/public/companies/:companyId/live`, `GET /health`, `/health/live`, `/health/ready`, `/health/uptime`, `GET /v1/openapi.json`,
 the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/console`, `/developers`, `/books`,
 `/play`, `/preview/scan`), `/static/*`, `/models/builtin/*`, `/assets/*`.
 
-**Every route (356):**
+**Every route (358):**
 
 | # | Route | Scope | Person | Other check | Docs |
 |---|---|---|---|---|---|
@@ -673,6 +673,7 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 355 | `POST /v1/platform/persistence/skip-stuck` | platform | yes | — | OK (R7 fixed): a person’s decision, signed in (RUNNING.md) |
 | 356 | `POST /v1/platform/jobs/:name/run` | platform | no | — | OK |
 | 357 | `GET /v1/public/features` | public | — | — | OK (public by design: which areas this server runs, no secrets; routes of areas switched off with FW_FEATURES aren't registered at all, so they aren't in this table's walk on a pilot server) |
+| 358 | `GET /health/deep` | platform | no | — | OK (staff only: job freshness, queues, spool, last books checks; no personal data) |
 
 ---
 

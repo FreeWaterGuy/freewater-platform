@@ -64,9 +64,10 @@ const luhn = (digits: string) => {
  * Take personal data and secrets out of a piece of text before it leaves the server. Stricter than the masks used in
  * the activity log (maskContact keeps a letter and the domain): here nothing of an email, phone or key is kept.
  */
+/* eslint-disable security/detect-unsafe-regex -- scrubText's input is cut to 2x its length limit first; the worst case measured (8,000 hostile characters) is ~85 ms, see test/monitoring.test.ts */
 export function scrubText(input: unknown, max = 2000): string {
   let s = String(input ?? '');
-  if (s.length > max * 4) s = s.slice(0, max * 4); // don't spend time scrubbing what would be cut anyway
+  if (s.length > max * 2) s = s.slice(0, max * 2); // don't spend time scrubbing what would be cut anyway
   s = s
     // user:password@ in an address
     .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@"'<>]+@/gi, '$1[credentials]@')
@@ -93,6 +94,7 @@ export function scrubText(input: unknown, max = 2000): string {
     .replace(/\b(?=[A-Za-z0-9_-]{24,}\b)(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{24,}\b/g, '[token]');
   return s.length > max ? `${s.slice(0, max)}…` : s;
 }
+/* eslint-enable security/detect-unsafe-regex */
 
 export interface Frame { filename: string; function: string; lineno?: number; colno?: number; in_app: boolean }
 
@@ -101,6 +103,7 @@ export function stackFrames(stack: string | undefined, cwd = process.cwd()): Fra
   if (!stack) return [];
   const frames: Frame[] = [];
   for (const line of stack.split('\n')) {
+    // eslint-disable-next-line security/detect-unsafe-regex -- one stack line at a time; measured linear on 200,000-character hostile lines
     const m = /^\s*at (?:(.+?) \()?(.+?):(\d+):(\d+)\)?\s*$/.exec(line);
     if (!m) continue;
     let file = m[2]!.replace(/^file:\/\//, '');
