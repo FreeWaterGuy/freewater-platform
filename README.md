@@ -245,11 +245,13 @@ npm run demo:ops-preview   # builds out/ops-preview/ and out/driver-preview/, cl
 **The auction (`src/modules/ads/auction.ts`).** It works like Google's and Meta's:
 - Bid adjustments by machine, product, time of day, day of week, interests, and new or returning customers. They multiply together.
 - Ad rank is the bid plus the engagement the ad is expected to earn, so a good ad can win with less.
-- Second price: the winner pays just enough to beat the next ad, never more than its bid and never below $1.
+- Second price: the winner pays just enough to beat the next other advertiser's ad (an advertiser's own ads never set each other's price), never more than its bid and never below $1.
 - Even pacing of daily budgets, reset each day in the company's time zone.
 - A cap on how many bottles one person gets with the same ad each day.
 
 Each placement records what it bid, what it paid and which adjustments applied. Advertisers set all of this under "Your bid" on the ad's code page.
+
+**When the price is set, and rounding.** A bottle's price is fixed when its ads are picked, and the money is held from that day's budget then; it's billed only if the bottle prints, and a failed print gives the hold back. Prices are whole cents: a piece's share of a bid rounds to the nearest cent (half a cent up), so a piece can cost up to half a cent more than its exact share of the bid. A machine's labels kept ready for when its internet drops (up to 24 hours) keep the price and the day of the moment they were made: a bid lowered or an ad paused afterwards doesn't change them, and if one prints offline it's billed at that price, against that day's budget, and shows on the statement and invoice on the day it was billed. Changing an ad in the chat keeps its bid settings and never adds bottles to a set number unless the advertiser asks for a new number.
 
 ## The prize game (`src/modules/lottery`)
 

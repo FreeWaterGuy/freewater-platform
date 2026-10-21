@@ -93,7 +93,7 @@ export function rankBidders(campaigns: Campaign[], company: CompanyConfig, m: Au
 }
 
 /**
- * Second price: what a winner pays for the whole label is just enough to keep its place above the next bidder
+ * Second price: what a winner pays for the whole label is just enough to keep its place above the next rival bidder
  * (that bidder's rank, less the winner's own expected engagement, plus 1¢), between the starting price and its own
  * adjusted bid. Guaranteed buys pay the starting price. Smaller pieces pay the same share as their starting prices.
  */
@@ -103,6 +103,15 @@ export function secondPrice(winner: Bidder, next: Bidder | undefined, company: C
   if (!next || next.campaign.buy.type === 'guaranteed') return Math.max(whole, Math.min(winner.adjustedBid, whole));
   const needed = Math.ceil(next.rank - winner.quality) + 1;
   return Math.max(whole, Math.min(winner.adjustedBid, needed));
+}
+
+/**
+ * The bidder a winner has to beat: the next one in line from another advertiser. An advertiser's own ads never set
+ * each other's price (as on Google), so running two ads can't make an advertiser outbid itself.
+ */
+export function nextRival(bidders: Bidder[], i: number): Bidder | undefined {
+  const me = bidders[i]!.campaign.advertiserId;
+  return bidders.slice(i + 1).find((b) => b.campaign.advertiserId !== me);
 }
 
 /** A whole-label price, for one piece of a given size. */

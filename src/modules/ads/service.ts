@@ -99,7 +99,7 @@ export class AdsService {
       if (c.creativeRef?.kind !== 'poster' && c.creativeRef?.kind !== 'studio') throw new AdsError(422, 'not_editable_here', 'This ad’s artwork was uploaded as a file. Upload a new file to change it.');
       draft = {
         name: c.name, category: c.category, ...(c.creativeRef.kind === 'studio' ? { studio: c.creativeRef.spec } : { poster: c.creativeRef.spec }), sizes: c.sizes, formats: c.formats ?? ['label'], locations: c.targeting.locations ?? 'all',
-        buy: c.buy.type === 'guaranteed' ? { type: 'guaranteed', prints: Math.max(100, c.buy.remainingPrints) } : { type: 'bid', dailyCapCents: c.buy.dailyCapCents, maxCentsPerLabel: c.buy.maxCentsPerLabel },
+        buy: c.buy.type === 'guaranteed' ? { type: 'guaranteed', prints: c.buy.remainingPrints, unchanged: true } : { type: 'bid', dailyCapCents: c.buy.dailyCapCents, maxCentsPerLabel: c.buy.maxCentsPerLabel, unchanged: true },
         experienceId: c.experienceId, experienceConfig: c.experienceConfig, theme: c.theme,
       };
       greeting = 'What would you like to change? Changes go back to review before they print.';
@@ -265,9 +265,14 @@ export class AdsService {
     const art = d.studio ? { creative: studioCreative(d.studio), creativeRef: { kind: 'studio' as const, spec: d.studio } } : { creative: posterCreative(spec), creativeRef: { kind: 'poster' as const, spec } };
     const now = this.platform.bus.now().toISOString();
     const existing = r.campaignId ? this.platform.campaigns.get(r.campaignId) : undefined;
+    // Changing an ad never buys it more bottles or drops its bid settings: a budget left as it was keeps the live
+    // ad's own (the bottles left now, which may be fewer than when the change began); a bid keeps its adjustments,
+    // pacing, frequency cap and today's spend.
+    const live = existing?.buy;
     const buy: Campaign['buy'] = d.buy.type === 'guaranteed'
-      ? { type: 'guaranteed', remainingPrints: d.buy.prints }
-      : { type: 'bid', dailyCapCents: d.buy.dailyCapCents, maxCentsPerLabel: Math.max(d.buy.maxCentsPerLabel ?? 0, bidFloor(company)), spentTodayCents: existing?.buy.type === 'bid' ? existing.buy.spentTodayCents : 0, ...(existing?.buy.type === 'bid' && existing.buy.spentDay ? { spentDay: existing.buy.spentDay } : {}) };
+      ? { type: 'guaranteed', remainingPrints: d.buy.unchanged && live?.type === 'guaranteed' ? live.remainingPrints : d.buy.prints }
+      : live?.type === 'bid' && d.buy.unchanged ? { ...live }
+      : { ...(live?.type === 'bid' ? live : {}), type: 'bid', dailyCapCents: d.buy.dailyCapCents, maxCentsPerLabel: Math.max(d.buy.maxCentsPerLabel ?? (live?.type === 'bid' ? live.maxCentsPerLabel : 0), bidFloor(company)), spentTodayCents: live?.type === 'bid' ? live.spentTodayCents : 0 };
     const c: Campaign = {
       ...(existing ?? {}),
       id: existing?.id ?? newId('cmp'), companyId: r.companyId, advertiserId: r.advertiserId, advertiserName: adv.name,
@@ -302,24 +307,26 @@ export class AdsService {
     const since = new Date(this.platform.bus.now().getTime() - (input.days - 1) * 86_400_000);
     since.setUTCHours(0, 0, 0, 0);
     const lines = (await this.db.query<any>(
-      `select campaign_id, kind, to_char(date_trunc('day', at at time zone 'UTC'), 'YYYY-MM-DD') as day, count(*)::int as n, sum(amount_cents)::bigint as cents
-       from ledger_entries where company_id = $1 and (debit = $2 or credit = $2) group by 1, 2, 3`, [input.companyId, acct])).rows;
+      `select campaign_id, kind, to_char(date_trunc('day', at at time zone 'UTC'), 'YYYY-MM-DD') as day, debit = $2 as owes, count(*)::int as n, sum(amount_cents)::bigint as cents
+       from ledger_entries where company_id = $1 and (debit = $2 or credit = $2) group by 1, 2, 3, 4`, [input.companyId, acct])).rows;
     const engaged = (await this.db.query<any>(
       `select payload->>'campaignId' as campaign_id, payload->>'action' as action, count(*)::int as n from events
        where company_id = $1 and type = 'experience.engaged' and payload->>'advertiserId' = $2 group by 1, 2`, [input.companyId, input.advertiserId])).rows;
 
     const blank = () => ({ spendCents: 0, prints: 0, scans: 0, arLaunches: 0, sales: 0, salesCents: 0, boxFaces: 0, saves: 0, linkTaps: 0 });
     type Totals = ReturnType<typeof blank>;
+    // A line charging the advertiser adds; a line giving back (a refunded commission, a voided batch, a value-back
+    // taken back) subtracts, whatever its kind, so the totals match the invoices to the cent.
     const add = (t: Totals, r: any) => {
-      const n = Number(r.n), cents = Number(r.cents);
-      if (r.kind === 'commission_reversal') { t.spendCents -= cents; t.sales -= n; t.salesCents -= Math.round((cents * 100) / company.prices.commissionPercent); return; }
       if (r.kind === 'payment') return;
+      const sign = r.owes === true || r.owes === 't' ? 1 : -1;
+      const n = sign * Number(r.n), cents = sign * Number(r.cents);
       t.spendCents += cents;
       if (r.kind === 'print') t.prints += n;
       if (r.kind === 'scan') t.scans += n;
       if (r.kind === 'ar') t.arLaunches += n;
       if (r.kind === 'box_face') t.boxFaces += n;
-      if (r.kind === 'commission') { t.sales += n; t.salesCents += Math.round((cents * 100) / company.prices.commissionPercent); }
+      if (r.kind === 'commission' || r.kind === 'commission_reversal') { t.sales += n; t.salesCents += Math.round((cents * 100) / company.prices.commissionPercent); }
     };
     const total = blank(), period = blank();
     const byCampaign = new Map<string, Totals>();

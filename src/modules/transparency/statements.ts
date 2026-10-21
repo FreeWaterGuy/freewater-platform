@@ -12,23 +12,29 @@ export interface StatementLine {
 
 export function statement(platform: Platform, advertiserId: string, companyId: string, from: Date, to: Date, dayOf: (at: Date) => string) {
   const lines: StatementLine[] = [];
+  const acct = `receivable:advertiser:${advertiserId}`;
   const byUnit = new Map<string, typeof platform.ledger.entries>();
-  for (const l of platform.ledger.entries) if (l.unitId && l.companyId === companyId) { const a = byUnit.get(l.unitId) ?? []; a.push(l); byUnit.set(l.unitId, a); }
+  for (const l of platform.ledger.entries) if (l.unitId && l.companyId === companyId && (l.debit === acct || l.credit === acct)) { const a = byUnit.get(l.unitId) ?? []; a.push(l); byUnit.set(l.unitId, a); }
+  // What the advertiser paid comes from the books, not from the bottle: a line charging them adds, a line giving back
+  // subtracts. A bottle is dated when it was billed (its print line), as the invoice dates it, not when its ads were
+  // picked: a machine's offline bottle can be filled one day and printed the next.
+  const signed = (l: (typeof platform.ledger.entries)[number]) => (l.debit === acct ? l.amountCents : -l.amountCents);
   for (const u of platform.units.values()) {
     if (u.companyId !== companyId || (u.status !== 'dispensed' && u.status !== 'printed')) continue;
-    const at = new Date(u.createdAt);
-    if (at < from || at >= to) continue;
     for (const p of u.placements) {
       if (p.isHouse || p.advertiserId !== advertiserId) continue;
       const ls = (byUnit.get(u.id) ?? []).filter((l) => l.campaignId === p.campaignId);
-      const sum = (k: string) => ls.filter((l) => l.kind === k).reduce((a, l) => a + l.amountCents, 0);
-      const count = (k: string) => ls.filter((l) => l.kind === k).length;
+      const printLines = ls.filter((l) => l.kind === 'print');
+      const billedAt = printLines[0]?.at ?? new Date(u.createdAt);
+      if (billedAt < from || billedAt >= to) continue;
+      const sum = (k: string) => ls.filter((l) => l.kind === k).reduce((a, l) => a + signed(l), 0);
+      const count = (k: string) => ls.filter((l) => l.kind === k).reduce((a, l) => a + Math.sign(signed(l)), 0);
       const loc = platform.locations.get(u.locationId);
       const share = placementShare(p);
       lines.push({
-        date: dayOf(at), at: u.createdAt, bottle: u.id, place: loc ? `${loc.id}, ${loc.name}` : u.locationId, product: platform.products.get(u.productId)?.name ?? u.productId,
-        piece: share === 1 ? 'Whole label' : `1/${share}`, bidCents: p.auction?.bidCents ?? null, paidLabelCents: p.auction?.paidLabelCents ?? null, paidCents: p.priceCents, adjustments: p.auction?.adjustments ?? [],
-        scans: count('scan'), arLaunches: count('ar'), sales: count('commission') - count('commission_reversal'), engagementCents: sum('scan') + sum('ar'), commissionCents: sum('commission') - sum('commission_reversal'),
+        date: dayOf(billedAt), at: billedAt.toISOString(), bottle: u.id, place: loc ? `${loc.id}, ${loc.name}` : u.locationId, product: platform.products.get(u.productId)?.name ?? u.productId,
+        piece: share === 1 ? 'Whole label' : `1/${share}`, bidCents: p.auction?.bidCents ?? null, paidLabelCents: p.auction?.paidLabelCents ?? null, paidCents: sum('print'), adjustments: p.auction?.adjustments ?? [],
+        scans: count('scan'), arLaunches: count('ar'), sales: count('commission') + count('commission_reversal'), engagementCents: sum('scan') + sum('ar'), commissionCents: sum('commission') + sum('commission_reversal'),
       });
     }
   }
