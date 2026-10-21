@@ -10,10 +10,11 @@ export function studioRoutes(app: App, route: (r: RouteDef) => void) {
     return key.advertiserId;
   };
   const wrap = async <T>(f: () => Promise<T>) => { try { return await f(); } catch (e: any) { if (e?.status && e?.code) throw new ApiError(e.status, e.code, e.message); throw e; } };
-  const picture = (req: any) => {
+  const picture = (req: any, svgToo = false) => {
     const type = String(req.headers['content-type'] ?? '').split(';')[0]!.trim();
-    if (!Buffer.isBuffer(req.body) || !['image/png', 'image/jpeg', 'image/webp'].includes(type)) throw new ApiError(415, 'unsupported_type', 'Send a PNG, JPEG or WebP picture as the body, with its Content-Type.');
-    return new Uint8Array(req.body);
+    const types = ['image/png', 'image/jpeg', 'image/webp', ...(svgToo ? ['image/svg+xml'] : [])];
+    if (!Buffer.isBuffer(req.body) || !types.includes(type)) throw new ApiError(415, 'unsupported_type', `Send a PNG, JPEG${svgToo ? ', WebP or SVG' : ' or WebP'} picture as the body, with its Content-Type.`);
+    return { bytes: new Uint8Array(req.body), svg: type === 'image/svg+xml' };
   };
   const num = { type: 'number' };
   const hex = { type: 'string', pattern: '^#[0-9a-fA-F]{6}$' };
@@ -31,9 +32,9 @@ export function studioRoutes(app: App, route: (r: RouteDef) => void) {
 
   route({ method: 'GET', url: '/v1/studio', scope: 'campaigns', summary: 'Your brand kit and photos, and what the studio is connected to (photo library, image AI, photo-to-3D).', handler: async (_req, key) => wrap(async () => ({ body: { kit: await studio.kit(key!.companyId, advertiserOf(key)), connections: studio.connections() } })) });
   route({ method: 'PATCH', url: '/v1/studio/kit', scope: 'campaigns', summary: 'Change your brand kit: the name on your ads, what you are about, your colors, your type style.', body: obj({ name: S.str, about: { type: 'string', maxLength: 300 }, colors, type: { type: ['string', 'null'] } }), handler: async (req, key) => wrap(async () => ({ body: await studio.saveKit(key!.companyId, advertiserOf(key), req.body as any) })) });
-  route({ method: 'POST', url: '/v1/studio/logo', scope: 'campaigns', summary: 'Upload your logo (PNG with a clear background is best). Send the picture itself as the body.', rawBodyLimit: 6 * 1024 * 1024, handler: async (req, key) => wrap(async () => ({ status: 201, body: await studio.setLogo(key!.companyId, advertiserOf(key), picture(req)) })) });
+  route({ method: 'POST', url: '/v1/studio/logo', scope: 'campaigns', summary: 'Upload your logo (an SVG, or a PNG with a clear background, is best). Send the picture itself as the body.', rawBodyLimit: 6 * 1024 * 1024, handler: async (req, key) => wrap(async () => { const advertiser = advertiserOf(key), p = picture(req, true); return { status: 201, body: await studio.setLogo(key!.companyId, advertiser, p.bytes, p.svg) }; }) });
 
-  route({ method: 'POST', url: '/v1/studio/photos', scope: 'campaigns', summary: 'Upload a photo. It is turned upright, sized for print, cleared of hidden data (like where it was taken), and studied for its subject and colors.', rawBodyLimit: 12 * 1024 * 1024, handler: async (req, key) => wrap(async () => ({ status: 201, body: await studio.addPhoto(key!.companyId, advertiserOf(key), picture(req), { kind: 'upload' }) })) });
+  route({ method: 'POST', url: '/v1/studio/photos', scope: 'campaigns', summary: 'Upload a photo. It is turned upright, sized for print, cleared of hidden data (like where it was taken), and studied for its subject and colors.', rawBodyLimit: 12 * 1024 * 1024, handler: async (req, key) => wrap(async () => ({ status: 201, body: await studio.addPhoto(key!.companyId, advertiserOf(key), picture(req).bytes, { kind: 'upload' }) })) });
   route({ method: 'DELETE', url: '/v1/studio/photos/:asset', scope: 'campaigns', summary: 'Remove a photo from your studio (ads already made with it keep it).', handler: async (req, key) => wrap(async () => ({ body: await studio.removePhoto(key!.companyId, advertiserOf(key), (req.params as any).asset) })) });
   route({ method: 'GET', url: '/v1/studio/library', scope: 'campaigns', summary: 'Search the photo library for photos to use, free, credited to their photographers.', handler: async (req, key) => { advertiserOf(key); const q = req.query as any; return wrap(async () => ({ body: await studio.search(q.q, ['landscape', 'portrait', 'squarish'].includes(q.orientation) ? q.orientation : undefined) })); } });
   route({ method: 'POST', url: '/v1/studio/library', scope: 'campaigns', summary: 'Take a photo from the library into your studio.', body: obj({ library: S.str, id: S.str }, ['library', 'id']), handler: async (req, key) => { const b = req.body as any; return wrap(async () => ({ status: 201, body: await studio.pick(key!.companyId, advertiserOf(key), b.library, b.id) })); } });

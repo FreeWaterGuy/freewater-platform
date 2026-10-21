@@ -24,13 +24,20 @@ export interface PreparedPhoto { bytes: Uint8Array; contentType: 'image/jpeg'; i
 
 /** At most 40 megapixels in: a bigger picture would take too much memory to read (a phone photo is 12 to 50). */
 export const MAX_PIXELS = 40_000_000;
+/** A picture whose header says it's over the limit: its size, to say so. (A header that can't be read: null.) */
+export async function overPixelLimit(bytes: Uint8Array): Promise<{ width: number; height: number } | null> {
+  // Only the header is read; sharp's own limit is turned off here or it would refuse the very biggest unread.
+  const m = await sharp(bytes, { limitInputPixels: false }).metadata().catch(() => null);
+  return m?.width && m.height && m.width * m.height > MAX_PIXELS ? { width: m.width, height: m.height } : null;
+}
+export const pixelsText = (p: { width: number; height: number }) => `${p.width.toLocaleString('en-US')} × ${p.height.toLocaleString('en-US')} pixels`;
 export const readImage = (bytes: Uint8Array | Buffer) => sharp(bytes, { limitInputPixels: MAX_PIXELS, failOn: 'error' });
 const MAX_SIDE = 1600; // a full label's ad area at print resolution, with room to crop
 const hex = (r: number, g: number, b: number) => `#${[r, g, b].map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('')}`.toUpperCase();
 const lum = (r: number, g: number, b: number) => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
 
 export async function preparePhoto(input: Uint8Array): Promise<PreparedPhoto> {
-  const meta = await sharp(input).metadata().catch(() => null);
+  const meta = await sharp(input, { limitInputPixels: false }).metadata().catch(() => null); // the header only
   if (!meta?.width || !meta.height) throw new Error('That file isn’t a picture we can read.');
   if (meta.width * meta.height > MAX_PIXELS) throw new Error('That picture is too big to use. Use one under 40 megapixels.');
   if (meta.width < 300 || meta.height < 300) throw new Error('That picture is too small for print. Use one at least 300 pixels on each side.');

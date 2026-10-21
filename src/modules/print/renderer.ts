@@ -24,9 +24,7 @@ export const svgLabelRenderer: LabelRenderer = {
     const adW = W - seam - panelW;
     const base = company.receiptBaseUrl.replace(/\/$/, '');
     // Everything scales with the label, so the same layout works on a short can sleeve or a tall bottle.
-    const k = Math.max(0.7, Math.min(1.4, H / 450));
-    const minQr = (product.label.minQrIn ?? 0.6) * PX_PER_IN;
-    const qrFor = (w: number) => Math.max(Math.min(78 * k, w * 0.42), Math.min(minQr, w - 16));
+    const k = labelScale(product);
 
     const parts: string[] = [];
     const slots: RenderedSlot[] = [];
@@ -48,17 +46,16 @@ export const svgLabelRenderer: LabelRenderer = {
     } else {
       for (const p of unit.placements) {
         // Each ad has its own piece of the label, as close to square as the layout allows.
-        const r = placementRect(p, unit.placements);
-        const x = adX + r.x * adW, y = r.y * H, w = r.w * adW, h = r.h * H;
+        const { x, y, w, h } = pieceOf(product, placementRect(p, unit.placements));
         const campaign = campaigns.get(p.campaignId);
         if (!campaign) throw new Error(`Unit ${unit.id} slot ${p.slotIndex} points at unknown campaign ${p.campaignId}.`);
-        const q = Math.min(qrFor(Math.min(w, h * 1.4)), h - 16);
+        const qr = slotQr(product, w, h), q = qr.size;
         // The artwork is told where its QR code goes, so it can keep words out of that corner.
-        parts.push(nested(x, y, w, h, campaign.creative.svg(w, h, { qr: { x: w - q - 10 * k, y: h - q - 10 * k, size: q } })));
+        parts.push(nested(x, y, w, h, campaign.creative.svg(w, h, { qr })));
         const mode = qrMode(company, campaign);
         const smart = req.codes ? req.codes.slot(company, unit.id, p.slotIndex) : `${base}/s/${unit.id}/${p.slotIndex}`;
         const url = mode === 'static' ? staticTarget(campaign, req.codes ? smart : null) : smart;
-        draw(url, x + w - q - 10 * k, y + h - q - 10 * k, q, campaignQrStyle(company, campaign), 'slot', p.slotIndex);
+        draw(url, x + qr.x, y + qr.y, q, campaignQrStyle(company, campaign), 'slot', p.slotIndex);
         slots.push({ slotIndex: p.slotIndex, xIn: x / PX_PER_IN, yIn: y / PX_PER_IN, widthIn: w / PX_PER_IN, heightIn: h / PX_PER_IN, advertiserName: p.advertiserName, qrUrl: url, qrMode: mode });
       }
     }
@@ -86,6 +83,28 @@ export const svgLabelRenderer: LabelRenderer = {
     return { unitId: unit.id, svg, widthIn: product.label.widthIn, heightIn: product.label.heightIn, slots, receiptUrl, codes };
   },
 };
+
+/** Where a piece of the ad area (fractions of it) sits on this product's label, in drawing units. Previews use it too. */
+export function pieceOf(product: import('../../core/types').Product, r: { x: number; y: number; w: number; h: number }) {
+  const W = product.label.widthIn * PX_PER_IN, H = product.label.heightIn * PX_PER_IN;
+  const adX = product.label.seamIn * PX_PER_IN, adW = W - adX - product.label.panelWidthIn * PX_PER_IN;
+  return { x: adX + r.x * adW, y: r.y * H, w: r.w * adW, h: r.h * H };
+}
+
+/** How much bigger than the standard 4.5 in tall label this one is drawn (a can sleeve is smaller, a tall bottle bigger). */
+const labelScale = (product: import('../../core/types').Product) => Math.max(0.7, Math.min(1.4, (product.label.heightIn * PX_PER_IN) / 450));
+
+/**
+ * Where an ad's QR code goes on its piece of this product's label (w by h drawing units), relative to the piece.
+ * The label renderer and every preview use this, so what an advertiser sees is where the code prints.
+ */
+export function slotQr(product: import('../../core/types').Product, w: number, h: number) {
+  const k = labelScale(product);
+  const minQr = (product.label.minQrIn ?? 0.6) * PX_PER_IN;
+  const m = Math.min(w, h * 1.4);
+  const q = Math.min(Math.max(Math.min(78 * k, m * 0.42), Math.min(minQr, m - 16)), h - 16);
+  return { x: w - q - 10 * k, y: h - q - 10 * k, size: q };
+}
 
 /**
  * The tracking strip: small numbered squares along the bottom of the slots whose owners use AR on the bottle, beside

@@ -1,5 +1,6 @@
 import { missingLabels, type DraftPatch, type Missing } from '../ads/draft';
 import type { AdAssistant, AdAssistantInput, AdAssistantOutput } from './contract';
+import type { Share } from '../../core/types';
 
 /**
  * The built-in stand-in for an AI. It reads simple things out of what people type (offers, colors, prices,
@@ -90,8 +91,16 @@ export class BuiltinAdAssistant implements AdAssistant {
     }
     if (/\b(no|remove|without) (the )?(photo|picture|image|logo)\b/.test(low)) patch.removeImage = true;
 
-    // Sizes.
-    if (/\b(full wrap|whole (label|bottle)|full label)\b/.test(low)) patch.sizes = [1];
+    // Sizes. Named ones first ("a quarter and a sixth", "1/4", "sizes 4 and 6"), then the rough words.
+    const sizeNames = new Set<number>();
+    for (const [re, s] of [[/\bquarters?\b/, 4], [/\bthirds?\b/, 3], [/\bsixths?\b/, 6], [/\beighths?\b/, 8], [/\btenths?\b/, 10]] as const) if (re.test(low)) sizeNames.add(s);
+    for (const m of low.matchAll(/\b1\s*\/\s*(2|3|4|6|8|10)\b/g)) sizeNames.add(Number(m[1]));
+    // "sizes 4 and 6": the numbers right after the word, up to the first thing that isn't one.
+    const at = low.search(/\bsizes?\s+\d/);
+    if (at >= 0) for (const w of low.slice(at).split(/[\s,&]+/).slice(1)) { if (w === 'and' || w === 'or') continue; if (!/^(1|2|3|4|6|8|10)$/.test(w)) break; sizeNames.add(Number(w)); }
+    if (sizeNames.size) { if (/\bhalf\b/.test(low)) sizeNames.add(2); if (/\b(full wrap|whole (label|bottle)|full label)\b/.test(low)) sizeNames.add(1); }
+    if (sizeNames.size) patch.sizes = [...sizeNames].sort((a, b) => a - b) as Share[];
+    else if (/\b(full wrap|whole (label|bottle)|full label)\b/.test(low)) patch.sizes = [1];
     else if (/\bhalf\b/.test(low)) patch.sizes = [2];
     else if (/\b(small|smallest|cheap(est)?)\b/.test(low)) patch.sizes = [6, 8, 10];
     else if (/\b(big|large|biggest)\b/.test(low)) patch.sizes = [2, 3];

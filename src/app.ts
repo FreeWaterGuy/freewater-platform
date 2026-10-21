@@ -364,8 +364,9 @@ export async function createApp(opts: AppOptions) {
   const STUDIO_IMAGE = /<image data-fw-photo="1" href="\/assets\/(as_[A-Za-z0-9_-]+)\.(?:jpg|png)"([^>]*)\/>/g;
   const fillPhotos = async (svg: string, cache: ReturnType<typeof photoCache>, size: number | null) => {
     if (!svg.includes('data-fw-photo')) return svg;
+    const keyOf = (id: string) => `${id}@${size ?? 'full'}`; // the same photo at another size is another copy
     for (const id of new Set([...svg.matchAll(STUDIO_IMAGE)].map((m) => m[1]!))) {
-      if (cache.get(id) !== undefined) continue;
+      if (cache.get(keyOf(id)) !== undefined) continue;
       // A storage hiccup throws: the print fails cleanly (nothing billed) and the next one tries again.
       const f = await assets.get(id);
       if (!f || !['image/jpeg', 'image/png'].includes(f.asset.contentType)) {
@@ -379,15 +380,16 @@ export async function createApp(opts: AppOptions) {
       }
       const png = f.asset.contentType === 'image/png';
       const bytes = size ? await (await import('sharp')).default(f.bytes, { limitInputPixels: 40_000_000 }).resize(size, size, { fit: 'inside', withoutEnlargement: true })[png ? 'png' : 'jpeg']().toBuffer() : Buffer.from(f.bytes);
-      cache.set(id, `data:${f.asset.contentType};base64,${bytes.toString('base64')}`);
+      cache.set(keyOf(id), `data:${f.asset.contentType};base64,${bytes.toString('base64')}`);
     }
     // A picture that can't be found is left out; the rest of the label prints.
-    return svg.replace(STUDIO_IMAGE, (m, id, rest) => { const d = cache.get(id); return d ? `<image href="${d}"${rest}/>` : ''; });
+    return svg.replace(STUDIO_IMAGE, (m, id, rest) => { const d = cache.get(keyOf(id)); return d ? `<image href="${d}"${rest}/>` : ''; });
   };
   const printCopies = photoCache(256 * 1024 * 1024), previewCopies = photoCache(64 * 1024 * 1024);
   platform.forPrint = (svg) => fillPhotos(svg, printCopies, null);
   platform.forView = (svg) => fillPhotos(svg, previewCopies, 900).catch(() => svg);
-  ads.inlineAssets = platform.forView;
+  ads.inlineAssets = (svg, maxSide) => (maxSide ? fillPhotos(svg, previewCopies, maxSide).catch(() => svg) : platform.forView(svg));
+  ads.boxProducts = () => [...state.boxes];
 
   const geocoder = opts.geocoder ?? new TestGeocoder({ Austin: { lat: 30.2672, lng: -97.7431, radiusKm: 6 }, Denver: { lat: 39.7392, lng: -104.9903, radiusKm: 6 } });
   const delivery = new DeliveryService(db, platform, packs, accounts, messenger, geocoder, opts.planner ?? new SimpleRoutePlanner(), () => persistence.flush());

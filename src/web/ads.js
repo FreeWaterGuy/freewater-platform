@@ -25,6 +25,11 @@
   const num = (n) => n.toLocaleString();
   const sizeName = (s) => (String(s) === '1' ? 'the whole label' : `1/${s} of the label`);
   const svgSrc = (s) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(s)}`;
+  // Every shape the ad prints at, size by size, then each box side: what's approved is what prints.
+  const everyShape = (p) => h('div', { class: 'stack' },
+    ...p.sizes.map((s) => ({ ...s, shapes: s.shapes ?? [{ svg: s.svg, w: 0, h: 0 }] })).map((s) => h('div', {}, h('h3', { text: `${s.label}${s.shapes.length > 1 ? ` · ${s.shapes.length} shapes` : ''}` }),
+      s.shapes.length ? h('div', { class: 'sizes' }, s.shapes.map((x) => h('figure', {}, h('img', { src: svgSrc(x.svg), alt: `Your ad at ${s.label}, ${Math.round(x.w)} by ${Math.round(x.h)}` }), h('figcaption', { text: x.w ? `${(x.w / 100).toFixed(1)} × ${(x.h / 100).toFixed(1)} in` : s.label })))) : h('p', { class: 'muted', text: 'This size doesn’t fit on the bottles here, so it won’t print. Pick another size.' }))),
+    ...(p.boxFaces?.length ? [h('div', {}, h('h3', { text: 'Box sides' }), h('div', { class: 'sizes' }, p.boxFaces.map((f) => h('figure', {}, h('img', { class: 'box-img', src: svgSrc(f.svg), alt: 'Your ad on a box side' }), h('figcaption', { text: `${(f.w / 40).toFixed(1)} × ${(f.h / 40).toFixed(1)} in` })))))] : []));
   const toastEl = h('div', { class: 'toast', role: 'status' }); document.body.append(toastEl);
   let tt; const toast = (m) => { toastEl.textContent = m; toastEl.classList.add('show'); clearTimeout(tt); tt = setTimeout(() => toastEl.classList.remove('show'), 2600); };
 
@@ -289,7 +294,7 @@
     const plain = (x) => {
       if (x.code !== 'invalid_request') return x.message;
       if (/website/i.test(x.message)) return 'Your website needs to start with https:// (a secure address), like https://titostacos.com.';
-      if (/businessName/i.test(x.message)) return 'Give your business name (2 to 60 characters).';
+      if (/business ?name/i.test(x.message)) return 'Give your business name (2 to 60 characters).';
       return 'Something in the form isn’t right. Check it and try again.';
     };
     const err = h('div', { class: 'notice err', hidden: true });
@@ -758,7 +763,7 @@
     function drawStage() {
       if (!preview) { stage.replaceChildren(h('p', { class: 'caption', text: 'Your ad appears here as you chat.' })); return; }
       if (tab === 'bottle') stage.replaceChildren(h('img', { class: 'label-img', src: svgSrc(preview.labelSvg), alt: 'A sample label with your ad on it' }), h('p', { class: 'caption', text: 'A sample label. Your ad is on the left; the other slots go to other advertisers. The black panel is the same on every bottle.' }));
-      if (tab === 'sizes') stage.replaceChildren(h('div', { class: 'sizes' }, preview.sizes.map((s) => h('figure', {}, h('img', { src: svgSrc(s.svg), alt: `Your ad at ${s.label}` }), h('figcaption', { text: s.label })))), h('p', { class: 'caption', text: 'The same ad, laid out for each size you chose. The QR code is added in the corner when it prints.' }));
+      if (tab === 'sizes') stage.replaceChildren(everyShape(preview), h('p', { class: 'caption', text: 'Your ad exactly as it prints, at every shape each size comes in (a piece can be wide on one bottle and tall on the next), with its QR code where it prints.' }));
       if (tab === 'box') stage.replaceChildren(h('img', { class: 'box-img', src: svgSrc(preview.boxFaceSvg), alt: 'Your ad on the side of a delivery box' }), h('p', { class: 'caption', text: 'One side of a delivery box. Each side has its own QR code.' }));
       if (tab === 'scan') {
         frameReady = false;
@@ -824,7 +829,7 @@
     shell('new', h('div', { class: 'review' },
       h('div', { class: 'page-head', style: 'margin:0' }, h('div', {}, link(`/ads/drafts/${id}`, {}, '← Back to the chat'), h('h1', { style: 'margin-top:8px', text: 'Review your ad' }), h('p', { text: 'This is exactly what prints and what opens. Look it over before you submit.' }))),
       h('div', { class: 'stage' }, h('img', { class: 'label-img', src: svgSrc(p.labelSvg), alt: 'A sample label with your ad' })),
-      h('div', { class: 'stage' }, h('div', { class: 'sizes' }, p.sizes.map((s) => h('figure', {}, h('img', { src: svgSrc(s.svg), alt: `At ${s.label}` }), h('figcaption', { text: s.label })))), p.boxFaceSvg ? h('img', { class: 'box-img', src: svgSrc(p.boxFaceSvg), alt: 'On a box' }) : null),
+      h('div', { class: 'stage' }, everyShape(p)),
       h('div', { class: 'stage' }, frame),
       h('div', { class: 'facts' },
         h('div', {}, h('span', { text: 'Where' }), dr.locations === 'all' ? 'Every machine' : (dr.locations || []).join(', ')),

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { newId } from '../../core/ids';
 import type { SqlClient } from '../../db/client';
 import { getChecked, type BlobStore } from './blobs';
+import { overPixelLimit, pixelsText } from '../studio/photos';
 
 // Where uploaded files live. Today: the database. Later: any object storage (S3, R2, GCS) behind the same contract.
 
@@ -37,6 +38,17 @@ export function checkAsset(contentType: string, bytes: Uint8Array) {
   if (!t.magic(bytes)) throw new AssetError(422, 'wrong_content', `That file says it's ${t.ext} but its contents aren't.`);
 }
 
+/**
+ * A picture's size in pixels, from its header: the same 40 megapixel limit the ad studio uses. A small file can say
+ * it's 20,000 by 20,000 pixels; opening it (on a phone's scan page, in a preview, at the printer) would need gigabytes.
+ * A header that can't be read is left to the content check above.
+ */
+export async function checkPixels(contentType: string, bytes: Uint8Array) {
+  if (!contentType.startsWith('image/')) return;
+  const over = await overPixelLimit(bytes);
+  if (over) throw new AssetError(413, 'too_many_pixels', `That picture is ${pixelsText(over)}. The most is 40 megapixels (like 8,000 × 5,000): make it smaller and upload it again.`);
+}
+
 export class SqlAssetStore implements AssetStore {
   /** With a blob store, the bytes go there and the database keeps only what the file is. */
   constructor(private db: SqlClient, private blobs?: BlobStore) {}
@@ -47,6 +59,7 @@ export class SqlAssetStore implements AssetStore {
 
   async put(input: { companyId: string; advertiserId?: string; userId?: string; contentType: string; bytes: Uint8Array; name?: string }) {
     checkAsset(input.contentType, input.bytes);
+    await checkPixels(input.contentType, input.bytes);
     const sha = createHash('sha256').update(input.bytes).digest('hex');
     const existing = (await this.db.query<any>(`select id, company_id, advertiser_id, user_id, content_type, size_bytes, sha256, name from assets where company_id = $1 and advertiser_id is not distinct from $2 and user_id is not distinct from $3 and sha256 = $4`, [input.companyId, input.advertiserId ?? null, input.userId ?? null, sha])).rows[0];
     if (existing) return this.view(existing); // the same file twice is stored once
