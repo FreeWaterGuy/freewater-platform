@@ -509,6 +509,25 @@ describe.each(engines)('paid bottles claimed under load (%s)', (engine) => {
     expect(charged.map((r) => Number(r.amount_cents))).toEqual([7 * 42]);
     expect(Number((await pdb.query<any>(`select count(*)::int as n from ad_prepaid where campaign_id = $1`, [orders[0].campaign_id])).rows[0].n)).toBe(1);
   });
+  it('claims and the queued “printed” moves of the same ads, at once and in any order, never deadlock (P2)', async () => {
+    const a = await newAd(papp, 4), b = await newAd(papp, 4);
+    for (const c of [a, b]) {
+      const q = papp.prepaid.quote('freewater', { bottles: 500, share: 4 }, c.sizes);
+      await papp.prepaid.payBottles({ companyId: 'freewater', advertiserId: c.advertiserId, campaignId: c.id, quote: { bottles: 500, share: 4 }, expectedTotalCents: q.totalCents });
+    }
+    const [x, y] = [a.id, b.id].sort() as [string, string];
+    const retries = (papp.persistence as any).stats.retries as number;
+    const errors: string[] = [];
+    for (let i = 0; i < 25; i++) {
+      // What one batch of printed bottles writes: a bottle with only the later ad, then one with both, later one first.
+      papp.platform.persist.prepaid?.('freewater', [y], 'printed');
+      papp.platform.persist.prepaid?.('freewater', [y, x], 'printed');
+      const claims = Array.from({ length: 3 }, () => papp.prepaid.claim('freewater', [x, y]).catch((e) => { errors.push(String(e?.message ?? e)); return []; }));
+      await Promise.all([...claims, papp.persistence.flush()]);
+    }
+    expect(errors).toEqual([]);
+    expect((papp.persistence as any).stats.retries - retries).toBe(0);
+  }, 120_000);
   it('a stop racing a claim: either the bottle was claimed first (the stop waits for it) or it is refused', async () => {
     const c = await newAd(papp, 4);
     const q = papp.prepaid.quote('freewater', { bottles: 3, share: 4 }, c.sizes);

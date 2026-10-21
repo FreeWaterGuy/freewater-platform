@@ -256,7 +256,10 @@ export class PrepaidService {
     // the others back).
     const ids = [...new Set(campaignIds)];
     await this.db.transaction(async (tx) => {
-      const got = new Set((await tx.query<any>(`update ad_prepaid set held = held + 1 where campaign_id = any($1::text[]) and company_id = $2 and stopped_at is null and printed + held + refunded < paid returning campaign_id`, [ids, companyId])).rows.map((r) => r.campaign_id as string));
+      // The rows are locked in campaign order (as the queued "printed" moves lock them, src/db/store.ts), so a claim and
+      // a write of bottles already printed never wait on each other in a circle (a deadlock, on Postgres).
+      const got = new Set((await tx.query<any>(`with l as (select campaign_id from ad_prepaid where campaign_id = any($1::text[]) and company_id = $2 order by campaign_id for update)
+        update ad_prepaid p set held = p.held + 1 from l where p.campaign_id = l.campaign_id and p.stopped_at is null and p.printed + p.held + p.refunded < p.paid returning p.campaign_id`, [ids, companyId])).rows.map((r) => r.campaign_id as string));
       // An ad bought on delivery routes prints only on a spot reserved for it, and each spot once: open → held here, in
       // the same step, so two packs (or two servers) can never print the same spot.
       const spots = routeSpotIds.length ? new Set((await tx.query<any>(`update route_spots set status = 'held' where id = any($1::text[]) and company_id = $2 and status = 'open' and bottle is not null returning campaign_id`, [routeSpotIds, companyId])).rows.map((r) => r.campaign_id as string)) : new Set<string>();

@@ -36,7 +36,9 @@ describe('the data environment', () => {
       expect(cs.options.map((o) => o.position)).toEqual([1, 2]);
       orders.add(cs.options.map((o) => o.subject).join(','));
     }
-    expect(orders.size).toBe(2); // both orders turn up
+    // Both orders turn up. The app is seeded (seed: 5), so the shuffle is repeatable: this can't miss by chance, and
+    // fails every time if the shuffle is dropped or always picks the same order.
+    expect(orders.size).toBe(2);
     await expect(app.environment.present('freewater', 'viewer-paid-1', 'x', [{ subject: 'a', label: 'A', facts: {} as any, paidRank: 1 } as any, { subject: 'b', label: 'B', facts: {} as any }])).rejects.toThrow(/pay to sit higher/);
 
     const cs = (await app.environment.machineChoice('freewater', 'viewer-choose-1', 'ATX-014'))!;

@@ -115,6 +115,10 @@ export class SqlPersistence implements Persistence {
             else await this.db.transaction(async (tx) => {
               // With a lease, every write first proves, in its own transaction, that this server still owns the data.
               if (lease && !(await lease.stillHeld(tx))) throw new LeaseLapsed();
+              // Every paid ad this batch moves is locked first, in campaign order: a batch holds its rows to the end, so
+              // locking them statement by statement (bottle by bottle, in any order) could wait in a circle with a claim.
+              const prepaid = [...new Set(batch.flatMap((op) => (op.kind === 'prepaid' ? (op.params[0] as string[]) : [])))].sort();
+              if (prepaid.length) await tx.query(`select 1 from ad_prepaid where campaign_id = any($1::text[]) order by campaign_id for update`, [prepaid]);
               for (const op of batch) await tx.query(op.sql, op.params);
               if (mark) await tx.query(WATERMARK, [this.epoch, last]);
             });
@@ -390,9 +394,11 @@ export class SqlPersistence implements Persistence {
    */
   prepaid(companyId: string, campaignIds: string[], move: 'printed' | 'released') {
     if (!campaignIds.length) return;
+    // Rows locked in campaign order, like a claim (PrepaidService.claim) and the batch's own first lock (schedule).
+    const locked = `with l as (select campaign_id from ad_prepaid where campaign_id = any($1::text[]) and company_id = $2 order by campaign_id for update)`;
     this.enqueue('prepaid', move === 'printed'
-      ? `update ad_prepaid set held = greatest(held - 1, 0), printed = printed + 1 where campaign_id = any($1::text[]) and company_id = $2 and printed + 1 + greatest(held - 1, 0) + refunded <= paid`
-      : `update ad_prepaid set held = held - 1 where campaign_id = any($1::text[]) and company_id = $2 and held > 0`, [[...new Set(campaignIds)], companyId]);
+      ? `${locked} update ad_prepaid p set held = greatest(p.held - 1, 0), printed = p.printed + 1 from l where p.campaign_id = l.campaign_id and p.printed + 1 + greatest(p.held - 1, 0) + p.refunded <= p.paid`
+      : `${locked} update ad_prepaid p set held = p.held - 1 from l where p.campaign_id = l.campaign_id and p.held > 0`, [[...new Set(campaignIds)].sort(), companyId]);
   }
 
   routeSpots(companyId: string, spotIds: string[], move: 'printed' | 'released', unitId: string, packId?: string) {

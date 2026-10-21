@@ -236,6 +236,11 @@ describe('an area of houses, from the map to the door', () => {
     // A made-up code, or a box number with the wrong house number, doesn't claim anything.
     expect((await call('POST', '/v1/me/house/claim', ana, { code: 'https://freewater.example/p/pk_00000000000000000000' })).json().error.code).toBe('no_match');
     expect((await call('POST', '/v1/me/house/claim', ana, { code: boxNumber(pack.id), houseNumber: 1 })).json().error.code).toBe('no_match');
+    // The same box's code, from someone at another company: not a box that company delivered. (Through the service:
+    // the other company has delivery areas off, so its route would refuse before the company check is reached.)
+    const elsewhere = await app.accounts.invite({ companyId: 'peak-spring', email: 'ana.elsewhere@example.com', role: 'ops' });
+    await expect(app.houses.claim(elsewhere.id, 'peak-spring', { code: pack.rendered!.packUrl })).rejects.toMatchObject({ code: 'no_match' });
+    expect((await db.query<any>(`select count(*)::int as n from house_claims where company_id = 'peak-spring'`)).rows[0].n).toBe(0);
     // The QR on the side of the box (what the app's camera reads).
     const claimed = await call('POST', '/v1/me/house/claim', ana, { code: pack.rendered!.packUrl });
     expect(claimed.statusCode, claimed.body).toBe(201);
@@ -256,6 +261,28 @@ describe('an area of houses, from the map to the door', () => {
     expect((await call('POST', '/v1/me/house/claim', ben, { code: `#${boxNumber(pack.id).toLowerCase()}`, houseNumber: num })).json()).toMatchObject({ id: next.houseId });
     // A big household gets more (the area's rule: 12 bottles a person a week, in 12-packs, at most 3 boxes).
     expect((await call('PATCH', '/v1/me/house', ben, { action: 'household', householdSize: 2 })).json().householdSize).toBe(2);
+  });
+
+  it('one house per person, proved by a box from the last two months; a real household size; the street known to ads only while its switch is on', async () => {
+    const dan = await app.accounts.invite({ companyId: 'freewater', email: 'dan@example.com', role: 'ops' });
+    const homePack = app.packs.packs.get(home.packId)!, nextPack = app.packs.packs.get(next.packId)!;
+    await app.houses.claim(dan.id, 'freewater', { code: homePack.rendered!.packUrl });
+    await app.houses.claim(dan.id, 'freewater', { code: nextPack.rendered!.packUrl });
+    expect((await db.query<any>(`select house_id from house_claims where user_id = $1`, [dan.id])).rows).toEqual([{ house_id: next.houseId }]);
+    await expect(app.houses.change(dan.id, 'freewater', { action: 'household', householdSize: 21 })).rejects.toMatchObject({ code: 'bad_size' });
+    await app.houses.unclaim(dan.id, 'freewater');
+    // Two months on, the same box proves nothing any more.
+    const was = now;
+    try {
+      at('2027-01-05T16:00:00Z');
+      await expect(app.houses.claim(dan.id, 'freewater', { code: homePack.rendered!.packUrl })).rejects.toMatchObject({ code: 'no_match' });
+    } finally { now = was; }
+    // What ads may know about a house (its street and area) is there only while that switch is on.
+    expect(await app.houses.contextFor(next.houseId, 'freewater')).not.toBeNull();
+    const actor = { userId: 'u-test', name: 'Test owner', approverProblem: async () => null } as any;
+    await app.companyFeatures.change('freewater', { house_ad_context: false }, actor);
+    try { expect(await app.houses.contextFor(next.houseId, 'freewater')).toBeNull(); }
+    finally { await app.companyFeatures.change('freewater', { house_ad_context: true }, actor); }
   });
 
   it('next week the house that stopped is skipped and the next house still gets its boxes, two for the bigger household', async () => {
@@ -362,7 +389,10 @@ describe('an area of houses, from the map to the door', () => {
     expect(r).toMatchObject({ frequencyDays: 14, packSize: 24 });
     const houses = (await call('GET', `/v1/ops/areas/${area.id}/houses?status=active`, admin())).json();
     // Planned on the 24th: next due two weeks later, not one.
-    for (const h of houses) expect(h.nextDate).toBe(h.lastPlanned === '2026-11-24' ? '2026-12-08' : h.lastPlanned === '2026-11-27' ? '2026-12-11' : h.nextDate);
+    // Every active house was last planned on one of those two nights (so none is passed over below).
+    expect(houses.length).toBeGreaterThan(0);
+    expect(houses.filter((h: any) => h.lastPlanned !== '2026-11-24' && h.lastPlanned !== '2026-11-27').map((h: any) => `${h.address}: ${h.lastPlanned}`)).toEqual([]);
+    for (const h of houses) expect(h.nextDate).toBe(h.lastPlanned === '2026-11-24' ? '2026-12-08' : '2026-12-11');
     at('2026-11-30T16:00:00Z');
     expect(await plan('2026-12-01')).toEqual([]); // a week on: nobody is due any more
     at('2026-12-07T16:00:00Z');
