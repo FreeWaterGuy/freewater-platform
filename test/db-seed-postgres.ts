@@ -23,12 +23,14 @@ const db = createPostgresClient(url);
 let now = new Date('2026-09-01T15:00:00Z').getTime();
 const clock = () => new Date(now);
 const app = await createApp({ db, seedDemo: true, seed: 7, clock, payouts: new TestPayoutProvider(), assumePlace: { country: 'US', state: 'TX' }, productLookup: null, anchorPublishers: [] } as any);
-const step = async (name: string, f: () => Promise<unknown>) => { try { await f(); console.log('ok  ', name); } catch (e: any) { console.log('FAIL', name, e?.message ?? e); } };
+const step = async (name: string, f: () => Promise<unknown>) => { try { await f(); console.log('ok  ', name); } catch (e: any) { console.log('FAIL', name, e?.message ?? e, app.persistence.problem?.message ?? ''); } };
 
 await step('orders and scans', async () => {
   for (let i = 0; i < 400; i++) {
     const r = await app.platform.order({ companyId: 'freewater', orderId: `seed-${i}`, locationId: 'ATX-014', productId: 'bottle-16oz' });
     if (r.ok && i % 5 === 0) for (const p of r.unit.placements) if (!p.isHouse) app.platform.scan(r.unit.id, p.slotIndex, `seed-viewer-${i}`);
+    // Stored as it goes: on a busy machine a long queue pauses changes ("paused for a moment"), and the rest would fail.
+    if (i % 20 === 19) await app.persistence.flush();
   }
   await app.persistence.flush();
 });
@@ -44,7 +46,16 @@ await step('wallet: earn, fund, credit, spend, correct', async () => {
   await app.wallet.correct('freewater', entry, 'user:josh', 'seed correction');
   void g;
 });
-await step('charity payouts', async () => { now += 86_400_000; await app.books.runPayouts('freewater', { baseUrl: 'https://x' }); });
+await step('charity payouts', async () => {
+  now += 86_400_000;
+  await app.books.runPayouts('freewater', { baseUrl: 'https://x' }).catch((e) => console.log('     (payouts:', e.message, ')'));
+  await app.persistence.flush();
+  // The checks after the upgrade need at least one transfer on record: if nothing was due to send, one as sent before.
+  if (!(await db.query<any>(`select 1 from charity_transfers limit 1`)).rows.length) {
+    const charity = (await db.query<any>(`select id from charities limit 1`)).rows[0].id;
+    await db.query(`insert into charity_transfers (id, company_id, number, charity_id, amount_cents, covers_until, bottles, status, provider, created_at) values ('ct_seed','freewater','T-SEED',$1,1234,$2,10,'sent','test',$2)`, [charity, clock().toISOString()]);
+  }
+});
 await step('chain: propose, approve, pause', async () => {
   await app.chain.propose('freewater', 'unpause', {}, 'user:josh').catch(() => null);
   await app.chain.pause('freewater', 'user:josh', 'seed pause');

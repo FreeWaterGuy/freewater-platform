@@ -46,6 +46,13 @@ export class PersistencePaused extends Error {
 }
 const WATERMARK = `insert into persistence_watermark (id, epoch, seq, at) values (1, $1, $2, now()) on conflict (id) do update set epoch = excluded.epoch, seq = excluded.seq, at = excluded.at`;
 
+/**
+ * Paid-bottle counts (ad_prepaid) are claimed before a label prints (PrepaidService.claim) and moved on after, by this
+ * writer, in a batch that may move several ads' counts in turn. Both take this lock first, so a claim and a batch never
+ * hold each other's rows (each would otherwise wait on the other: a deadlock, a second lost, and a retry).
+ */
+export const PREPAID_LANE = `select pg_advisory_xact_lock(724261)`;
+
 /** What a write checks inside its transaction: is the lease still this server's (see InstanceLease.stillHeld)? */
 export interface WriteLease { stillHeld(tx: SqlClient): Promise<boolean>; lost(why: string): void }
 class LeaseLapsed extends Error { constructor() { super('this server no longer holds the lease'); } }
@@ -115,7 +122,12 @@ export class SqlPersistence implements Persistence {
             else await this.db.transaction(async (tx) => {
               // With a lease, every write first proves, in its own transaction, that this server still owns the data.
               if (lease && !(await lease.stillHeld(tx))) throw new LeaseLapsed();
-              for (const op of batch) await tx.query(op.sql, op.params);
+              // Paid-bottle counts are moved last, under PREPAID_LANE, so a claim waits only for those few statements,
+              // not the whole batch. (They are counters guarded on their own row: nothing else in a batch reads them.)
+              const counts = batch.filter((op) => op.kind === 'prepaid');
+              for (const op of batch) if (op.kind !== 'prepaid') await tx.query(op.sql, op.params);
+              if (counts.length) await tx.query(PREPAID_LANE);
+              for (const op of counts) await tx.query(op.sql, op.params);
               if (mark) await tx.query(WATERMARK, [this.epoch, last]);
             });
             if (mark) this.claimed = true;
@@ -390,9 +402,11 @@ export class SqlPersistence implements Persistence {
    */
   prepaid(companyId: string, campaignIds: string[], move: 'printed' | 'released') {
     if (!campaignIds.length) return;
+    // Rows taken in one order (by ad), as a claim takes them (src/modules/ads/prepaid.ts).
+    const mine = `campaign_id in (select campaign_id from ad_prepaid where campaign_id = any($1::text[]) and company_id = $2 order by campaign_id for update)`;
     this.enqueue('prepaid', move === 'printed'
-      ? `update ad_prepaid set held = greatest(held - 1, 0), printed = printed + 1 where campaign_id = any($1::text[]) and company_id = $2 and printed + 1 + greatest(held - 1, 0) + refunded <= paid`
-      : `update ad_prepaid set held = held - 1 where campaign_id = any($1::text[]) and company_id = $2 and held > 0`, [[...new Set(campaignIds)], companyId]);
+      ? `update ad_prepaid set held = greatest(held - 1, 0), printed = printed + 1 where ${mine} and printed + 1 + greatest(held - 1, 0) + refunded <= paid`
+      : `update ad_prepaid set held = held - 1 where ${mine} and held > 0`, [[...new Set(campaignIds)], companyId]);
   }
 
   routeSpots(companyId: string, spotIds: string[], move: 'printed' | 'released', unitId: string, packId?: string) {

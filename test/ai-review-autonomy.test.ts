@@ -436,6 +436,25 @@ describe('5. the governor', () => {
     expect(finalCallOwn()).toBe(false);
     expect((await call('POST', '/v1/review/ai/settings', owner, { minDecisions: 100, reason: 'Back to the usual 100 decisions' })).status).toBe(200);
   });
+
+  it('a bar raised while it is being turned on still counts (P2): it never ends up on below the bar', async () => {
+    await seedRecord(100);
+    const o = { userId: ownerId, role: 'owner', name: 'owner', approverProblem: async () => null };
+    const rv = { userId: reviewerId, role: 'reviewer', name: 'reviewer', approverProblem: async () => null };
+    // The reviewer raises the bar just after the owner's turn-on read the record, before it saved the switch.
+    const real = app.aiReview.record.bind(app.aiReview);
+    let raced = false;
+    app.aiReview.record = async (companyId: string) => {
+      const r = await real(companyId);
+      if (!raced) { raced = true; await app.aiReview.changeBar('freewater', { minDecisions: 1000 }, rv); }
+      return r;
+    };
+    try {
+      await expect(app.aiReview.turnOn('freewater', o, 'Agreed with us on every one of the last 100')).rejects.toMatchObject({ code: 'not_yet' });
+    } finally { app.aiReview.record = real; }
+    expect(finalCallOwn()).toBe(false); // before the fix: on, against a bar of 100 that had just become 1000
+    await app.aiReview.changeBar('freewater', { minDecisions: 100 }, o, 'Back to the usual 100 decisions');
+  });
 });
 
 describe('6. off for a company', () => {

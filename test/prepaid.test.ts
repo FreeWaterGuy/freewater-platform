@@ -429,7 +429,7 @@ describe('the database’s own rules', () => {
     const c = await newAd(app, 4);
     await payAndApprove(app, c, 2);
     await expect(db.query(`update ad_prepaid set printed = 3 where campaign_id = $1`, [c.id])).rejects.toThrow(/check/i);
-    await expect(db.query(`update ad_prepaid set paid = -1 where campaign_id = $1`, [c.id])).rejects.toThrow(/check/i);
+    await expect(db.query(`update ad_prepaid set paid = -1 where campaign_id = $1`, [c.id])).rejects.toThrow(/check|what was paid never changes/i);
     await app.persistence.flush();
     await expect(db.query(`insert into ledger_entries (id, event_id, company_id, at, debit, credit, amount_cents, kind, memo) values ('le_over','ev_over','freewater',now(),$1,'revenue:print',85,'print','more than was paid')`, [`prepaid:advertiser:${c.advertiserId}`])).rejects.toThrow(/check/i);
   });

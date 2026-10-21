@@ -363,18 +363,23 @@ export class HouseService {
    */
   async claim(userId: string, companyId: string, input: { code: string; houseNumber?: number }) {
     const since = new Date(this.platform.bus.now().getTime() - 86_400_000).toISOString();
-    const tries = Number((await this.db.query<any>(`select count(*)::int as n from house_events where company_id = $1 and by_user = $2 and kind = 'claim_failed' and at > $3`, [companyId, userId, since])).rows[0]?.n ?? 0);
-    if (tries >= CLAIM_TRIES_PER_DAY) throw new DeliveryError(429, 'too_many_tries', 'Too many codes that didn’t match today. Try again tomorrow, with the code from your most recent box.');
+    const tooMany = () => new DeliveryError(429, 'too_many_tries', 'Too many codes that didn’t match today. Try again tomorrow, with the code from your most recent box.');
+    const triesIn = async (db: SqlClient) => Number((await db.query<any>(`select count(*)::int as n from house_events where company_id = $1 and by_user = $2 and kind = 'claim_failed' and at > $3`, [companyId, userId, since])).rows[0]?.n ?? 0);
+    if (await triesIn(this.db) >= CLAIM_TRIES_PER_DAY) throw tooMany();
     const pack = await this.findPack(companyId, input.code, input.houseNumber);
-    if (!pack?.houseId) {
-      await this.event(companyId, null, 'claim_failed', userId, null);
-      throw new DeliveryError(404, 'no_match', input.houseNumber !== undefined ? 'That box number and house number don’t match a box we delivered. Check the number in the box’s corner.' : 'That code isn’t from a box we delivered in the last two months. Scan the code on the side of your most recent box.');
-    }
-    await this.db.transaction(async (tx) => {
+    // Counted and written under one lock per person, so codes sent all at once are still five a day (and two claims at
+    // once leave one house, not an error). Over the limit, the answer is the same whether or not the code matched.
+    const outcome = await this.db.transaction(async (tx) => {
+      await tx.query(`select pg_advisory_xact_lock(hashtext('house-claim:' || $1 || ':' || $2))`, [companyId, userId]);
+      if (await triesIn(tx) >= CLAIM_TRIES_PER_DAY) return 'too_many' as const;
+      if (!pack?.houseId) { await this.event(companyId, null, 'claim_failed', userId, null, tx); return 'no_match' as const; }
       await tx.query(`delete from house_claims where company_id = $1 and user_id = $2`, [companyId, userId]);
       await tx.query(`insert into house_claims (house_id, user_id, company_id, pack_id, claimed_at) values ($1,$2,$3,$4,$5)`, [pack.houseId, userId, companyId, pack.id, this.platform.bus.now().toISOString()]);
-      await this.event(companyId, pack.houseId!, 'claimed', userId, null, tx);
+      await this.event(companyId, pack.houseId, 'claimed', userId, null, tx);
+      return 'claimed' as const;
     });
+    if (outcome === 'too_many') throw tooMany();
+    if (outcome === 'no_match') throw new DeliveryError(404, 'no_match', input.houseNumber !== undefined ? 'That box number and house number don’t match a box we delivered. Check the number in the box’s corner.' : 'That code isn’t from a box we delivered in the last two months. Scan the code on the side of your most recent box.');
     return this.mine(userId, companyId);
   }
 
