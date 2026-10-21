@@ -409,6 +409,7 @@ npm run demo:console-preview   # builds out/console-preview/, a clickable copy t
 - **Machines:** add a machine and get its own key, which can only print bottles. The key is shown once.
 - **Team:** add people with a role, remove them (they're signed out everywhere). The last owner can't be removed.
 - **Licensees** (FreeWater only): set up a new company with its own brand, house ad and first owner, who is emailed a link. Licensee owners can never do this, and no company can see another's.
+- **Features page:** every feature as a switch (about 130, in categories, with main switches and finer ones beneath), starting points (Full FreeWater, Design studio only, Delivery + printed ads, Machines + printed ads), a search, and the locked items that are always on. Off for a company means its routes refuse, its jobs skip, its screens hide and the engine doesn't use it. A new company copies FreeWater's choices with money, chain and one-way switches off. Every change is kept. The list is `src/runtime/registry.ts`; how to add a feature is in `docs/SWITCHES.md` §8.
 
 **API keys (`/v1/keys`).** Each system gets its own key with only the scopes it needs. A key is shown once; only a fingerprint and a short hint are kept. The list shows when each key was last used. Advertiser keys are limited to their own campaigns, sales and invoices.
 

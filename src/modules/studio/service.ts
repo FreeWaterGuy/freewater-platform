@@ -10,6 +10,9 @@ import { ProviderError, type ImageMaker, type ModelMaker, type PhotoLibrary } fr
 import { contrast } from '../creative/poster';
 import { checkSvg, checkSvgPictures } from '../print/svgCreative';
 import { withCompany } from '../ai/routing';
+import { PX_PER_IN, pieceOf, slotQr } from '../print/renderer';
+import { layoutsFor, shareLabel } from '../ads/layouts';
+import type { Share } from '../../core/types';
 
 /**
  * The ad studio: a brand sets up its kit once (name, colors, logo, photos), says what an ad is for, and gets finished
@@ -176,7 +179,7 @@ export class StudioService {
       previews.push(`data:image/jpeg;base64,${(await readImage(f.bytes).resize(512, 512, { fit: 'inside' }).jpeg({ quality: 70 }).toBuffer()).toString('base64')}`);
       seen.push(p);
     }
-    const designs = (await withCompany(companyId, async () => this.designer.design({ ...kit, photos: [...seen, ...kit.photos.slice(4)] }, clean, previews))).filter((s) => checkStudioSpec(s) === null).slice(0, 3);
+    const designs = (await withCompany(companyId, async () => this.designer.design({ ...kit, photos: [...seen, ...kit.photos.slice(4)] }, clean, previews), 'ai_studio_designer')).filter((s) => checkStudioSpec(s) === null).slice(0, 3);
     if (!designs.length) throw new StudioError(422, 'no_design', 'No design could be made from that. Add a photo or brand colors and try again.');
     return { kit: { name: kit.name, colors: kit.colors ?? designs[0]!.colors, type: kit.type ?? designs[0]!.type }, designs };
   }
@@ -188,6 +191,34 @@ export class StudioService {
     await this.owns(companyId, advertiserId, spec);
     const adv = await this.advertiser(companyId, advertiserId);
     return this.ads.previewArt({ companyId, advertiserId, advertiserName: adv.name, category: adv.category, draw: (w, h, ctx) => renderStudio(spec, w, h, ctx) });
+  }
+
+  /**
+   * A design as a print-ready file: an SVG at real size (inches), with its photos inside, for any printer. With a size
+   * of the label (a share), it's cut exactly as that piece prints on the company's standard bottle; or at any size
+   * asked for (up to 48 inches a side). It leaves the corner clear for a code only when asked (`qrCorner`); this is how
+   * a company running the studio without printing hands designs to whoever prints them.
+   */
+  async exportDesign(companyId: string, advertiserId: string, spec: StudioSpec, opts: { share?: Share; widthIn?: number; heightIn?: number; qrCorner?: boolean } = {}) {
+    const problem = checkStudioSpec(spec);
+    if (problem) throw new StudioError(422, 'invalid_design', `That design can't be drawn: ${problem}.`);
+    await this.owns(companyId, advertiserId, spec);
+    let w: number, h: number;
+    if (opts.widthIn !== undefined || opts.heightIn !== undefined) {
+      if (!(opts.widthIn! >= 0.5 && opts.widthIn! <= 48 && opts.heightIn! >= 0.5 && opts.heightIn! <= 48)) throw new StudioError(422, 'bad_size', 'Give a width and a height between 0.5 and 48 inches.');
+      w = opts.widthIn! * PX_PER_IN; h = opts.heightIn! * PX_PER_IN;
+    } else {
+      const share = opts.share ?? 1;
+      const product = this.platform.standardProduct(companyId);
+      const company = this.platform.companies.get(companyId)!;
+      const layout = layoutsFor(product, { maxAds: company.adRules.maxAdsPerUnit, minAds: 1 }).find((l) => l.shares.includes(share));
+      if (!layout) throw new StudioError(422, 'bad_size', `${shareLabel(share)} doesn’t fit on ${product.name}. Pick another size, or give a width and a height.`);
+      ({ w, h } = pieceOf(product, layout.rects[layout.shares.indexOf(share)]!));
+    }
+    const ctx = opts.qrCorner ? { qr: slotQr(this.platform.standardProduct(companyId), w, h) } : undefined;
+    const inches = (n: number) => `${Math.round((n / PX_PER_IN) * 1000) / 1000}in`;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${inches(w)}" height="${inches(h)}" viewBox="0 0 ${w} ${h}">${renderStudio(spec, w, h, ctx)}</svg>`;
+    return { svg: await this.platform.forPrint(svg), widthIn: Math.round((w / PX_PER_IN) * 1000) / 1000, heightIn: Math.round((h / PX_PER_IN) * 1000) / 1000 };
   }
 
   /** Put a design into an ad being made (then it's sized, budgeted and submitted as usual). */

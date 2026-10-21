@@ -12,16 +12,21 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { keySettingFor, type AiSettings } from './settings';
 export { checkAiSettings, keySettingFor, type AiMode, type AiSettings } from './settings';
 
-const current = new AsyncLocalStorage<{ companyId: string }>();
-/** Run AI work on behalf of one operator, so every call inside it uses that operator's AI. */
-export function withCompany<T>(companyId: string | undefined, f: () => Promise<T>): Promise<T> {
-  return companyId ? current.run({ companyId }, f) : f();
+const current = new AsyncLocalStorage<{ companyId: string; use?: string }>();
+/**
+ * Run AI work on behalf of one operator, so every call inside it uses that operator's AI. `use` names which use of AI
+ * this is (a switch on the operator's Features page, e.g. 'ai_personalizer'): when it's off, the call isn't made and
+ * the built-in rules answer, as when the AI can't be reached.
+ */
+export function withCompany<T>(companyId: string | undefined, f: () => Promise<T>, use?: string): Promise<T> {
+  return companyId ? current.run({ companyId, use }, f) : f();
 }
 export function currentCompany() { return current.getStore()?.companyId; }
+export function currentUse() { return current.getStore()?.use; }
 
 /** Set by the app: each operator's settings and name, and where host settings are read. */
-export const aiRouting: { settingsOf: (companyId: string) => AiSettings | undefined; nameOf: (companyId: string) => string | undefined; env: Record<string, string | undefined> } = {
-  settingsOf: () => undefined, nameOf: () => undefined, env: process.env,
+export const aiRouting: { settingsOf: (companyId: string) => AiSettings | undefined; nameOf: (companyId: string) => string | undefined; env: Record<string, string | undefined>; useOn: (companyId: string, use: string) => boolean } = {
+  settingsOf: () => undefined, nameOf: () => undefined, env: process.env, useOn: () => true,
 };
 
 export class AiUnavailable extends Error { constructor(why: string) { super(why); } }
@@ -30,7 +35,8 @@ export class AiUnavailable extends Error { constructor(why: string) { super(why)
  * The key and model one call uses. Throws AiUnavailable when there's no AI for this operator (its mode is off, or its
  * key isn't set): the caller then falls back to its built-in rules, as it does when the AI can't be reached.
  */
-export function routeAi(companyId: string | undefined, networkKey: string, model: string): { apiKey: string; model: string } {
+export function routeAi(companyId: string | undefined, networkKey: string, model: string, use: string | undefined = currentUse()): { apiKey: string; model: string } {
+  if (companyId && use && !aiRouting.useOn(companyId, use)) throw new AiUnavailable('This use of AI is switched off for this company (its Features page).');
   const s = companyId ? aiRouting.settingsOf(companyId) : undefined;
   if (!s || s.mode === 'network') {
     if (!networkKey) throw new AiUnavailable('The network AI has no key here.');

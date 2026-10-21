@@ -196,9 +196,9 @@
           h('div', {}, h('b', { text: money(stats.savedCents) }), h('span', { text: 'saved' })))
           : h('p', { style: 'margin:0;opacity:.85', text: 'Free spring water, paid for by the ads on the bottle. Every bottle gives to charity.' })),
       link('/app/scan', { class: 'tile blue' }, h('span', { class: 'tile-ico' }, icon(I.scan)), h('span', { class: 'grow' }, h('b', { text: 'Scan a bottle' }), h('span', { text: 'Open the AR printed on any FreeWater' }))),
-      link('/app/wallet', { class: 'tile ice' }, h('span', { class: 'grow' }, h('b', { text: 'Your wallet' }), h('span', { class: 'muted small', text: 'Points, offers, coupons and what you saved' })), h('span', { class: 'go', text: 'Open' })),
-      house ? houseCard(house) : deliveryCard(delivery),
-      m0 && link(`/app/m/${m0.id}`, { class: 'tile ice' }, h('span', { class: 'grow' }, h('b', { text: `${m0.id} on ${m0.name}` }), h('span', { class: 'muted small', text: m0.address || m0.city })), h('span', { class: 'go', text: 'Get one' })),
+      on('rewards') ? link('/app/wallet', { class: 'tile ice' }, h('span', { class: 'grow' }, h('b', { text: 'Your wallet' }), h('span', { class: 'muted small', text: 'Points, offers, coupons and what you saved' })), h('span', { class: 'go', text: 'Open' })) : null,
+      on('delivery') ? (house && on('delivery_areas') ? houseCard(house) : deliveryCard(delivery)) : null,
+      on('app_free_bottle') && m0 && link(`/app/m/${m0.id}`, { class: 'tile ice' }, h('span', { class: 'grow' }, h('b', { text: `${m0.id} on ${m0.name}` }), h('span', { class: 'muted small', text: m0.address || m0.city })), h('span', { class: 'go', text: 'Get one' })),
       me && h('h2', { class: 'section' }, 'Your bottles'),
       me && (mine?.bottles.length
         ? h('div', { class: 'rail' }, mine.bottles.slice(0, 8).map((b) => bottleCard(b)))
@@ -284,13 +284,14 @@
     const change = async (body, msg) => { err.hidden = true; try { await api('PATCH', '/v1/me/house', body); toast(msg); render(); } catch (x) { fail(x); } };
     const confirmStop = h('div', { class: 'notice err', hidden: true }, h('p', { style: 'margin:0 0 10px', text: 'Stop free water at this house? It’s left out from the next delivery on. You can start again any time.' }),
       h('button', { class: 'btn small', style: 'background:var(--danger)', type: 'button', onclick: () => change({ action: 'stop' }, 'Deliveries stopped') }, 'Yes, stop deliveries'));
-    const on = hs.status === 'active';
+    const active = hs.status === 'active';
     screen({ nav: 'me' }, backBar('Your house', hs.address, '/app/me'),
-      h('section', { class: 'hero-card' }, h('div', { class: 'headline' }, HOUSE_STATUS[hs.status] || hs.status, h('span', { text: on ? `A ${hs.packSize}-pack ${hs.everyDays === 7 ? 'every week' : `every ${hs.everyDays} days`}` : '' })),
+      h('section', { class: 'hero-card' }, h('div', { class: 'headline' }, HOUSE_STATUS[hs.status] || hs.status, h('span', { text: active ? `A ${hs.packSize}-pack ${hs.everyDays === 7 ? 'every week' : `every ${hs.everyDays} days`}` : '' })),
         h('p', { style: 'margin:0;opacity:.85', text: hs.lastDeliveredAt ? `Last one left ${new Date(hs.lastDeliveredAt).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })}.` : 'Nothing left here yet.' })),
-      on ? h('button', { class: 'btn danger', type: 'button', onclick: () => { confirmStop.hidden = false; } }, 'Stop deliveries') : h('button', { class: 'btn', type: 'button', onclick: () => change({ action: 'restart' }, 'Back on. See you on delivery day!') }, 'Start deliveries again'),
+      active ? h('button', { class: 'btn danger', type: 'button', onclick: () => { confirmStop.hidden = false; } }, 'Stop deliveries') : h('button', { class: 'btn', type: 'button', onclick: () => change({ action: 'restart' }, 'Back on. See you on delivery day!') }, 'Start deliveries again'),
       confirmStop,
-      h('div', { class: 'field' }, h('label', { text: 'How many people live here' }), h('p', { class: 'small muted', style: 'margin:0', text: 'Bigger households get more water.' }),
+      // Asked only where the company sizes packs by household (Features page, “More packs for bigger households”).
+      on('household_packs') && h('div', { class: 'field' }, h('label', { text: 'How many people live here' }), h('p', { class: 'small muted', style: 'margin:0', text: 'Bigger households get more water.' }),
         h('div', { class: 'chips' }, [1, 2, 3, 4, 5, 6, 7, 8].map((n) => h('button', { type: 'button', class: 'chip-btn', 'aria-pressed': String(hs.householdSize === n), onclick: () => change({ action: 'household', householdSize: n }, 'Thanks. We’ll bring enough.') }, n === 8 ? '8+' : String(n))))),
       err,
       h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { try { await api('DELETE', '/v1/me/house'); toast('Removed'); go('/app/me'); } catch (x) { fail(x); } } }, 'This isn’t my house any more'));
@@ -617,7 +618,7 @@
       });
       return h('label', { class: 'field' }, h('span', { class: 'small muted', text: 'Bought it? Add a photo of the receipt' }), f);
     };
-    const lvl = await levelInfo(me).catch(() => null);
+    const lvl = on('data_levels') ? await levelInfo(me).catch(() => null) : null;
     const said = { claimed: 'Buy it, then add the receipt', receipt_sent: 'Checking your receipt', verified: 'Approved', paid: 'Paid', rejected: 'Receipt not accepted (points returned)', expired: 'Ran out (points returned)', void: 'Closed' };
     screen({ nav: 'wallet' },
       h('h1', { class: 'display', style: 'font-size:26px', text: 'Wallet' }),
@@ -667,7 +668,7 @@
       screen({ nav: 'me' }, h('h1', { class: 'display', style: 'font-size:26px', text: 'Me' }), h('p', { class: 'muted', text: 'Sign in to keep your bottles, saved offers and your own designs in one place.' }), h('button', { class: 'btn', type: 'button', onclick: async () => { if (await signIn()) render(); } }, 'Sign in'));
       return;
     }
-    const [cards, lvl] = await Promise.all([api('GET', '/v1/me/cards').catch(() => []), levelInfo(me).catch(() => null)]);
+    const [cards, lvl] = await Promise.all([on('card_payments') ? api('GET', '/v1/me/cards').catch(() => []) : [], on('data_levels') ? levelInfo(me).catch(() => null) : null]);
     const name = h('input', { class: 'input', id: 'me-name', value: me.displayName || '', placeholder: 'What should we call you?', autocomplete: 'name' });
     const consent = (key, title, text) => {
       const input = h('input', { type: 'checkbox', id: `c-${key}`, role: 'switch', onchange: async () => {
@@ -704,8 +705,8 @@
         const pick = (key, label, opts) => { const sel = h('select', { class: 'input', 'aria-label': label }, h('option', { value: '', text: 'Rather not say' }), opts.map(([v, l]) => h('option', { value: v, text: l }))); sel.value = me.consents?.[key === 'cause' ? 'causeStance' : 'adsStance'] ?? ''; sel.addEventListener('change', async () => { if (!sel.value) return; try { await api('POST', '/v1/me/stance', { [key]: sel.value }); toast('Saved'); } catch (x) { toast(x.message); } }); return h('div', { class: 'field' }, h('label', { text: label }), sel); };
         return h('div', {}, pick('cause', `The cause your bottles support${state.config?.giving?.charity ? ` (${state.config.giving.charity})` : ''}`, [['supports', 'I support it'], ['indifferent', 'I don’t mind either way'], ['opposes', 'I’d rather not support it']]), pick('ads', 'Ads on my bottles', [['welcome', 'Fine by me'], ['unwelcome', 'I’d rather not have them']]));
       })(),
-      h('h2', { class: 'section' }, 'Free water at your house'),
-      link('/app/house', { class: 'tile plain' }, h('span', { class: 'grow' }, h('b', { text: 'Your house’s deliveries' }), h('span', { class: 'muted small', text: 'Stop or restart the free water left at your door, or say how many live there.' })), h('span', { class: 'go', text: 'Open' })),
+      on('delivery_areas') ? [h('h2', { class: 'section' }, 'Free water at your house'),
+        link('/app/house', { class: 'tile plain' }, h('span', { class: 'grow' }, h('b', { text: 'Your house’s deliveries' }), h('span', { class: 'muted small', text: 'Stop or restart the free water left at your door, or say how many live there.' })), h('span', { class: 'go', text: 'Open' }))] : null,
       h('h2', { class: 'section' }, 'Payment'),
       cards.length ? h('div', {}, cards.map((c) => h('div', { class: 'list-row' }, h('span', { class: 'grow' }, h('b', { text: `${c.brand[0].toUpperCase()}${c.brand.slice(1)} •••• ${c.last4}` }), h('span', { class: 'small muted', text: `Expires ${c.expMonth}/${c.expYear}` })))))
         : h('div', { class: 'empty', text: 'No card saved. You only need one to design your own bottles. Free water never needs a card.' }),
@@ -883,7 +884,8 @@
     try {
       state.config = await api('GET', '/v1/public/app-config');
       // Areas switched off on this server (FW_FEATURES): their tiles and buttons aren't shown.
-      state.features = await api('GET', '/v1/public/features').catch(() => ({ off: [] }));
+      // And what this company switched off on its Features page (?company=): those aren't shown either.
+      state.features = await api('GET', `/v1/public/features?company=${encodeURIComponent(state.config.companyId)}`).catch(() => ({ off: [] }));
     }
     catch { root.replaceChildren(h('div', { class: 'boot' }, h('p', { text: 'Can’t reach FreeWater. Check your connection and try again.' }))); return; }
     render();

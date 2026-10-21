@@ -40,6 +40,7 @@ import { BooksError } from '../modules/books/service';
 import { DeliveryError } from '../modules/delivery/service';
 import { AdsError } from '../modules/ads/service';
 import { DesignError } from '../modules/custom/service';
+import { FeatureError } from '../modules/features/service';
 import type { App } from '../app';
 import { findApiKey, type ApiKey, type Scope , PersistencePaused } from '../db/store';
 import { LeaseLostError } from '../db/leaseChecked';
@@ -55,6 +56,8 @@ import { AssetError, allowedTypes } from '../modules/assets/store';
 import { builtinModel } from '../modules/models/builtin';
 import { glbToUsdz } from '../modules/models/usdz';
 import { arBundle } from '../web/ar/bundle';
+import { switchOf } from '../runtime/registry';
+import { featuresRoutes } from './features';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -124,7 +127,13 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   // A route whose area is switched off in the host's settings (FW_FEATURES, src/runtime/features.ts) is never
   // registered: it answers 404 like any address that doesn't exist, and isn't in /v1/openapi.json.
   const route = (r: RouteDef) => { if (app.features.routeOn(r)) routes.push(r); };
-  route({ method: 'GET', url: '/v1/public/features', scope: 'public', summary: 'Which areas of the platform this server runs (the rest are switched off in its settings and their addresses don’t exist). The screens hide what’s off.', handler: async () => ({ body: app.features.view() }) });
+  route({ method: 'GET', url: '/v1/public/features', scope: 'public', query: { company: Q.text }, summary: 'Which areas of the platform this server runs (the rest are switched off in its settings and their addresses don’t exist). With ?company=, also every switch that company has off on its Features page (in `off`, and on its own in `companyOff`). The screens hide what’s off.', handler: async (req) => {
+    const view = app.features.view();
+    const companyId = (req.query as any)?.company;
+    if (typeof companyId !== 'string' || !platform.companies.has(companyId)) return { body: view };
+    const companyOff = app.companyFeatures.offIds(companyId);
+    return { body: { ...view, off: [...new Set([...view.off, ...companyOff])], company: companyId, companyOff } };
+  } });
 
   const unitFor = (key: ApiKey, id: string) => {
     const u = platform.units.get(id);
@@ -174,7 +183,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   };
   const campaignView = (c: Campaign) => ({ id: c.id, advertiserId: c.advertiserId, advertiserName: c.advertiserName, category: c.category, competitorGroup: c.competitorGroup ?? null, sizes: c.sizes, formats: c.formats ?? ['label'], experienceId: c.experienceId, experienceConfig: c.experienceConfig ?? null, theme: c.theme ?? null, targeting: c.targeting, buy: c.buy, active: c.active, isHouse: !!c.isHouse,
     qr: { mode: c.qr?.mode ?? 'dynamic', ...(c.qr?.staticUrl ? { staticUrl: c.qr.staticUrl } : {}), hasLogo: !!c.qr?.logo }, variants: c.variants?.length ?? 0, personalize: c.personalize ?? null, afterEnd: c.afterEnd ?? 'current' });
-  const checkExperience = (experienceId: string, config: unknown, theme: unknown) => {
+  const checkExperience = (experienceId: string, config: unknown, theme: unknown, companyId?: string) => {
+    // What a code opens must be switched on for the company (its Features page).
+    if (companyId && !app.companyFeatures.pluginOn(companyId, experienceId)) throw new ApiError(422, 'experience_off', `“${experienceId}” is switched off here. Pick another kind of page.`);
     const bad = experiences.host.checkConfig(experienceId, config) ?? experiences.host.checkTheme(theme);
     if (bad) throw new ApiError(422, 'experience_invalid', bad);
   };
@@ -453,7 +464,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     if (big) throw new ApiError(422, 'artwork_refused', `Artwork refused: ${big}.`);
     const company = platform.companies.get(key!.companyId)!;
     if (company.adRules.blockedCategories.includes(b.category)) throw new ApiError(422, 'category_blocked', `${company.name} doesn't print ${b.category} ads.`);
-    checkExperience(b.experienceId, b.experienceConfig ?? {}, b.theme);
+    if (b.buy.type === 'bid' && !app.companyFeatures.on(company.id, 'bidding')) throw new ApiError(422, 'bidding_off', `${company.name} doesn’t sell space by bidding: buy a set number of bottles instead.`);
+    checkExperience(b.experienceId, b.experienceConfig ?? {}, b.theme, company.id);
     const c: Campaign = {
       // An advertiser's own key prints under the name the business signed up with, never a name it sends.
       id: newId('cmp'), companyId: key!.companyId, advertiserId, advertiserName: key!.advertiserId ? (await app.ads.advertiser(key!.companyId, key!.advertiserId).catch(() => null))?.name ?? b.advertiserName : b.advertiserName, category: b.category, competitorGroup: b.competitorGroup,
@@ -479,7 +491,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       const id = b.experienceId ?? c.experienceId;
       const config = b.experienceConfig ?? (b.experienceId && b.experienceId !== c.experienceId ? undefined : c.experienceConfig);
       if (config === undefined) throw new ApiError(422, 'experience_invalid', `Send experienceConfig for "${id}" too.`);
-      checkExperience(id, config, b.theme ?? c.theme);
+      checkExperience(id, config, b.theme ?? c.theme, c.companyId);
       c.experienceId = id;
       c.experienceConfig = config;
       if (b.theme !== undefined) c.theme = b.theme;
@@ -497,7 +509,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   route({ method: 'GET', url: '/v1/experiences', scope: 'campaigns', summary: 'Every kind of experience a QR can open, with the settings each one takes and an example.', handler: async () => ({ body: experiences.host.list() }) });
   route({ method: 'POST', url: '/v1/experiences/preview', scope: 'campaigns', summary: 'See what an experience will look like with these settings, before saving.', body: obj({ experienceId: S.str, experienceConfig: { type: 'object' }, theme: themeProp, ownerName: S.str, firstTime: S.bool }, ['experienceId', 'experienceConfig']), handler: async (req, key) => {
     const b = req.body as any;
-    checkExperience(b.experienceId, b.experienceConfig, b.theme);
+    checkExperience(b.experienceId, b.experienceConfig, b.theme, key!.companyId);
     const company = platform.companies.get(key!.companyId)!;
     const { themeFor } = await import('../modules/experiences/host');
     const doc = await experiences.host.open({ pluginId: b.experienceId, config: b.experienceConfig, theme: themeFor(company.brand, b.theme), scan: {
@@ -817,6 +829,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   chainRoutes(app, route);
   studioRoutes(app, route);
   teamRoutes(app, route);
+  featuresRoutes(app, route);
 
   // ---------- wiring ----------
 
@@ -916,6 +929,32 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     app.data.activity(companyId, actorOf(key, masked), `${r.method} ${r.url}`, { target: JSON.stringify(req.params ?? {}).slice(0, 200), detail: { status, ...(masked ? { body: masked } : {}) }, ip: req.ip, headers: req.headers, device: String(req.headers['user-agent'] ?? ''), gpc: String(req.headers['sec-gpc'] ?? '') === '1' }).catch(() => {});
   };
 
+  /**
+   * A route whose switch is off for the caller's company (its Features page, src/runtime/registry.ts) refuses, the
+   * same for every caller: 404 feature_off. The company is the key's, or for public routes the one the address names
+   * (a company, bottle, pack or machine). A switch kept in the settings (the games, the prize game…) handles its own
+   * "off" as before; it's refused here only when something it needs is off.
+   */
+  const companyOfRequest = (req: FastifyRequest, key: ApiKey | null): string | undefined => {
+    if (key) return key.companyId;
+    const p: any = req.params ?? {}, q: any = req.query ?? {};
+    if (typeof p.companyId === 'string') return p.companyId;
+    if (typeof p.unitId === 'string') return platform.units.get(p.unitId)?.companyId;
+    if (typeof p.packId === 'string') return packs.packs.get(p.packId)?.companyId;
+    if (typeof p.locationId === 'string') { const l = platform.locations.get(p.locationId); return l ? l.companyId ?? PLATFORM_COMPANY : undefined; }
+    const body: any = req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body) ? req.body : undefined;
+    return companyOfPublic(body) ?? (typeof q.company === 'string' ? q.company : typeof q.c === 'string' ? q.c : undefined);
+  };
+  const featureGate = (r: RouteDef, req: FastifyRequest, key: ApiKey | null) => {
+    const id = app.companyFeatures.routeSwitch(r.method, r.url);
+    if (!id) return;
+    const companyId = companyOfRequest(req, key);
+    if (!companyId || !platform.companies.has(companyId)) return;
+    const why = app.companyFeatures.whyOff(companyId, id);
+    if (!why || (why === 'off' && switchOf(id)?.kind === 'linked')) return;
+    throw new ApiError(404, 'feature_off', `${switchOf(id)?.label ?? 'This'} is switched off for ${platform.companies.get(companyId)!.name}.`);
+  };
+
   for (const r of routes) {
     server.route({
       method: r.method,
@@ -944,6 +983,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
         (req as any).apiKey = key;
       },
       handler: async (req: FastifyRequest, reply: FastifyReply) => {
+        featureGate(r, req, (req as any).apiKey as ApiKey | null);
         const out = await r.handler(req, (req as any).apiKey as ApiKey | null);
         // Answer only once the change is safely stored. Things recorded on the way past (a scan, what someone did on
         // the page) don't wait while the database is refusing changes: they're queued in order and go in with the rest.
@@ -1063,7 +1103,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       securityLog.record({ kind: 'sign_in_failed', companyId: typeof b.companyId === 'string' && platform.companies.has(b.companyId) ? b.companyId : null, actor: mask(b.to), ip: req.ip, detail: { reason: err.code ?? 'invalid' } }, `sif:${req.ip}:${b.to}`);
     }
     if (err instanceof ApiError || err instanceof PersistencePaused || err instanceof LeaseLostError || err instanceof OrderConflictError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
-    if (err instanceof AccountsError || err instanceof PaymentError || err instanceof ExperienceError || err instanceof AssetError || err instanceof AdsError || err instanceof DesignError || err instanceof DeliveryError || err instanceof BooksError || err instanceof WebhookError || err instanceof ConsoleError || err instanceof FleetError || err instanceof AttributionError || err instanceof LotteryError || err instanceof VideoError || err instanceof DataError || err instanceof NumberLineError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
+    if (err instanceof AccountsError || err instanceof PaymentError || err instanceof ExperienceError || err instanceof AssetError || err instanceof AdsError || err instanceof DesignError || err instanceof DeliveryError || err instanceof BooksError || err instanceof WebhookError || err instanceof ConsoleError || err instanceof FleetError || err instanceof AttributionError || err instanceof LotteryError || err instanceof VideoError || err instanceof DataError || err instanceof NumberLineError || err instanceof FeatureError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
     if (err.code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE') return reply.code(415).send({ error: { code: 'unsupported_type', message: 'Send JSON, or for uploads a .glb, PNG, JPEG, WebP or MP4 file.' } });
     if (err.code === 'FST_ERR_CTP_BODY_TOO_LARGE') return reply.code(413).send({ error: { code: 'too_large', message: 'That is too big to upload.' } });
     if (err.validation) return reply.code(400).send({ error: { code: 'invalid_request', ...plainValidation(err.validation, err.validationContext, err.message) } });

@@ -60,6 +60,7 @@ import { WalletService } from './modules/wallet/service';
 import { giftCardsFromEnv, type GiftCardProvider } from './modules/wallet/giftcards';
 import { GamesService } from './modules/games/service';
 import { aiRouting } from './modules/ai/routing';
+import { FeatureService } from './modules/features/service';
 import { ContinuityService, type Asker } from './modules/agents/continuity';
 import { claudeWithTool } from './modules/ai/anthropic';
 import { ClaudePrompter, builtinPrompter, type Prompter } from './modules/games/prompter';
@@ -437,7 +438,7 @@ export async function createApp(opts: AppOptions) {
   // The chain layer, switched off: hourly seals of the wallet journal, actions needing several people, the daily check.
   const chain = new ChainService(db, platform, wallet, publishers, opts.clock);
   // A step that would switch on an area that's off (FW_FEATURES) can't be proposed or run.
-  chain.kindAllowed = (kind) => features.actionOn(kind);
+  chain.kindAllowed = (kind) => features.actionOn(kind); // and the company's own switches, once they're loaded (below)
   chain.alert = (companyId, message) => void runtime.alerts.alert(`chain:${companyId}`, 'critical', `Chain (${companyId})`, message);
   // An ad reached its daily ceiling of billed scans or AR launches (R3): more are counted, never billed, and a person looks.
   platform.ledger.onCeiling = (h) => void runtime.alerts.alert(`billing-ceiling:${h.companyId}:${h.campaignId}:${h.kind}:${h.day}`, 'warning', `Ad ${h.campaignId} reached its daily ceiling of ${h.ceiling} billed ${h.kind === 'scan' ? 'scans' : 'AR launches'} (${h.companyId}, ${h.day})`, `More are counted but not billed today. Far more ${h.kind === 'scan' ? 'scans' : 'AR launches'} than its bottles could get usually means fake scans: check where they come from (GET /v1/books/reconciliation) before the advertiser is invoiced.`);
@@ -464,15 +465,30 @@ export async function createApp(opts: AppOptions) {
   const allowPrivate = opts.allowPrivateWebhooks ?? process.env.ALLOW_PRIVATE_WEBHOOKS === '1';
   const webhooks = new WebhookService(db, opts.webhookSender ?? new HttpWebhookSender({ allowPrivate }), messenger, opts.clock, flush, { allowPrivate, consoleUrl: publicUrl });
   const consoleSvc = new ConsoleService(db, platform, made.registry, accounts, messenger, flush, { consoleUrl: publicUrl, clock: opts.clock });
+  // Each company's switches (its Features page, src/runtime/registry.ts): routes, jobs, screens and the engine read them.
+  // The host's settings (FW_FEATURES) stay the outer limit: a company can't turn on what the host has off.
+  const companyFeatures = new FeatureService(db, () => platform.companies, features, consoleSvc, opts.clock);
+  await companyFeatures.load();
+  const featureOn = (companyId: string, id: string) => companyFeatures.on(companyId, id);
+  platform.featureOn = featureOn;
+  delivery.featureOn = featureOn;
+  houses.featureOn = featureOn;
+  host.pluginOn = (companyId, pluginId) => companyFeatures.pluginOn(companyId, pluginId);
+  aiRouting.useOn = featureOn;
+  videos.featureOn = featureOn;
+  attribution.featureOn = featureOn;
+  webhooks.companyOn = (companyId) => companyFeatures.on(companyId, 'webhooks');
+  chain.kindAllowed = (kind, companyId) => features.actionOn(kind) && companyFeatures.actionOn(companyId, kind);
   // Switched on with the rules as they were when people approved it, never weaker ones set since.
   chain.turnOn = async (companyId, by, rules, kind) => {
     const now = chain.settings(companyId);
     const launch = platform.companies.get(companyId)?.launch ?? { stage: 'test' as const };
-    if (kind === 'go_live_points') { await consoleSvc.save(companyId, { launch: { ...launch, stage: 'points' } }, by, undefined, { chainApproved: true }); return; }
-    if (kind === 'exchanges_on') { const w = wallet.settings(companyId); await consoleSvc.save(companyId, { wallet: { ...w, conversions: { enabled: true, approvedBy: by, approvedAt: new Date().toISOString() } } }, by, undefined, { chainApproved: true }); return; }
-    if (kind === 'withdrawals_on') { await consoleSvc.save(companyId, { launch: { ...launch, withdrawals: true } }, by, undefined, { chainApproved: true }); return; }
+    const note = { via: `approved step (${kind})` };
+    if (kind === 'go_live_points') { await consoleSvc.save(companyId, { launch: { ...launch, stage: 'points' } }, by, undefined, { chainApproved: true, note }); return; }
+    if (kind === 'exchanges_on') { const w = wallet.settings(companyId); await consoleSvc.save(companyId, { wallet: { ...w, conversions: { enabled: true, approvedBy: by, approvedAt: new Date().toISOString() } } }, by, undefined, { chainApproved: true, note }); return; }
+    if (kind === 'withdrawals_on') { await consoleSvc.save(companyId, { launch: { ...launch, withdrawals: true } }, by, undefined, { chainApproved: true, note }); return; }
     const chainOn = { ...now, network: rules.network, approvalsNeeded: Math.max(now.approvalsNeeded, rules.approvalsNeeded), delayHours: Math.max(now.delayHours, rules.delayHours), enabled: true };
-    await consoleSvc.save(companyId, { chain: chainOn, ...(kind === 'go_live_token' ? { launch: { ...launch, stage: 'token' } } : {}) }, by, undefined, { chainApproved: true });
+    await consoleSvc.save(companyId, { chain: chainOn, ...(kind === 'go_live_token' ? { launch: { ...launch, stage: 'token' } } : {}) }, by, undefined, { chainApproved: true, note });
   };
   chain.isMember = async (companyId, person, at) => {
     if (!person.startsWith('user:')) return false;
@@ -571,7 +587,7 @@ export async function createApp(opts: AppOptions) {
   await attribution.repairUnrecorded();
   await persistence.flush();
 
-  return { ...made, features, db, persistence, runtime, demoKeys, accounts, payments, credit, messenger, experiences, assets, ads, designs, delivery, houses, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
+  return { ...made, features, companyFeatures, db, persistence, runtime, demoKeys, accounts, payments, credit, messenger, experiences, assets, ads, designs, delivery, houses, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

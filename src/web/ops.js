@@ -51,9 +51,9 @@
   const routes = [[/^\/ops\/?$/, today, 'today'], [/^\/ops\/review$/, reviewPage, 'review'], [/^\/ops\/machines$/, machinesPage, 'machines'], [/^\/ops\/machines\/([\w-]+)$/, machinePage, 'machines'], [/^\/ops\/routes$/, routesPage, 'routes'], [/^\/ops\/subscriptions$/, subsPage, 'subs'], [/^\/ops\/areas$/, areasPage, 'areas'], [/^\/ops\/areas\/([\w-]+)$/, areaPage, 'areas'], [/^\/ops\/books$/, booksPage, 'books']];
   // The scopes each page's main call needs (from its route in src/api). 'admin' passes them all.
   const PAGE_SCOPES = { today: ['packs', 'events', 'ledger', 'campaigns'], review: ['campaigns'], machines: ['orders', 'packs', 'events'], routes: ['packs'], subs: ['packs'], areas: ['packs'], books: ['ledger'] };
-  // The area each page belongs to, if any (src/runtime/features.ts). Every ops page is part of the core loop today, so
-  // none is listed; a page for an area that can be switched off goes here and disappears when it's off.
-  const PAGE_FEATURES = {};
+  // The switch each page belongs to (src/runtime/registry.ts): a page whose switch is off, on this server or for this
+  // company (its Features page), isn't shown or opened.
+  const PAGE_FEATURES = { review: 'ads', machines: 'machines', routes: 'delivery', subs: 'delivery', areas: 'delivery_areas' };
   const on = (page) => !PAGE_FEATURES[page] || !(S.features?.off ?? []).includes(PAGE_FEATURES[page]);
   const can = (page) => { if (!on(page)) return false; const sc = S.me?.scopes; if (!Array.isArray(sc)) return true; return sc.includes('admin') || (PAGE_SCOPES[page] ?? []).some((x) => sc.includes(x)); };
   let cleanup = null;
@@ -64,7 +64,7 @@
     if (cleanup) { cleanup(); cleanup = null; }
     if (!S.config) S.config = await api('GET', '/v1/public/app-config');
     // Areas switched off on this server (FW_FEATURES): pages that belong to one aren't shown or opened.
-    if (!S.features) S.features = await api('GET', '/v1/public/features').catch(() => ({ off: [] }));
+    if (!S.features) S.features = await api('GET', `/v1/public/features?company=${encodeURIComponent(S.config.companyId)}`).catch(() => ({ off: [] }));
     if (S.token && !S.me) { try { S.me = await api('GET', '/v1/me'); } catch { S.me = null; } }
     if (!S.me) return signIn();
     if (S.me.advertiserId || S.me.role === 'consumer') return shell('', h('div', { class: 'notice err', text: 'This console is for the company’s team. Ask an owner to add you.' }));

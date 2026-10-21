@@ -32,6 +32,8 @@ export class VideoService {
   perCompanyDay = FOOTAGE_PER_COMPANY_DAY;
   /** Set by the app: tells the team when a company reaches its footage ceiling. */
   alert?: (key: string, title: string, detail: string) => void;
+  /** Set by the app: is this switch on for this company (its Features page)? */
+  featureOn?: (companyId: string, id: string) => boolean;
   constructor(private db: SqlClient, private platform: Platform, private assets: AssetStore, private writer: StoryWriter = builtinWriter, private footage?: FootageProvider, private clock: () => Date = () => new Date()) {}
 
   stylesOf(c: Campaign): VideoStyle[] { return c.more ? c.more.videos : ['motion']; }
@@ -90,7 +92,8 @@ export class VideoService {
     const styles = this.stylesOf(c);
     const rows = (await this.db.query<any>(`select * from videos where campaign_id = $1 and segment = $2 and content = $3`, [c.id, key, this.contentOf(c)])).rows;
     const out: VideoView[] = [];
-    for (const style of (['live_action', 'animated'] as const).filter((s) => styles.includes(s))) {
+    const footageOn = !this.featureOn || this.featureOn(c.companyId, 'video_generation');
+    for (const style of (['live_action', 'animated'] as const).filter((s) => styles.includes(s) && footageOn)) {
       const ready = rows.filter((r) => r.style === style && r.status === 'ready' && r.review === 'approved');
       if (ready.length) out.push(this.view(this.best(ready)));
       if (!rows.some((r) => r.style === style && (r.status === 'making' || (r.status === 'ready' && r.review !== 'rejected')))) this.startFootage(c, seg, style).catch(() => {});
@@ -133,7 +136,7 @@ export class VideoService {
   private async makeMotion(c: Campaign, seg: Segment, take: number, now: boolean) {
     const id = newId('vid');
     const writer = now ? builtinWriter : this.writer;
-    const spec = await withCompany(c.companyId, async () => writer.write(this.brief(c, seg, take)));
+    const spec = await withCompany(c.companyId, async () => writer.write(this.brief(c, seg, take)), 'ai_video_writer');
     await this.db.query(`insert into videos (id, company_id, campaign_id, segment, style, take, status, review, spec, provider, created_at, ready_at, content) values ($1,$2,$3,$4,'motion',$5,'ready','approved',$6,$7,$8,$8,$9)`,
       [id, c.companyId, c.id, segmentKey(seg), take, JSON.stringify(spec), writer.name, this.clock().toISOString(), this.contentOf(c)]);
     // Motion cuts use only the advertiser's own approved words and pictures, so they don't need another review.
@@ -142,6 +145,8 @@ export class VideoService {
 
   private async startFootage(c: Campaign, seg: Segment, style: 'live_action' | 'animated') {
     if (!this.footage?.styles.includes(style)) return;
+    // The company switched the AI video maker off (its Features page): no clip is started (it costs money).
+    if (this.featureOn && !this.featureOn(c.companyId, 'video_generation')) return;
     const since = new Date(this.clock().getTime() - 86_400_000).toISOString();
     const id = newId('vid');
     const content = this.contentOf(c);

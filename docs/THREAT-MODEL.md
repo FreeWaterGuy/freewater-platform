@@ -692,6 +692,12 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 358 | `GET /health/deep` | platform | no | — | OK (staff only: job freshness, queues, spool, last books checks; no personal data) |
 | 359 | `GET /v1/advertisers/:advertiserId/credit` | invoices | no | an advertiser key only its own | OK (card, limit and what it owes; no card numbers) |
 | 360 | `POST /v1/advertisers/:advertiserId/credit-limit` | invoices | yes | owner or finance, signed in with the second step (an approval route); never an API or advertiser key | OK (each limit a new append-only row; a lower limit pauses at once) |
+| 361 | `GET /v1/console/features` | admin | no | team only (no advertiser/machine key) | OK (the company's own switches and why each is on or off; no secrets) |
+| 362 | `POST /v1/console/features/preview` | admin | no | team only (no advertiser/machine key) | OK (saves nothing: what a change or starting point would do) |
+| 363 | `POST /v1/console/features` | admin | yes | an owner signed in, never a key (P4); turning ON a money, chain or one-way switch needs the second step (R4, `conditionalApprovalRoutes`); switches only an approved step turns on (gift cards, withdrawals, the chain) are refused here | OK (every change logged append-only with who, when, from, to, why; turning off is quick and takes dependants with it) |
+| 364 | `GET /v1/console/features/history` | admin | no | team only (no advertiser/machine key) | OK (append-only log) |
+| 365 | `GET /v1/public/companies/:companyId/features` | public | — | — | OK (public by design, only when the company turned on "Publish our feature list"; on/off per switch, no settings or numbers) |
+| 366 | `POST /v1/studio/export` | campaigns | no | advertiser only | OK (a print-ready SVG of the advertiser's own design; only its own photos and logo) |
 
 ---
 
