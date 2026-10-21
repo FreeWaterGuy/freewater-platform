@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { createPlatform } from '../src/setup';
-import { bottle16oz, freewater, locations, mayaDesign, peakSpring, sampleCampaigns } from '../src/demo/seed';
+import { bottle16oz, freewater as paidUpFront, locations, mayaDesign, peakSpring, sampleCampaigns } from '../src/demo/seed';
+import { billedAfter } from '../src/modules/ads/billing';
 import type { CompanyConfig } from '../src/core/types';
 import { givingLine } from '../src/modules/print/renderer';
+
+// The platform alone (no database), with sample ads that print without paying first: FreeWater's settings billing
+// afterwards. Paying up front, where only paid bottles print, is tested in prepaid.test.ts.
+const freewater: CompanyConfig = { ...paidUpFront, adBilling: billedAfter() };
 
 function setup(opts: { companies?: CompanyConfig[]; seed?: number } = {}) {
   let now = new Date('2026-10-19T12:00:00Z').getTime();

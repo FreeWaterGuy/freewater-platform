@@ -120,13 +120,16 @@ describe('a new advertiser, from sign-up to a live ad on a printed label', () =>
     expect(proof.labelSvg).toContain('data:image/jpeg;base64,');
     expect(proof.scan.doc.blocks.some((b: any) => JSON.stringify(b).includes(model.body.asset))).toBe(true);
 
-    // 7. Submitted (approved by the advertiser), then approved by the company: it goes live.
-    const sub = await call('POST', `/v1/ads/drafts/${draft.id}/submit`, t, { approved: true });
+    // 7. Paid up front (docs/SWITCHES.md, "How advertisers pay"): a card, the exact total, then pay and submit
+    // (approved by the advertiser); then approved by the company: it goes live.
+    expect((await call('POST', `/v1/advertisers/${advertiserId}/cards`, t, { token: 'tok_visa' })).status).toBe(201);
+    const quote = (await call('POST', `/v1/ads/drafts/${draft.id}/quote`, t, {})).body;
+    expect(quote.totalCents).toBe(quote.bottles * quote.perBottleCents);
+    const sub = await call('POST', `/v1/ads/drafts/${draft.id}/submit`, t, { approved: true, pay: { share: quote.share, expectedTotalCents: quote.totalCents } });
     expect(sub.status).toBe(201);
+    expect(sub.body.paidCents).toBe(quote.totalCents);
     const id = sub.body.campaignId as string;
     expect(app.platform.campaigns.get(id)!.active).toBe(false);
-    // Billed after the fact: it goes live once the advertiser has a card on file (docs/SWITCHES.md, credit).
-    expect((await call('POST', `/v1/advertisers/${app.platform.campaigns.get(id)!.advertiserId}/cards`, t, { token: 'tok_visa' })).status).toBe(201);
     expect((await call('POST', `/v1/review/campaigns/${id}`, admin, { decision: 'approve' })).status).toBe(200);
     expect(app.platform.campaigns.get(id)!.active).toBe(true);
     expect((await call('GET', '/v1/ads/overview', t)).body.campaigns.find((c: any) => c.id === id).status).toBe('running');

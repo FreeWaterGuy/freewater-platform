@@ -388,10 +388,11 @@ export class SqlPersistence implements Persistence {
    * hold up every other change: a move the counts can't take is left out, and the daily reconciliation, which counts
    * printed bottles from the bottles themselves, reports the difference for a person.
    */
-  prepaid(companyId: string, campaignId: string, move: 'printed' | 'released') {
+  prepaid(companyId: string, campaignIds: string[], move: 'printed' | 'released') {
+    if (!campaignIds.length) return;
     this.enqueue('prepaid', move === 'printed'
-      ? `update ad_prepaid set held = greatest(held - 1, 0), printed = printed + 1 where campaign_id = $1 and company_id = $2 and printed + 1 + greatest(held - 1, 0) + refunded <= paid`
-      : `update ad_prepaid set held = held - 1 where campaign_id = $1 and company_id = $2 and held > 0`, [campaignId, companyId]);
+      ? `update ad_prepaid set held = greatest(held - 1, 0), printed = printed + 1 where campaign_id = any($1::text[]) and company_id = $2 and printed + 1 + greatest(held - 1, 0) + refunded <= paid`
+      : `update ad_prepaid set held = held - 1 where campaign_id = any($1::text[]) and company_id = $2 and held > 0`, [[...new Set(campaignIds)], companyId]);
   }
 
   pack(p: Pack) {

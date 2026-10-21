@@ -76,26 +76,43 @@ export function adBilling(company: Pick<CompanyConfig, 'adBilling'>): AdBilling 
 export const prepaidModel = (company: Pick<CompanyConfig, 'adBilling'>) => adBilling(company).requirePrepay;
 export const flatPricing = (company: Pick<CompanyConfig, 'adBilling'>) => adBilling(company).pricingMode === 'flat';
 
+/** Is a switch on for a company (its Features page: the fee switch and everything it needs)? Absent: the setting alone decides. */
+export type SwitchOn = (companyId: string, id: string) => boolean;
+/** Each fee's switch on the Features page (src/runtime/registry.ts). */
+export const FEE_SWITCH = { scan: 'fee_scan', ar: 'fee_ar_launch', boxFace: 'fee_box_face', commission: 'fee_commission' } as const;
+
 /**
  * What the advertiser is charged for one engagement or sale, or null when nothing is charged. Prepaid: only the fees
- * a person switched on. Billed after: the company's prices, as before.
+ * a person switched on (and only while that switch, with everything it needs, is on for the company: `on`). Billed
+ * after: the company's prices, as before.
  */
-export function engagementFee(company: CompanyConfig, kind: 'scan' | 'ar' | 'boxFace'): number | null {
+export function engagementFee(company: CompanyConfig, kind: 'scan' | 'ar' | 'boxFace', on?: SwitchOn): number | null {
   const b = adBilling(company);
   if (!b.requirePrepay) return kind === 'scan' ? company.prices.perScan : kind === 'ar' ? company.prices.perArLaunch : company.prices.perBoxFace;
+  if (on && !on(company.id, FEE_SWITCH[kind])) return null;
   if (kind === 'scan') return b.fees.scan.on ? b.fees.scan.cents : null;
   if (kind === 'ar') return b.fees.arLaunch.on ? b.fees.arLaunch.cents : null;
   return b.fees.boxFace.on ? company.prices.perBoxFace : null;
 }
-export function commissionPercent(company: CompanyConfig): number | null {
+export function commissionPercent(company: CompanyConfig, on?: SwitchOn): number | null {
   const b = adBilling(company);
   if (!b.requirePrepay) return company.prices.commissionPercent;
+  if (on && !on(company.id, FEE_SWITCH.commission)) return null;
   return b.fees.commission.on ? b.fees.commission.percent : null;
 }
+/** The fees on top of the bottles that are charged right now, in plain words (the quote, the portal, the assistant). */
+export function feesOnWords(company: CompanyConfig, on?: SwitchOn): string[] {
+  const b = adBilling(company);
+  return [
+    engagementFee(company, 'scan', on) !== null ? `${b.fees.scan.cents}¢ per scan` : '',
+    engagementFee(company, 'ar', on) !== null ? `${b.fees.arLaunch.cents}¢ per AR launch` : '',
+    engagementFee(company, 'boxFace', on) !== null ? `${company.prices.perBoxFace}¢ per box side` : '',
+    commissionPercent(company, on) !== null ? `${b.fees.commission.percent}% of sales` : '',
+  ].filter(Boolean);
+}
 /** Any fee that's charged after the fact is on (so the daily charge has something to do). */
-export function anyFeeOn(company: CompanyConfig): boolean {
-  const f = adBilling(company).fees;
-  return f.scan.on || f.arLaunch.on || f.boxFace.on || f.commission.on;
+export function anyFeeOn(company: CompanyConfig, on?: SwitchOn): boolean {
+  return feesOnWords(company, on).length > 0;
 }
 
 /** What one use of an extra is charged: its cost plus the markup, rounded up to the cent. */

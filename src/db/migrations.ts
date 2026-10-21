@@ -1669,6 +1669,8 @@ create table ad_orders (
 create index ad_orders_company on ad_orders(company_id, campaign_id);
 -- One payment for an ad's bottles (and one change fee per change), however often the button is pressed.
 create unique index ad_orders_bottles_once on ad_orders(campaign_id) where kind = 'bottles' and status <> 'declined';
+-- A new ad's order is made before its campaign exists: one per draft too, so two presses at once are one charge.
+create unique index ad_orders_bottles_draft_once on ad_orders(draft_id) where kind = 'bottles' and status <> 'declined' and draft_id is not null;
 create unique index ad_orders_change_once on ad_orders(draft_id) where kind = 'change' and status <> 'declined';
 
 -- Each prepaid ad's bottles: paid, printed, being printed now (held), and paid back. A paid bottle is claimed here

@@ -9,7 +9,8 @@ let now = new Date('2026-09-01T16:00:00Z').getTime();
 
 beforeAll(async () => {
   db = await createPgliteClient();
-  app = await createApp({ db, seedDemo: true, seed: 11, clock: () => new Date(now) });
+  // Value is read from what sales and scans earn, so this runs where advertisers are billed for them (billing afterwards).
+  app = await createApp({ db, seedDemo: true, demoBilling: 'billed_after', seed: 11, clock: () => new Date(now) });
 });
 afterAll(async () => { await app.numberline.idle(); await app.persistence.flush(); await db.close(); });
 

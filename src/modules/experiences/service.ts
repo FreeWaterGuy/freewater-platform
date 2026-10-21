@@ -105,7 +105,10 @@ export class ExperienceService {
       for (const l of this.platform.ledger.entries) if (l.kind === 'commission') add(l.unitId, l.campaignId, 1); else if (l.kind === 'commission_reversal') add(l.unitId, l.campaignId, -1);
       this.platform.ledger.onAdd = (l) => { if (l.kind === 'commission') add(l.unitId, l.campaignId, 1); else if (l.kind === 'commission_reversal') add(l.unitId, l.campaignId, -1); };
     }
-    return { bottle: spot ? this.sales.bySpot.get(spot) ?? 0 : 0, ad: this.sales.byAd.get(campaignId) ?? 0 };
+    // Plus sales with no commission line (paid up front, commission off): still sales.
+    const unitId = spot?.split('|')[0];
+    const led = this.platform.ledger;
+    return { bottle: spot ? (this.sales.bySpot.get(spot) ?? 0) + (unitId ? led.salesStandingWithoutCommission(campaignId, unitId) : 0) : 0, ad: (this.sales.byAd.get(campaignId) ?? 0) + led.salesStandingWithoutCommission(campaignId) };
   }
 
   /** The page in the order the advertiser paid for: their ad, their AR, everything else of theirs, proof, pass it on, more. */

@@ -14,7 +14,9 @@ let db: SqlClient;
 let app: App;
 beforeAll(async () => {
   db = await createPgliteClient();
-  app = await createApp({ db, seedDemo: true, seed: 12 });
+  // Bids, per-scan prices and giving on money above $1: a company that bills afterwards with the auction. FreeWater's
+  // flat, paid-up-front prices are tested in prepaid.test.ts.
+  app = await createApp({ db, seedDemo: true, demoBilling: 'billed_after', seed: 12 });
 });
 afterAll(async () => { await app.persistence.flush(); await app.numberline.idle(); await app.agents.idle(); await db.close(); });
 

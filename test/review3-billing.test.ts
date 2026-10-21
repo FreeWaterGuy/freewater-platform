@@ -40,7 +40,8 @@ const reversedOn = (order: string) => sum(app.platform.ledger.entries.filter((l)
 
 beforeAll(async () => {
   db = await createPgliteClient();
-  app = await createApp({ db, seedDemo: true, seed: 41, clock });
+  // Sales billed with commission: a company that bills afterwards (paying up front: prepaid.test.ts).
+  app = await createApp({ db, seedDemo: true, demoBilling: 'billed_after', seed: 41, clock });
   keys = app.demoKeys!;
   peakJoesKey = (await createApiKey(db, { companyId: 'peak-spring', name: 'Peak Joe POS', scopes: ['purchases', 'campaigns'], advertiserId: 'adv-joes' })).key;
   server = await buildServer(app);

@@ -4,7 +4,7 @@ type EventPayloadsEngagement = EventPayloads['unit.scanned'] | EventPayloads['ar
 type BoxEngagement = EventPayloads['box.scanned'] | EventPayloads['box.ar_launched'];
 import { newId } from '../../core/ids';
 import type { BoxFacePlacement, Cents, CompanyConfig, Placement } from '../../core/types';
-import { commissionPercent, engagementFee } from '../ads/billing';
+import { commissionPercent, engagementFee, type SwitchOn } from '../ads/billing';
 
 /** Where an advertiser's money paid up front sits until bottles print (a liability: it's still theirs). */
 export const prepaidAccount = (advertiserId: string) => `prepaid:advertiser:${advertiserId}`;
@@ -70,6 +70,8 @@ export class Ledger {
   private printedUnits = new Map<string, { placements: Placement[]; locationId: string }>();
   private lastEngagement = new Map<string, number>();
   private printedBoxes = new Map<string, BoxFacePlacement[]>();
+  /** Set by the app: the company's Features page. A fee on top of prepaid bottles is charged only while its switch is on. */
+  featureOn?: SwitchOn;
 
   private onEntry: (entry: LedgerEntry) => void;
   /** Told when an ad first reaches its daily ceiling (the app alerts a person). */
@@ -255,7 +257,7 @@ export class Ledger {
     this.printedBoxes.set(e.payload.packId, e.payload.faces);
     for (const f of e.payload.faces) if (!f.isHouse) this.countPrinted(f.campaignId);
     // Prepaid companies charge for box sides only when a person switched that fee on.
-    if (engagementFee(this.company(e.companyId), 'boxFace') === null) return;
+    if (engagementFee(this.company(e.companyId), 'boxFace', this.featureOn) === null) return;
     for (const f of e.payload.faces) {
       if (f.isHouse) continue;
       this.add(e, { packId: e.payload.packId, campaignId: f.campaignId, debit: `receivable:advertiser:${f.advertiserId}`, credit: 'revenue:box', amountCents: f.priceCents, kind: 'box_face', memo: `${f.advertiserName}, ${f.face} of the box, printed` });
@@ -275,7 +277,7 @@ export class Ledger {
     if (!placement || placement.isHouse) return;
     // Prepaid: scans and AR are included unless a person switched their fee on. Nothing is billed, nothing counted
     // toward a billing ceiling.
-    const fee = engagementFee(company, kind);
+    const fee = engagementFee(company, kind, this.featureOn);
     if (fee === null) return;
 
     if (this.isRepeat(`${kind}:${p.unitId}:${p.slotIndex}:${p.viewerKey}`, e.at.getTime(), company)) return; // repeat, free
@@ -307,7 +309,7 @@ export class Ledger {
     if (!loaded || p.unbilled) return;
     const face = this.printedBoxes.get(p.packId)?.find((f) => f.face === p.face);
     if (!face || face.isHouse) return;
-    const fee = engagementFee(company, kind);
+    const fee = engagementFee(company, kind, this.featureOn);
     if (fee === null) return;
     if (this.isRepeat(`box-${kind}:${p.packId}:${p.face}:${p.viewerKey}`, e.at.getTime(), company)) return;
     if (this.overDailyCap(`box-${kind}:${p.packId}:${face.campaignId}`, e.at, company)) return;
@@ -414,7 +416,28 @@ export class Ledger {
    * Sales the ledger billed, per advertiser and order: what was sold, the lines it added, and how much of it has been
    * refunded. A refund only reverses a sale found here, in proportion to the amount refunded, and never past the sale.
    */
-  private sales = new Map<string, { amountCents: number; lines: LedgerEntry[]; refundedCents: number }>();
+  private sales = new Map<string, { amountCents: number; lines: LedgerEntry[]; refundedCents: number; companyId?: string; advertiserId?: string; campaignId?: string; unitId?: string; at?: Date }>();
+  /** Sales standing with no commission line, per ad and per bottle and ad (`unit|campaign`): for social proof and statements. */
+  private uncharged = new Map<string, number>();
+  private countUncharged(s: { companyId?: string; campaignId?: string; unitId?: string }, d: number) {
+    for (const k of [s.campaignId, s.unitId && s.campaignId ? `${s.unitId}|${s.campaignId}` : undefined, s.companyId ? `company:${s.companyId}` : undefined]) if (k) this.uncharged.set(k, (this.uncharged.get(k) ?? 0) + d);
+  }
+  /** Sales still standing (not refunded in full) that carry no commission line, for an ad, or for an ad on one bottle. */
+  salesStandingWithoutCommission(campaignId: string, unitId?: string) { return this.uncharged.get(unitId ? `${unitId}|${campaignId}` : campaignId) ?? 0; }
+  /** The same, for a whole company (its public sales counter). */
+  companySalesStandingWithoutCommission(companyId: string) { return this.uncharged.get(`company:${companyId}`) ?? 0; }
+  /**
+   * Sales traced to a bottle that carry no commission line (an advertiser who pays up front, with the commission fee
+   * off): they're still sales, so the advertiser's results and the public counter count them from here.
+   */
+  salesWithoutCommission(companyId: string, advertiserId?: string) {
+    const out: { campaignId: string; at: Date; amountCents: number; refundedCents: number }[] = [];
+    for (const s of this.sales.values()) {
+      if (s.lines.length || s.companyId !== companyId || (advertiserId && s.advertiserId !== advertiserId) || !s.campaignId || !s.at) continue;
+      out.push({ campaignId: s.campaignId, at: s.at, amountCents: s.amountCents, refundedCents: s.refundedCents });
+    }
+    return out;
+  }
   private saleKey(companyId: string, advertiserId: string, orderId: string) { return `${companyId}:${advertiserId}:${orderId}`; }
   /** A billed sale, if there is one for this advertiser's order. */
   sale(companyId: string, advertiserId: string, orderId: string): { amountCents: number; refunded: boolean } | undefined {
@@ -450,6 +473,7 @@ export class Ledger {
       if (part <= 0) return;
       const before = sale.refundedCents, after = before + part;
       sale.refundedCents = after;
+      if (!sale.lines.length && after >= sale.amountCents && before < sale.amountCents) this.countUncharged(sale, -1);
       const upTo = (cents: number, refunded: number) => (refunded >= sale.amountCents ? cents : Math.round((cents * refunded) / sale.amountCents));
       for (const l of sale.lines) {
         const amount = upTo(l.amountCents, after) - upTo(l.amountCents, before);
@@ -460,14 +484,16 @@ export class Ledger {
     }
     if (this.sales.has(key)) return; // the same order again: billed once
     // Prepaid: commission only when a person switched it on. The sale is still recorded (for refunds and the checks).
-    const amount = Math.round((p.amountCents * (commissionPercent(company) ?? 0)) / 100);
+    const amount = Math.round((p.amountCents * (commissionPercent(company, this.featureOn) ?? 0)) / 100);
     const adv = `receivable:advertiser:${placement.advertiserId}`;
     const where = p.unitId !== undefined ? { unitId: p.unitId } : { packId: p.packId };
     const loc = p.unitId !== undefined ? this.printedUnits.get(p.unitId)?.locationId : undefined;
     const start = this.entries.length;
     this.add(e, { ...where, campaignId: placement.campaignId, debit: adv, credit: 'revenue:commission', amountCents: amount, kind: 'commission', memo: `Commission on order ${e.payload.orderId}` });
     this.giveShare(e, company, amount, where, loc, 'a sales commission');
-    this.sales.set(key, { amountCents: p.amountCents, lines: this.entries.slice(start), refundedCents: 0 });
+    const sale = { amountCents: p.amountCents, lines: this.entries.slice(start), refundedCents: 0, companyId: e.companyId, advertiserId: placement.advertiserId, campaignId: placement.campaignId, unitId: p.unitId, at: e.at };
+    this.sales.set(key, sale);
+    if (!sale.lines.length && sale.amountCents > 0) this.countUncharged(sale, 1);
   }
 
   /** After a restart: reload past lines and what the billing rules need to remember. Nothing is billed again. */
@@ -503,8 +529,18 @@ export class Ledger {
         const placement = this.placementForSale(p);
         if (!placement || placement.isHouse) continue;
         const key = this.saleKey(e.companyId, placement.advertiserId, p.orderId);
-        if (e.type === 'purchase.completed') { if (!this.sales.has(key)) this.sales.set(key, { amountCents: p.amountCents, lines: byEvent.get(e.id) ?? [], refundedCents: 0 }); }
-        else if (e.type === 'purchase.refunded') { const s = this.sales.get(key); if (s) s.refundedCents += this.refundPart(s, p.amountCents); }
+        if (e.type === 'purchase.completed') {
+          if (this.sales.has(key)) continue;
+          const sale = { amountCents: p.amountCents, lines: byEvent.get(e.id) ?? [], refundedCents: 0, companyId: e.companyId, advertiserId: placement.advertiserId, campaignId: placement.campaignId, unitId: p.unitId, at: e.at };
+          this.sales.set(key, sale);
+          if (!sale.lines.length && sale.amountCents > 0) this.countUncharged(sale, 1);
+        } else if (e.type === 'purchase.refunded') {
+          const s = this.sales.get(key);
+          if (!s) continue;
+          const before = s.refundedCents;
+          s.refundedCents += this.refundPart(s, p.amountCents);
+          if (!s.lines.length && s.refundedCents >= s.amountCents && before < s.amountCents) this.countUncharged(s, -1);
+        }
       }
     }
     for (const e of input.engagementEvents) {

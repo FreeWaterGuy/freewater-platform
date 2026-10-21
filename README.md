@@ -40,7 +40,9 @@ One order goes through the print pipeline:
 4. **Print** (printer adapter): retries a jam once. A sale is confirmed only when the printer confirms.
 5. **Dispense**, then scans, AR launches and purchases come in as events.
 
-The **ledger** listens to events and bills:
+The **ledger** listens to events and bills (where advertisers pay up front, FreeWater's way, a print moves its
+price from the money the advertiser paid in advance to what's earned, and scans, AR launches, box sides and sales
+are billed only when a person switched that fee on: see *How advertisers pay* below):
 
 - each confirmed print, at that slot size's price
 - each scan and AR launch that loads (repeats by one viewer inside the repeat window are free)
@@ -88,6 +90,7 @@ One API for every app, machine, micro-factory, driver, advertiser and partner. T
 
 **Payments.** Card numbers never reach FreeWater: apps send them to the payment provider and FreeWater keeps only a reference, brand and last 4 digits.
 - *Custom bottles:* the price is set by the server. The money is held first, taken only once the bottle prints, and released if it doesn't. A declined card prints nothing. The same order sent twice is printed and charged once.
+- *Ads, paid up front:* the advertiser's card is charged for its bottles before the ad is reviewed, at the total it was shown (a total that changed charges nothing); pressing pay twice, even on two servers, is one charge (one order per ad and per draft, a database rule). See *How advertisers pay*.
 - *Advertiser invoices:* `POST /v1/invoices/run` bills each advertiser for every ledger line since their last invoice (prints, scans, AR launches, commission, box faces, less refunds). Each ledger line can be on only one invoice. A saved card is charged; without one the invoice stays open, and a declined card marks it failed until it's paid.
 - Every payment taken is a ledger line, so the books show both what was billed and what was collected.
 
@@ -237,7 +240,19 @@ npm run demo:ops-preview   # builds out/ops-preview/ and out/driver-preview/, cl
 
 **Pieces as square as possible (`src/modules/ads/layouts.ts`).** An ad gets a share of the label: the whole label, 1/2, 1/3, 1/4, 1/6, 1/8 or 1/10. For every mix of sizes that fills the label (up to 10 ads), the label is cut in two again and again along whichever side gives the squarest pieces. On the 16 oz bottle quarters are 2 × 2, sixths 3 × 2, eighths 4 × 2, and a half with two quarters is a column beside two stacked pieces. Pieces too thin (more than 2.6 times as long as wide) or too small for a readable QR code are never used. Products say which sizes they offer; the console shows how each one is cut.
 
-**FreeWater's starting prices** (each company sets its own; white-label licensees keep theirs): whole label $1.00, 1/2 65¢, 1/3 51¢, 1/4 42¢, 1/6 33¢, 1/8 24¢, 1/10 20¢ per bottle printed.
+**FreeWater's prices** (each company sets its own; white-label licensees keep theirs): whole label $1.00, 1/2 65¢, 1/3 51¢, 1/4 42¢, 1/6 33¢, 1/8 24¢, 1/10 20¢ per bottle, times the product's price factor (the 25 oz bottle is 1.25×). For the pilot these are flat and all-inclusive: AR, video and scans are included at every size, and every size gets the same tech.
+
+**How advertisers pay (`src/modules/ads/prepaid.ts`, `billing.ts`; docs/SWITCHES.md).** "We don't manufacture anything unless they have paid up front."
+- **Quote → pay → review → print.** The review page shows the exact total (bottles × the size's price × the product's factor, plus any costly extras); *Pay and submit* charges the card; the company reviews the ad; then it prints until every paid bottle is out ("N of M bottles out"). No end date and no cancel button: pausing only delays.
+- **Only paid bottles print.** Each bottle's paid ads are claimed in the database before its label is drawn (`ad_prepaid`, one guarded statement each), so the last paid bottle prints once even with two servers or a restart. A failed or abandoned print gives its bottle back. Bottles in delivery packs and at machines draw the same way; a bottle with ten tenth-ads draws one from each of ten ads.
+- **Books:** the payment sits in `prepaid:advertiser:<id>` (a liability) until each bottle prints and moves its price to `revenue:print`. The database refuses a prepaid balance below nothing, more printed than paid, and a second refund for one ad. The daily reconciliation and `npm run books:check` compare paid, printed and printing bottles with the bottles themselves and the books.
+- **Changing a running ad** costs the change fee ($100 by default, per company), paid up front; the new ad is reviewed, then the bottles not printed yet carry it.
+- **If FreeWater stops an ad**, an owner or finance person (signed in, second step) pays back the unprinted bottles and unused extras to the card, once (`POST /v1/ads/campaigns/:id/stop`).
+- **Fees on top** (per scan 25¢, per AR launch 40¢, per box side, 3% commission) each have their own switch, all off. Turned on, they're charged to the card on file once a day (the `ad-fees` job), never left on an invoice to wait; a declined card pauses that advertiser's ads at once.
+- **Costly extras** (AI video clips from Veo): cost plus the company's markup, in the quote and paid up front. No paid clip left, no clip made. What each use really cost is recorded; if it passes what was charged the team is alerted, and the advertiser is never billed more.
+- **Per company:** pricing `flat` or `auction`, paying up front or billing afterwards with credit limits (FreeWater: flat, up front, no credit). Each is a switch on the Features page; for a new white-label company the money switches start off.
+
+The rest of this section is for companies that bill afterwards and sell by auction.
 - **Bids start at $1** for the whole label and go up. A smaller piece pays the same share of the bid as its starting price is of $1 (a $1.20 bid pays 78¢ for a half). A product's price factor scales all of it.
 
 **Targeting costs more per engagement (`src/modules/ads/targeting.ts`).** Like Google and Facebook: each scan and AR launch costs the base price (FreeWater: 25¢ and 40¢) plus a premium for each kind of targeting. FreeWater's settings: chosen machines or routes +10%, chosen products +5%, people's interests +25%, new or returning customers +15%, at most +60% in all. The ledger line says what was added, and advertisers see their premium on the "Code, versions and AI" page.
@@ -429,7 +444,7 @@ npm run demo:ads-preview   # builds out/ads-preview/, a clickable copy that need
 - **See it before submitting** (`GET /v1/ads/drafts/:id/preview`): every size at every shape it can print at, on every product (a sixth can be a wide strip on one bottle and a tall column on the next), each drawn the way the label renderer draws it with its QR code where it prints; a real sample label with the company panel; each box side; the real scan page in a phone frame; and what it costs. An ad whose sizes fit no bottle can't be submitted.
 - **Review twice.** The advertiser confirms the preview (`submit` needs `approved: true`), then the company approves or sends it back with a note (`GET /v1/review/campaigns`, `POST /v1/review/campaigns/:id`). Nothing prints before that. Once approved, the advertiser can pause and resume; changing the artwork or scan page sends it back to review. Changes are made the same way, by chatting (`POST /v1/ads/drafts` with `fromCampaignId`).
 - **Results from the books** (`GET /v1/ads/overview`): spend, bottles printed, box sides, scans, AR launches, sales, saves and link taps, day by day and per ad. Every ledger line now carries its campaign, so each number traces to the lines it adds up.
-- **Billing**: invoices made from those ledger lines, a saved card charged automatically, and pay-now for open ones.
+- **Billing**: what was paid up front for each ad (and any refund), fees switched on charged to the card each day; for companies that bill afterwards, invoices made from those ledger lines, a saved card charged automatically, and pay-now for open ones.
 
 ## Where people are (`src/modules/data/jurisdiction.ts`)
 

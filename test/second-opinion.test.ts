@@ -10,7 +10,8 @@ const clock = () => new Date(now);
 const alerts: { key: string; title: string }[] = [];
 beforeAll(async () => {
   db = await createPgliteClient();
-  app = await createApp({ db, seedDemo: true, seed: 6, clock });
+  // Credit limits apply only where advertisers are billed afterwards (paying up front: prepaid.test.ts).
+  app = await createApp({ db, seedDemo: true, demoBilling: 'billed_after', seed: 6, clock });
   const send = app.runtime.alerts.alert.bind(app.runtime.alerts);
   app.runtime.alerts.alert = (async (key: string, sev: any, title: string, ...rest: any[]) => { alerts.push({ key, title }); return (send as any)(key, sev, title, ...rest); }) as any;
 });

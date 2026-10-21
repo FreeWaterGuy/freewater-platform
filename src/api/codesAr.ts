@@ -10,6 +10,7 @@ import { themeFor } from '../modules/experiences/host';
 import { checkQrColor, checkQrLogo, monogramLogo, qrPlan, qrSvg } from '../modules/print/qr';
 import { checkProduct } from '../modules/products/check';
 import { targetingPremium } from '../modules/ads/targeting';
+import { engagementFee } from '../modules/ads/billing';
 import { ExperienceError } from '../modules/experiences/service';
 import { ApiError, notFound, obj, S, type RouteDef } from './http';
 
@@ -73,7 +74,7 @@ export function codesArRoutes(app: App, server: FastifyInstance, route: (r: Rout
     const company = platform.companies.get(c.companyId)!;
     return { body: { ...extrasView(c), experienceId: c.experienceId, experienceConfig: c.experienceConfig ?? {}, arMode: experiences.host.info(c.experienceId)?.arMode ?? null,
       allowed: { static: !!company.qr?.allowStatic, logos: company.qr?.advertiserLogos ?? true },
-      engagement: { floorCents: company.prices.perPrintByShare[1], perScanCents: company.prices.perScan, perArLaunchCents: company.prices.perArLaunch, premium: targetingPremium(c, company), table: company.prices.targetingPremium ?? null },
+      engagement: { floorCents: company.prices.perPrintByShare[1], perScanCents: engagementFee(company, 'scan', platform.featureOn) ?? 0, perArLaunchCents: engagementFee(company, 'ar', platform.featureOn) ?? 0, premium: targetingPremium(c, company), table: company.prices.targetingPremium ?? null },
       products: productsFor(c.companyId).map((p) => ({ id: p.id, name: p.name, category: p.category ?? null })) } };
   } });
   route({ method: 'PATCH', url: '/v1/campaigns/:id/codes', scope: 'campaigns', summary: 'Change a campaign’s code, its versions of the call to action, AI personalization, what old bottles open once it ends, or who it targets. An advertiser changing what people see sends it back to review.', body: { ...obj(extrasSchema as any), minProperties: 1 }, handler: async (req, key) => {

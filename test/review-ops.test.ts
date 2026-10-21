@@ -9,12 +9,16 @@ import { createPgliteClient } from '../src/db/pglite';
 import type { SqlClient } from '../src/db/client';
 import type { TestOutbox } from '../src/adapters/messaging/contract';
 import { createPlatform } from '../src/setup';
-import { bottle16oz, boxes, freewater, locations, peakSpring, sampleCampaigns } from '../src/demo/seed';
+import { bottle16oz, boxes, freewater as paidUpFront, locations, peakSpring, sampleCampaigns } from '../src/demo/seed';
 import { PackStateError } from '../src/modules/packs/service';
 import { lotteryDefaults } from '../src/modules/lottery/service';
 import type { MachineStatus } from '../src/modules/fleet/service';
 import { MachineAgent } from '../src/machine/agent';
 import { Journal } from '../src/machine/journal';
+import { billedAfter as billedAfterSetting } from '../src/modules/ads/billing';
+// The sample ads print here without paying first: FreeWater's settings billing afterwards (paying up front, where
+// only paid bottles print, is tested in prepaid.test.ts).
+const freewater: typeof paidUpFront = { ...paidUpFront, adBilling: billedAfterSetting() };
 
 // Review fixes for ops: machine keys, the free-bottle limit, packing and loading, the prize game, Model 6 jobs and the
 // machine's journal.

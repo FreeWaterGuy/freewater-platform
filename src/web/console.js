@@ -444,7 +444,16 @@
           num(ctx, 'prices.targetingPremium.interests', 'People’s interests', { min: 0, max: 200, suffix: '%' }), num(ctx, 'prices.targetingPremium.customers', 'New or returning customers', { min: 0, max: 200, suffix: '%' }),
           num(ctx, 'prices.targetingPremium.max', 'The most in all', { min: 0, max: 500, suffix: '%', hint: (v) => `So a 25¢ scan costs at most ${Math.round(25 * (1 + (v ?? 0) / 100))}¢.` }),
           num(ctx, 'prices.commissionPercent', 'Commission on sales', { min: 0, max: 50, step: 0.5, int: false, suffix: '%' }), num(ctx, 'prices.perBoxFace', 'Each side of a delivery box', { min: 0, max: 5000, suffix: '¢' }),
-          num(ctx, 'prices.customUnit', 'A custom bottle (what people pay)', { min: 0, max: 10000, suffix: '¢', hint: (v) => dollars(v ?? 0) }))))];
+          num(ctx, 'prices.customUnit', 'A custom bottle (what people pay)', { min: 0, max: 10000, suffix: '¢', hint: (v) => dollars(v ?? 0) }))),
+        // How advertisers pay (docs/SWITCHES.md). Paying up front, bidding and each fee are switched on the Features page.
+        ctx.draft.adBilling ? section('How advertisers pay', ctx.draft.adBilling.requirePrepay
+          ? 'Up front, by card, for a number of bottles, at the prices above (AR, video and scans included). Each fee below is charged only when it’s switched on (Features → Money and payments), to the card once a day. Saving these needs the second sign-in step.'
+          : 'Billed afterwards, on invoices, with credit limits (Features → Money and payments → Bill advertisers afterwards). Saving these needs the second sign-in step.', h('div', { class: 'form' },
+          num(ctx, 'adBilling.changeFeeCents', 'Fee for changing a running ad', { min: 0, max: 100000, suffix: '¢', hint: (v) => `${dollars(v ?? 0)}, paid up front. The new ad is reviewed before it prints.` }),
+          num(ctx, 'adBilling.fees.scan.cents', `Fee per scan (${ctx.draft.adBilling.fees.scan.on ? 'on' : 'off'})`, { min: 0, max: 1000, suffix: '¢' }),
+          num(ctx, 'adBilling.fees.arLaunch.cents', `Fee per AR launch (${ctx.draft.adBilling.fees.arLaunch.on ? 'on' : 'off'})`, { min: 0, max: 1000, suffix: '¢' }),
+          num(ctx, 'adBilling.fees.commission.percent', `Commission on sales (${ctx.draft.adBilling.fees.commission.on ? 'on' : 'off'})`, { min: 0, max: 50, step: 0.5, int: false, suffix: '%' }),
+          num(ctx, 'adBilling.extras.markupPercent', 'Markup on costly extras (AI video clips)', { min: 0, max: 500, suffix: '%', hint: (v) => Object.values(ctx.draft.adBilling.extras.perUse).map((x) => `${x.label}: costs us ${dollars(x.costCents)}, the advertiser pays ${dollars(Math.ceil(x.costCents * (100 + (v ?? 0)) / 100))} a use`).join('; ') }))) : null)];
     });
   }
 

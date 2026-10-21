@@ -69,7 +69,8 @@ const page = (unitId: string, slot: number, viewer: string, token?: string, t?: 
 
 beforeAll(async () => {
   db = await createPgliteClient();
-  app = await createApp({ db, seedDemo: true, seed: 11, clock, features: featuresFrom({ FW_FEATURES: 'pilot' }).features, footage });
+  // Scans and AR launches are billed here (billing afterwards); paying up front includes them (prepaid.test.ts).
+  app = await createApp({ db, seedDemo: true, demoBilling: 'billed_after', seed: 11, clock, features: featuresFrom({ FW_FEATURES: 'pilot' }).features, footage });
   keys = app.demoKeys!;
   server = await buildServer(app);
   saved = { ...joes() }; // its artwork draws with functions: a shallow copy, its fields are replaced, never changed in place

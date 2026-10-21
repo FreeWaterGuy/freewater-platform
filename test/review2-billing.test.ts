@@ -36,7 +36,8 @@ const sum = (lines: { amountCents: number }[]) => lines.reduce((s, l) => s + l.a
 
 beforeAll(async () => {
   db = await createPgliteClient();
-  app = await createApp({ db, seedDemo: true, seed: 31, clock });
+  // Commission refunds and billed scans: a company that bills afterwards (paying up front: prepaid.test.ts).
+  app = await createApp({ db, seedDemo: true, demoBilling: 'billed_after', seed: 31, clock });
   keys = app.demoKeys!;
   server = await buildServer(app);
 });

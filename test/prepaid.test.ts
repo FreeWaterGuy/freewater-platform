@@ -9,6 +9,7 @@ import type { Campaign, Share } from '../src/core/types';
 import { posterCreative } from '../src/modules/creative/poster';
 import { PrepaidService } from '../src/modules/ads/prepaid';
 import { adBilling, checkAdBilling, defaultAdBilling } from '../src/modules/ads/billing';
+import { estimate } from '../src/modules/ads/draft';
 import { TestPaymentProvider } from '../src/adapters/payments/test';
 import { buildServer } from '../src/api/server';
 import { engines, freshDb } from './db-helpers';
@@ -254,6 +255,19 @@ describe('fees: off means nothing is charged per scan, AR launch, box side or sa
     expect(added.filter((l) => l.debit.startsWith('receivable:advertiser:') || l.credit.startsWith('receivable:advertiser:'))).toEqual([]);
     // The sale is still recorded (for its refunds and the checks), with no commission.
     expect(app.platform.ledger.sale('freewater', c.advertiserId, 'fees-order-1')).toMatchObject({ amountCents: 5000 });
+    // Still a sale: in the advertiser's results and the public counter, until it's refunded in full.
+    const counter = app.transparency.counters('freewater').sales;
+    await app.persistence.flush();
+    expect((await app.ads.overview({ companyId: 'freewater', advertiserId: c.advertiserId, days: 14 })).total).toMatchObject({ sales: 1, salesCents: 5000, spendCents: 42 });
+    // On the bottle's scan page (social proof) and the advertiser's statement too.
+    expect(app.experiences.salesOf(c.id, `${u.id}|${c.id}`)).toEqual({ bottle: 1, ad: 1 });
+    const { statement } = await import('../src/modules/transparency/statements');
+    const st = statement(app.platform, c.advertiserId, 'freewater', new Date(now - 86_400_000), new Date(now + 86_400_000), (d) => d.toISOString().slice(0, 10)) as any;
+    expect((st.lines ?? st).find((l: any) => l.bottle === u.id)).toMatchObject({ sales: 1, commissionCents: 0 });
+    app.platform.bus.publish('purchase.refunded', 'freewater', { unitId: u.id, slotIndex: slot, orderId: 'fees-order-1', amountCents: 5000 }, 'fees-refund-1');
+    expect(app.experiences.salesOf(c.id, `${u.id}|${c.id}`)).toEqual({ bottle: 0, ad: 0 });
+    expect(app.transparency.counters('freewater').sales).toBe(counter - 1);
+    expect((await app.ads.overview({ companyId: 'freewater', advertiserId: c.advertiserId, days: 14 })).total).toMatchObject({ sales: 0, salesCents: 0 });
     // A box side printed with the ad: no charge either.
     app.platform.bus.publish('box.printed', 'freewater', { packId: 'pk-fees', faces: [{ face: 'top', campaignId: c.id, advertiserId: c.advertiserId, advertiserName: c.advertiserName, experienceId: 'offer', priceCents: 40, isHouse: false }] } as any, 'pk-fees');
     expect(app.platform.ledger.entries.some((l) => l.kind === 'box_face' && l.campaignId === c.id)).toBe(false);
@@ -443,6 +457,31 @@ describe('after a restart', () => {
   });
 });
 
+describe('extras left half done by a crash', () => {
+  it('a clip marked made whose books line never got stored is booked at the next start, once; a claim never settled is given back', async () => {
+    const c = await newAd(app, 4);
+    await payAndApprove(app, c, 2, { aiVideoClip: 3 });
+    // A crash right after the use was marked made, before its books line was stored.
+    const made = await app.prepaid.claimExtra(c, 'aiVideoClip');
+    await db.query(`update ad_extra_uses set status = 'used', cost_cents = 300 where id = $1`, [made!.useId]);
+    // And a claim that a crash cut off before the clip was started or let go (two hours ago).
+    const cut = await app.prepaid.claimExtra(c, 'aiVideoClip');
+    await db.query(`update ad_extra_uses set at = $2 where id = $1`, [cut!.useId, new Date(now - 2 * 3600_000).toISOString()]);
+    await app.persistence.flush();
+    const again = await createApp({ db, clock, payments: provider, productLookup: null, anchorPublishers: [] } as any);
+    await again.persistence.flush();
+    const extraLines = (a: App) => a.platform.ledger.entries.filter((l) => l.kind === 'extra' && l.campaignId === c.id).map((l) => l.amountCents);
+    expect(extraLines(again)).toEqual([450]);
+    expect((await db.query<any>(`select status from ad_extra_uses where id = $1`, [cut!.useId])).rows[0].status).toBe('returned');
+    expect(again.platform.campaigns.get(c.id)!.prepaid!.extras!.aiVideoClip).toMatchObject({ paid: 3, used: 1 });
+    // A second start books nothing more.
+    const third = await createApp({ db, clock, payments: provider, productLookup: null, anchorPublishers: [] } as any);
+    await third.persistence.flush();
+    expect(extraLines(third)).toEqual([450]);
+    expect((await third.reconciliation.report('freewater')).checks.find((k) => k.id === 'prepaid_balances')!.status).toBe('ok');
+  });
+});
+
 describe.each(engines)('paid bottles claimed under load (%s)', (engine) => {
   let pdb: SqlClient, papp: App;
   beforeAll(async () => { pdb = await freshDb(engine); papp = await setup(pdb); }, 60_000);
@@ -455,6 +494,21 @@ describe.each(engines)('paid bottles claimed under load (%s)', (engine) => {
     expect(out.filter((r) => r.length === 0)).toHaveLength(1);
     expect(Number((await pdb.query<any>(`select held from ad_prepaid where campaign_id = $1`, [c.id])).rows[0].held)).toBe(1);
   });
+  it('a new ad’s submit pressed twice at once (two tabs, two servers): one order, one charge', async () => {
+    const c = await newAd(papp, 4);
+    papp.platform.campaigns.delete(c.id); // a new ad from the chat: its campaign is made only after it's paid for
+    const q = papp.prepaid.quote('freewater', { bottles: 7, share: 4 }, c.sizes);
+    // Two servers: each has its own in-memory guard, so only the database can keep this to one charge.
+    const other = new PrepaidService(pdb, papp.platform, papp.payments, () => papp.persistence.flush());
+    const pay = (svc: PrepaidService) => svc.payBottles({ companyId: 'freewater', advertiserId: c.advertiserId, draftId: `dr-twice-${engine}`, quote: { bottles: 7, share: 4 }, expectedTotalCents: q.totalCents, sizes: c.sizes });
+    const out = await Promise.allSettled([pay(papp.prepaid), pay(other), pay(papp.prepaid), pay(other)]);
+    expect(out.filter((o) => o.status === 'fulfilled').length).toBeGreaterThan(0);
+    const orders = (await pdb.query<any>(`select id, campaign_id from ad_orders where draft_id = $1 and kind = 'bottles'`, [`dr-twice-${engine}`])).rows;
+    expect(orders).toHaveLength(1);
+    const charged = (await pdb.query<any>(`select amount_cents from payments where purpose = 'ad_order' and status = 'captured' and ref in (select id from ad_orders where draft_id = $1)`, [`dr-twice-${engine}`])).rows;
+    expect(charged.map((r) => Number(r.amount_cents))).toEqual([7 * 42]);
+    expect(Number((await pdb.query<any>(`select count(*)::int as n from ad_prepaid where campaign_id = $1`, [orders[0].campaign_id])).rows[0].n)).toBe(1);
+  });
   it('a stop racing a claim: either the bottle was claimed first (the stop waits for it) or it is refused', async () => {
     const c = await newAd(papp, 4);
     const q = papp.prepaid.quote('freewater', { bottles: 3, share: 4 }, c.sizes);
@@ -463,5 +517,137 @@ describe.each(engines)('paid bottles claimed under load (%s)', (engine) => {
     const row = (await pdb.query<any>(`select held, refunded, stopped_at from ad_prepaid where campaign_id = $1`, [c.id])).rows[0];
     if (stopped.status === 'fulfilled') { expect((claimed as PromiseFulfilledResult<string[]>).value).toEqual([c.id]); expect(Number(row.refunded)).toBe(3); expect(Number(row.held)).toBe(0); }
     else { expect((stopped as PromiseRejectedResult).reason).toMatchObject({ code: 'printing_now' }); expect(Number(row.held)).toBe(1); expect(row.stopped_at).toBeNull(); }
+  });
+});
+
+describe('the Features page: each part of how advertisers pay is a switch, per company', () => {
+  const person = (name = 'Test owner') => ({ userId: 'u-test', name, approverProblem: async () => null });
+  it('registers paying up front, billing afterwards, bidding and each fee, with money flags and FreeWater’s choices', async () => {
+    const { byId, startsOffForNew } = await import('../src/runtime/registry');
+    for (const id of ['prepaid_ads', 'billed_after', 'fee_scan', 'fee_ar_launch', 'fee_box_face', 'fee_commission']) {
+      expect(byId.get(id)!.risk, id).toBe('money');
+      expect(startsOffForNew(byId.get(id)!), id).toBe(true);
+    }
+    const f = app.companyFeatures;
+    expect(f.on('freewater', 'prepaid_ads')).toBe(true);
+    for (const id of ['billed_after', 'bidding', 'fee_scan', 'fee_ar_launch', 'fee_box_face', 'fee_commission']) expect(f.on('freewater', id), id).toBe(false);
+    // An existing white-label company decides for itself: paying up front is new for it, and off until it does.
+    expect(f.isNew('peak-spring', byId.get('prepaid_ads')!)).toBe(true);
+    expect(f.on('peak-spring', 'prepaid_ads')).toBe(false);
+  });
+
+  it('a fee switched on from the Features page is the setting itself (one source of truth), and is charged; off again, nothing is', async () => {
+    const plan = app.companyFeatures.plan('freewater', { fee_scan: true });
+    expect(plan.needsSecondStep).toBe(true);
+    await app.companyFeatures.change('freewater', { fee_scan: true }, person());
+    expect(adBilling(fw()).fees.scan).toEqual({ on: true, cents: 25 });
+    try {
+      const c = await newAd(app, 4);
+      await payAndApprove(app, c, 2);
+      onlyThese(app, [c.id]);
+      const u = (await print(app)).unit;
+      const slot = u.placements.find((p) => p.campaignId === c.id)!.slotIndex;
+      app.platform.scan(u.id, slot, 'viewer-switch-1');
+      expect(app.platform.ledger.entries.filter((l) => l.debit === `receivable:advertiser:${c.advertiserId}`).map((l) => l.amountCents)).toEqual([25]);
+      // Turning off "Advertisers pay up front" takes its fees along with it: a scan then costs nothing, even though
+      // the fee's own setting was on a moment ago.
+      const off = app.companyFeatures.plan('freewater', { prepaid_ads: false });
+      expect(off.changes.map((x) => x.id).sort()).toEqual(['fee_scan', 'prepaid_ads']);
+      await app.companyFeatures.change('freewater', { prepaid_ads: false }, person());
+      expect(adBilling(fw()).fees.scan.on).toBe(false);
+      app.platform.scan(u.id, slot, 'viewer-switch-2');
+      expect(app.platform.ledger.entries.filter((l) => l.debit === `receivable:advertiser:${c.advertiserId}`)).toHaveLength(1);
+    } finally {
+      await app.companyFeatures.change('freewater', { prepaid_ads: true }, person());
+      fw().adBilling = defaultAdBilling();
+    }
+  });
+
+  it('a fee whose setting is on is still not charged while its switch is off for the company (a parent turned off)', async () => {
+    fw().adBilling = { ...defaultAdBilling(), fees: { ...defaultAdBilling().fees, arLaunch: { on: true, cents: 40 }, commission: { on: true, percent: 3 } } };
+    const c = await newAd(app, 4);
+    await payAndApprove(app, c, 2);
+    onlyThese(app, [c.id]);
+    const u = (await print(app)).unit;
+    const slot = u.placements.find((p) => p.campaignId === c.id)!.slotIndex;
+    // Turned off quickly, straight in the switches (as a dependant would be): the settings still say on.
+    await app.db.query(`update company_features set is_on = false where company_id = 'freewater' and feature_id = 'prepaid_ads'`);
+    await app.companyFeatures.load();
+    try {
+      expect(adBilling(fw()).fees.arLaunch.on).toBe(true);
+      expect(app.companyFeatures.on('freewater', 'fee_ar_launch')).toBe(false);
+      const before = app.platform.ledger.entries.length;
+      app.platform.launchAr(u.id, slot, 'viewer-switch-3');
+      app.platform.purchase(u.id, slot, 'switch-order-1', 10_000);
+      expect(app.platform.ledger.entries.slice(before).filter((l) => l.debit.startsWith('receivable:advertiser:'))).toEqual([]);
+      // What the advertiser is shown agrees: nothing per AR launch or sale.
+      expect(estimate({}, fw(), 1, undefined, app.platform.featureOn)).toMatchObject({ perScanCents: 0, perArLaunchCents: 0, commissionPercent: 0, perBoxFaceCents: 0 });
+      // And nobody can pay for a new ad: the routes are closed and the service refuses (nothing is charged).
+      const n2 = await newAd(app, 4);
+      await expect(app.prepaid.payBottles({ companyId: 'freewater', advertiserId: n2.advertiserId, campaignId: n2.id, quote: { bottles: 2, share: 4 }, expectedTotalCents: 84 })).rejects.toMatchObject({ code: 'feature_off' });
+      const server = await buildServer(app);
+      try {
+        const r = await server.inject({ method: 'POST', url: `/v1/ads/campaigns/${n2.id}/quote`, payload: { bottles: 2 }, headers: { authorization: `Bearer ${app.demoKeys!['freewater-admin']}` } });
+        expect([r.statusCode, r.json().error.code]).toEqual([404, 'feature_off']);
+      } finally { await server.close(); }
+      // An ad already paid for keeps printing until its bottles are out (the money is in).
+      expect((await print(app)).unit.placements.some((p) => p.campaignId === c.id)).toBe(true);
+    } finally {
+      await app.db.query(`update company_features set is_on = true where company_id = 'freewater' and feature_id = 'prepaid_ads'`);
+      await app.companyFeatures.load();
+      fw().adBilling = defaultAdBilling();
+    }
+  });
+
+  it('with paying up front on, the estimate shows nothing per scan, AR launch, sale or box side; billing afterwards shows the prices', () => {
+    expect(estimate({}, fw(), 1, undefined, app.platform.featureOn)).toMatchObject({ perScanCents: 0, perArLaunchCents: 0, commissionPercent: 0, perBoxFaceCents: 0 });
+    const after = { ...fw(), adBilling: { ...defaultAdBilling(), requirePrepay: false, pricingMode: 'auction' as const } };
+    expect(estimate({}, after, 1)).toMatchObject({ perScanCents: fw().prices.perScan, perArLaunchCents: fw().prices.perArLaunch, commissionPercent: fw().prices.commissionPercent });
+  });
+
+  it('billing afterwards and bidding are switches over the same setting: bidding needs billing afterwards', async () => {
+    expect(app.companyFeatures.plan('freewater', { bidding: true }).refused[0]?.reason).toMatch(/Bill advertisers afterwards/);
+    await app.companyFeatures.change('freewater', { billed_after: true }, person());
+    try {
+      expect(adBilling(fw())).toMatchObject({ requirePrepay: false, pricingMode: 'flat' });
+      await app.companyFeatures.change('freewater', { bidding: true }, person());
+      expect(adBilling(fw()).pricingMode).toBe('auction');
+      // Back to paying up front: bidding goes too, and prices are flat again.
+      await app.companyFeatures.change('freewater', { billed_after: false }, person());
+      expect(adBilling(fw())).toMatchObject({ requirePrepay: true, pricingMode: 'flat' });
+      expect(app.companyFeatures.on('freewater', 'bidding')).toBe(false);
+    } finally { fw().adBilling = defaultAdBilling(); }
+  });
+
+  it('a white-label company with its own settings: off until it turns paying on, then its advertisers pay its prices and its fees', async () => {
+    const peak = app.platform.companies.get('peak-spring')!;
+    peak.modules = { ...peak.modules, ads: 'freewater-ads' };
+    const adv = 'adv-peak-pp';
+    await db.query(`insert into advertisers (id, company_id, name, category) values ($1,'peak-spring','Trailhead Gear','retail')`, [adv]);
+    await app.payments.addMethod('peak-spring', 'advertiser', adv, 'tok_visa');
+    const spec = { brand: 'Trailhead', headline: 'Boots 20% off', colors: { bg: '#FFFFFF', fg: '#0B0B0B', accent: '#1E7DB8' } };
+    const c: Campaign = { id: 'cmp-peak-pp', companyId: 'peak-spring', advertiserId: adv, advertiserName: 'Trailhead Gear', category: 'retail', sizes: [4], creative: posterCreative(spec), creativeRef: { kind: 'poster', spec }, experienceId: 'offer', experienceConfig: { headline: 'Boots' }, targeting: {}, buy: { type: 'guaranteed', remainingPrints: 0 }, active: false };
+    app.platform.campaigns.set(c.id, c);
+    const q = app.prepaid.quote('peak-spring', { bottles: 2, share: 4 }, c.sizes);
+    expect(q.perBottleCents).toBe(peak.prices.perPrintByShare[4]);
+    // Off for Peak Spring (new to it, and money starts off): nothing can be paid.
+    await expect(app.prepaid.payBottles({ companyId: 'peak-spring', advertiserId: adv, campaignId: c.id, quote: { bottles: 2, share: 4 }, expectedTotalCents: q.totalCents })).rejects.toMatchObject({ code: 'feature_off' });
+    // Its own people turn it on, with its own fee for scans; FreeWater's stays off.
+    await app.companyFeatures.change('peak-spring', { money: true, advertiser_billing: true, prepaid_ads: true }, person('Peak owner'));
+    await app.console.save('peak-spring', { adBilling: { fees: { scan: { on: true, cents: 10 } }, changeFeeCents: 2_000 } } as any, 'Peak owner', undefined, { person: true });
+    expect(app.companyFeatures.on('peak-spring', 'fee_scan')).toBe(true);
+    expect(app.companyFeatures.on('freewater', 'fee_scan')).toBe(false);
+    try {
+      await app.prepaid.payBottles({ companyId: 'peak-spring', advertiserId: adv, campaignId: c.id, quote: { bottles: 2, share: 4 }, expectedTotalCents: q.totalCents });
+      await app.ads.review({ companyId: 'peak-spring', campaignId: c.id, decision: 'approve' });
+      const u = (await app.platform.order({ companyId: 'peak-spring', orderId: 'pp-peak-1', locationId: 'PS-001', productId: 'bottle-16oz' })).unit;
+      const p = u.placements.find((x) => x.campaignId === c.id)!;
+      expect(p).toMatchObject({ prepaid: true, priceCents: q.perBottleCents });
+      app.platform.scan(u.id, p.slotIndex, 'viewer-peak-1');
+      expect(app.platform.ledger.entries.filter((l) => l.debit === `receivable:advertiser:${adv}`).map((l) => [l.kind, l.amountCents])).toEqual([['scan', 10]]);
+      expect(adBilling(fw()).changeFeeCents).toBe(10_000);
+      await app.persistence.flush();
+      expect((await app.reconciliation.report('peak-spring')).checks.filter((k) => k.id.startsWith('prepaid_')).map((k) => [k.id, k.status])).toEqual([['prepaid_bottles', 'ok'], ['prepaid_balances', 'ok'], ['prepaid_open', 'ok']]);
+    } finally { peak.modules = { ...peak.modules, ads: 'house-only' }; c.active = false; }
   });
 });

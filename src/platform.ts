@@ -370,7 +370,7 @@ export class Platform {
   }
 
   private persistPrepaid(unit: Unit, move: 'printed' | 'released') {
-    for (const p of unit.placements) if (p.prepaid && !p.isHouse) this.persist.prepaid?.(unit.companyId, p.campaignId, move);
+    this.persist.prepaid?.(unit.companyId, unit.placements.filter((p) => p.prepaid && !p.isHouse).map((p) => p.campaignId), move);
   }
 
   private persistCampaigns(placements: Placement[]) {

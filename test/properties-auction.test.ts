@@ -6,7 +6,11 @@ import { AuctionStats, adjustment, paced, piecePrice, rankBidders, rollDay, seco
 import { canAfford, floorPrice, priceFor, release, reserve } from '../src/modules/ads/budget';
 import { freewaterAdEngine } from '../src/modules/ads/engine';
 import { engagementPrice, targetingPremium } from '../src/modules/ads/targeting';
-import { bottle16oz, bottle25oz, freewater, locations, sampleCampaigns } from '../src/demo/seed';
+import { bottle16oz, bottle25oz, freewater as paidUpFront, locations, sampleCampaigns } from '../src/demo/seed';
+import { billedAfter as billedAfterSetting } from '../src/modules/ads/billing';
+// The sample ads print here without paying first: FreeWater's settings billing afterwards (paying up front, where
+// only paid bottles print, is tested in prepaid.test.ts).
+const freewater: typeof paidUpFront = { ...paidUpFront, adBilling: billedAfterSetting() };
 
 // Property tests for the auction, bid adjustments, pricing per piece and the daily budget. Seeded, so a failure
 // repeats exactly; bounded, so the whole file runs in a few seconds.

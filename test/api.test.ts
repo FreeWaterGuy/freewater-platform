@@ -17,7 +17,8 @@ const art = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 450"><rect
 
 beforeAll(async () => {
   db = await createPgliteClient(); // in memory
-  app = await createApp({ db, seedDemo: true, seed: 5 });
+  // The API end to end for a company that bills afterwards (scans, sales and invoices); paying up front: prepaid.test.ts.
+  app = await createApp({ db, seedDemo: true, demoBilling: 'billed_after', seed: 5 });
   keys = app.demoKeys!;
   server = await buildServer(app);
 });

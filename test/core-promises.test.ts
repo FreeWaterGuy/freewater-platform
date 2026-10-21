@@ -21,7 +21,8 @@ describe('what advertisers are told before they submit, and what changing an ad 
   const clock = () => new Date('2026-10-21T15:00:00Z');
   beforeAll(async () => {
     db = await freshDb('pglite');
-    app = await createApp({ db, seedDemo: true, seed: 707, clock, productLookup: null, anchorPublishers: [] });
+    // Bids and per-scan prices are for a company that bills afterwards; paying up front shows its own (prepaid.test.ts).
+    app = await createApp({ db, seedDemo: true, demoBilling: 'billed_after', seed: 707, clock, productLookup: null, anchorPublishers: [] });
   });
   afterAll(async () => { await app.persistence.flush(); await db.close(); });
 

@@ -37,7 +37,8 @@ export function statement(platform: Platform, advertiserId: string, companyId: s
         const m = l.kind === 'commission' ? /^Commission on order (.+)$/.exec(l.memo) : l.kind === 'commission_reversal' ? /^Refund on order (.+), commission returned$/.exec(l.memo) : null;
         if (m) net.set(m[1]!, (net.get(m[1]!) ?? 0) + signed(l));
       }
-      const sales = [...net.values()].filter((v) => v > 0).length;
+      // Plus sales that carry no commission line (paid up front, commission off): still sales on this bottle.
+      const sales = [...net.values()].filter((v) => v > 0).length + platform.ledger.salesStandingWithoutCommission(p.campaignId, u.id);
       const loc = platform.locations.get(u.locationId);
       const share = placementShare(p);
       lines.push({

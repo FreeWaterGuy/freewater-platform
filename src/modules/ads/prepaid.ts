@@ -3,7 +3,7 @@ import type { Platform } from '../../platform';
 import { SHARES, type Campaign, type PrepaidBottles, type Share } from '../../core/types';
 import { newId } from '../../core/ids';
 import { AdsError } from './service';
-import { adBilling, anyFeeOn, extraPrice, prepaidModel } from './billing';
+import { adBilling, anyFeeOn, extraPrice, feesOnWords, prepaidModel } from './billing';
 import { layoutsFor, shareLabel } from './layouts';
 import { prepaidLeft, syncPrepaidBuy } from './budget';
 import { PaymentError, PaymentsService } from '../payments/service';
@@ -74,7 +74,7 @@ export class PrepaidService {
     }
     const bottlesCents = perBottleCents * bottles, extrasCents = extras.reduce((a, x) => a + x.cents, 0);
     if (bottlesCents + extrasCents <= 0) throw new AdsError(422, 'nothing_to_pay', 'Prices here are $0. Set prices in the console first.');
-    const feesOn = [b.fees.scan.on ? `${b.fees.scan.cents}¢ per scan` : '', b.fees.arLaunch.on ? `${b.fees.arLaunch.cents}¢ per AR launch` : '', b.fees.boxFace.on ? `${company.prices.perBoxFace}¢ per box side` : '', b.fees.commission.on ? `${b.fees.commission.percent}% of sales` : ''].filter(Boolean);
+    const feesOn = feesOnWords(company, this.platform.featureOn);
     return {
       bottles, share, size: shareLabel(share), productId: product.id, product: product.name, perBottleCents, bottlesCents, extras, extrasCents, totalCents: bottlesCents + extrasCents,
       included: 'AR, video and scans are included, at every size.', feesOn, changeFeeCents: b.changeFeeCents,
@@ -82,6 +82,13 @@ export class PrepaidService {
   }
 
   // ---------- paying ----------
+
+  /** Taking money for ads is on for this company (its Features page: "Advertisers pay up front" and what it needs). */
+  private payingOn(companyId: string) {
+    if (this.platform.featureOn && !this.platform.featureOn(companyId, 'prepaid_ads')) {
+      throw new AdsError(404, 'feature_off', `Paying for ads is switched off for ${this.company(companyId).name} (Features: Advertisers pay up front). Nothing was charged.`);
+    }
+  }
 
   private async orderFor(companyId: string, kind: 'bottles' | 'change', where: { campaignId?: string; draftId?: string }) {
     return (await this.db.query<any>(`select * from ad_orders where company_id = $1 and kind = $2 and status <> 'declined' and ((campaign_id = $3 and $2 = 'bottles') or ($4::text is not null and draft_id = $4)) order by created_at limit 1`,
@@ -105,6 +112,7 @@ export class PrepaidService {
     if (row && row.advertiser_id !== o.advertiserId) throw new AdsError(404, 'not_found', 'Campaign not found.');
     // Already paid (a second press, or a submit finished after a restart): nothing is charged again, at any price.
     if (row?.status === 'paid') return { orderId: row.id as string, campaignId: row.campaign_id as string, totalCents: n(row.total_cents), prepaid: await this.attach(row.campaign_id) };
+    this.payingOn(o.companyId);
     const q = this.quote(o.companyId, o.quote, o.sizes);
     if (!row) {
       if (o.expectedTotalCents !== q.totalCents) throw new AdsError(409, 'price_changed', `The total is ${dollars(q.totalCents)}, not ${dollars(o.expectedTotalCents)}. Check it and pay again.`);
@@ -124,8 +132,10 @@ export class PrepaidService {
   async payChangeFee(o: { companyId: string; advertiserId: string; campaignId: string; draftId: string; expectedFeeCents?: number }) {
     const fee = adBilling(this.company(o.companyId)).changeFeeCents;
     let row = await this.orderFor(o.companyId, 'change', { draftId: o.draftId });
+    if (row?.status === 'paid') return { orderId: row.id as string, feeCents: n(row.total_cents) };
     if (!row) {
       if (fee <= 0) return null;
+      this.payingOn(o.companyId);
       if (o.expectedFeeCents !== fee) throw new AdsError(409, 'fee_changed', `Changing an ad costs ${dollars(fee)}. Confirm that amount to pay it.`);
       row = (await this.db.query<any>(`insert into ad_orders (id, company_id, advertiser_id, campaign_id, draft_id, kind, total_cents, status) values ($1,$2,$3,$4,$5,'change',$6,'paying') on conflict do nothing returning *`,
         [newId('ado'), o.companyId, o.advertiserId, o.campaignId, o.draftId, fee])).rows[0] ?? await this.orderFor(o.companyId, 'change', { draftId: o.draftId });
@@ -226,12 +236,13 @@ export class PrepaidService {
    * agrees one is left and the ad isn't stopped. Returns the ads that had none (memory was ahead of the books).
    */
   async claim(companyId: string, campaignIds: string[]): Promise<string[]> {
-    const refused: string[] = [];
+    let refused: string[] = [];
+    // An ad is on a bottle at most once, so one statement claims one bottle from each (all or none: a refusal rolls
+    // the others back).
+    const ids = [...new Set(campaignIds)];
     await this.db.transaction(async (tx) => {
-      for (const id of campaignIds) {
-        const got = (await tx.query(`update ad_prepaid set held = held + 1 where campaign_id = $1 and company_id = $2 and stopped_at is null and printed + held + refunded < paid returning campaign_id`, [id, companyId])).rows.length;
-        if (!got) refused.push(id);
-      }
+      const got = new Set((await tx.query<any>(`update ad_prepaid set held = held + 1 where campaign_id = any($1::text[]) and company_id = $2 and stopped_at is null and printed + held + refunded < paid returning campaign_id`, [ids, companyId])).rows.map((r) => r.campaign_id as string));
+      refused = ids.filter((id) => !got.has(id));
       if (refused.length) throw new Refused();
     }).catch((e) => { if (!(e instanceof Refused)) throw e; });
     for (const id of refused) {
@@ -252,7 +263,7 @@ export class PrepaidService {
     if (c.prepaid) {
       if (c.prepaid.stoppedAt) throw new AdsError(409, 'stopped', 'This ad was stopped by the company and what wasn’t printed was paid back.');
       if (prepaidLeft(c) <= 0) throw new AdsError(409, 'all_printed', 'Every paid bottle of this ad is out. Make a new ad to keep going.');
-      if (anyFeeOn(company) && this.credit) await this.credit.needCredit(c);
+      if (anyFeeOn(company, this.platform.featureOn) && this.credit) await this.credit.needCredit(c);
       return;
     }
     if (prepaidModel(company)) throw new AdsError(402, 'payment_needed', `This ad hasn't been paid for. Ads at ${company.name} are paid up front: pay for its bottles first (POST /v1/ads/campaigns/${c.id}/pay).`);
@@ -475,6 +486,30 @@ export class PrepaidService {
       } catch { /* tried again next time; the reconciliation shows it */ }
     }
     for (const r of (await this.db.query<any>(`select id from ad_refunds where status = 'refunding' and ($1::text is null or company_id = $1)`, [companyId ?? null])).rows) await this.sendRefund(r.id).catch(() => {});
+    await this.repairExtras(companyId);
+  }
+
+  /**
+   * Extras left half done by a crash. A use marked made whose books line was never stored is booked now (the same
+   * event, so never twice). A use claimed and never settled (over an hour old) is given back to the advertiser, and
+   * the team is told: if the clip was really made, it's on us, never billed again.
+   */
+  private async repairExtras(companyId?: string) {
+    const unbooked = (await this.db.query<any>(`select x.* from ad_extra_uses x where x.status = 'used' and x.charged_cents > 0 and ($1::text is null or x.company_id = $1)
+      and not exists (select 1 from events e where e.company_id = x.company_id and e.type = 'ad.extra_used' and e.idempotency_key = x.id)`, [companyId ?? null])).rows;
+    for (const r of unbooked) {
+      const c = this.platform.campaigns.get(r.campaign_id);
+      if (!c) continue;
+      this.platform.bus.publish('ad.extra_used', r.company_id, { useId: r.id, campaignId: r.campaign_id, advertiserId: c.advertiserId, advertiserName: c.advertiserName, feature: r.feature, chargedCents: n(r.charged_cents), costCents: n(r.cost_cents) }, r.id);
+    }
+    if (unbooked.length) await this.flush();
+    const stale = new Date(this.platform.bus.now().getTime() - 3600_000).toISOString();
+    const left = (await this.db.query<any>(`update ad_extra_uses set status = 'returned' where status = 'claimed' and at < $1 and ($2::text is null or company_id = $2) returning id, campaign_id, feature`, [stale, companyId ?? null])).rows;
+    for (const r of left) {
+      const x = this.platform.campaigns.get(r.campaign_id)?.prepaid?.extras?.[r.feature];
+      if (x) x.used = Math.max(0, x.used - 1);
+      this.alert?.(`extras-stuck:${r.id}`, `An extra for ad ${r.campaign_id} was never finished`, `Use ${r.id} (${r.feature}) was claimed but a restart cut it off. It was given back to the advertiser; if it was really made, it's on us (nothing more is charged).`);
+    }
   }
 
   // ---------- what the advertiser sees ----------

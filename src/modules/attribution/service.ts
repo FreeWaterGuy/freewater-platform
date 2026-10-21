@@ -91,7 +91,7 @@ export class AttributionService {
 
   /** What the books charge on a sale: nothing for a prepaid company unless its commission fee is switched on. */
   private commission(companyId: string, valueCents: number) {
-    return Math.round((valueCents * (commissionPercent(this.platform.companies.get(companyId)!) ?? 0)) / 100);
+    return Math.round((valueCents * (commissionPercent(this.platform.companies.get(companyId)!, this.featureOn) ?? 0)) / 100);
   }
 
   /**

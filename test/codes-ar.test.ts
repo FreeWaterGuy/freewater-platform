@@ -61,7 +61,8 @@ function decodeWithLogo(text: string, fill: 'white' | 'black' | 'noise', share =
 
 beforeAll(async () => {
   db = await createPgliteClient();
-  app = await createApp({ db, seedDemo: true, seed: 9, clock, personalizer: fakeAi });
+  // The sample ads print without paying first here (billing afterwards); paying up front is tested in prepaid.test.ts.
+  app = await createApp({ db, seedDemo: true, demoBilling: 'billed_after', seed: 9, clock, personalizer: fakeAi });
   keys = app.demoKeys!;
   server = await buildServer(app);
   for (const id of ['cmp-fizz', 'cmp-roast']) app.platform.campaigns.get(id)!.review = { status: 'approved', at: new Date(now).toISOString() };

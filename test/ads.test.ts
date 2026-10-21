@@ -33,7 +33,9 @@ const say = async (t: string, id: string, text: string, attachments?: unknown[])
 
 beforeAll(async () => {
   db = await createPgliteClient();
-  app = await createApp({ db, seedDemo: true, seed: 9, clock });
+  // Making an ad by chatting at a company that bills afterwards (daily amounts, credit); paying up front, with its own
+  // chat, quote and pay step, is tested in prepaid.test.ts.
+  app = await createApp({ db, seedDemo: true, demoBilling: 'billed_after', seed: 9, clock });
   keys = app.demoKeys!;
   server = await buildServer(app);
 });

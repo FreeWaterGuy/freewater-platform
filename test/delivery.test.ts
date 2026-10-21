@@ -170,6 +170,6 @@ describe('ops', () => {
     const p = (await call('GET', '/v1/review/campaigns/cmp-joes/preview', admin)).json();
     expect(p.campaign.advertiser).toBe("Joe's Burgers");
     expect(p.scan.doc.pluginId).toBe('ar-3d-menu');
-    expect(p.sizes.length).toBe(3);
+    expect(p.sizes.length).toBe(1); // Joe's paid up front for one size (of its three), and prints at that size
   });
 });

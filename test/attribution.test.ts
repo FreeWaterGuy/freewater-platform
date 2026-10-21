@@ -42,7 +42,8 @@ async function bottleWith(advertiserId: string) {
 
 beforeAll(async () => {
   db = await createPgliteClient();
-  app = await createApp({ db, seedDemo: true, seed: 3 });
+  // Commission on sales is billed here (billing afterwards); with paying up front it's a fee that starts off.
+  app = await createApp({ db, seedDemo: true, demoBilling: 'billed_after', seed: 3 });
   keys = app.demoKeys!;
   pattyKey = (await createApiKey(db, { companyId: 'freewater', name: 'Patty POS', scopes: ['purchases', 'campaigns'], advertiserId: 'adv-patty' })).key;
   server = await buildServer(app);

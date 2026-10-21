@@ -154,7 +154,9 @@ export class TransparencyService {
     const names = new Set([...x.given.keys(), ...x.sent.keys()]);
     const byCharity = [...names].map((name) => ({ name, givenCents: x.given.get(name) ?? 0, sentCents: x.sent.get(name) ?? 0 })).sort((a, b) => b.givenCents - a.givenCents);
     const given = byCharity.reduce((a, c) => a + c.givenCents, 0), sent = byCharity.reduce((a, c) => a + c.sentCents, 0);
-    return { bottles: x.bottles, givenCents: given, sentCents: sent, owedCents: given - sent, prizesCents: x.prizes, adMoneyCents: x.adMoney, sales: x.sales, ...(x.ai.earnedCents > 0 ? { ai: { ...x.ai } } : {}), byCharity, updatedAt: x.updatedAt };
+    // Sales with no commission line (paid up front, commission off) count too, until refunded in full.
+    const uncharged = this.platform.ledger.companySalesStandingWithoutCommission(companyId);
+    return { bottles: x.bottles, givenCents: given, sentCents: sent, owedCents: given - sent, prizesCents: x.prizes, adMoneyCents: x.adMoney, sales: x.sales + uncharged, ...(x.ai.earnedCents > 0 ? { ai: { ...x.ai } } : {}), byCharity, updatedAt: x.updatedAt };
   }
 
   /** Follow the feed live. Returns a function that stops. */

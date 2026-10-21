@@ -18,9 +18,10 @@
 
 import type { Feature } from './features';
 import { defaultWallet } from '../modules/wallet/assets';
+import { adBilling } from '../modules/ads/billing';
 
 /** Raise this when adding switches (and give them `since: CATALOGUE`). */
-export const CATALOGUE = 1;
+export const CATALOGUE = 2;
 
 export const categoryIds = ['printing', 'ads', 'ar_video', 'studio', 'delivery', 'machines', 'rewards', 'games', 'news', 'data', 'ai', 'money', 'transparency', 'giving', 'partners', 'blockchain', 'safety', 'core'] as const;
 export type CategoryId = (typeof categoryIds)[number];
@@ -150,7 +151,8 @@ export const SWITCHES: Switch[] = [
     routes: ['GET /v1/campaigns', 'POST /v1/campaigns', 'PATCH /v1/campaigns/:id', 'GET /v1/experiences', 'POST /v1/experiences/preview', 'GET /v1/assets', 'POST /v1/assets', 'GET /v1/ads/overview'], pages: ['ads'], plugins: ['offer'] }),
   sw({ id: 'ad_chat', category: 'ads', group: 'Making ads', label: 'Make an ad by chatting', description: 'Advertisers describe the ad and attach pictures; the assistant fills in the draft, they preview it at every size, then submit.',
     routes: ['POST /v1/ads/drafts', 'GET /v1/ads/drafts/:id', 'POST /v1/ads/drafts/:id/messages', 'GET /v1/ads/drafts/:id/preview', 'POST /v1/ads/drafts/:id/submit'] }),
-  sw({ id: 'bidding', category: 'ads', group: 'Selling space', label: 'Bidding (the auction)', description: 'Advertisers bid for their place, second price, with daily budgets. Off: only set numbers of bottles are sold.' }),
+  sw({ id: 'bidding', category: 'ads', group: 'Selling space', kind: 'linked', default: false, dependsOn: ['billed_after'], label: 'Bidding (the auction)', description: 'Advertisers bid for their place, second price, with daily budgets (pricing: auction). Only where advertisers are billed afterwards: a bid’s price isn’t known until the bottle prints. Off: flat prices, one per size.',
+    link: { get: (c) => adBilling(c).pricingMode === 'auction', set: (c, on) => ({ adBilling: { ...adBilling(c), pricingMode: on ? 'auction' : 'flat' } }) } }),
   sw({ id: 'ad_versions', category: 'ads', group: 'What the code shows', label: 'Versions of the call to action', description: 'An ad can show different versions to the first scanner, someone it was passed to, mornings, regulars… decided at each scan.',
     routes: ['GET /v1/campaigns/:id/codes', 'PATCH /v1/campaigns/:id/codes', 'POST /v1/campaigns/:id/preview-moment'] }),
   sw({ id: 'booking', category: 'ads', group: 'What the code shows', label: 'Book a time', description: 'A code can open a booking page.', plugins: ['booking'] }),
@@ -280,9 +282,19 @@ export const SWITCHES: Switch[] = [
   // ======================= Money & payments =======================
   sw({ id: 'money', category: 'money', parent: null, risk: 'money', label: 'Money and payments', description: 'Taking money: advertiser invoices and cards, people’s card payments, brand reserves. Billing lines are always recorded; off, nobody is charged.',
     routes: ['POST /v1/wallet/reserve'] }),
-  sw({ id: 'advertiser_billing', category: 'money', group: 'Advertisers', risk: 'money', label: 'Advertiser invoices and cards', description: 'Invoice each advertiser for what really happened, charge saved cards, and set credit limits; ads pause when an advertiser owes too much.',
-    routes: ['GET /v1/advertisers/:advertiserId/cards', 'POST /v1/advertisers/:advertiserId/cards', 'GET /v1/advertisers/:advertiserId/credit', 'POST /v1/advertisers/:advertiserId/credit-limit', 'POST /v1/invoices/run', 'GET /v1/invoices', 'GET /v1/invoices/:id', 'POST /v1/invoices/:id/pay'],
-    jobs: ['credit'] }),
+  sw({ id: 'advertiser_billing', category: 'money', group: 'Advertisers', risk: 'money', label: 'Advertiser invoices and cards', description: 'Advertisers’ saved cards, and invoices charged to them at once: fees switched on for advertisers who pay up front, or everything for those billed afterwards. A declined card pauses that advertiser’s ads.',
+    routes: ['GET /v1/advertisers/:advertiserId/cards', 'POST /v1/advertisers/:advertiserId/cards', 'POST /v1/invoices/run', 'GET /v1/invoices', 'GET /v1/invoices/:id', 'POST /v1/invoices/:id/pay', 'POST /v1/ads/fees/charge'],
+    jobs: ['credit', 'ad-fees'] }),
+  // How advertisers pay (docs/SWITCHES.md, "How advertisers pay"): up front for their bottles; each fee on top its own switch.
+  sw({ id: 'prepaid_ads', category: 'money', group: 'How advertisers pay', risk: 'money', dependsOn: ['advertiser_billing'], since: 2, label: 'Advertisers pay up front', description: 'An advertiser pays by card for a number of bottles before its ad is reviewed; only paid bottles print, and exactly that many go out. AR, video and scans are included. Off: no ad can be paid for, so none prints for a new advertiser; ads already paid for keep printing until their bottles are out, and can still be stopped and paid back.',
+    routes: ['POST /v1/ads/drafts/:id/quote', 'POST /v1/ads/campaigns/:id/quote', 'POST /v1/ads/campaigns/:id/pay', 'GET /v1/ads/billing'] }),
+  sw({ id: 'billed_after', category: 'money', group: 'How advertisers pay', kind: 'linked', risk: 'money', default: false, dependsOn: ['advertiser_billing'], label: 'Bill advertisers afterwards (credit)', description: 'Instead of paying up front, advertisers are invoiced for what printed, scanned and sold, and a person gives each a credit limit. FreeWater: off (nothing is printed until it’s paid for). Needed for bidding.',
+    routes: ['GET /v1/advertisers/:advertiserId/credit', 'POST /v1/advertisers/:advertiserId/credit-limit'],
+    link: { get: (c) => !adBilling(c).requirePrepay, set: (c, on) => ({ adBilling: { ...adBilling(c), requirePrepay: !on, ...(on ? {} : { pricingMode: 'flat' }) } }) } }),
+  ...([['fee_scan', 'scan', 'Fee per scan', 'Charge the advertiser for each scan that loads (25¢ suggested).'], ['fee_ar_launch', 'arLaunch', 'Fee per AR launch', 'Charge for each AR launch that loads (40¢ suggested).'],
+    ['fee_box_face', 'boxFace', 'Fee per box side', 'Charge the box side price for each delivery box side printed with the ad.'], ['fee_commission', 'commission', 'Commission on sales', 'Charge a share of each sale traced to a bottle (3% suggested).']] as const)
+    .map(([id, key, label, description]) => sw({ id, category: 'money', group: 'How advertisers pay', parent: 'prepaid_ads', kind: 'linked', risk: 'money', default: false, label, description: `For advertisers who pay up front. ${description} Charged to the card on file once a day; a declined card pauses their ads at once. Off: included. Its price is under Ads and prices.`,
+      link: { get: (c) => adBilling(c).fees[key].on, set: (c, on) => { const b = adBilling(c); return { adBilling: { ...b, fees: { ...b.fees, [key]: { ...b.fees[key], on } } } }; } } })),
   sw({ id: 'card_payments', category: 'money', group: 'People', risk: 'money', dependsOn: ['printing'], label: 'Paid custom bottles', description: 'People pay for their own designed bottles: the money is held first and taken only once it prints.', routes: ['GET /v1/me/cards', 'POST /v1/me/cards', 'POST /v1/me/custom-orders'] }),
   sw({ id: 'gift_cards', category: 'money', group: 'Money leaving the platform', parent: 'credit', kind: 'linked', host: 'gift_cards', risk: 'one_way', step: 'exchanges_on', label: 'Gift cards', description: 'Spending dollar credit on gift cards. Turning it on takes 2 other people’s approval and a wait.',
     routes: ['GET /v1/me/wallet/gift-cards', 'POST /v1/me/wallet/gift-cards'],
@@ -292,7 +304,8 @@ export const SWITCHES: Switch[] = [
     link: { get: (c) => !!c.launch?.withdrawals, set: (c, on) => (on ? null : { launch: { ...(c.launch ?? { stage: 'test' }), withdrawals: false } }), via: stepOn('Propose turning on withdrawals under Launch, after going live with the token.', 'launch') } }),
   sw({ id: 'money_partners', category: 'money', group: 'Money leaving the platform', host: 'partners', risk: 'money', label: 'Money partners', description: 'Exchanging points or credit through a money partner (a card issuer or treasury provider).', routes: ['POST /v1/public/wallet/:companyId/exchange'] }),
   ...([['price_print', 'Print prices', 'What each size of ad costs per bottle printed.'], ['price_scan', 'Price per scan', 'What a scan that loaded costs the advertiser.'], ['price_ar', 'Price per AR launch', 'What an AR launch that loaded costs.'], ['commission', 'Commission on sales', 'The share of sales traced to a bottle.'],
-    ['price_box_face', 'Box side price', 'What each side of a box costs.'], ['targeting_premium', 'Targeting premium', 'What each kind of targeting adds per engagement.'], ['custom_price', 'Custom bottle price', 'What people pay for their own designed bottle.']] as const)
+    ['price_box_face', 'Box side price', 'What each side of a box costs.'], ['targeting_premium', 'Targeting premium', 'What each kind of targeting adds per engagement.'], ['custom_price', 'Custom bottle price', 'What people pay for their own designed bottle.'],
+    ['price_change_ad', 'Fee for changing an ad', 'What changing a running ad costs, paid up front ($100 to start).'], ['price_extras', 'Costly extras', 'AI video clips and other per-use costs: their cost plus your markup, paid up front with the bottles.']] as const)
     .map(([id, label, description]) => sw({ id, category: 'money', group: 'Each fee', kind: 'setting', page: 'ads', label, description: `${description} Set it under Ads and prices; 0 means free.` })),
 
   // ======================= Transparency =======================
@@ -358,7 +371,8 @@ export const SWITCHES: Switch[] = [
     routes: ['GET /v1/ledger', 'GET /v1/events', 'GET /v1/wallet/check', 'POST /v1/wallet/correct', 'GET /v1/chain/seals/check', 'GET /v1/books/reconciliation', 'POST /v1/books/expenses', 'POST /v1/books/reinvestments', 'POST /v1/books/owner-payouts', 'GET /v1/books/surplus',
       'GET /v1/profit', 'POST /v1/profit/close', 'POST /v1/milestones/factories', 'GET /v1/public/companies/:companyId/profit-sharing'],
     jobs: ['wallet-seals', 'reconciliation', 'fingerprints'] }),
-  sw({ id: 'settle_in_flight', category: 'safety', parent: null, locked: 'Turning something off never strands money already moving: a person can always settle it.', label: 'Settling money already in flight', description: 'Gift-card purchases already made can be settled by the team even with gift cards off.', routes: ['GET /v1/wallet/gift-cards', 'POST /v1/wallet/gift-cards/:ref/settle'] }),
+  sw({ id: 'settle_in_flight', category: 'safety', parent: null, locked: 'Turning something off never strands money already moving: a person can always settle it.', label: 'Settling money already in flight', description: 'Gift-card purchases already made can be settled by the team even with gift cards off; ad payments a restart cut off are finished; a paid ad can always be stopped and what wasn’t printed paid back.',
+    routes: ['GET /v1/wallet/gift-cards', 'POST /v1/wallet/gift-cards/:ref/settle', 'POST /v1/ads/campaigns/:id/stop'], jobs: ['ad-payments'] }),
   sw({ id: 'ad_review', category: 'safety', parent: null, locked: 'A person checks every ad before it prints; an AI’s objection is shown to them.', label: 'Ad review', description: 'Each ad is checked on a sample label, at every size, on a box and as its scan page.',
     routes: ['GET /v1/review/campaigns', 'POST /v1/review/campaigns/:id', 'GET /v1/review/campaigns/:id/preview'] }),
   sw({ id: 'print_limits', category: 'safety', parent: null, locked: 'Machines’ print limits are a safety limit: stricter, never weaker.', label: 'Machines’ print limits', description: 'A stolen machine key can’t print (and bill) at scale.' }),

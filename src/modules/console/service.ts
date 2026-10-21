@@ -13,7 +13,7 @@ import { lotteryDefaults } from '../lottery/rules';
 import { quietTransparency } from '../transparency/service';
 import { preset } from '../data/policy';
 import { adCategories, applyChange, checkSettings, describeChange, editableKeys, fontChoices, personOnlyKeys, ratchetProblem, chainProblem, walletProblem, printLimitsChanged, type EditableKey } from './settings';
-import { defaultAdBilling } from '../ads/billing';
+import { adBilling, defaultAdBilling } from '../ads/billing';
 
 /** Where a settings change came from, and why (for the switches' history on the Features page). */
 export interface SaveNote { via: string; reason?: string }
@@ -92,7 +92,8 @@ export class ConsoleService {
   }
 
   async overview(companyId: string) {
-    const config = this.company(companyId);
+    // How advertisers pay is shown filled in (a company without the setting has exactly the defaults).
+    const config = { ...this.company(companyId), adBilling: adBilling(this.company(companyId)) };
     const version = await this.baseline(companyId);
     const charities = (await this.db.query<{ name: string }>(`select name from charities where company_id = $1 order by name`, [companyId])).rows.map((r) => r.name);
     return {

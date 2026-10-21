@@ -17,7 +17,7 @@ import { boxFaceQr, boxFaceSizes } from '../packs/boxRenderer';
 import type { AdAssistant, ChatMessage } from '../ai/contract';
 import { allowedSizes, applyPatch, draftTargeting, estimate, missing, missingLabels, themeFromPoster, type AdDraft } from './draft';
 import { withCompany } from '../ai/routing';
-import { adBilling, extraPrice, prepaidModel } from './billing';
+import { adBilling, extraPrice, feesOnWords, prepaidModel } from './billing';
 import type { PrepaidService, Quote } from './prepaid';
 
 export class AdsError extends Error {
@@ -91,7 +91,7 @@ export class AdsService {
       id: r.id, status: r.status, campaignId: r.campaignId, updatedAt: r.updatedAt,
       draft: { ...rest, poster: poster ? { ...poster, image: poster.image ? { role: poster.image.role, attached: true } : undefined } : undefined },
       messages: r.messages, missing: left.map((m) => ({ id: m, label: missingLabels[m] })), ready: left.length === 0,
-      estimate: estimate(r.draft, company, this.maxFactor(company.id), r.campaignId ? this.platform.campaigns.get(r.campaignId) : undefined), assistant: this.assistant.name,
+      estimate: estimate(r.draft, company, this.maxFactor(company.id), r.campaignId ? this.platform.campaigns.get(r.campaignId) : undefined, this.platform.featureOn), assistant: this.assistant.name,
       payment: this.paymentFor(r),
     };
   }
@@ -108,6 +108,7 @@ export class AdsService {
     if (!prepaidModel(company) || !this.prepaid) return null;
     const live = r.campaignId ? this.platform.campaigns.get(r.campaignId) : undefined;
     if (live?.prepaid) return { kind: 'change', feeCents: adBilling(company).changeFeeCents };
+    if (this.platform.featureOn && !this.platform.featureOn(r.companyId, 'prepaid_ads')) return { kind: 'bottles', quote: null, problem: `${company.name} isn’t taking payments for ads right now, so this ad can’t be submitted yet.` };
     const d = r.draft;
     if (d.buy?.type !== 'guaranteed') return { kind: 'bottles', quote: null, problem: 'Say how many bottles (at least 100). Ads here are paid up front.' };
     try { return { kind: 'bottles', quote: this.prepaid.quote(r.companyId, { bottles: d.buy.prints }, d.sizes), problem: null }; }
@@ -211,7 +212,7 @@ export class AdsService {
     const b = adBilling(company);
     return {
       minBottles: 100, changeFeeCents: b.changeFeeCents, included: 'AR, video and scans are included at every size',
-      feesOn: [b.fees.scan.on ? `${b.fees.scan.cents}¢ per scan` : '', b.fees.arLaunch.on ? `${b.fees.arLaunch.cents}¢ per AR launch` : '', b.fees.boxFace.on ? `${company.prices.perBoxFace}¢ per box side` : '', b.fees.commission.on ? `${b.fees.commission.percent}% of sales` : ''].filter(Boolean),
+      feesOn: feesOnWords(company, this.platform.featureOn),
       extras: Object.entries(b.extras.perUse).map(([id, x]) => ({ id, label: x.label, perUseCents: extraPrice(company, id)! })),
     };
   }
@@ -466,6 +467,15 @@ export class AdsService {
       const day = days.get(r.day);
       if (day) { add(day, r); add(period, r); }
     }
+    // Sales with no commission line (paid up front, commission off): counted from the sales themselves, net of refunds.
+    const dayIn = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' });
+    for (const s of this.platform.ledger.salesWithoutCommission(input.companyId, input.advertiserId)) {
+      const open = s.refundedCents < s.amountCents ? 1 : 0, cents = Math.max(0, s.amountCents - s.refundedCents);
+      const day = days.get(dayIn.format(s.at));
+      const ts = [total, byCampaign.get(s.campaignId) ?? blank(), ...(day ? [day, period] : [])];
+      byCampaign.set(s.campaignId, ts[1]!);
+      for (const t of ts) { t.sales += open; t.salesCents += cents; }
+    }
     for (const e of engaged) {
       const t = byCampaign.get(e.campaign_id) ?? blank();
       byCampaign.set(e.campaign_id, t);
@@ -486,7 +496,7 @@ export class AdsService {
       }));
     const adv = await this.advertiser(input.companyId, input.advertiserId);
     const billing = prepaidModel(company) ? { model: 'prepaid' as const, ...this.prepaidTerms(company.id), orders: this.prepaid ? await this.prepaid.orders(input.companyId, input.advertiserId) : [] } : { model: 'billed_after' as const };
-    return { advertiser: adv, days: input.days, total, period, daily: [...days.entries()].map(([day, t]) => ({ day, ...t })), campaigns, drafts: await this.listDrafts(input.companyId, input.advertiserId), prices: estimate({}, company, this.maxFactor(company.id)), billing };
+    return { advertiser: adv, days: input.days, total, period, daily: [...days.entries()].map(([day, t]) => ({ day, ...t })), campaigns, drafts: await this.listDrafts(input.companyId, input.advertiserId), prices: estimate({}, company, this.maxFactor(company.id), undefined, this.platform.featureOn), billing };
   }
 
   // ---------- content review (the company) ----------

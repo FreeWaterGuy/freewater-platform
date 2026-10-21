@@ -6,9 +6,13 @@ import { createPgliteClient } from '../src/db/pglite';
 import type { SqlClient } from '../src/db/client';
 import type { TestOutbox } from '../src/adapters/messaging/contract';
 import { createPlatform } from '../src/setup';
-import { bottle16oz, boxes, freewater, locations, peakSpring, sampleCampaigns } from '../src/demo/seed';
+import { bottle16oz, boxes, freewater as paidUpFront, locations, peakSpring, sampleCampaigns } from '../src/demo/seed';
 import { AmbiguousRunError } from '../src/modules/packs/service';
 import { structuralTier } from '../src/modules/games/catalog';
+import { billedAfter as billedAfterSetting } from '../src/modules/ads/billing';
+// The sample ads print here without paying first: FreeWater's settings billing afterwards (paying up front, where
+// only paid bottles print, is tested in prepaid.test.ts).
+const freewater: typeof paidUpFront = { ...paidUpFront, adBilling: billedAfterSetting() };
 
 // Second review: reversals in the open books, the packing check by hand, the route's current run, and picks that
 // may come true.

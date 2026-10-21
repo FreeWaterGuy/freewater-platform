@@ -11,7 +11,8 @@ describe('the data environment', () => {
   let db: SqlClient, app: App, server: FastifyInstance, key: string;
   beforeAll(async () => {
     db = await createPgliteClient();
-    app = await createApp({ db, assumePlace: { country: 'US', state: 'AL' }, seedDemo: true, seed: 5 });
+    // A scan earns money here (billing afterwards), so it gives more to the chosen cause.
+    app = await createApp({ db, assumePlace: { country: 'US', state: 'AL' }, seedDemo: true, demoBilling: 'billed_after', seed: 5 });
     key = app.demoKeys!['freewater-admin']!;
     server = await buildServer(app);
   });

@@ -158,7 +158,9 @@ describe('the studio, as a brand uses it', () => {
     const got = (await call('GET', `/v1/ads/drafts/${draft.id}`)).body;
     expect(got.missing ?? []).toEqual([]);
     {
-      const sub = await call('POST', `/v1/ads/drafts/${draft.id}/submit`, { approved: true });
+      // Paid up front at the total shown (Joe's has a card on file), then in review.
+      const quote = (await call('POST', `/v1/ads/drafts/${draft.id}/quote`, {})).body;
+      const sub = await call('POST', `/v1/ads/drafts/${draft.id}/submit`, { approved: true, pay: { share: quote.share, expectedTotalCents: quote.totalCents } });
       expect(sub.status).toBe(201);
       const c = app.platform.campaigns.get(sub.body.campaignId)!;
       expect(c.creativeRef?.kind).toBe('studio');

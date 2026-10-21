@@ -41,7 +41,8 @@ async function customOrder(token: string, orderId: string, svg: string, experien
 
 beforeAll(async () => {
   db = await createPgliteClient();
-  app = await createApp({ db, seedDemo: true, seed: 2, clock });
+  // Invoices for what printed and scanned: billing afterwards (paying up front is tested in prepaid.test.ts).
+  app = await createApp({ db, seedDemo: true, demoBilling: 'billed_after', seed: 2, clock });
   keys = app.demoKeys!;
   outbox = app.messenger as TestOutbox;
   server = await buildServer(app);

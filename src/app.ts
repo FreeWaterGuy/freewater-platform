@@ -33,7 +33,7 @@ import type { DesignAssistant } from './modules/ai/designContract';
 import { DeliveryService } from './modules/delivery/service';
 import { CreditService } from './modules/ads/credit';
 import { PrepaidService } from './modules/ads/prepaid';
-import { prepaidModel } from './modules/ads/billing';
+import { adBilling, billedAfter, prepaidModel } from './modules/ads/billing';
 import { SimpleRoutePlanner, type RoutePlanner } from './modules/delivery/planner';
 import { TestGeocoder, type Geocoder } from './adapters/geocoding/contract';
 import { OpsService } from './modules/ops/service';
@@ -122,6 +122,12 @@ export interface AppOptions {
   /** Which areas are switched off (src/runtime/features.ts). Default: read FW_FEATURES and FW_FEATURES_OFF. */
   features?: Features;
   seedDemo?: boolean; // load FreeWater's sample catalog and print demo API keys when the database is empty
+  /**
+   * How the sample FreeWater advertisers pay when the demo is seeded: 'prepaid' (FreeWater's way: their sample ads are
+   * paid for with the test card) or 'billed_after' (the older model a company can choose: the auction, invoices and
+   * credit limits). Only read when the demo is seeded into an empty database.
+   */
+  demoBilling?: 'prepaid' | 'billed_after';
   clock?: () => Date;
   seed?: number;
   messenger?: Messenger; // defaults to the test outbox (sends nothing)
@@ -187,7 +193,7 @@ export async function createApp(opts: AppOptions) {
   let demoKeys: Record<string, string> | undefined;
   const empty = Number((await db.query<{ n: string }>(`select count(*)::int as n from companies`)).rows[0]?.n ?? 0) === 0;
   if (empty && opts.seedDemo) {
-    await saveCatalog(db, { companies: [freewater, peakSpring], products, boxes, locations, campaigns: sampleCampaigns() });
+    await saveCatalog(db, { companies: [opts.demoBilling === 'billed_after' ? { ...freewater, adBilling: billedAfter() } : freewater, peakSpring], products, boxes, locations, campaigns: sampleCampaigns() });
     demoKeys = {};
     const make = async (label: string, companyId: string, scopes: Scope[], advertiserId?: string, locationId?: string) => {
       demoKeys![label] = (await createApiKey(db, { companyId, name: label, scopes, advertiserId, locationId })).key;
@@ -360,15 +366,19 @@ export async function createApp(opts: AppOptions) {
   ads.beforeLive = (c) => prepaid.beforeLive(c);
   platform.claimPrepaid = (companyId, ids) => prepaid.claim(companyId, ids);
   await prepaid.restore();
-  // The demo's made-up advertisers have paid for their sample ads (the test card, no real money), so they print.
-  if (demoKeys) for (const c of sampleCampaigns().filter((x) => !x.isHouse && x.buy.type === 'guaranteed')) {
+  // The demo's made-up advertisers have paid for their sample ads (the test card, no real money), so they print: a set
+  // number of bottles as the sample says, or 2,000 for a sample written as a bid, and five AI video clips each (a
+  // costly extra, paid up front). Ads in a blocked category, or switched off in the sample, stay unpaid.
+  if (demoKeys) for (const c of sampleCampaigns().filter((x) => !x.isHouse && x.active !== false)) {
     const live = platform.campaigns.get(c.id);
-    if (!live || live.prepaid || !prepaidModel(platform.companies.get(c.companyId)!)) continue;
+    const company = platform.companies.get(c.companyId)!;
+    if (!live || live.prepaid || !prepaidModel(company) || company.adRules.blockedCategories.includes(c.category)) continue;
     try {
       await payments.addMethod(c.companyId, 'advertiser', c.advertiserId, 'tok_visa');
       const share = [...c.sizes].sort((a, b) => a - b)[Math.floor((c.sizes.length - 1) / 2)]!;
-      const quote = prepaid.quote(c.companyId, { bottles: c.buy.type === 'guaranteed' ? c.buy.remainingPrints : 0, share }, c.sizes);
-      await prepaid.payBottles({ companyId: c.companyId, advertiserId: c.advertiserId, campaignId: c.id, quote: { bottles: quote.bottles, share }, expectedTotalCents: quote.totalCents, sizes: c.sizes });
+      const extras: Record<string, number> = adBilling(company).extras.perUse.aiVideoClip ? { aiVideoClip: 5 } : {};
+      const quote = prepaid.quote(c.companyId, { bottles: c.buy.type === 'guaranteed' ? c.buy.remainingPrints : 2_000, share, extras }, c.sizes);
+      await prepaid.payBottles({ companyId: c.companyId, advertiserId: c.advertiserId, campaignId: c.id, quote: { bottles: quote.bottles, share, extras }, expectedTotalCents: quote.totalCents, sizes: c.sizes });
     } catch { /* a provider that doesn't know the test card: the sample ad stays unpaid */ }
   }
 
@@ -482,6 +492,7 @@ export async function createApp(opts: AppOptions) {
   await companyFeatures.load();
   const featureOn = (companyId: string, id: string) => companyFeatures.on(companyId, id);
   platform.featureOn = featureOn;
+  platform.ledger.featureOn = featureOn;
   host.pluginOn = (companyId, pluginId) => companyFeatures.pluginOn(companyId, pluginId);
   aiRouting.useOn = featureOn;
   videos.featureOn = featureOn;

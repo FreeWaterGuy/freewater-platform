@@ -682,6 +682,12 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 364 | `GET /v1/console/features/history` | admin | no | team only (no advertiser/machine key) | OK (append-only log) |
 | 365 | `GET /v1/public/companies/:companyId/features` | public | — | — | OK (public by design, only when the company turned on "Publish our feature list"; on/off per switch, no settings or numbers) |
 | 366 | `POST /v1/studio/export` | campaigns | no | advertiser only | OK (a print-ready SVG of the advertiser's own design; only its own photos and logo) |
+| 367 | `POST /v1/ads/drafts/:id/quote` | campaigns | no | the draft's own advertiser (a company key is refused) | OK (the price is worked out on the server from the company's own prices; nothing is charged) |
+| 368 | `POST /v1/ads/campaigns/:id/quote` | campaigns | no | the campaign's own advertiser, or the company's staff | OK (nothing is charged) |
+| 369 | `POST /v1/ads/campaigns/:id/pay` | campaigns | no | the campaign's own advertiser, or the company's staff | OK (charges the advertiser's own card at the server's total, only if it equals the total the caller saw; one order per ad and per draft, a DB rule) |
+| 370 | `POST /v1/ads/campaigns/:id/stop` | [invoices, admin] | yes | owner or finance, signed in with the second step (an approval route); never an API or advertiser key | OK (one refund per ad, a DB rule; refused while bottles with it are printing) |
+| 371 | `GET /v1/ads/billing` | campaigns | no | the caller's own advertiser | OK (only its own orders) |
+| 372 | `POST /v1/ads/fees/charge` | invoices | no | the company's staff (no advertiser or machine key) | OK (charges only fees a person switched on, each advertiser's own card) |
 
 ---
 

@@ -116,6 +116,19 @@ the card, once, and the books record it. While bottles with the ad are printing 
 **Changing these settings** is a money switch: a person signed in, with the second step. Paying up front needs flat
 pricing; turning it off brings back billing after the fact, with credit (below).
 
+**On the Features page** (*Money and payments → How advertisers pay*), each part is a switch for that company:
+*Advertisers pay up front* (`prepaid_ads`), *Bill advertisers afterwards (credit)* (`billed_after`, the setting
+`requirePrepay` turned off), *Bidding* (`bidding`, pricing `auction`; needs billing afterwards), and *Fee per scan*,
+*Fee per AR launch*, *Fee per box side*, *Commission on sales* (each fee's `on`). The linked ones are the setting
+itself, so the page and *Ads and prices → How advertisers pay* always agree. Turning *Advertisers pay up front* off
+turns its fees off with it; nothing can be paid for, so no new advertiser's ad prints, while ads already paid keep
+printing until their bottles are out. Stopping an ad and paying it back, and finishing payments a restart cut off,
+always work (*Settling money already in flight*). A new white-label company starts with all of these off (P13): its
+own owners turn them on, with the second step. FreeWater: paying up front on, everything else off.
+
+**Why daily, not weekly:** fees are charged in one batch a day so a card that stops working pauses the ads within a
+day, and an advertiser never runs up more than a day of fees unpaid. Each day's batch is one charge per advertiser.
+
 ### Credit for advertisers (only when paying up front is off)
 
 With paying up front turned off, advertisers are billed after the fact: each invoice covers what already printed (and
