@@ -278,6 +278,13 @@
     try { await api('POST', `/v1/ops/runs/${encodeURIComponent(r.id)}/stops/${s.stop}/deliver-without-photo`, { reason: reason.trim() }); toast('Marked delivered, with your reason.'); } catch (x) { toast(x.message); }
     render();
   }
+  /** A run that will never be finished (a night long gone, a van that didn't go): its boxes go back, with why. */
+  async function closeOut(r) {
+    const reason = window.prompt(`Close out ${r.areaName ? `${r.areaName} · van ${r.van}` : r.routeName}? Stops not delivered are marked not delivered and their boxes go back. Why? (kept on the record)`);
+    if (!reason || reason.trim().length < 5) return;
+    try { const x = await api('POST', `/v1/ops/runs/${encodeURIComponent(r.id)}/close`, { reason: reason.trim() }); toast(`Closed out: ${x.closedOut.length} box(es) go back.`); } catch (x) { toast(x.message); }
+    render();
+  }
   async function routesPage() {
     const q = new URLSearchParams(S.path.split('?')[1] || '');
     const date = q.get('date') || (await api('GET', '/v1/ops/overview')).date;
@@ -291,7 +298,7 @@
         const at = stages.indexOf(r.status);
         return h('section', { class: 'run' },
           h('div', { class: 'run-head' }, h('div', {}, h('h3', { text: r.areaName ? `${r.areaName} · van ${r.van} · ${r.routeId.replace(/^route-/, 'Route ')}` : `${r.routeName} · ${r.routeId.replace(/^route-/, 'Route ')}` }), h('div', { style: 'color:var(--muted);font-size:14px', text: `${r.counts.stops} stops · ${r.counts.bottles} bottles · about ${r.distanceKm} km, ${r.minutes} min · from ${r.depot?.name ?? 'the depot'}` })),
-            h('div', { class: 'toolbar' }, r.status === 'packing' ? h('button', { class: 'btn small', type: 'button', onclick: async () => { try { const x = await api('POST', `/v1/ops/runs/${r.id}/pack-check`); toast(x.problems.length ? `${x.problems.length} box(es) need attention` : 'Every box checked and sealed'); } catch (e) { toast(e.message); } render(); } }, 'Run packing check') : null, r.driverId ? h('span', { class: 'pill dark', text: 'Driver assigned' }) : null)),
+            h('div', { class: 'toolbar' }, r.status === 'packing' ? h('button', { class: 'btn small', type: 'button', onclick: async () => { try { const x = await api('POST', `/v1/ops/runs/${r.id}/pack-check`); toast(x.problems.length ? `${x.problems.length} box(es) need attention` : 'Every box checked and sealed'); } catch (e) { toast(e.message); } render(); } }, 'Run packing check') : null, r.driverId ? h('span', { class: 'pill dark', text: 'Driver assigned' }) : null, r.status !== 'done' ? h('button', { class: 'btn secondary small', type: 'button', onclick: () => closeOut(r) }, 'Close out…') : null)),
           h('div', { class: 'steps' }, stages.map((s, i) => h('span', { class: i < at ? 'done' : i === at ? 'on' : '', text: stageName[s] }))),
           h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Stop', 'Address', 'Box', 'Pack', 'Status', ''].map((x) => h('th', { text: x })))),
             h('tbody', {}, r.stops.map((s) => h('tr', {}, h('td', {}, h('b', { text: s.stopCode })), h('td', { text: s.address }), h('td', { text: `#${s.boxNumber ?? '—'}` }), h('td', { text: `${s.packSize}` }),

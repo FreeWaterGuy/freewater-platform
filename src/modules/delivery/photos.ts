@@ -120,24 +120,34 @@ export class DropPhotoService {
   }
 
   /**
-   * Delete the pictures kept longer than each company's keep. Safe to run again (a deleted picture is skipped); a
-   * picture whose file can't be removed now is left for the next run.
+   * Delete the pictures kept longer than each company's keep, oldest first. Safe to run again (a deleted picture is
+   * skipped). A picture whose file can't be removed now keeps its record, so the next run finds it again; and the run
+   * then fails, so the job's alert says photos of people's homes are being kept past their time.
    */
   async purge(): Promise<number> {
-    let n = 0;
+    let n = 0, stuck = 0;
+    let firstError = '';
+    const gone = async (key: string | null) => {
+      if (!key || !this.blobs) return true;
+      try { await this.blobs.delete(key); return true; } catch (e) { stuck++; firstError ||= String((e as Error)?.message ?? e); return false; }
+    };
     for (const c of this.platform.companies.values()) {
       const before = new Date(this.clock().getTime() - this.keepDays(c.id) * 86_400_000).toISOString();
-      const rows = (await this.db.query<any>(`select id, blob_key from drop_photos where company_id = $1 and deleted_at is null and taken_at < $2 limit 5000`, [c.id, before])).rows;
+      const rows = (await this.db.query<any>(`select id, blob_key from drop_photos where company_id = $1 and deleted_at is null and taken_at < $2 order by taken_at limit 5000`, [c.id, before])).rows;
       for (const r of rows) {
-        if (r.blob_key && this.blobs) { try { await this.blobs.delete(r.blob_key); } catch { continue; } }
+        if (!(await gone(r.blob_key))) continue;
         const done = await this.db.query(`update drop_photos set bytes = null, blob_key = null, deleted_at = $2 where id = $1 and deleted_at is null`, [r.id, this.clock().toISOString()]);
         n += Number((done as any).rowCount ?? 1);
       }
-      // Photos taken before 065 were kept with the uploads (assets): the same keep applies to them.
-      const old = (await this.db.query<any>(`delete from assets where company_id = $1 and name = 'delivery-photo' and created_at < $2 returning blob_key`, [c.id, before])).rows;
-      for (const r of old) if (r.blob_key && this.blobs) await this.blobs.delete(r.blob_key).catch(() => {});
-      n += old.length;
+      // Photos taken before 065 were kept with the uploads (assets): the same keep applies to them. The file goes
+      // first, then its record, so a file that can't be removed now is never left behind with nothing pointing at it.
+      const old = (await this.db.query<any>(`select id, blob_key from assets where company_id = $1 and name = 'delivery-photo' and created_at < $2 order by created_at limit 5000`, [c.id, before])).rows;
+      for (const r of old) {
+        if (!(await gone(r.blob_key))) continue;
+        n += Number((await this.db.query(`delete from assets where id = $1`, [r.id])).rowCount ?? 1);
+      }
     }
+    if (stuck) throw new Error(`${stuck} door photo${stuck === 1 ? '' : 's'} past ${stuck === 1 ? 'its' : 'their'} keep couldn't be deleted from file storage (${firstError}); ${n} deleted. They're tried again on the next run. Check the file storage settings (FILE_STORAGE) and docs/RUNBOOKS.md ("Door photos").`);
     return n;
   }
 }

@@ -219,6 +219,24 @@
       h('div', { class: 'reasons' }, reasons.map(([r, label]) => h('button', { type: 'button', onclick: () => skipHouse(s, r, note.value.trim()) }, label))),
       dock(h('button', { class: 'btn secondary', type: 'button', onclick: nextStop }, 'Back to this stop')));
   }
+  /**
+   * A phone's photo is 3 to 15 MB, and the server keeps at most 1600 pixels a side (and refuses more than 8 MB). Shrunk
+   * here first to about 300 KB of JPEG, it sends in a second on a weak signal at the door, and a photo from a big
+   * camera is never refused. If the phone can't shrink it, the photo is sent as it is.
+   */
+  async function shrink(f) {
+    try {
+      if (fixture || !window.createImageBitmap) return f;
+      const img = await createImageBitmap(f, { imageOrientation: 'from-image' });
+      const k = Math.min(1, 1600 / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(img.width * k)); c.height = Math.max(1, Math.round(img.height * k));
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      img.close?.();
+      const b = await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.85));
+      return b && b.size ? b : f;
+    } catch { return f; }
+  }
   function here() {
     if (fixture) return Promise.resolve(fixture.here?.() ?? null);
     return new Promise((res) => {
@@ -261,7 +279,7 @@
       const f = cam.files[0]; if (!f) return;
       photoOk = false;
       photoBtn.replaceChildren(h('img', { src: URL.createObjectURL(f), alt: 'Photo of the box at the door' }));
-      try { await api('POST', `/v1/driver/photos?packId=${encodeURIComponent(packId)}`, null, f); photoOk = true; } catch (x) { toast(x.message); photoBtn.replaceChildren(document.createTextNode('That photo didn’t send. Tap to take it again.')); }
+      try { await api('POST', `/v1/driver/photos?packId=${encodeURIComponent(packId)}`, null, await shrink(f)); photoOk = true; } catch (x) { toast(x.message); photoBtn.replaceChildren(document.createTextNode('That photo didn’t send. Tap to take it again.')); }
     } });
     screen(h('div', { class: 'dhead' }, h('div', { text: `Stop ${s.stop} · ${s.address.split(',')[0]}` })),
       h('div', { class: 'verdict ok' }, h('div', { class: 'mark', text: '✓' }), h('h2', { text: 'Right box' }), whereBox),

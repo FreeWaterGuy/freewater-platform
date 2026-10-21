@@ -1,4 +1,5 @@
 import type { SqlClient } from '../../db/client';
+import { retryConflicts } from '../../db/conflicts';
 import type { Platform } from '../../platform';
 import { SHARES, type Campaign, type PrepaidBottles, type Share } from '../../core/types';
 import { newId } from '../../core/ids';
@@ -255,7 +256,12 @@ export class PrepaidService {
     // An ad is on a bottle at most once, so one statement claims one bottle from each (all or none: a refusal rolls
     // the others back).
     const ids = [...new Set(campaignIds)];
-    await this.db.transaction(async (tx) => {
+    // On a busy night the write queue is marking earlier bottles of the same ads printed, in batches. Waiting on its
+    // rows while holding some of ours is how a deadlock starts (each costs a second before Postgres breaks it), so the
+    // rows are taken all at once without waiting (NOWAIT, in a fixed order); if the queue holds one, everything is let
+    // go and tried again a moment later.
+    await retryConflicts(() => this.db.transaction(async (tx) => {
+      await tx.query(`select campaign_id from ad_prepaid where campaign_id = any($1::text[]) and company_id = $2 order by campaign_id for update nowait`, [ids, companyId]);
       const got = new Set((await tx.query<any>(`update ad_prepaid set held = held + 1 where campaign_id = any($1::text[]) and company_id = $2 and stopped_at is null and printed + held + refunded < paid returning campaign_id`, [ids, companyId])).rows.map((r) => r.campaign_id as string));
       // An ad bought on delivery routes prints only on a spot reserved for it, and each spot once: open → held here, in
       // the same step, so two packs (or two servers) can never print the same spot.
@@ -263,7 +269,7 @@ export class PrepaidService {
       const route = new Set((await tx.query<any>(`select campaign_id from route_buys where campaign_id = any($1::text[])`, [ids])).rows.map((r) => r.campaign_id as string));
       refused = ids.filter((id) => !got.has(id) || (route.has(id) && !spots.has(id)));
       if (refused.length) throw new Refused();
-    }).catch((e) => { if (!(e instanceof Refused)) throw e; });
+    }), 40).catch((e) => { if (!(e instanceof Refused)) throw e; });
     for (const id of refused) {
       this.alert?.(`prepaid-claim:${id}`, `Ad ${id}: memory thought a paid bottle was left, the database didn't`, 'The bottle was printed without it. This happens if two servers run at once or the database was changed by hand; check the daily reconciliation (prepaid bottles).');
       const c = this.platform.campaigns.get(id);

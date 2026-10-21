@@ -2344,6 +2344,26 @@ create table ad_ai_review_changes (
 create trigger ad_ai_review_changes_append_only before update or delete on ad_ai_review_changes for each row execute function forbid_change();
 `,
   },
+  {
+    id: '070_drop_photos_move',
+    sql: `
+-- Door photos kept in the database (no FILE_STORAGE at first) can be moved to file storage (npm run files:move): the
+-- bytes go and a blob key comes, once, nothing else changes. Everything else stays as 065 had it: a picture deleted
+-- stays deleted, the row is never deleted, and a photo never moves to another pack or company.
+create or replace function drop_photos_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then perform fw_refuse('drop_photos', 'rows are kept; only the picture is deleted.'); end if;
+  if old.deleted_at is null and new.deleted_at is null and old.bytes is not null and old.blob_key is null and new.bytes is null and new.blob_key is not null
+     and fw_only_changed(to_jsonb(old), to_jsonb(new), array['bytes', 'blob_key']) then
+    return new; -- moved to file storage
+  end if;
+  if old.deleted_at is not null or not fw_only_changed(to_jsonb(old), to_jsonb(new), array['bytes', 'blob_key', 'deleted_at']) or new.deleted_at is null then
+    perform fw_refuse('drop_photos', 'only the picture can be deleted, once.');
+  end if;
+  return new;
+end $$;
+`,
+  },
 ];
 
 /** Runs every migration not yet run (or, for tests that start from an older schema, those in `list`). */

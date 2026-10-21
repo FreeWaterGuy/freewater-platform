@@ -14,6 +14,7 @@ import { svgCreative } from '../modules/print/svgCreative';
 import { posterCreative } from '../modules/creative/poster';
 import type { SqlClient } from './client';
 import { LeaseLostError } from './leaseChecked';
+import { isConflict } from './conflicts';
 
 /**
  * Writes every change to the database, in the order it happened, and never drops one.
@@ -49,6 +50,7 @@ const WATERMARK = `insert into persistence_watermark (id, epoch, seq, at) values
 /** What a write checks inside its transaction: is the lease still this server's (see InstanceLease.stillHeld)? */
 export interface WriteLease { stillHeld(tx: SqlClient): Promise<boolean>; lost(why: string): void }
 class LeaseLapsed extends Error { constructor() { super('this server no longer holds the lease'); } }
+
 // The same, but never moving this server's own mark backwards (a batch may have written meanwhile).
 const CLAIM = `insert into persistence_watermark (id, epoch, seq, at) values (1, $1, $2, now()) on conflict (id) do update set epoch = excluded.epoch, seq = case when persistence_watermark.epoch = excluded.epoch then greatest(persistence_watermark.seq, excluded.seq) else excluded.seq end, at = excluded.at`;
 
@@ -69,6 +71,7 @@ export class SqlPersistence implements Persistence {
   private skipRequest: { seq: number; done: (r: { skipped: string | null; reason?: string }) => void } | null = null;
   private wakeRetry: (() => void) | null = null;
   private lease: WriteLease | null = null;
+  private conflicts = 0; // deadlocks lost in a row, retried as they are
   stats = { written: 0, batches: 0, retries: 0, skipped: 0 };
 
   constructor(private db: SqlClient, private opts: { epoch?: string; maxBatch?: number; retryDelayMs?: number; maxRetryDelayMs?: number; pauseAfterMs?: number; flushTimeoutMs?: number; spoolFile?: string; onProblem?: (p: PersistenceProblem) => void; onRecovered?: () => void } = {}) {
@@ -121,9 +124,14 @@ export class SqlPersistence implements Persistence {
             if (mark) this.claimed = true;
           } catch (e) {
             if (e instanceof LeaseLapsed) { this.leaseLapsed(); break; }
+            // Lost a deadlock (or a serialization conflict) against another transaction: nothing is wrong with the
+            // database or the changes, so the whole batch is simply tried again at once. Only if it keeps happening is
+            // it treated as the database refusing (one at a time, the pause, the alert).
+            if (isConflict(e) && this.conflicts < 8) { this.conflicts++; this.stats.retries++; await new Promise((r) => setTimeout(r, 5 + Math.random() * 20 * this.conflicts)); continue; }
             await this.failed(e, batch.length);
             continue;
           }
+          this.conflicts = 0;
           // Remove by number, not position: nothing else may have moved in the meantime, but be sure.
           while (this.pending.length && this.pending[0]!.seq <= last) this.pending.shift();
           this.written = last;
