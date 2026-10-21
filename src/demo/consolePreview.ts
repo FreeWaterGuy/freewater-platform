@@ -111,11 +111,26 @@ const rec = {
   })(),
   secondStepStart: await call('POST', '/v1/me/second-step/start', token),
   intake: await call('POST', '/v1/team/intake', token, { message: 'We gave 500 bottles at SXSW today in Austin for the WeFunder campaign' }),
+  // The Features page: every switch, a few changes in its history, and each starting point's preview.
+  ...(await (async () => {
+    await call('POST', '/v1/console/features', token, { changes: { box_back: false }, reason: 'Keeping the back of the box for our own message this month' });
+    await call('POST', '/v1/console/features', token, { changes: { studio_library: false } });
+    await call('POST', '/v1/console/features', token, { changes: { studio_library: true }, reason: 'Back on: designers asked for it' });
+    const features = await call('GET', '/v1/console/features', token);
+    const featurePlans = Object.fromEntries(await Promise.all(features.startingPoints.map(async (p: any) => [p.id, await call('POST', '/v1/console/features/preview', token, { startingPoint: p.id })])));
+    return { features, featurePlans, featureHistory: await call('GET', '/v1/console/features/history', token) };
+  })()),
   profit: await (async () => { await call('POST', '/v1/milestones/factories', token, { name: 'Austin micro factory 1', city: 'Austin', openedOn: new Date(end - 30 * 86_400_000).toISOString().slice(0, 10) }); return call('GET', '/v1/profit', token); })(),
 };
 await server.close();
 
-const bundle = await build({ entryPoints: ['src/demo/consolePreviewEntry.ts'], bundle: true, format: 'iife', globalName: 'FWLocal', platform: 'browser', minify: true, write: false, define: { 'process.env.NODE_ENV': '"production"' } });
+// The settings rules reach code that only runs on the server (ids from node:crypto, photos through sharp); the page
+// never calls it, so in the browser bundle those modules are a harmless stand-in (randomUUID uses the browser's own).
+const serverOnly = { name: 'server-only', setup(b: any) {
+  b.onResolve({ filter: /^(node:.*|sharp|detect-libc)$/ }, (a: any) => ({ path: a.path, namespace: 'server-only' }));
+  b.onLoad({ filter: /.*/, namespace: 'server-only' }, () => ({ loader: 'js', contents: 'const f = function () { return p; }; const p = new Proxy(f, { get: (_t, k) => (k === "__esModule" ? false : k === "randomUUID" ? () => globalThis.crypto.randomUUID() : p), apply: () => p }); module.exports = p;' }));
+} };
+const bundle = await build({ entryPoints: ['src/demo/consolePreviewEntry.ts'], bundle: true, format: 'iife', globalName: 'FWLocal', platform: 'browser', minify: true, write: false, define: { 'process.env.NODE_ENV': '"production"' }, plugins: [serverOnly] });
 const safe = (s: string) => s.replace(/<\/script/gi, '<\\/script').replace(/<!--/g, '<\\!--');
 const out = 'out/console-preview';
 mkdirSync(out, { recursive: true });

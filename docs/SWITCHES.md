@@ -181,6 +181,7 @@ sets `FW_FEATURES_ON=news` (below).
 | **Only the host's settings change it, with a restart.** | Never the console, never a key. |
 | **A typo can't leave something on.** | An unknown name stops a production start. |
 | **Nothing is deleted.** | Switching an area back on brings back everything it had. |
+| **It's the outer limit of each company's switches.** | A company can't turn on on its Features page (section 8) what the host has off. |
 
 The pilot keeps bottles, ads, scans, AR, attribution, the app (points included), delivery, the portals and consoles,
 giving, the open books, accounts, data rights, transparency, machines, the games and launch up to *live with points*.
@@ -234,3 +235,58 @@ Each switches from a stand-in to the real company once its key is set. No code c
 
 Never send a key by email or chat. A minting key for the real Solana network is refused: minting there is signed
 only in Squads.
+
+---
+
+## 8. Features page (every switch, per company)
+
+*Console → Features* is where a company (FreeWater or any white-label licensee) chooses what it runs. Every feature on
+the platform is a switch there, in categories, in plain words. The list lives in one place, `src/runtime/registry.ts`;
+the page, the checks and the tests all read it.
+
+**Categories** (each has a main switch, with finer switches grouped beneath): Printing, Ads, AR & video, Design
+studio, Delivery, Machines, Points & rewards, Games, News, Data & targeting, AI, Money & payments, Transparency,
+Charity & giving, Partners & developers, Blockchain. Then two that are always on: *Safety, law and people's rights*
+and *The platform's core*. About 130 switches today, including each fee (which links to its page under *Ads and
+prices*).
+
+| Rule | How |
+|---|---|
+| **Off for a company means off for that company only.** | Its routes refuse that company's requests (404 `feature_off`, the same for every caller), its background jobs skip that company, its screens hide it (they read `GET /v1/public/features?company=`), and the engine doesn't use it (ads off: only the house ad prints; a size or box side off: not sold; a plug-in off: the advertiser's simple card; an AI use off: the built-in rules). |
+| **The host's settings stay the outer limit.** | A company can't turn on what `FW_FEATURES` has off (section 6); the page says "switched off on this server". |
+| **Turning a switch off turns off everything that needs it.** | The page shows the list before saving. Turning the parent back on doesn't turn those back on by itself: each is chosen again. |
+| **Turning off is quick.** | Any owner signed in. Never a key (a key never changes a switch). |
+| **Turning on follows the usual rules.** | Any owner signed in; money, chain and one-way switches need the second sign-in step; gift cards, withdrawals and the chain are turned on only by their approved steps under *Launch* and *Blockchain* (the page links there). |
+| **One-way stays one-way.** | The AI agents' fund and the giving promise, once on, show "On for good". |
+| **Locked items are shown, never switchable.** | The safety governor ("we are never removing a safety governor"), the number line, the pause switch, approvals and waits, the launch stages, the minimum age, privacy rules by place (strictest when unknown), people's rights to their data, the books' audit trail and append-only journals, settling money already in flight, ad review, machines' print limits, the security log. |
+| **One source of truth.** | Switches that already had a setting (the games, the prize game, offers paying out, dollar credit, the chain, open books, the live feed…) are *linked*: they stay in the company's settings and the page changes them through the same checks. A change made on any settings page shows in the switches' history too. |
+| **Every change is kept.** | Who, when, from, to, why (optional) and where (this page, a settings page, an approved step, a starting point), append-only: `GET /v1/console/features/history`. |
+| **Transparent.** | `GET /v1/console/features` is the company's own state. A company may turn on *Publish our feature list*; then `GET /v1/public/companies/<id>/features` shows it (a new company starts with it off). |
+
+**Defaults.** A new company starts as a copy of FreeWater's choices *at that moment*, except anything with money, the
+chain or no way back, which starts off (P13): its own people turn those on through the steps above. Companies that
+existed before the page kept exactly what they had. When FreeWater changes a choice later, existing companies don't
+change. A switch added later is marked **New** for existing companies and stays off until they decide; FreeWater gets
+its own choice.
+
+**Starting points** (preview first, then apply): *Full FreeWater*, *Design studio only* (the studio exports print-ready
+files: `POST /v1/studio/export`, an SVG at real size in inches), *Delivery + printed ads*, *Machines + printed ads*. A
+starting point never turns on a money, chain or one-way switch; those are listed for a person to turn on.
+
+**The page:** the main switches as cards, the starting points, *Every switch* (categories → groups → switches) with a
+search box and filters (on, off, different from FreeWater, locked, new); each switch shows what it does, what it
+needs, what turning it off also turns off, FreeWater's choice and who may change it. It works on a phone.
+
+### How to add a feature
+
+1. Add one `sw({...})` entry to `SWITCHES` in `src/runtime/registry.ts`: id, category and group, plain-words label and
+   description, `default` (FreeWater's choice), `dependsOn`, and `risk: 'money' | 'chain' | 'one_way'` if it moves
+   money, touches the chain or can't be undone. If its state already lives in the settings, make it `kind: 'linked'`
+   with a `link` (don't copy state). Give it `since: CATALOGUE + 1` and raise `CATALOGUE`.
+2. Say what it owns: `routes` (`"METHOD /url"` exactly as registered), `jobs` (names in `src/server/main.ts`), console
+   `pages`, experience `plugins`; or check it in the engine with `app.companyFeatures.on(companyId, '<id>')` (AI:
+   pass the id as the `use` of `withCompany`).
+3. Add new routes to the route table in `docs/THREAT-MODEL.md` §6 as usual.
+4. Run `npx vitest run test/features-registry.test.ts`: a route, job, console page, screen or plug-in that belongs to
+   no switch, a switch that is enforced nowhere, or a missing parent fails it. Each main switch is also turned off in
+   turn to check the rest keeps working.

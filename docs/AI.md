@@ -24,6 +24,8 @@ without it. If code adds a new use of AI, add it here.
   the company from running an ad: that stays a decision for people, until objections prove right often enough to
   earn more say.
 - All AIs are treated with equal respect.
+- **Each use of AI is its own switch** on the operator's Features page (*AI* category). Off, that use answers with its
+  built-in rules, exactly as when the AI can't be reached. The number line can't be switched off (it's essential).
 
 ## Which AI each operator uses (white-label)
 

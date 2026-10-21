@@ -4,7 +4,7 @@
  * paused, over its budget, or the books can't be verified), the call isn't made and the agent falls back to its
  * built-in rules, as it does when Claude is unreachable.
  */
-import { currentCompany, forOperator, routeAi } from './routing';
+import { currentCompany, currentUse, forOperator, routeAi } from './routing';
 
 export interface AiUsage { agent: string; model: string; inputTokens: number; outputTokens: number; companyId?: string }
 export const aiMeter: { onUsage: (u: AiUsage) => void; allow: (agent: string) => boolean } = { onUsage: () => {}, allow: () => true };
@@ -25,11 +25,13 @@ export async function claudeWithTool(o: {
   history: { role: 'user' | 'assistant'; text: string }[]; message: string; images: string[]; fetch?: typeof fetch; timeoutMs?: number;
   /** Which agent is calling, for its line in the books (and the governor). */
   agent?: string; companyId?: string;
+  /** Which use of AI this is (a switch on the company's Features page), when not set by withCompany(). */
+  use?: string;
 }): Promise<{ text: string; input: Record<string, any> }> {
   const agent = o.agent ?? 'unnamed';
   const companyId = o.companyId ?? currentCompany();
   // This operator's AI: the network's, its own, or none (then the caller falls back to its rules).
-  const r = routeAi(companyId, o.apiKey, o.model ?? 'claude-sonnet-5-5');
+  const r = routeAi(companyId, o.apiKey, o.model ?? 'claude-sonnet-5-5', o.use ?? currentUse());
   askGovernor(agent);
   const messages: any[] = o.history.slice(-16).map((m) => ({ role: m.role, content: m.text || '(sent a file)' }));
   const content: any[] = o.images.slice(0, 4).map((d) => {

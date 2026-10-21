@@ -8,6 +8,9 @@ import { targetingPremium } from './modules/ads/targeting';
 import { AuctionStats, momentAt } from './modules/ads/auction';
 import { Ledger } from './modules/ledger/ledger';
 import type { RenderedLabel } from './modules/print/contract';
+import { houseOnlyAdEngine } from './modules/ads/engine';
+import { SHARES } from './core/types';
+import { SIZE_SWITCHES } from './runtime/registry';
 
 export interface OrderOptions {
   companyId: string;
@@ -72,6 +75,8 @@ export class Platform {
   unsold?: (req: { company: CompanyConfig; product: Product; location: Location; audience: import('./modules/ads/contract').PrintAudience | null; placements: Placement[]; random: () => number }) => Placement[];
   /** Which slots on a bottle use AR that follows the bottle, so its label gets the tracking strip there. Set at start-up. */
   arTracking?: (unit: Unit) => number[];
+  /** Is this switch on for this company (its Features page)? Set at start-up; without it everything is on. */
+  featureOn?: (companyId: string, id: string) => boolean;
 
   constructor(
     readonly registry: Registry,
@@ -102,6 +107,15 @@ export class Platform {
   }
 
   /** For frequency caps: how many bottles with each campaign this person already got today. */
+  /**
+   * Who a bottle is printed for, as far as this company's switches allow: without "Ads aimed at people" their interests
+   * and history aren't matched; without "Kinds of ads people never want" or the measurement panel, those aren't used.
+   */
+  private audienceFor(a: import('./modules/ads/contract').PrintAudience | null, on: (id: string) => boolean) {
+    if (!a) return null;
+    return { ...a, ...(on('targeting_people') ? {} : { interests: [], advertisersSeen: new Set<string>() }), ...(on('ad_preferences') ? {} : { avoid: [] }), ...(on('measurement') ? {} : { noAds: false }) };
+  }
+
   private withToday(a: import('./modules/ads/contract').PrintAudience | null, tz?: string) {
     if (!a) return null;
     const today = momentAt(this.bus.now(), tz ?? 'UTC').dayKey;
@@ -205,13 +219,18 @@ export class Platform {
 
     this.bus.publish('order.created', company.id, { orderId: opts.orderId, locationId: location.id, productId: product.id, kind, customerId: opts.custom?.customerId, packId: opts.packId }, opts.orderId);
 
-    // 1. Fill slots (custom units have no ads).
+    // 1. Fill slots (custom units have no ads). What the company switched off isn't used (its Features page): with ads
+    // off only its own house ad prints; ad sizes it turned off aren't cut; targeting it turned off isn't matched.
+    const on = (id: string) => !this.featureOn || this.featureOn(company.id, id);
+    const sizes = (product.sizes?.length ? product.sizes : SHARES).filter((s) => on(SIZE_SWITCHES[s] ?? ''));
+    const engine = on('ads') && sizes.length ? this.registry.adsFor(company) : houseOnlyAdEngine;
+    const audience = this.audienceFor(opts.audience ?? null, on);
     const fill: import('./modules/ads/contract').FillResult = opts.custom
       ? { layout: [1 as const], placements: [] }
-      : this.registry.adsFor(company).fill({ company, product, location, campaigns: [...this.campaigns.values()], random: this.random, frequency: opts.frequency, avoidSignatures: opts.avoidSignatures, audience: this.withToday(opts.audience ?? null, company.timezone), moment: momentAt(this.bus.now(), company.timezone ?? 'UTC'), stats: this.auctionStats });
+      : engine.fill({ company, product: sizes.length === (product.sizes?.length ? product.sizes : SHARES).length ? product : { ...product, sizes }, location, campaigns: on('bidding') ? [...this.campaigns.values()] : [...this.campaigns.values()].filter((c) => c.buy.type !== 'bid'), random: this.random, frequency: opts.frequency, avoidSignatures: opts.avoidSignatures, audience: this.withToday(audience, company.timezone), moment: momentAt(this.bus.now(), company.timezone ?? 'UTC'), stats: this.auctionStats });
     // Spots nobody bought: approved filler (the company's own messages, charity, advertisers' offered ads, news) before
-    // the generic house ad. Never billed.
-    if (!opts.custom && this.unsold) fill.placements = this.unsold({ company, product, location, audience: opts.audience ?? null, placements: fill.placements, random: this.random });
+    // the generic house ad. Never billed. Only where the company has fillers on (they need ads on).
+    if (!opts.custom && this.unsold && on('fillers')) fill.placements = this.unsold({ company, product, location, audience, placements: fill.placements, random: this.random });
     reserve(fill.placements, this.campaigns);
     this.persistCampaigns(fill.placements);
 
@@ -229,7 +248,7 @@ export class Platform {
       packId: opts.packId,
       createdAt: this.bus.now().toISOString(),
       ...(opts.consumerId ? { consumerId: opts.consumerId } : {}),
-      ...(opts.audience ? { intendedFor: opts.audience.personKey } : {}),
+      ...(audience && on('targeting_people') ? { intendedFor: audience.personKey } : {}),
       ...(opts.custom?.experienceConfig ? { experienceConfig: opts.custom.experienceConfig } : {}),
     };
     this.units.set(unit.id, unit);
@@ -239,7 +258,7 @@ export class Platform {
 
     // 2. Render.
     const t0 = performance.now();
-    const trackSlots = this.arTracking?.(unit) ?? [];
+    const trackSlots = on('ar_tracking') ? this.arTracking?.(unit) ?? [] : [];
     const label = await this.registry.rendererFor(company).render({ unit, product, company, campaigns: this.campaigns, customArt: opts.custom?.art, codes: this.codes, ...(trackSlots.length ? { tracking: true, trackSlots } : {}) });
     unit.status = 'rendered';
     this.keepLabel(label);

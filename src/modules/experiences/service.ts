@@ -176,7 +176,7 @@ export class ExperienceService {
       const out = await withCompany(r.companyId, async () => (c.personalize!.ai && !held ? this.personalizer : builtinPersonalizer).personalize({
         campaignId: c.id, advertiser: r.ownerName, category: c.category, facts, wantGreeting: false,
         options: [{ id: 'default', name: 'Standard', summary: summary(r.config) }, ...fitting.map((v) => ({ id: v.id, name: v.name, summary: `Meant for ${describeConditions(v.when)}. ${summary(v.experienceConfig)}` }))],
-      }));
+      }), 'ai_personalizer');
       choice = out.choice; by = out.by;
     }
     const v = fitting.find((x) => x.id === choice);

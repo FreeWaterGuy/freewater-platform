@@ -22,6 +22,30 @@
     me: R.me, config: clone(R.ov.config), version: R.ov.version, history: clone(R.history), versions: clone(R.versions),
     locations: clone(R.ov.locations), charities: clone(R.ov.charities), team: clone(R.team), keys: clone(R.keys.keys),
     hooks: clone(R.hooks), hookDetail: clone(R.hookDetail), deliveries: clone(R.deliveries), deliveryDetail: clone(R.deliveryDetail), companies: clone(R.companies), products: clone(R.products),
+    features: clone(R.features), featureHistory: clone(R.featureHistory),
+  };
+  // The Features page: starting points are the server's own recorded previews; a single switch is worked out here
+  // the same way (off takes everything that needs it; on needs what it needs on), and saving changes this copy only.
+  const fsw = (id) => S.features.switches.find((x) => x.id === id);
+  const featurePlan = (body) => {
+    if (body.startingPoint) return clone(R.featurePlans[body.startingPoint] ?? fail(400, 'Unknown starting point.'));
+    const plan = { changes: [], refused: [], yourself: [], needsSecondStep: false };
+    for (const [id, to] of Object.entries(body.changes ?? {})) {
+      const s = fsw(id) || fail(400, `There is no switch called “${id}”.`);
+      if (s.locked) { plan.refused.push({ id, label: s.label, reason: `Always on: ${s.locked}` }); continue; }
+      if (!to) {
+        if (s.lockedOn) { plan.refused.push({ id, label: s.label, reason: s.lockedOn }); continue; }
+        if (s.own) plan.changes.push({ id, label: s.label, from: true, to: false, why: 'asked' });
+        for (const d of s.alsoTurnsOff) { const x = fsw(d); if (x && x.own && !x.locked && x.kind !== 'setting') plan.changes.push({ id: d, label: x.label, from: true, to: false, why: `needs “${s.label}”, which is being turned off` }); }
+      } else {
+        const missing = [s.parent, ...s.dependsOn].filter(Boolean).filter((n) => !fsw(n)?.on);
+        if (missing.length) { plan.refused.push({ id, label: s.label, reason: `Turn on ${missing.map((m) => `“${fsw(m).label}”`).join(' and ')} first.` }); continue; }
+        if (s.turnOnHow) { plan.refused.push({ id, label: s.label, reason: s.turnOnHow }); continue; }
+        if (!s.own) plan.changes.push({ id, label: s.label, from: false, to: true, why: 'asked' });
+        if (s.risk) plan.needsSecondStep = true;
+      }
+    }
+    return plan;
   };
   const checklist = () => R.ov.checklist.map((c) => ({ ...c, done: c.done || (c.id === 'brand' && S.version > R.ov.version) }));
   const commit = (next, changes) => {
@@ -75,6 +99,16 @@
       const plan = L.qrPlan(text, style), pct = (x) => Math.round(x * 100);
       return { svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240">${L.qrSvg(text, 0, 0, 240, 'H', style)}</svg>`, version: plan.matrix.version, logoShare: plan.logo?.share ?? null, damageTolerance: { plain: pct(plan.damageTolerance.plain), withLogo: pct(plan.damageTolerance.withLogo) },
         note: style.logo ? (plan.logo ? `Your logo fits at ${pct(plan.logo.share)}% of the code’s width. The code still reads with ${pct(plan.damageTolerance.withLogo)}% of it damaged (${pct(plan.damageTolerance.plain)}% without the logo).` : 'There wasn’t room for a logo in this code without making it unreliable, so it prints without one.') : null };
+    }
+    if (key === 'GET /v1/console/features') return clone(S.features);
+    if (key === 'GET /v1/console/features/history') return clone(S.featureHistory);
+    if (key === 'POST /v1/console/features/preview') return featurePlan(body);
+    if (key === 'POST /v1/console/features') {
+      const plan = featurePlan(body);
+      if (plan.refused.length && !body.startingPoint) fail(422, plan.refused.map((r) => `${r.label}: ${r.reason}`).join(' '));
+      for (const c of plan.changes) { const x = fsw(c.id); x.own = c.to; S.featureHistory.unshift({ id: c.id, label: c.label, from: c.from, to: c.to, by: S.me.displayName, reason: body.reason ?? null, via: body.startingPoint ? 'starting point' : 'features page', at: nowIso() }); }
+      for (const x of S.features.switches) x.on = x.locked || x.kind === 'setting' || (x.own && [x.parent, ...x.dependsOn].filter(Boolean).every((n) => fsw(n)?.own));
+      return { ...plan, saved: plan.changes.length, features: clone(S.features) };
     }
     if (key === 'GET /v1/console/products') return clone(S.products);
     if (key === 'GET /v1/lottery') return clone(R.lottery);

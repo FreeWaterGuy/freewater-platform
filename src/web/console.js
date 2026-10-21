@@ -67,12 +67,14 @@
     [/^\/console\/?$/, startPage], [/^\/console\/company$/, companyPage], [/^\/console\/brand$/, brandPage], [/^\/console\/ads$/, adsPage], [/^\/console\/giving$/, givingPage], [/^\/console\/game$/, gamePage], [/^\/console\/transparency$/, transparencyPage], [/^\/console\/data$/, dataPage], [/^\/console\/numberline$/, numberLinePage], [/^\/console\/agents$/, agentsPage], [/^\/console\/given$/, givenPage], [/^\/console\/security$/, securityPage],
     [/^\/console\/modules$/, modulesPage], [/^\/console\/codes$/, codesPage], [/^\/console\/products$/, productsPage], [/^\/console\/machines$/, machinesPage], [/^\/console\/team$/, teamPage], [/^\/console\/history$/, historyPage],
     [/^\/console\/keys$/, keysPage], [/^\/console\/webhooks$/, webhooksPage], [/^\/console\/webhooks\/([\w-]+)$/, webhookPage], [/^\/console\/licensees$/, licenseesPage],
-    [/^\/console\/launch$/, launchPage], [/^\/console\/wallet$/, walletPage], [/^\/console\/offers$/, offersPage], [/^\/console\/games$/, gamesPage], [/^\/console\/chain$/, chainPage],
+    [/^\/console\/features$/, featuresPage], [/^\/console\/launch$/, launchPage], [/^\/console\/wallet$/, walletPage], [/^\/console\/offers$/, offersPage], [/^\/console\/games$/, gamesPage], [/^\/console\/chain$/, chainPage],
   ];
-  /** Is this area on, on this server? (GET /v1/public/features; unknown or no area: on.) */
+  /** Is this switch on, on this server and for this company? (GET /v1/public/features?company=; unknown or none: on.) */
   const on = (feature) => !feature || !(S.features?.off ?? []).includes(feature);
-  // Pages (and menu entries) that belong to an area, and sections inside pages that do (by their heading).
-  const PAGE_FEATURES = { offers: 'offers', chain: 'token', game: 'lottery', games: 'games', licensees: 'network' };
+  // Pages (and menu entries) that belong to a switch (src/runtime/registry.ts), and sections inside pages that do (by
+  // their heading). A page whose switch is off isn't shown; its switch is turned back on from the Features page.
+  // (The prize game and the games are their own on/off: their pages stay so they can be turned on there.)
+  const PAGE_FEATURES = { offers: 'offers', chain: 'token', licensees: 'network', machines: 'machines', webhooks: 'webhooks', given: 'giveaways', docs: 'developer_pages', transparency: 'transparency' };
   const SECTION_FEATURES = { 'Go live with the token': 'token', 'Points into tokens': 'token_conversion', 'Gift cards': 'gift_cards', 'The agents’ fund': 'agents_fund', 'What the agents spent': 'agents_fund', 'The upsides library': 'agents_fund', Continuity: 'network' };
   let cleanup = null;
   function go(path, replace) {
@@ -85,13 +87,13 @@
 
   async function render() {
     if (cleanup) { cleanup(); cleanup = null; }
-    const pathname = S.path.split('?')[0];
+    const pathname = S.path.split('#')[0].split('?')[0];
     if (pathname.startsWith('/developers')) return docs(pathname);
     try {
       if (!S.config) S.config = await api('GET', `/v1/public/app-config${S.company ? `?company=${encodeURIComponent(S.company)}` : ''}`);
     } catch { S.company = null; store.set('fw_console_company', null); S.config = await api('GET', '/v1/public/app-config'); }
     // Areas switched off on this server (FW_FEATURES): their pages and buttons aren't shown, their addresses don't exist.
-    if (!S.features) S.features = await api('GET', '/v1/public/features').catch(() => ({ off: [] }));
+    if (!S.features) S.features = await api('GET', `/v1/public/features${S.config?.companyId ? `?company=${encodeURIComponent(S.config.companyId)}` : ''}`).catch(() => ({ off: [] }));
     if (S.token && !S.me) { try { S.me = await api('GET', '/v1/me'); } catch { S.me = null; } }
     if (!S.me) return signIn();
     if (!['owner'].includes(S.me.role)) return shell('', h('div', { class: 'notice err', text: 'The console is for company owners. Ask an owner to change your role, or use the ops console.' }));
@@ -107,7 +109,7 @@
 
   function shell(active, ...content) {
     const nav = [
-      ['start', '/console', 'Get started', I.start],
+      ['start', '/console', 'Get started', I.start], ['features', '/console/features', 'Features', I.modules],
       'Points and rewards', ['launch', '/console/launch', 'Launch', I.start], ['wallet', '/console/wallet', 'Points and credit', I.giving], ['offers', '/console/offers', 'Brand offers', I.ads], ['games', '/console/games', 'The games', I.game], ['chain', '/console/chain', 'Blockchain', I.key],
       'Settings', ['company', '/console/company', 'Company', I.company], ['brand', '/console/brand', 'Brand', I.brand], ['ads', '/console/ads', 'Ads and prices', I.ads], ['codes', '/console/codes', 'QR codes and AR', I.qr], ['products', '/console/products', 'Products', I.product],
       ['giving', '/console/giving', 'Giving', I.giving], ['game', '/console/game', 'Prize game', I.game], ['transparency', '/console/transparency', 'Transparency', I.eye], ['data', '/console/data', 'Data and privacy', I.shield], ['numberline', '/console/numberline', 'Number line', I.line], ['agents', '/console/agents', 'AI agents', I.ai], ['security', '/console/security', 'Security', I.shield], ['modules', '/console/modules', 'Modules', I.modules], ['machines', '/console/machines', 'Machines', I.machine], ['team', '/console/team', 'Team', I.team], ['history', '/console/history', 'History', I.history],
@@ -1163,6 +1165,119 @@
         h('div', { class: 'v', text: `v${v.version}` }),
         h('div', {}, h('div', { class: 'who', text: `${v.changedBy ?? 'Set up'} · ${when(v.at)}${i === 0 ? ' · current' : ''}` }), h('ul', {}, v.changes.slice(0, 8).map((c) => h('li', { text: c })), v.changes.length > 8 ? h('li', { class: 'muted', text: `and ${v.changes.length - 8} more` }) : null)),
         i === 0 ? h('span', { class: 'pill ok', text: 'In use' }) : h('button', { class: 'btn secondary small', type: 'button', onclick: async (e) => { const btn = e.currentTarget; btn.disabled = true; try { const r = await api('POST', `/v1/console/history/${v.version}/restore`); toast(r.changes.length ? `Version ${v.version} is back, saved as version ${r.version}.` : 'That’s already what you have.'); render(); } catch (x) { toast(x.message); btn.disabled = false; } } }, 'Put this back')))));
+  }
+
+  // ---------- features: every switch, in categories (src/runtime/registry.ts) ----------
+  const WHO = { owner: 'Any owner, signed in', owner_approved: 'An owner with the second sign-in step', approved_step: 'Proposed under Launch or Blockchain, approved by 2 other people, then a wait' };
+  const RISK = { money: 'Money', chain: 'Blockchain', one_way: 'One way' };
+  async function featuresPage() {
+    const qs = new URLSearchParams((S.path.split('#')[0].split('?')[1]) || '');
+    const view = qs.get('view') === 'all' ? 'all' : 'main';
+    const F = await api('GET', '/v1/console/features');
+    const byId = new Map(F.switches.map((s) => [s.id, s]));
+    const name = (id) => byId.get(id)?.label ?? id;
+    const fresh = F.switches.filter((s) => s.isNew);
+    const ui = { q: qs.get('q') || '', filter: qs.get('filter') || 'all' };
+
+    // The warning before saving: what the change does, what it also turns off, and what can't change.
+    const confirmBox = h('div', { class: 'feat-confirm', role: 'dialog', 'aria-modal': 'false', 'aria-label': 'Check before saving', hidden: true });
+    const ask = async (body, title) => {
+      let plan;
+      try { plan = await api('POST', '/v1/console/features/preview', body); } catch (x) { toast(x.message); return; }
+      const on = plan.changes.filter((c) => c.to), off = plan.changes.filter((c) => !c.to);
+      const reason = h('input', { class: 'input', maxlength: '300', placeholder: 'Why (optional, kept in the history)', 'aria-label': 'Why' });
+      const save = h('button', { class: 'btn', type: 'button', disabled: !plan.changes.length || null }, plan.changes.length ? `Save ${plan.changes.length} change${plan.changes.length === 1 ? '' : 's'}` : 'Nothing to change');
+      save.onclick = async () => {
+        save.disabled = true;
+        try { const r = await api('POST', '/v1/console/features', { ...body, ...(reason.value.trim() ? { reason: reason.value.trim() } : {}) }); confirmBox.hidden = true; toast(`Saved ${r.saved} change${r.saved === 1 ? '' : 's'}.`); S.features = null; render(); }
+        catch (x) { save.disabled = false; toast(x.message); }
+      };
+      const list = (items, text) => (items.length ? h('ul', {}, items.map((c) => h('li', { text: text(c) }))) : null);
+      confirmBox.replaceChildren(...[
+        h('h2', { text: title }),
+        off.length ? h('div', {}, h('b', { text: `Turns off (${off.length})` }), list(off, (c) => `${c.label}${c.why !== 'asked' && !c.why.startsWith('starting point') ? `: ${c.why}` : ''}`)) : null,
+        on.length ? h('div', {}, h('b', { text: `Turns on (${on.length})` }), list(on, (c) => c.label)) : null,
+        off.length > 1 && !body.startingPoint ? h('div', { class: 'notice', text: 'Everything that needs it goes off too, so nothing is left half on. Turning it back on later won’t turn those on by itself: you choose each one.' }) : null,
+        plan.yourself.length ? h('div', {}, h('b', { text: 'Turn these on yourself' }), list(plan.yourself, (c) => `${c.label}: ${c.how}`)) : null,
+        plan.refused.length ? h('div', { class: 'notice err' }, h('b', { text: 'Can’t change' }), list(plan.refused, (c) => `${c.label}: ${c.reason}`)) : null,
+        plan.needsSecondStep ? h('div', { class: 'notice', text: 'This turns on something with money, the chain or no way back: you need to have signed in with your authenticator app.' }) : null,
+        reason,
+        h('div', { class: 'toolbar' }, save, h('button', { class: 'btn secondary', type: 'button', onclick: () => { confirmBox.hidden = true; } }, 'Cancel'))].filter(Boolean));
+      confirmBox.hidden = false;
+      confirmBox.scrollIntoView?.({ block: 'nearest' });
+      save.focus();
+    };
+    const flip = (s) => ask({ changes: { [s.id]: !s.own } }, `${s.own ? 'Turn off' : 'Turn on'} “${s.label}”?`);
+
+    // One switch: what it does, what it needs, what turning it off also turns off, FreeWater's choice, who may change it.
+    const toggle = (s) => {
+      if (s.locked) return h('span', { class: 'pill ok', text: 'Always on' });
+      if (s.kind === 'setting') return link(`/console/${s.page}`, { class: 'btn secondary small' }, 'Set it');
+      if (s.lockedOn) return h('span', { class: 'pill dark', title: s.lockedOn, text: 'On for good' });
+      if (!s.own && s.turnOnHow) return s.page ? link(`/console/${s.page}`, { class: 'btn secondary small' }, 'Turn on there') : h('span', { class: 'pill', text: 'Off' });
+      return h('label', { class: 'tog' }, h('input', { type: 'checkbox', role: 'switch', checked: s.own || null, 'aria-label': `${s.label}: ${s.own ? 'on' : 'off'}`, onchange: (e) => { e.preventDefault(); e.target.checked = s.own; flip(s); } }), h('span', { 'aria-hidden': 'true' }));
+    };
+    const row = (s) => h('div', { class: `feat-row${s.on ? '' : ' off'}`, id: `f-${s.id}` },
+      h('div', { class: 'grow' },
+        h('div', { class: 'feat-title' }, h('b', { text: s.label }),
+          s.risk ? h('span', { class: 'pill warn', text: RISK[s.risk] }) : null, s.locked ? h('span', { class: 'pill', text: 'Locked' }) : null, s.isNew ? h('span', { class: 'pill dark', text: 'New' }) : null,
+          s.kind !== 'setting' && !s.locked && s.freewater !== null && s.freewater !== s.own ? h('span', { class: 'pill', text: `FreeWater: ${s.freewater ? 'on' : 'off'}` }) : null),
+        h('p', { text: s.description }),
+        s.locked ? h('p', { class: 'why', text: s.locked }) : null,
+        s.offBecause ? h('p', { class: 'why', text: s.offBecause }) : null,
+        s.turnOnHow && !s.own ? h('p', { class: 'why', text: s.turnOnHow }) : null,
+        s.kind !== 'setting' && !s.locked ? h('details', {}, h('summary', { text: 'Details' }), h('dl', {},
+          h('dt', { text: 'Needs' }), h('dd', { text: [s.parent, ...s.dependsOn].filter(Boolean).map(name).join(', ') || 'Nothing else' }),
+          h('dt', { text: 'Turning it off also turns off' }), h('dd', { text: s.alsoTurnsOff.length ? s.alsoTurnsOff.map(name).join(', ') : 'Nothing else' }),
+          h('dt', { text: 'FreeWater’s choice' }), h('dd', { text: s.freewater ? 'On' : 'Off' }),
+          h('dt', { text: 'Who may turn it on' }), h('dd', { text: WHO[s.who] ?? '—' }),
+          h('dt', { text: 'Who may turn it off' }), h('dd', { text: s.lockedOn ? 'No one: it only goes one way' : 'Any owner, signed in (quick)' }),
+          s.startsOffForNew ? [h('dt', { text: 'New companies' }), h('dd', { text: 'Start with it off' })] : null)) : null),
+      toggle(s));
+
+    const counts = (catId) => { const xs = F.switches.filter((s) => s.category === catId && s.kind !== 'setting'); return `${xs.filter((s) => s.on).length} of ${xs.length} on`; };
+    const startCards = h('section', { class: 'panel-box' }, h('h2', { text: 'Start from' }),
+      h('p', { class: 'muted', style: 'margin:0', text: 'Ready-made starting points. See exactly what changes before anything is saved. Money, blockchain and one-way switches are never turned on for you.' }),
+      h('div', { class: 'feat-starts' }, F.startingPoints.map((p) => h('button', { type: 'button', class: 'feat-start', onclick: () => ask({ startingPoint: p.id }, `Start from “${p.label}”?`) }, h('b', { text: p.label }), h('span', { text: p.description }), h('em', { text: 'Preview' })))));
+    const mainCards = h('div', { class: 'feat-cards' }, F.categories.filter((c) => c.main).map((c) => {
+      const m = byId.get(c.main);
+      return h('article', { class: `feat-card${m.on ? '' : ' off'}` },
+        h('div', { class: 'feat-title' }, h('h3', { text: c.label }), toggle(m)),
+        h('p', { text: c.description }),
+        m.offBecause ? h('p', { class: 'why', text: m.offBecause }) : null,
+        h('div', { class: 'feat-foot' }, h('span', { class: 'muted', text: counts(c.id) }), link(`/console/features?view=all#cat-${c.id}`, {}, 'Every switch →')));
+    }));
+    const locked = h('section', { class: 'panel-box' }, h('h2', { text: 'Always on' }),
+      h('p', { class: 'muted', style: 'margin:0', text: 'These can’t be turned off, for anyone. They keep people, money and the AI safe.' }),
+      h('ul', { class: 'feat-locked' }, F.switches.filter((s) => s.locked && s.category === 'safety').map((s) => h('li', {}, h('b', { text: s.label }), ` ${s.locked}`))));
+
+    // Every switch: categories, then groups, with a search box and filters.
+    const results = h('div', { class: 'stack' });
+    const drawAll = () => {
+      const q = ui.q.trim().toLowerCase();
+      const keep = (s) => (!q || `${s.label} ${s.description} ${s.id}`.toLowerCase().includes(q)) && (ui.filter === 'all' || (ui.filter === 'on' && s.on) || (ui.filter === 'off' && !s.on && !s.locked) || (ui.filter === 'different' && !s.locked && s.kind !== 'setting' && s.freewater !== null && s.freewater !== s.own) || (ui.filter === 'locked' && !!s.locked) || (ui.filter === 'new' && s.isNew));
+      const shown = F.categories.map((c) => ({ c, xs: F.switches.filter((s) => s.category === c.id && keep(s)) })).filter((x) => x.xs.length);
+      results.replaceChildren(...(shown.length ? shown.map(({ c, xs }) => {
+        const groups = [...new Set(xs.map((s) => s.group))];
+        return h('section', { class: 'section', id: `cat-${c.id}` }, h('h2', {}, c.label, ' ', h('span', { class: 'pill', text: counts(c.id) })), h('p', { class: 'lead', text: c.description }),
+          groups.map((g) => h('div', { class: 'feat-group' }, g ? h('h3', { text: g }) : null, xs.filter((s) => s.group === g).map(row))));
+      }) : [h('div', { class: 'notice', text: 'No switch matches. Try another word or filter.' })]));
+    };
+    const search = h('input', { class: 'input', type: 'search', placeholder: 'Search every switch (AR, gift cards, coupons…)', 'aria-label': 'Search switches', value: ui.q, oninput: (e) => { ui.q = e.target.value; drawAll(); } });
+    const filters = h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'Show' }, [['all', 'All'], ['on', 'On'], ['off', 'Off'], ['different', 'Different from FreeWater'], ['locked', 'Locked'], ['new', 'New']].map(([id, label]) =>
+      h('button', { type: 'button', role: 'tab', 'aria-selected': String(ui.filter === id), onclick: (e) => { ui.filter = id; for (const b of filters.children) b.setAttribute('aria-selected', String(b === e.currentTarget)); drawAll(); } }, label)));
+    const history = await api('GET', '/v1/console/features/history').catch(() => []);
+    const recent = h('section', { class: 'panel-box' }, h('h2', { text: 'Recent changes' }),
+      history.length ? h('ul', { class: 'feat-history' }, history.slice(0, 12).map((x) => h('li', {}, h('b', { text: `${x.label} ${x.to ? 'on' : 'off'}` }), ` · ${x.by} · ${when(x.at)} · ${x.via}${x.reason ? ` · “${x.reason}”` : ''}`))) : h('p', { class: 'muted', style: 'margin:0', text: 'Nothing changed yet. Every change is kept here: who, when, from, to and why.' }));
+
+    const views = h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'View' }, link('/console/features', { role: 'tab', class: 'btn small' + (view === 'main' ? '' : ' secondary'), 'aria-selected': String(view === 'main') }, 'Main switches'), link('/console/features?view=all', { role: 'tab', class: 'btn small' + (view === 'all' ? '' : ' secondary'), 'aria-selected': String(view === 'all') }, `Every switch (${F.switches.length})`));
+    shell('features', head('Features', 'Choose what your company runs. You start from FreeWater’s choices; money, the blockchain and anything that can’t be undone need the usual steps. Turning something off is always quick.', views),
+      fresh.length ? h('div', { class: 'notice' }, h('b', { text: 'New features available: ' }), fresh.map((s) => s.label).join(', '), '. They’re off until you decide.', ' ', link('/console/features?view=all&filter=new', {}, 'See them')) : null,
+      confirmBox,
+      h('div', { class: 'stack' }, ...(view === 'main' ? [startCards, mainCards, locked, recent] : [h('div', { class: 'feat-tools' }, search, filters), results])));
+    if (view === 'all') drawAll();
+    const hash = S.path.split('#')[1];
+    if (hash) document.getElementById(hash)?.scrollIntoView?.();
   }
 
   // ---------- API keys ----------

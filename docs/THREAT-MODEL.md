@@ -313,7 +313,7 @@ scan token), `GET /v/:code`, `/V/:code` (coupon check redirect), `GET /go/:token
 the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/console`, `/developers`, `/books`,
 `/play`, `/preview/scan`), `/static/*`, `/models/builtin/*`, `/assets/*`.
 
-**Every route (387):**
+**Every route (393):**
 
 | # | Route | Scope | Person | Other check | Docs |
 |---|---|---|---|---|---|
@@ -677,33 +677,39 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 358 | `GET /health/deep` | platform | no | — | OK (staff only: job freshness, queues, spool, last books checks; no personal data) |
 | 359 | `GET /v1/advertisers/:advertiserId/credit` | invoices | no | an advertiser key only its own | OK (card, limit and what it owes; no card numbers) |
 | 360 | `POST /v1/advertisers/:advertiserId/credit-limit` | invoices | yes | owner or finance, signed in with the second step (an approval route); never an API or advertiser key | OK (each limit a new append-only row; a lower limit pauses at once) |
-| 361 | `GET /v1/news/topics` | admin | no | team only; news area (FW_FEATURES_ON=news) | OK (topics, whether each may print, the newest story) |
-| 362 | `POST /v1/news/topics` | admin | no | team only; news area | OK (a subject only: no numbers, claim words or sentence punctuation; prints only once a person approves) |
-| 363 | `POST /v1/news/topics/:id/approve` | admin | yes | team only; news area | OK (a person approves each topic before it can print; SWITCHES “News”) |
-| 364 | `POST /v1/news/topics/:id/retire` | admin | no | team only; news area | OK (turning off is immediate; bottles out keep opening the newest story) |
-| 365 | `POST /v1/news/topics/:id/reports` | admin | no | team only; news area | OK (a story needs two or more outlets; every story checked for copied wording, links and outlets’ names) |
-| 366 | `POST /v1/news/topics/:id/corrections` | admin | yes | team only; news area | OK (logged, append-only, a new version; a person corrects) |
-| 367 | `GET /v1/news/errors` | admin | no | team only; news area | OK (only what readers wrote, never who they are) |
-| 368 | `GET /v1/public/news/:companyId/topics/:topicId` | public | — | news area; 404 news_off until the company turns news.on | OK (public by design: the newest story; `no-store`) |
-| 369 | `POST /v1/public/news/:companyId/topics/:topicId/errors` | public | — | news area; news.on | OK (stores the text only; no viewer key, IP or account) |
-| 370 | `GET /v1/public/news/:companyId/sources` | public | — | news area; news.on | OK (the phone’s own stated choice, by its key; `no-store`) |
-| 371 | `POST /v1/public/news/:companyId/sources` | public | — | news area; news.on | OK (the phone key is the proof, as for ad preferences; only listed sources) |
-| 372 | `GET /v1/me/news-sources` | me | yes | news area; news.on | OK (stored under the account’s own phone key) |
-| 373 | `POST /v1/me/news-sources` | me | yes | news area; news.on | OK |
-| 374 | `POST /v1/campaigns/:id/news-adjacency` | campaigns | no | an advertiser key only its own; never a machine; news area | OK (keeps the ad off bottles that carry news; copied to its offered filler) |
-| 375 | `GET /v1/fillers` | admin | no | team only | OK |
-| 376 | `POST /v1/fillers` | admin | no | team only | OK (the company’s own or a charity’s message; prints only once a person approves) |
-| 377 | `POST /v1/fillers/:id/approve` | admin | yes | team only | OK (a person approves every filler) |
-| 378 | `POST /v1/fillers/:id/retire` | admin | no | team only | OK (turning off is immediate) |
-| 379 | `POST /v1/campaigns/:id/filler-offer` | campaigns | no | an advertiser key only its own; never a machine | OK (a free copy for unsold spots, never billed; the company approves it first) |
-| 380 | `GET /v1/areas` | admin | no | team only | OK (area statistics; no person in them; sample values say so) |
-| 381 | `POST /v1/areas` | admin | no | team only | OK (each row needs its source and date; only known area attributes) |
-| 382 | `POST /v1/households/imports` | admin | yes | team only | OK (buying data is a person’s decision; sensitive kinds and anything off the list refused; COMPLIANCE “Household data”) |
-| 383 | `GET /v1/households/imports` | admin | no | team only | OK |
-| 384 | `DELETE /v1/households/imports/:id` | admin | no | team only | OK (deleting is immediate) |
-| 385 | `DELETE /v1/households/sources/:source` | admin | no | team only | OK (deleting is immediate) |
-| 386 | `GET /v1/households/audience` | admin | no | team only | OK (for checking; advertisers never see a house’s audience; `no-store`) |
-| 387 | `POST /v1/public/households/:companyId/opt-out` | public | — | — | OK (public by design: a house says no without an account; the same answer whether or not anything was held) |
+| 361 | `GET /v1/console/features` | admin | no | team only (no advertiser/machine key) | OK (the company's own switches and why each is on or off; no secrets) |
+| 362 | `POST /v1/console/features/preview` | admin | no | team only (no advertiser/machine key) | OK (saves nothing: what a change or starting point would do) |
+| 363 | `POST /v1/console/features` | admin | yes | an owner signed in, never a key (P4); turning ON a money, chain or one-way switch needs the second step (R4, `conditionalApprovalRoutes`); switches only an approved step turns on (gift cards, withdrawals, the chain) are refused here | OK (every change logged append-only with who, when, from, to, why; turning off is quick and takes dependants with it) |
+| 364 | `GET /v1/console/features/history` | admin | no | team only (no advertiser/machine key) | OK (append-only log) |
+| 365 | `GET /v1/public/companies/:companyId/features` | public | — | — | OK (public by design, only when the company turned on "Publish our feature list"; on/off per switch, no settings or numbers) |
+| 366 | `POST /v1/studio/export` | campaigns | no | advertiser only | OK (a print-ready SVG of the advertiser's own design; only its own photos and logo) |
+| 367 | `GET /v1/news/topics` | admin | no | team only; news area (FW_FEATURES_ON=news) | OK (topics, whether each may print, the newest story) |
+| 368 | `POST /v1/news/topics` | admin | no | team only; news area | OK (a subject only: no numbers, claim words or sentence punctuation; prints only once a person approves) |
+| 369 | `POST /v1/news/topics/:id/approve` | admin | yes | team only; news area | OK (a person approves each topic before it can print; SWITCHES “News”) |
+| 370 | `POST /v1/news/topics/:id/retire` | admin | no | team only; news area | OK (turning off is immediate; bottles out keep opening the newest story) |
+| 371 | `POST /v1/news/topics/:id/reports` | admin | no | team only; news area | OK (a story needs two or more outlets; every story checked for copied wording, links and outlets’ names) |
+| 372 | `POST /v1/news/topics/:id/corrections` | admin | yes | team only; news area | OK (logged, append-only, a new version; a person corrects) |
+| 373 | `GET /v1/news/errors` | admin | no | team only; news area | OK (only what readers wrote, never who they are) |
+| 374 | `GET /v1/public/news/:companyId/topics/:topicId` | public | — | news area; 404 news_off until the company turns news.on | OK (public by design: the newest story; `no-store`) |
+| 375 | `POST /v1/public/news/:companyId/topics/:topicId/errors` | public | — | news area; news.on | OK (stores the text only; no viewer key, IP or account) |
+| 376 | `GET /v1/public/news/:companyId/sources` | public | — | news area; news.on | OK (the phone’s own stated choice, by its key; `no-store`) |
+| 377 | `POST /v1/public/news/:companyId/sources` | public | — | news area; news.on | OK (the phone key is the proof, as for ad preferences; only listed sources) |
+| 378 | `GET /v1/me/news-sources` | me | yes | news area; news.on | OK (stored under the account’s own phone key) |
+| 379 | `POST /v1/me/news-sources` | me | yes | news area; news.on | OK |
+| 380 | `POST /v1/campaigns/:id/news-adjacency` | campaigns | no | an advertiser key only its own; never a machine; news area | OK (keeps the ad off bottles that carry news; copied to its offered filler) |
+| 381 | `GET /v1/fillers` | admin | no | team only | OK |
+| 382 | `POST /v1/fillers` | admin | no | team only | OK (the company’s own or a charity’s message; prints only once a person approves) |
+| 383 | `POST /v1/fillers/:id/approve` | admin | yes | team only | OK (a person approves every filler) |
+| 384 | `POST /v1/fillers/:id/retire` | admin | no | team only | OK (turning off is immediate) |
+| 385 | `POST /v1/campaigns/:id/filler-offer` | campaigns | no | an advertiser key only its own; never a machine | OK (a free copy for unsold spots, never billed; the company approves it first) |
+| 386 | `GET /v1/areas` | admin | no | team only | OK (area statistics; no person in them; sample values say so) |
+| 387 | `POST /v1/areas` | admin | no | team only | OK (each row needs its source and date; only known area attributes) |
+| 388 | `POST /v1/households/imports` | admin | yes | team only | OK (buying data is a person’s decision; sensitive kinds and anything off the list refused; COMPLIANCE “Household data”) |
+| 389 | `GET /v1/households/imports` | admin | no | team only | OK |
+| 390 | `DELETE /v1/households/imports/:id` | admin | no | team only | OK (deleting is immediate) |
+| 391 | `DELETE /v1/households/sources/:source` | admin | no | team only | OK (deleting is immediate) |
+| 392 | `GET /v1/households/audience` | admin | no | team only | OK (for checking; advertisers never see a house’s audience; `no-store`) |
+| 393 | `POST /v1/public/households/:companyId/opt-out` | public | — | — | OK (public by design: a house says no without an account; the same answer whether or not anything was held) |
 
 ---
 
