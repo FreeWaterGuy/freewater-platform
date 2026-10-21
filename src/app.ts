@@ -477,8 +477,14 @@ export async function createApp(opts: AppOptions) {
   host.register(newsPlugin(news));
   // Household and area data, for choosing ads for houses (the route-buying engine calls audienceForHouse).
   const households = new HouseholdService(db, platform, opts.clock);
-  const claimed = async (companyId: string, houseKey: string) => (await db.query<any>(`select s.user_id, s.address, s.route_id, s.lat, s.lng, u.viewer_key, u.consents, u.interests from subscriptions s join users u on u.id = s.user_id where s.company_id = $1 and s.status <> 'cancelled' and s.address <> 'erased' and u.deleted_at is null`, [companyId])).rows
-    .filter((r) => households.houseKey(companyId, r.address) === houseKey);
+  // A house's residents: people with a delivery there, and people who claimed it in a delivery area (house_claims), so
+  // a resident's "do not sell" or a child at home counts whichever way they came (one row per person).
+  const claimed = async (companyId: string, houseKey: string) => {
+    const rows = (await db.query<any>(`select s.user_id, s.address, s.route_id, s.lat, s.lng, u.viewer_key, u.consents, u.interests from subscriptions s join users u on u.id = s.user_id where s.company_id = $1 and s.status <> 'cancelled' and s.address <> 'erased' and u.deleted_at is null
+      union all select c.user_id, h.address, a.route_id, h.lat, h.lng, u.viewer_key, u.consents, u.interests from house_claims c join houses h on h.id = c.house_id join delivery_areas a on a.id = h.area_id join users u on u.id = c.user_id where c.company_id = $1 and u.deleted_at is null`, [companyId])).rows
+      .filter((r) => households.houseKey(companyId, r.address) === houseKey);
+    return rows.filter((r, i) => rows.findIndex((x) => x.user_id === r.user_id) === i);
+  };
   const parse = <T>(v: unknown): T => (typeof v === 'string' ? JSON.parse(v) : v) as T;
   households.claimants = async (companyId, houseKey) => Promise.all((await claimed(companyId, houseKey)).map(async (r) => {
     const subjects = [r.viewer_key, `user:${r.user_id}`];
@@ -490,7 +496,8 @@ export async function createApp(opts: AppOptions) {
     return { optedOut: await data.doesNotSell(companyId, subjects), child, personalize, interests: personalize ? parse<string[]>(r.interests) ?? [] : [], household: household === null ? null : Number(household) };
   }));
   households.placeOf = async (companyId, houseKey) => { const r = (await claimed(companyId, houseKey))[0]; return r ? { routeId: r.route_id, lat: Number(r.lat), lng: Number(r.lng) } : null; };
-  const addressesOf = async (companyId: string, userIds: string[]) => (await db.query<any>(`select address from subscriptions where company_id = $1 and user_id = any($2) and address <> 'erased'`, [companyId, userIds])).rows.map((r) => r.address as string);
+  const addressesOf = async (companyId: string, userIds: string[]) => (await db.query<any>(`select address from subscriptions where company_id = $1 and user_id = any($2) and address <> 'erased'
+    union select h.address from house_claims c join houses h on h.id = c.house_id where c.company_id = $1 and c.user_id = any($2)`, [companyId, userIds])).rows.map((r) => r.address as string);
   data.houseData = async (companyId, userIds) => households.aboutAddresses(companyId, await addressesOf(companyId, userIds));
   data.eraseHouses = async (companyId, userIds) => {
     let n = 0;

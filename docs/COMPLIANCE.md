@@ -113,7 +113,10 @@ Travis County (tables B11001, B25010, B19013, B11003, B25003), one row per GEOID
 The audience for one house, for the route-buying engine: `app.households.audienceForHouse(companyId, { address,
 routeId?, lat?, lng? })` returns `HouseAudience` (`src/modules/households/service.ts`): first-party (residents, as
 their choices allow) over bought over area, each value saying where it came from; `optedOut`, `childAtHome`; empty
-when the company's switches are off. For choosing ads only; never shown to advertisers or passed on.
+when the company's switches are off. For choosing ads only; never shown to advertisers or passed on. For a house in a delivery area,
+`audienceForRouteHouse(companyId, houseId)` reads the house's own address and route; residents are the people with a
+delivery at that address and the people who claimed the house in the app (`house_claims`), so either one's "do not
+sell or share" keeps the house out, and their data download and erasure reach the bought data about it.
 
 ## 2. Findings fixed in this review
 

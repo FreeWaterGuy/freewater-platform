@@ -177,6 +177,14 @@ junk mail but free water that gives to charity. Houses don't sign up and aren't 
   `src/core/types.ts`: house id, area id, route id, street, household size if known, whether someone claimed it) and,
   if someone claimed the house, that person's audience as `FillRequest.audience` (only what they allowed), exactly as
   for any bottle printed for a known person. Nothing is sold on it yet: what advertisers can buy on routes is next.
+- **Where route buying meets household data** (for the next builder): a house in a delivery area and the household
+  data about it are one house. Houses are keyed by the same address form household data uses (`normalizeAddress`, so
+  "700 Big Bend Drive" and "700 Big Bend Dr." are one door and one pack), and
+  `app.households.audienceForRouteHouse(companyId, RouteHouseContext.houseId)` gives that house's `HouseAudience`,
+  counting people who claimed it in the app as residents (their "do not sell", a child at home, and what they allowed
+  apply). It is empty while *Ads aimed at houses* is off. House packs draw paid bottles from prepaid ads exactly as
+  machine bottles do (one claimed bottle per printed bottle); spots nobody paid for get approved fillers, then the
+  house ad, never an unpaid ad.
 - **Demo**: an "Austin pilot (sample houses)" area of about 50 made-up houses on four Travis Heights streets, off,
   every house marked as a sample.
 - **Limits and decisions for the founder.** The box code proves a house to anyone who can scan the box, so a

@@ -8,6 +8,7 @@ import type { PackService } from '../packs/service';
 import { boxNumber } from '../packs/boxRenderer';
 import { insidePolygon } from './planner';
 import { DeliveryError } from './errors';
+import { normalizeAddress } from '../households/vocabulary';
 
 // Delivery areas: FreeWater chooses the streets, and every house on them gets packs, in street order, with no sign-up.
 // A house is an address, not a person. The only ways a house stops getting packs: someone there says so in the app
@@ -48,7 +49,9 @@ export function splitAddress(address: string): { number: number | null; street: 
   const words = (m ? m[2]! : first).split(' ').map((w) => SUFFIXES[w] ?? w);
   return { number: m ? Number(m[1]) : null, street: words.join(' ') };
 }
-const addressKey = (address: string) => address.trim().toLowerCase().replace(/\s+/g, ' ');
+// One way of writing an address, the same one household data uses (households/vocabulary): "700 Big Bend Drive" and
+// "700 Big Bend Dr." are one door, one pack, and one house for the ads chosen for it.
+const addressKey = (address: string) => normalizeAddress(address).toLowerCase();
 
 /** Reads CSV text (quotes allowed, so an address can hold commas). */
 export function parseCsv(text: string): string[][] {

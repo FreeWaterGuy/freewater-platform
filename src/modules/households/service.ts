@@ -219,6 +219,18 @@ export class HouseholdService {
     };
   }
 
+  /**
+   * The audience of a house in a delivery area (src/modules/delivery/houses.ts), by its id: where route buying meets
+   * household data. The same house either way: houses are keyed by the same address form (normalizeAddress), and the
+   * people who claimed it in the app (house_claims) count as its residents, with their own choices (see app.ts
+   * `claimants`). Null for a house the company doesn't have.
+   */
+  async audienceForRouteHouse(companyId: string, houseId: string): Promise<HouseAudience | null> {
+    const h = (await this.db.query<any>(`select h.address, h.lat, h.lng, a.route_id from houses h join delivery_areas a on a.id = h.area_id where h.id = $1 and h.company_id = $2`, [houseId, companyId])).rows[0];
+    if (!h) return null;
+    return this.audienceForHouse(companyId, { address: h.address, routeId: h.route_id, lat: Number(h.lat), lng: Number(h.lng) });
+  }
+
   private async areaFor(companyId: string, blockId: string | null, routeId?: string, lat?: number, lng?: number): Promise<HouseAudience['area']> {
     const view = (r: any) => (r ? { areaId: r.area_id, name: r.name, kind: r.kind, attributes: typeof r.attributes === 'string' ? JSON.parse(r.attributes) : r.attributes, source: r.source, asOf: new Date(r.as_of).toISOString().slice(0, 10), sample: r.sample } : null);
     for (const id of [blockId, routeId]) {

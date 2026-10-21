@@ -34,7 +34,9 @@ const sellNothing = () => { for (const c of app.platform.campaigns.values()) if 
 beforeAll(async () => {
   db = await createPgliteClient();
   // News is off here (the default): filler works without it.
-  app = await createApp({ db, seedDemo: true, seed: 9, clock, features: featuresFrom({}).features });
+  // The demo's ads billed afterwards, so a demo ad (Luma) can take part of a label and leave the rest unsold. With
+  // FreeWater paying up front, fillers next to paid ads are covered in test/integration-seams.test.ts.
+  app = await createApp({ db, seedDemo: true, demoBilling: 'billed_after', seed: 9, clock, features: featuresFrom({}).features });
   keys = app.demoKeys!;
   server = await buildServer(app);
   const u = await app.accounts.invite({ companyId: 'freewater', email: 'ops-lead@freewater.io', role: 'owner', displayName: 'Ops' });
