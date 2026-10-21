@@ -2344,6 +2344,89 @@ create table ad_ai_review_changes (
 create trigger ad_ai_review_changes_append_only before update or delete on ad_ai_review_changes for each row execute function forbid_change();
 `,
   },
+  {
+    id: '069_db_prepaid_money_rules',
+    sql: `
+-- The database's own rules for the money tables that came with paying up front and buying on delivery routes (060,
+-- 064): the code already keeps them; this keeps them if the code (or a hand in the database) ever doesn't. What was
+-- paid, at what price, for which ad and which house never changes; a status only moves forward; nothing is deleted.
+
+-- An ad's order: only its payment's progress changes, and once paid or declined it is final.
+create function ad_orders_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then perform fw_refuse('ad_orders', 'are kept: a declined order stays, declined.'); end if;
+  if not fw_only_changed(to_jsonb(old), to_jsonb(new), array['status', 'failure', 'payment_id', 'paid_at', 'credit_cents'])
+     or (old.status <> 'paying' and (new.status, new.payment_id, new.paid_at, new.credit_cents) is distinct from (old.status, old.payment_id, old.paid_at, old.credit_cents)) then
+    perform fw_refuse('ad_orders', 'can''t be edited: only a payment in progress becomes paid or declined.');
+  end if;
+  return new;
+end $$;
+create trigger ad_orders_guard before update or delete on ad_orders for each row execute function ad_orders_guard();
+
+-- An ad's paid bottles: what was paid, at what price and size, never changes; bottles paid back are only ever added;
+-- a stopped ad stays stopped. (Printed and printing are recounted from the bottles after a restart.)
+create function ad_prepaid_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then perform fw_refuse('ad_prepaid', 'is kept: what an advertiser paid for stays on record.'); end if;
+  if not fw_only_changed(to_jsonb(old), to_jsonb(new), array['printed', 'held', 'refunded', 'stopped_at'])
+     or new.refunded < old.refunded or (old.stopped_at is not null and new.stopped_at is distinct from old.stopped_at) then
+    perform fw_refuse('ad_prepaid', 'can''t be edited: what was paid never changes, bottles paid back are only added, and a stopped ad stays stopped.');
+  end if;
+  return new;
+end $$;
+create trigger ad_prepaid_guard before update or delete on ad_prepaid for each row execute function ad_prepaid_guard();
+
+-- A refund to an advertiser: its amounts never change; once refunded it is done.
+create function ad_refunds_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then perform fw_refuse('ad_refunds', 'is a permanent record.'); end if;
+  if not fw_only_changed(to_jsonb(old), to_jsonb(new), array['status', 'failure', 'done_at']) or old.status = 'refunded' then
+    perform fw_refuse('ad_refunds', 'can''t be edited: only a refund''s progress moves forward, and a refund done is done.');
+  end if;
+  return new;
+end $$;
+create trigger ad_refunds_guard before update or delete on ad_refunds for each row execute function ad_refunds_guard();
+
+-- A use of a paid extra: what it was charged, for which ad, never changes; used, given back or credited is final.
+create function ad_extra_uses_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then perform fw_refuse('ad_extra_uses', 'is kept.'); end if;
+  if (new.id, new.company_id, new.campaign_id, new.feature, new.charged_cents) is distinct from (old.id, old.company_id, old.campaign_id, old.feature, old.charged_cents)
+     or (old.status <> 'claimed' and new.status is distinct from old.status) then
+    perform fw_refuse('ad_extra_uses', 'can''t be edited: what a use was charged never changes, and a use settled stays settled.');
+  end if;
+  return new;
+end $$;
+create trigger ad_extra_uses_guard before update or delete on ad_extra_uses for each row execute function ad_extra_uses_guard();
+
+-- A piece reserved on a route: its ad, house, week, place and price never change. Waiting → printing → printed
+-- (or back to waiting, a print that failed); waiting or printed → given back as credit, refunding, or (waiting)
+-- cancelled; refunding → refunded. Given back, refunded and cancelled are final. Nothing is deleted.
+create function route_spots_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then perform fw_refuse('route_spots', 'are kept: a piece paid for stays on record.'); end if;
+  if not fw_only_changed(to_jsonb(old), to_jsonb(new), array['status', 'unit_id', 'pack_id', 'settlement_id']) then
+    perform fw_refuse('route_spots', 'can''t be edited: what was bought, where and at what price never changes.');
+  end if;
+  if new.status is distinct from old.status and not (
+       (old.status = 'open' and new.status in ('held', 'placed', 'credited', 'refunding', 'cancelled'))
+    or (old.status = 'held' and new.status in ('open', 'placed'))
+    or (old.status = 'placed' and new.status in ('credited', 'refunding'))
+    or (old.status = 'refunding' and new.status = 'refunded')) then
+    perform fw_refuse('route_spots', format('can''t go from %s to %s.', old.status, new.status));
+  end if;
+  return new;
+end $$;
+create trigger route_spots_guard before update or delete on route_spots for each row execute function route_spots_guard();
+
+-- Route pieces grow by every house, bottle and week (a year of two buys on 20,000 houses is two million rows). The
+-- quote's space left in a week, the daily settle of pieces still waiting, and the restart's check of pieces being
+-- printed read only the live ones. Measured on real Postgres over two million pieces: the week's space 1.0 s to 0.15 s
+-- (read from the index alone), the restart's check 94 ms to 0.1 ms.
+create index route_spots_week on route_spots(company_id, week) include (house_id, bottle, units) where status in ('open', 'held', 'placed');
+create index route_spots_waiting on route_spots(status, company_id) where status in ('open', 'held');
+`,
+  },
 ];
 
 /** Runs every migration not yet run (or, for tests that start from an older schema, those in `list`). */

@@ -215,3 +215,72 @@ describe.each(engines)('the new rules go in over data already stored (%s)', (eng
     expect(await migrate(db)).toEqual([]);
   });
 });
+
+describe.each(engines)('paid-up-front and route money can’t be rewritten (069, %s)', (engine) => {
+  let db: SqlClient;
+  const q = (sql: string, args: unknown[] = []) => db.query<any>(sql, args);
+  const no = (p: Promise<unknown>) => expect(p).rejects.toThrow(/^(ad_orders|ad_prepaid|ad_refunds|ad_extra_uses|route_spots) /);
+  beforeAll(async () => {
+    db = await freshDb(engine);
+    await migrate(db);
+    await q(`insert into ad_orders (id, company_id, advertiser_id, campaign_id, kind, bottles, share, product_id, price_cents, total_cents, status) values ('o1','co','adv','cmp1','bottles',10,4,'p',20,200,'paying')`);
+    await q(`insert into ad_prepaid (campaign_id, company_id, advertiser_id, share, product_id, price_cents, paid) values ('cmp1','co','adv',4,'p',20,10)`);
+    await q(`insert into ad_refunds (id, company_id, campaign_id, advertiser_id, bottles, bottles_cents, extras_cents, total_cents, status, reason, stopped_by) values ('r1','co','cmp1','adv',4,80,0,80,'refunding','stopped','user:o')`);
+    await q(`insert into ad_extra_uses (id, company_id, campaign_id, feature, status, charged_cents, at) values ('x1','co','cmp1','aiVideoClip','claimed',300,$1)`, [at]);
+    for (const id of ['s1', 's2', 's3']) await q(`insert into route_spots (id, company_id, campaign_id, advertiser_id, order_id, house_id, week, bottle, share, units, price_cents, status) values ($1,'co','cmp1','adv','o1','h1','2026-11-09',$2,4,30,20,$3)`, [id, Number(id.slice(1)), 'open']);
+  });
+  afterAll(async () => { await db.close(); });
+
+  it('an order: only paying moves to paid or declined, then it is final; never deleted', async () => {
+    await no(q(`update ad_orders set total_cents = 1 where id = 'o1'`));
+    await q(`update ad_orders set credit_cents = 50 where id = 'o1'`); // the credit used, in the paying step
+    await q(`update ad_orders set status = 'paid', payment_id = 'pay1', paid_at = now() where id = 'o1'`);
+    await no(q(`update ad_orders set status = 'declined' where id = 'o1'`));
+    await no(q(`update ad_orders set credit_cents = 0 where id = 'o1'`));
+    await no(q(`delete from ad_orders where id = 'o1'`));
+  });
+
+  it('paid bottles: what was paid never changes; paid back only grows; stopped stays stopped', async () => {
+    await q(`update ad_prepaid set held = held + 1 where campaign_id = 'cmp1'`);
+    await q(`update ad_prepaid set held = held - 1, printed = printed + 1 where campaign_id = 'cmp1'`);
+    await no(q(`update ad_prepaid set paid = 20 where campaign_id = 'cmp1'`));
+    await no(q(`update ad_prepaid set price_cents = 1 where campaign_id = 'cmp1'`));
+    await q(`update ad_prepaid set refunded = 4, stopped_at = now() where campaign_id = 'cmp1'`);
+    await no(q(`update ad_prepaid set refunded = 0 where campaign_id = 'cmp1'`));
+    await no(q(`update ad_prepaid set stopped_at = null where campaign_id = 'cmp1'`));
+    await no(q(`delete from ad_prepaid where campaign_id = 'cmp1'`));
+  });
+
+  it('a refund: amounts fixed; failed may be retried; refunded is done', async () => {
+    await no(q(`update ad_refunds set total_cents = 8000 where id = 'r1'`));
+    await q(`update ad_refunds set status = 'failed', failure = 'declined' where id = 'r1'`);
+    await q(`update ad_refunds set status = 'refunded', failure = null, done_at = now() where id = 'r1'`);
+    await no(q(`update ad_refunds set status = 'refunding' where id = 'r1'`));
+    await no(q(`delete from ad_refunds where id = 'r1'`));
+  });
+
+  it('a paid extra: its charge fixed; settled stays settled', async () => {
+    await no(q(`update ad_extra_uses set charged_cents = 0 where id = 'x1'`));
+    await q(`update ad_extra_uses set status = 'used', cost_cents = 120 where id = 'x1'`);
+    await no(q(`update ad_extra_uses set status = 'returned' where id = 'x1'`));
+    await no(q(`delete from ad_extra_uses where id = 'x1'`));
+  });
+
+  it('a route piece: what, where and the price never change; its status only moves forward', async () => {
+    await no(q(`update route_spots set price_cents = 0 where id = 's1'`));
+    await no(q(`update route_spots set house_id = 'h2' where id = 's1'`));
+    await q(`update route_spots set status = 'held' where id = 's1'`);
+    await q(`update route_spots set status = 'open' where id = 's1'`); // a print that failed lets it go
+    await q(`update route_spots set status = 'held' where id = 's1'`);
+    await q(`update route_spots set status = 'placed', unit_id = 'u1', pack_id = 'pk1' where id = 's1'`);
+    await q(`update route_spots set unit_id = 'u2' where id = 's1'`); // moved to its reprint
+    await no(q(`update route_spots set status = 'open' where id = 's1'`));
+    await q(`update route_spots set status = 'refunding', settlement_id = 'st1' where id = 's1'`);
+    await q(`update route_spots set status = 'refunded' where id = 's1'`);
+    await q(`update route_spots set status = 'cancelled' where id = 's2'`);
+    await no(q(`update route_spots set status = 'open' where id = 's2'`));
+    await q(`update route_spots set status = 'credited' where id = 's3'`);
+    await no(q(`update route_spots set status = 'refunding' where id = 's3'`));
+    await no(q(`delete from route_spots where id = 's3'`));
+  });
+});

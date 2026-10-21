@@ -60,11 +60,30 @@ describe.skipIf(!url)('the new migrations over data the old code wrote, on real 
     await app.wallet.correct('freewater', entry, 'user:josh', 'pg check');
     await expect(app.wallet.correct('freewater', entry, 'user:josh', 'again')).rejects.toMatchObject({ code: 'already_corrected' });
     await expect(db.query(`update wallet_lines set amount = amount * 2 where tx_id = $1`, [entry])).rejects.toThrow(/append-only/);
+    // A transfer of its own, so the check holds whether or not the seed's payout run sent one (a delete of no rows
+    // refuses nothing).
+    const charity = (await db.query<any>(`select id from charities limit 1`)).rows[0].id;
+    await db.query(`insert into charity_transfers (id, company_id, number, charity_id, amount_cents, covers_until, bottles, status, provider) values ($1,'freewater',$2,$3,100,now(),1,'failed','test')`, [`ct_pg_${now}`, `T-PG-${now}`, charity]);
+    await expect(db.query(`delete from charity_transfers where id = $1`, [`ct_pg_${now}`])).rejects.toThrow(/permanent/);
     await expect(db.query(`delete from charity_transfers`)).rejects.toThrow(/permanent/);
     await expect(db.query(`update chain_actions set status = 'approved' where status = 'cancelled'`)).rejects.toThrow(/can.t change/);
     await expect(db.query(`delete from profit_periods`)).rejects.toThrow(/append-only/);
     await app.chain.seal('freewater');
     expect((await app.wallet.check('freewater')).ok).toBe(true);
+  });
+
+  it('the tables and rules of 060 on are in, over the old data (prepaid, routes, houses, news, features, reprints, AI review)', async () => {
+    for (const t of ['ad_orders', 'ad_prepaid', 'ad_refunds', 'route_spots', 'route_settlements', 'houses', 'house_events', 'news_stories', 'company_feature_log', 'drop_photos', 'ad_ai_verdicts']) {
+      expect((await db.query(`select 1 from information_schema.tables where table_name = $1`, [t])).rows, t).toHaveLength(1);
+    }
+    const triggers = (await db.query<any>(`select tgname from pg_trigger where not tgisinternal`)).rows.map((r) => r.tgname);
+    expect(triggers).toEqual(expect.arrayContaining(['ad_prepaid_balance', 'route_spots_room', 'units_void_once', 'company_feature_log_append_only', 'ad_orders_guard', 'ad_prepaid_guard', 'ad_refunds_guard', 'route_spots_guard']));
+    // Every bottle the old code wrote passes the reprint rules (no bottle replaced twice), and can still be updated.
+    const u = (await db.query<any>(`select id from units limit 1`)).rows[0].id;
+    await db.query(`update units set data = data where id = $1`, [u]);
+    // The company's switches were written from its settings at the first start of the new code.
+    expect((await db.query<any>(`select count(*)::int as n from company_features where company_id = 'freewater'`)).rows[0].n).toBeGreaterThan(10);
+    expect((await db.query<any>(`select count(*)::int as n from company_feature_baselines`)).rows[0].n).toBeGreaterThan(0);
   });
 
   it('the test-stage reset still wipes test records, keeping brand money and pauses', async () => {

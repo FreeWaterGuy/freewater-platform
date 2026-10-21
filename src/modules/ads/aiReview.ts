@@ -264,6 +264,9 @@ export class AiReviewService {
     const r = await this.record(companyId);
     if (!r.meetsBar) throw new AdsError(422, 'not_yet', `Not yet: it needs ${r.missing.join('; ')}.`);
     await this.features.setOnOwnPage(companyId, FINAL_CALL, true, who.name, reason.trim(), 'AI reviewer page');
+    // The record was read before the switch was saved: a bar raised (or a decision made) in between is judged now, by
+    // the governor, so it never stays on below the bar.
+    if (await this.governor(companyId)) throw new AdsError(422, 'not_yet', `Not yet: the bar changed while it was being turned on. It needs ${(await this.record(companyId)).missing.join('; ')}.`);
     return this.record(companyId);
   }
 

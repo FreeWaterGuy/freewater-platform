@@ -1,4 +1,4 @@
-import type { SqlClient } from '../../db/client';
+import { retryOnConflict, type SqlClient } from '../../db/client';
 import type { Platform } from '../../platform';
 import type { Campaign, CompanyConfig, Product, Share } from '../../core/types';
 import { SHARES } from '../../core/types';
@@ -697,7 +697,7 @@ export class RouteBuyService {
     if (!rb) return null;
     const kind: 'credit' | 'refund' = n(rb.houses) === 1 ? 'refund' : 'credit';
     const status = kind === 'credit' ? 'credited' : 'refunding';
-    const got = await this.db.transaction(async (tx) => {
+    const got = await retryOnConflict(() => this.db.transaction(async (tx) => {
       await tx.query(`select 1 from ad_prepaid where campaign_id = $1 for update`, [campaignId]);
       const unprinted = openIds.length ? (await tx.query<any>(`update route_spots set status = $3, settlement_id = $4 where id = any($1::text[]) and company_id = $2 and status = 'open' returning id, bottle, face, price_cents`, [openIds, companyId, status, id])).rows : [];
       const back = backIds.length ? (await tx.query<any>(`update route_spots set status = $3, settlement_id = $4 where id = any($1::text[]) and company_id = $2 and status = 'placed' returning id, bottle, face, price_cents, unit_id, pack_id`, [backIds, companyId, status, id])).rows : [];
@@ -711,7 +711,7 @@ export class RouteBuyService {
       await tx.query(`insert into route_settlements (id, company_id, advertiser_id, campaign_id, kind, reason, bottles, faces, unprinted_cents, reversed_cents, total_cents, status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
         [id, companyId, rb.advertiser_id, campaignId, kind, reason.slice(0, 300), bottles + back.filter((r) => r.bottle !== null).length, faces.length + back.filter((r) => r.face !== null).length, unprintedCents, reversedCents, unprintedCents + reversedCents, kind === 'credit' ? 'done' : 'waiting']);
       return { bottles, faces: faces.length, back, total: unprintedCents + reversedCents };
-    });
+    }));
     if (!got) return null;
     const c = this.platform.campaigns.get(campaignId);
     if (c?.prepaid) {

@@ -1,4 +1,5 @@
-import type { SqlClient } from '../../db/client';
+import { retryOnConflict, type SqlClient } from '../../db/client';
+import { PREPAID_LANE } from '../../db/store';
 import type { Platform } from '../../platform';
 import { SHARES, type Campaign, type PrepaidBottles, type Share } from '../../core/types';
 import { newId } from '../../core/ids';
@@ -255,7 +256,12 @@ export class PrepaidService {
     // An ad is on a bottle at most once, so one statement claims one bottle from each (all or none: a refusal rolls
     // the others back).
     const ids = [...new Set(campaignIds)];
-    await this.db.transaction(async (tx) => {
+    // The background writer holds these rows too, in its own order, inside one batch: when Postgres ends this claim to
+    // break a deadlock, it is simply tried again (nothing of it was kept).
+    await retryOnConflict(() => this.db.transaction(async (tx) => {
+      // One claim at a time against the writer's batches, and rows taken in one order (by ad): nobody waits in a circle.
+      await tx.query(PREPAID_LANE);
+      await tx.query(`select 1 from ad_prepaid where campaign_id = any($1::text[]) order by campaign_id for update`, [ids]);
       const got = new Set((await tx.query<any>(`update ad_prepaid set held = held + 1 where campaign_id = any($1::text[]) and company_id = $2 and stopped_at is null and printed + held + refunded < paid returning campaign_id`, [ids, companyId])).rows.map((r) => r.campaign_id as string));
       // An ad bought on delivery routes prints only on a spot reserved for it, and each spot once: open → held here, in
       // the same step, so two packs (or two servers) can never print the same spot.
@@ -263,7 +269,7 @@ export class PrepaidService {
       const route = new Set((await tx.query<any>(`select campaign_id from route_buys where campaign_id = any($1::text[])`, [ids])).rows.map((r) => r.campaign_id as string));
       refused = ids.filter((id) => !got.has(id) || (route.has(id) && !spots.has(id)));
       if (refused.length) throw new Refused();
-    }).catch((e) => { if (!(e instanceof Refused)) throw e; });
+    })).catch((e) => { if (!(e instanceof Refused)) throw e; });
     for (const id of refused) {
       this.alert?.(`prepaid-claim:${id}`, `Ad ${id}: memory thought a paid bottle was left, the database didn't`, 'The bottle was printed without it. This happens if two servers run at once or the database was changed by hand; check the daily reconciliation (prepaid bottles).');
       const c = this.platform.campaigns.get(id);
@@ -318,7 +324,7 @@ export class PrepaidService {
     }
     await this.flush();
     const used = await this.extrasUsed(c.id);
-    const row = await this.db.transaction(async (tx) => {
+    const row = await retryOnConflict(() => this.db.transaction(async (tx) => {
       const p = (await tx.query<any>(`select * from ad_prepaid where campaign_id = $1 and company_id = $2 for update`, [c.id, o.companyId])).rows[0];
       if (!p) throw new AdsError(404, 'not_found', 'Campaign not found.');
       if (p.stopped_at) throw new AdsError(409, 'already_stopped', 'This ad was already stopped.');
@@ -335,7 +341,7 @@ export class PrepaidService {
       // Its route spots not printed yet are let go: they're in this refund, and the space is free for others.
       await tx.query(`update route_spots set status = 'cancelled' where campaign_id = $1 and status = 'open'`, [c.id]);
       return r;
-    });
+    }));
     c.prepaid = { ...c.prepaid, refunded: c.prepaid.refunded + n(row.bottles), stoppedAt: this.platform.bus.now().toISOString() };
     c.active = false;
     syncPrepaidBuy(c);
