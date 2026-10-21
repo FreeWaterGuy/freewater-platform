@@ -381,7 +381,10 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   // ---------- purchases: advertisers' point-of-sale systems ----------
 
   const sale = (refund: boolean): Handler => async (req, key) => {
-    const b = req.body as any;
+    // An order number with a space around it (as a till may send it) is the same order, as on /v1/conversions: one
+    // sale reported both ways is billed once.
+    const b = { ...(req.body as any), orderId: String((req.body as any).orderId).trim() };
+    if (!b.orderId) throw new ApiError(422, 'bad_order', 'Send the order number.');
     const { placement } = placementFor(key, b.unitId, b.slot);
     if (!placement || placement.isHouse) throw new ApiError(422, 'not_sold', 'That slot has no advertiser to credit.');
     if (key!.advertiserId && placement.advertiserId !== key!.advertiserId) throw notFound('Slot');

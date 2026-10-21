@@ -36,6 +36,7 @@ const parse = <T>(v: unknown): T => (typeof v === 'string' ? JSON.parse(v) : v) 
 const addDays = (date: string, n: number) => new Date(Date.parse(`${date}T12:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
 const weekday = (date: string) => new Date(`${date}T12:00:00Z`).getUTCDay();
 /** The first date on the subscription's rhythm (`from` plus whole steps) after `after`. */
+const isoDay = (v: unknown) => (typeof v === 'string' ? v.slice(0, 10) : new Date(v as string).toISOString().slice(0, 10));
 const nextAfter = (from: string, step: number, after: string) => { let d = from; while (d <= after) d = addDays(d, step); return d; };
 
 /** Home delivery: subscriptions, the nightly plan, printing and packing each route, and the drive. */
@@ -188,11 +189,14 @@ export class DeliveryService {
     // Everyone due tonight, and anyone whose delivery day went by without being planned (a night nobody planned, or
     // a sign-up after that route's night was already planned): they come on the next night their route runs. A
     // subscription already on a run from its due date on is never planned again until that run moves it forward.
+    // Only a day already gone counts as missed: planning a later night ahead never takes a delivery from its own night.
+    await this.moveOnPrinted(companyId);
+    const today = this.today(companyId);
     const due = (await this.db.query<any>(
       `select * from subscriptions s where s.company_id = $1 and s.status = 'active' and s.next_date <= $2
          and not exists (select 1 from route_runs rr where rr.company_id = s.company_id and rr.route_id = s.route_id and rr.run_date >= s.next_date
                            and rr.stops @> jsonb_build_array(jsonb_build_object('subscriptionId', s.id)))`, [companyId, date],
-    )).rows.map((r) => this.sub(r)).filter((s) => s.nextDate === date || this.runsOn(s.routeId, date));
+    )).rows.map((r) => this.sub(r)).filter((s) => s.nextDate === date || (s.nextDate! < today && this.runsOn(s.routeId, date)));
     const out: Run[] = await this.runs(companyId, date); // already planned routes stay as they are
     for (const run of out) if (run.status === 'printing') await this.printRun(run);
     const byRoute = new Map<string, Subscription[]>();
@@ -252,6 +256,23 @@ export class DeliveryService {
     }
   }
 
+  /**
+   * A subscription whose run got past printing while its next date stayed put (the server stopped between the two):
+   * moved on now, as the run would have. Left alone it would stay "already on a run" and off every later night, and
+   * off the overdue alert too, without anyone knowing.
+   */
+  private async moveOnPrinted(companyId: string) {
+    const rows = (await this.db.query<any>(
+      `select s.id, s.next_date, s.frequency, max(rr.run_date) as last from subscriptions s
+         join route_runs rr on rr.company_id = s.company_id and rr.route_id = s.route_id and rr.run_date >= s.next_date and rr.status <> 'printing'
+                           and rr.stops @> jsonb_build_array(jsonb_build_object('subscriptionId', s.id))
+       where s.company_id = $1 and s.status = 'active' group by s.id, s.next_date, s.frequency`, [companyId])).rows;
+    for (const r of rows) {
+      const from = isoDay(r.next_date);
+      await this.db.query(`update subscriptions set next_date = $2, updated_at = now() where id = $1 and next_date = $3`, [r.id, nextAfter(from, STEP[r.frequency as Frequency], isoDay(r.last)), from]);
+    }
+  }
+
   /** Whether a route drives on that date (a route with no days set drives any day). */
   private runsOn(routeId: string, date: string) {
     const days = this.platform.locations.get(routeId)?.deliveryDays ?? [];
@@ -263,6 +284,7 @@ export class DeliveryService {
    * their route catches them up; until someone does, the team is alerted (a person plans each night: docs/RUNBOOKS.md).
    */
   async overdue(companyId: string) {
+    await this.moveOnPrinted(companyId);
     const today = this.today(companyId);
     const rows = (await this.db.query<any>(
       `select s.* from subscriptions s where s.company_id = $1 and s.status = 'active' and s.next_date < $2

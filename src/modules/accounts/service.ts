@@ -193,14 +193,14 @@ export class AccountsService {
     const r = (await this.db.query<any>(`select viewer_key, consents, interests from users where id = $1 and company_id = $2 and deleted_at is null`, [userId, companyId])).rows[0];
     if (!r) return null;
     const consents = parse<Consents>(r.consents);
-    // Without their yes to personalized offers, nothing about them is used to pick ads.
-    const seen = consents.personalizedOffers ? (await this.db.query<any>(`select advertiser_id from viewer_advertisers where company_id = $1 and viewer_key = $2`, [companyId, r.viewer_key])).rows.map((x) => x.advertiser_id as string) : [];
+    // Without their yes to personalized offers, nothing about them is used to pick ads; and someone who told us they're
+    // under the minimum age gets none whatever they turned on (COPPA and its kind): neither their interests nor which
+    // advertisers they met before (new or returning customer targeting is personalized advertising too).
+    const mayUse = !!consents.personalizedOffers && (await this.mayPersonalize(companyId, [r.viewer_key, `user:${userId}`]));
+    const seen = mayUse ? (await this.db.query<any>(`select advertiser_id from viewer_advertisers where company_id = $1 and viewer_key = $2`, [companyId, r.viewer_key])).rows.map((x) => x.advertiser_id as string) : [];
     // What they asked for themselves (kinds of ads never wanted) and the no-ads control apply with or without that yes.
     const extra = this.audienceExtras ? await this.audienceExtras(companyId, r.viewer_key) : {};
-    // Someone who told us they're under the minimum age: their interests never pick their ads (COPPA and its kind).
-    const interests = consents.personalizedOffers ? parse<string[]>(r.interests) : [];
-    const mayUse = interests.length > 0 && (await this.mayPersonalize(companyId, [r.viewer_key, `user:${userId}`]));
-    return { personKey: r.viewer_key, interests: mayUse ? interests : [], advertisersSeen: new Set(seen), ...extra };
+    return { personKey: r.viewer_key, interests: mayUse ? parse<string[]>(r.interests) : [], advertisersSeen: new Set(seen), ...extra };
   }
   /** Set by the app: false for a person known to be under the minimum age. */
   mayPersonalize: (companyId: string, subjects: string[]) => Promise<boolean> = async () => true;

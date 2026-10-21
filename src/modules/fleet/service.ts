@@ -551,6 +551,10 @@ export class FleetService {
         }
         if (this.platform.confirmPrepared(it.unitId, `offline:${it.unitId}`)) {
           billed++;
+          // The bottle (out, billed) is stored before its label is marked used: a crash in between leaves the label
+          // held, so the machine's resend finds the bottle billed and marks it used. The other way round, the restart
+          // would let go a bottle in someone's hand (unbilled, its code dead) whose label already said "used".
+          await this.flush();
           await this.db.query(`update machine_buffer set status = 'used', used_at = $2 where unit_id = $1 and status = 'held'`, [it.unitId, new Date(at).toISOString()]);
           continue;
         }
