@@ -587,7 +587,7 @@
       };
       return h('section', { class: 'panel', style: 'gap:12px' }, h('h2', { class: 'section', text: 'Your bid' }),
         h('p', { style: 'margin:0', text: `You bid for the whole label; smaller pieces pay the same share. Bidding starts at ${cents(c.engagement?.floorCents ?? 100)}. You pay only enough to beat the next ad in line, never more than your bid. Ads people engage with more can win with lower bids.` }),
-        h('div', { class: 'form' }, field('Most you’ll pay for the whole label ($)', f.bid), field('Daily budget ($)', f.cap), field('Budget pacing', f.pacing), field('Most bottles one person gets a day', f.freq)),
+        h('div', { class: 'form' }, field('Most you’ll pay for the whole label ($)', f.bid), field('Most you’ll pay a day for printed labels ($)', f.cap, 'Covers only what you pay for labels printed. Scans, AR launches, box sides and sales commission are billed on top.'), field('Budget pacing', f.pacing), field('Most bottles one person gets a day', f.freq)),
         h('div', { class: 'field' }, h('label', { text: 'Bid more or less (%) by time of day' }), h('div', { class: 'chips' }, f.parts.map(([, l, i]) => h('label', { class: 'chip-check' }, `${l} `, i)))),
         h('div', { class: 'form' }, field('New customers (%)', f.newC), field('Returning customers (%)', f.retC), field('By interest', f.ints, 'Only for people who shared their interests.'), field('By machine or route', f.locs)));
     })();
@@ -671,7 +671,7 @@
     if (c.status === 'paused') actions.push(h('button', { class: 'btn small', type: 'button', onclick: async () => { try { await api('PATCH', `/v1/campaigns/${c.id}`, { active: true }); toast('Running again'); render(); } catch (x) { toast(x.message); } } }, 'Resume'));
     if (c.editable && c.status !== 'in_review') actions.push(link(`/ads/campaigns/${c.id}/change`, { class: 'btn small secondary' }, 'Change it'));
     actions.push(link(`/ads/campaigns/${c.id}/code`, { class: 'btn small secondary' }, 'Code, versions and AI'));
-    const budget = c.budget.type === 'guaranteed' ? `${num(c.budget.bottlesLeft)} bottles left` : `${dollars(c.budget.dailyCapCents)} a day`;
+    const budget = c.budget.type === 'guaranteed' ? `${num(c.budget.bottlesLeft)} bottles left` : `up to ${dollars(c.budget.dailyCapCents)} a day for printed labels (scans and other charges on top)`;
     return h('article', { class: 'camp' },
       h('div', { class: 'thumb' }, h('img', { src: svgSrc(c.thumbSvg), alt: `Your ad: ${c.name}` })),
       h('div', {},
@@ -814,7 +814,7 @@
     const agree = h('input', { type: 'checkbox', id: 'agree' });
     const err = h('div', { class: 'notice err', hidden: true });
     const dr = d.draft;
-    const budget = dr.buy?.type === 'guaranteed' ? `${num(dr.buy.prints)} bottles` : dr.buy ? `${dollars(dr.buy.dailyCapCents)} a day` : 'Not set';
+    const budget = dr.buy?.type === 'guaranteed' ? `${num(dr.buy.prints)} bottles` : dr.buy ? `up to ${dollars(dr.buy.dailyCapCents)} a day for printed labels (scans and other charges on top)` : 'Not set';
     const submit = h('button', { class: 'btn wide', type: 'button', onclick: async () => {
       err.hidden = true;
       if (!agree.checked) { err.textContent = 'Check the box to confirm you looked it over.'; err.hidden = false; return; }

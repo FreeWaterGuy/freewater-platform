@@ -118,7 +118,7 @@ export class BuiltinAdAssistant implements AdAssistant {
     // Budget: "$20 a day" or "5,000 bottles".
     const perDay = /\$\s?(\d[\d,]*)(?:\.\d\d)?\s*(?:a|per|\/)\s*day/i.exec(text);
     const bottles = /(\d[\d,]{2,})\s*(bottles|prints|labels)/i.exec(text);
-    if (perDay) { patch.buy = { type: 'bid', dailyCapCents: Number(perDay[1]!.replace(/,/g, '')) * 100 }; did.push(`a budget of $${perDay[1]} a day`); }
+    if (perDay) { patch.buy = { type: 'bid', dailyCapCents: Number(perDay[1]!.replace(/,/g, '')) * 100 }; did.push(`a daily cap of $${perDay[1]} for printed labels only (scans and other charges are billed on top)`); }
     else if (bottles) { patch.buy = { type: 'guaranteed', prints: Number(bottles[1]!.replace(/,/g, '')) }; did.push(`${bottles[1]} bottles`); }
 
     // What opens when people scan it.

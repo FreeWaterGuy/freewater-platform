@@ -54,6 +54,7 @@ with a plain explanation.
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `ANTHROPIC_PERSONALIZE_MODEL` | Claude, for the agents, ad assistant, designer, video writer and team assistant. Without it the built-in rules run. |
 | `AI_KEY_<COMPANY ID>` | An operator's own Anthropic key, when it chose "our own AI" in the console (for example `AI_KEY_PEAK_SPRING`). Only that operator's AI calls use it. |
 | `GEMINI_API_KEY`, `VEO_MODEL` | Veo, for live-action and animated footage. Optional; costs money per clip. |
+| `FOOTAGE_PER_COMPANY_DAY` | Most footage clips one company may start in any 24 hours, across all its ads (default 60; each ad also stops at 12). The team is alerted when a company reaches it. |
 | `GEOIP_DB` | Path to MaxMind's GeoLite2 City file, to tell where each visitor is so their own law applies. Without it (and without trusted headers), everyone gets the strictest rules. |
 | `TRUST_GEO_HEADERS` | `1` when the host adds a visitor-country header (Cloudflare `CF-IPCountry`, Vercel, Fastly). Only behind such a host: otherwise anyone could send it. |
 | `SANCTIONED_COUNTRIES` | Comma-separated country codes where points and prizes aren't offered (default `CU,IR,KP,SY`). |
@@ -194,8 +195,10 @@ decision start once with `FW_SPOOL_SKIP=1` to set it aside unapplied (`….skipp
 | Job | How often | What it does | Safe to run again? |
 |---|---|---|---|
 | `webhooks` | 3 s | Sends webhooks to companies' systems, with retries. | Yes: each delivery is tracked. |
-| `fleet-sweep` | 15 s | Opens an "offline" problem for Model 6 machines that stopped calling in; lets go of kept offline labels past their time. | Yes. |
-| `videos` | 10 s | Checks on footage being made. | Yes. |
+| `fleet-sweep` | 15 s | Opens an "offline" problem for Model 6 machines that stopped calling in; lets go of kept offline labels 48 hours after their time (a machine still offline may yet report a bottle it gave before then). | Yes. |
+| `videos` | 10 s | Checks on footage being made; a clip claimed but never started (the server stopped) fails after 15 minutes so it can be tried again. | Yes. |
+| `credit` | hourly | Pauses the live ads of advertisers who owe more than their credit allows, alerting the team and emailing the advertiser (docs/SWITCHES.md, "Credit for advertisers"). Also runs at once when an invoice's card is declined. It never turns anything back on. | Yes: an ad already paused is left alone. |
+| `deliveries-overdue` | hourly | Alerts when active home deliveries' day went by without being planned or printed. It never plans a night itself (printing bills advertisers): a person does (docs/RUNBOOKS.md). | Yes: it only reads. |
 | `books-and-agents` | hourly | Closes any month that's due, measures agents' changes, reads every agent's standing, shares out the AI fund, security review. Company by company. | Yes: a month closes once, a day's share-out once (crash-tested). |
 | `agent-exams` | daily | Any agent whose model hasn't passed the current test takes it. | Yes. |
 | `game-photos` | 6 hours | Finds photos of the real products for the games' cards, a few at a time. | Yes. |

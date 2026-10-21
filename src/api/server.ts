@@ -482,6 +482,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       if (b.theme !== undefined) c.theme = b.theme;
       if (!reviewer) c.active = false;
     }
+    // Going live (approved by a reviewer, or turned back on by the advertiser) needs the advertiser's credit to allow it.
+    if (b.active === true && !c.active && (reviewer || (approved && !changesPage))) await app.credit.needCredit(c);
     if (b.active !== undefined && (reviewer || b.active === false || (approved && !changesPage))) c.active = b.active;
     if (reviewer && b.active === true) c.review = { status: 'approved', at: platform.bus.now().toISOString() };
     if (changesPage && !reviewer) c.review = { status: 'submitted', at: platform.bus.now().toISOString() };
@@ -752,6 +754,20 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const id = (req.params as any).advertiserId;
     advertiserScope(key!, id);
     return { status: 201, body: await app.payments.addMethod(key!.companyId, 'advertiser', id, (req.body as any).token) };
+  } });
+
+  // Credit for advertisers (docs/SWITCHES.md, "Credit for advertisers").
+  route({ method: 'GET', url: '/v1/advertisers/:advertiserId/credit', scope: 'invoices', summary: 'Whether an advertiser’s ads may run: its card, its credit limit (if a person set one) and what it owes now (unpaid invoices and charges not invoiced yet).', handler: async (req, key) => {
+    const id = (req.params as any).advertiserId;
+    advertiserScope(key!, id);
+    return { body: { ...(await app.credit.standing(key!.companyId, id)), limit: await app.credit.limit(key!.companyId, id) } };
+  } });
+  route({ method: 'POST', url: '/v1/advertisers/:advertiserId/credit-limit', scope: 'invoices', summary: 'Set how much an advertiser may owe before its ads pause (0 for none: then it needs a working card). An owner or finance person, signed in with the second step, with a reason. Each change is kept.', body: obj({ limitCents: { type: 'integer', minimum: 0, maximum: 100_000_000 }, reason: { type: 'string', minLength: 5, maxLength: 300 } }, ['limitCents', 'reason']), handler: async (req, key) => {
+    if (!key!.userId || key!.advertiserId) throw new ApiError(403, 'people_only', 'An owner or finance person sets credit limits, signed in, not with an API key.');
+    const u = await app.accounts.get(key!.userId);
+    if (!u || u.companyId !== key!.companyId || !['owner', 'finance'].includes(u.role)) throw new ApiError(403, 'owner_or_finance', 'Only an owner or a finance person sets credit limits.');
+    const b = req.body as any;
+    return { status: 201, body: await app.credit.grant(key!.companyId, (req.params as any).advertiserId, b.limitCents, `user:${u.id}`, b.reason) };
   } });
 
   route({ method: 'POST', url: '/v1/invoices/run', scope: 'invoices', summary: 'Invoice every advertiser for everything billed since their last invoice. Saved cards are charged; others stay open.', body: obj({ periodEnd: { type: 'string', format: 'date-time' } }), handler: async (req, key) => {

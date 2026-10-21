@@ -353,11 +353,13 @@ export class AdsService {
   async overview(input: { companyId: string; advertiserId: string; days: number }) {
     const company = this.platform.companies.get(input.companyId)!;
     const acct = `receivable:advertiser:${input.advertiserId}`;
-    const since = new Date(this.platform.bus.now().getTime() - (input.days - 1) * 86_400_000);
-    since.setUTCHours(0, 0, 0, 0);
+    // Days as the company counts them (its time zone), the same days its advertisers' daily budgets run on.
+    const tz = company.timezone ?? 'UTC';
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(this.platform.bus.now());
+    const dayBefore = (d: string, n: number) => new Date(Date.parse(`${d}T12:00:00Z`) - n * 86_400_000).toISOString().slice(0, 10);
     const lines = (await this.db.query<any>(
-      `select campaign_id, kind, to_char(date_trunc('day', at at time zone 'UTC'), 'YYYY-MM-DD') as day, debit = $2 as owes, count(*)::int as n, sum(amount_cents)::bigint as cents
-       from ledger_entries where company_id = $1 and (debit = $2 or credit = $2) group by 1, 2, 3, 4`, [input.companyId, acct])).rows;
+      `select campaign_id, kind, to_char(at at time zone $3, 'YYYY-MM-DD') as day, debit = $2 as owes, count(*)::int as n, sum(amount_cents)::bigint as cents
+       from ledger_entries where company_id = $1 and (debit = $2 or credit = $2) group by 1, 2, 3, 4`, [input.companyId, acct, tz])).rows;
     const engaged = (await this.db.query<any>(
       `select payload->>'campaignId' as campaign_id, payload->>'action' as action, count(*)::int as n from events
        where company_id = $1 and type = 'experience.engaged' and payload->>'advertiserId' = $2 group by 1, 2`, [input.companyId, input.advertiserId])).rows;
@@ -380,7 +382,7 @@ export class AdsService {
     const total = blank(), period = blank();
     const byCampaign = new Map<string, Totals>();
     const days = new Map<string, Totals>();
-    for (let i = 0; i < input.days; i++) days.set(new Date(since.getTime() + i * 86_400_000).toISOString().slice(0, 10), blank());
+    for (let i = input.days - 1; i >= 0; i--) days.set(dayBefore(today, i), blank());
     for (const r of lines) {
       add(total, r);
       const key = r.campaign_id ?? 'other';
@@ -400,7 +402,7 @@ export class AdsService {
     const campaigns = [...this.platform.campaigns.values()].filter((c) => c.companyId === input.companyId && c.advertiserId === input.advertiserId && !c.isHouse)
       .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '') || a.id.localeCompare(b.id))
       .map((c) => ({
-        id: c.id, name: c.name ?? (c.creativeRef?.kind === 'poster' || c.creativeRef?.kind === 'studio' ? c.creativeRef.spec.headline : c.advertiserName), status: this.status(c), review: c.review ?? null,
+        id: c.id, name: c.name ?? (c.creativeRef?.kind === 'poster' || c.creativeRef?.kind === 'studio' ? c.creativeRef.spec.headline : c.advertiserName), status: this.status(c), review: c.review ?? null, creditHold: c.creditHold ?? null,
         sizes: c.sizes, formats: c.formats ?? ['label'], where: c.targeting.locations ?? 'all', experienceId: c.experienceId,
         budget: c.buy.type === 'guaranteed' ? { type: 'guaranteed', bottlesLeft: c.buy.remainingPrints } : { type: 'bid', dailyCapCents: c.buy.dailyCapCents, spentTodayCents: c.buy.spentTodayCents },
         editable: c.creativeRef?.kind === 'poster' || c.creativeRef?.kind === 'studio',
@@ -423,9 +425,13 @@ export class AdsService {
     return [...this.platform.campaigns.values()].filter((c) => c.companyId === companyId && c.review?.status === 'submitted');
   }
 
-  review(input: { companyId: string; campaignId: string; decision: 'approve' | 'reject'; note?: string }) {
+  /** Set by the app: refuses an ad going live when its advertiser's credit doesn't allow it (CreditService). */
+  beforeLive: (c: Campaign) => Promise<void> = async () => {};
+
+  async review(input: { companyId: string; campaignId: string; decision: 'approve' | 'reject'; note?: string }) {
     const c = this.platform.campaigns.get(input.campaignId);
     if (!c || c.companyId !== input.companyId) throw new AdsError(404, 'not_found', 'Campaign not found.');
+    if (input.decision === 'approve') await this.beforeLive(c);
     const at = this.platform.bus.now().toISOString();
     c.review = { status: input.decision === 'approve' ? 'approved' : 'rejected', ...(input.note ? { note: input.note } : {}), at };
     c.active = input.decision === 'approve';

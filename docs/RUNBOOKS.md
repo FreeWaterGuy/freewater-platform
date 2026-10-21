@@ -261,6 +261,49 @@ A machine asked to print faster than it physically can. Either the machine is un
    console (Keys) and give the machine a new one.
 2. Only a person signed in can change the print limits (console settings, machines), and only to sane whole numbers.
 
+## Plan tonight's deliveries (a person, every delivery night)
+
+Nothing plans the night by itself on purpose: planning prints every box and bottle, and printing bills advertisers.
+
+1. In the ops console, the night's runs → *Plan and print this night* (or `POST /v1/ops/runs/plan` with the date) for each night routes
+   drive, before printing starts. Running it twice for the same night does nothing new (a run stuck "printing"
+   picks up its unprinted boxes).
+2. Anyone whose delivery day went by without a plan is included on the next night their route drives, once, and
+   their next date carries on from their usual day.
+
+## "Home deliveries are overdue"
+
+Someone's delivery day went by and they aren't on a planned, printed run (a night nobody planned, a run stuck
+printing, or they signed up after their route's night was planned). The alert lists who and the route.
+
+1. Plan the next night their route drives (above). They're included automatically; the alert stops once they're on
+   a printed run.
+2. If a run is stuck "printing", read its failures in the console, fix the printer, and plan that night again.
+3. Tell the customers it's coming a few days late, if it is.
+
+## "An advertiser's ads were paused: credit"
+
+Its unpaid balance passed its credit limit, or its card was declined with no limit to cover it (docs/SWITCHES.md,
+"Credit for advertisers"). Its staff have been emailed.
+
+1. `GET /v1/advertisers/<id>/credit` shows the card, the limit and what it owes; `GET /v1/invoices` the open ones.
+2. If it pays (`POST /v1/invoices/<id>/pay` after adding a card, or a transfer recorded in the books), or an owner or
+   finance person raises its limit with a reason, turn its ads back on (the advertiser can, or a reviewer).
+3. Don't raise a limit only to make the alert go away: that's lending the advertiser money.
+
+## "Machine … reported bottles printed after their labels expired"
+
+A machine said it printed offline labels after their time. Those bottles weren't billed and their codes don't work.
+Labels a machine gave out before they expired are still billed when it comes back online, up to 48 hours after
+(kept until then, then let go). Check the machine's clock and software version; if it keeps happening, take it out of
+service and call the machine's maker.
+
+## "Company … reached its ceiling of … video clips a day"
+
+Live-action and animated clips cost money each. A company stops starting new ones at `FOOTAGE_PER_COMPANY_DAY`
+(default 60) in any 24 hours; each ad stops at 12. Motion videos still show. If the company really is that busy, raise
+the host setting and restart; if not, check which ads are making clips (`GET /v1/campaigns/<id>/videos`).
+
 ## A backup or the restore check failed
 
 1. Read the error. Common causes: the backup bucket's keys expired or changed; `BACKUP_KEY` changed (old copies then

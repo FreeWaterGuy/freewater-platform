@@ -35,6 +35,8 @@ export interface Run {
 const parse = <T>(v: unknown): T => (typeof v === 'string' ? JSON.parse(v) : v) as T;
 const addDays = (date: string, n: number) => new Date(Date.parse(`${date}T12:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
 const weekday = (date: string) => new Date(`${date}T12:00:00Z`).getUTCDay();
+/** The first date on the subscription's rhythm (`from` plus whole steps) after `after`. */
+const nextAfter = (from: string, step: number, after: string) => { let d = from; while (d <= after) d = addDays(d, step); return d; };
 
 /** Home delivery: subscriptions, the nightly plan, printing and packing each route, and the drive. */
 export class DeliveryService {
@@ -42,6 +44,9 @@ export class DeliveryService {
     private db: SqlClient, private platform: Platform, private packs: PackService, private accounts: AccountsService,
     private messenger: Messenger, public geocoder: Geocoder, public planner: RoutePlanner, private flush: () => Promise<void>,
   ) {}
+
+  /** Set by the app: tells the team (the platform's alerts) about deliveries that went by unplanned. */
+  alert?: (key: string, title: string, detail: string) => void;
 
   /**
    * One change at a time per key (a company's night plan, one run). A run is read, changed and written back whole, so
@@ -180,7 +185,14 @@ export class DeliveryService {
     return this.serial(`plan:${companyId}`, () => this.planNightNow(companyId, date));
   }
   private async planNightNow(companyId: string, date: string) {
-    const due = (await this.db.query<any>(`select * from subscriptions where company_id = $1 and status = 'active' and next_date = $2`, [companyId, date])).rows.map((r) => this.sub(r));
+    // Everyone due tonight, and anyone whose delivery day went by without being planned (a night nobody planned, or
+    // a sign-up after that route's night was already planned): they come on the next night their route runs. A
+    // subscription already on a run from its due date on is never planned again until that run moves it forward.
+    const due = (await this.db.query<any>(
+      `select * from subscriptions s where s.company_id = $1 and s.status = 'active' and s.next_date <= $2
+         and not exists (select 1 from route_runs rr where rr.company_id = s.company_id and rr.route_id = s.route_id and rr.run_date >= s.next_date
+                           and rr.stops @> jsonb_build_array(jsonb_build_object('subscriptionId', s.id)))`, [companyId, date],
+    )).rows.map((r) => this.sub(r)).filter((s) => s.nextDate === date || this.runsOn(s.routeId, date));
     const out: Run[] = await this.runs(companyId, date); // already planned routes stay as they are
     for (const run of out) if (run.status === 'printing') await this.printRun(run);
     const byRoute = new Map<string, Subscription[]>();
@@ -236,8 +248,32 @@ export class DeliveryService {
       const r = (await this.db.query<any>(`select * from subscriptions where id = $1`, [st.subscriptionId])).rows[0];
       if (!r) continue;
       const s = this.sub(r);
-      if (s.nextDate === run.date) await this.db.query(`update subscriptions set next_date = $2, updated_at = now() where id = $1`, [s.id, addDays(run.date, STEP[s.frequency])]);
+      if (s.nextDate && s.nextDate <= run.date) await this.db.query(`update subscriptions set next_date = $2, updated_at = now() where id = $1 and next_date = $3`, [s.id, nextAfter(s.nextDate, STEP[s.frequency], run.date), s.nextDate]);
     }
+  }
+
+  /** Whether a route drives on that date (a route with no days set drives any day). */
+  private runsOn(routeId: string, date: string) {
+    const days = this.platform.locations.get(routeId)?.deliveryDays ?? [];
+    return !days.length || days.includes(weekday(date));
+  }
+
+  /**
+   * Active subscriptions whose delivery day has gone by without them on a planned run. Planning the next night of
+   * their route catches them up; until someone does, the team is alerted (a person plans each night: docs/RUNBOOKS.md).
+   */
+  async overdue(companyId: string) {
+    const today = this.today(companyId);
+    const rows = (await this.db.query<any>(
+      `select s.* from subscriptions s where s.company_id = $1 and s.status = 'active' and s.next_date < $2
+         and not exists (select 1 from route_runs rr where rr.company_id = s.company_id and rr.route_id = s.route_id and rr.run_date >= s.next_date and rr.status <> 'printing'
+                           and rr.stops @> jsonb_build_array(jsonb_build_object('subscriptionId', s.id)))
+       order by s.next_date`, [companyId, today])).rows.map((r) => this.sub(r));
+    if (rows.length) {
+      this.alert?.(`deliveries-overdue:${companyId}`, `${rows.length} home deliver${rows.length === 1 ? 'y is' : 'ies are'} overdue (${companyId})`,
+        `Subscriptions whose delivery day went by without being planned or printed, the oldest due ${rows[0]!.nextDate}: ${rows.slice(0, 20).map((s) => `${s.id} (${s.routeId}, due ${s.nextDate})`).join(', ')}${rows.length > 20 ? ', …' : ''}. Plan the next night their route runs (POST /v1/ops/runs/plan); they're included automatically. See docs/RUNBOOKS.md ("Home deliveries overdue").`);
+    }
+    return rows;
   }
 
   /**

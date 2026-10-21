@@ -22,9 +22,16 @@ export interface VideoView { id: string; style: VideoStyle; kind: 'motion' | 'fi
 
 const MOTION_TAKES = 3; // cuts of the motion video per kind of moment
 const FOOTAGE_PER_DAY = 12; // footage clips started per ad per day, at most (they cost money)
+/** Footage clips started per company per day, at most, across all its ads (FOOTAGE_PER_COMPANY_DAY sets another). */
+export const FOOTAGE_PER_COMPANY_DAY = 60;
+const NEVER_STARTED_MS = 15 * 60_000; // a clip claimed but never handed to the video model (the server stopped) after this
 
 export class VideoService {
   random = Math.random;
+  /** Footage clips a company may start in any 24 hours (each costs real money). */
+  perCompanyDay = FOOTAGE_PER_COMPANY_DAY;
+  /** Set by the app: tells the team when a company reaches its footage ceiling. */
+  alert?: (key: string, title: string, detail: string) => void;
   constructor(private db: SqlClient, private platform: Platform, private assets: AssetStore, private writer: StoryWriter = builtinWriter, private footage?: FootageProvider, private clock: () => Date = () => new Date()) {}
 
   stylesOf(c: Campaign): VideoStyle[] { return c.more ? c.more.videos : ['motion']; }
@@ -136,11 +143,22 @@ export class VideoService {
   private async startFootage(c: Campaign, seg: Segment, style: 'live_action' | 'animated') {
     if (!this.footage?.styles.includes(style)) return;
     const since = new Date(this.clock().getTime() - 86_400_000).toISOString();
-    const today = (await this.db.query<any>(`select count(*)::int as n from videos where campaign_id = $1 and style <> 'motion' and created_at >= $2`, [c.id, since])).rows[0].n;
-    if (today >= FOOTAGE_PER_DAY) return;
     const id = newId('vid');
-    // Claim the slot first, so two scans at once don't both start a clip.
-    await this.db.query(`insert into videos (id, company_id, campaign_id, segment, style, take, status, review, provider, created_at, content) values ($1,$2,$3,$4,$5,0,'making','pending',$6,$7,$8)`, [id, c.companyId, c.id, segmentKey(seg), style, this.footage.name, this.clock().toISOString(), this.contentOf(c)]);
+    const content = this.contentOf(c);
+    // Claim the slot first, so two scans at once don't both start a clip: the counts and the claim happen under one
+    // lock per company, so two scans (or two servers) can't both pass the ceilings or both claim one moment's clip.
+    const claim = await this.db.transaction(async (tx) => {
+      await tx.query(`select pg_advisory_xact_lock(hashtext($1))`, [`videos:${c.companyId}`]);
+      const n = (await tx.query<any>(`select count(*) filter (where campaign_id = $2)::int as ad, count(*)::int as company from videos where company_id = $1 and style <> 'motion' and created_at >= $3`, [c.companyId, c.id, since])).rows[0];
+      if (n.ad >= FOOTAGE_PER_DAY) return 'ad_ceiling' as const;
+      if (n.company >= this.perCompanyDay) return 'company_ceiling' as const;
+      const busy = (await tx.query(`select 1 from videos where campaign_id = $1 and segment = $2 and style = $3 and content = $4 and (status = 'making' or (status = 'ready' and review <> 'rejected')) limit 1`, [c.id, segmentKey(seg), style, content])).rows.length;
+      if (busy) return 'busy' as const;
+      await tx.query(`insert into videos (id, company_id, campaign_id, segment, style, take, status, review, provider, created_at, content) values ($1,$2,$3,$4,$5,0,'making','pending',$6,$7,$8)`, [id, c.companyId, c.id, segmentKey(seg), style, this.footage!.name, this.clock().toISOString(), content]);
+      return 'claimed' as const;
+    });
+    if (claim === 'company_ceiling') this.alert?.(`video-ceiling:${c.companyId}`, `Company ${c.companyId} reached its ceiling of ${this.perCompanyDay} video clips a day`, `No more live-action or animated clips are started for its ads until the last 24 hours fall under ${this.perCompanyDay} (each clip costs money; motion videos still show). Raise FOOTAGE_PER_COMPANY_DAY if that's expected.`);
+    if (claim !== 'claimed') return;
     try {
       const job = await this.footage.start(this.brief(c, seg, 0), style);
       await this.db.query(`update videos set job_id = $2, prompt = $3 where id = $1`, [id, job.jobId, job.prompt]);
@@ -152,6 +170,9 @@ export class VideoService {
   /** Check footage being made. Run every few seconds by the server. */
   async tick() {
     if (!this.footage) return 0;
+    // A clip claimed but never handed to the video model (the server stopped in between) would hold its moment's slot
+    // forever: after 15 minutes it fails, and the next scan of that moment tries again (within the day's ceilings).
+    await this.db.query(`update videos set status = 'failed', error = 'Never started: the server stopped before the clip was handed to the video model' where status = 'making' and job_id is null and created_at < $1`, [new Date(this.clock().getTime() - NEVER_STARTED_MS).toISOString()]);
     const rows = (await this.db.query<any>(`select * from videos where status = 'making' and job_id is not null order by created_at limit 20`)).rows;
     let done = 0;
     for (const r of rows) {

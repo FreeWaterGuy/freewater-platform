@@ -247,6 +247,7 @@ export type Buy =
   | { type: 'guaranteed'; remainingPrints: number }
   /** A bid for the whole label; smaller sizes pay the same share of it as the starting prices do. Never below the starting price. */
   | {
+      /** dailyCapCents caps only the label print fees of a day; scans, AR launches, box faces and commission are on top. */
       type: 'bid'; maxCentsPerLabel: Cents; dailyCapCents: Cents; spentTodayCents: Cents;
       /** The company-local day that spentTodayCents belongs to; a new day starts the budget again. */
       spentDay?: string;
@@ -321,6 +322,8 @@ export interface Campaign {
   active: boolean;
   /** Content review. A campaign only runs once the company has approved it. */
   review?: { status: 'submitted' | 'approved' | 'rejected'; note?: string; at: string };
+  /** Paused because the advertiser owes more than its credit allows (docs/SWITCHES.md, "Credit for advertisers"). */
+  creditHold?: { at: string; owedCents: number; limitCents: number | null; reason: string };
   /** A short name the advertiser knows it by. */
   name?: string;
   createdAt?: string;
