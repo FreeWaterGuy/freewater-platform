@@ -119,9 +119,9 @@ export class DropPhotoService {
       `select 1 from drop_photos p where p.id = $3 and p.company_id = $1 and (p.customer_id = $2 or exists (select 1 from house_claims c where c.house_id = p.house_id and c.user_id = $2 and c.company_id = $1 and p.taken_at >= c.claimed_at - interval '14 days'))`, [companyId, userId, id])).rows.length;
   }
 
-  /** Deletes one picture (its file first); 0 when its file can't be removed now (the next run tries again). */
+  /** Deletes one picture: its file first, then the picture in its record (a file that can't be removed throws, the record stays). */
   private async deletePicture(r: { id: string; blob_key: string | null }) {
-    if (r.blob_key && this.blobs) { try { await this.blobs.delete(r.blob_key); } catch { return 0; } }
+    if (r.blob_key && this.blobs) await this.blobs.delete(r.blob_key);
     const done = await this.db.query(`update drop_photos set bytes = null, blob_key = null, deleted_at = $2 where id = $1 and deleted_at is null`, [r.id, this.clock().toISOString()]);
     return Number((done as any).rowCount ?? 1);
   }
@@ -133,8 +133,13 @@ export class DropPhotoService {
    */
   async eraseFor(companyId: string, userIds: string[]) {
     if (!userIds.length) return 0;
-    let n = 0;
-    for (const r of (await this.db.query<any>(`select id, blob_key from drop_photos where company_id = $1 and customer_id = any($2) and deleted_at is null`, [companyId, userIds])).rows) n += await this.deletePicture(r);
+    // Like the rest of an erase (SqlAssetStore.removeForUsers): never reported done while a photo of their door is
+    // still in file storage. Each is tried; any left fail the erase, saying so, and the next try finds them again.
+    let n = 0, stuck = 0, firstError = '';
+    for (const r of (await this.db.query<any>(`select id, blob_key from drop_photos where company_id = $1 and customer_id = any($2) and deleted_at is null`, [companyId, userIds])).rows) {
+      try { n += await this.deletePicture(r); } catch (e) { stuck++; firstError ||= String((e as Error)?.message ?? e); }
+    }
+    if (stuck) throw new Error(`${stuck} door photo${stuck === 1 ? '' : 's'} of their deliveries couldn't be deleted from file storage (${firstError}); ${n} deleted. Erase again once file storage answers.`);
     return n;
   }
 
@@ -154,9 +159,7 @@ export class DropPhotoService {
       const before = new Date(this.clock().getTime() - this.keepDays(c.id) * 86_400_000).toISOString();
       const rows = (await this.db.query<any>(`select id, blob_key from drop_photos where company_id = $1 and deleted_at is null and taken_at < $2 order by taken_at limit 5000`, [c.id, before])).rows;
       for (const r of rows) {
-        if (!(await gone(r.blob_key))) continue;
-        const done = await this.db.query(`update drop_photos set bytes = null, blob_key = null, deleted_at = $2 where id = $1 and deleted_at is null`, [r.id, this.clock().toISOString()]);
-        n += Number((done as any).rowCount ?? 1);
+        try { n += await this.deletePicture(r); } catch (e) { stuck++; firstError ||= String((e as Error)?.message ?? e); }
       }
       // Photos taken before 065 were kept with the uploads (assets): the same keep applies to them. The file goes
       // first, then its record, so a file that can't be removed now is never left behind with nothing pointing at it.

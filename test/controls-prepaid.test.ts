@@ -138,7 +138,7 @@ describe('prepaid money controls', () => {
         try {
           const paid = await app.prepaid.payBottles({ companyId: CO, advertiserId: c.advertiserId, campaignId: c.id, quote: { bottles, share }, expectedTotalCents: q.totalCents, sizes: c.sizes });
           expect(paid.totalCents).toBe(q.totalCents);
-          await app.ads.review({ companyId: CO, campaignId: c.id, decision: 'approve' });
+          await app.ads.review({ companyId: CO, campaignId: c.id, decision: 'approve', by: { userId: 'usr_test_reviewer', role: 'reviewer' } });
           ads.push(c);
           label += ` bought ${bottles} at 1/${share}`;
         } catch (e: any) {
@@ -182,7 +182,7 @@ describe('prepaid money controls', () => {
           try {
             const d = await app.ads.createDraft({ companyId: CO, advertiserId: c.advertiserId, fromCampaignId: c.id });
             await app.ads.submit({ id: d.id, companyId: CO, advertiserId: c.advertiserId, pay: { expectedFeeCents: 10_000 } });
-            await app.ads.review({ companyId: CO, campaignId: c.id, decision: 'approve' });
+            await app.ads.review({ companyId: CO, campaignId: c.id, decision: 'approve', by: { userId: 'usr_test_reviewer', role: 'reviewer' } });
             label += ` changed ${c.id}`;
           } catch (e: any) {
             expect(['all_printed', 'card_declined'], `${label}: ${e.message}`).toContain(e.code);
@@ -218,7 +218,7 @@ describe('prepaid money controls', () => {
     const c = await newAd(4);
     const q = app.prepaid.quote(CO, { bottles: 2, share: 4 }, c.sizes);
     await app.prepaid.payBottles({ companyId: CO, advertiserId: c.advertiserId, campaignId: c.id, quote: { bottles: 2, share: 4 }, expectedTotalCents: q.totalCents, sizes: c.sizes });
-    await app.ads.review({ companyId: CO, campaignId: c.id, decision: 'approve' });
+    await app.ads.review({ companyId: CO, campaignId: c.id, decision: 'approve', by: { userId: 'usr_test_reviewer', role: 'reviewer' } });
     for (const x of app.platform.campaigns.values()) if (!x.isHouse && x.companyId === CO && x.id !== c.id) x.active = false;
     const printOne = () => app.platform.order({ companyId: CO, orderId: `cp-${++orderNo}`, locationId: 'ATX-022', productId: 'bottle-16oz' });
     await printOne();

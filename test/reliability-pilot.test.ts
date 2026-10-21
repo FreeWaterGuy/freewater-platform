@@ -164,6 +164,18 @@ describe('erasing a person’s uploads while file storage is down (sibling)', ()
     expect(await store.removeForUsers('freewater', ['usr-rel-1'])).toBe(1);
     expect(blobs.files.has(key)).toBe(false);
   });
+
+  it('the photos of their own deliveries too: an erase never reports done with a photo of their door still stored (integration seam)', async () => {
+    const key = 'drop-photos/freewater/dph-rel-own';
+    await blobs.put(key, new Uint8Array([9]));
+    await db.query(`insert into drop_photos (id, company_id, pack_id, customer_id, taken_by, content_type, blob_key, size_bytes, sha256, taken_at) values ('dph-rel-own','freewater','pk-own','usr-rel-2','driver-x','image/jpeg',$1,1,'x',$2)`, [key, clock().toISOString()]);
+    const photos = app.dropPhotos;
+    blobs.failDeletes = true;
+    try { await expect(photos.eraseFor('freewater', ['usr-rel-2'])).rejects.toThrow(/couldn't be deleted/); } finally { blobs.failDeletes = false; }
+    expect((await db.query<any>(`select deleted_at from drop_photos where id = 'dph-rel-own'`)).rows[0].deleted_at).toBeNull();
+    expect(await photos.eraseFor('freewater', ['usr-rel-2'])).toBe(1);
+    expect(blobs.files.has(key)).toBe(false);
+  });
 });
 
 describe('moving files out of the database (npm run files:move)', () => {

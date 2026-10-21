@@ -33,7 +33,7 @@ async function newAd(size: Share) {
 async function payAndApprove(c: Campaign, bottles: number, extras?: Record<string, number>) {
   const q = app.prepaid.quote('freewater', { bottles, share: c.sizes[0], extras }, c.sizes);
   await app.prepaid.payBottles({ companyId: 'freewater', advertiserId: c.advertiserId, campaignId: c.id, quote: { bottles, share: c.sizes[0], extras }, expectedTotalCents: q.totalCents, sizes: c.sizes });
-  await app.ads.review({ companyId: 'freewater', campaignId: c.id, decision: 'approve' });
+  await app.ads.review({ companyId: 'freewater', campaignId: c.id, decision: 'approve', by: { userId: 'usr_test_reviewer', role: 'reviewer' } });
   return q;
 }
 const onlyThese = (ids: string[]) => { for (const c of app.platform.campaigns.values()) if (!c.isHouse && c.companyId === 'freewater') c.active = ids.includes(c.id); };

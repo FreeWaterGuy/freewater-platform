@@ -86,10 +86,10 @@ describe('the numbers the docs promise are the numbers the code uses', () => {
     expect(p.perPrintByShare).toEqual({ 1: 100, 2: 65, 3: 51, 4: 42, 6: 33, 8: 24, 10: 20 });
     expect(readme).toContain('whole label $1.00, 1/2 65¢, 1/3 51¢, 1/4 42¢, 1/6 33¢, 1/8 24¢, 1/10 20¢');
     expect([p.perScan, p.perArLaunch]).toEqual([25, 40]);
-    expect(readme).toContain('FreeWater: 25¢ and 40¢');
+    expect(readme).toContain('base price (25¢ and 40¢ suggested)'); // r-spec: suggested rates, fees switch on per company
     expect(p.targetingPremium).toEqual({ locations: 10, products: 5, interests: 25, customers: 15, max: 60 });
     expect(p.commissionPercent).toBe(3);
-    expect(readme).toContain('**3% commission on sales.**');
+    expect(readme).toContain('**Commission on sales (3% suggested).**');
     expect(freewater.giving).toMatchObject({ centsPerUnit: 10, percentOfExtra: 10, extraAboveCents: 100, defaultCharity: 'Well Aware' });
     expect(freewater.adRules.maxPackShare).toBe(0.5);
     expect(CLICK_WINDOW_DAYS).toBe(30);

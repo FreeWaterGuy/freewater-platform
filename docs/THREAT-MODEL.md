@@ -388,7 +388,7 @@ scan token), `GET /v/:code`, `/V/:code` (coupon check redirect), `GET /go/:token
 the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/console`, `/developers`, `/books`,
 `/play`, `/preview/scan`), `/static/*`, `/models/builtin/*`, `/assets/*`.
 
-**Every route (393):**
+**Every route (438):**
 
 | # | Route | Scope | Person | Other check | Docs |
 |---|---|---|---|---|---|
