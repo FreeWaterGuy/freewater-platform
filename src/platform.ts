@@ -21,6 +21,8 @@ export interface OrderOptions {
   avoidSignatures?: Set<string>;
   /** The person this bottle is for, so ads that target people can be chosen (and checked later when they scan it). */
   audience?: import('./modules/ads/contract').PrintAudience | null;
+  /** A pack for a house in a delivery area: the house and area, passed on to the ad engine (docs/OVERVIEW.md). */
+  house?: import('./core/types').RouteHouseContext | null;
 }
 
 export type OrderOutcome =
@@ -206,7 +208,7 @@ export class Platform {
     // 1. Fill slots (custom units have no ads).
     const fill = opts.custom
       ? { layout: [1 as const], placements: [] }
-      : this.registry.adsFor(company).fill({ company, product, location, campaigns: [...this.campaigns.values()], random: this.random, frequency: opts.frequency, avoidSignatures: opts.avoidSignatures, audience: this.withToday(opts.audience ?? null, company.timezone), moment: momentAt(this.bus.now(), company.timezone ?? 'UTC'), stats: this.auctionStats });
+      : this.registry.adsFor(company).fill({ company, product, location, campaigns: [...this.campaigns.values()], random: this.random, frequency: opts.frequency, avoidSignatures: opts.avoidSignatures, audience: this.withToday(opts.audience ?? null, company.timezone), house: opts.house ?? null, moment: momentAt(this.bus.now(), company.timezone ?? 'UTC'), stats: this.auctionStats });
     reserve(fill.placements, this.campaigns);
     this.persistCampaigns(fill.placements);
 

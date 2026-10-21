@@ -49,7 +49,9 @@
   const screen = (...kids) => { if (stop) { stop(); stop = null; } root.replaceChildren(h('main', { class: 'screen drive no-nav' }, ...kids)); window.scrollTo(0, 0); };
   const dock = (...btns) => h('div', { class: 'dock' }, h('div', { class: 'dock-inner' }, ...btns));
   const grabCard = (s, label = 'Box to grab') => h('div', { class: 'grab' }, h('div', { class: 'code' }, h('small', { text: 'Stop' }), h('b', { text: String(s.stop) })),
-    h('div', { class: 'what' }, h('small', { text: label }), h('b', { text: `#${s.boxNumber} · ${s.packSize}-pack` }), h('span', { text: `Stop code ${s.stopCode} is printed small on the box corner` })));
+    h('div', { class: 'what' }, h('small', { text: s.pack ? `${label} · box ${s.pack.n} of ${s.pack.of} for this house` : label }), h('b', { text: `#${s.boxNumber} · ${s.packSize}-pack` }), h('span', { text: `Stop code ${s.stopCode} is printed small on the box corner` })));
+  /** A delivery area's run is named for the area and the van; a subscribers' run for its route. */
+  const runName = (r) => (r.areaName ? `${r.areaName} · van ${r.van}` : `${r.routeName} · ${r.routeId.replace(/^route-/, 'Route ')}`);
 
   async function signOut() {
     try { if (!fixture) await api('POST', '/v1/auth/sign-out'); } catch {}
@@ -92,7 +94,7 @@
     screen(h('div', { class: 'dhead' }, h('div', { text: `Hi${S.me.displayName ? `, ${S.me.displayName}` : ''}` }), h('span', { text: new Date().toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' }) })),
       h('h1', { class: 'dtitle', text: 'Today’s routes' }),
       runs.length ? h('div', { class: 'rows' }, runs.map((r) => h('div', { class: 'row' }, h('span', { class: 'n', text: r.routeId.replace(/^route-/, 'R') }),
-        h('span', { class: 'grow' }, h('b', { text: r.routeName }), h('span', { text: `${r.counts.stops} stops · ${r.counts.bottles} bottles · about ${r.distanceKm} km, ${Math.round(r.minutes / 60 * 10) / 10} h` })),
+        h('span', { class: 'grow' }, h('b', { text: r.areaName ? `${r.areaName} · van ${r.van}` : r.routeName }), h('span', { text: `${r.counts.stops} stops · ${r.counts.bottles} bottles · about ${r.distanceKm} km, ${Math.round(r.minutes / 60 * 10) / 10} h` })),
         r.status === 'ready' && !r.driverId ? h('button', { class: 'btn small', type: 'button', onclick: async () => { try { S.run = await api('POST', `/v1/driver/runs/${r.id}/start`); load(); } catch (x) { toast(x.message); } } }, 'Take it')
           : h('em', { class: r.status === 'done' ? 'ok' : '', text: r.driverId && r.driverId !== S.me.id ? 'Taken' : label[r.status] }))))
         : h('div', { class: 'empty', text: 'No routes today yet. They appear here once tonight’s boxes are printed and packed.' }),
@@ -145,7 +147,7 @@
     const loaded = order.filter((s) => s.loaded).length;
     const next = order.find((s) => !s.loaded);
     const stopOf = (n) => r.stops.find((s) => s.stop === n);
-    screen(h('div', { class: 'dhead' }, h('div', { text: `${r.routeName} · ${r.routeId.replace(/^route-/, 'Route ')}` }), h('span', { text: r.depot?.name ?? '' })),
+    screen(h('div', { class: 'dhead' }, h('div', { text: runName(r) }), h('span', { text: r.depot?.name ?? '' })),
       h('h1', { class: 'dtitle', text: 'Load the van' }), h('p', { class: 'dsub', text: 'Last stop goes in first, so stop 1 ends up by the door.' }),
       h('div', { class: 'dhead', style: 'font-size:14px' }, h('span', { text: 'Boxes loaded' }), h('b', { text: `${loaded} of ${order.length}` })),
       h('div', { class: 'bar' }, h('i', { style: `width:${(loaded / Math.max(1, order.length)) * 100}%` })),
@@ -177,14 +179,33 @@
     const s = r.stops.find((x) => x.status === 'planned');
     if (!s) return finished();
     const after = r.stops.filter((x) => x.status === 'planned' && x.stop > s.stop).slice(0, 3);
-    screen(h('div', { class: 'dhead' }, h('div', { text: `${r.routeName} · ${r.routeId.replace(/^route-/, 'Route ')}` }), h('span', { text: `${r.counts.delivered + r.counts.notDelivered} done · ${r.counts.stops - r.counts.delivered - r.counts.notDelivered} to go` })),
+    // A house that stopped deliveries in the app after tonight's plan (or is marked to skip): keep its box, go on.
+    const keep = s.houseId && s.houseStatus && s.houseStatus !== 'active';
+    screen(h('div', { class: 'dhead' }, h('div', { text: runName(r) }), h('span', { text: `${r.counts.delivered + r.counts.notDelivered} done · ${r.counts.stops - r.counts.delivered - r.counts.notDelivered} to go` })),
       miniMap(r, s),
       h('div', {}, h('div', { class: 'small muted', style: 'font-family:ui-monospace,Menlo,monospace;letter-spacing:.08em', text: `STOP ${s.stop} OF ${r.counts.stops}` }), h('h1', { class: 'dtitle', text: s.address.split(',')[0] }), h('p', { class: 'dsub', text: s.address.split(',').slice(1).join(',').trim() })),
       s.notes ? h('div', { class: 'notes' }, h('b', { text: 'Note: ' }), s.notes) : null,
+      keep ? h('div', { class: 'verdict bad' }, h('div', { class: 'mark', text: '!' }), h('h2', { text: 'Don’t leave a box here' }), h('p', { text: s.houseStatus === 'opted_out' ? 'This house stopped deliveries in the app after tonight’s plan. Keep the box; it goes back to the micro-factory.' : 'This house is marked to skip. Keep the box.' })) : null,
       grabCard(s),
       after.length ? h('div', {}, h('div', { class: 'small muted', style: 'font-family:ui-monospace,Menlo,monospace;letter-spacing:.08em;margin-bottom:4px', text: 'THEN' }), h('div', { class: 'rows' }, after.map((a) => h('div', { class: 'row' }, h('span', { style: 'width:28px;color:var(--muted)', text: String(a.stop) }), h('span', { class: 'grow', text: a.address.split(',')[0] }))))) : null,
-      dock(h('a', { class: 'btn secondary', href: `https://www.google.com/maps/dir/?api=1&destination=${s.point.lat},${s.point.lng}`, target: '_blank', rel: 'noopener' }, 'Directions'),
-        h('button', { class: 'btn', type: 'button', onclick: () => atDoor(s) }, 'I’m at the door · scan box')));
+      keep ? dock(h('button', { class: 'btn', type: 'button', onclick: () => skipHouse(s, 'asked_not_to') }, 'Keep the box · next house'))
+        : dock(h('a', { class: 'btn secondary', href: `https://www.google.com/maps/dir/?api=1&destination=${s.point.lat},${s.point.lng}`, target: '_blank', rel: 'noopener' }, 'Directions'),
+          h('button', { class: 'btn', type: 'button', onclick: () => atDoor(s) }, 'I’m at the door · scan box'),
+          s.houseId ? h('button', { class: 'link-btn', type: 'button', onclick: () => skipSheet(s) }, 'Skip this house') : null));
+  }
+  /** Pass a house in a delivery area by. Its boxes come back; a person reviews the skip before the house is left out for good. */
+  async function skipHouse(s, reason, note) {
+    try { S.run = await api('POST', `/v1/driver/runs/${encodeURIComponent(S.run.id)}/stops/${s.stop}/skip-house`, { reason, ...(note ? { note } : {}) }); toast(reason === 'asked_not_to' && s.houseStatus === 'opted_out' ? 'Box kept. Next house.' : 'Skipped. The office will review it.'); nextStop(); }
+    catch (x) { toast(x.message); }
+  }
+  function skipSheet(s) {
+    const note = h('input', { class: 'input', id: 'skip-note', maxlength: '200', placeholder: 'What you saw (optional)' });
+    const reasons = [['no_soliciting', 'No soliciting sign'], ['asked_not_to', 'They asked us not to'], ['not_a_home', 'Not a home (empty, business, building site)'], ['unsafe', 'Not safe to leave it'], ['dog', 'Dog in the way'], ['other', 'Something else']];
+    screen(h('div', { class: 'dhead' }, h('div', { text: `Stop ${s.stop} · ${s.address.split(',')[0]}` })), h('h1', { class: 'dtitle', text: 'Skip this house?' }),
+      h('p', { class: 'dsub', text: 'Its box comes back with you. The house is left out of the next deliveries until the office has looked at why.' }),
+      h('label', { for: 'skip-note', style: 'font-weight:700', text: 'Note' }), note,
+      h('div', { class: 'reasons' }, reasons.map(([r, label]) => h('button', { type: 'button', onclick: () => skipHouse(s, r, note.value.trim()) }, label))),
+      dock(h('button', { class: 'btn secondary', type: 'button', onclick: nextStop }, 'Back to this stop')));
   }
   function here() {
     if (fixture) return Promise.resolve(fixture.here?.() ?? null);
@@ -240,9 +261,10 @@
       } }, 'Done · next house'), h('button', { class: 'link-btn', type: 'button', onclick: () => problem(s) }, 'Problem at this stop')));
   }
   function problem(s) {
-    const go = async (reason) => { try { S.run = await api('POST', `/v1/driver/runs/${S.run.id}/stops/${s.stop}/fail`, { reason }); toast('Noted. The customer will be told.'); nextStop(); } catch (x) { toast(x.message); } };
+    const go = async (reason) => { try { S.run = await api('POST', `/v1/driver/runs/${encodeURIComponent(S.run.id)}/stops/${s.stop}/fail`, { reason }); toast(s.houseId ? 'Noted. The box comes back.' : 'Noted. The customer will be told.'); nextStop(); } catch (x) { toast(x.message); } };
     screen(h('div', { class: 'dhead' }, h('div', { text: `Stop ${s.stop} · ${s.address.split(',')[0]}` })), h('h1', { class: 'dtitle', text: 'What happened?' }), h('p', { class: 'dsub', text: 'The box goes back to the micro-factory and the customer gets a message.' }),
       h('div', { class: 'reasons' }, ['No safe place to leave it', 'Gate or door locked', 'Box missing from the van', 'Box damaged', 'Can’t find the address'].map((r) => h('button', { type: 'button', onclick: () => go(r) }, r))),
+      s.houseId ? h('button', { class: 'link-btn', type: 'button', onclick: () => skipSheet(s) }, 'No soliciting sign, or they don’t want it? Skip this house') : null,
       dock(h('button', { class: 'btn secondary', type: 'button', onclick: nextStop }, 'Back to this stop')));
   }
   function finished() {

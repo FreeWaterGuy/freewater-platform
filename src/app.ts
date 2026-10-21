@@ -31,6 +31,8 @@ import { join as joinPath, dirname as dirnamePath } from 'node:path';
 import { fileURLToPath as toPath } from 'node:url';
 import type { DesignAssistant } from './modules/ai/designContract';
 import { DeliveryService } from './modules/delivery/service';
+import { HouseService } from './modules/delivery/houses';
+import { pilotHouses } from './demo/pilotArea';
 import { CreditService } from './modules/ads/credit';
 import { SimpleRoutePlanner, type RoutePlanner } from './modules/delivery/planner';
 import { TestGeocoder, type Geocoder } from './adapters/geocoding/contract';
@@ -410,6 +412,16 @@ export async function createApp(opts: AppOptions) {
   const geocoder = opts.geocoder ?? new TestGeocoder({ Austin: { lat: 30.2672, lng: -97.7431, radiusKm: 6 }, Denver: { lat: 39.7392, lng: -104.9903, radiusKm: 6 } });
   const delivery = new DeliveryService(db, platform, packs, accounts, messenger, geocoder, opts.planner ?? new SimpleRoutePlanner(), () => persistence.flush());
   delivery.alert = (key, title, detail) => void runtime.alerts.alert(key, 'warning', title, detail);
+  // Delivery areas: every house on the chosen streets, in street order (src/modules/delivery/houses.ts).
+  const houses = new HouseService(db, platform, accounts, packs);
+  houses.packFromCode = async (text) => {
+    const smart = /\/Q\/([A-Za-z0-9]+)\b/.exec(text)?.[1];
+    if (smart) return (await codes.find(smart))?.packId ?? null;
+    return /\/(?:p|b)\/(pk_[A-Za-z0-9]+)/.exec(text)?.[1] ?? (/^pk_[A-Za-z0-9]+$/.test(text) ? text : null);
+  };
+  delivery.houses = houses;
+  packs.houseContextFor = (houseId, companyId) => houses.contextFor(houseId, companyId);
+  if (demoKeys) await houses.seedSample('freewater', 'route-3', pilotHouses);
   const ops = new OpsService(db, platform, delivery, host);
 
   const handoff = new HandoffService(db, platform, packs);
@@ -559,7 +571,7 @@ export async function createApp(opts: AppOptions) {
   await attribution.repairUnrecorded();
   await persistence.flush();
 
-  return { ...made, features, db, persistence, runtime, demoKeys, accounts, payments, credit, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
+  return { ...made, features, db, persistence, runtime, demoKeys, accounts, payments, credit, messenger, experiences, assets, ads, designs, delivery, houses, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

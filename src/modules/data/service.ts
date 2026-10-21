@@ -649,6 +649,11 @@ export class DataService {
       // A custom order's proof stays (it's what was paid for), without the names and pictures on it.
       await run('proofs', `update proofs set design_svg = '', label_svg = '', names = null, spec = null, experience = null where company_id = $1 and user_id = any($2)`, [companyId, users]);
       await run('deliveries', `update subscriptions set address = 'erased', lat = 0, lng = 0, notes = null, status = 'cancelled' where company_id = $1 and user_id = any($2)`, [companyId, users]);
+      // The house they said is theirs keeps what they chose for it (stopped stays stopped); the link to them goes, and the
+      // household size they gave goes too unless someone else in the house still has it claimed.
+      await run('house', `update houses h set household_size = null where h.company_id = $1 and h.id in (select house_id from house_claims where company_id = $1 and user_id = any($2)) and not exists (select 1 from house_claims c where c.house_id = h.id and not (c.user_id = any($2)))`, [companyId, users]);
+      await run('house claims', `delete from house_claims where company_id = $1 and user_id = any($2)`, [companyId, users]);
+      await run('house history', `update house_events set by_user = null where company_id = $1 and by_user = any($2)`, [companyId, users]);
       await run('cards', `delete from payment_methods where customer_id in (select id from payment_customers where company_id = $1 and owner_type = 'user' and owner_id = any($2))`, [companyId, users]);
       if (this.removeUploads) counts.uploads = await this.removeUploads(companyId, users);
     }

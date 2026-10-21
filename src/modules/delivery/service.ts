@@ -7,13 +7,11 @@ import { distanceKm, type GeoPoint, type Geocoder } from '../../adapters/geocodi
 import type { AccountsService } from '../accounts/service';
 import { PackStateError, type PackService } from '../packs/service';
 import { boxNumber, stopCode } from '../packs/boxRenderer';
-import type { RoutePlanner } from './planner';
+import { streetOrder, type RoutePlanner } from './planner';
+import { packsFor, SKIP_REASONS, type HouseService, type SkipReason } from './houses';
 
-export class DeliveryError extends Error {
-  constructor(public status: number, public code: string, message: string) {
-    super(message);
-  }
-}
+import { DeliveryError } from './errors';
+export { DeliveryError };
 
 export type Frequency = 'weekly' | 'biweekly' | 'every4weeks';
 const STEP: Record<Frequency, number> = { weekly: 7, biweekly: 14, every4weeks: 28 };
@@ -24,12 +22,24 @@ export interface Subscription {
   packSize: 6 | 12 | 24; frequency: Frequency; day: number; status: 'active' | 'paused' | 'cancelled'; nextDate: string | null; notes: string | null;
 }
 export interface RunStop {
-  stop: number; subscriptionId: string; userId: string; packId: string | null; address: string; point: GeoPoint; packSize: number; notes: string | null;
+  /** Numbered across every run of the route that night, so a stop code ("R3 · 14") is never on two boxes at once. */
+  stop: number;
+  /** A subscriber's stop: their subscription and account. Empty for a house in a delivery area. */
+  subscriptionId?: string; userId: string;
+  /** A house in a delivery area: the house, its area, and which of its boxes this is when it gets more than one. */
+  houseId?: string; areaId?: string; pack?: { n: number; of: number };
+  packId: string | null; address: string; point: GeoPoint; packSize: number; notes: string | null;
   status: 'planned' | 'delivered' | 'not_delivered'; loaded?: boolean; checkedByHand?: { by: string; at: string; reason?: string }; at?: string; emptiesCollected?: number; photoUrl?: string; atAddressBy?: 'gps' | 'driver'; reason?: string;
+  /** Proof of the drop: where the driver's phone was when the box was scanned at the door, and how far from the house. */
+  dropPoint?: GeoPoint; metersFromHouse?: number;
+  /** The driver passed the house by, and why (it waits for a person's review). */
+  skipped?: SkipReason;
 }
 export interface Run {
   id: string; companyId: string; routeId: string; date: string; status: 'printing' | 'packing' | 'ready' | 'out' | 'done';
   driverId: string | null; distanceKm: number | null; minutes: number | null; stops: RunStop[];
+  /** A run of a delivery area (one van's share of its houses that night); null for the subscribers' run. */
+  areaId?: string | null;
 }
 
 const parse = <T>(v: unknown): T => (typeof v === 'string' ? JSON.parse(v) : v) as T;
@@ -48,6 +58,8 @@ export class DeliveryService {
 
   /** Set by the app: tells the team (the platform's alerts) about deliveries that went by unplanned. */
   alert?: (key: string, title: string, detail: string) => void;
+  /** Delivery areas and their houses. Set by the app. */
+  houses?: HouseService;
 
   /**
    * One change at a time per key (a company's night plan, one run). A run is read, changed and written back whole, so
@@ -117,7 +129,8 @@ export class DeliveryService {
     const s = this.sub(r);
     const route = this.platform.locations.get(s.routeId);
     const today = this.today(s.companyId);
-    const run = (await this.db.query<any>(`select * from route_runs where route_id = $1 and run_date = $2`, [s.routeId, today])).rows[0];
+    // The subscribers' run of the route (a delivery area's runs of the same route that night are other runs).
+    const run = (await this.db.query<any>(`select * from route_runs where id = $1 and company_id = $2`, [`${s.routeId}@${today}`, s.companyId])).rows[0];
     let todayStatus = null;
     if (run) {
       const stops = parse<RunStop[]>(run.stops);
@@ -163,7 +176,7 @@ export class DeliveryService {
   // ---------- the night's runs ----------
 
   private run(r: any): Run {
-    return { id: r.id, companyId: r.company_id, routeId: r.route_id, date: typeof r.run_date === 'string' ? r.run_date.slice(0, 10) : new Date(r.run_date).toISOString().slice(0, 10), status: r.status, driverId: r.driver_id ?? null, distanceKm: r.distance_km === null ? null : Number(r.distance_km), minutes: r.minutes === null ? null : Number(r.minutes), stops: parse(r.stops) };
+    return { id: r.id, companyId: r.company_id, routeId: r.route_id, date: typeof r.run_date === 'string' ? r.run_date.slice(0, 10) : new Date(r.run_date).toISOString().slice(0, 10), status: r.status, driverId: r.driver_id ?? null, distanceKm: r.distance_km === null ? null : Number(r.distance_km), minutes: r.minutes === null ? null : Number(r.minutes), stops: parse(r.stops), areaId: r.area_id ?? null };
   }
   private async saveRun(run: Run) {
     await this.db.query(`update route_runs set status = $2, driver_id = $3, stops = $4, updated_at = now() where id = $1`, [run.id, run.status, run.driverId, JSON.stringify(run.stops)]);
@@ -174,18 +187,19 @@ export class DeliveryService {
     return this.run(r);
   }
   async runs(companyId: string, date: string) {
-    return (await this.db.query<any>(`select * from route_runs where company_id = $1 and run_date = $2 order by route_id`, [companyId, date])).rows.map((r) => this.run(r));
+    return (await this.db.query<any>(`select * from route_runs where company_id = $1 and run_date = $2 order by route_id, id`, [companyId, date])).rows.map((r) => this.run(r));
   }
 
   /**
    * Plan and print the night: everyone due on `date`, grouped by route, put in driving order, and a pack printed
-   * for each stop with its stop code on the box. Running it twice for the same night does nothing new, except that a
-   * run left 'printing' (a box or bottle wouldn't print) picks up its unprinted stops again.
+   * for each stop with its stop code on the box; then every house due in each delivery area, in street order, split
+   * into one run per van. Running it twice for the same night does nothing new, except that a run left 'printing'
+   * (a box or bottle wouldn't print) picks up its unprinted stops again. `by` is the person who planned it.
    */
-  planNight(companyId: string, date: string) {
-    return this.serial(`plan:${companyId}`, () => this.planNightNow(companyId, date));
+  planNight(companyId: string, date: string, by?: string) {
+    return this.serial(`plan:${companyId}`, () => this.planNightNow(companyId, date, by ?? null));
   }
-  private async planNightNow(companyId: string, date: string) {
+  private async planNightNow(companyId: string, date: string, by: string | null) {
     // Everyone due tonight, and anyone whose delivery day went by without being planned (a night nobody planned, or
     // a sign-up after that route's night was already planned): they come on the next night their route runs. A
     // subscription already on a run from its due date on is never planned again until that run moves it forward.
@@ -201,20 +215,68 @@ export class DeliveryService {
     for (const run of out) if (run.status === 'printing') await this.printRun(run);
     const byRoute = new Map<string, Subscription[]>();
     for (const s of due) byRoute.set(s.routeId, [...(byRoute.get(s.routeId) ?? []), s]);
+    // Stop numbers carry on across every run of a route that night, so no two boxes out that night share a stop code.
+    const lastStop = (routeId: string) => Math.max(0, ...out.filter((r) => r.routeId === routeId).flatMap((r) => r.stops.map((s) => s.stop)));
     for (const [routeId, subs] of byRoute) {
       const id = `${routeId}@${date}`;
       if (out.some((r) => r.id === id)) continue;
       const route = this.platform.locations.get(routeId)!;
       const plan = await this.planner.plan(route.depot!, subs.map((s) => ({ id: s.id, point: s.point })));
       const ordered = plan.order.map((sid) => subs.find((s) => s.id === sid)!);
+      const first = lastStop(routeId);
       const run: Run = { id, companyId, routeId, date, status: 'printing', driverId: null, distanceKm: plan.distanceKm, minutes: plan.minutes,
-        stops: ordered.map((s, i) => ({ stop: i + 1, subscriptionId: s.id, userId: s.userId, packId: null, address: s.address, point: s.point, packSize: s.packSize, notes: s.notes, status: 'planned' })) };
-      await this.db.query(`insert into route_runs (id, company_id, route_id, run_date, status, distance_km, minutes, stops) values ($1,$2,$3,$4,'printing',$5,$6,$7)`, [id, companyId, routeId, date, run.distanceKm, run.minutes, JSON.stringify(run.stops)]);
+        stops: ordered.map((s, i) => ({ stop: first + i + 1, subscriptionId: s.id, userId: s.userId, packId: null, address: s.address, point: s.point, packSize: s.packSize, notes: s.notes, status: 'planned' })) };
+      await this.db.query(`insert into route_runs (id, company_id, route_id, run_date, status, distance_km, minutes, stops, planned_by) values ($1,$2,$3,$4,'printing',$5,$6,$7,$8)`, [id, companyId, routeId, date, run.distanceKm, run.minutes, JSON.stringify(run.stops), by]);
       await this.printRun(run);
       out.push(run);
     }
+    if (this.houses) {
+      for (const { area, houses } of await this.houses.due(companyId, date, today, (r, d) => this.runsOn(r, d))) {
+        if (out.some((r) => r.areaId === area.id)) continue; // planned already: houses due since wait for the next night
+        const made = await this.planArea(companyId, date, area, houses, lastStop(area.routeId), by);
+        for (const run of made) { await this.printRun(run); out.push(run); }
+      }
+    }
     await this.flush();
     return out;
+  }
+
+  /**
+   * One area's houses for one night: in street order from the depot, each with its packs (packsFor), split into one
+   * run per van (vanPacks; a house's boxes always go in the same van). The houses are taken and the runs written in
+   * one transaction, and a house is only taken if it is still active and still due: two plans at once (or an opt-out
+   * at the same moment) can never put a house on two runs, or a house that stopped on one.
+   */
+  private async planArea(companyId: string, date: string, area: import('./houses').Area, houses: import('./houses').House[], firstStop: number, by: string | null): Promise<Run[]> {
+    const route = this.platform.locations.get(area.routeId)!;
+    const order = streetOrder(route.depot!, houses.map((h) => ({ id: h.id, point: h.point, street: h.street, number: h.number })));
+    const byId = new Map(houses.map((h) => [h.id, h]));
+    return this.db.transaction(async (tx) => {
+      const taken = await this.houses!.take(tx, area, order.order, date);
+      const runs: Run[] = [];
+      let stops: RunStop[] = [], packs = 0, n = firstStop;
+      const close = () => {
+        if (!stops.length) return;
+        let km = 0, at: GeoPoint = route.depot!;
+        for (const s of stops) { km += distanceKm(at, s.point); at = s.point; }
+        km *= 1.35;
+        runs.push({ id: `${area.id}.${runs.length + 1}@${date}`, companyId, routeId: area.routeId, date, status: 'printing', driverId: null, distanceKm: +km.toFixed(1), minutes: Math.round((km / 24) * 60 + stops.length), stops, areaId: area.id });
+        stops = []; packs = 0;
+      };
+      for (const id of order.order) {
+        if (!taken.has(id)) continue;
+        const h = byId.get(id)!;
+        const count = packsFor(area, h.householdSize);
+        if (stops.length && packs + count > area.vanPacks) close();
+        for (let i = 1; i <= count; i++) stops.push({ stop: ++n, userId: '', houseId: h.id, areaId: area.id, ...(count > 1 ? { pack: { n: i, of: count } } : {}), packId: null, address: h.address, point: h.point, packSize: area.packSize, notes: null, status: 'planned' });
+        packs += count;
+      }
+      close();
+      for (const r of runs) {
+        await tx.query(`insert into route_runs (id, company_id, route_id, run_date, status, distance_km, minutes, stops, area_id, planned_by) values ($1,$2,$3,$4,'printing',$5,$6,$7,$8,$9)`, [r.id, companyId, r.routeId, date, r.distanceKm, r.minutes, JSON.stringify(r.stops), area.id, by]);
+      }
+      return runs;
+    });
   }
 
   /**
@@ -236,7 +298,9 @@ export class DeliveryService {
           await this.packs.finish(pack.id, pack.unitIds[0] ? this.platform.units.get(pack.unitIds[0])?.productId ?? product.id : product.id);
         } else {
           // If its box (or a bottle) then fails, the pack is still written on the stop, so a retry finishes that one.
-          try { stop.packId = (await this.packs.compose({ companyId: run.companyId, customerId: stop.userId, address: stop.address, routeId: run.routeId, stop: stop.stop, boxId: `box-${stop.packSize}`, productId: product.id, runId: run.id })).id; }
+          // A house's bottles are for whoever in the app said it's theirs (their audience, their bottles), else nobody.
+          const customerId = stop.houseId ? (await this.houses?.claimantOf(stop.houseId)) ?? '' : stop.userId;
+          try { stop.packId = (await this.packs.compose({ companyId: run.companyId, customerId, address: stop.address, routeId: run.routeId, stop: stop.stop, boxId: `box-${stop.packSize}`, productId: product.id, runId: run.id, ...(stop.houseId ? { houseId: stop.houseId, areaId: stop.areaId } : {}) })).id; }
           catch (e) { stop.packId = [...this.packs.packs.values()].find((p) => p.runId === run.id && p.stop === stop.stop && p.status !== 'returned')?.id ?? null; throw e; }
           finally { await this.saveRun(run); }
         }
@@ -249,6 +313,7 @@ export class DeliveryService {
     run.status = 'packing';
     await this.saveRun(run);
     for (const st of run.stops) {
+      if (!st.subscriptionId) continue; // a house's next date moved on when the night was planned
       const r = (await this.db.query<any>(`select * from subscriptions where id = $1`, [st.subscriptionId])).rows[0];
       if (!r) continue;
       const s = this.sub(r);
@@ -291,11 +356,27 @@ export class DeliveryService {
          and not exists (select 1 from route_runs rr where rr.company_id = s.company_id and rr.route_id = s.route_id and rr.run_date >= s.next_date and rr.status <> 'printing'
                            and rr.stops @> jsonb_build_array(jsonb_build_object('subscriptionId', s.id)))
        order by s.next_date`, [companyId, today])).rows.map((r) => this.sub(r));
+    await this.housesOverdue(companyId, today);
     if (rows.length) {
       this.alert?.(`deliveries-overdue:${companyId}`, `${rows.length} home deliver${rows.length === 1 ? 'y is' : 'ies are'} overdue (${companyId})`,
         `Subscriptions whose delivery day went by without being planned or printed, the oldest due ${rows[0]!.nextDate}: ${rows.slice(0, 20).map((s) => `${s.id} (${s.routeId}, due ${s.nextDate})`).join(', ')}${rows.length > 20 ? ', …' : ''}. Plan the next night their route runs (POST /v1/ops/runs/plan); they're included automatically. See docs/RUNBOOKS.md ("Home deliveries overdue").`);
     }
     return rows;
+  }
+
+  /**
+   * Houses in active areas whose night went by without a plan, and area runs from an earlier day still stuck printing.
+   * Planning the next night their route drives catches the houses up; a stuck run is finished by planning its night
+   * again (docs/RUNBOOKS.md, "Houses in delivery areas are overdue").
+   */
+  private async housesOverdue(companyId: string, today: string) {
+    if (!this.houses) return;
+    const late = await this.houses.overdue(companyId, today, (r, d) => this.runsOn(r, d));
+    const stuck = (await this.db.query<any>(`select id from route_runs where company_id = $1 and area_id is not null and status = 'printing' and run_date < $2 order by run_date`, [companyId, today])).rows.map((r) => r.id as string);
+    if (!late.length && !stuck.length) return;
+    const areas = [...new Set(late.map((l) => l.area.name))];
+    this.alert?.(`houses-overdue:${companyId}`, `${late.length} house${late.length === 1 ? '' : 's'} in delivery areas overdue${stuck.length ? `, ${stuck.length} area run(s) stuck printing` : ''} (${companyId})`,
+      `${late.length ? `Houses whose night went by without a plan, the oldest due ${late[0]!.house.nextDate}, in ${areas.join(', ')}. Plan the next night their route drives (POST /v1/ops/runs/plan); they're included automatically. ` : ''}${stuck.length ? `Runs still printing from an earlier day: ${stuck.slice(0, 10).join(', ')}. Fix the printer and plan that night again. ` : ''}See docs/RUNBOOKS.md ("Houses in delivery areas are overdue").`);
   }
 
   /**
@@ -427,16 +508,23 @@ export class DeliveryService {
     if (!s) throw new DeliveryError(404, 'not_found', 'No such stop.');
     if (s.status !== 'planned') throw new DeliveryError(409, 'already_done', `Stop ${s.stop} is already ${s.status === 'delivered' ? 'delivered' : 'marked not delivered'}.`);
     const meters = input.point ? Math.round(distanceKm(input.point, s.point) * 1000) : null;
+    // A house that stopped deliveries after tonight's plan (or was marked to skip) gets nothing: the box comes back.
+    const houseStatus = s.houseId && this.houses ? (await this.houses.statuses([s.houseId])).get(s.houseId) : undefined;
+    if (houseStatus && houseStatus !== 'active') {
+      return { ok: false as const, reason: houseStatus === 'opted_out' ? 'This house stopped deliveries in the app after tonight’s plan. Don’t leave the box: skip this house.' : 'This house is marked to skip. Don’t leave the box: skip this house.', grab: null, metersAway: meters };
+    }
     const byGps = meters !== null && meters <= 100;
     const r = this.packs.deliver({ routeId: run.routeId, runId: run.id, stop: s.stop, scannedPackId: input.scannedPackId, atAddress: byGps || !!input.confirmedAtDoor, photoProof: !!input.photoUrl, emptiesCollected: input.emptiesCollected });
     if (!r.ok) {
       const right = r.rightPack;
       return { ok: false as const, reason: r.reason, grab: right ? stopCode(right.routeId, right.stop) : null, metersAway: meters };
     }
-    Object.assign(s, { status: 'delivered', at: this.platform.bus.now().toISOString(), emptiesCollected: input.emptiesCollected, atAddressBy: byGps ? 'gps' : 'driver', ...(input.photoUrl ? { photoUrl: input.photoUrl } : {}) });
+    Object.assign(s, { status: 'delivered', at: this.platform.bus.now().toISOString(), emptiesCollected: input.emptiesCollected, atAddressBy: byGps ? 'gps' : 'driver', ...(input.photoUrl ? { photoUrl: input.photoUrl } : {}), ...(input.point ? { dropPoint: input.point, metersFromHouse: meters! } : {}) });
     if (run.stops.every((x) => x.status !== 'planned')) run.status = 'done';
     await this.saveRun(run);
+    if (s.houseId) await this.houses?.delivered(s.houseId, s.at!);
     await this.flush();
+    if (!s.userId) return { ok: true as const, run: await this.view(run) }; // a house: nobody to tell
     await this.notify(s.userId, `Your ${s.packSize}-pack of FreeWater was delivered${input.emptiesCollected ? `, and we picked up ${input.emptiesCollected} empties` : ''}. Leave your empties out next time and we'll take them.`);
     return { ok: true as const, run: await this.view(run) };
   }
@@ -454,7 +542,38 @@ export class DeliveryService {
     if (run.stops.every((x) => x.status !== 'planned')) run.status = 'done';
     await this.saveRun(run);
     await this.flush();
-    await this.notify(s.userId, `We couldn't leave your FreeWater today (${input.reason.toLowerCase()}). It's back at the micro-factory and comes with your next delivery.`);
+    if (s.userId) await this.notify(s.userId, `We couldn't leave your FreeWater today (${input.reason.toLowerCase()}). It's back at the micro-factory and comes with your next delivery.`);
+    return this.view(run);
+  }
+
+  /**
+   * A driver passes a house in a delivery area by: a "no soliciting" sign, they asked not to, it isn't a home, it isn't
+   * safe … Every box of the house on this run comes back, and the house is skipped from the next plan until a person
+   * reviews it (GET /v1/ops/house-reviews). A house that already stopped deliveries in the app just has its boxes
+   * brought back.
+   */
+  skipHouse(input: { runId: string; companyId: string; driverId: string; stop: number; reason: SkipReason; note?: string }) {
+    return this.serial(`run:${input.runId}`, () => this.skipHouseNow(input));
+  }
+  private async skipHouseNow(input: { runId: string; companyId: string; driverId: string; stop: number; reason: SkipReason; note?: string }) {
+    if (!SKIP_REASONS.includes(input.reason)) throw new DeliveryError(422, 'bad_reason', `Say why: ${SKIP_REASONS.join(', ')}.`);
+    const run = await this.getRun(input.runId, input.companyId);
+    if (run.status !== 'out' || run.driverId !== input.driverId) throw new DeliveryError(409, 'not_your_route', 'Start this route first.');
+    const s = run.stops.find((x) => x.stop === input.stop);
+    if (!s) throw new DeliveryError(404, 'not_found', 'No such stop.');
+    if (!s.houseId || !this.houses) throw new DeliveryError(422, 'not_a_house', 'This stop is a subscriber’s. Use “Problem at this stop” instead.');
+    const mine = run.stops.filter((x) => x.houseId === s.houseId && x.status === 'planned');
+    if (!mine.length) throw new DeliveryError(409, 'already_done', 'That house is already done.');
+    await this.houses.driverSkip(s.houseId, input.companyId, input.driverId, input.reason, input.note);
+    const at = this.platform.bus.now().toISOString();
+    const label = { no_soliciting: 'No soliciting sign', asked_not_to: 'Asked us not to leave it', not_a_home: 'Not a home', unsafe: 'Not safe to leave it', dog: 'Dog in the way', other: 'Driver skipped' }[input.reason];
+    for (const x of mine) {
+      if (x.packId && this.packs.packs.get(x.packId)?.status === 'loaded') this.packs.fail(x.packId, label);
+      Object.assign(x, { status: 'not_delivered', at, reason: input.note ? `${label}: ${input.note.slice(0, 100)}` : label, skipped: input.reason });
+    }
+    if (run.stops.every((x) => x.status !== 'planned')) run.status = 'done';
+    await this.saveRun(run);
+    await this.flush();
     return this.view(run);
   }
 
@@ -469,9 +588,13 @@ export class DeliveryService {
   async view(run: Run) {
     const route = this.platform.locations.get(run.routeId);
     const next = run.stops.find((s) => s.status === 'planned') ?? null;
+    // For a delivery area's run: the area's name, which van this is, and whether each house still wants its box.
+    const area = run.areaId && this.houses ? await this.houses.getArea(run.areaId, run.companyId).catch(() => null) : null;
+    const houseStatus = this.houses ? await this.houses.statuses([...new Set(run.stops.flatMap((s) => (s.houseId ? [s.houseId] : [])))]) : new Map();
     return {
       ...run, routeName: route?.name ?? run.routeId, depot: route?.depot ?? null,
-      stops: run.stops.map((s) => ({ ...s, stopCode: stopCode(run.routeId, s.stop), boxNumber: s.packId ? boxNumber(s.packId) : null, packStatus: s.packId ? this.packs.packs.get(s.packId)?.status ?? null : null })),
+      ...(run.areaId ? { areaName: area?.name ?? run.areaId, van: Number(/\.(\d+)@/.exec(run.id)?.[1] ?? 1) } : {}),
+      stops: run.stops.map((s) => ({ ...s, stopCode: stopCode(run.routeId, s.stop), boxNumber: s.packId ? boxNumber(s.packId) : null, packStatus: s.packId ? this.packs.packs.get(s.packId)?.status ?? null : null, ...(s.houseId ? { houseStatus: houseStatus.get(s.houseId) ?? null } : {}) })),
       loadOrder: [...run.stops].sort((a, b) => b.stop - a.stop).map((s) => ({ stop: s.stop, stopCode: stopCode(run.routeId, s.stop), packId: s.packId, boxNumber: s.packId ? boxNumber(s.packId) : null, packSize: s.packSize, address: s.address, loaded: !!s.loaded || run.status === 'out' || run.status === 'done' })),
       nextStop: next?.stop ?? null,
       counts: { stops: run.stops.length, delivered: run.stops.filter((s) => s.status === 'delivered').length, notDelivered: run.stops.filter((s) => s.status === 'not_delivered').length, bottles: run.stops.reduce((n, s) => n + s.packSize, 0), empties: run.stops.reduce((n, s) => n + (s.emptiesCollected ?? 0), 0) },

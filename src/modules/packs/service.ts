@@ -14,6 +14,9 @@ export interface PackOrder {
   boxId: string; // "box-6", "box-12", "box-24"
   productId: string; // the bottle
   runId?: string; // one night's run of a route, like "route-3@2026-11-03"
+  /** A pack for a house in a delivery area (not a subscription): which house and area. */
+  houseId?: string;
+  areaId?: string;
 }
 
 export interface Pack {
@@ -30,6 +33,9 @@ export interface Pack {
   status: 'composed' | 'box_printed' | 'mismatch' | 'verified' | 'sealed' | 'loaded' | 'delivered' | 'returned';
   loadPosition?: number;
   runId?: string;
+  /** For a house in a delivery area: the house and its area. */
+  houseId?: string;
+  areaId?: string;
   /** Checked by a person, by hand, when no packing line was there to scan it: who and when, for the record. */
   checkedByHand?: { by: string; at: string; reason?: string };
   /** Its run was closed out from an earlier day and never driven: who, when and why. */
@@ -73,6 +79,11 @@ export class PackService {
 
   /** Who a pack is for, so ads that target people can go in it. Set at start-up. */
   audienceFor?: (customerId: string, companyId: string) => Promise<import('../ads/contract').PrintAudience | null>;
+  /** Where a pack for a house in a delivery area is going, handed to the ad engine with each bottle. Set at start-up. */
+  houseContextFor?: (houseId: string, companyId: string) => Promise<import('../../core/types').RouteHouseContext | null>;
+  private houseOf(pack: Pack) {
+    return pack.houseId && this.houseContextFor ? this.houseContextFor(pack.houseId, pack.companyId) : Promise.resolve(null);
+  }
 
   async compose(order: PackOrder): Promise<Pack> {
     const p = this.platform;
@@ -81,7 +92,7 @@ export class PackService {
     if (!company) throw new Error(`Unknown company ${order.companyId}`);
     if (!box) throw new Error(`Unknown box ${order.boxId}`);
 
-    const pack: Pack = { id: newId('pk'), companyId: company.id, customerId: order.customerId, address: order.address, routeId: order.routeId, stop: order.stop, box, unitIds: [], faces: [], status: 'composed', ...(order.runId ? { runId: order.runId } : {}) };
+    const pack: Pack = { id: newId('pk'), companyId: company.id, customerId: order.customerId, address: order.address, routeId: order.routeId, stop: order.stop, box, unitIds: [], faces: [], status: 'composed', ...(order.runId ? { runId: order.runId } : {}), ...(order.houseId ? { houseId: order.houseId, areaId: order.areaId } : {}) };
     this.packs.set(pack.id, pack);
     this.save(pack);
 
@@ -111,8 +122,9 @@ export class PackService {
       const counts = new Map<string, number>();
       for (const id of pack.unitIds) for (const pl of p.units.get(id)?.placements ?? []) if (!pl.isHouse) counts.set(pl.campaignId, (counts.get(pl.campaignId) ?? 0) + 1);
       const max = Math.max(1, Math.floor(box.bottles * company.adRules.maxPackShare));
+      const house = await this.houseOf(pack);
       while (pack.unitIds.length < box.bottles) {
-        const unitId = await this.printBottle(pack, productId, counts, max);
+        const unitId = await this.printBottle(pack, productId, counts, max, house);
         pack.unitIds.push(unitId);
         this.save(pack);
       }
@@ -143,11 +155,11 @@ export class PackService {
     return pack;
   }
 
-  private async printBottle(pack: Pack, productId: string, counts: Map<string, number>, max: number): Promise<string> {
+  private async printBottle(pack: Pack, productId: string, counts: Map<string, number>, max: number, house: import('../../core/types').RouteHouseContext | null): Promise<string> {
     for (let tries = 0; tries < 3; tries++) {
       const avoidSignatures = new Set(pack.unitIds.map((id) => labelSignature(this.platform.units.get(id)?.placements ?? [])));
-      const audience = this.audienceFor ? await this.audienceFor(pack.customerId, pack.companyId) : null;
-      const r = await this.platform.order({ companyId: pack.companyId, locationId: pack.routeId, productId, packId: pack.id, consumerId: pack.customerId, frequency: { counts, max }, avoidSignatures, audience });
+      const audience = this.audienceFor && pack.customerId ? await this.audienceFor(pack.customerId, pack.companyId) : null;
+      const r = await this.platform.order({ companyId: pack.companyId, locationId: pack.routeId, productId, packId: pack.id, consumerId: pack.customerId || undefined, frequency: { counts, max }, avoidSignatures, audience, house });
       if (r.ok) {
         for (const pl of r.unit.placements) if (!pl.isHouse) counts.set(pl.campaignId, (counts.get(pl.campaignId) ?? 0) + 1);
         return r.unit.id;
@@ -193,10 +205,11 @@ export class PackService {
     for (const id of pack.unitIds) for (const pl of this.platform.units.get(id)?.placements ?? []) if (!pl.isHouse) counts.set(pl.campaignId, (counts.get(pl.campaignId) ?? 0) + 1);
     const max = Math.max(1, Math.floor(pack.box.bottles * company.adRules.maxPackShare));
     const fresh: string[] = [];
+    const house = await this.houseOf(pack);
     for (const old of missingUnitIds) {
       const i = pack.unitIds.indexOf(old);
       if (i < 0) continue;
-      const id = await this.printBottle(pack, productId, counts, max);
+      const id = await this.printBottle(pack, productId, counts, max, house);
       pack.unitIds[i] = id;
       fresh.push(id);
       this.save(pack);
@@ -325,7 +338,7 @@ export class PackService {
     if (right.status !== 'loaded') return reject(`This pack isn't loaded on the van.`);
     right.status = 'delivered';
     this.save(right);
-    this.platform.bus.publish('pack.delivered', right.companyId, { packId: right.id, routeId: right.routeId, stop: right.stop, emptiesCollected: input.emptiesCollected, photoProof: input.photoProof }, `${right.id}:delivered`);
+    this.platform.bus.publish('pack.delivered', right.companyId, { packId: right.id, routeId: right.routeId, stop: right.stop, emptiesCollected: input.emptiesCollected, photoProof: input.photoProof, ...(right.houseId ? { houseId: right.houseId, areaId: right.areaId } : {}) }, `${right.id}:delivered`);
     return { ok: true, pack: right };
   }
 

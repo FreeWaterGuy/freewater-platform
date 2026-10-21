@@ -18,6 +18,8 @@ export interface FillRequest {
    * can only go on bottles for someone who fits; bottles for nobody in particular never carry them.
    */
   audience?: PrintAudience | null;
+  /** A pack for a house in a delivery area: which house, area and street (no person). Null for everything else. */
+  house?: import('../../core/types').RouteHouseContext | null;
   /** When and where, for bid adjustments and pacing. Worked out from the clock if missing. */
   moment?: Omit<import('./auction').AuctionMoment, 'product' | 'audience' | 'locationId'>;
   /** Each ad's results so far, to predict its engagement. */

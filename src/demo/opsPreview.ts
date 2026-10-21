@@ -62,6 +62,7 @@ const rec = {
   overview: await call('GET', '/v1/ops/overview', ops), machines: await call('GET', '/v1/ops/machines', ops), failures: await call('GET', '/v1/ops/plugin-failures', ops),
   queue, previews: Object.fromEntries(await Promise.all(queue.map(async (q: any) => [q.id, await call('GET', `/v1/review/campaigns/${q.id}/preview`, ops)]))),
   runs: await call('GET', `/v1/ops/runs?date=${today}`, ops), subs: await call('GET', '/v1/ops/subscriptions', ops),
+  areas: await call('GET', '/v1/ops/areas', ops), areaHouses: { 'area-austin-pilot': await call('GET', '/v1/ops/areas/area-austin-pilot/houses', ops) },
   fleet: await call('GET', '/v1/ops/fleet', ops), fleetDetail: { 'ATX-014': await call('GET', '/v1/ops/fleet/ATX-014', ops), 'ATX-022': await call('GET', '/v1/ops/fleet/ATX-022', ops) },
   totals: await call('GET', '/v1/public/companies/freewater/totals'), ledger: await call('GET', '/v1/ledger?limit=500', app.demoKeys!['freewater-admin']),
 };

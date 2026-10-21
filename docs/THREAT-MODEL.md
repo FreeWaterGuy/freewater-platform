@@ -201,6 +201,10 @@ Status: **OK** (a control exists and was read), **PARTIAL** (a control exists bu
 | A12 | T | Machine software replaced | `update_software` is a stand-in; no signed updates | **MISSING** (R13) |
 | A12 | T | Box marked delivered at the wrong door | `PackService.deliver` (right box), driver-reported GPS / `atAddress` | PARTIAL (client-asserted; R13) |
 | A12 | E | Any non-machine `orders` key commands machines | `POST /v1/ops/fleet/:id/commands` scope `admin|orders` | PARTIAL (R13) |
+| A12 | S | Someone claims a house that isn't theirs and stops (or restarts) its free water | `HouseService.claim`: only a code from a box delivered to that house in the last 60 days, or its box number with the house number; 5 wrong tries a day per person, counted in `house_events` (survives restarts) | PARTIAL (anyone who can scan the box on the porch can claim; the real resident can claim too and restart. Stronger: a code inside the box) |
+| A12 | E | A key plans a night (prints and bills) or changes a delivery area | `POST /v1/ops/runs/plan`, `/v1/ops/areas*`, house reviews need a signed-in ops person or owner (`HouseService.needOpsPerson`) | OK (`test/route-delivery.test.ts`) |
+| A12 | T | A house delivered twice in a cycle when two plans run at once | `HouseService.take`: one guarded update (still active, still due, not planned for that night or later) inside the transaction that writes the runs; run ids unique | OK (`test/route-delivery.test.ts`, real Postgres with two servers) |
+| A6 | I | A house’s record grows into a profile of the people in it | houses hold address, map point, status and household size only; the link to a person (`house_claims`) and their id in `house_events` go when they delete their account | OK |
 
 ### 4.2 Boundaries
 
@@ -411,15 +415,26 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 93 | `GET /v1/me/delivery` | me | yes | — | OK |
 | 94 | `POST /v1/me/delivery` | me | yes | — | OK |
 | 95 | `PATCH /v1/me/delivery` | me | yes | — | OK |
+| 801 | `GET /v1/me/house` | me | yes | — | OK (only the house this person claimed) |
+| 802 | `POST /v1/me/house/claim` | me | yes | — | OK (proof: a code from a box delivered to that house in the last 60 days; 5 wrong tries a day, kept in the database) |
+| 803 | `PATCH /v1/me/house` | me | yes | — | OK (only the claimed house) |
+| 804 | `DELETE /v1/me/house` | me | yes | — | OK |
 | 96 | `GET /v1/ops/overview` | [admin, packs, events, ledger, campaigns] | no | team only (no advertiser/machine key) | OK |
 | 97 | `GET /v1/ops/machines` | [admin, orders, packs, events] | no | team only (no advertiser/machine key) | OK |
 | 98 | `GET /v1/ops/plugin-failures` | [admin, events, campaigns] | no | team only (no advertiser/machine key) | OK |
 | 99 | `GET /v1/ops/subscriptions` | [admin, packs] | no | team only (no advertiser/machine key) | OK |
 | 100 | `GET /v1/ops/runs` | [admin, packs] | no | team only (no advertiser/machine key) | OK |
-| 101 | `POST /v1/ops/runs/plan` | [admin, packs] | no | team only (no advertiser/machine key) | OK |
+| 101 | `POST /v1/ops/runs/plan` | [admin, packs] | yes | team only (no advertiser/machine key) | OK; ops person or owner (it prints bottles that bill advertisers) |
 | 102 | `POST /v1/ops/runs/:id/pack-check` | [admin, packs] | no | team only (no advertiser/machine key) | OK |
 | 103 | `POST /v1/ops/runs/:id/stops/:stop/check-by-hand` | [admin, packs] | yes | team only (no advertiser/machine key) | OK; ops person or owner only (README) |
 | 104 | `POST /v1/ops/runs/:id/close` | [admin, packs] | yes | team only (no advertiser/machine key) | OK; ops person or owner |
+| 805 | `GET /v1/ops/areas` | [admin, packs] | no | team only (no advertiser/machine key) | OK |
+| 806 | `POST /v1/ops/areas` | [admin, packs] | yes | team only (no advertiser/machine key) | OK; ops person or owner; starts off |
+| 807 | `PATCH /v1/ops/areas/:id` | [admin, packs] | yes | team only (no advertiser/machine key) | OK; ops person or owner |
+| 808 | `GET /v1/ops/areas/:id/houses` | [admin, packs] | no | team only (no advertiser/machine key) | OK (addresses only, no people) |
+| 809 | `POST /v1/ops/areas/:id/houses/import` | [admin, packs] | yes | team only (no advertiser/machine key) | OK; ops person or owner |
+| 810 | `GET /v1/ops/house-reviews` | [admin, packs] | no | team only (no advertiser/machine key) | OK |
+| 811 | `POST /v1/ops/houses/:id/review` | [admin, packs] | yes | team only (no advertiser/machine key) | OK; ops person or owner |
 | 105 | `GET /v1/review/campaigns/:id/preview` | campaigns | no | team only (no advertiser/machine key) | OK |
 | 106 | `GET /v1/driver/runs` | packs | yes | — | OK |
 | 107 | `GET /v1/driver/runs/:id` | packs | yes | — | OK |
@@ -427,6 +442,7 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 109 | `POST /v1/driver/runs/:id/load` | packs | yes | — | OK |
 | 110 | `POST /v1/driver/runs/:id/stops/:stop/deliver` | packs | yes | — | OK |
 | 111 | `POST /v1/driver/runs/:id/stops/:stop/fail` | packs | yes | — | OK |
+| 812 | `POST /v1/driver/runs/:id/stops/:stop/skip-house` | packs | yes | — | OK (the run's own driver; a person reviews the skip) |
 | 112 | `POST /v1/driver/photos` | packs | yes | — | OK |
 | 113 | `GET /v1/public/books` | public | — | — | OK (public by design) |
 | 114 | `GET /v1/public/books/:companyId` | public | — | — | OK (public by design) |

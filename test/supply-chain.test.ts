@@ -134,7 +134,7 @@ describe('door reports come from the driver', () => {
     for (let i = 1; addrs.length < 1 && i < 4000; i++) { const a = `${1000 + i} Kenwood Ave, Austin, TX`; const c = await app.delivery.check('freewater', a); if (c.covered && c.routeId === 'route-3') addrs.push(a); }
     await call('POST', '/v1/me/delivery', await signIn('sc-ana@example.com'), { address: addrs[0], packSize: 6, frequency: 'weekly', day: 2 });
     const admin = keys['freewater-admin']!;
-    const [run] = (await call('POST', '/v1/ops/runs/plan', admin, { date: '2026-11-03' })).body;
+    const [run] = (await call('POST', '/v1/ops/runs/plan', await person('freewater', 'ops-sc@freewater.io', 'ops'), { date: '2026-11-03' })).body; // a person plans (it prints and bills)
     for (const s of run.stops) await call('POST', `/v1/packs/${s.packId}/verify`, admin, { scannedUnitIds: app.packs.packs.get(s.packId)!.unitIds });
     await call('POST', `/v1/ops/runs/${run.id}/pack-check`, admin);
     now = new Date('2026-11-03T14:00:00Z').getTime();

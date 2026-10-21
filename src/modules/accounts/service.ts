@@ -215,7 +215,9 @@ export class AccountsService {
     const bottles = (await this.db.query<any>(`select id, status, created_at, data->>'locationId' as location from units where data->>'ownerId' = $1 order by created_at`, [userId])).rows;
     const payments = (await this.db.query<any>(`select p.id, p.purpose, p.amount_cents, p.status, p.created_at from payments p join payment_customers c on c.id = p.customer_id where c.owner_type = 'user' and c.owner_id = $1 order by p.created_at`, [userId])).rows;
     const methods = (await this.db.query<any>(`select m.brand, m.last4, m.exp_month, m.exp_year from payment_methods m join payment_customers c on c.id = m.customer_id where c.owner_type = 'user' and c.owner_id = $1`, [userId])).rows;
-    return { exportedAt: this.clock().toISOString(), account: u, sessions, customBottles: bottles, payments, savedCards: methods };
+    const deliveries = (await this.db.query<any>(`select address, pack_size, frequency, day, status, next_date, notes, created_at from subscriptions where user_id = $1 order by created_at`, [userId])).rows;
+    const house = (await this.db.query<any>(`select h.address, h.status, h.household_size, c.claimed_at from house_claims c join houses h on h.id = c.house_id where c.user_id = $1`, [userId])).rows;
+    return { exportedAt: this.clock().toISOString(), account: u, sessions, customBottles: bottles, payments, savedCards: methods, deliveries, house };
   }
 
   /**

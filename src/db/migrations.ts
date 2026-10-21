@@ -1636,6 +1636,93 @@ end $$;
 create trigger advertiser_credit_limits_guard before update or delete on advertiser_credit_limits for each row execute function advertiser_credit_limits_guard();
 `,
   },
+  {
+    id: '061_route_areas',
+    sql: `
+-- Delivery areas FreeWater chooses: every house on the chosen streets gets packs, in street order, with no sign-up.
+-- New areas start off; a person turns one on. Settings are the area's own (docs/SWITCHES.md, "Delivery areas").
+create table delivery_areas (
+  id text primary key,
+  company_id text not null,
+  name text not null check (length(name) between 2 and 80),
+  route_id text not null, -- the route whose depot and delivery days its vans use
+  polygon jsonb, -- [[lat, lng], ...]: imported houses must fall inside it; null means no limit
+  frequency_days integer not null default 7 check (frequency_days between 1 and 28),
+  pack_size integer not null default 24 check (pack_size in (12, 24)),
+  packs_per_house integer not null default 1 check (packs_per_house between 1 and 6),
+  bottles_per_person_week integer default 12 check (bottles_per_person_week between 1 and 48),
+  max_packs_per_house integer not null default 3 check (max_packs_per_house between 1 and 6),
+  van_packs integer not null default 100 check (van_packs between 1 and 1000),
+  active boolean not null default false,
+  sample boolean not null default false,
+  created_by text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index delivery_areas_company on delivery_areas(company_id);
+
+-- Houses are addresses, not people: no names, no contact details. Household size only if someone in the app tells us.
+create table houses (
+  id text primary key,
+  company_id text not null,
+  area_id text not null references delivery_areas(id),
+  address text not null,
+  address_key text not null,
+  street text not null,
+  number integer,
+  lat double precision not null check (lat between -90 and 90),
+  lng double precision not null check (lng between -180 and 180),
+  status text not null default 'active' check (status in ('active', 'opted_out', 'skip_pending', 'skipped')),
+  household_size integer check (household_size between 1 and 20),
+  next_date date, -- the first night it's due again; null: due at the next plan
+  last_planned date,
+  last_delivered_at timestamptz,
+  skip_reason text,
+  sample boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (company_id, address_key)
+);
+create index houses_area on houses(area_id, status);
+
+-- A person in the app who proved a house is theirs (a code from a box delivered there). One house per person.
+create table house_claims (
+  house_id text not null references houses(id),
+  user_id text not null references users(id),
+  company_id text not null,
+  pack_id text not null,
+  claimed_at timestamptz not null default now(),
+  primary key (house_id, user_id)
+);
+create unique index house_claims_one_per_person on house_claims(company_id, user_id);
+
+-- What happened to each house and who did it (opt-outs, restarts, driver skips, reviews, claims). Only added to.
+create table house_events (
+  id text primary key,
+  company_id text not null,
+  house_id text,
+  kind text not null,
+  by_user text,
+  reason text,
+  at timestamptz not null default now()
+);
+create index house_events_house on house_events(house_id, at);
+create index house_events_tries on house_events(company_id, by_user, kind, at);
+create function house_events_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' and fw_test_reset(old.company_id) then return old; end if;
+  -- Erasing a person takes their id off what they did; nothing else about an event changes.
+  if tg_op = 'UPDATE' and new.by_user is null and new.id = old.id and new.kind = old.kind and new.house_id is not distinct from old.house_id
+     and new.reason is not distinct from old.reason and new.at = old.at then return new; end if;
+  perform fw_refuse('house_events', 'is append-only.');
+  return null;
+end $$;
+create trigger house_events_guard before update or delete on house_events for each row execute function house_events_guard();
+
+alter table route_runs add column if not exists area_id text;
+alter table route_runs add column if not exists planned_by text;
+`,
+  },
 ];
 
 /** Runs every migration not yet run (or, for tests that start from an older schema, those in `list`). */

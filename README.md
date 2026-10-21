@@ -138,9 +138,53 @@ npm run demo:ops           # ~30 homes on two routes due today, today's boxes pr
 npm run demo:ops-preview   # builds out/ops-preview/ and out/driver-preview/, clickable copies that need no server
 ```
 
+**Delivery areas: house after house (the Austin pilot, `src/modules/delivery/houses.ts`).** The pilot's main way of
+handing out water. FreeWater chooses the streets; every house on them gets a free pack, house after house, like
+junk mail but free water that gives to charity. Houses don't sign up and aren't app users.
+- **Areas** (ops console *Areas*, `/v1/ops/areas`). An ops person or owner makes an area on one of the routes (its
+  micro-factory and delivery days), adds houses from a CSV of addresses with lat and lng, and keeps only the ones inside
+  a polygon of [lat, lng] corners. A real map to draw the polygon on can come later; the console shows the houses as
+  dots meanwhile. A new area starts **off**. Settings per area (docs/SWITCHES.md, "Delivery areas"): how often (weekly
+  by default), 12- or 24-packs (24), packs per house (1), bottles a person a week once a household says its size (12),
+  the most packs per house (3), boxes per van (100).
+- **Houses** are addresses, not people: address, street and number, lat and lng, area, status (gets packs, stopped in
+  the app, driver skip waiting for review, skipped), household size only if someone told us, last delivered, next due.
+  What happened to a house and who did it is kept in `house_events`, which can only be added to.
+- **The night's plan** (the same *Plan and print this night*, a signed-in ops person or owner). Every house due in
+  every area that's on, in **street order**: one street at a time, every house on it by house number, driven from the
+  nearer end, then on to the nearest end of the next street (`streetOrder` in `src/modules/delivery/planner.ts`; a
+  routing service with real roads can replace it). Split into one run per van by boxes per van, a house's boxes in one
+  van, stop numbers running on from van to van. Houses that stopped, or wait on a driver's skip, are left out and the
+  next house still gets its box. A house is taken for a night in one guarded database statement, so two plans at once
+  (or two servers) never put a house on two runs, and a house whose night went by unplanned comes on the next night
+  (with an hourly "overdue" alert until then).
+- **Packs per house**: the area's packs per house; once a household tells us its size, enough for its people (one
+  24-pack a week for one or two people, two for three or four, three for five or more, by default).
+- **At the door** nothing changes: the driver scans the house's own box there (GPS within 100 m, or confirms), and the
+  drop time and the phone's position are kept on the stop, with the house and area on the `pack.delivered` event, as
+  proof for advertisers. The driver can **skip a house** with a reason ("no soliciting" sign, they asked, not a home,
+  not safe, a dog): its boxes come back and the house is left out until a person reviews it (*Areas*).
+- **Stopping, in the app** (*Me → Your house's deliveries*, `/v1/me/house`). Someone at the house shows it's theirs by
+  scanning the code on the side of a box delivered there in the last 60 days (or typing the box number from its corner
+  with their house number; five wrong tries a day), then presses *Stop deliveries*: the house is left out of every
+  plan from then on, and a box already printed for that night comes back with the driver. *Start deliveries again*
+  puts it back from the next night its route drives. They can also say how many people live there. Deleting the account
+  removes the link to the house and the household size, never the choice made for the house.
+- **For the ad engine**: every bottle printed for a house gets `FillRequest.house` (`RouteHouseContext` in
+  `src/core/types.ts`: house id, area id, route id, street, household size if known, whether someone claimed it) and,
+  if someone claimed the house, that person's audience as `FillRequest.audience` (only what they allowed), exactly as
+  for any bottle printed for a known person. Nothing is sold on it yet: what advertisers can buy on routes is next.
+- **Demo**: an "Austin pilot (sample houses)" area of about 50 made-up houses on four Travis Heights streets, off,
+  every house marked as a sample.
+- **Limits and decisions for the founder.** The box code proves a house to anyone who can scan the box, so a
+  passer-by could stop a neighbour's water (the neighbour can claim it too and start again); a code printed inside the
+  box would be stronger. Stopping is app-only as chosen: someone without the app, or who never got a box, can't stop
+  it yet. A box printed for a house that stops the same night still prints (and bills its ads); it comes back unopened.
+  The streets order is straight-line, not real roads.
+
 **Home delivery (in the app, `/v1/me/delivery`).** Free 6, 12 or 24 packs every week, every 2 weeks or every 4 weeks, on the days a neighbourhood's route runs. Check an address first (`POST /v1/public/delivery/check`), then skip the next one, pause, resume, change size, day or the note for the driver, or stop. The app shows when it arrives and, on the day, how many stops away the van is. Bottles in a pack count as the customer's bottles, with their AR.
 
-**The night's routes (`POST /v1/ops/runs/plan`).** Everyone due that night, grouped by route, put in driving order from the micro-factory, and a pack printed for each stop. Every bottle in a pack is different and the box carries its stop code ("R3 · 14") and its own box number. Planning the same night twice prints nothing new.
+**The night's routes (`POST /v1/ops/runs/plan`, a signed-in ops person or owner).** Everyone due that night, grouped by route, put in driving order from the micro-factory, and a pack printed for each stop; then every delivery area's houses (above). Every bottle in a pack is different and the box carries its stop code ("R3 · 14") and its own box number. Planning the same night twice prints nothing new.
 - **Swappable pieces.** Addresses become map points through a `Geocoder` (the test geocoder stands in until a real one is chosen). Stops are ordered by a `RoutePlanner` (the simple planner goes to the nearest stop next and then untangles crossings; a real routing service with roads and traffic plugs in the same way).
 - **Packing check (`POST /v1/ops/runs/:id/pack-check`).** Every bottle in every box is checked before the box is sealed. The packing line reports each box's scan through the packs API (`POST /v1/packs/:id/verify`); the packing check then seals every box the line passed and lists the rest. Where there's no line, a signed-in person counts a box by hand and presses **Checked by hand** next to it on the routes page (`POST /v1/ops/runs/:id/stops/:stop/check-by-hand`, a person only, never an API key): the box is sealed and the stop records who checked it and when. Once every box is sealed the route is ready to load.
 
@@ -157,7 +201,8 @@ npm run demo:ops-preview   # builds out/ops-preview/ and out/driver-preview/, cl
 - **Ad review:** each ad on a sample label, at every size, on a box and as its scan page, with a checklist. Approve, or send it back with a note.
 - **Machines:** prints today, failures and the last print for each machine, plus any scan pages that fell back.
 - **Routes:** plan and print a night, run the packing check, and follow every stop.
-- **Deliveries:** everyone getting packs.
+- **Areas:** the delivery areas, their settings and houses, adding houses from CSV, and drivers' skips to review.
+- **Deliveries:** everyone getting packs by subscription.
 - **Books:** the public totals and the latest ledger lines.
 
 ## Smart codes and seeing the sale
@@ -499,6 +544,7 @@ The server keeps working state in memory and writes through to the database, so 
 | `src/modules/console` | Company settings, their rules and version history, machines, licensee setup |
 | `src/modules/webhooks`, `src/adapters/webhooks` | Webhook endpoints, signed deliveries, retries, the public event list, and the sender contract |
 | `src/modules/packs` | Packs, box faces, packing check, van loading and delivery |
+| `src/modules/delivery` | Subscriptions, delivery areas and houses (`houses.ts`), street-order and route planning, the night's runs |
 | `src/adapters/printers` | Printer contract and the virtual printer |
 | `src/db` | Database contract, PGlite and Postgres adapters, migrations, storage |
 | `src/modules/accounts` | Sign-in codes, sessions, roles, privacy, export and delete |
