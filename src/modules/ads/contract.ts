@@ -20,6 +20,13 @@ export interface FillRequest {
   audience?: PrintAudience | null;
   /** A pack for a house in a delivery area: which house, area and street (no person). Null for everything else. */
   house?: import('../../core/types').RouteHouseContext | null;
+  /**
+   * Pieces bought on a delivery route for this very bottle (route_spots): each goes on the label at its size, before
+   * anything else; the rest of the label is filled as usual. Only those still allowed to print are placed.
+   */
+  reserved?: { spotId: string; campaignId: string; share: Share }[];
+  /** Advertisers the house this bottle goes to has blocked: none of their ads go on it. */
+  blockedAdvertisers?: string[];
   /** When and where, for bid adjustments and pacing. Worked out from the clock if missing. */
   moment?: Omit<import('./auction').AuctionMoment, 'product' | 'audience' | 'locationId'>;
   /** Each ad's results so far, to predict its engagement. */

@@ -26,6 +26,9 @@ export interface OrderOptions {
   audience?: import('./modules/ads/contract').PrintAudience | null;
   /** A pack for a house in a delivery area: the house and area, passed on to the ad engine (docs/OVERVIEW.md). */
   house?: import('./core/types').RouteHouseContext | null;
+  /** Pieces bought on a delivery route for this bottle (route_spots), placed first; and advertisers the house blocked. */
+  reserved?: import('./modules/ads/contract').FillRequest['reserved'];
+  blockedAdvertisers?: string[];
 }
 
 export type OrderOutcome =
@@ -82,7 +85,7 @@ export class Platform {
    * and returns the campaigns that have none left there. Memory decides first; this is the guard that holds even if
    * memory is wrong (two servers, a restart mid-print), so a bottle nobody paid for never prints.
    */
-  claimPrepaid?: (companyId: string, campaignIds: string[]) => Promise<string[]>;
+  claimPrepaid?: (companyId: string, campaignIds: string[], routeSpotIds?: string[]) => Promise<string[]>;
   /** Is this switch on for this company (its Features page)? Set at start-up; without it everything is on. */
   featureOn?: (companyId: string, id: string) => boolean;
 
@@ -243,7 +246,8 @@ export class Platform {
     // never claimed from a prepaid ad, and only where the company has fillers on (they need ads on).
     const fillNow = (): import('./modules/ads/contract').FillResult => {
       if (opts.custom) return { layout: [1 as const], placements: [] };
-      const f = engine.fill({ company, product: sizes.length === allSizes.length ? product : { ...product, sizes }, location, campaigns: usable(), random: this.random, frequency: opts.frequency, avoidSignatures: opts.avoidSignatures, audience: this.withToday(audience, company.timezone), moment: momentAt(this.bus.now(), company.timezone ?? 'UTC'), house: opts.house ?? null, stats: this.auctionStats });
+      const reserved = (opts.reserved ?? []).filter((r) => !without.has(r.campaignId));
+      const f = engine.fill({ company, product: sizes.length === allSizes.length ? product : { ...product, sizes }, location, campaigns: usable(), random: this.random, frequency: opts.frequency, avoidSignatures: opts.avoidSignatures, audience: this.withToday(audience, company.timezone), moment: momentAt(this.bus.now(), company.timezone ?? 'UTC'), house: opts.house ?? null, stats: this.auctionStats, reserved, blockedAdvertisers: opts.blockedAdvertisers });
       if (this.unsold && on('fillers')) f.placements = this.unsold({ company, product, location, audience, placements: f.placements, random: this.random });
       return f;
     };
@@ -253,7 +257,8 @@ export class Platform {
       const paid = fill.placements.filter((p) => p.prepaid).map((p) => p.campaignId);
       if (!paid.length) break;
       let refused: string[];
-      try { refused = await this.claimPrepaid(company.id, paid); } catch (e) { release(fill.placements, this.campaigns); throw e; }
+      const spots = fill.placements.flatMap((p) => (p.prepaid && p.routeSpotId ? [p.routeSpotId] : []));
+      try { refused = await this.claimPrepaid(company.id, paid, spots); } catch (e) { release(fill.placements, this.campaigns); throw e; }
       if (!refused.length) break;
       release(fill.placements, this.campaigns);
       for (const id of refused) without.add(id);
@@ -381,6 +386,8 @@ export class Platform {
 
   private persistPrepaid(unit: Unit, move: 'printed' | 'released') {
     this.persist.prepaid?.(unit.companyId, unit.placements.filter((p) => p.prepaid && !p.isHouse).map((p) => p.campaignId), move);
+    const spots = unit.placements.flatMap((p) => (p.routeSpotId && !p.isHouse ? [p.routeSpotId] : []));
+    if (spots.length) this.persist.routeSpots?.(unit.companyId, spots, move, unit.id, unit.packId);
   }
 
   private persistCampaigns(placements: Placement[]) {

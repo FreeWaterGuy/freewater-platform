@@ -235,8 +235,35 @@ The company's switches for delivery areas (*Console → Features → Delivery*, 
 | **More packs for bigger households** | On | Delivery areas | Any owner signed in | Every house gets the area's packs per house; the app doesn't ask how many live there. |
 | **Ads know the house's street and area** | On | Delivery areas, Ads | Any owner signed in | The ad engine gets no house context; ads are chosen as for any pack on that route. |
 | **Drivers skip a house, with a reason** | On | The driver app, Delivery areas | Any owner signed in | No *Skip this house* button; the driver uses *Problem at this stop* and the house stays on the next plan. |
+| **Houses block ads** | On | Delivery areas | Any owner signed in | No blocking in the app's *Your house*; and no route buys aimed at fewer than 50 houses (they need it). |
 
 Companies that existed before these switches see them as **New** and off until their own people decide.
+
+### Buying on delivery routes
+
+Advertisers buy pieces of the labels on bottles going to houses in the delivery areas (`src/modules/ads/routeBuys.ts`;
+README, "Buying on delivery routes"). Paid up front like every ad here; every size gets the same technology.
+
+| What | How it works |
+|---|---|
+| **Kinds** | *Spread*: N bottles shared over an area, streets or a shape on the map. *Blanket*: one piece on one bottle in every box at every house there. *Whole box*: every bottle in a house's box (and its sides, if chosen). *Chosen houses*: named by address, a number of bottles at each. Each for 1 to 26 weeks (Monday to Sunday), from next week. Only weekly areas that are on. |
+| **The price** | Exact before paying: pieces × the size's price (*Ads and prices*: whole label $1 … 1/10 20¢) × the product's factor, plus box sides at the box side price (40¢), less any credit. The card is charged that or nothing. AR, video and scans are included. |
+| **Room** | A bottle is one label: what's sold on it never passes the whole label or ten pieces, only in mixes the bottle can print, never an ad twice, never two competitors (the database refuses more than a whole label). Blanket and whole-box buys skip a house whose box is already taken that week and don't charge for it; a buy that can't fit is refused with what's left. |
+| **First paid wins** | Paying reserves each piece on a bottle under a lock on each house and week, checked against what's committed then. Of two payments for the last space, the second is charged nothing and shown the new price. A declined card lets its space go at once. No bidding for houses while pricing is flat. |
+| **At print time** | Each bottle of a house's pack carries exactly the pieces reserved for it, each printed once; the rest of the label gets other paid ads, approved fillers, then the house ad. A route ad never prints anywhere else. |
+| **When a house stops** | Pieces that can't go out (the house stopped or was skipped, blocked the business or every ad aimed at it alone, the week went by before they printed, the box came back) come back: a buy aimed at **one house** gets a **refund** of that part to the card, approved by an owner or finance person with the second step (`POST /v1/ops/route-refunds/:id/approve`; the list is `GET /v1/ops/route-refunds`, no console page yet); any other buy gets **credit for other houses**, used first on the advertiser's next route buy (not on a one-house buy, so a refund never exceeds what the card paid). Nobody pays for a house that stopped. Runs daily (job `route-buys`), at once when a house stops or blocks, and on `POST /v1/ops/route-settle`. |
+| **Fewer than 50 houses** | A **small-audience** buy (the company's number, 50 or more: the setting `adRules.smallAudienceHouses` through `PATCH /v1/console/settings`, no console field yet; it can be raised, never lowered below 50): only with the switch below on; only a business the company verified (`POST /v1/advertisers/:id/verify`, an owner or reviewer signed in); no names, street addresses, phone numbers, emails or personal messages in the ad (checked when paying and again when approved); approved by an owner or reviewer signed in, never an API key (the review queue marks it); never a house that blocked ads aimed at it alone or said no to targeted ads. Sensitive kinds of data are never targetable (household data refuses them). |
+| **Proof** | *Where it went*: streets and houses reached (streets with fewer than 5 houses shown together), each drop's time and rough place from the driver's scan (to about 100 m), scans by area, what came back. Never which house or who lives there. |
+
+The switches (*Console → Features*, category Ads, *Buying on delivery routes*):
+
+| Switch | FreeWater | A new company | Needs | Off means |
+|---|---|---|---|---|
+| **Buying on delivery routes** (`route_buying`) | On | Off (money) | Advertisers pay up front, Delivery areas | Nothing new can be bought on routes. Pieces already bought still print; what can't go out still comes back (*Settling money already in flight*, always on). |
+| **Bottles spread over an area** / **Every house on the route** / **A whole box** / **Chosen houses** | On | On (once the above is on) | Buying on delivery routes | That kind can't be quoted or bought. |
+| **Buys aimed at fewer than 50 houses** (`route_small_audience`) | On | Off | Buying on delivery routes, Houses block ads | Every route buy must reach at least 50 houses. |
+| **Aim route buys by household data** (`route_attribute_targeting`) | Off (needs *Ads aimed at houses*, off) | Off | Ads aimed at houses | Route buys are by place only. |
+| **Delivery report for route buys** (`route_proof`) | On | On | Delivery areas | No *Where it went* report. |
 
 Every settings change is saved as a version. *History* shows who changed what, and can put an earlier version back
 (a version that changes money or blockchain settings must be put back by a person, and passes the same checks).

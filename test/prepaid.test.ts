@@ -552,7 +552,8 @@ describe('the Features page: each part of how advertisers pay is a switch, per c
       // Turning off "Advertisers pay up front" takes its fees along with it: a scan then costs nothing, even though
       // the fee's own setting was on a moment ago.
       const off = app.companyFeatures.plan('freewater', { prepaid_ads: false });
-      expect(off.changes.map((x) => x.id).sort()).toEqual(['fee_scan', 'prepaid_ads']);
+      // (Buying on delivery routes is paid up front too, so it and its kinds go off with it.)
+      expect(off.changes.map((x) => x.id).sort()).toEqual(['fee_scan', 'prepaid_ads', 'route_buy_blanket', 'route_buy_box', 'route_buy_houses', 'route_buy_spread', 'route_buying', 'route_small_audience']);
       await app.companyFeatures.change('freewater', { prepaid_ads: false }, person());
       expect(adBilling(fw()).fees.scan.on).toBe(false);
       app.platform.scan(u.id, slot, 'viewer-switch-2');

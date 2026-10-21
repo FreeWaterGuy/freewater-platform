@@ -102,6 +102,13 @@ export class Ledger {
       this.add(e, { debit: `cash:${p.provider}`, credit: `receivable:${p.payerType === 'user' ? 'customer' : 'advertiser'}:${p.payerId}`, amountCents: p.amountCents, kind: 'payment', memo: p.purpose === 'invoice' ? `Invoice ${p.ref} paid` : `Custom bottle order ${p.ref} paid` });
     });
     bus.on('ad.extra_used', (e) => this.add(e, { campaignId: e.payload.campaignId, debit: prepaidAccount(e.payload.advertiserId), credit: 'revenue:extras', amountCents: e.payload.chargedCents, kind: 'extra', memo: `${e.payload.advertiserName}, one ${e.payload.feature} (paid in advance)` }));
+    // A piece on a delivery route that printed but whose box never reached the house: its price back to the advertiser.
+    bus.on('ad.route_credited', (e) => {
+      for (const r of e.payload.reversed) {
+        if (r.kind === 'print') this.add(e, { unitId: r.unitId, campaignId: e.payload.campaignId, debit: 'revenue:print', credit: prepaidAccount(e.payload.advertiserId), amountCents: r.cents, kind: 'print', memo: `${e.payload.advertiserName}, a piece whose box never reached the house: back as credit (${e.payload.settlementId})` });
+        else this.add(e, { packId: r.packId, campaignId: e.payload.campaignId, debit: 'revenue:extras', credit: prepaidAccount(e.payload.advertiserId), amountCents: r.cents, kind: 'extra', memo: `${e.payload.advertiserName}, a box side whose box never reached the house: back as credit (${e.payload.settlementId})` });
+      }
+    });
     bus.on('ad.refunded', (e) => this.add(e, { campaignId: e.payload.campaignId, debit: prepaidAccount(e.payload.advertiserId), credit: `cash:${e.payload.provider}`, amountCents: e.payload.totalCents, kind: 'prepay_refund', memo: `${e.payload.advertiserName}'s ad stopped by the company: ${e.payload.bottles} unprinted bottle(s) and unused extras paid back (refund ${e.payload.refundId})` }));
     // Money going out: donations sent to charities, and the costs of running the business.
     bus.on('charity.transferred', (e) => this.add(e, { debit: `payable:charity:${e.payload.charity}`, credit: `cash:${e.payload.provider}`, amountCents: e.payload.amountCents, kind: 'charity_transfer', memo: `Transfer ${e.payload.number} to ${e.payload.charity}` }));
@@ -259,7 +266,8 @@ export class Ledger {
     // Prepaid companies charge for box sides only when a person switched that fee on.
     if (engagementFee(this.company(e.companyId), 'boxFace', this.featureOn) === null) return;
     for (const f of e.payload.faces) {
-      if (f.isHouse) continue;
+      // A side bought on a delivery route was paid up front: it's booked from the advertiser's prepaid money instead.
+      if (f.isHouse || f.routeSpotId) continue;
       this.add(e, { packId: e.payload.packId, campaignId: f.campaignId, debit: `receivable:advertiser:${f.advertiserId}`, credit: 'revenue:box', amountCents: f.priceCents, kind: 'box_face', memo: `${f.advertiserName}, ${f.face} of the box, printed` });
       this.giveShare(e, this.company(e.companyId), f.priceCents, { packId: e.payload.packId }, undefined, 'a box side');
     }

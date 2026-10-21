@@ -320,6 +320,20 @@ person gets five wrong tries a day.
 If they can't use the app (no smartphone, never had a box), an ops person can't stop it for them yet: the founder chose
 app-only. Note the address and pass it on; see "Decisions for the founder" in the delivery section of the README.
 
+## "A route refund waits for approval" (buying on delivery routes)
+
+A house that an advertiser bought on its own stopped deliveries, blocked the business, wasn't delivered that week, or
+its box came back: the part not delivered goes back to the advertiser's card once a person approves it.
+
+1. `GET /v1/ops/route-refunds` (with a team key or a signed-in session; no console page yet): the ad, the amount and why.
+2. An owner or finance person, signed in with the second step, approves it (`POST /v1/ops/route-refunds/<id>/approve`).
+   The refund goes to the card it was paid with, once (pressing again does nothing more).
+3. If it says *failed* (the provider refused), approve again later, or refund it at the provider and record it.
+
+Buys on more than one house get credit instead, automatically. The reconciliation's *route_open* check lists
+refunds still waiting and pieces past their week not yet given back (the daily `route-buys` job does that; to do it
+now, `POST /v1/ops/route-settle`).
+
 ## "Home deliveries are overdue"
 
 Someone's delivery day went by and they aren't on a planned, printed run (a night nobody planned, a run stuck

@@ -732,6 +732,19 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 397 | `DELETE /v1/households/sources/:source` | admin | no | team only | OK (deleting is immediate) |
 | 398 | `GET /v1/households/audience` | admin | no | team only; *Ads aimed at houses* (starts off) | OK (for checking; advertisers never see a house’s audience; `no-store`) |
 | 399 | `POST /v1/public/households/:companyId/opt-out` | public | — | — | OK (public by design: a house says no without an account; the same answer whether or not anything was held) |
+| 400 | `GET /v1/ads/route-areas` | campaigns | no | advertiser only; *Buying on delivery routes* | OK (streets with house counts and outlines; never an address or a house) |
+| 401 | `GET /v1/ads/routes` | campaigns | no | advertiser only (its own buys, credit and refunds) | OK |
+| 402 | `POST /v1/ads/drafts/:id/route-quote` | campaigns | no | advertiser only, its own draft | OK (prices from the company's own settings and the room left now; counts, never which houses) |
+| 403 | `POST /v1/ads/campaigns/:id/route-quote` | campaigns | no | the campaign's own advertiser, or the company's staff | OK |
+| 404 | `POST /v1/ads/campaigns/:id/route-pay` | campaigns | no | the campaign's own advertiser, or the company's staff | OK (charges only the total seen; every piece reserved under a lock on each house and week, first paid wins, a database rule refuses more than a whole label on a bottle; small-audience guardrails) |
+| 405 | `GET /v1/ads/campaigns/:id/route-report` | campaigns | no | the campaign's own advertiser, or the company's staff; *Delivery report for route buys* | OK (streets with at least 5 houses, areas, drop times and points rounded to ~100 m; never a house or a person) |
+| 406 | `POST /v1/advertisers/:id/verify` | [admin, campaigns] | yes | an owner or reviewer, signed in; never a key; *Buys aimed at fewer than 50 houses* | OK |
+| 407 | `GET /v1/ops/route-refunds` | [admin, invoices] | no | team only | OK |
+| 408 | `POST /v1/ops/route-refunds/:id/approve` | [admin, invoices] | yes | owner or finance, signed in with the second step (an approval route); never a key | OK (back to the card it came from, once: one key every try; booked before marked done) |
+| 409 | `POST /v1/ops/route-settle` | [admin, invoices] | no | team only | OK (gives back, never takes: credit, or refunds waiting for a person) |
+| 410 | `GET /v1/me/house/ads` | me | yes | only the house this person claimed; *Houses block ads* | OK (business names that came to this house; nothing about other houses) |
+| 411 | `POST /v1/me/house/ad-blocks` | me | yes | only the house this person claimed | OK (from the next box on; what was bought for the house goes back to the advertiser) |
+| 412 | `DELETE /v1/me/house/ad-blocks/:id` | me | yes | only the house this person claimed | OK |
 
 ---
 

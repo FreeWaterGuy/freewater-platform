@@ -69,6 +69,11 @@ export interface EventPayloads {
   'ad.extra_used': { useId: string; campaignId: string; advertiserId: string; advertiserName: string; feature: string; chargedCents: Cents; costCents: Cents };
   /** The company stopped an ad: what wasn't printed (and unused extras) went back to the advertiser's card. */
   'ad.refunded': { refundId: string; campaignId: string; advertiserId: string; advertiserName: string; bottles: number; totalCents: Cents; provider: string };
+  /**
+   * Pieces bought on a delivery route that printed but never reached the house (its box came back: the house stopped,
+   * the driver couldn't leave it): each one's price goes back from earned to the advertiser's money, as credit.
+   */
+  'ad.route_credited': { settlementId: string; campaignId: string; advertiserId: string; advertiserName: string; reversed: { kind: 'print' | 'extra'; unitId?: string; packId?: string; cents: Cents }[] };
   'payment.voided': { paymentId: string; ref: string };
   'payment.declined': { paymentId: string; payerType: 'user' | 'advertiser'; payerId: string; reason: string; ref: string };
   'invoice.issued': { invoiceId: string; advertiserId: string; totalCents: Cents; lines: number };

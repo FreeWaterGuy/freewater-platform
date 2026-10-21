@@ -37,6 +37,13 @@ platform is the software that runs all of it. Other companies can also run it un
   up; every house gets a free 24-pack a week unless someone there stops it in the app. How often, pack size and packs
   per house are set per area, and bigger households get more once they tell us their size.
 - Drivers can skip a house ("no soliciting") with a reason; a person reviews it.
+- **Advertisers buy the routes**, paid up front at an exact price: N bottles spread over an area, one bottle in every
+  box at every house, a whole box (every bottle and its sides), or chosen houses (as little as a tenth of one label at
+  one house), for chosen weeks, by area, street, a shape on the map or address, optionally by household data. Every
+  piece is reserved on a real bottle when paid, so nothing is sold twice (first paid wins), and printed once, at that
+  house. If a house stops or blocks the ad, the advertiser gets that part back (credit for other houses, or a refund
+  for a one-house buy). Buys for fewer than 50 houses get stricter review, a verified business and no names or
+  addresses in the ad. Advertisers see streets, drop times and scans by area, never a house or a person.
 - Later, and for people who join the app: free 6, 12 and 24 packs on a schedule they choose.
 - Every bottle in a pack is different, and the box itself carries ads.
 - Each night is planned: routes are set, boxes are packed and checked, and the van is loaded so the next stop is

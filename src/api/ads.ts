@@ -2,6 +2,7 @@ import type { App } from '../app';
 import type { ApiKey } from '../db/store';
 import { ApiError, obj, S, type RouteDef, Q } from './http';
 import { prepaidModel } from '../modules/ads/billing';
+import { routeInputSchema } from './routeBuys';
 
 /** The advertiser portal's API: sign up, make an ad by chatting, preview, submit, results. Plus the company's review queue. */
 export function adsRoutes(app: App, route: (r: RouteDef) => void, h: { me: (key: ApiKey | null) => string }) {
@@ -42,9 +43,9 @@ export function adsRoutes(app: App, route: (r: RouteDef) => void, h: { me: (key:
   // advertiser saw. The price is always worked out here; a total that no longer matches charges nothing.
   const extrasProp = { type: 'object', maxProperties: 20, additionalProperties: { type: 'integer', minimum: 0, maximum: 1000 } };
   const choice = { share: { type: 'integer', enum: [1, 2, 3, 4, 6, 8, 10] }, productId: { type: 'string', maxLength: 60 }, extras: extrasProp };
-  const payProp = obj({ ...choice, expectedTotalCents: { type: 'integer', minimum: 0 }, expectedFeeCents: { type: 'integer', minimum: 0 } });
+  const payProp = obj({ ...choice, expectedTotalCents: { type: 'integer', minimum: 0 }, expectedFeeCents: { type: 'integer', minimum: 0 }, expectedCreditCents: { type: 'integer', minimum: 0 }, route: routeInputSchema });
   route({ method: 'POST', url: '/v1/ads/drafts/:id/quote', scope: 'campaigns', summary: 'What this ad costs, paid up front: its bottles at one size (AR, video and scans included), plus any extras. Nothing is charged.', body: obj(choice), handler: async (req, key) => ({ body: await ads.quoteDraft((req.params as any).id, key!.companyId, advertiserOf(key), (req.body ?? {}) as any) }) });
-  route({ method: 'POST', url: '/v1/ads/drafts/:id/submit', scope: 'campaigns', summary: 'Send the ad for review. Send approved: true to confirm you checked the preview. Where ads are paid up front, this pays: a new ad’s bottles (send pay.expectedTotalCents, the total you saw), or a change’s fee (pay.expectedFeeCents).', body: obj({ approved: { const: true }, pay: payProp }, ['approved']), handler: async (req, key) => ({ status: 201, body: await ads.submit({ id: (req.params as any).id, companyId: key!.companyId, advertiserId: advertiserOf(key), pay: (req.body as any).pay }) }) });
+  route({ method: 'POST', url: '/v1/ads/drafts/:id/submit', scope: 'campaigns', summary: 'Send the ad for review. Send approved: true to confirm you checked the preview. Where ads are paid up front, this pays: a new ad’s bottles (send pay.expectedTotalCents, the total you saw), a buy on delivery routes (pay.route, as for /route-quote, with pay.expectedTotalCents and pay.expectedCreditCents), or a change’s fee (pay.expectedFeeCents).', body: obj({ approved: { const: true }, pay: payProp }, ['approved']), handler: async (req, key) => ({ status: 201, body: await ads.submit({ id: (req.params as any).id, companyId: key!.companyId, advertiserId: advertiserOf(key), pay: (req.body as any).pay }) }) });
 
   // An ad made through the API (uploaded artwork) is paid for here, once, before review can turn it on.
   const prepaidCampaign = (key: ApiKey, id: string) => {
@@ -89,13 +90,15 @@ export function adsRoutes(app: App, route: (r: RouteDef) => void, h: { me: (key:
 
   route({ method: 'GET', url: '/v1/review/campaigns', scope: 'campaigns', summary: 'Ads waiting for content review.', handler: async (_req, key) => {
     companyStaff(key);
-    return { body: ads.reviewQueue(key!.companyId).map((c) => ({ id: c.id, advertiser: c.advertiserName, name: c.name ?? null, category: c.category, submittedAt: c.review?.at, experienceId: c.experienceId, sizes: c.sizes })) };
+    // A route buy aimed at a few houses says so, with what the content check found: it gets the stricter review.
+    return { body: await Promise.all(ads.reviewQueue(key!.companyId).map(async (c) => ({ id: c.id, advertiser: c.advertiserName, name: c.name ?? null, category: c.category, submittedAt: c.review?.at, experienceId: c.experienceId, sizes: c.sizes, ...(c.routeBuy ? { routeBuy: await app.routeBuys.reviewInfo(c) } : {}) }))) };
   } });
   route({ method: 'POST', url: '/v1/review/campaigns/:id', scope: 'campaigns', summary: 'Approve an ad (it starts running) or send it back with a note.', body: obj({ decision: { type: 'string', enum: ['approve', 'reject'] }, note: { type: 'string', maxLength: 500 } }, ['decision']), handler: async (req, key) => {
     companyStaff(key);
     const b = req.body as any;
     if (b.decision === 'reject' && !b.note) throw new ApiError(422, 'note_required', 'Say what needs to change, so the advertiser can fix it.');
-    const c = await ads.review({ companyId: key!.companyId, campaignId: (req.params as any).id, decision: b.decision, note: b.note });
+    const u = key!.userId ? await app.accounts.get(key!.userId) : null;
+    const c = await ads.review({ companyId: key!.companyId, campaignId: (req.params as any).id, decision: b.decision, note: b.note, by: { userId: u && u.companyId === key!.companyId ? u.id : null, role: u && u.companyId === key!.companyId ? u.role : null } });
     return { body: { id: c.id, review: c.review, active: c.active } };
   } });
 }

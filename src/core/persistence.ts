@@ -19,6 +19,8 @@ export interface Persistence {
   code(c: CodeRow): void;
   /** A bottle printed, or given back by a failed print: one paid bottle of each of these ads moves, in order with everything else. */
   prepaid?(companyId: string, campaignIds: string[], move: 'printed' | 'released'): void;
+  /** Route pieces on a bottle printed (held → placed, with the bottle and its pack) or given back by a failed print (held → open). */
+  routeSpots?(companyId: string, spotIds: string[], move: 'printed' | 'released', unitId: string, packId?: string): void;
 }
 
 export const noPersistence: Persistence = {

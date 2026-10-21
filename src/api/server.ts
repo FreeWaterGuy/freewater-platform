@@ -3,6 +3,7 @@ import { ApiError, notFound, obj, S, signedInOwner, type Handler, type RouteDef,
 import { consumerRoutes } from './consumer';
 import { adsRoutes } from './ads';
 import { deliveryRoutes } from './delivery';
+import { routeBuyRoutes } from './routeBuys';
 import { booksRoutes } from './books';
 import { consoleRoutes } from './console';
 import { machineRoutes } from './machine';
@@ -490,6 +491,14 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const approved = c.review ? c.review.status === 'approved' : false;
     if (b.active === true && !reviewer && !approved) throw new ApiError(403, 'review_required', 'Content review turns campaigns on. You can pause yours any time.');
     const changesPage = b.experienceId !== undefined || b.experienceConfig !== undefined || b.theme !== undefined;
+    // A route ad aimed at a few houses: the company turns it on, or changes what it says, only as a person (an owner or
+    // a reviewer, signed in), with the stricter review run on what it will say (routeBuys.beforeApprove). Checked
+    // before anything changes.
+    if (reviewer && c.routeBuy?.small && ((b.active === true && !approved) || changesPage)) {
+      const u = key!.userId ? await app.accounts.get(key!.userId) : null;
+      const page = changesPage ? { experienceId: b.experienceId ?? c.experienceId, experienceConfig: b.experienceConfig ?? c.experienceConfig } : {};
+      await app.routeBuys.beforeApprove({ ...c, ...page }, { userId: u && u.companyId === c.companyId ? u.id : null, role: u && u.companyId === c.companyId ? u.role : null });
+    }
     if (changesPage) {
       const id = b.experienceId ?? c.experienceId;
       const config = b.experienceConfig ?? (b.experienceId && b.experienceId !== c.experienceId ? undefined : c.experienceConfig);
@@ -816,6 +825,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   consumerRoutes(app, route, { me, checkExperience });
   adsRoutes(app, route, { me });
   deliveryRoutes(app, route, { me });
+  routeBuyRoutes(app, route, { me });
   booksRoutes(app, route);
   consoleRoutes(app, route);
   machineRoutes(app, route);

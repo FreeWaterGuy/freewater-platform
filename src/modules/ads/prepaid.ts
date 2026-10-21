@@ -146,8 +146,21 @@ export class PrepaidService {
 
   /** One charge per order at a time in this server: a second press waits for the first and finds it paid. */
   private charging = new Map<string, Promise<void>>();
-  /** Charge an order's total to the advertiser's card and finish it. A declined card leaves nothing charged. */
-  private async charge(row: any, purpose: 'ad_order' | 'ad_change', description: string): Promise<void> {
+  /**
+   * An order that won't be paid: declined, and in the same step the route spots it reserved are let go (so the space
+   * is free again for whoever pays next). Credit it used stops counting as used, since its order is declined.
+   */
+  private async decline(orderId: string, failure: string, paymentId: string | null = null) {
+    await this.db.transaction(async (tx) => {
+      const r = (await tx.query<any>(`update ad_orders set status = 'declined', failure = $2, payment_id = coalesce($3, payment_id) where id = $1 and status = 'paying' returning id`, [orderId, failure, paymentId])).rows[0];
+      if (r) await tx.query(`update route_spots set status = 'cancelled' where order_id = $1 and status = 'open'`, [orderId]);
+    });
+  }
+  /**
+   * Charge an order to the advertiser's card and finish it: its total less any credit used for it (nothing goes on the
+   * card when credit covers it all). A declined card leaves nothing charged. Used by route buys too (routeBuys.ts).
+   */
+  async charge(row: any, purpose: 'ad_order' | 'ad_change', description: string): Promise<void> {
     const running = this.charging.get(row.id);
     if (running) {
       await running;
@@ -160,25 +173,27 @@ export class PrepaidService {
     try { await run; } finally { this.charging.delete(row.id); }
   }
   private async chargeNow(row: any, purpose: 'ad_order' | 'ad_change', description: string) {
+    const card = n(row.total_cents) - n(row.credit_cents);
+    if (card <= 0) { await this.finish(row.id, null); return; } // credit paid for all of it: nothing on the card
     let p;
     try {
-      p = await this.payments.authorize({ companyId: row.company_id, ownerType: 'advertiser', ownerId: row.advertiser_id, amountCents: n(row.total_cents), purpose, ref: row.id, idempotencyKey: `${purpose}:${row.id}`, description });
+      p = await this.payments.authorize({ companyId: row.company_id, ownerType: 'advertiser', ownerId: row.advertiser_id, amountCents: card, purpose, ref: row.id, idempotencyKey: `${purpose}:${row.id}`, description });
     } catch (e) {
       if (e instanceof PaymentError && e.code === 'no_payment_method') {
-        await this.db.query(`update ad_orders set status = 'declined', failure = 'No card on file' where id = $1 and status = 'paying'`, [row.id]);
+        await this.decline(row.id, 'No card on file');
         throw new AdsError(402, 'card_needed', 'Add a card first: ads here are paid up front. Nothing was charged.');
       }
       throw e;
     }
     if (p.status === 'declined') {
-      await this.db.query(`update ad_orders set status = 'declined', failure = $2, payment_id = $3 where id = $1 and status = 'paying'`, [row.id, p.failure ?? 'Declined', p.id]);
+      await this.decline(row.id, p.failure ?? 'Declined', p.id);
       throw new AdsError(402, 'card_declined', `Your card was declined (${p.failure ?? 'declined'}). Nothing was charged. Try another card.`);
     }
     if (p.status === 'authorized') {
       try { p = await this.payments.capture(p.id); }
       catch (e) {
         if (e instanceof PaymentError && e.code === 'capture_failed') {
-          await this.db.query(`update ad_orders set status = 'declined', failure = $2, payment_id = $3 where id = $1 and status = 'paying'`, [row.id, e.message, p.id]);
+          await this.decline(row.id, e.message, p.id);
           throw new AdsError(402, 'card_declined', `The payment didn’t go through (${e.message}). Nothing was charged.`);
         }
         throw e; // no answer: the order stays 'paying' and `recover` finishes it from the provider's answer
@@ -189,7 +204,7 @@ export class PrepaidService {
   }
 
   /** The card was charged: in one step the order is paid and (for bottles) its bottles counted. Once, whoever gets here first. */
-  private async finish(orderId: string, paymentId: string) {
+  private async finish(orderId: string, paymentId: string | null) {
     await this.db.transaction(async (tx) => {
       const o = (await tx.query<any>(`update ad_orders set status = 'paid', payment_id = $2, paid_at = now() where id = $1 and status = 'paying' returning *`, [orderId, paymentId])).rows[0];
       if (!o || o.kind !== 'bottles') return;
@@ -225,7 +240,7 @@ export class PrepaidService {
   }
 
   private async extrasUsed(campaignId: string) {
-    const rows = (await this.db.query<any>(`select feature, count(*)::int as n from ad_extra_uses where campaign_id = $1 and status in ('claimed', 'used') group by 1`, [campaignId])).rows;
+    const rows = (await this.db.query<any>(`select feature, count(*)::int as n from ad_extra_uses where campaign_id = $1 and status in ('claimed', 'used', 'credited') group by 1`, [campaignId])).rows;
     return new Map(rows.map((x) => [x.feature as string, n(x.n)]));
   }
 
@@ -235,14 +250,18 @@ export class PrepaidService {
    * Claim one paid bottle for each of these ads, in one statement each and all or none: only where the database
    * agrees one is left and the ad isn't stopped. Returns the ads that had none (memory was ahead of the books).
    */
-  async claim(companyId: string, campaignIds: string[]): Promise<string[]> {
+  async claim(companyId: string, campaignIds: string[], routeSpotIds: string[] = []): Promise<string[]> {
     let refused: string[] = [];
     // An ad is on a bottle at most once, so one statement claims one bottle from each (all or none: a refusal rolls
     // the others back).
     const ids = [...new Set(campaignIds)];
     await this.db.transaction(async (tx) => {
       const got = new Set((await tx.query<any>(`update ad_prepaid set held = held + 1 where campaign_id = any($1::text[]) and company_id = $2 and stopped_at is null and printed + held + refunded < paid returning campaign_id`, [ids, companyId])).rows.map((r) => r.campaign_id as string));
-      refused = ids.filter((id) => !got.has(id));
+      // An ad bought on delivery routes prints only on a spot reserved for it, and each spot once: open → held here, in
+      // the same step, so two packs (or two servers) can never print the same spot.
+      const spots = routeSpotIds.length ? new Set((await tx.query<any>(`update route_spots set status = 'held' where id = any($1::text[]) and company_id = $2 and status = 'open' and bottle is not null returning campaign_id`, [routeSpotIds, companyId])).rows.map((r) => r.campaign_id as string)) : new Set<string>();
+      const route = new Set((await tx.query<any>(`select campaign_id from route_buys where campaign_id = any($1::text[])`, [ids])).rows.map((r) => r.campaign_id as string));
+      refused = ids.filter((id) => !got.has(id) || (route.has(id) && !spots.has(id)));
       if (refused.length) throw new Refused();
     }).catch((e) => { if (!(e instanceof Refused)) throw e; });
     for (const id of refused) {
@@ -310,6 +329,8 @@ export class PrepaidService {
       const r = (await tx.query<any>(`insert into ad_refunds (id, company_id, campaign_id, advertiser_id, bottles, bottles_cents, extras_cents, total_cents, payment_id, status, reason, stopped_by) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) returning *`,
         [id, o.companyId, c.id, c.advertiserId, bottles, bottles * n(p.price_cents), extrasCents, total, pay?.payment_id ?? null, total > 0 ? 'refunding' : 'refunded', o.reason.trim(), o.by])).rows[0];
       await tx.query(`update ad_prepaid set stopped_at = now(), refunded = refunded + $2 where campaign_id = $1`, [c.id, bottles]);
+      // Its route spots not printed yet are let go: they're in this refund, and the space is free for others.
+      await tx.query(`update route_spots set status = 'cancelled' where campaign_id = $1 and status = 'open'`, [c.id]);
       return r;
     });
     c.prepaid = { ...c.prepaid, refunded: c.prepaid.refunded + n(row.bottles), stoppedAt: this.platform.bus.now().toISOString() };
@@ -426,7 +447,7 @@ export class PrepaidService {
   async restore() {
     const rows = (await this.db.query<any>(`select * from ad_prepaid`)).rows;
     const used = new Map<string, Map<string, number>>();
-    for (const u of (await this.db.query<any>(`select campaign_id, feature, count(*)::int as n from ad_extra_uses where status in ('claimed','used') group by 1, 2`)).rows) {
+    for (const u of (await this.db.query<any>(`select campaign_id, feature, count(*)::int as n from ad_extra_uses where status in ('claimed','used','credited') group by 1, 2`)).rows) {
       const m = used.get(u.campaign_id) ?? new Map<string, number>(); m.set(u.feature, n(u.n)); used.set(u.campaign_id, m);
     }
     const counts = this.countUnits();
@@ -482,7 +503,8 @@ export class PrepaidService {
         if (st === 'capturing' || st === 'voiding') st = (await this.payments.recover(pay.id)).status;
         if (st === 'authorized') st = (await this.payments.capture(pay.id)).status;
         if (st === 'captured') { await this.finish(o.id, pay.id); await this.attach(o.campaign_id); }
-        else if (st === 'declined' || st === 'failed' || st === 'voided' || (!pay && new Date(o.created_at).getTime() < Date.now() - PaymentsService.stuckAfterMs)) await this.db.query(`update ad_orders set status = 'declined', failure = $2 where id = $1 and status = 'paying'`, [o.id, pay ? `Payment ${st}` : 'Never charged']);
+        else if (!pay && n(o.total_cents) - n(o.credit_cents) <= 0) { await this.finish(o.id, null); await this.attach(o.campaign_id); } // all paid with credit
+        else if (st === 'declined' || st === 'failed' || st === 'voided' || (!pay && new Date(o.created_at).getTime() < Date.now() - PaymentsService.stuckAfterMs)) await this.decline(o.id, pay ? `Payment ${st}` : 'Never charged');
       } catch { /* tried again next time; the reconciliation shows it */ }
     }
     for (const r of (await this.db.query<any>(`select id from ad_refunds where status = 'refunding' and ($1::text is null or company_id = $1)`, [companyId ?? null])).rows) await this.sendRefund(r.id).catch(() => {});
@@ -561,6 +583,16 @@ export class PrepaidService {
         - (refunded.get(r.campaign_id) ?? 0);
       const acct = prepaidAccount(r.advertiser_id);
       expected.set(acct, (expected.get(acct) ?? 0) + left);
+    }
+    // Route buys (routeBuys.ts): a piece whose box came back is moved back from earned (+); credit spent on a new order
+    // paid part of that order's bottles, which count in full above (−); a route refund sent went back to the card (−).
+    for (const r of (await this.db.query<any>(`select advertiser_id, coalesce(sum(reversed_cents),0)::bigint as back, coalesce(sum(total_cents) filter (where status = 'refunded'),0)::bigint as sent from route_settlements where company_id = $1 group by 1`, [companyId])).rows) {
+      const acct = prepaidAccount(r.advertiser_id);
+      expected.set(acct, (expected.get(acct) ?? 0) + n(r.back) - n(r.sent));
+    }
+    for (const r of (await this.db.query<any>(`select u.advertiser_id, sum(u.cents)::bigint as cents from route_credit_uses u join ad_orders o on o.id = u.order_id where u.company_id = $1 and o.status = 'paid' group by 1`, [companyId])).rows) {
+      const acct = prepaidAccount(r.advertiser_id);
+      expected.set(acct, (expected.get(acct) ?? 0) - n(r.cents));
     }
     for (const id of paidOrders.keys()) if (!rows.some((r) => r.campaign_id === id)) off.push({ campaignId: id, paid: 0, ordered: paidOrders.get(id)!, printed: 0, bottlesPrinted: 0, printLines: printLines.get(id) ?? 0, held: 0, printing: 0 });
     out.push({ id: 'prepaid_bottles', what: 'Every prepaid ad’s bottles: paid equals what its orders bought, printed equals the bottles printed and the books’ print lines, and nothing prints beyond what was paid',

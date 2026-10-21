@@ -176,3 +176,6 @@ textarea.input { min-height: 90px; resize: vertical; }
 .spin { width: 22px; height: 22px; border: 3px solid rgb(255 255 255 / .35); border-top-color: currentColor; border-radius: 50%; animation: s .8s linear infinite; }
 @keyframes s { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .sheet, .btn, .progress i { animation: none; transition: none; } }
+
+/* A link-looking button (unblock an advertiser on Your house). */
+.linkish { background: none; border: 0; padding: 0 2px; color: inherit; text-decoration: underline; cursor: pointer; font: inherit; min-height: 32px; }

@@ -150,6 +150,9 @@ describe('who else is kept out', () => {
     const bad: string[] = [];
     for (const t of scopedRows().filter((x) => /advertiser only/.test(x.other))) {
       const r = await call(t.method, urlFor(t), keys['peak-spring-admin'], bodyFor(t));
+      // A switch Peak Spring has off (new money switches start off, P13) refuses everyone first; those routes' company
+      // key refusal is checked with FreeWater's admin key in their own tests (test/route-buying.test.ts).
+      if (r.status === 404 && r.code === 'feature_off') continue;
       if (r.status !== 403) bad.push(`${at(t)}: ${r.status} ${r.code}`);
     }
     expect(bad).toEqual([]);

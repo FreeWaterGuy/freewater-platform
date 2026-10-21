@@ -201,7 +201,7 @@ describe('the daily reconciliation report', () => {
     expect((await call('GET', '/v1/books/reconciliation', keys['advertiser-joes'])).status).toBe(403);
     expect((await call('GET', '/v1/books/reconciliation?date=nope', finance)).status).toBe(400);
     const r = (await call('GET', '/v1/books/reconciliation', finance)).body;
-    expect(r.checks.map((c: any) => c.id)).toEqual(['ledger_balanced', 'books_equal_ledger', 'payments_match_processor', 'invoices_match_ledger', 'customers_paid', 'charities_match_bank', 'wallet_and_reserves', 'ai_fund', 'published_days_unchanged', 'billing_ceilings', 'sales_match_conversions', 'prepaid_bottles', 'prepaid_balances', 'prepaid_open']);
+    expect(r.checks.map((c: any) => c.id)).toEqual(['ledger_balanced', 'books_equal_ledger', 'payments_match_processor', 'invoices_match_ledger', 'customers_paid', 'charities_match_bank', 'wallet_and_reserves', 'ai_fund', 'published_days_unchanged', 'billing_ceilings', 'sales_match_conversions', 'prepaid_bottles', 'prepaid_balances', 'prepaid_open', 'route_spots_printed', 'route_buys_add_up', 'route_open']);
     expect(r.failed).toBe(0);
     expect(r.totals).toMatchObject({ lines: expect.any(Number), fingerprint: expect.any(String) });
     // The card processor took money the books never heard of: the report fails, naming it.

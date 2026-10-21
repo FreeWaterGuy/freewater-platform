@@ -20,6 +20,7 @@ import { allowedSizes, applyPatch, draftTargeting, estimate, missing, missingLab
 import { withCompany } from '../ai/routing';
 import { adBilling, extraPrice, feesOnWords, prepaidModel } from './billing';
 import type { PrepaidService, Quote } from './prepaid';
+import { adWords, KIND_SWITCH, KIND_WORDS, ROUTE_KINDS, type RouteBuyService, type RouteQuoteInput } from './routeBuys';
 
 export class AdsError extends Error {
   constructor(public status: number, public code: string, message: string) {
@@ -99,6 +100,8 @@ export class AdsService {
 
   /** Set by the app: paying up front for bottles (modules/ads/prepaid). */
   prepaid?: PrepaidService;
+  /** Set by the app: buying on delivery routes (modules/ads/routeBuys). */
+  routeBuys?: RouteBuyService;
 
   /**
    * What submitting this draft will charge, for a company where ads are paid up front: the bottles (a new ad) or the
@@ -215,6 +218,8 @@ export class AdsService {
       minBottles: 100, changeFeeCents: b.changeFeeCents, included: 'AR, video and scans are included at every size',
       feesOn: feesOnWords(company, this.platform.featureOn),
       extras: Object.entries(b.extras.perUse).map(([id, x]) => ({ id, label: x.label, perUseCents: extraPrice(company, id)! })),
+      // Buying on the delivery routes, where it's on (the review page has the picker; the chat explains it).
+      ...(this.routeBuys && (!this.platform.featureOn || this.platform.featureOn(companyId, 'route_buying')) ? { routes: { kinds: ROUTE_KINDS.filter((k) => !this.platform.featureOn || this.platform.featureOn(companyId, KIND_SWITCH[k])).map((k) => KIND_WORDS[k]), smallAudienceHouses: this.routeBuys.smallAudienceHouses(company) } } : {}),
     };
   }
 
@@ -351,10 +356,12 @@ export class AdsService {
    * total the advertiser saw, or nothing is charged), or a change's fee. Nothing is sent for review unless that went
    * through, and pressing it twice never pays twice.
    */
-  async submit(input: { id: string; companyId: string; advertiserId: string; pay?: { share?: number; productId?: string; extras?: Record<string, number>; expectedTotalCents?: number; expectedFeeCents?: number } }) {
+  async submit(input: { id: string; companyId: string; advertiserId: string; pay?: { share?: number; productId?: string; extras?: Record<string, number>; expectedTotalCents?: number; expectedFeeCents?: number; route?: RouteQuoteInput; expectedCreditCents?: number } }) {
     const r = await this.row(input.id, input.companyId, input.advertiserId);
     if (r.status !== 'open') throw new AdsError(409, 'already_submitted', 'This ad was already submitted.');
-    const left = missing(r.draft, this.host);
+    // Bought on delivery routes: the route buy says where and how many, so the chat's "where" and budget aren't needed.
+    const route = input.pay?.route && !r.campaignId ? input.pay.route : null;
+    const left = missing(r.draft, this.host).filter((m) => !route || (m !== 'where' && m !== 'budget'));
     if (left.length) throw new AdsError(422, 'not_ready', `Before submitting, add ${left.map((m) => missingLabels[m]).join(', ')}.`);
     const company = this.platform.companies.get(r.companyId)!;
     // An ad whose sizes fit on none of the company's bottles would be approved and then never print.
@@ -363,7 +370,7 @@ export class AdsService {
     if (!(r.draft.sizes ?? []).some((s) => prints.has(s))) throw new AdsError(422, 'sizes_never_print', `None of those sizes fit on ${company.name}'s bottles, so the ad would never print. Pick from: ${[...prints].sort((a, b) => a - b).map(shareLabel).join(', ')}.`);
     const adv = await this.advertiser(r.companyId, r.advertiserId);
     const d = r.draft as Required<Pick<AdDraft, 'sizes' | 'buy' | 'experienceId' | 'locations' | 'category'>> & AdDraft;
-    if (d.buy.type === 'bid' && this.platform.featureOn && !this.platform.featureOn(r.companyId, 'bidding')) throw new AdsError(422, 'bidding_off', `${company.name} doesn’t sell space by bidding: buy a set number of bottles instead.`);
+    if (d.buy?.type === 'bid' && this.platform.featureOn && !this.platform.featureOn(r.companyId, 'bidding')) throw new AdsError(422, 'bidding_off', `${company.name} doesn’t sell space by bidding: buy a set number of bottles instead.`);
     const spec = d.poster as PosterSpec;
     const art = d.studio ? { creative: studioCreative(d.studio), creativeRef: { kind: 'studio' as const, spec: d.studio } } : { creative: posterCreative(spec), creativeRef: { kind: 'poster' as const, spec } };
     const now = this.platform.bus.now().toISOString();
@@ -371,11 +378,17 @@ export class AdsService {
 
     // Paid up front: a new ad pays for its bottles, a change to a paid ad pays the change fee. Then it's reviewed.
     let paid: { campaignId: string; prepaid: import('../../core/types').PrepaidBottles | null; totalCents: number } | null = null;
+    let routePaid: Awaited<ReturnType<RouteBuyService['pay']>> | null = null;
     let feeCents = 0;
     if (prepaidModel(company) && this.prepaid) {
       if (existing?.prepaid) {
         if (existing.prepaid.stoppedAt) throw new AdsError(409, 'stopped', 'This ad was stopped and its unprinted bottles paid back. Make a new ad instead.');
         feeCents = (await this.prepaid.payChangeFee({ companyId: r.companyId, advertiserId: r.advertiserId, campaignId: existing.id, draftId: r.id, expectedFeeCents: input.pay?.expectedFeeCents }))?.feeCents ?? 0;
+      } else if (!existing && route) {
+        if (!this.routeBuys) throw new AdsError(404, 'feature_off', 'Buying on delivery routes isn’t available here.');
+        const out = await this.routeBuys.pay({ companyId: r.companyId, advertiserId: r.advertiserId, draftId: r.id, input: route, expectedTotalCents: input.pay?.expectedTotalCents ?? -1, expectedCreditCents: input.pay?.expectedCreditCents, sizes: d.sizes, words: adWords({ ...d, name: d.name }) });
+        paid = { campaignId: out.campaignId, prepaid: out.prepaid, totalCents: out.totalCents };
+        routePaid = out;
       } else if (!existing) {
         if (d.buy.type !== 'guaranteed') throw new AdsError(422, 'bottles_needed', 'Ads here are paid up front for a number of bottles (at least 100). Tell the assistant how many.');
         paid = await this.prepaid.payBottles({ companyId: r.companyId, advertiserId: r.advertiserId, draftId: r.id, quote: { bottles: d.buy.prints, share: input.pay?.share, productId: input.pay?.productId, extras: input.pay?.extras }, expectedTotalCents: input.pay?.expectedTotalCents ?? -1, sizes: d.sizes });
@@ -386,7 +399,7 @@ export class AdsService {
     // ad's own (the bottles left now, which may be fewer than when the change began); a bid keeps its adjustments,
     // pacing, frequency cap and today's spend.
     const live = existing?.buy;
-    const buy: Campaign['buy'] = d.buy.type === 'guaranteed'
+    const buy: Campaign['buy'] = !d.buy ? { type: 'guaranteed', remainingPrints: 0 } : d.buy.type === 'guaranteed'
       ? { type: 'guaranteed', remainingPrints: d.buy.unchanged && live?.type === 'guaranteed' ? live.remainingPrints : d.buy.prints }
       : live?.type === 'bid' && d.buy.unchanged ? { ...live }
       : { ...(live?.type === 'bid' ? live : {}), type: 'bid', dailyCapCents: d.buy.dailyCapCents, maxCentsPerLabel: Math.max(d.buy.maxCentsPerLabel ?? (live?.type === 'bid' ? live.maxCentsPerLabel : 0), bidFloor(company)), spentTodayCents: live?.type === 'bid' ? live.spentTodayCents : 0 };
@@ -404,14 +417,16 @@ export class AdsService {
     };
     this.platform.campaigns.set(c.id, c);
     if (paid) await this.prepaid!.attach(c.id);
+    if (routePaid) await this.routeBuys!.attach(c.id);
     this.platform.persist.campaign(c);
     r.status = 'submitted';
     r.campaignId = c.id;
-    const money = paid ? `Paid $${(paid.totalCents / 100).toFixed(2)} for ${(c.prepaid?.paid ?? 0).toLocaleString('en-US')} bottles. ` : feeCents ? `Paid the $${(feeCents / 100).toFixed(2)} change fee. ` : '';
+    const money = routePaid ? `Paid $${(routePaid.totalCents / 100).toFixed(2)}${routePaid.creditCents ? ` ($${(routePaid.creditCents / 100).toFixed(2)} of it from your credit)` : ''} for ${routePaid.bottles.toLocaleString('en-US')} pieces at ${routePaid.houses.toLocaleString('en-US')} houses over ${routePaid.weeks} week${routePaid.weeks === 1 ? '' : 's'}. ${routePaid.small ? 'It’s aimed at a few houses, so a person checks it more closely. ' : ''}`
+      : paid ? `Paid $${(paid.totalCents / 100).toFixed(2)} for ${(c.prepaid?.paid ?? 0).toLocaleString('en-US')} bottles. ` : feeCents ? `Paid the $${(feeCents / 100).toFixed(2)} change fee. ` : '';
     r.messages.push({ role: 'assistant', text: `${money}Submitted. ${company.name} reviews new ads, usually within a day. You'll see it running in your campaigns once it's approved.`, at: now });
     await this.save(r);
     await this.flush();
-    return { campaignId: c.id, status: 'in_review', ...(paid ? { paidCents: paid.totalCents, bottles: c.prepaid?.paid ?? 0 } : {}), ...(feeCents ? { changeFeeCents: feeCents } : {}) };
+    return { campaignId: c.id, status: 'in_review', ...(paid ? { paidCents: paid.totalCents, bottles: c.prepaid?.paid ?? 0 } : {}), ...(routePaid ? { route: { houses: routePaid.houses, weeks: routePaid.weeks, creditCents: routePaid.creditCents, cardCents: routePaid.cardCents, small: routePaid.small } } : {}), ...(feeCents ? { changeFeeCents: feeCents } : {}) };
   }
 
   // ---------- results ----------
@@ -489,7 +504,7 @@ export class AdsService {
       .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '') || a.id.localeCompare(b.id))
       .map((c) => ({
         id: c.id, name: c.name ?? (c.creativeRef?.kind === 'poster' || c.creativeRef?.kind === 'studio' ? c.creativeRef.spec.headline : c.advertiserName), status: this.status(c), review: c.review ?? null, creditHold: c.creditHold ?? null,
-        sizes: c.sizes, formats: c.formats ?? ['label'], where: c.targeting.locations ?? 'all', experienceId: c.experienceId,
+        sizes: c.sizes, formats: c.formats ?? ['label'], where: c.routeBuy ? 'routes' : c.targeting.locations ?? 'all', experienceId: c.experienceId, ...(c.routeBuy ? { route: c.routeBuy } : {}),
         budget: c.prepaid ? { type: 'prepaid', ...this.prepaid!.progress(c)! } : c.buy.type === 'guaranteed' ? { type: 'guaranteed', bottlesLeft: c.buy.remainingPrints } : { type: 'bid', dailyCapCents: c.buy.dailyCapCents, spentTodayCents: c.buy.spentTodayCents },
         editable: c.creativeRef?.kind === 'poster' || c.creativeRef?.kind === 'studio',
         thumbSvg: `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(thumbW)}" height="450" viewBox="0 0 ${thumbW.toFixed(1)} 450">${c.creative.svg(thumbW, 450)}</svg>`,
@@ -515,9 +530,11 @@ export class AdsService {
   /** Set by the app: refuses an ad going live when its advertiser's credit doesn't allow it (CreditService). */
   beforeLive: (c: Campaign) => Promise<void> = async () => {};
 
-  async review(input: { companyId: string; campaignId: string; decision: 'approve' | 'reject'; note?: string }) {
+  async review(input: { companyId: string; campaignId: string; decision: 'approve' | 'reject'; note?: string; by?: { userId?: string | null; role?: string | null } }) {
     const c = this.platform.campaigns.get(input.campaignId);
     if (!c || c.companyId !== input.companyId) throw new AdsError(404, 'not_found', 'Campaign not found.');
+    // Aimed at a few houses: the stricter review (a person, the business verified, no names or addresses).
+    if (input.decision === 'approve' && c.routeBuy?.small) await this.routeBuys?.beforeApprove(c, input.by ?? {});
     if (input.decision === 'approve') await this.beforeLive(c);
     const at = this.platform.bus.now().toISOString();
     c.review = { status: input.decision === 'approve' ? 'approved' : 'rejected', ...(input.note ? { note: input.note } : {}), at };

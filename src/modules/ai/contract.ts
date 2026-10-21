@@ -21,7 +21,9 @@ export interface AdAssistantInput {
     prices: {
       perPrintByShare: Record<string, number>; bidStartsAt: number; perScan: number; perArLaunch: number; commissionPercent: number;
       /** Set where ads are paid up front for a number of bottles (then there are no bids or daily amounts). */
-      prepaid?: { minBottles: number; changeFeeCents: number; included: string; feesOn: string[]; extras: { id: string; label: string; perUseCents: number }[] };
+      prepaid?: { minBottles: number; changeFeeCents: number; included: string; feesOn: string[]; extras: { id: string; label: string; perUseCents: number }[];
+        /** Set where ads can be bought on the delivery routes (src/modules/ads/routeBuys.ts): the kinds offered. */
+        routes?: { kinds: string[]; smallAudienceHouses: number } };
     };
     missing: Missing[];
   };

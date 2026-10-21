@@ -207,6 +207,11 @@ export interface CompanyConfig {
     repeatScanWindowSec: number;
     /** In a 6, 12 or 24 pack, the most bottles one campaign may appear on, as a share of the pack (0–1). */
     maxPackShare: number;
+    /**
+     * Buying on delivery routes: a buy aimed at fewer houses than this is a small-audience buy (stricter review, a
+     * verified business, no names, addresses or personal messages). Unset: 50; never below 50.
+     */
+    smallAudienceHouses?: number;
   };
   prices: {
     /** The starting price of one print, by size. Bids start here and go up. */
@@ -348,6 +353,11 @@ export interface Campaign {
   createdAt?: string;
   /** Bottles paid for up front (prepaid companies). Only paid bottles print; the counts are kept in the database too. */
   prepaid?: PrepaidBottles;
+  /**
+   * Bought on delivery routes (src/modules/ads/routeBuys.ts): it prints only on the bottles and box sides reserved for
+   * it at chosen houses in chosen weeks, never anywhere else. Read from the database (route_buys) at start.
+   */
+  routeBuy?: { kind: 'spread' | 'blanket' | 'box' | 'houses'; small: boolean; houses: number };
 }
 
 /**
@@ -426,6 +436,8 @@ export interface Placement {
   priceCents: Cents; // what the advertiser pays if, and only if, the print is confirmed
   /** Drawn from the bottles the advertiser paid for up front (the print moves its price from prepaid to earned). */
   prepaid?: true;
+  /** The spot bought on a delivery route that this piece fills (route_spots): placed once, at that house that week. */
+  routeSpotId?: string;
   /** For a bid: the campaign's spend day (its own time zone) the price was held against. */
   spentDay?: string;
   isHouse: boolean;
@@ -445,6 +457,8 @@ export interface BoxFacePlacement {
   experienceId: string;
   priceCents: Cents; // billed only when the box print is confirmed
   isHouse: boolean;
+  /** A box side bought on a delivery route and paid up front (route_spots): booked from the advertiser's prepaid money. */
+  routeSpotId?: string;
 }
 
 export interface BoxProduct {

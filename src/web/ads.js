@@ -74,7 +74,7 @@
   const routes = [
     [/^\/ads\/?$/, overview], [/^\/ads\/new$/, newAd], [/^\/ads\/drafts\/([\w-]+)$/, builder], [/^\/ads\/drafts\/([\w-]+)\/review$/, review],
     // eslint-disable-next-line security/detect-unsafe-regex -- route patterns, anchored and linear; the input is this page's own path
-    [/^\/ads\/campaigns\/([\w-]+)\/change$/, changeAd], [/^\/ads\/campaigns\/([\w-]+)\/code$/, codePage], [/^\/ads\/billing$/, billing], [/^\/ads\/studio(?:\?.*)?$/, studioPage], [/^\/ads\/tracking$/, tracking], [/^\/ads\/redeem(?:\/([\w-]+))?$/, redeem], [/^\/ads\/statement$/, statementPage], [/^\/ads\/offers$/, offersPage],
+    [/^\/ads\/campaigns\/([\w-]+)\/change$/, changeAd], [/^\/ads\/campaigns\/([\w-]+)\/code$/, codePage], [/^\/ads\/billing$/, billing], [/^\/ads\/studio(?:\?.*)?$/, studioPage], [/^\/ads\/tracking$/, tracking], [/^\/ads\/redeem(?:\/([\w-]+))?$/, redeem], [/^\/ads\/statement$/, statementPage], [/^\/ads\/offers$/, offersPage], [/^\/ads\/campaigns\/([\w-]+)\/report$/, routeReport],
   ];
   let cleanup = null;
   function go(path, replace) { state.path = path; if (!fixture) history[replace ? 'replaceState' : 'pushState'](null, '', path); render(); }
@@ -679,6 +679,7 @@
     const paid = c.budget.type === 'prepaid' ? c.budget : null;
     if (c.editable && c.status !== 'in_review' && c.status !== 'stopped' && c.status !== 'finished') actions.push(link(`/ads/campaigns/${c.id}/change`, { class: 'btn small secondary' }, paid ? `Change it (${dollars(state.changeFeeCents ?? 0)})` : 'Change it'));
     actions.push(link(`/ads/campaigns/${c.id}/code`, { class: 'btn small secondary' }, 'Code, versions and AI'));
+    if (c.route && on('route_proof')) actions.push(link(`/ads/campaigns/${c.id}/report`, { class: 'btn small secondary' }, 'Where it went'));
     // Paid up front: how many of the bottles paid for are out. No end date and no cancelling: it runs until they are.
     const budget = paid ? (paid.stopped ? `stopped by ${state.config.name}: ${num(paid.printed)} of ${num(paid.paid)} bottles went out, ${num(paid.refunded)} paid back`
       : `${num(paid.printed)} of ${num(paid.paid)} bottles out${paid.printing ? ` (${num(paid.printing)} printing)` : ''}, ${sizeName(paid.share)} at ${cents(paid.perBottleCents)} each, paid`)
@@ -688,7 +689,7 @@
       h('div', {},
         h('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:4px' }, h('span', { class: `status ${c.status}`, text: statusText[c.status] })),
         h('h3', { text: c.name }),
-        h('div', { class: 'meta', text: `${c.where === 'all' ? 'Every machine' : c.where.join(', ')} · ${budget} · ${c.formats.includes('box-face') ? 'bottles and boxes' : 'bottles'}` }),
+        h('div', { class: 'meta', text: `${c.route ? `On delivery routes: ${ROUTE_KINDS[c.route.kind] ?? c.route.kind}, ${num(c.route.houses)} houses` : c.where === 'all' ? 'Every machine' : c.where.join(', ')} · ${budget} · ${c.formats.includes('box-face') ? 'bottles and boxes' : 'bottles'}` }),
         h('div', { class: 'nums' }, [['Bottles', num(r.prints)], ['Scans', num(r.scans)], ['AR', num(r.arLaunches)], ['Spent', dollars(r.spendCents)]].map(([k, v]) => h('div', {}, h('b', { text: v }), k))),
         c.status === 'not_approved' && c.review?.note ? h('div', { class: 'note' }, h('b', { text: 'What to change: ' }), c.review.note) : null,
         actions.length ? h('div', { class: 'actions' }, actions) : null));
@@ -851,15 +852,22 @@
     if (sizePick) sizePick.addEventListener('change', requote);
     for (const { input } of extraInputs) input.addEventListener('change', requote);
     const submitLabel = pay?.kind === 'bottles' ? (quote ? `Pay ${dollars(quote.totalCents)} and submit for review` : 'Submit for review') : pay?.kind === 'change' && pay.feeCents ? `Pay the ${dollars(pay.feeCents)} change fee and submit` : 'Submit for review';
-    const submit = h('button', { class: 'btn wide', type: 'button', onclick: async () => {
+    // Where it goes: anywhere (a number of bottles), or on the delivery routes (areas, streets, a shape, or houses).
+    let routeQuote = null, routeInput = null, submit = null;
+    const routes = pay?.kind === 'bottles' && on('route_buying') ? routePicker({ quoteUrl: `/v1/ads/drafts/${id}/route-quote`, sizes: dr.sizes || [], onQuote: (q, input) => { routeQuote = q; routeInput = input; if (submit && routeMode()) submit.textContent = q ? `Pay ${dollars(q.cardCents)}${q.creditCents ? ` (+ ${dollars(q.creditCents)} credit)` : ''} and submit for review` : 'See the price first'; } }) : null;
+    const whereMode = routes ? h('div', { class: 'seg', role: 'radiogroup', 'aria-label': 'Where your ad goes' },
+      ...[['anywhere', 'Anywhere we hand out bottles'], ['routes', 'On our delivery routes']].map(([v, t]) => h('label', { class: 'chip-check' }, h('input', { type: 'radio', name: 'where-mode', value: v, ...(v === 'anywhere' ? { checked: true } : {}), onchange: () => { routes.el.hidden = v !== 'routes'; submit.textContent = v === 'routes' ? (routeQuote ? `Pay ${dollars(routeQuote.cardCents)} and submit for review` : 'See the price first') : submitLabel; } }), t))) : null;
+    function routeMode() { return !!routes && !routes.el.hidden; }
+    submit = h('button', { class: 'btn wide', type: 'button', onclick: async () => {
       err.hidden = true;
       if (!agree.checked) { err.textContent = 'Check the box to confirm you looked it over.'; err.hidden = false; return; }
-      if (pay?.kind === 'bottles' && !quote) { err.textContent = pay.problem || 'Tell the assistant how many bottles first.'; err.hidden = false; return; }
+      if (routeMode() && !routeQuote) { err.textContent = 'Choose where on the routes, then press “See the exact price”.'; err.hidden = false; return; }
+      if (pay?.kind === 'bottles' && !routeMode() && !quote) { err.textContent = pay.problem || 'Tell the assistant how many bottles first.'; err.hidden = false; return; }
       submit.disabled = true;
-      const body = { approved: true, ...(pay?.kind === 'bottles' ? { pay: { share: quote.share, extras: Object.fromEntries(extraInputs.map(({ x, input }) => [x.id, Math.max(0, Math.floor(Number(input.value) || 0))])), expectedTotalCents: quote.totalCents } } : pay?.kind === 'change' ? { pay: { expectedFeeCents: pay.feeCents } } : {}) };
+      const body = { approved: true, ...(routeMode() ? { pay: { route: routeInput, expectedTotalCents: routeQuote.totalCents, expectedCreditCents: routeQuote.creditCents } } : pay?.kind === 'bottles' ? { pay: { share: quote.share, extras: Object.fromEntries(extraInputs.map(({ x, input }) => [x.id, Math.max(0, Math.floor(Number(input.value) || 0))])), expectedTotalCents: quote.totalCents } } : pay?.kind === 'change' ? { pay: { expectedFeeCents: pay.feeCents } } : {}) };
       try { const out = await api('POST', `/v1/ads/drafts/${id}/submit`, body); done(out); } catch (x) { err.textContent = x.code === 'card_needed' ? `${x.message} Add one under Billing.` : x.message; err.hidden = false; submit.disabled = false; }
     } }, submitLabel);
-    const done = (out) => shell('new', h('div', { class: 'review' }, h('div', { class: 'notice ok' }, h('b', { text: out?.paidCents ? `Paid ${dollars(out.paidCents)} for ${num(out.bottles)} bottles. Submitted. ` : out?.changeFeeCents ? `Paid the ${dollars(out.changeFeeCents)} change fee. Submitted. ` : 'Submitted. ' }), `${state.config.name} reviews new ads, usually within a day. It starts printing as soon as it's approved, and you'll see results on your Overview.`), link('/ads', { class: 'btn' }, 'Go to Overview')));
+    const done = (out) => shell('new', h('div', { class: 'review' }, h('div', { class: 'notice ok' }, h('b', { text: out?.route ? `Paid ${dollars(out.paidCents)} for ${num(out.bottles)} pieces at ${num(out.route.houses)} houses. Submitted. ${out.route.small ? 'It’s aimed at a few houses, so a person looks at it more closely. ' : ''}` : out?.paidCents ? `Paid ${dollars(out.paidCents)} for ${num(out.bottles)} bottles. Submitted. ` : out?.changeFeeCents ? `Paid the ${dollars(out.changeFeeCents)} change fee. Submitted. ` : 'Submitted. ' }), `${state.config.name} reviews new ads, usually within a day. It starts printing as soon as it's approved, and you'll see results on your Overview.`), link('/ads', { class: 'btn' }, 'Go to Overview')));
     let frame;
     const onMsg = (e) => { if ((fixture || e.origin === location.origin) && e.data?.type === 'fw-preview-ready' && frame) frame.contentWindow.postMessage({ type: 'fw-preview', ...(p.scan ?? { doc: null }) }, fixture ? '*' : location.origin); };
     window.addEventListener('message', onMsg); cleanup = () => window.removeEventListener('message', onMsg);
@@ -878,14 +886,136 @@
         pay?.kind === 'bottles' ? h('div', {}, h('span', { text: 'You pay now' }), totalEl, ' ', payLine, h('br'), h('small', { text: terms ? prepaidTerms(terms) : 'AR, video and scans included.' }))
           : pay?.kind === 'change' ? h('div', {}, h('span', { text: 'You pay now' }), `${dollars(pay.feeCents)} to change it. Your bottles stay as they are; the ones not printed yet carry the new ad once it's approved.`)
           : h('div', {}, h('span', { text: 'You pay' }), `${Object.entries(d.estimate.perPrintCents).map(([s, c]) => `from ${cents(c)} per bottle for ${sizeName(s)}`).join(', ')}; ${cents(d.estimate.perScanCents)} per scan; ${cents(d.estimate.perArLaunchCents)} per AR launch; ${d.estimate.commissionPercent}% of sales`)),
+      whereMode, routes ? routes.el : null,
       h('label', { class: 'check', for: 'agree' }, agree, h('span', {}, h('b', { text: 'It looks right. ' }), 'I checked the words, colors, picture and scan page, and I have the right to use them.')),
       err, submit));
+  }
+
+  // ---------- buying on delivery routes ----------
+  const ROUTE_KINDS = { spread: 'Bottles spread over an area', blanket: 'One bottle in every box, at every house', box: 'A whole box (every bottle, and its sides)', houses: 'Chosen houses' };
+  const ROUTE_SWITCH = { spread: 'route_buy_spread', blanket: 'route_buy_blanket', box: 'route_buy_box', houses: 'route_buy_houses' };
+  /**
+   * Choose where on the routes: the kind of buy, the size, the weeks, and areas, streets, a shape drawn on the map, or
+   * houses by address. "See the exact price" asks the server; nothing is charged until the advertiser pays.
+   */
+  function routePicker(o) {
+    const el = h('section', { class: 'route-pick', hidden: true, 'aria-label': 'Buy on our delivery routes' });
+    const err = h('div', { class: 'notice err', hidden: true });
+    const out = h('div', { class: 'route-quote' });
+    const kinds = Object.keys(ROUTE_KINDS).filter((k) => on(ROUTE_SWITCH[k]));
+    const kind = h('select', { class: 'input', id: 'route-kind' }, kinds.map((k) => h('option', { value: k, text: ROUTE_KINDS[k] })));
+    const size = h('select', { class: 'input', id: 'route-size' }, o.sizes.map((sz) => h('option', { value: String(sz), text: sizeName(sz) })));
+    const weeks = h('input', { class: 'input', id: 'route-weeks', type: 'number', min: 1, max: 26, value: 1 });
+    const start = h('input', { class: 'input', id: 'route-start', type: 'date', 'aria-describedby': 'route-start-hint' });
+    const bottles = h('input', { class: 'input', id: 'route-bottles', type: 'number', min: 1, max: 1000000, value: 100 });
+    const perHouse = h('input', { class: 'input', id: 'route-per-house', type: 'number', min: 1, max: 72, value: 1 });
+    const sides = h('input', { type: 'checkbox', id: 'route-sides' });
+    const addresses = h('textarea', { class: 'input', id: 'route-addresses', rows: 3, placeholder: '1501 Kenwood Ave, Austin, TX\none address a line' });
+    const areaBox = h('div', { class: 'route-areas' }, h('p', { class: 'muted', text: 'Loading the delivery areas…' }));
+    let areas = [], polygon = [];
+    const picked = new Set(), streets = new Set();
+    const field = (label, control, hint) => h('div', { class: 'field' }, h('label', { for: control.id, text: label }), control, hint ? h('div', { class: 'hint', id: `${control.id}-hint`, text: hint }) : null);
+    const show = () => {
+      const k = kind.value;
+      for (const [f, ks] of [[bottlesField, ['spread']], [perHouseField, ['houses']], [sidesField, ['box']], [addressField, ['houses', 'box']]]) f.hidden = !ks.includes(k);
+      areaBox.hidden = k === 'houses';
+      o.onQuote(null);
+    };
+    const bottlesField = field('How many bottles in all', bottles, 'Spread evenly over the houses and weeks you choose.');
+    const perHouseField = field('Bottles at each house, each week', perHouse);
+    const sidesField = h('label', { class: 'check', for: 'route-sides' }, sides, h('span', { text: 'Include the box’s sides too' }));
+    const addressField = field('Houses (street addresses, one a line)', addresses, 'Fewer than 50 houses: a person checks the ad more closely; no names, addresses or personal messages in it.');
+    // Each area as a small map: its outline and its streets (never a house). Click it to draw a shape: houses inside it.
+    const sketch = (a) => {
+      const pts = [...(a.polygon || []), ...a.streets.map((x) => [x.lat, x.lng])];
+      if (!pts.length) return null;
+      const lats = pts.map((p) => p[0]), lngs = pts.map((p) => p[1]);
+      const minLat = Math.min(...lats), maxLat = Math.max(...lats), minLng = Math.min(...lngs), maxLng = Math.max(...lngs);
+      const pad = 0.0006, W = 320, H = 200;
+      const X = (lng) => ((lng - (minLng - pad)) / ((maxLng - minLng) + 2 * pad)) * W, Y = (lat) => H - ((lat - (minLat - pad)) / ((maxLat - minLat) + 2 * pad)) * H;
+      const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, class: 'route-map', role: 'img', 'aria-label': `Map of ${a.name}: click to draw a shape` });
+      if (a.polygon) svg.append(svgEl('polygon', { points: a.polygon.map((p) => `${X(p[1])},${Y(p[0])}`).join(' '), fill: '#EEF6FB', stroke: '#1E7DB8', 'stroke-width': 1.5 }));
+      for (const st of a.streets) { const c = svgEl('circle', { cx: X(st.lng), cy: Y(st.lat), r: 5, fill: '#0B0B0B' }); const t = svgEl('title', {}); t.textContent = `${st.street}: ${st.houses} houses`; c.append(t); svg.append(c); }
+      const drawn = svgEl('polygon', { points: '', fill: 'rgba(215,38,46,.12)', stroke: '#D7262E', 'stroke-width': 2 });
+      svg.append(drawn);
+      svg.addEventListener('click', (e) => {
+        const r = svg.getBoundingClientRect();
+        const x = ((e.clientX - r.left) / r.width) * W, y = ((e.clientY - r.top) / r.height) * H;
+        polygon.push([+(minLat - pad + ((H - y) / H) * ((maxLat - minLat) + 2 * pad)).toFixed(6), +(minLng - pad + (x / W) * ((maxLng - minLng) + 2 * pad)).toFixed(6)]);
+        drawn.setAttribute('points', polygon.map((p) => `${X(p[1])},${Y(p[0])}`).join(' '));
+        o.onQuote(null);
+      });
+      return svg;
+    };
+    api('GET', '/v1/ads/route-areas').then((list) => {
+      areas = list;
+      areaBox.replaceChildren(...(areas.length ? areas.map((a) => h('fieldset', { class: 'route-area' },
+        h('legend', {}, h('label', { class: 'chip-check' }, h('input', { type: 'checkbox', onchange: (e) => { e.target.checked ? picked.add(a.id) : picked.delete(a.id); o.onQuote(null); } }), `${a.name}: ${num(a.houses)} houses, ${a.packSize}-packs`)),
+        h('div', { class: 'muted', text: `Next week: ${num(a.nextWeek.bottles)} bottles, ${a.nextWeek.labelsFree}% of their labels still free.` }),
+        sketch(a),
+        h('details', {}, h('summary', { text: `Or pick streets (${a.streets.length})` }), h('div', { class: 'street-list' }, a.streets.map((st) => h('label', { class: 'chip-check' }, h('input', { type: 'checkbox', onchange: (e) => { const k = JSON.stringify({ areaId: a.id, street: st.street }); e.target.checked ? streets.add(k) : streets.delete(k); o.onQuote(null); } }), `${st.street} (${st.houses})`)))))) : [h('p', { class: 'muted', text: 'No delivery areas are open for ads right now.' })]),
+        h('button', { class: 'btn small secondary', type: 'button', onclick: () => { polygon = []; for (const p of areaBox.querySelectorAll('.route-map polygon:last-of-type')) p.setAttribute('points', ''); o.onQuote(null); } }, 'Clear the shape'));
+    }).catch((x) => areaBox.replaceChildren(h('div', { class: 'notice err', text: x.message })));
+    const input = () => {
+      const k = kind.value;
+      const where = k === 'houses' || (k === 'box' && addresses.value.trim())
+        ? { addresses: addresses.value.split('\n').map((x) => x.trim()).filter(Boolean) }
+        : { ...(picked.size ? { areaIds: [...picked] } : {}), ...(streets.size ? { streets: [...streets].map((x) => JSON.parse(x)) } : {}), ...(polygon.length >= 3 ? { polygon } : {}) };
+      return { kind: k, share: Number(size.value), weeks: Math.max(1, Math.min(26, Math.floor(Number(weeks.value) || 1))), ...(start.value ? { startWeek: start.value } : {}), where,
+        ...(k === 'spread' ? { bottles: Math.max(1, Math.floor(Number(bottles.value) || 1)) } : {}), ...(k === 'houses' ? { perHouse: Math.max(1, Math.floor(Number(perHouse.value) || 1)) } : {}), ...(k === 'box' && sides.checked ? { boxSides: true } : {}) };
+    };
+    const ask = h('button', { class: 'btn', type: 'button', onclick: async () => {
+      err.hidden = true; out.replaceChildren();
+      const body = input();
+      try {
+        const q = await api('POST', o.quoteUrl, body);
+        o.onQuote(q, body);
+        out.replaceChildren(h('div', { class: 'facts' },
+          h('div', {}, h('span', { text: 'Houses' }), `${num(q.housesReached)} of the ${num(q.houses)} chosen get it${q.noRoom ? ` (${num(q.noRoom)} were already full those weeks; not charged)` : ''}`),
+          h('div', {}, h('span', { text: 'Bottles' }), `${num(q.bottles)} × ${cents(q.perBottleCents)} (${q.size}) = ${dollars(q.bottlesCents)}`),
+          q.faces ? h('div', {}, h('span', { text: 'Box sides' }), `${num(q.faces)} × ${cents(q.perFaceCents)} = ${dollars(q.facesCents)}`) : null,
+          h('div', {}, h('span', { text: 'Weeks' }), q.perWeek.map((w) => `${new Date(`${w.week}T12:00:00Z`).toLocaleDateString([], { month: 'short', day: 'numeric' })}: ${num(w.bottles)} bottles at ${num(w.houses)} houses`).join(' · ')),
+          h('div', {}, h('span', { text: 'Streets' }), q.streets.map((x) => `${x.street} (${x.houses})`).join(', ')),
+          h('div', {}, h('span', { text: 'You pay now' }), h('b', { text: dollars(q.cardCents) }), q.creditCents ? ` + ${dollars(q.creditCents)} from your credit` : '', h('br'), h('small', { text: `${q.included} Every piece paid for goes out; there's nothing to cancel. ${q.ifAHouseStops}` }))),
+        q.guardrails.length ? h('div', { class: 'notice' }, h('b', { text: 'Aimed at a few houses. ' }), q.guardrails.join(' ')) : null);
+      } catch (x) { o.onQuote(null); err.textContent = x.message; err.hidden = false; }
+    } }, 'See the exact price');
+    for (const c of [kind, size, weeks, start, bottles, perHouse, sides, addresses]) c.addEventListener('change', () => o.onQuote(null));
+    kind.addEventListener('change', show);
+    el.append(h('h2', { class: 'section', text: 'On our delivery routes' }),
+      h('p', { text: 'Every house on these streets gets a free box of water each week. Your ad goes on the bottles going to the houses you choose: as little as a tenth of one label at one house, or every bottle in every box.' }),
+      h('div', { class: 'facts' }, h('div', {}, field('Kind of buy', kind)), h('div', {}, field('Size on each bottle', size)), h('div', {}, field('Weeks', weeks)), h('div', {}, field('Starting the week of (a Monday; next week if empty)', start))),
+      bottlesField, perHouseField, sidesField, addressField, areaBox, ask, err, out);
+    show();
+    return { el };
+  }
+
+  /** Where a route ad went: streets and houses reached (never which house), each drop, scans by area, what came back. */
+  async function routeReport(id) {
+    const p = await api('GET', `/v1/ads/campaigns/${id}/route-report`);
+    const day = (iso) => (iso ? new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '–');
+    shell('overview', h('div', { class: 'review' },
+      h('div', { class: 'page-head', style: 'margin:0' }, h('div', {}, link('/ads', {}, '← Overview'), h('h1', { style: 'margin-top:8px', text: 'Where your ad went' }), h('p', { text: `${p.kindWords}, ${p.size}, ${p.weeks} week${p.weeks === 1 ? '' : 's'} from ${p.startWeek}.` }))),
+      h('div', { class: 'kpis' },
+        h('div', { class: 'kpi dark' }, h('span', { text: 'Houses reached' }), h('b', { text: num(p.housesReached) }), h('small', { text: `of ${num(p.bought.houses)} chosen` })),
+        h('div', { class: 'kpi' }, h('span', { text: 'Bottles delivered' }), h('b', { text: num(p.progress.delivered) }), h('small', { text: `${num(p.progress.printed)} printed, ${num(p.progress.waiting)} waiting` })),
+        h('div', { class: 'kpi' }, h('span', { text: 'Given back' }), h('b', { text: num(p.progress.credited + p.progress.refunded) }), h('small', { text: 'houses that stopped or blocked, weeks gone by' }))),
+      h('h2', { class: 'section', text: 'Streets' }),
+      p.streets.length ? h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Area', 'Street', 'Houses', 'Bottles'].map((x) => h('th', { text: x })))), h('tbody', {}, p.streets.map((x) => h('tr', {}, h('td', { text: x.area }), h('td', { text: x.street }), h('td', { text: num(x.houses) }), h('td', { text: num(x.bottles) })))))
+        : h('div', { class: 'empty', text: 'Nothing delivered yet.' }),
+      h('h2', { class: 'section', text: 'Scans by area' }),
+      h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Area', 'Bottles', 'Scans', 'Scan rate'].map((x) => h('th', { text: x })))), h('tbody', {}, p.scansByArea.map((a) => h('tr', {}, h('td', { text: a.area }), h('td', { text: num(a.bottles) }), h('td', { text: num(a.scans) }), h('td', { text: `${a.scanRatePercent}%` }))))),
+      h('h2', { class: 'section', text: 'Drops' }),
+      h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['When', 'Street', 'Where the driver scanned it (about 100 m)', 'At the door'].map((x) => h('th', { text: x })))),
+        h('tbody', {}, p.drops.map((d) => h('tr', {}, h('td', { text: day(d.at) }), h('td', { text: d.street }), h('td', { text: d.point ? `${d.point.lat}, ${d.point.lng}` : '–' }), h('td', { text: d.atDoor ? 'Yes' : 'Driver confirmed' })))))),
+      p.givenBack.length ? h('div', {}, h('h2', { class: 'section', text: 'Given back to you' }), h('ul', {}, p.givenBack.map((g) => h('li', { text: `${dollars(g.totalCents)} ${g.kind === 'credit' ? 'as credit' : g.status === 'refunded' ? 'refunded to your card' : 'to be refunded (waiting for approval)'}: ${g.reason}` })))) : null,
+      h('p', { class: 'muted', text: p.note })));
   }
 
   // ---------- billing ----------
   async function billing() {
     const advId = state.me.advertiserId;
-    const [invoices, cards, terms] = await Promise.all([api('GET', '/v1/invoices'), api('GET', `/v1/advertisers/${advId}/cards`).catch(() => []), api('GET', '/v1/ads/billing').catch(() => ({ model: 'billed_after' }))]);
+    const [invoices, cards, terms, routeInfo] = await Promise.all([api('GET', '/v1/invoices'), api('GET', `/v1/advertisers/${advId}/cards`).catch(() => []), api('GET', '/v1/ads/billing').catch(() => ({ model: 'billed_after' })), on('route_buying') ? api('GET', '/v1/ads/routes').catch(() => null) : null]);
     const prepaid = terms.model === 'prepaid';
     const kindText = { bottles: 'Bottles, paid in advance', change: 'Changing an ad' };
     const statusOf = (o) => (o.refund ? (o.refund.status === 'refunded' ? `Paid; ${dollars(o.refund.totalCents)} paid back` : 'Paid; paying back') : { paid: 'Paid', paying: 'Being paid', declined: 'Card declined' }[o.status] || o.status);
@@ -898,6 +1028,10 @@
       prepaid ? (terms.orders.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['When', 'For', 'Bottles', 'Total', 'Status'].map((x) => h('th', { text: x })))),
         h('tbody', {}, terms.orders.map((o) => h('tr', {}, h('td', { text: new Date(o.at).toLocaleDateString() }), h('td', { text: kindText[o.kind] || o.kind }), h('td', { text: o.bottles ? `${num(o.bottles)} × ${cents(o.perBottleCents)}` : '–' }), h('td', { text: dollars(o.totalCents) }), h('td', { text: statusOf(o) }))))))
         : h('div', { class: 'empty', text: 'Nothing paid yet. You pay for an ad’s bottles when you submit it.' })) : null,
+      routeInfo && (routeInfo.creditCents || routeInfo.buys.length) ? h('div', {}, h('h2', { class: 'section', style: 'margin-top:22px', text: 'Delivery routes' }),
+        h('p', { text: `Credit from houses that stopped or blocked: ${dollars(routeInfo.creditCents)}, used first on your next route buy.${routeInfo.verified ? ' Your business is verified.' : ''}` }),
+        routeInfo.buys.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Ad', 'Kind', 'Houses', 'Pieces', 'Weeks', 'Paid'].map((x) => h('th', { text: x })))),
+          h('tbody', {}, routeInfo.buys.map((b) => h('tr', {}, h('td', {}, on('route_proof') ? link(`/ads/campaigns/${b.campaignId}/report`, {}, b.name || b.campaignId) : (b.name || b.campaignId)), h('td', { text: b.kindWords }), h('td', { text: num(b.houses) }), h('td', { text: `${num(b.bottles)} × ${b.size}${b.boxSides ? ` + ${num(b.boxSides)} sides` : ''}` }), h('td', { text: `${b.weeks} from ${b.startWeek}` }), h('td', { text: `${dollars(b.totalCents)}${b.creditCents ? ` (${dollars(b.creditCents)} credit)` : ''}` })))))) : null) : null,
       !prepaid || invoices.length ? h('h2', { class: 'section', style: 'margin-top:22px', text: prepaid ? 'Fees charged after the fact' : 'Invoices' }) : null,
       invoices.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Up to', 'Lines', 'Total', 'Status', ''].map((x) => h('th', { text: x })))),
         h('tbody', {}, invoices.map((i) => h('tr', {}, h('td', { text: new Date(i.periodEnd).toLocaleDateString() }), h('td', { text: String(i.lines) }), h('td', { text: dollars(i.totalCents) }), h('td', { text: { open: 'Open', paid: 'Paid', failed: 'Card declined' }[i.status] || i.status }),

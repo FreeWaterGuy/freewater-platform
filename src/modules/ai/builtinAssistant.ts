@@ -122,6 +122,8 @@ export class BuiltinAdAssistant implements AdAssistant {
     if (bottles) { patch.buy = { type: 'guaranteed', prints: Number(bottles[1]!.replace(/,/g, '')) }; did.push(pre ? `${bottles[1]} bottles, paid up front (${pre.included})` : `${bottles[1]} bottles`); }
     else if (perDay && !pre) { patch.buy = { type: 'bid', dailyCapCents: Number(perDay[1]!.replace(/,/g, '')) * 100 }; did.push(`a daily cap of $${perDay[1]} for printed labels only (scans and other charges are billed on top)`); }
     else if (perDay && pre) did.push('nothing for a daily amount: ads here are paid up front for a number of bottles');
+    // Houses, streets, a neighbourhood: that's a buy on the delivery routes, chosen on the review page.
+    if (pre?.routes && /\b(house|houses|home|homes|street|streets|neighbou?rhood|route|routes|door|doorstep|block)\b/.test(low)) did.push(`a note: to aim it at houses or streets, choose “On our delivery routes” on the review page (${pre.routes.kinds.join('; ')}), where you see the exact price before paying`);
 
     // What opens when people scan it.
     const url = /https:\/\/[^\s"'<>]+/.exec(text)?.[0];

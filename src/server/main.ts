@@ -149,6 +149,9 @@ const jobs: Job[] = [
   // ads and refunds a restart or a timeout cut off are finished from the provider's answer.
   { name: 'ad-fees', everyMs: 24 * 3600_000, timeoutMs: 30 * 60_000, run: saved(() => perCompany('ad-fees', (id) => app!.prepaid.chargeFees(id))) },
   { name: 'ad-payments', everyMs: 3600_000, timeoutMs: 10 * 60_000, run: saved(() => perCompany('ad-payments', (id) => app!.prepaid.recover(id))) },
+  // Each day: route pieces that can't go out (a house stopped or blocked them, their week went by, their box came
+  // back) are given back as credit, or as refunds waiting for a person; refunds a restart cut off are finished.
+  { name: 'route-buys', everyMs: 24 * 3600_000, timeoutMs: 30 * 60_000, run: saved(() => perCompany('route-buys', async (id) => { await app!.routeBuys.settle(id); await app!.routeBuys.recover(id); })) },
   { name: 'videos', everyMs: 10_000, timeoutMs: 120_000, run: saved(() => app!.videos.tick()) },
   // Each hour: close any month that's due, measure changes whose week is up, read every agent's standing, share out
   // the AI fund, and have the security agent look around.

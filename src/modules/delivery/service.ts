@@ -305,7 +305,7 @@ export class DeliveryService {
           // If its box (or a bottle) then fails, the pack is still written on the stop, so a retry finishes that one.
           // A house's bottles are for whoever in the app said it's theirs (their audience, their bottles), else nobody.
           const customerId = stop.houseId ? (await this.houses?.claimantOf(stop.houseId)) ?? '' : stop.userId;
-          try { stop.packId = (await this.packs.compose({ companyId: run.companyId, customerId, address: stop.address, routeId: run.routeId, stop: stop.stop, boxId: `box-${stop.packSize}`, productId: product.id, runId: run.id, ...(stop.houseId ? { houseId: stop.houseId, areaId: stop.areaId } : {}) })).id; }
+          try { stop.packId = (await this.packs.compose({ companyId: run.companyId, customerId, address: stop.address, routeId: run.routeId, stop: stop.stop, boxId: `box-${stop.packSize}`, productId: product.id, runId: run.id, ...(stop.houseId ? { houseId: stop.houseId, areaId: stop.areaId, packNo: stop.pack?.n ?? 1 } : {}) })).id; }
           catch (e) { stop.packId = [...this.packs.packs.values()].find((p) => p.runId === run.id && p.stop === stop.stop && p.status !== 'returned')?.id ?? null; throw e; }
           finally { await this.saveRun(run); }
         }

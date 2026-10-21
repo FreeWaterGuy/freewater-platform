@@ -35,6 +35,8 @@ import { HouseService } from './modules/delivery/houses';
 import { pilotHouses } from './demo/pilotArea';
 import { CreditService } from './modules/ads/credit';
 import { PrepaidService } from './modules/ads/prepaid';
+import { RouteBuyService } from './modules/ads/routeBuys';
+import { seedRouteBuys } from './demo/routeBuys';
 import { adBilling, billedAfter, prepaidModel } from './modules/ads/billing';
 import { SimpleRoutePlanner, type RoutePlanner } from './modules/delivery/planner';
 import { TestGeocoder, type Geocoder } from './adapters/geocoding/contract';
@@ -375,7 +377,7 @@ export async function createApp(opts: AppOptions) {
   prepaid.credit = credit;
   ads.prepaid = prepaid;
   ads.beforeLive = (c) => prepaid.beforeLive(c);
-  platform.claimPrepaid = (companyId, ids) => prepaid.claim(companyId, ids);
+  platform.claimPrepaid = (companyId, ids, spots) => prepaid.claim(companyId, ids, spots);
   await prepaid.restore();
   // The demo's made-up advertisers have paid for their sample ads (the test card, no real money), so they print: a set
   // number of bottles as the sample says, or 2,000 for a sample written as a bid, and five AI video clips each (a
@@ -505,6 +507,20 @@ export async function createApp(opts: AppOptions) {
     return n;
   };
 
+  // Buying on delivery routes (src/modules/ads/routeBuys.ts): pieces of the labels at chosen houses in chosen weeks,
+  // reserved when paid (first paid wins), placed when each house's pack prints, given back when a house stops.
+  const routeBuys = new RouteBuyService(db, platform, prepaid, payments, () => persistence.flush());
+  routeBuys.households = households;
+  routeBuys.packs = () => packs.packs;
+  routeBuys.boxes = () => new Map(state.boxes.map((b) => [b.id, b]));
+  routeBuys.alert = (key, title, detail) => void runtime.alerts.alert(key, 'warning', title, detail);
+  ads.routeBuys = routeBuys;
+  packs.routeFor = (pack) => routeBuys.forPack(pack);
+  packs.routeBoxPrinted = (pack) => routeBuys.boxPrinted(pack);
+  houses.onStopped = (companyId, houseId) => routeBuys.settle(companyId, { houseId }).catch((e) => runtime.alerts.alert(`route-settle:${companyId}`, 'warning', 'Giving back route pieces for a house that stopped failed', String((e as Error)?.message ?? e)));
+  await routeBuys.restore();
+  if (demoKeys) await seedRouteBuys(platform, db, routeBuys, payments).catch((e) => console.error('Demo route buys weren’t made:', (e as Error).message));
+
   const handoff = new HandoffService(db, platform, packs);
   const books = new BooksService(db, platform, packs, messenger, opts.payouts ?? new TestPayoutProvider(), (c, at) => delivery.today(c, at), () => persistence.flush());
 
@@ -560,6 +576,7 @@ export async function createApp(opts: AppOptions) {
   news.featureOn = featureOn;
   fillers.featureOn = featureOn;
   households.featureOn = featureOn;
+  routeBuys.featureOn = featureOn;
   attribution.featureOn = featureOn;
   webhooks.companyOn = (companyId) => companyFeatures.on(companyId, 'webhooks');
   chain.kindAllowed = (kind, companyId) => features.actionOn(kind) && companyFeatures.actionOn(companyId, kind);
@@ -661,7 +678,7 @@ export async function createApp(opts: AppOptions) {
     wallet, flush: () => persistence.flush(), today: (companyId, at) => delivery.today(companyId, at),
     anchors: (companyId) => anchors.list(companyId), days: (companyId) => books.days(companyId),
     charities: async (companyId) => (await books.charities(companyId)).map((c: any) => c.name),
-    more: (companyId) => prepaid.checks(companyId),
+    more: async (companyId) => [...await prepaid.checks(companyId), ...await routeBuys.checks(companyId)],
   });
   await payments.repairUnrecorded();
   for (const c of platform.companies.values()) { await books.repairUnrecorded(c.id); await profit.repairShares(c.id); }
@@ -672,7 +689,7 @@ export async function createApp(opts: AppOptions) {
   await attribution.repairUnrecorded();
   await persistence.flush();
 
-  return { ...made, fillers, news, households, features, companyFeatures, db, persistence, runtime, demoKeys, accounts, payments, credit, prepaid, messenger, experiences, assets, ads, designs, delivery, houses, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
+  return { ...made, fillers, news, households, routeBuys, features, companyFeatures, db, persistence, runtime, demoKeys, accounts, payments, credit, prepaid, messenger, experiences, assets, ads, designs, delivery, houses, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

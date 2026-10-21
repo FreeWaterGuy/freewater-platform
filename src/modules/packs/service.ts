@@ -18,6 +18,8 @@ export interface PackOrder {
   /** A pack for a house in a delivery area (not a subscription): which house and area. */
   houseId?: string;
   areaId?: string;
+  /** Which of the house's boxes this is that night (1 when it gets one): route pieces are reserved box by box. */
+  packNo?: number;
 }
 
 export interface Pack {
@@ -34,9 +36,10 @@ export interface Pack {
   status: 'composed' | 'box_printed' | 'mismatch' | 'verified' | 'sealed' | 'loaded' | 'delivered' | 'returned';
   loadPosition?: number;
   runId?: string;
-  /** For a house in a delivery area: the house and its area. */
+  /** For a house in a delivery area: the house and its area, and which of its boxes that night this is. */
   houseId?: string;
   areaId?: string;
+  packNo?: number;
   /** Checked by a person, by hand, when no packing line was there to scan it: who and when, for the record. */
   checkedByHand?: { by: string; at: string; reason?: string };
   /** Its run was closed out from an earlier day and never driven: who, when and why. */
@@ -85,6 +88,15 @@ export class PackService {
   private houseOf(pack: Pack) {
     return pack.houseId && this.houseContextFor ? this.houseContextFor(pack.houseId, pack.companyId) : Promise.resolve(null);
   }
+  /**
+   * Pieces bought on delivery routes for a house's pack (src/modules/ads/routeBuys.ts): per bottle (numbered across
+   * the house's boxes that week), its box sides, and the advertisers the house blocked. Set at start-up.
+   */
+  routeFor?: (pack: Pack) => Promise<{ bottle: (n: number) => { spotId: string; campaignId: string; share: import('../../core/types').Share }[]; faces: { spotId: string; campaignId: string; face: string }[]; blocked: string[] } | null>;
+  /** A house's box printed: its route sides are placed and booked. Set at start-up. */
+  routeBoxPrinted?: (pack: Pack) => Promise<void>;
+  /** The number, across the house's boxes that week, of the bottle at this place in this pack (1-based). */
+  private bottleNo(pack: Pack, index: number) { return ((pack.packNo ?? 1) - 1) * pack.box.bottles + index + 1; }
 
   async compose(order: PackOrder): Promise<Pack> {
     const p = this.platform;
@@ -93,7 +105,7 @@ export class PackService {
     if (!company) throw new Error(`Unknown company ${order.companyId}`);
     if (!box) throw new Error(`Unknown box ${order.boxId}`);
 
-    const pack: Pack = { id: newId('pk'), companyId: company.id, customerId: order.customerId, address: order.address, routeId: order.routeId, stop: order.stop, box, unitIds: [], faces: [], status: 'composed', ...(order.runId ? { runId: order.runId } : {}), ...(order.houseId ? { houseId: order.houseId, areaId: order.areaId } : {}) };
+    const pack: Pack = { id: newId('pk'), companyId: company.id, customerId: order.customerId, address: order.address, routeId: order.routeId, stop: order.stop, box, unitIds: [], faces: [], status: 'composed', ...(order.runId ? { runId: order.runId } : {}), ...(order.houseId ? { houseId: order.houseId, areaId: order.areaId, packNo: order.packNo ?? 1 } : {}) };
     this.packs.set(pack.id, pack);
     this.save(pack);
 
@@ -124,8 +136,9 @@ export class PackService {
       for (const id of pack.unitIds) for (const pl of p.units.get(id)?.placements ?? []) if (!pl.isHouse) counts.set(pl.campaignId, (counts.get(pl.campaignId) ?? 0) + 1);
       const max = Math.max(1, Math.floor(box.bottles * company.adRules.maxPackShare));
       const house = await this.houseOf(pack);
+      const route = await this.routeFor?.(pack) ?? null;
       while (pack.unitIds.length < box.bottles) {
-        const unitId = await this.printBottle(pack, productId, counts, max, house);
+        const unitId = await this.printBottle(pack, productId, counts, max, house, route, this.bottleNo(pack, pack.unitIds.length));
         pack.unitIds.push(unitId);
         this.save(pack);
       }
@@ -134,7 +147,8 @@ export class PackService {
 
     // 2. The box itself.
     if (!pack.rendered) {
-      pack.faces = fillBoxFaces({ company, box, routeId: pack.routeId, campaigns: [...p.campaigns.values()], random: p.random, faceOn: (face) => !p.featureOn || (p.featureOn(company.id, 'box_ads') && p.featureOn(company.id, FACE_SWITCHES[face] ?? 'box_ads')) });
+      const route = await this.routeFor?.(pack) ?? null;
+      pack.faces = fillBoxFaces({ company, box, routeId: pack.routeId, campaigns: [...p.campaigns.values()], random: p.random, faceOn: (face) => !p.featureOn || (p.featureOn(company.id, 'box_ads') && p.featureOn(company.id, FACE_SWITCHES[face] ?? 'box_ads')), reserved: route?.faces, blockedAdvertisers: route?.blocked });
       pack.rendered = renderBox({ packId: pack.id, box, company, faces: pack.faces, campaigns: p.campaigns, routeId: pack.routeId, stop: pack.stop, codes: p.codes });
       this.save(pack);
     }
@@ -149,6 +163,7 @@ export class PackService {
         pack.status = 'box_printed';
         this.save(pack);
         p.bus.publish('box.printed', company.id, { packId: pack.id, jobId, faces: pack.faces }, pack.id);
+        await this.routeBoxPrinted?.(pack);
         break;
       }
     }
@@ -156,11 +171,14 @@ export class PackService {
     return pack;
   }
 
-  private async printBottle(pack: Pack, productId: string, counts: Map<string, number>, max: number, house: import('../../core/types').RouteHouseContext | null): Promise<string> {
+  private async printBottle(pack: Pack, productId: string, counts: Map<string, number>, max: number, house: import('../../core/types').RouteHouseContext | null, route: Awaited<ReturnType<NonNullable<PackService['routeFor']>>> = null, bottleNo = 0): Promise<string> {
     for (let tries = 0; tries < 3; tries++) {
       const avoidSignatures = new Set(pack.unitIds.map((id) => labelSignature(this.platform.units.get(id)?.placements ?? [])));
       const audience = this.audienceFor && pack.customerId ? await this.audienceFor(pack.customerId, pack.companyId) : null;
-      const r = await this.platform.order({ companyId: pack.companyId, locationId: pack.routeId, productId, packId: pack.id, consumerId: pack.customerId || undefined, frequency: { counts, max }, avoidSignatures, audience, house });
+      // A route piece already on a bottle of this pack is never placed again (the database's claim refuses it too).
+      const done = new Set(pack.unitIds.flatMap((id) => this.platform.units.get(id)?.placements.flatMap((pl) => (pl.routeSpotId ? [pl.routeSpotId] : [])) ?? []));
+      const reserved = route ? route.bottle(bottleNo).filter((x) => !done.has(x.spotId)) : undefined;
+      const r = await this.platform.order({ companyId: pack.companyId, locationId: pack.routeId, productId, packId: pack.id, consumerId: pack.customerId || undefined, frequency: { counts, max }, avoidSignatures, audience, house, ...(reserved?.length ? { reserved } : {}), ...(route?.blocked.length ? { blockedAdvertisers: route.blocked } : {}) });
       if (r.ok) {
         for (const pl of r.unit.placements) if (!pl.isHouse) counts.set(pl.campaignId, (counts.get(pl.campaignId) ?? 0) + 1);
         return r.unit.id;
@@ -207,10 +225,12 @@ export class PackService {
     const max = Math.max(1, Math.floor(pack.box.bottles * company.adRules.maxPackShare));
     const fresh: string[] = [];
     const house = await this.houseOf(pack);
+    // A route piece the missing bottle carried was printed (and drawn) once: the new bottle doesn't draw it again.
+    const route = await this.routeFor?.(pack) ?? null;
     for (const old of missingUnitIds) {
       const i = pack.unitIds.indexOf(old);
       if (i < 0) continue;
-      const id = await this.printBottle(pack, productId, counts, max, house);
+      const id = await this.printBottle(pack, productId, counts, max, house, route, this.bottleNo(pack, i));
       pack.unitIds[i] = id;
       fresh.push(id);
       this.save(pack);

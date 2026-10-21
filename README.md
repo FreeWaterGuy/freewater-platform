@@ -182,9 +182,9 @@ junk mail but free water that gives to charity. Houses don't sign up and aren't 
   "700 Big Bend Drive" and "700 Big Bend Dr." are one door and one pack), and
   `app.households.audienceForRouteHouse(companyId, RouteHouseContext.houseId)` gives that house's `HouseAudience`,
   counting people who claimed it in the app as residents (their "do not sell", a child at home, and what they allowed
-  apply). It is empty while *Ads aimed at houses* is off. House packs draw paid bottles from prepaid ads exactly as
-  machine bottles do (one claimed bottle per printed bottle); spots nobody paid for get approved fillers, then the
-  house ad, never an unpaid ad.
+  apply). It is empty while *Ads aimed at houses* is off. A house's bottles carry, in order: the pieces bought for that
+  house that week on the routes (below), then other paid ads in the space left (one claimed bottle per printed bottle,
+  as at machines), then approved fillers, then the house ad; never an unpaid ad.
 - **Demo**: an "Austin pilot (sample houses)" area of about 50 made-up houses on four Travis Heights streets, off,
   every house marked as a sample.
 - **Limits and decisions for the founder.** The box code proves a house to anyone who can scan the box, so a
@@ -215,6 +215,54 @@ junk mail but free water that gives to charity. Houses don't sign up and aren't 
 - **Areas:** the delivery areas, their settings and houses, adding houses from CSV, and drivers' skips to review.
 - **Deliveries:** everyone getting packs by subscription.
 - **Books:** the public totals and the latest ledger lines.
+
+## Buying on delivery routes (`src/modules/ads/routeBuys.ts`)
+
+Advertisers buy pieces of the labels on the bottles going to houses in the delivery areas, like direct mail but on a
+bottle: "as little as 1/10th of the label on a single bottle … to the house of their dreams, or blanket every house on
+the route, or every bottle in the box". Every size gets the same technology (printed for that house, its own code,
+the scan page and AR). Switches: *Ads → Buying on delivery routes* (docs/SWITCHES.md, "Buying on delivery routes").
+
+- **Four kinds of buy**, each for chosen weeks (Monday to Sunday, from next week): **spread** (N bottles shared evenly
+  over an area, streets or a shape drawn on the map), **blanket** (one piece on one bottle in every box at every
+  house there), **whole box** (every bottle in a house's box, and its sides if chosen, at the chosen houses) and
+  **chosen houses** (named by address, a number of bottles at each). Optional: only houses whose household data fits
+  (size, income band, owner or renter, interests), with *Ads aimed at houses* on.
+- **Exact quote first** (`POST /v1/ads/drafts/:id/route-quote`, `/v1/ads/campaigns/:id/route-quote`): pieces × the
+  size's price × the product's factor, plus box sides, less credit; houses aimed at and reached, bottles per week,
+  the streets (counts only, never which house). Paying (`submit` with `pay.route`, or `/route-pay`) charges exactly
+  that or nothing.
+- **Never more than exists; first paid wins.** Paying reserves each piece on one bottle (numbered across the house's
+  boxes that week) or one box side (`route_spots`), in one transaction that locks each house and week first and works
+  the quote again against what is committed then: of two payments for the last space the second is charged nothing
+  and told the new price. The database refuses more than a whole label (or ten pieces) on one bottle whatever the
+  code decided. Small pieces share labels: each goes on the fullest bottle it still fits, only in mixes some layout
+  of the bottle can print, never an ad twice on a bottle, never two competitors. A declined card lets the space go.
+- **Printed exactly once, at the right house.** When the night is planned, each bottle of a house's pack carries the
+  pieces reserved for it, placed first (the label with the fewest, biggest pieces around them), each claimed open →
+  held in the database before the label is drawn and placed when it prints; the rest of the label gets other paid
+  ads, approved fillers, then the house ad. A route ad never prints anywhere else.
+- **Nobody pays for a house that stopped.** Pieces that can't go out come back: the house stopped deliveries or was
+  skipped, blocked the business (or every ad aimed at it alone), the week went by before they printed, or the box
+  came back. For a buy aimed at one house: a refund of that part to the card, approved by an owner or finance
+  person with the second step (`POST /v1/ops/route-refunds/:id/approve`). Otherwise: credit for other houses, used
+  first on the next route buy. Daily (job `route-buys`), at once when a house stops or blocks, and on request.
+- **Guardrails on tiny audiences** (fewer than 50 houses; a company may only raise that): *Buys aimed at fewer than
+  50 houses* on, a business the company verified (`POST /v1/advertisers/:id/verify`), no names, street addresses,
+  phone numbers, emails or personal messages in the ad (checked when paying and again at approval), approved by an
+  owner or reviewer signed in (never a key), never a house that blocked it or said no to targeted ads.
+- **A house's say** (the app, *Your house*): the businesses whose ads came there, block one, or block every ad aimed
+  at this house alone (`/v1/me/house/ads`, `/v1/me/house/ad-blocks`).
+- **Proof** (`GET /v1/ads/campaigns/:id/route-report`, the portal's *Where it went*): streets and houses reached
+  (streets with fewer than 5 shown together), each drop's time and rough place from the driver's scan (to ~100 m)
+  and whether it was at the door, scans by area, and what came back. Never a house or a person.
+- **Books:** a route buy is a prepaid order (`ad_orders`, `ad_prepaid`); box sides are a prepaid extra booked when the
+  box prints; a piece whose box came back is moved back from `revenue:print` to the advertiser's money; credit used
+  pays part of the next order. The daily reconciliation adds `route_spots_printed`, `route_buys_add_up` and
+  `route_open`; `test/controls-route-buying.test.ts` runs randomized months of buys, stops, blocks and nights with
+  every invariant checked after every step, on PGlite and real Postgres.
+- **Demo:** three route buys on the sample pilot area: a blanket (a tenth of one bottle in every box, two weeks), a
+  whole box with its sides on Leland St, and one house (two quarter pieces a week at 1501 Kenwood Ave).
 
 ## Smart codes and seeing the sale
 
@@ -497,6 +545,7 @@ npm run demo:ads-preview   # builds out/ads-preview/, a clickable copy that need
 - **See it before submitting** (`GET /v1/ads/drafts/:id/preview`): every size at every shape it can print at, on every product (a sixth can be a wide strip on one bottle and a tall column on the next), each drawn the way the label renderer draws it with its QR code where it prints; a real sample label with the company panel; each box side; the real scan page in a phone frame; and what it costs. An ad whose sizes fit no bottle can't be submitted.
 - **Review twice.** The advertiser confirms the preview (`submit` needs `approved: true`), then the company approves or sends it back with a note (`GET /v1/review/campaigns`, `POST /v1/review/campaigns/:id`). Nothing prints before that. Once approved, the advertiser can pause and resume; changing the artwork or scan page sends it back to review. Changes are made the same way, by chatting (`POST /v1/ads/drafts` with `fromCampaignId`).
 - **Results from the books** (`GET /v1/ads/overview`): spend, bottles printed, box sides, scans, AR launches, sales, saves and link taps, day by day and per ad. Every ledger line now carries its campaign, so each number traces to the lines it adds up.
+- **On our delivery routes**: on the review page, *Where it goes → On our delivery routes*: the kind of buy, the size, the weeks, and areas (each a small map of its streets, where a shape can be drawn), streets or addresses; *See the exact price*, then pay and submit. *Where it went* on the ad shows the report; *Billing* shows route buys and credit.
 - **Billing**: what was paid up front for each ad (and any refund), fees switched on charged to the card each day; for companies that bill afterwards, invoices made from those ledger lines, a saved card charged automatically, and pay-now for open ones.
 
 ## Where people are (`src/modules/data/jurisdiction.ts`)

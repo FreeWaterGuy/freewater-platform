@@ -2015,6 +2015,162 @@ create trigger company_feature_log_append_only before update or delete on compan
 create trigger company_feature_log_no_truncate before truncate on company_feature_log for each statement execute function forbid_change();
 `,
   },
+  {
+    id: '064_route_buying',
+    sql: `
+-- Buying on delivery routes (docs/SWITCHES.md, "Buying on delivery routes"): an advertiser pays up front for pieces of
+-- labels on bottles going to chosen houses in chosen weeks. Each piece is a spot on one bottle (or one box side) of one
+-- house's delivery that week, reserved when the order is made, so a payment can never promise space that isn't there.
+
+-- A business the company checked is who it says it is (needed for buys aimed at fewer than ~50 houses). A person.
+alter table advertisers add column if not exists verified_at timestamptz;
+alter table advertisers add column if not exists verified_by text;
+
+-- Part of an order can be paid with credit the advertiser got back for houses that stopped (the rest goes on the card).
+alter table ad_orders add column if not exists credit_cents bigint not null default 0 check (credit_cents >= 0);
+alter table ad_orders add constraint ad_orders_credit_within check (credit_cents <= total_cents);
+-- A box side paid for and then given back as credit (it never printed): counted, so it's never paid back twice.
+alter table ad_extra_uses drop constraint if exists ad_extra_uses_status_check;
+alter table ad_extra_uses add constraint ad_extra_uses_status_check check (status in ('claimed', 'used', 'returned', 'credited'));
+
+-- What a route buy is: its kind, size, weeks and what was chosen (areas, streets, a polygon, houses, attributes).
+create table route_buys (
+  campaign_id text primary key,
+  company_id text not null,
+  advertiser_id text not null,
+  order_id text not null unique,
+  kind text not null check (kind in ('spread', 'blanket', 'box', 'houses')),
+  share integer not null check (share in (1, 2, 3, 4, 6, 8, 10)),
+  product_id text not null,
+  start_week date not null,
+  weeks integer not null check (weeks between 1 and 52),
+  houses integer not null check (houses >= 1),
+  bottles integer not null check (bottles >= 1),
+  faces integer not null default 0 check (faces >= 0),
+  small boolean not null,
+  target jsonb not null,
+  created_at timestamptz not null default now()
+);
+create index route_buys_company on route_buys(company_id);
+
+-- One row per house and week that has (or had) spots: locked while spots are reserved there, so two payments for the
+-- same house and week take turns and the second sees what the first took (first paid wins).
+create table route_weeks (
+  company_id text not null,
+  house_id text not null,
+  week date not null,
+  primary key (house_id, week)
+);
+
+-- Each piece reserved: on a bottle (numbered 1.. across the house's boxes that week) or on a box side of one of its
+-- boxes. open (waiting for the night), held (on a label being printed), placed (printed), or given back as credit,
+-- refunded, or cancelled (its order's card was declined, or the company stopped the ad).
+create table route_spots (
+  id text primary key,
+  company_id text not null,
+  campaign_id text not null,
+  advertiser_id text not null,
+  order_id text not null,
+  house_id text not null,
+  week date not null,
+  bottle integer check (bottle between 1 and 200),
+  pack integer check (pack between 1 and 10),
+  face text,
+  share integer not null check (share in (1, 2, 3, 4, 6, 8, 10)),
+  units integer not null check (units between 0 and 120),
+  price_cents integer not null check (price_cents >= 0),
+  status text not null check (status in ('open', 'held', 'placed', 'credited', 'refunding', 'refunded', 'cancelled')),
+  unit_id text,
+  pack_id text,
+  settlement_id text,
+  created_at timestamptz not null default now(),
+  check ((bottle is not null and face is null) or (bottle is null and face is not null and pack is not null))
+);
+-- An ad is at most once on a bottle, and a box side carries one ad.
+create unique index route_spots_once_per_bottle on route_spots(house_id, week, bottle, campaign_id) where bottle is not null and status in ('open', 'held', 'placed');
+create unique index route_spots_once_per_face on route_spots(house_id, week, pack, face) where face is not null and status in ('open', 'held', 'placed');
+create index route_spots_house_week on route_spots(house_id, week);
+create index route_spots_campaign on route_spots(campaign_id, status);
+create index route_spots_order on route_spots(order_id);
+-- A label is 120 units (a tenth is 12) and carries at most 10 pieces: the database refuses more on one bottle, whatever
+-- the code decided.
+create function route_spots_room() returns trigger language plpgsql as $$
+begin
+  if exists (select 1 from route_spots s join (select distinct house_id, week, bottle from fresh where bottle is not null) f
+               on f.house_id = s.house_id and f.week = s.week and f.bottle = s.bottle
+             where s.status in ('open', 'held', 'placed') group by s.house_id, s.week, s.bottle having sum(s.units) > 120 or count(*) > 10) then
+    perform fw_refuse('route_spots', 'a bottle can''t carry more than its whole label (or more than 10 pieces).');
+  end if;
+  return null;
+end $$;
+create trigger route_spots_room after insert on route_spots referencing new table as fresh for each statement execute function route_spots_room();
+
+-- Spots given back: as credit for other houses (most buys), or as a refund of the unused part (a buy of chosen houses,
+-- once a person approves). reversed_cents: pieces that printed but whose box never reached the house (it came back),
+-- moved back from earned to the advertiser's money. Only ever added to; a refund's status moves forward.
+create table route_settlements (
+  id text primary key,
+  company_id text not null,
+  advertiser_id text not null,
+  campaign_id text not null,
+  kind text not null check (kind in ('credit', 'refund')),
+  reason text not null,
+  bottles integer not null default 0 check (bottles >= 0),
+  faces integer not null default 0 check (faces >= 0),
+  unprinted_cents bigint not null default 0 check (unprinted_cents >= 0),
+  reversed_cents bigint not null default 0 check (reversed_cents >= 0),
+  total_cents bigint not null check (total_cents >= 0),
+  status text not null check (status in ('done', 'waiting', 'refunding', 'refunded', 'failed')),
+  payment_id text,
+  failure text,
+  approved_by text,
+  created_at timestamptz not null default now(),
+  done_at timestamptz,
+  check (total_cents = unprinted_cents + reversed_cents),
+  check ((kind = 'credit' and status = 'done') or (kind = 'refund' and status <> 'done'))
+);
+create index route_settlements_adv on route_settlements(company_id, advertiser_id);
+create function route_settlements_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then perform fw_refuse('route_settlements', 'is append-only.'); end if;
+  if not fw_only_changed(to_jsonb(old), to_jsonb(new), array['status', 'payment_id', 'failure', 'approved_by', 'done_at'])
+     or old.status in ('done', 'refunded') then
+    perform fw_refuse('route_settlements', 'can''t be edited: only a refund''s status moves forward.');
+  end if;
+  return new;
+end $$;
+create trigger route_settlements_guard before update or delete on route_settlements for each row execute function route_settlements_guard();
+
+-- Credit used to pay part of an order. Only added to; an order whose card was declined doesn't count.
+create table route_credit_uses (
+  id text primary key,
+  company_id text not null,
+  advertiser_id text not null,
+  order_id text not null unique,
+  cents bigint not null check (cents > 0),
+  created_at timestamptz not null default now()
+);
+create trigger route_credit_uses_append_only before update or delete on route_credit_uses for each row execute function forbid_change();
+-- One row per advertiser, locked while credit is spent, so two orders at once can't spend the same credit.
+create table route_credit_accounts (
+  company_id text not null,
+  advertiser_id text not null,
+  primary key (company_id, advertiser_id)
+);
+
+-- A house blocks an advertiser (or every ad aimed at it alone), by someone who proved it's their house in the app.
+create table house_ad_blocks (
+  id text primary key,
+  company_id text not null,
+  house_id text not null references houses(id),
+  user_id text,
+  advertiser_id text,
+  created_at timestamptz not null default now(),
+  removed_at timestamptz
+);
+create unique index house_ad_blocks_once on house_ad_blocks(house_id, coalesce(advertiser_id, '*')) where removed_at is null;
+`,
+  },
 ];
 
 /** Runs every migration not yet run (or, for tests that start from an older schema, those in `list`). */

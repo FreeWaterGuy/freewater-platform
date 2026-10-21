@@ -88,6 +88,12 @@ export class HouseService {
   featureOn?: (companyId: string, id: string) => boolean;
   private on(companyId: string, id: string) { return !this.featureOn || this.featureOn(companyId, id); }
 
+  /**
+   * A house stopped getting packs (it stopped in the app, or a person agreed with a driver's skip): ads already bought
+   * for it come back to their advertisers (src/modules/ads/routeBuys.ts). Set by the app.
+   */
+  onStopped?: (companyId: string, houseId: string) => Promise<unknown>;
+
   /** Turns a scanned code into the pack it's printed on: a smart code (…/Q/CODE), …/p/<pack>, …/b/<pack>/<face>, or a pack id. */
   packFromCode?: (code: string) => Promise<string | null>;
 
@@ -267,6 +273,7 @@ export class HouseService {
     const r = (await this.db.query<any>(`update houses set status = $3, updated_at = now() where id = $1 and company_id = $2 and status = 'skip_pending' returning *`, [houseId, companyId, to])).rows[0];
     if (!r) throw new DeliveryError(409, 'not_pending', 'That house isn’t waiting for a review.');
     await this.event(companyId, houseId, decision === 'skip' ? 'skip_confirmed' : 'skip_overruled', by, note?.slice(0, 300) ?? null);
+    if (decision === 'skip') await this.onStopped?.(companyId, houseId);
     return this.house(r);
   }
 
@@ -395,6 +402,7 @@ export class HouseService {
     if (input.action === 'stop') {
       await this.db.query(`update houses set status = 'opted_out', updated_at = now() where id = $1`, [id]);
       await this.event(companyId, id, 'opted_out', userId, null);
+      await this.onStopped?.(companyId, id);
     } else if (input.action === 'restart') {
       // A long pause doesn't make the house "overdue": it's next due from today.
       await this.db.query(`update houses set status = 'active', skip_reason = null, next_date = case when next_date < $2 then $2::date else next_date end, updated_at = now() where id = $1`, [id, today]);

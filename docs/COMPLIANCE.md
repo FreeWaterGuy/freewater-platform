@@ -314,6 +314,19 @@ Status: **Code** = done and tested; **Partly** = done with a gap noted; **Lawyer
 - **L-22** Children taking bottles left at doors: whether ad categories must be limited on undirected bottles
   (alcohol is already a concern, L-12), and whether area statistics such as "share of families with children" may
   choose ads at all.
+- **L-23** Buying on delivery routes for one house or a few ("the house of their dreams"): is an ad bought for a
+  single address, delivered by us, "targeted advertising" or "profiling" of the people there under TDPSA (and other
+  states) even when no data about them is used? We keep these buys from any house that said no to targeted ads, let a
+  claimed house block a business or every ad aimed at it alone, require a verified business and stricter review, and
+  refuse names, addresses and personal messages in the ad (`docs/SWITCHES.md`, "Buying on delivery routes"). Is
+  that enough, or must a single-house buy need the household's consent? Could such an ad be harassment or stalking
+  in some uses, and what must the verification of the business cover?
+- **L-24** The advertiser's proof report shows streets, house counts, each drop's time and a point rounded to about
+  100 m (streets with fewer than five houses reached shown together). For a buy aimed at fewer than 50 houses we
+  show the day only, since the time says when someone could be home. Is the time of day on larger buys, or the day
+  on small ones, personal information about a household?
+- **L-25** Credit instead of a refund when a house stops (buys on more than one house): a stored-value or
+  unclaimed-property question if credit is never used, and whether advertisers must be able to ask for cash instead.
 
 ## 6. What this review could not check
 

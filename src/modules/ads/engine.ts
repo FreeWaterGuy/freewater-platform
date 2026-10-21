@@ -24,7 +24,11 @@ export const freewaterAdEngine: AdEngine = {
     const capped = (c: Campaign) => !!req.frequency && (req.frequency.counts.get(c.id) ?? 0) >= req.frequency.max;
     const tooOften = (c: Campaign) => c.buy.type === 'bid' && !!c.buy.frequencyCap && (req.audience?.campaignsToday?.get(c.id) ?? 0) >= c.buy.frequencyCap;
     for (const c of req.campaigns) rollDay(c, moment.dayKey);
-    const eligible = req.campaigns.filter((c) => isEligible(c, company, location.id, { product, audience: req.audience ?? null }) && !capped(c) && !tooOften(c) && paced(c, moment));
+    // Pieces bought on a delivery route for this bottle go on first, exactly these (routeBuys.ts); the house's blocks
+    // keep an advertiser off its bottles altogether.
+    const blocked = new Set(req.blockedAdvertisers ?? []);
+    const fixed = reservedFor(req, blocked);
+    const eligible = req.campaigns.filter((c) => !blocked.has(c.advertiserId) && isEligible(c, company, location.id, { product, audience: req.audience ?? null }) && !capped(c) && !tooOften(c) && paced(c, moment));
     const why = new Map(eligible.filter((c) => c.targeting.audience).map((c) => [c.id, audienceMatch(c, req.audience ?? null) ?? []]));
 
     // Flat prices: every ad pays its size's price (a prepaid ad, the price it paid), and equal ads take turns.
@@ -41,9 +45,9 @@ export const freewaterAdEngine: AdEngine = {
     };
 
     const chosen: Campaign[] = [];
-    const groups = new Set<string>();
+    const groups = new Set<string>(company.adRules.competitorSeparation ? fixed.flatMap((f) => (f.campaign.competitorGroup ? [f.campaign.competitorGroup] : [])) : []);
     for (const c of ranked) {
-      if (chosen.length >= company.adRules.maxAdsPerUnit) break;
+      if (chosen.length + fixed.length >= company.adRules.maxAdsPerUnit) break;
       if (company.adRules.competitorSeparation && c.competitorGroup) {
         if (groups.has(c.competitorGroup)) continue;
         groups.add(c.competitorGroup);
@@ -53,17 +57,23 @@ export const freewaterAdEngine: AdEngine = {
 
     // Try each layout, and when a pack asks for variety, a few different line-ups of the same campaigns.
     // Keep the best-earning label that doesn't repeat one already in this pack.
-    type Option = { layout: Share[]; placements: Placement[]; revenue: number };
+    type Option = { layout: Share[]; placements: Placement[]; revenue: number; pieces: number; aspect: number };
     let best: Option | null = null;
     let bestNew: Option | null = null;
+    // With route pieces on the bottle, equal earnings go to the label with fewer, bigger pieces (a tenth bought on its
+    // own shares the label with a few large fillers, not nine tiny ones), then the squarer one.
+    const better = (o: Option, than: Option | null) => !than || o.revenue > than.revenue || (fixed.length > 0 && o.revenue === than.revenue && (o.pieces < than.pieces || (o.pieces === than.pieces && o.aspect < than.aspect)));
+    const layouts = layoutsFor(product, { maxAds: company.adRules.maxAdsPerUnit, minAds: company.adRules.minAdsPerUnit });
     const lineups = req.avoidSignatures ? [chosen, ...Array.from({ length: 6 }, () => shuffle(chosen, random))] : [chosen];
     for (const pool of lineups) {
-      for (const layout of shuffle(layoutsFor(product, { maxAds: company.adRules.maxAdsPerUnit, minAds: company.adRules.minAdsPerUnit }), random)) {
-        const placements = assign(layout, pool, house, company, factor, why, priceOf, labelPrice);
+      for (const layout of shuffle(layouts, random)) {
+        const pinned = fixed.length ? pin(layout, fixed) : new Map<number, Placement>();
+        if (!pinned) continue;
+        const placements = assign(layout, pool, house, company, factor, why, priceOf, labelPrice, pinned);
         if (!placements) continue;
-        const option = { layout: layout.shares, placements, revenue: placements.reduce((s, p) => s + p.priceCents, 0) };
-        if (!best || option.revenue > best.revenue) best = option;
-        if (req.avoidSignatures && !req.avoidSignatures.has(labelSignature(placements)) && (!bestNew || option.revenue > bestNew.revenue)) bestNew = option;
+        const option = { layout: layout.shares, placements, revenue: placements.reduce((s, p) => s + p.priceCents, 0), pieces: layout.shares.length, aspect: layout.worstAspect };
+        if (better(option, best)) best = option;
+        if (req.avoidSignatures && !req.avoidSignatures.has(labelSignature(placements)) && better(option, bestNew)) bestNew = option;
       }
     }
     if (bestNew) best = bestNew;
@@ -95,6 +105,8 @@ export function labelSignature(placements: Placement[]): string {
 
 export function isEligible(c: Campaign, company: CompanyConfig, locationId: string, ctx: { product?: Product; audience?: PrintAudience | null } = {}): boolean {
   if (!c.active || c.isHouse || c.companyId !== company.id) return false;
+  // Bought on delivery routes: only on the bottles and box sides reserved for it (see reservedFor), never anywhere else.
+  if (c.routeBuy) return false;
   if (company.adRules.blockedCategories.includes(c.category)) return false;
   if (ctx.audience?.noAds) return false;
   if (ctx.audience?.avoid?.includes(c.category.toLowerCase())) return false;
@@ -137,12 +149,57 @@ function rank(c: Campaign, company: CompanyConfig, factor = 1): number {
   return guaranteedBonus + priceFor(c, company, biggest, factor) * biggest;
 }
 
+type Fixed = { spotId: string; share: Share; campaign: Campaign };
+
+/**
+ * The route pieces bought for this bottle that may still print here: the ad is live and approved, paid for at that
+ * size on this product, its category allowed, not blocked by the house, and the bottle isn't in the no-ads control.
+ * If no label can hold all of them (sizes the company switched off since), the smallest are left off; the caller gives
+ * those back as credit.
+ */
+function reservedFor(req: FillRequest, blocked: Set<string>): Fixed[] {
+  const { company, product } = req;
+  if (!req.reserved?.length || req.audience?.noAds) return [];
+  const byId = new Map(req.campaigns.map((c) => [c.id, c]));
+  let out: Fixed[] = [];
+  const seen = new Set<string>();
+  for (const r of req.reserved) {
+    const c = byId.get(r.campaignId);
+    if (!c || seen.has(c.id) || !c.active || c.isHouse || c.companyId !== company.id || !c.routeBuy || !c.prepaid || c.prepaid.stoppedAt) continue;
+    if ((c.review?.status ?? 'approved') !== 'approved' || blocked.has(c.advertiserId)) continue;
+    if (company.adRules.blockedCategories.includes(c.category) || product.blockedAdCategories?.includes(c.category)) continue;
+    if (c.prepaid.productId !== product.id || c.prepaid.share !== r.share || !canAfford(c, company, r.share, product.priceFactor ?? 1)) continue;
+    if (company.adRules.competitorSeparation && c.competitorGroup && out.some((f) => f.campaign.competitorGroup === c.competitorGroup)) continue;
+    seen.add(c.id);
+    out.push({ spotId: r.spotId, share: r.share, campaign: c });
+  }
+  out = out.sort((a, b) => a.share - b.share).slice(0, company.adRules.maxAdsPerUnit);
+  const layouts = layoutsFor(product, { maxAds: company.adRules.maxAdsPerUnit, minAds: company.adRules.minAdsPerUnit });
+  while (out.length && !layouts.some((l) => pin(l, out))) out.pop();
+  return out;
+}
+
+/** Put each route piece on a slot of its size (reading order), or null when this layout hasn't room for all of them. */
+function pin(layout: Layout, fixed: Fixed[]): Map<number, Placement> | null {
+  const free = layout.shares.map((share, i) => ({ share, i }));
+  const out = new Map<number, Placement>();
+  for (const f of fixed) {
+    const k = free.findIndex((x) => x.share === f.share);
+    if (k < 0) return null;
+    const { i } = free.splice(k, 1)[0]!;
+    const c = f.campaign;
+    out.set(i, { slotIndex: i, share: f.share, rect: layout.rects[i]!, campaignId: c.id, advertiserId: c.advertiserId, advertiserName: c.advertiserName, experienceId: c.experienceId, priceCents: c.prepaid!.priceCents, isHouse: false, routeSpotId: f.spotId });
+  }
+  return out;
+}
+
 /** Fill the biggest slots first with the best-paying campaign that has artwork that size. */
-function assign(layout: Layout, chosen: Campaign[], house: Campaign | undefined, company: CompanyConfig, factor = 1, why = new Map<string, string[]>(), priceOf?: (c: Campaign, share: Share) => number, auction?: Map<string, { paid: number; bidder: Bidder }>): Placement[] | null {
+function assign(layout: Layout, chosen: Campaign[], house: Campaign | undefined, company: CompanyConfig, factor = 1, why = new Map<string, string[]>(), priceOf?: (c: Campaign, share: Share) => number, auction?: Map<string, { paid: number; bidder: Bidder }>, pinned = new Map<number, Placement>()): Placement[] | null {
   const order = layout.shares.map((share, slotIndex) => ({ share, slotIndex })).sort((a, b) => a.share - b.share);
   const pool = [...chosen];
-  const out: Placement[] = [];
+  const out: Placement[] = [...pinned.values()];
   for (const { share, slotIndex } of order) {
+    if (pinned.has(slotIndex)) continue;
     const rect = layout.rects[slotIndex]!;
     const cost = (c: Campaign) => (priceOf ? priceOf(c, share) : priceFor(c, company, share, factor));
     const affordable = (c: Campaign) => (c.prepaid ? canAfford(c, company, share, factor) : c.buy.type === 'guaranteed' ? c.buy.remainingPrints > 0 : priceOf ? c.buy.spentTodayCents + cost(c) <= c.buy.dailyCapCents : canAfford(c, company, share, factor));

@@ -143,6 +143,7 @@ export const approvalRoutes: ReadonlySet<string> = new Set([
   'POST /v1/environment/experiments/:id/decide',
   'POST /v1/advertisers/:advertiserId/credit-limit',
   'POST /v1/ads/campaigns/:id/stop',
+  'POST /v1/ops/route-refunds/:id/approve',
 ]);
 /**
  * Routes that are approvals only for some requests, so their handlers check the second step themselves (with

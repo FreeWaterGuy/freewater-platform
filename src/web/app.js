@@ -285,6 +285,15 @@
     const confirmStop = h('div', { class: 'notice err', hidden: true }, h('p', { style: 'margin:0 0 10px', text: 'Stop free water at this house? It’s left out from the next delivery on. You can start again any time.' }),
       h('button', { class: 'btn small', style: 'background:var(--danger)', type: 'button', onclick: () => change({ action: 'stop' }, 'Deliveries stopped') }, 'Yes, stop deliveries'));
     const active = hs.status === 'active';
+    // The ads that come to this house: block a business, or every ad aimed at this house alone (Houses block ads).
+    const ads = on('house_ad_blocks') ? await api('GET', '/v1/me/house/ads').catch(() => null) : null;
+    const block = async (body, msg) => { err.hidden = true; try { await api('POST', '/v1/me/house/ad-blocks', body); toast(msg); render(); } catch (x) { fail(x); } };
+    const unblock = async (id) => { err.hidden = true; try { await api('DELETE', `/v1/me/house/ad-blocks/${encodeURIComponent(id)}`); toast('Unblocked'); render(); } catch (x) { fail(x); } };
+    const adsSection = ads && h('section', { class: 'field', 'aria-label': 'Ads on your water' }, h('h2', { style: 'margin:8px 0 0;font-size:18px', text: 'Ads on your water' }),
+      h('p', { class: 'small muted', style: 'margin:0', text: 'The ads pay for your water. If you don’t want a business’s ads here, block it: from the next box on, its ads don’t come to this house, and it isn’t charged for this house.' }),
+      ads.advertisers.length ? h('div', { class: 'chips' }, ads.advertisers.filter((a) => !a.blocked).map((a) => h('button', { type: 'button', class: 'chip-btn', onclick: () => block({ advertiserId: a.id }, `${a.name} blocked`) }, `Block ${a.name}`))) : h('p', { class: 'small muted', style: 'margin:0', text: 'No ads have come to this house in the last two months.' }),
+      ads.blocks.some((b) => !b.advertiserId) ? null : h('button', { class: 'btn secondary small', type: 'button', onclick: () => block({ aimedAtHouse: true }, 'Done. No ads aimed at this house alone.') }, 'Block every ad aimed at this house alone'),
+      ads.blocks.length ? h('ul', { style: 'margin:0;padding-left:18px' }, ads.blocks.map((b) => h('li', {}, `${b.what} `, h('button', { class: 'linkish', type: 'button', onclick: () => unblock(b.id) }, 'unblock')))) : null);
     screen({ nav: 'me' }, backBar('Your house', hs.address, '/app/me'),
       h('section', { class: 'hero-card' }, h('div', { class: 'headline' }, HOUSE_STATUS[hs.status] || hs.status, h('span', { text: active ? `A ${hs.packSize}-pack ${hs.everyDays === 7 ? 'every week' : `every ${hs.everyDays} days`}` : '' })),
         h('p', { style: 'margin:0;opacity:.85', text: hs.lastDeliveredAt ? `Last one left ${new Date(hs.lastDeliveredAt).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })}.` : 'Nothing left here yet.' })),
@@ -293,6 +302,7 @@
       // Asked only where the company sizes packs by household (Features page, “More packs for bigger households”).
       on('household_packs') && h('div', { class: 'field' }, h('label', { text: 'How many people live here' }), h('p', { class: 'small muted', style: 'margin:0', text: 'Bigger households get more water.' }),
         h('div', { class: 'chips' }, [1, 2, 3, 4, 5, 6, 7, 8].map((n) => h('button', { type: 'button', class: 'chip-btn', 'aria-pressed': String(hs.householdSize === n), onclick: () => change({ action: 'household', householdSize: n }, 'Thanks. We’ll bring enough.') }, n === 8 ? '8+' : String(n))))),
+      adsSection,
       err,
       h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { try { await api('DELETE', '/v1/me/house'); toast('Removed'); go('/app/me'); } catch (x) { fail(x); } } }, 'This isn’t my house any more'));
   }
