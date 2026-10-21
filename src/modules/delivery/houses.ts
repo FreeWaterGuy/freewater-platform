@@ -363,8 +363,16 @@ export class HouseService {
    */
   async claim(userId: string, companyId: string, input: { code: string; houseNumber?: number }) {
     const since = new Date(this.platform.bus.now().getTime() - 86_400_000).toISOString();
-    const tries = Number((await this.db.query<any>(`select count(*)::int as n from house_events where company_id = $1 and by_user = $2 and kind = 'claim_failed' and at > $3`, [companyId, userId, since])).rows[0]?.n ?? 0);
-    if (tries >= CLAIM_TRIES_PER_DAY) throw new DeliveryError(429, 'too_many_tries', 'Too many codes that didn’t match today. Try again tomorrow, with the code from your most recent box.');
+    // Each try is taken under a lock on this person before its code is checked, so tries arriving at once (on one
+    // server or several) can't all pass the count (P2). Wrong tries = tries taken − houses claimed, in the last day.
+    const allowed = await this.db.transaction(async (tx) => {
+      await tx.query(`select pg_advisory_xact_lock(hashtext($1))`, [`house-claim:${companyId}:${userId}`]);
+      const r = (await tx.query<any>(`select count(*) filter (where kind = 'claim_try')::int as tries, count(*) filter (where kind = 'claimed')::int as claimed from house_events where company_id = $1 and by_user = $2 and kind in ('claim_try', 'claimed') and at > $3`, [companyId, userId, since])).rows[0];
+      if (Number(r?.tries ?? 0) - Number(r?.claimed ?? 0) >= CLAIM_TRIES_PER_DAY) return false;
+      await this.event(companyId, null, 'claim_try', userId, null, tx);
+      return true;
+    });
+    if (!allowed) throw new DeliveryError(429, 'too_many_tries', 'Too many codes that didn’t match today. Try again tomorrow, with the code from your most recent box.');
     const pack = await this.findPack(companyId, input.code, input.houseNumber);
     if (!pack?.houseId) {
       await this.event(companyId, null, 'claim_failed', userId, null);

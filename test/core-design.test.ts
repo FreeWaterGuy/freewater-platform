@@ -19,14 +19,15 @@ import { checkStudioSpec, renderStudio } from '../src/modules/studio/layout';
 
 const photoFile = (f: string) => readFileSync(new URL(`../src/modules/studio/stand-in-photos/${f}`, import.meta.url));
 
-let db: SqlClient, app: App, server: FastifyInstance, admin: string;
+let db: SqlClient, app: App, server: FastifyInstance, reviewer: string;
 let now = new Date('2026-11-03T16:00:00Z').getTime();
 const clock = () => new Date(now);
 
 beforeAll(async () => {
   db = await createPgliteClient();
   app = await createApp({ db, seedDemo: true, seed: 11, clock });
-  admin = app.demoKeys!['freewater-admin']!;
+  // A paid ad is approved by a person on the team, signed in (never a key).
+  reviewer = await app.accounts.createSession((await app.accounts.invite({ companyId: 'freewater', email: 'rev-core@freewater.io', role: 'reviewer' })).id);
   server = await buildServer(app);
 });
 afterAll(async () => { await server.close(); await app.persistence.flush(); await db.close(); });
@@ -130,7 +131,7 @@ describe('a new advertiser, from sign-up to a live ad on a printed label', () =>
     expect(sub.body.paidCents).toBe(quote.totalCents);
     const id = sub.body.campaignId as string;
     expect(app.platform.campaigns.get(id)!.active).toBe(false);
-    expect((await call('POST', `/v1/review/campaigns/${id}`, admin, { decision: 'approve' })).status).toBe(200);
+    expect((await call('POST', `/v1/review/campaigns/${id}`, reviewer, { decision: 'approve' })).status).toBe(200);
     expect(app.platform.campaigns.get(id)!.active).toBe(true);
     expect((await call('GET', '/v1/ads/overview', t)).body.campaigns.find((c: any) => c.id === id).status).toBe('running');
 

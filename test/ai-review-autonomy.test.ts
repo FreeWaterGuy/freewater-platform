@@ -239,7 +239,8 @@ describe('2. its record: every final decision a person makes', () => {
     expect((await decide(flaggedThenApproved, reviewer, 'approve')).status).toBe(200);
     expect((await decide(flaggedThenRejected, reviewer, 'reject', 'It names a private person; we agree with the AI')).status).toBe(200);
     expect((await decide(passedThenApproved, reviewer, 'approve')).status).toBe(200);
-    expect((await decide(passedByKey, admin, 'approve')).status).toBe(200); // a key: not a person's decision
+    // A key can't approve a paid ad at all (*Ad review*: a person checks every ad; P4), so it never reaches the record.
+    expect((await decide(passedByKey, admin, 'approve')).code).toBe('person_review');
     let r = await record();
     expect(r.sinceItBegan.decisions - before.decisions).toBe(3);
     expect(r.sinceItBegan.agreed - before.agreed).toBe(2);

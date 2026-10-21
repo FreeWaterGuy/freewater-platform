@@ -1021,7 +1021,7 @@ function groupSmall<T extends { area: string; street: string; houses: number; bo
 }
 
 /** Every piece of words in an ad: its artwork's words, what its code opens, its name. */
-export function adWords(c: { creativeRef?: Campaign['creativeRef']; experienceConfig?: Record<string, unknown>; name?: string; poster?: unknown; studio?: unknown }): string[] {
+export function adWords(c: { creativeRef?: Campaign['creativeRef']; experienceConfig?: Record<string, unknown>; name?: string; poster?: unknown; studio?: unknown; variants?: { experienceConfig?: unknown }[] }): string[] {
   const out: string[] = [];
   const walk = (v: unknown, depth = 0) => {
     if (depth > 5 || out.length > 200) return;
@@ -1033,6 +1033,8 @@ export function adWords(c: { creativeRef?: Campaign['creativeRef']; experienceCo
   walk(ref?.kind === 'svg' ? (String(ref.markup ?? '').match(/>[^<]{1,300}</g) ?? []).map((t: string) => t.slice(1, -1)) : ref?.spec);
   walk((c as any).poster); walk((c as any).studio);
   walk(c.experienceConfig); walk(c.name);
+  // Its versions of the call to action are what some scanners see instead: the same words to check.
+  for (const v of (c.variants ?? []).slice(0, 20)) walk(v?.experienceConfig);
   return out;
 }
 

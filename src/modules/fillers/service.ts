@@ -110,6 +110,9 @@ export class FillerService {
     if (mine.length) return { offered: true, id: mine[0]!.id, status: mine[0]!.filler!.status };
     if ((src.review?.status ?? 'approved') !== 'approved' || !src.active) throw new FillerError('not_running', 'Only an approved ad that’s running can be offered for unsold spots.');
     if (src.targeting.audience) throw new FillerError('targeted', 'An ad for particular people can’t fill unsold spots: those bottles are for nobody in particular.');
+    // Bought on delivery routes: written for the houses chosen (maybe a few, under the stricter review), never copied
+    // onto bottles anywhere else.
+    if (src.routeBuy) throw new FillerError('targeted', 'An ad bought on delivery routes is for the houses chosen: it can’t fill unsold spots elsewhere.');
     if (!src.creativeRef) throw new FillerError('artwork', 'This ad’s artwork can’t be copied.');
     const now = this.clock().toISOString();
     const c: Campaign = {

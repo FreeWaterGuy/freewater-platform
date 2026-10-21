@@ -3,17 +3,37 @@
 What FreeWater has worth protecting, who can reach it, what protects each thing today, and where the gaps are.
 Refreshed on every review run by the security architect (`.claude/agents/security-architect.md`).
 
-- **As of:** 2026-10-20, branch `t0` at `9c58d43` (after three review rounds and about 140 fixes).
+- **As of:** 2026-10-21, release check on branch `r-sec` (after `57ca8fd`: the Features registry, prepaid payments,
+  delivery areas, route buying, news, fillers, household data, photo proof, paid-ad review by people and the AI reviewer's
+  final call; about 14,000 new lines). The 2026-10-20 review (branch `t0`, `9c58d43`) is the base for sections 1–5.
 - **Method:** STRIDE (Spoofing, Tampering, Repudiation, Information disclosure, Denial of service, Elevation of
   privilege) applied to each asset and each trust boundary; every API route checked against what the docs say.
 - **Evidence:** "CONFIRMED" means a probe against the real server (PGlite, demo seed, `server.inject`) showed it
   during this review; the probe was a scratch file and was not kept, so each confirmed item still needs a permanent
   test from the specialist who fixes it. "PLAUSIBLE" means the code reads that way; each says what would prove it.
-- **No code was changed in this step.**
+- **This step fixed what it found** (each with a test shown failing on the old code; `docs/REVIEW-LOG.md`, "security
+  architect (release check)"). Section 5a lists the new code's risks.
 
 ---
 
 ## In plain words
+
+**Release check, 2026-10-21.** The new things to protect are advertisers' prepaid money and the route spots it reserves,
+houses (their addresses, status, household size) and who claimed them, photos of boxes at people's doors, bought
+household data, each company's switches, and the switch that lets the AI reviewer reject paid ads on its own. Most of
+the new code checks who is asking well: money steps, refunds and the AI's switch need a person (and the second step),
+houses are only changed by ops people, photos are re-encoded and shown only to the team and the house's claimant, news
+stays off unless the host and then a person turn it on, and a company can't turn on what the host switched off. Five
+gaps were found and fixed: **any company API key could approve a paid ad** (and switch one on, or change what one
+shows), though the locked rule is that a person checks every ad; **any company key could flip switches kept in the
+settings** (open books, the live feed, the games), though a key never changes a switch; the **five-wrong-tries limit on
+claiming a house** could be passed by sending tries at once; the **check for names and addresses on ads aimed at a few
+houses** skipped the ad's alternative versions; and a **route ad could be copied as a free filler** onto bottles
+anywhere. What's left for the founder (section 5a): whoever can read a box on a porch can claim the house and then see
+photos of later drops at that door, with no expiry or notice; a company key can still charge an advertiser's card for a
+new buy; and ads billed afterwards are still approved by company keys.
+
+**The 2026-10-20 review:**
 
 FreeWater's most valuable things are: advertisers' money (what we bill them), the money we owe charities, people's
 points and credit (later the token), people's personal details, the settings and safety switches, and the keys that
@@ -72,6 +92,13 @@ match or that the docs leave unclear.
 | A9 | **Keys and secrets**: API keys, sign-in sessions, second-step seeds, code-signing secrets, provider keys | `api_keys`, `sessions` (hashes only), `platform_secrets`, host environment | Full takeover | Keys and sessions stored only as SHA-256 hashes (`src/db/store.ts:findApiKey`, `AccountsService.userFromToken`); keys shown once; `checkConfig` refuses unsafe production settings |
 | A10 | **Honest data and open books**: events, daily fingerprints, hourly seals, number-line tiers | `events` (append-only), fingerprints, seals, published to GitHub / Bitcoin | Rewriting the past undetected | Append-only trigger on `events`; daily fingerprints chained and published (`src/modules/transparency/anchors.ts`); hourly seals (`ChainService.seal`, `checkSeals`) |
 | A11 | **AI agents' funds, memory and autonomy** | agents' ledger lines, archives, autonomy levels | AI acting beyond what people allowed; fund misspent | `governor.ts:judge` before every call; proposals decided by a person (`/v1/agents/proposals/:id/decide`); fund only rises once on (`ratchetProblem`); archives fingerprinted (`continuity.ts`) |
+| A13 | **Prepaid balances and orders** (new) | `ad_orders`, ledger `prepaid:advertiser:*` (a liability), `route_settlements`, `route_credit_uses` | Charging the wrong amount, refunding twice, printing unpaid | Server-side price only, charged only if it equals the total seen (`PrepaidService.payBottles`, `RouteBuyService.pay`); one order per ad (DB rule); refunds and stops by owner or finance with the second step (`approvalRoutes`); settlements append-only |
+| A14 | **Reserved route spots** (new) | `route_spots`, `route_buys` | Oversold bottles, an ad printed at houses that blocked it | Reserved under a lock per house and week inside the paying transaction; `route_spots_room` trigger; blocks honored at print (`forPack`) |
+| A15 | **Houses and claims** (new) | `houses`, `house_claims`, `house_events` (append-only), `house_ad_blocks` | A stranger stops a house's water, blocks its ads or sees its drops; a house's record grows into a profile | Claim needs a recent box's code (`HouseService.claim`, 5 wrong tries a day under a lock); ops changes by an ops person or owner (`needOpsPerson`); a person's link erased with their account (`DataService`) |
+| A16 | **Drop photos** (new) | `drop_photos` (bytes or blob), purged after the company's keep | Pictures of people's doors leaking | Re-encoded without metadata (`DropPhotoService.put`); team persons (`GET /v1/ops/drop-photos/:id`) and the house's claimant (`residentMay`); never at a public address; `no-store`; purged after 90 days unless set |
+| A17 | **Household and area data** (new) | `household_*`, area statistics | Bought data about homes misused or kept after opt-out | Import by a person only, sensitive kinds refused (`HouseholdService.importHouseholds`); public opt-out with the same answer either way; deletes are immediate; advertisers never see a house's audience |
+| A18 | **The AI reviewer's final-call switch** (new) | `company_features` (`ai_ad_final_call`), bar and sample | An AI rejecting ads alone without having earned it, or turning itself on | Only on its own page by an owner with the second step on the record (`AiReviewService.turnOn`); never through the Features page (`ownPage`), never a key; the governor turns it off |
+| A19 | **Each company's switches** (new) | `company_features`, `company_feature_log` (append-only), linked settings | A switch flipped by a key, or a company turning on what the host forbids | `FeatureService.change` (an owner signed in; money/chain/one-way: the second step; host areas refused); linked switches only by a person (`ConsoleService.switchesChanged`, fixed in this check) |
 | A12 | **Machines, stock, labels, packs and deliveries** | Model 6 fleet, micro-factory, vans | Bottles printed and billed without a person; wrong box left; machine hijacked | Machine keys bound to one machine (`unitFor`, `machine.ts:mine`); print cap (`server.ts:printCap`); pack checks (`PackService.verify/seal`); right box at right door (`PackService.deliver`) |
 
 ---
@@ -94,6 +121,7 @@ match or that the docs leave unclear.
 | **Machine key** | Bearer key with `locationId`, scope `orders` | Print only at its own machine (capped), read only its own bottles and screen code, Model 6 heartbeat/jobs |
 | **White-label company** | Its own keys and team | Only its own company's data; never `platform`; starts in testing with money, chain, offers and AI fund off |
 | **AI agents** | Code inside the server; no credential | Propose only; every call metered and checked by the governor; act alone only where the autonomy ladder allows. The AI reviewer of paid ads (066) flags, and rejects alone only where a company's owner turned on *AI makes the final call* on its record (`src/modules/ads/aiReview.ts` `turnOn`); appeals, audits, approvals and refunds stay with people; its switch, bar and sample are changed only by people (`src/api/aiReview.ts` `person`), and the governor turns it off when its agreement drops (`AiReviewService.governor`) |
+| **Resident who claimed a house** (new) | A consumer sign-in plus a code from a box delivered to that house in the last 60 days (or its box number with the house number) | Their house's status (stop, restart, household size), ads that came there and blocks, photos of drops there. Anyone who can read a box on the porch can become one (N2) |
 | **Outside providers** | Our keys in the host environment | Payments, payouts, email/SMS, Anthropic, Google, Tremendous, Veryfi, photo libraries, GitHub, OpenTimestamps, S3, Solana RPC |
 | **Partners** | Webhook signing secrets; remote plug-in shared secret | Receive signed webhooks; answer scan-page plug-in calls (data only, 300 ms) |
 | **Charities** | Emailed confirm token | Confirm a transfer arrived |
@@ -126,6 +154,8 @@ helper that refuses keys without a `userId` (`me`, `person`, `fwPerson`).
 | B5 | **Company ↔ company** (white-label) | Every query | `key.companyId` on every lookup (`unitFor`, `packFor`, `campaignFor`, `invoiceFor`, SQL `company_id = $1`); `platform` scope never grantable; new licensees start safe |
 | B6 | **Server ↔ database** (and spool, backups) | Every change | One writer at a time (`InstanceLease`, `leaseChecked`); append-only triggers on `ledger_entries`, `events`; TLS required in production (`checkConfig`); encrypted backups (`src/runtime/backup.ts:encryptFile`) |
 | B7 | **Server ↔ Solana** | Seals, mint checks, daily reconcile | Payer key pays fees only; mints signed by people in Squads; `confirmSigned` checks memo, amount, destination, authority |
+| B9 | **Porch ↔ app** (new) | A box's printed code proves "this is my house" | 60-day window, company match, 5 wrong tries a day under a lock; the code is on the outside of the box (N2) |
+| B10 | **Host ↔ company switches** (new) | `FW_FEATURES`, `FW_FEATURES_ON` against each company's Features page | The host is the outer limit (`FeatureService.whyOff` checks the host first; `plan` refuses); off-host routes are never registered; news needs the host and then a person (`news.on`, person-only) |
 | B8 | **Load balancer ↔ server** | Visitor address (`X-Forwarded-For`), country headers | `TRUST_PROXY`, `TRUST_GEO_HEADERS`. **Weak: see R2** |
 
 ---
@@ -205,6 +235,18 @@ Status: **OK** (a control exists and was read), **PARTIAL** (a control exists bu
 | A12 | E | A key plans a night (prints and bills) or changes a delivery area | `POST /v1/ops/runs/plan`, `/v1/ops/areas*`, house reviews need a signed-in ops person or owner (`HouseService.needOpsPerson`) | OK (`test/route-delivery.test.ts`) |
 | A12 | T | A house delivered twice in a cycle when two plans run at once | `HouseService.take`: one guarded update (still active, still due, not planned for that night or later) inside the transaction that writes the runs; run ids unique | OK (`test/route-delivery.test.ts`, real Postgres with two servers) |
 | A6 | I | A house’s record grows into a profile of the people in it | houses hold address, map point, status and household size only; the link to a person (`house_claims`) and their id in `house_events` go when they delete their account | OK |
+| A13 | E | A company key approves (and so starts spending) a paid ad | `AdsService.review`, `PATCH /v1/campaigns/:id`, `PATCH /v1/campaigns/:id/codes`: a person on the team (`teamPersonOf`) | OK (fixed in this check; `test/security-release.test.ts`) |
+| A13 | T | A key charges an advertiser's card for a buy they didn't make | `POST /v1/ads/campaigns/:id/pay` and `/route-pay` accept company staff keys | PARTIAL (N4) |
+| A14 | T | Two buys take the same bottle | Lock per house and week, DB trigger | OK (`test/controls-route-buying.test.ts`) |
+| A14 | I | An ad aimed at a few houses carries a name or address | `personalContent(adWords(c))` at approval and on changes; versions now included | OK (fixed in this check) |
+| A14 | E | A route ad copied as a free filler onto other bottles | `FillerService.offerAd` refuses route ads | OK (fixed in this check) |
+| A15 | S | Many tries at a box code at once | Lock per person, `claim_try` rows | OK (fixed in this check, real Postgres) |
+| A16 | I | A porch claimant sees later drop photos | Claims never lapse, several allowed, no notice | PARTIAL (N2) |
+| A16 | I | A photo reachable without a sign-in | Only `/v1/ops/drop-photos/:id` (team person) and `/v1/me/drop-photos/:id` (claimant); not under `/assets` | OK |
+| A17 | E | A key imports bought household data | `POST /v1/households/imports` needs a person | OK |
+| A18 | E | The AI (or a key) turns its own final call on | `src/api/aiReview.ts` `person`; `FeatureService.plan` refuses `ownPage` switches | OK (`test/ai-review-autonomy.test.ts` §3) |
+| A19 | E | A key flips a switch kept in the settings | `ConsoleService.saveNow` / `restoreNow` with `switchesChanged` | OK (fixed in this check) |
+| A19 | E | A company turns on what the host forbids | `FeatureService.plan` (`host`), `whyOff` | OK (`test/features-registry.test.ts`) |
 
 ### 4.2 Boundaries
 
@@ -278,6 +320,35 @@ answers CORS `*` (fine while sessions are bearer tokens, not cookies; revisit if
 
 ---
 
+## 5a. Release check 2026-10-21: risks in the new code
+
+| # | Risk | L | I | Score | Status | Specialist |
+|---|---|---|---|---|---|---|
+| N1 | **A company key approved paid ads** (and switched them on, or changed what they show), against *Ad review* (locked): "a person checks every ad". An AI or automated check holding a key could put any paid ad live. | 4 | 4 | 16 | **FIXED**, CONFIRMED by test: a person on the team signed in, 403 `person_review` for a key, on the review queue and both PATCH siblings | test-engineer |
+| N2 | **The proof of a house is on its porch.** Anyone who can read a box (its QR, or its box number and the house number) can claim the house, stop or restart its water, block its ads, and see photos of every later drop at that door, when boxes are left there; several claims are allowed, none expires, and no one is told. | 3 | 4 | 12 | PLAUSIBLE (by design today; the threat model's A12 note). Prove: claim with a second account and list `/v1/me/drop-photos`. Options: a code inside the box, notify earlier claimants, claims that lapse without a newer box, photos only of one's own subscription | privacy-officer |
+| N3 | **A key flipped switches kept in the settings** (open books, live feed, counters, fingerprints, games, AR strips, static codes, offline bottles), though "a key never changes a switch". | 3 | 3 | 9 | **FIXED**, CONFIRMED by test | test-engineer |
+| N4 | **A company key charges an advertiser's card for a new buy** (`/pay`, `/route-pay`, up to 1,000,000 bottles at the server's price). Documented, but a money step without a person or the advertiser. | 2 | 4 | 8 | PLAUSIBLE; a question for the founder | financial-auditor |
+| N5 | **Wrong tries at a house claim, all at once.** The five-a-day limit was a count, then an insert. | 3 | 2 | 6 | **FIXED**, CONFIRMED on real Postgres | database-engineer |
+| N6 | **The small-audience content check skipped an ad's versions**, and a route ad could be offered as a free filler for any bottle. | 2 | 3 | 6 | **FIXED**, CONFIRMED by test | test-engineer |
+| N7 | **Ads billed afterwards are still approved by company keys**, while the locked text says "every ad". | 2 | 3 | 6 | Open: README allows it; a question for the founder | — |
+| N8 | **An address oracle for advertisers.** A houses quote says whether an address gets packs and hasn't stopped or blocked (`cannot_reach` otherwise), without paying. | 2 | 2 | 4 | PLAUSIBLE; consider a quote limit or verified businesses only | privacy-officer |
+
+**Checked and fine:** prepaid stop and route refunds (owner or finance, second step, once per ad, booked before
+marked done); the AI's final-call switch, bar and sample (people only; on with the second step on the record; never via
+the Features page); feature switches (a key never changes one now; host areas can't be turned on; locked switches
+can't be turned off; starting points never turn on money, chain or one-way switches); news (off unless
+`FW_FEATURES_ON=news`, then `news.on` by a person, then each topic by a person; public pages answer `news_off`);
+household imports (a person); delivery areas, plans and house reviews (an ops person or owner); drop photos (team
+persons and the claimant only, re-encoded, purged); house claims and blocks stay inside the company (P5); advertiser
+verification by an owner or reviewer.
+
+**Standing rules, this release:** never remove a safety governor: pass (the AI's final call keeps its governor; print
+limits stay a person's). Irreversible steps: pass. Correcting entries: pass (settlements, credit uses, house events and
+the switch log are append-only). Money, crypto and partners off until a person turns them on: pass for switches (fixed
+N3); N4 open. Keys only in host settings: unchanged from R9.
+
+---
+
 ## 6. Route access
 
 **How to read it.** *Scope*: what `authenticate` requires (`admin` also passes any non-`platform` scope). *Person*:
@@ -339,7 +410,7 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 16 | `POST /v1/refunds` | purchases | no | — | OK |
 | 17 | `GET /v1/campaigns` | campaigns | no | — | OK |
 | 18 | `POST /v1/campaigns` | campaigns | no | — | OK; starts paused until a company key approves |
-| 19 | `PATCH /v1/campaigns/:id` | campaigns | no | own campaigns | OK; only a company key turns a campaign on (README); never a paid ad that's flagged, appealed or rejected by the AI reviewer (409 `decide_in_review`: decided in the review queue, 066) |
+| 19 | `PATCH /v1/campaigns/:id` | campaigns | some | own campaigns | OK; only the company turns a campaign on (README). A paid ad (bottles, a route buy, a change to one) is switched on, or its page changed, only by a person on the team signed in (403 `person_review` for a key, 2026-10-21 release check); never one that's flagged, appealed or rejected by the AI reviewer (409 `decide_in_review`: decided in the review queue, 066). Pausing: anyone |
 | 20 | `GET /v1/experiences` | campaigns | no | — | OK |
 | 21 | `POST /v1/experiences/preview` | campaigns | no | — | OK |
 | 22 | `POST /v1/assets` | campaigns | no | — | OK |
@@ -411,13 +482,13 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 88 | `GET /v1/ads/drafts/:id/preview` | campaigns | no | advertiser only | OK |
 | 89 | `POST /v1/ads/drafts/:id/submit` | campaigns | no | advertiser only | OK |
 | 90 | `GET /v1/review/campaigns` | campaigns | no | team only (no advertiser/machine key) | OK |
-| 91 | `POST /v1/review/campaigns/:id` | campaigns | no | team only (no advertiser/machine key) | OK; company team (reviewer role or company key). A paid ad: a key (an automated check, an AI) can only flag it, its reject becomes a flag; only a person signed in finally rejects it, with a written reason (065). Approving an ad the AI reviewer rejected, or deciding its appeal, is a person only (066). GAP (CONFIRMED by `test/ai-review-autonomy.test.ts` §2, docs/REVIEW-LOG.md 2026-10-21): any company key can still approve other paid ads, though *Ad review* says a person checks every ad |
+| 91 | `POST /v1/review/campaigns/:id` | campaigns | paid ads | team only (no advertiser/machine key) | OK; a paid ad (bottles, a route buy, a change to one, an AI rejection or an appeal) is approved and finally rejected only by a person on the team signed in (403 `person_review`; a key's reject becomes a flag); aimed at a few houses: an owner or reviewer, the business verified, the content check (065/066; release check 2026-10-21 closed the gap where any company key approved paid ads). Ads billed afterwards: still a company key may approve (README); *Ad review* says "every ad" (QUESTION for the founder) |
 | 92 | `POST /v1/public/delivery/check` | public | — | — | OK (public by design) |
 | 93 | `GET /v1/me/delivery` | me | yes | — | OK |
 | 94 | `POST /v1/me/delivery` | me | yes | — | OK |
 | 95 | `PATCH /v1/me/delivery` | me | yes | — | OK |
 | 801 | `GET /v1/me/house` | me | yes | — | OK (only the house this person claimed) |
-| 802 | `POST /v1/me/house/claim` | me | yes | — | OK (proof: a code from a box delivered to that house in the last 60 days; 5 wrong tries a day, kept in the database) |
+| 802 | `POST /v1/me/house/claim` | me | yes | — | OK (proof: a code from a box delivered to that house in the last 60 days; 5 wrong tries a day, taken under a lock on the person and kept in the database, so tries at once can't pass together). See N2: the proof is on the outside of the box |
 | 803 | `PATCH /v1/me/house` | me | yes | — | OK (only the claimed house) |
 | 804 | `DELETE /v1/me/house` | me | yes | — | OK |
 | 96 | `GET /v1/ops/overview` | [admin, packs, events, ledger, campaigns] | no | team only (no advertiser/machine key) | OK |
@@ -463,11 +534,11 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 128 | `GET /v1/books/reconciliation` | [ledger, admin] | no | team only (no advertiser/machine key) | OK: the daily reconciliation report (read only) |
 | 129 | `GET /v1/books/surplus` | [ledger, admin] | no | — | OK |
 | 130 | `GET /v1/console` | admin | no | team only (no advertiser/machine key) | OK (corrected: keys can read it; it reports `person: false`) |
-| 131 | `PATCH /v1/console/settings` | admin | some | team only (no advertiser/machine key); money/prize/token switches: second step (owners/finance, R4) | OK: money, chain and one-way keys and the machines’ print limits (R5 fixed: 1–20 a minute, 1–20,000 a day) are a person’s; switching money, prizes or the token needs the second step |
+| 131 | `PATCH /v1/console/settings` | admin | some | team only (no advertiser/machine key); money/prize/token switches: second step (owners/finance, R4) | OK: money, chain and one-way keys and the machines’ print limits (R5 fixed: 1–20 a minute, 1–20,000 a day) are a person’s; switching money, prizes or the token needs the second step; turning any switch kept in the settings on or off (open books, live feed, games…) is a person, never a key (`ConsoleService.switchesChanged`, release check 2026-10-21) |
 | 132 | `POST /v1/console/preview-label` | admin | no | team only (no advertiser/machine key) | OK |
 | 133 | `GET /v1/console/history` | admin | no | team only (no advertiser/machine key) | OK |
 | 134 | `GET /v1/console/history/:version` | admin | no | team only (no advertiser/machine key) | OK |
-| 135 | `POST /v1/console/history/:version/restore` | admin | some | team only (no advertiser/machine key); a version differing in money/prize/token switches: second step (owners/finance, R4) | OK (a version touching money/chain needs a person; one differing in any `approvalSettings` key needs the second step, as `PATCH /v1/console/settings` does: `conditionalApprovalRoutes`) |
+| 135 | `POST /v1/console/history/:version/restore` | admin | some | team only (no advertiser/machine key); a version differing in money/prize/token switches: second step (owners/finance, R4) | OK (a version touching money/chain needs a person; one differing in any `approvalSettings` key needs the second step, as `PATCH /v1/console/settings` does: `conditionalApprovalRoutes`); turning any switch kept in the settings on or off (open books, live feed, games…) is a person, never a key (`ConsoleService.switchesChanged`, release check 2026-10-21) |
 | 136 | `POST /v1/console/machines` | admin | no | team only (no advertiser/machine key) | OK |
 | 137 | `PATCH /v1/console/machines/:id` | admin | no | team only (no advertiser/machine key) | OK |
 | 138 | `GET /v1/team` | admin | no | team only (no advertiser/machine key) | OK |
@@ -508,7 +579,7 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 173 | `GET /v1/public/ar/:unitId` | public | — | — | OK (public by design) |
 | 174 | `POST /v1/qr/preview` | [campaigns, admin] | no | — | OK |
 | 175 | `GET /v1/campaigns/:id/codes` | campaigns | no | own campaigns | OK |
-| 176 | `PATCH /v1/campaigns/:id/codes` | campaigns | no | own campaigns | OK |
+| 176 | `PATCH /v1/campaigns/:id/codes` | campaigns | paid ads | own campaigns | OK; an advertiser changing what people see sends it back to review; the company changing what a paid ad shows is a person on the team signed in (403 `person_review` for a key), and for an ad aimed at a few houses an owner or reviewer with the content check on the new versions (release check 2026-10-21) |
 | 177 | `POST /v1/campaigns/:id/preview-moment` | campaigns | no | own campaigns | OK |
 | 178 | `GET /v1/ads/reach` | [campaigns, purchases] | no | — | OK |
 | 179 | `GET /v1/ops/reach` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
@@ -723,7 +794,7 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 388 | `POST /v1/fillers` | admin | no | team only; *Approved fillers* | OK (the company’s own or a charity’s message; prints only once a person approves) |
 | 389 | `POST /v1/fillers/:id/approve` | admin | yes | team only; *Approved fillers* | OK (a person approves every filler) |
 | 390 | `POST /v1/fillers/:id/retire` | admin | no | team only; *Approved fillers* | OK (turning off is immediate) |
-| 391 | `POST /v1/campaigns/:id/filler-offer` | campaigns | no | an advertiser key only its own; never a machine; *Advertisers offer ads for unsold spots* | OK (a free copy for unsold spots, never billed; the company approves it first) |
+| 391 | `POST /v1/campaigns/:id/filler-offer` | campaigns | no | an advertiser key only its own (a company key may offer any of its advertisers' running ads); never a machine; *Advertisers offer ads for unsold spots* | OK (a free copy for unsold spots, never billed; a person approves it first; never an ad aimed at particular people or bought on delivery routes, release check 2026-10-21) |
 | 392 | `GET /v1/areas` | admin | no | team only; *Area statistics* (starts off) | OK (area statistics; no person in them; sample values say so) |
 | 393 | `POST /v1/areas` | admin | no | team only; *Area statistics* (starts off) | OK (each row needs its source and date; only known area attributes) |
 | 394 | `POST /v1/households/imports` | admin | yes | team only; *Bought household data* (starts off) | OK (buying data is a person’s decision; sensitive kinds and anything off the list refused; COMPLIANCE “Household data”) |
@@ -746,7 +817,7 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 411 | `POST /v1/me/house/ad-blocks` | me | yes | only the house this person claimed | OK (from the next box on; what was bought for the house goes back to the advertiser) |
 | 412 | `DELETE /v1/me/house/ad-blocks/:id` | me | yes | only the house this person claimed | OK |
 | 413 | `GET /v1/ops/drop-photos/:id` | [admin, packs] | yes | a person on the team, signed in (no service, advertiser or machine key) | OK (a drop's photo; 404 once deleted after the keep; `private, no-store`) |
-| 414 | `GET /v1/me/drop-photos` | me | yes | only drops at the house this person claimed, from when they claimed it, or their own subscription | OK (never another household's) |
+| 414 | `GET /v1/me/drop-photos` | me | yes | only drops at the house this person claimed (from 14 days before the claim), or their own subscription | OK (never a previous household's); see N2 for who can claim |
 | 415 | `GET /v1/me/drop-photos/:id` | me | yes | the same rule, checked per photo | OK |
 | 416 | `POST /v1/ops/runs/:id/stops/:stop/deliver-without-photo` | [admin, packs] | yes | an ops person or owner signed in, not the driver who scanned it; a reason | OK (only a box scanned at its door and still on the van) |
 | 417 | `GET /v1/review/campaigns/:id/notes` | campaigns | no | team only | OK |
@@ -773,6 +844,10 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
   `TRUST_PROXY` value (reliability-engineer, with the host).
 - **The law:** whether each jurisdiction preset, the prize game and paying points for data are lawful (a lawyer;
   privacy-officer to prepare the questions).
+- **Real phones at real doors:** photo re-encoding was checked with test images, not every phone's formats; whether a
+  porch box's code is readable from the street (N2) needs a look at a printed box (privacy-officer).
+- **Real Postgres for every new race:** the claim limit was shown on Postgres 16 here; the route-buying locks were
+  shown by their builder; other new read-then-write steps were read, not raced.
 - **AI prompts in production:** that no personal data reaches a model was checked against `docs/AI.md` and the
   personalizer's inputs, not by sampling live prompts (privacy-officer).
 

@@ -572,9 +572,10 @@ export class AdsService {
     }
     // An AI's rejection picked for audit: a person confirms it (reject) or overturns it (approve).
     const audit = !!(c.review?.status === 'rejected' && c.review.auditPending);
-    // Overturning the AI reviewer's own rejection, or deciding an advertiser's appeal of it, is a person's call: never
-    // a key (which an AI could hold).
-    if (input.decision === 'approve' && !person && (c.review?.aiFinal || c.review?.appealedAt)) throw new AdsError(403, 'person_review', 'The AI reviewer rejected this ad (or the advertiser appealed that): a person on the team decides it, signed in, not with an API key.');
+    // A paid ad (its bottles, a route buy, or a change to one) is approved by a person on the team, signed in: never a
+    // key, which an automated check or an AI could hold (*Ad review*, locked: "a person checks every ad"; P4). That
+    // includes overturning the AI reviewer's own rejection and deciding an advertiser's appeal of it.
+    if (input.decision === 'approve' && !person && (paid || c.routeBuy || c.review?.aiFinal || c.review?.appealedAt)) throw new AdsError(403, 'person_review', c.review?.aiFinal || c.review?.appealedAt ? 'The AI reviewer rejected this ad (or the advertiser appealed that): a person on the team decides it, signed in, not with an API key.' : 'A paid ad is approved by a person on the team, signed in, not with an API key (an automated check can flag it).');
     if (input.decision === 'reject' && paid) {
       if (c.review?.status !== 'submitted' && c.review?.status !== 'flagged' && !audit) throw new AdsError(409, 'not_in_review', 'Only an ad waiting for review can be rejected.');
       if (note.length < 10) throw new AdsError(422, 'reason_required', 'Write why it’s rejected, in plain words (at least 10 characters): it’s kept, and the advertiser sees it.');
