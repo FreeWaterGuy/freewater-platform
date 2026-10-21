@@ -522,3 +522,21 @@ export interface OfferingDeclaration {
   peerToPeer?: boolean;
   conditions?: string[];
 }
+
+/**
+ * Where a home-delivery pack in a delivery area is going, handed to the ad engine with every bottle printed for it
+ * (FillRequest.house). Houses aren't people: no name or contact, only the house, its area and street, and the
+ * household size if someone in the app told us. If a person claimed the house in the app, their audience (only what
+ * they allowed) comes separately as FillRequest.audience, exactly as for any bottle printed for a known person.
+ */
+export interface RouteHouseContext {
+  houseId: string;
+  areaId: string;
+  /** The route (depot and days) the area's vans drive from: the same location id campaigns can target. */
+  routeId: string;
+  /** The street name as imported, like "Kenwood Ave". */
+  street: string;
+  householdSize: number | null;
+  /** Someone in the app has said this is their house. */
+  claimed: boolean;
+}

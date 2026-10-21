@@ -1,10 +1,11 @@
 import type { App } from '../app';
 import type { ApiKey } from '../db/store';
 import { ApiError, obj, S, type RouteDef, Q } from './http';
+import { SKIP_REASONS } from '../modules/delivery/houses';
 
 /** Home delivery for people, the night's routes for ops, and the driver's day. */
 export function deliveryRoutes(app: App, route: (r: RouteDef) => void, h: { me: (key: ApiKey | null) => string }) {
-  const { delivery, ops } = app;
+  const { delivery, ops, houses } = app;
   const staff = (key: ApiKey | null) => { if (!key || key.advertiserId || key.locationId) throw new ApiError(403, 'missing_scope', 'Only the company’s team can do this.'); };
   const person = (key: ApiKey | null) => { if (!key?.userId) throw new ApiError(403, 'person_required', 'Sign in as a person to do this.'); return key.userId; };
   const packSize = { type: 'integer', enum: [6, 12, 24] };
@@ -23,6 +24,12 @@ export function deliveryRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
   route({ method: 'POST', url: '/v1/me/delivery', scope: 'me', summary: 'Start home delivery. Packs are free, paid for by the ads.', body: obj({ address: { type: 'string', minLength: 6, maxLength: 200 }, packSize, frequency, day, notes: { type: 'string', maxLength: 300 } }, ['address', 'packSize', 'frequency']), handler: async (req, key) => ({ status: 201, body: await delivery.subscribe({ companyId: key!.companyId, userId: h.me(key), ...(req.body as any) }) }) });
   route({ method: 'PATCH', url: '/v1/me/delivery', scope: 'me', summary: 'Skip the next one, pause, resume, cancel, or change size, how often, the day or notes for the driver.', body: obj({ action: { type: 'string', enum: ['skip', 'pause', 'resume', 'cancel', 'update'] }, packSize, frequency, day, notes: { type: 'string', maxLength: 300 } }, ['action']), handler: async (req, key) => ({ body: await delivery.change(h.me(key), req.body as any) }) });
 
+  // ---------- your house, in a delivery area (no sign-up: houses get packs unless someone there says stop) ----------
+  route({ method: 'GET', url: '/v1/me/house', scope: 'me', summary: 'The house you said is yours in a delivery area: whether it gets packs, and when the last one came. Null if you haven’t said.', handler: async (_req, key) => ({ body: await houses.mine(h.me(key), key!.companyId) }) });
+  route({ method: 'POST', url: '/v1/me/house/claim', scope: 'me', summary: 'Say which house is yours: the code scanned from the side of a box we delivered there in the last 60 days, or the box number from its corner together with your house number. Five wrong tries a day.', body: obj({ code: { type: 'string', minLength: 5, maxLength: 300 }, houseNumber: { type: 'integer', minimum: 0, maximum: 999999 } }, ['code']), handler: async (req, key) => ({ status: 201, body: await houses.claim(h.me(key), key!.companyId, req.body as any) }) });
+  route({ method: 'PATCH', url: '/v1/me/house', scope: 'me', summary: 'Stop deliveries to your house (at once: it’s left out of every plan from now), start them again, or say how many people live there.', body: obj({ action: { type: 'string', enum: ['stop', 'restart', 'household'] }, householdSize: { type: 'integer', minimum: 1, maximum: 20 } }, ['action']), handler: async (req, key) => ({ body: await houses.change(h.me(key), key!.companyId, req.body as any) }) });
+  route({ method: 'DELETE', url: '/v1/me/house', scope: 'me', summary: 'This isn’t your house any more. The house keeps what was chosen for it.', handler: async (_req, key) => ({ body: await houses.unclaim(h.me(key), key!.companyId) }) });
+
   // ---------- ops ----------
   route({ method: 'GET', url: '/v1/ops/overview', scope: ['admin', 'packs', 'events', 'ledger', 'campaigns'], summary: 'Today at a glance: bottles, scans, money, deliveries, and what needs attention.', handler: async (_req, key) => { staff(key); return { body: await ops.overview(key!.companyId) }; } });
   route({ method: 'GET', url: '/v1/ops/machines', scope: ['admin', 'orders', 'packs', 'events'], summary: 'Every machine: prints today, failures, last print, and whether it needs a look.', handler: async (_req, key) => { staff(key); return { body: await ops.machines(key!.companyId) }; } });
@@ -33,9 +40,11 @@ export function deliveryRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     const d = String((req.query as any).date ?? delivery.today(key!.companyId));
     return { body: { date: d, runs: await Promise.all((await delivery.runs(key!.companyId, d)).map((r) => delivery.view(r))) } };
   } });
-  route({ method: 'POST', url: '/v1/ops/runs/plan', scope: ['admin', 'packs'], summary: 'Plan and print a night: everyone due, in driving order, a pack printed for each stop.', body: obj({ date }, ['date']), handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/ops/runs/plan', scope: ['admin', 'packs'], summary: 'Plan and print a night: every subscriber due, and every house due in each delivery area that’s on, in driving order, a pack printed for each stop. A signed-in ops person or owner: planning prints bottles that bill advertisers.', body: obj({ date }, ['date']), handler: async (req, key) => {
     staff(key);
-    const runs = await delivery.planNight(key!.companyId, (req.body as any).date);
+    const by = person(key);
+    await houses.needOpsPerson(key!.companyId, by, 'plan and print a night');
+    const runs = await delivery.planNight(key!.companyId, (req.body as any).date, by);
     return { status: 201, body: await Promise.all(runs.map((r) => delivery.view(r))) };
   } });
   route({ method: 'POST', url: '/v1/ops/runs/:id/pack-check', scope: ['admin', 'packs'], summary: 'Check every bottle in every box of a route and seal them.', handler: async (req, key) => { staff(key); return { body: await delivery.packCheck((req.params as any).id, key!.companyId) }; } });
@@ -47,6 +56,35 @@ export function deliveryRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
   route({ method: 'POST', url: '/v1/ops/runs/:id/close', scope: ['admin', 'packs'], summary: 'Close out a run from an earlier day that will never be driven: its boxes go back and it can’t take over a later night. A signed-in ops person or owner, with a reason.', body: obj({ reason: { type: 'string', minLength: 5, maxLength: 300 } }, ['reason']), handler: async (req, key) => {
     staff(key);
     return { body: await delivery.closeRun((req.params as any).id, key!.companyId, person(key), (req.body as any).reason) };
+  } });
+  // ---------- delivery areas ----------
+  const latLng = { type: 'array', minItems: 2, maxItems: 2, items: { type: 'number' } };
+  const polygon = { anyOf: [{ type: 'array', minItems: 3, maxItems: 500, items: latLng }, { type: 'null' }] };
+  const areaProps = { name: { type: 'string', minLength: 2, maxLength: 80 }, polygon, frequencyDays: { type: 'integer', minimum: 1, maximum: 28 }, packSize: { type: 'integer', enum: [12, 24] }, packsPerHouse: { type: 'integer', minimum: 1, maximum: 6 },
+    bottlesPerPersonWeek: { anyOf: [{ type: 'integer', minimum: 1, maximum: 48 }, { type: 'null' }] }, maxPacksPerHouse: { type: 'integer', minimum: 1, maximum: 6 }, vanPacks: { type: 'integer', minimum: 1, maximum: 1000 } };
+  route({ method: 'GET', url: '/v1/ops/areas', scope: ['admin', 'packs'], summary: 'Delivery areas: their settings and how many houses get packs, stopped, or wait for a review.', handler: async (_req, key) => { staff(key); return { body: await houses.areas(key!.companyId) }; } });
+  route({ method: 'POST', url: '/v1/ops/areas', scope: ['admin', 'packs'], summary: 'Make a delivery area on one of the company’s routes. It starts off. A signed-in ops person or owner.', body: obj({ ...areaProps, routeId: S.str }, ['name', 'routeId']), handler: async (req, key) => {
+    staff(key);
+    return { status: 201, body: await houses.createArea(key!.companyId, person(key), req.body as any) };
+  } });
+  route({ method: 'PATCH', url: '/v1/ops/areas/:id', scope: ['admin', 'packs'], summary: 'Change a delivery area’s settings (how often, pack size, packs per house, household rule, van size, polygon) or turn it on or off. A signed-in ops person or owner.', body: { ...obj({ ...areaProps, active: S.bool }), minProperties: 1 }, handler: async (req, key) => {
+    staff(key);
+    return { body: await houses.updateArea((req.params as any).id, key!.companyId, person(key), req.body as any) };
+  } });
+  route({ method: 'GET', url: '/v1/ops/areas/:id/houses', query: { status: { type: 'string', enum: ['active', 'opted_out', 'skip_pending', 'skipped'] } }, scope: ['admin', 'packs'], summary: 'The houses in a delivery area (?status=active|opted_out|skip_pending|skipped). Addresses only: houses aren’t people.', handler: async (req, key) => {
+    staff(key);
+    return { body: await houses.houses((req.params as any).id, key!.companyId, (req.query as any).status) };
+  } });
+  route({ method: 'POST', url: '/v1/ops/areas/:id/houses/import', scope: ['admin', 'packs'], summary: 'Add houses from CSV (a header with address, lat, lng; street and number optional). Only houses inside the polygon (this one, else the area’s) are added; addresses already known stay as they are. A signed-in ops person or owner.', body: obj({ csv: { type: 'string', minLength: 10, maxLength: 1_000_000 }, polygon }, ['csv']), handler: async (req, key) => {
+    staff(key);
+    const b = req.body as any;
+    return { status: 201, body: await houses.importHouses((req.params as any).id, key!.companyId, person(key), b.csv, b.polygon ?? null) };
+  } });
+  route({ method: 'GET', url: '/v1/ops/house-reviews', scope: ['admin', 'packs'], summary: 'Houses a driver said to skip (a “no soliciting” sign …), waiting for a person to agree or send the van back.', handler: async (_req, key) => { staff(key); return { body: await houses.reviews(key!.companyId) }; } });
+  route({ method: 'POST', url: '/v1/ops/houses/:id/review', scope: ['admin', 'packs'], summary: 'Decide a driver’s skip: keep skipping the house, or deliver to it again. A signed-in ops person or owner.', body: obj({ decision: { type: 'string', enum: ['skip', 'deliver'] }, note: { type: 'string', maxLength: 300 } }, ['decision']), handler: async (req, key) => {
+    staff(key);
+    const b = req.body as any;
+    return { body: await houses.review((req.params as any).id, key!.companyId, person(key), b.decision, b.note) };
   } });
   route({ method: 'GET', url: '/v1/review/campaigns/:id/preview', scope: 'campaigns', summary: 'An ad waiting for review: every size, on a label, on a box, and its scan page.', handler: async (req, key) => { staff(key); const id = (req.params as any).id; return { body: { ...(await app.ads.campaignPreview(id, key!.companyId)), objections: await app.ads.objections(key!.companyId, id) } }; } });
 
@@ -79,6 +117,11 @@ export function deliveryRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
   route({ method: 'POST', url: '/v1/driver/runs/:id/stops/:stop/fail', params: { stop: Q.count }, scope: 'packs', summary: 'Couldn’t deliver (no safe place, locked gate). The box comes back and the customer is told.', body: obj({ reason: { type: 'string', minLength: 3, maxLength: 120 } }, ['reason']), handler: async (req, key) => {
     const p = req.params as any;
     return { body: await delivery.failStop({ runId: p.id, companyId: key!.companyId, driverId: person(key), stop: Number(p.stop), reason: (req.body as any).reason }) };
+  } });
+  route({ method: 'POST', url: '/v1/driver/runs/:id/stops/:stop/skip-house', params: { stop: Q.count }, scope: 'packs', summary: 'Pass a house in a delivery area by (a “no soliciting” sign, they asked not to, not a home …). Its boxes come back and it’s skipped from the next plan until a person reviews it.', body: obj({ reason: { type: 'string', enum: [...SKIP_REASONS] }, note: { type: 'string', maxLength: 200 } }, ['reason']), handler: async (req, key) => {
+    const p = req.params as any;
+    const b = req.body as any;
+    return { body: await delivery.skipHouse({ runId: p.id, companyId: key!.companyId, driverId: person(key), stop: Number(p.stop), reason: b.reason, note: b.note }) };
   } });
   route({ method: 'POST', url: '/v1/driver/photos', scope: 'packs', summary: 'Upload a photo of a delivered box (JPEG, PNG or WebP as the body). Returns its address for the delivery.', rawBodyLimit: 6 * 1024 * 1024, handler: async (req, key) => {
     person(key);

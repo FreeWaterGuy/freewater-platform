@@ -80,6 +80,7 @@
     [/^\/app\/design$/, designScreen],
     [/^\/app\/printing$/, printingScreen],
     [/^\/app\/delivery$/, deliveryScreen],
+    [/^\/app\/house$/, houseScreen],
   ];
   let stopCurrent = null;
   function go(path, replace) {
@@ -175,11 +176,12 @@
   // ---------- home ----------
   async function homeScreen() {
     const me = await loadMe();
-    const [machines, mine, saved, delivery] = await Promise.all([
+    const [machines, mine, saved, delivery, house] = await Promise.all([
       api('GET', `/v1/public/companies/${state.config.companyId}/machines`).catch(() => []),
       me ? api('GET', '/v1/me/bottles').catch(() => null) : null,
       me ? api('GET', '/v1/me/saved').catch(() => []) : [],
       me ? api('GET', '/v1/me/delivery').catch(() => null) : null,
+      me ? api('GET', '/v1/me/house').catch(() => null) : null,
     ]);
     const stats = mine?.stats ?? { bottles: 0, donatedCents: 0, savedCents: 0 };
     const m0 = machines[0];
@@ -195,7 +197,7 @@
           : h('p', { style: 'margin:0;opacity:.85', text: 'Free spring water, paid for by the ads on the bottle. Every bottle gives to charity.' })),
       link('/app/scan', { class: 'tile blue' }, h('span', { class: 'tile-ico' }, icon(I.scan)), h('span', { class: 'grow' }, h('b', { text: 'Scan a bottle' }), h('span', { text: 'Open the AR printed on any FreeWater' }))),
       on('rewards') ? link('/app/wallet', { class: 'tile ice' }, h('span', { class: 'grow' }, h('b', { text: 'Your wallet' }), h('span', { class: 'muted small', text: 'Points, offers, coupons and what you saved' })), h('span', { class: 'go', text: 'Open' })) : null,
-      on('delivery') ? deliveryCard(delivery) : null,
+      on('delivery') ? (house && on('delivery_areas') ? houseCard(house) : deliveryCard(delivery)) : null,
       on('app_free_bottle') && m0 && link(`/app/m/${m0.id}`, { class: 'tile ice' }, h('span', { class: 'grow' }, h('b', { text: `${m0.id} on ${m0.name}` }), h('span', { class: 'muted small', text: m0.address || m0.city })), h('span', { class: 'go', text: 'Get one' })),
       me && h('h2', { class: 'section' }, 'Your bottles'),
       me && (mine?.bottles.length
@@ -224,6 +226,75 @@
       h('div', { style: 'display:flex;gap:14px;align-items:center' }, h('span', { class: 'tile-ico', style: 'background:var(--ice)' }, icon(truck)),
         h('span', { class: 'grow' }, h('b', { text: d.status === 'paused' ? `Your ${d.packSize}-pack is paused` : when ? `Your ${d.packSize}-pack arrives ${when}` : `Your ${d.packSize}-pack` }), h('span', { class: 'muted small', text: deliveryLine(d) }))),
       h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' }, link('/app/delivery', { class: 'btn small' }, 'Manage delivery'), d.status === 'active' && !d.today ? h('button', { class: 'btn small secondary', type: 'button', onclick: async () => { await api('PATCH', '/v1/me/delivery', { action: 'skip' }); toast('Skipped. See you next time.'); render(); } }, 'Skip next') : null));
+  }
+
+  // ---------- your house (a delivery area: every house on our streets gets water unless someone there says stop) ----------
+  const HOUSE_STATUS = { active: 'Free water comes here', opted_out: 'Deliveries stopped', skip_pending: 'Paused: a driver flagged it, we’re checking', skipped: 'Not delivered here' };
+  function houseCard(hs) {
+    return link('/app/house', { class: 'tile plain' }, h('span', { class: 'tile-ico', style: 'background:var(--ice)' }, icon(truck)),
+      h('span', { class: 'grow' }, h('b', { text: HOUSE_STATUS[hs.status] || hs.status }), h('span', { class: 'muted small', text: hs.address.split(',')[0] })), h('span', { class: 'go', text: 'Manage' }));
+  }
+  /** Opens the camera; resolves with the text of the first QR code it reads (null if cancelled). */
+  function scanQr(title) {
+    return new Promise((resolve) => {
+      const video = h('video', { playsinline: true, muted: true, autoplay: true, style: 'width:100%;height:100%;object-fit:cover' });
+      let stream, raf, done = false;
+      const finish = (v) => { if (done) return; done = true; cancelAnimationFrame(raf); stream?.getTracks().forEach((t) => t.stop()); wrap.remove(); resolve(v); };
+      const wrap = h('div', { role: 'dialog', 'aria-modal': 'true', 'aria-label': title, style: 'position:fixed;inset:0;background:rgba(0,0,0,.8);display:grid;place-items:center;z-index:100;padding:16px' },
+        h('div', { style: 'background:#fff;border-radius:20px;padding:16px;max-width:420px;width:100%;display:flex;flex-direction:column;gap:12px' },
+          h('b', { text: title }), h('div', { class: 'camera' }, fixture ? h('div', { style: 'display:grid;place-items:center;height:100%;color:#fff;padding:20px;text-align:center', text: 'The camera opens here on your phone.' }) : video, h('div', { class: 'frame' })),
+          h('button', { class: 'btn secondary', type: 'button', onclick: () => finish(null) }, 'Cancel')));
+      document.body.append(wrap);
+      if (fixture || !navigator.mediaDevices?.getUserMedia) return;
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false }).then((st) => {
+        stream = st; video.srcObject = st;
+        const c = document.createElement('canvas'); const ctx = c.getContext('2d', { willReadFrequently: true });
+        const tick = () => {
+          if (done) return;
+          if (video.readyState >= 2 && window.jsQR) {
+            const w = 480, hh = Math.round((video.videoHeight / video.videoWidth) * w) || 360; c.width = w; c.height = hh; ctx.drawImage(video, 0, 0, w, hh);
+            const q = window.jsQR(ctx.getImageData(0, 0, w, hh).data, w, hh, { inversionAttempts: 'dontInvert' });
+            if (q && q.data) { navigator.vibrate?.(60); return finish(q.data); }
+          }
+          raf = requestAnimationFrame(tick);
+        };
+        tick();
+      }).catch(() => { toast('Camera is off. Type the box number instead.'); finish(null); });
+    });
+  }
+  async function houseScreen() {
+    if (!(await ensureSignedIn('Sign in to manage deliveries to your house.'))) { go('/app', true); return; }
+    const hs = await api('GET', '/v1/me/house').catch(() => null);
+    const err = h('div', { class: 'notice err', hidden: true });
+    const fail = (x) => { err.textContent = x.message; err.hidden = false; };
+    if (!hs) {
+      const claim = async (body) => { err.hidden = true; try { await api('POST', '/v1/me/house/claim', body); toast('Got it. This is your house.'); render(); } catch (x) { fail(x); } };
+      const box = h('input', { class: 'input', id: 'hs-box', placeholder: '#7K2QF', maxlength: '8', autocapitalize: 'characters', style: 'text-transform:uppercase' });
+      const num = h('input', { class: 'input', id: 'hs-num', inputmode: 'numeric', placeholder: '1502', maxlength: '6' });
+      screen({ nav: 'me' }, backBar('Your house', 'Free water, left at every house on our streets', '/app/me'),
+        h('p', { style: 'margin:0', text: 'We leave a free pack of water at every house on the streets we deliver to. You don’t have to sign up. To stop it, or to tell us how many people live with you, first show us it’s your house.' }),
+        h('button', { class: 'btn', type: 'button', onclick: async () => { const text = await scanQr('Scan the code on the side of your box'); if (text) claim({ code: text }); } }, 'Scan the code on your box'),
+        h('p', { class: 'small muted', style: 'margin:0', text: 'Or type the box number from the box’s corner and your house number.' }),
+        h('form', { style: 'display:flex;flex-direction:column;gap:8px', onsubmit: (e) => { e.preventDefault(); if (box.value.trim() && /^\d+$/.test(num.value.trim())) claim({ code: box.value.trim(), houseNumber: Number(num.value.trim()) }); else fail(new Error('Type the box number and your house number.')); } },
+          h('label', { for: 'hs-box', text: 'Box number' }), box, h('label', { for: 'hs-num', text: 'Your house number' }), num, h('button', { class: 'btn secondary', type: 'submit' }, 'This is my house')),
+        err,
+        h('p', { class: 'small muted', style: 'margin:0', text: 'Use a box from the last two months. We keep only that this account goes with this address; your neighbours can’t see it.' }));
+      return;
+    }
+    const change = async (body, msg) => { err.hidden = true; try { await api('PATCH', '/v1/me/house', body); toast(msg); render(); } catch (x) { fail(x); } };
+    const confirmStop = h('div', { class: 'notice err', hidden: true }, h('p', { style: 'margin:0 0 10px', text: 'Stop free water at this house? It’s left out from the next delivery on. You can start again any time.' }),
+      h('button', { class: 'btn small', style: 'background:var(--danger)', type: 'button', onclick: () => change({ action: 'stop' }, 'Deliveries stopped') }, 'Yes, stop deliveries'));
+    const active = hs.status === 'active';
+    screen({ nav: 'me' }, backBar('Your house', hs.address, '/app/me'),
+      h('section', { class: 'hero-card' }, h('div', { class: 'headline' }, HOUSE_STATUS[hs.status] || hs.status, h('span', { text: active ? `A ${hs.packSize}-pack ${hs.everyDays === 7 ? 'every week' : `every ${hs.everyDays} days`}` : '' })),
+        h('p', { style: 'margin:0;opacity:.85', text: hs.lastDeliveredAt ? `Last one left ${new Date(hs.lastDeliveredAt).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })}.` : 'Nothing left here yet.' })),
+      active ? h('button', { class: 'btn danger', type: 'button', onclick: () => { confirmStop.hidden = false; } }, 'Stop deliveries') : h('button', { class: 'btn', type: 'button', onclick: () => change({ action: 'restart' }, 'Back on. See you on delivery day!') }, 'Start deliveries again'),
+      confirmStop,
+      // Asked only where the company sizes packs by household (Features page, “More packs for bigger households”).
+      on('household_packs') && h('div', { class: 'field' }, h('label', { text: 'How many people live here' }), h('p', { class: 'small muted', style: 'margin:0', text: 'Bigger households get more water.' }),
+        h('div', { class: 'chips' }, [1, 2, 3, 4, 5, 6, 7, 8].map((n) => h('button', { type: 'button', class: 'chip-btn', 'aria-pressed': String(hs.householdSize === n), onclick: () => change({ action: 'household', householdSize: n }, 'Thanks. We’ll bring enough.') }, n === 8 ? '8+' : String(n))))),
+      err,
+      h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { try { await api('DELETE', '/v1/me/house'); toast('Removed'); go('/app/me'); } catch (x) { fail(x); } } }, 'This isn’t my house any more'));
   }
 
   async function deliveryScreen() {
@@ -634,6 +705,8 @@
         const pick = (key, label, opts) => { const sel = h('select', { class: 'input', 'aria-label': label }, h('option', { value: '', text: 'Rather not say' }), opts.map(([v, l]) => h('option', { value: v, text: l }))); sel.value = me.consents?.[key === 'cause' ? 'causeStance' : 'adsStance'] ?? ''; sel.addEventListener('change', async () => { if (!sel.value) return; try { await api('POST', '/v1/me/stance', { [key]: sel.value }); toast('Saved'); } catch (x) { toast(x.message); } }); return h('div', { class: 'field' }, h('label', { text: label }), sel); };
         return h('div', {}, pick('cause', `The cause your bottles support${state.config?.giving?.charity ? ` (${state.config.giving.charity})` : ''}`, [['supports', 'I support it'], ['indifferent', 'I don’t mind either way'], ['opposes', 'I’d rather not support it']]), pick('ads', 'Ads on my bottles', [['welcome', 'Fine by me'], ['unwelcome', 'I’d rather not have them']]));
       })(),
+      on('delivery_areas') ? [h('h2', { class: 'section' }, 'Free water at your house'),
+        link('/app/house', { class: 'tile plain' }, h('span', { class: 'grow' }, h('b', { text: 'Your house’s deliveries' }), h('span', { class: 'muted small', text: 'Stop or restart the free water left at your door, or say how many live there.' })), h('span', { class: 'go', text: 'Open' }))] : null,
       h('h2', { class: 'section' }, 'Payment'),
       cards.length ? h('div', {}, cards.map((c) => h('div', { class: 'list-row' }, h('span', { class: 'grow' }, h('b', { text: `${c.brand[0].toUpperCase()}${c.brand.slice(1)} •••• ${c.last4}` }), h('span', { class: 'small muted', text: `Expires ${c.expMonth}/${c.expYear}` })))))
         : h('div', { class: 'empty', text: 'No card saved. You only need one to design your own bottles. Free water never needs a card.' }),

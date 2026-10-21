@@ -204,6 +204,40 @@ GitHub (and the chain when it's on). Anyone can check their own entry at
 | **Owners' second sign-in step** | Off | *Security* | Recommended on before going live. |
 | **API keys** | — | *API keys* | Turn off a key at once if it might be lost. |
 
+### Delivery areas (ops console, *Areas*)
+
+Each delivery area has its own settings. Only a signed-in ops person or owner changes them (never a key), and they
+apply from the next night planned. Planning itself is always a person's press of *Plan and print this night*.
+
+| Setting | Default | Range | What it does |
+|---|---|---|---|
+| **On** | Off | on / off | Off: the area is never planned. A new area starts off. Turning it off is immediate; its houses keep their place. |
+| **Every how many days** | 7 (weekly) | 1–28 | A house is next due this many days after the night it was planned. Changing it moves each house's next date to its last plan plus the new number. |
+| **Pack size** | 24 | 12 or 24 | Box and bottles printed for each house. |
+| **Packs per house** | 1 | 1–6 | Every house, until its household tells us its size. |
+| **Bottles a person a week** | 12 | 1–48, or empty | Once someone in the app says how many live there, the house gets enough boxes for this many bottles each a week, over the area's frequency. Empty: household size isn't used. |
+| **Most packs per house** | 3 | 1–6 | The cap on the rule above. |
+| **Boxes per van** | 100 | 1–1000 | A night's houses are split into one run per van; a house's boxes always go in one van. |
+| **Polygon** | none | 3–500 corners | Houses added from CSV must fall inside it. |
+
+The rule in one line: packs = the most of *packs per house* and ⌈people × bottles a person a week × days ÷ 7 ÷ pack
+size⌉, never more than *most packs per house* (`packsFor` in `src/modules/delivery/houses.ts`). With the defaults, a
+24-pack a week: 1–2 people get one box, 3–4 get two, 5 or more get three.
+
+A house stops getting packs only if someone there stops it in the app (at once, and they can start again), or a
+driver marks it to skip and a person agrees (*Areas → driver skips to review*). Houses are addresses, never people.
+
+The company's switches for delivery areas (*Console → Features → Delivery*, section 8; `src/runtime/registry.ts`):
+
+| Switch | FreeWater's choice | Needs | Who may change it | Off means |
+|---|---|---|---|---|
+| **Delivery areas (house after house)** | On | Home delivery | Any owner signed in | No area is planned, printed or alerted; the *Areas* page, its routes and the app's *Your house* are gone. Houses keep their place. |
+| **More packs for bigger households** | On | Delivery areas | Any owner signed in | Every house gets the area's packs per house; the app doesn't ask how many live there. |
+| **Ads know the house's street and area** | On | Delivery areas, Ads | Any owner signed in | The ad engine gets no house context; ads are chosen as for any pack on that route. |
+| **Drivers skip a house, with a reason** | On | The driver app, Delivery areas | Any owner signed in | No *Skip this house* button; the driver uses *Problem at this stop* and the house stays on the next plan. |
+
+Companies that existed before these switches see them as **New** and off until their own people decide.
+
 Every settings change is saved as a version. *History* shows who changed what, and can put an earlier version back
 (a version that changes money or blockchain settings must be put back by a person, and passes the same checks).
 

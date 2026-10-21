@@ -24,6 +24,8 @@ export interface OrderOptions {
   avoidSignatures?: Set<string>;
   /** The person this bottle is for, so ads that target people can be chosen (and checked later when they scan it). */
   audience?: import('./modules/ads/contract').PrintAudience | null;
+  /** A pack for a house in a delivery area: the house and area, passed on to the ad engine (docs/OVERVIEW.md). */
+  house?: import('./core/types').RouteHouseContext | null;
 }
 
 export type OrderOutcome =
@@ -236,7 +238,7 @@ export class Platform {
     const usable = () => [...this.campaigns.values()].filter((c) => !without.has(c.id) && (on('bidding') || c.buy.type !== 'bid'));
     const fillNow = () => (opts.custom
       ? { layout: [1 as const], placements: [] }
-      : engine.fill({ company, product: sizes.length === allSizes.length ? product : { ...product, sizes }, location, campaigns: usable(), random: this.random, frequency: opts.frequency, avoidSignatures: opts.avoidSignatures, audience: this.withToday(audience, company.timezone), moment: momentAt(this.bus.now(), company.timezone ?? 'UTC'), stats: this.auctionStats }));
+      : engine.fill({ company, product: sizes.length === allSizes.length ? product : { ...product, sizes }, location, campaigns: usable(), random: this.random, frequency: opts.frequency, avoidSignatures: opts.avoidSignatures, audience: this.withToday(audience, company.timezone), moment: momentAt(this.bus.now(), company.timezone ?? 'UTC'), house: opts.house ?? null, stats: this.auctionStats }));
     let fill = fillNow();
     reserve(fill.placements, this.campaigns);
     for (let tries = 0; this.claimPrepaid; tries++) {

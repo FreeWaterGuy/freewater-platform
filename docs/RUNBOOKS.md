@@ -264,12 +264,61 @@ A machine asked to print faster than it physically can. Either the machine is un
 ## Plan tonight's deliveries (a person, every delivery night)
 
 Nothing plans the night by itself on purpose: planning prints every box and bottle, and printing bills advertisers.
+Only a signed-in ops person or owner can plan (never an API key or a driver); the run records who.
 
 1. In the ops console, the night's runs → *Plan and print this night* (or `POST /v1/ops/runs/plan` with the date) for each night routes
    drive, before printing starts. Running it twice for the same night does nothing new (a run stuck "printing"
    picks up its unprinted boxes).
 2. Anyone whose delivery day went by without a plan is included on the next night their route drives, once, and
    their next date carries on from their usual day.
+3. **Delivery areas** (the pilot's house-after-house streets) are planned in the same press, for every area that is
+   on and whose route drives that night. Each house due gets its boxes (the area's pack size and packs per house,
+   more for a household that told us its size), in street order from the micro-factory, split into one run per van
+   ("Travis Heights pilot · van 1", "van 2", …). Stop numbers run on from van to van, so no two boxes that night share
+   a stop code. Houses that stopped in the app, and houses a driver marked to skip, are left out; the next house still
+   gets its box.
+4. Before the first night of a new area: open it under *Areas*, check the dots on the map and the house list, set
+   *Boxes per van* to what one van really carries, then *Turn on*.
+5. Each van's run then goes as usual: packing check, the driver loads it, scans each box at each house. A house that
+   stopped deliveries after the plan shows "Don't leave a box here" to the driver; its box comes back.
+6. **No area was planned at all** (the press returns only subscribers' runs, or `feature_off`): check *Console →
+   Features → Delivery* for the company. With *Delivery areas* off nothing in any area is planned, printed or alerted
+   as overdue (the houses keep their place); with *Home delivery* off nothing is planned at all. Turn it back on (an
+   owner signed in) and press *Plan and print this night* again: the houses due come on that night.
+
+## "Houses in delivery areas are overdue"
+
+A house in an area that's on had its night go by without a plan (a night nobody planned), or an area's run from an
+earlier day is still "printing". The alert says which areas and which runs.
+
+1. Plan the next night their route drives. Late houses are included automatically, once; their next date then
+   carries on from that night.
+2. A run stuck printing: fix the printer (or the box printer), then plan **that run's night** again (the date in
+   the run's id, like `area_….1@2026-11-03`); it finishes the boxes not yet printed and prints nothing twice. If the
+   night is long gone, close the run out instead (*Routes* → close, with a reason): its boxes go back.
+3. If an area shouldn't be delivered any more, turn it off under *Areas*: it stops being planned or alerted at once.
+
+## A driver skipped a house ("no soliciting", they asked, not a home …)
+
+The house is left out of every plan until a person decides. *Areas* lists them under "driver skips to review"
+(`GET /v1/ops/house-reviews`).
+
+1. Read what the driver said. A "no soliciting" sign usually means sales calls; free water isn't one, but respect a
+   sign that says no deliveries, and anything a person at the door said.
+2. *Keep skipping* (the house stays out until someone there starts deliveries again in the app) or *Deliver again*
+   (back on the next night its route drives). Who decided and why is kept with the house.
+3. Someone at a skipped house who wants water can claim the house in the app and press *Start deliveries again*.
+
+## Someone at a house wants deliveries to stop (or to start again)
+
+They do it themselves in the app: *Me → Your house's deliveries*, scan the code on the side of a box we left there
+(or type the box number from its corner and their house number), then *Stop deliveries*. It's left out from the next
+plan on; a box already printed for that night comes back with the driver. *Start deliveries again* puts it back from
+the next night its route drives. A code proves the house only from a box delivered there in the last 60 days, and a
+person gets five wrong tries a day.
+
+If they can't use the app (no smartphone, never had a box), an ops person can't stop it for them yet: the founder chose
+app-only. Note the address and pass it on; see "Decisions for the founder" in the delivery section of the README.
 
 ## "Home deliveries are overdue"
 

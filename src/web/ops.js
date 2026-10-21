@@ -48,12 +48,12 @@
     if (!res.ok) throw new Error(data?.error?.message || 'Something went wrong.');
     return data;
   }
-  const routes = [[/^\/ops\/?$/, today, 'today'], [/^\/ops\/review$/, reviewPage, 'review'], [/^\/ops\/machines$/, machinesPage, 'machines'], [/^\/ops\/machines\/([\w-]+)$/, machinePage, 'machines'], [/^\/ops\/routes$/, routesPage, 'routes'], [/^\/ops\/subscriptions$/, subsPage, 'subs'], [/^\/ops\/books$/, booksPage, 'books']];
+  const routes = [[/^\/ops\/?$/, today, 'today'], [/^\/ops\/review$/, reviewPage, 'review'], [/^\/ops\/machines$/, machinesPage, 'machines'], [/^\/ops\/machines\/([\w-]+)$/, machinePage, 'machines'], [/^\/ops\/routes$/, routesPage, 'routes'], [/^\/ops\/subscriptions$/, subsPage, 'subs'], [/^\/ops\/areas$/, areasPage, 'areas'], [/^\/ops\/areas\/([\w-]+)$/, areaPage, 'areas'], [/^\/ops\/books$/, booksPage, 'books']];
   // The scopes each page's main call needs (from its route in src/api). 'admin' passes them all.
-  const PAGE_SCOPES = { today: ['packs', 'events', 'ledger', 'campaigns'], review: ['campaigns'], machines: ['orders', 'packs', 'events'], routes: ['packs'], subs: ['packs'], books: ['ledger'] };
+  const PAGE_SCOPES = { today: ['packs', 'events', 'ledger', 'campaigns'], review: ['campaigns'], machines: ['orders', 'packs', 'events'], routes: ['packs'], subs: ['packs'], areas: ['packs'], books: ['ledger'] };
   // The switch each page belongs to (src/runtime/registry.ts): a page whose switch is off, on this server or for this
   // company (its Features page), isn't shown or opened.
-  const PAGE_FEATURES = { review: 'ads', machines: 'machines', routes: 'delivery', subs: 'delivery' };
+  const PAGE_FEATURES = { review: 'ads', machines: 'machines', routes: 'delivery', subs: 'delivery', areas: 'delivery_areas' };
   const on = (page) => !PAGE_FEATURES[page] || !(S.features?.off ?? []).includes(PAGE_FEATURES[page]);
   const can = (page) => { if (!on(page)) return false; const sc = S.me?.scopes; if (!Array.isArray(sc)) return true; return sc.includes('admin') || (PAGE_SCOPES[page] ?? []).some((x) => sc.includes(x)); };
   let cleanup = null;
@@ -73,7 +73,7 @@
     go('/ops', true);
   }
   function shell(active, ...content) {
-    const nav = [['today', '/ops', 'Today', I.today], ['review', '/ops/review', 'Ad review', I.review], ['machines', '/ops/machines', 'Machines', I.machine], ['routes', '/ops/routes', 'Routes', I.route], ['subs', '/ops/subscriptions', 'Deliveries', I.people], ['books', '/ops/books', 'Books', I.books]];
+    const nav = [['today', '/ops', 'Today', I.today], ['review', '/ops/review', 'Ad review', I.review], ['machines', '/ops/machines', 'Machines', I.machine], ['routes', '/ops/routes', 'Routes', I.route], ['areas', '/ops/areas', 'Areas', I.route], ['subs', '/ops/subscriptions', 'Deliveries', I.people], ['books', '/ops/books', 'Books', I.books]];
     root.replaceChildren(h('div', { class: 'shell' },
       h('aside', { class: 'side' }, h('div', { class: 'logo', 'aria-label': 'FreeWater Ops' }, h('span', { text: 'free' }), h('span', { text: 'water' }), h('small', { text: 'Ops' })),
         h('nav', { 'aria-label': 'Main' }, nav.filter(([id]) => can(id)).map(([id, path, label, ic]) => link(path, { 'aria-current': active === id ? 'page' : null }, icon(ic), label))),
@@ -236,20 +236,96 @@
     const plan = h('button', { class: 'btn', type: 'button', onclick: async () => { plan.disabled = true; plan.textContent = 'Planning and printing…'; try { const r = await api('POST', '/v1/ops/runs/plan', { date }); toast(r.length ? `${r.length} route${r.length === 1 ? '' : 's'} planned and printed` : 'Nobody is due that day'); } catch (x) { toast(x.message); } render(); } }, 'Plan and print this night');
     const stages = ['printing', 'packing', 'ready', 'out', 'done'];
     const stageName = { printing: 'Printing', packing: 'Packing check', ready: 'Ready to load', out: 'Out on the road', done: 'Done' };
-    shell('routes', head('Routes', 'Everyone due that night, in driving order, with a box printed for each stop.', picker, plan),
+    shell('routes', head('Routes', 'Everyone due that night, in driving order, and every house due in each delivery area that’s on, street by street, with a box printed for each stop.', picker, plan),
       data.runs.length ? h('div', { style: 'display:flex;flex-direction:column;gap:16px' }, data.runs.map((r) => {
         const at = stages.indexOf(r.status);
         return h('section', { class: 'run' },
-          h('div', { class: 'run-head' }, h('div', {}, h('h3', { text: `${r.routeName} · ${r.routeId.replace(/^route-/, 'Route ')}` }), h('div', { style: 'color:var(--muted);font-size:14px', text: `${r.counts.stops} stops · ${r.counts.bottles} bottles · about ${r.distanceKm} km, ${r.minutes} min · from ${r.depot?.name ?? 'the depot'}` })),
+          h('div', { class: 'run-head' }, h('div', {}, h('h3', { text: r.areaName ? `${r.areaName} · van ${r.van} · ${r.routeId.replace(/^route-/, 'Route ')}` : `${r.routeName} · ${r.routeId.replace(/^route-/, 'Route ')}` }), h('div', { style: 'color:var(--muted);font-size:14px', text: `${r.counts.stops} stops · ${r.counts.bottles} bottles · about ${r.distanceKm} km, ${r.minutes} min · from ${r.depot?.name ?? 'the depot'}` })),
             h('div', { class: 'toolbar' }, r.status === 'packing' ? h('button', { class: 'btn small', type: 'button', onclick: async () => { try { const x = await api('POST', `/v1/ops/runs/${r.id}/pack-check`); toast(x.problems.length ? `${x.problems.length} box(es) need attention` : 'Every box checked and sealed'); } catch (e) { toast(e.message); } render(); } }, 'Run packing check') : null, r.driverId ? h('span', { class: 'pill dark', text: 'Driver assigned' }) : null)),
           h('div', { class: 'steps' }, stages.map((s, i) => h('span', { class: i < at ? 'done' : i === at ? 'on' : '', text: stageName[s] }))),
           h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Stop', 'Address', 'Box', 'Pack', 'Status', ''].map((x) => h('th', { text: x })))),
             h('tbody', {}, r.stops.map((s) => h('tr', {}, h('td', {}, h('b', { text: s.stopCode })), h('td', { text: s.address }), h('td', { text: `#${s.boxNumber ?? '—'}` }), h('td', { text: `${s.packSize}` }),
-              h('td', {}, s.status === 'delivered' ? h('span', { class: 'pill ok', text: `Delivered${s.atAddressBy === 'driver' ? ' (driver confirmed)' : ''}` }) : s.status === 'not_delivered' ? h('span', { class: 'pill bad', text: `Not delivered: ${s.reason}` }) : h('span', { class: 'pill', text: s.packStatus === 'loaded' ? 'On the van' : s.packStatus === 'sealed' ? 'Sealed' : s.packStatus ?? 'Planned' })),
+              h('td', {}, s.status === 'delivered' ? h('span', { class: 'pill ok', text: `Delivered${s.atAddressBy === 'driver' ? ' (driver confirmed)' : ''}` }) : s.status === 'not_delivered' ? h('span', { class: `pill ${s.skipped ? 'warn' : 'bad'}`, text: `${s.skipped ? 'Skipped' : 'Not delivered'}: ${s.reason}` }) : s.houseStatus && s.houseStatus !== 'active' ? h('span', { class: 'pill warn', text: 'Stopped since the plan: keep the box' }) : h('span', { class: 'pill', text: s.packStatus === 'loaded' ? 'On the van' : s.packStatus === 'sealed' ? 'Sealed' : s.packStatus ?? 'Planned' })),
               h('td', { style: 'color:var(--muted);font-size:13px' }, s.emptiesCollected ? `${s.emptiesCollected} empties` : '', s.checkedByHand ? `Checked by hand, ${ago(s.checkedByHand.at)}` : '',
                 // No packing line for this box: a signed-in person counts every bottle and checks it by hand (who and when are kept).
                 r.status === 'packing' && (s.packStatus === 'box_printed' || s.packStatus === 'mismatch') ? h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { if (!confirm(`Did you count all ${s.packSize} bottles in box #${s.boxNumber ?? '—'} and check each one belongs? It's sealed and recorded under your name.`)) return; try { const x = await api('POST', `/v1/ops/runs/${encodeURIComponent(r.id)}/stops/${s.stop}/check-by-hand`); toast(x.problems.length ? `Checked and sealed. ${x.problems.length} box(es) still need a check` : 'Checked and sealed. Every box is ready to load'); } catch (e) { toast(e.message); } render(); } }, 'Checked by hand') : null)))))));
       })) : h('div', { class: 'empty', text: 'No routes planned for this night yet. Plan and print it when the day’s orders are in.' }));
+  }
+
+  // ---------- delivery areas: the streets FreeWater chooses, every house on them ----------
+  const HS = { active: ['ok', 'Gets packs'], opted_out: ['warn', 'Stopped in the app'], skip_pending: ['bad', 'Driver skip: review'], skipped: ['', 'Skipped'] };
+  async function areasPage() {
+    const [areas, reviews] = await Promise.all([api('GET', '/v1/ops/areas'), api('GET', '/v1/ops/house-reviews').catch(() => [])]);
+    const name = h('input', { class: 'input', id: 'ar-name', placeholder: 'Travis Heights, first 1,000 homes', maxlength: '80' });
+    const routeId = h('input', { class: 'input', id: 'ar-route', placeholder: 'route-3', value: 'route-3' });
+    const create = h('form', { class: 'panel-box', onsubmit: async (e) => { e.preventDefault(); try { const a = await api('POST', '/v1/ops/areas', { name: name.value.trim(), routeId: routeId.value.trim() }); toast('Area made. It’s off until you turn it on.'); go(`/ops/areas/${a.id}`); } catch (x) { toast(x.message); } } },
+      h('h2', { text: 'New area' }), h('p', { style: 'margin:0;color:var(--muted);font-size:14px', text: 'Its vans start from the route’s micro-factory and drive on the route’s days. It starts off; add houses, check them, then turn it on.' }),
+      h('div', { class: 'field' }, h('label', { for: 'ar-name', text: 'Name' }), name), h('div', { class: 'field' }, h('label', { for: 'ar-route', text: 'Route' }), routeId), h('button', { class: 'btn', type: 'submit' }, 'Make the area'));
+    const review = (r) => h('tr', {}, h('td', {}, h('b', { text: r.address.split(',')[0] }), h('div', { style: 'color:var(--muted);font-size:12px', text: r.areaName })), h('td', { text: r.skipReason ?? '' }),
+      h('td', {}, h('div', { class: 'toolbar' },
+        h('button', { class: 'btn small', type: 'button', onclick: async () => { try { await api('POST', `/v1/ops/houses/${r.id}/review`, { decision: 'deliver' }); toast('It gets packs again from the next night'); } catch (x) { toast(x.message); } render(); } }, 'Deliver again'),
+        h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { try { await api('POST', `/v1/ops/houses/${r.id}/review`, { decision: 'skip' }); toast('Skipped from now on'); } catch (x) { toast(x.message); } render(); } }, 'Keep skipping'))));
+    shell('areas', head('Delivery areas', 'House after house on the streets we choose. Nobody signs up: every house gets packs unless someone there stops them in the app, or a driver’s skip is agreed.'),
+      reviews.length ? h('section', { class: 'panel-box' }, h('h2', { text: `${reviews.length} driver skip${reviews.length === 1 ? '' : 's'} to review` }), h('p', { style: 'margin:0;color:var(--muted);font-size:14px', text: 'These houses are left out until you decide.' }),
+        h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['House', 'Driver said', ''].map((x) => h('th', { text: x })))), h('tbody', {}, reviews.map(review))))) : null,
+      areas.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Area', 'Houses', 'Packs', 'How often', 'Status'].map((x) => h('th', { text: x })))),
+        h('tbody', {}, areas.map((a) => h('tr', {}, h('td', {}, link(`/ops/areas/${a.id}`, {}, h('b', { text: a.name })), h('div', { style: 'color:var(--muted);font-size:12px', text: `${a.routeName}${a.sample ? ' · sample houses' : ''}` })),
+          h('td', { text: `${a.byStatus.active} of ${a.houses}${a.byStatus.opted_out ? ` · ${a.byStatus.opted_out} stopped` : ''}${a.byStatus.skip_pending ? ` · ${a.byStatus.skip_pending} to review` : ''}` }),
+          h('td', { text: `${a.packsPerHouse} × ${a.packSize}` }), h('td', { text: a.frequencyDays === 7 ? 'Weekly' : `Every ${a.frequencyDays} days` }),
+          h('td', {}, h('span', { class: `pill ${a.active ? 'ok' : ''}`, text: a.active ? 'On' : 'Off' }))))))) : h('div', { class: 'empty', text: 'No delivery areas yet.' }),
+      create);
+  }
+  /** The area's houses as dots, coloured by status; a real map can replace this (docs/OVERVIEW.md). */
+  function houseMap(houses, polygon) {
+    const pts = [...houses.map((x) => x.point), ...(polygon ?? []).map(([lat, lng]) => ({ lat, lng }))];
+    if (!pts.length) return null;
+    const minLat = Math.min(...pts.map((p) => p.lat)), maxLat = Math.max(...pts.map((p) => p.lat)), minLng = Math.min(...pts.map((p) => p.lng)), maxLng = Math.max(...pts.map((p) => p.lng));
+    const W = 640, H = 300, pad = 14;
+    const x = (p) => pad + ((p.lng - minLng) / Math.max(1e-6, maxLng - minLng)) * (W - pad * 2);
+    const y = (p) => H - pad - ((p.lat - minLat) / Math.max(1e-6, maxLat - minLat)) * (H - pad * 2);
+    const svg = document.createElementNS(NS, 'svg');
+    for (const [k, v] of Object.entries({ viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `Map of ${houses.length} houses`, style: 'width:100%;height:auto;background:var(--soft);border-radius:12px' })) svg.setAttribute(k, v);
+    const el = (tag, a) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(a)) e.setAttribute(k, String(v)); svg.append(e); return e; };
+    if (polygon) el('polygon', { points: polygon.map(([lat, lng]) => `${x({ lat, lng })},${y({ lat, lng })}`).join(' '), fill: 'none', stroke: '#9AA6B2', 'stroke-dasharray': '5 4', 'stroke-width': 2 });
+    const color = { active: '#1F8A4C', opted_out: '#B7791F', skip_pending: '#B42318', skipped: '#9AA6B2' };
+    for (const hs of houses) el('circle', { cx: x(hs.point), cy: y(hs.point), r: 4, fill: color[hs.status] ?? '#1F2633' }).append(Object.assign(document.createElementNS(NS, 'title'), { textContent: `${hs.address} · ${HS[hs.status]?.[1] ?? hs.status}` }));
+    return svg;
+  }
+  async function areaPage(id) {
+    const [areas, houses] = await Promise.all([api('GET', '/v1/ops/areas'), api('GET', `/v1/ops/areas/${id}/houses`)]);
+    const a = areas.find((x) => x.id === id);
+    if (!a) throw new Error('Delivery area not found.');
+    const num = (key, label, min, max, help) => { const i = h('input', { class: 'input', id: `ar-${key}`, type: 'number', min, max, value: a[key] ?? '' }); return [h('div', { class: 'field' }, h('label', { for: `ar-${key}`, text: label }), i, help ? h('small', { style: 'color:var(--muted)', text: help }) : null), () => (i.value === '' ? null : Number(i.value)), key]; };
+    const fields = [num('frequencyDays', 'Every how many days', 1, 28, '7 = weekly (the pilot’s default).'), num('packsPerHouse', 'Packs per house', 1, 6, 'Until a household tells us its size.'), num('bottlesPerPersonWeek', 'Bottles a person a week', 1, 48, 'Once a household says its size it gets enough for this many each; empty = don’t use household size.'), num('maxPacksPerHouse', 'Most packs per house', 1, 6), num('vanPacks', 'Boxes per van', 1, 1000, 'A night’s houses are split into one run per van.')];
+    const size = h('select', { class: 'input', id: 'ar-size' }, [12, 24].map((n) => h('option', { value: String(n), text: `${n}-packs`, selected: a.packSize === n })));
+    const save = async (patch, msg) => { try { await api('PATCH', `/v1/ops/areas/${id}`, patch); toast(msg); } catch (x) { toast(x.message); } render(); };
+    const csv = h('textarea', { class: 'input', id: 'ar-csv', rows: '6', placeholder: 'address,lat,lng\n"1601 Ravey St, Austin, TX",30.2450,-97.7401' });
+    const file = h('input', { type: 'file', accept: '.csv,text/csv', onchange: async () => { const f = file.files[0]; if (f) csv.value = await f.text(); } });
+    const poly = h('textarea', { class: 'input', id: 'ar-poly', rows: '3', placeholder: '[[30.240,-97.746],[30.252,-97.746],[30.252,-97.734],[30.240,-97.734]]' });
+    poly.value = a.polygon ? JSON.stringify(a.polygon) : '';
+    const result = h('div', {});
+    const counts = houses.reduce((m, x) => ({ ...m, [x.status]: (m[x.status] ?? 0) + 1 }), {});
+    shell('areas', head(a.name, `${a.routeName} · ${a.houses} houses · ${a.packsPerHouse} × ${a.packSize}-pack ${a.frequencyDays === 7 ? 'every week' : `every ${a.frequencyDays} days`}${a.sample ? ' · sample houses, not real addresses' : ''}`,
+      h('button', { class: `btn ${a.active ? 'secondary' : ''}`, type: 'button', onclick: () => { if (a.active || confirm(`Turn on ${a.name}? Every active house in it is planned and printed from the next night you plan.`)) save({ active: !a.active }, a.active ? 'Turned off. Nothing more is planned for it.' : 'Turned on'); } }, a.active ? 'Turn off' : 'Turn on')),
+      h('div', { class: 'grid2' },
+        h('section', { class: 'panel-box' }, h('h2', { text: 'Houses' }), houseMap(houses, a.polygon),
+          h('div', { class: 'toolbar' }, Object.entries(HS).map(([k, [cls, label]]) => h('span', { class: `pill ${cls}`, text: `${label}: ${counts[k] ?? 0}` })))),
+        h('form', { class: 'panel-box', onsubmit: (e) => { e.preventDefault(); const patch = { packSize: Number(size.value) }; for (const [, get, key] of fields) { const v = get(); if (v !== null || key === 'bottlesPerPersonWeek') patch[key] = v; } save(patch, 'Saved. It applies from the next plan.'); } },
+          h('h2', { text: 'Settings' }), h('div', { class: 'field' }, h('label', { for: 'ar-size', text: 'Pack size' }), size), fields.map(([el]) => el), h('button', { class: 'btn', type: 'submit' }, 'Save settings'))),
+      h('section', { class: 'panel-box' }, h('h2', { text: 'Add houses' }),
+        h('p', { style: 'margin:0;color:var(--muted);font-size:14px', text: 'A CSV with a header line naming address, lat and lng (street and number are optional). Only houses inside the polygon are added; an address we already have stays as it is.' }),
+        file, csv, h('div', { class: 'field' }, h('label', { for: 'ar-poly', text: 'Polygon (optional): corners as [lat, lng]' }), poly),
+        h('div', { class: 'toolbar' },
+          h('button', { class: 'btn', type: 'button', onclick: async () => {
+            let polygon = null;
+            try { polygon = poly.value.trim() ? JSON.parse(poly.value) : null; } catch { return toast('The polygon isn’t valid: [[lat, lng], …]'); }
+            try { const r = await api('POST', `/v1/ops/areas/${id}/houses/import`, { csv: csv.value, ...(polygon ? { polygon } : {}) }); result.replaceChildren(h('div', { class: 'notice' }, `${r.added} added, ${r.alreadyKnown} already known, ${r.outside} outside the polygon${r.problemCount ? `, ${r.problemCount} lines not read (first: line ${r.problems[0].line}, ${r.problems[0].reason})` : ''}.`)); } catch (x) { toast(x.message); }
+          } }, 'Add these houses'),
+          h('button', { class: 'btn secondary', type: 'button', onclick: () => { let polygon = null; try { polygon = poly.value.trim() ? JSON.parse(poly.value) : null; } catch { return toast('The polygon isn’t valid: [[lat, lng], …]'); } save({ polygon }, 'Polygon saved for the next houses added'); } }, 'Save polygon')),
+        result),
+      h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Address', 'Status', 'People', 'Last left', 'Next due'].map((x) => h('th', { text: x })))),
+        h('tbody', {}, houses.map((x) => h('tr', {}, h('td', {}, x.address, x.claimed ? h('span', { class: 'pill', style: 'margin-left:6px', text: 'In the app' }) : null), h('td', {}, h('span', { class: `pill ${HS[x.status]?.[0] ?? ''}`, text: HS[x.status]?.[1] ?? x.status }), x.skipReason ? h('div', { style: 'color:var(--muted);font-size:12px', text: x.skipReason }) : null),
+          h('td', { text: x.householdSize ? String(x.householdSize) : '—' }), h('td', { text: x.lastDeliveredAt ? ago(x.lastDeliveredAt) : '—' }), h('td', { text: x.status === 'active' ? x.nextDate ?? 'Next plan' : '—' })))))));
   }
 
   // ---------- deliveries ----------

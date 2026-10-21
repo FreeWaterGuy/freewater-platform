@@ -73,16 +73,20 @@ describe('home delivery, from sign-up to the door', () => {
     // One skips this week.
     expect((await call('PATCH', '/v1/me/delivery', people[2], { action: 'skip' })).json().nextDate).toBe('2026-11-10');
 
-    // Ops plans Tuesday night: two stops, in driving order, one pack each, printed with their stop code.
+    // Ops plans Tuesday night: two stops, in driving order, one pack each, printed with their stop code. A signed-in
+    // ops person or owner plans (it prints bottles that bill advertisers), never a key.
     const admin = keys['freewater-admin']!;
-    const plan = (await call('POST', '/v1/ops/runs/plan', admin, { date: '2026-11-03' })).json();
+    await app.accounts.invite({ companyId: 'freewater', email: 'olga@freewater.io', role: 'ops' });
+    const opsPerson = await signIn('olga@freewater.io');
+    expect((await call('POST', '/v1/ops/runs/plan', admin, { date: '2026-11-03' })).json().error.code).toBe('person_required');
+    const plan = (await call('POST', '/v1/ops/runs/plan', opsPerson, { date: '2026-11-03' })).json();
     expect(plan).toHaveLength(1);
     const run = plan[0];
     expect(run).toMatchObject({ id: 'route-3@2026-11-03', status: 'packing', counts: { stops: 2, bottles: 18 } });
     expect(run.stops.map((s: any) => s.stopCode)).toEqual(['R3 · 1', 'R3 · 2']);
     expect(run.loadOrder.map((s: any) => s.stop)).toEqual([2, 1]);
     for (const s of run.stops) expect(app.packs.packs.get(s.packId)!.runId).toBe(run.id);
-    expect((await call('POST', '/v1/ops/runs/plan', admin, { date: '2026-11-03' })).json()[0].id).toBe(run.id); // twice = no new printing
+    expect((await call('POST', '/v1/ops/runs/plan', opsPerson, { date: '2026-11-03' })).json()[0].id).toBe(run.id); // twice = no new printing
     expect(app.packs.packs.size).toBe(2);
     expect((await call('GET', '/v1/me/delivery', people[0])).json().nextDate).toBe('2026-11-10');
 

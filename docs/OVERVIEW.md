@@ -25,7 +25,12 @@ platform is the software that runs all of it. Other companies can also run it un
 - You have to be standing at the machine to get a bottle, and there's a daily limit per person.
 
 **3. Home delivery**
-- Free 6, 12 and 24 packs on a schedule. Every bottle in a pack is different, and the box itself carries ads.
+- The pilot: **house after house** on streets FreeWater chooses (about 1,000 homes in Austin to start). Nobody signs
+  up; every house gets a free 24-pack a week unless someone there stops it in the app. How often, pack size and packs
+  per house are set per area, and bigger households get more once they tell us their size.
+- Drivers can skip a house ("no soliciting") with a reason; a person reviews it.
+- Later, and for people who join the app: free 6, 12 and 24 packs on a schedule they choose.
+- Every bottle in a pack is different, and the box itself carries ads.
 - Each night is planned: routes are set, boxes are packed and checked, and the van is loaded so the next stop is
   always by the door.
 - The driver app only marks a delivery done when the right box is scanned at the right house.
@@ -39,7 +44,7 @@ platform is the software that runs all of it. Other companies can also run it un
 
 **5. The FreeWater app**
 - Get a free bottle at a machine and see every bottle you've had.
-- Set up home delivery.
+- Set up home delivery, or stop (and restart) the free water left at your house.
 - Design your own paid bottle by chatting (birthdays, weddings, teams).
 - A **Wallet** for points, credit and later the token.
 
