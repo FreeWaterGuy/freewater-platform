@@ -1521,6 +1521,18 @@ create index if not exists ledger_company_at on ledger_entries(company_id, at);
 alter table sessions add column if not exists second_step_at timestamptz;
 `,
   },
+  {
+    id: '056_c_cpc_conversion_refunds',
+    sql: `
+-- How much of each sale has been refunded (refunds can come in parts), as the ledger has it, so what advertisers see
+-- equals what they're billed; and what the advertiser's own website tag saw, kept when their server confirms the sale,
+-- so a sale confirmed for less than the tag saw shows.
+alter table conversions add column if not exists refunded_cents integer not null default 0 check (refunded_cents >= 0);
+alter table conversions add column if not exists tag_value_cents integer;
+update conversions set refunded_cents = value_cents where refunded_at is not null and refunded_cents = 0;
+update conversions set tag_value_cents = value_cents where source = 'tag' and tag_value_cents is null;
+`,
+  },
 ];
 
 /** Runs every migration not yet run (or, for tests that start from an older schema, those in `list`). */

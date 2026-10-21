@@ -484,7 +484,7 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 166 | `GET /v1/ads/tracking` | [campaigns, purchases] | no | advertiser only | OK |
 | 167 | `POST /v1/ads/tracking/domains` | [campaigns, purchases] | no | advertiser only | OK |
 | 168 | `POST /v1/conversions` | purchases | no | advertiser only | OK; advertiser's own key; bills commission |
-| 169 | `POST /v1/conversions/:orderId/refund` | purchases | no | advertiser only | OK |
+| 169 | `POST /v1/conversions/:orderId/refund` | purchases | no | advertiser only | OK; whole or in parts (a part needs a refundId; same key as `/v1/refunds`); never more than the sale |
 | 170 | `GET /v1/coupons/:code` | [campaigns, purchases] | no | advertiser only | OK |
 | 171 | `POST /v1/coupons/:code/redeem` | [campaigns, purchases] | no | advertiser only | OK; advertiser's own key |
 | 172 | `GET /v1/ops/attribution` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
