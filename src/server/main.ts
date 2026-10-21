@@ -4,14 +4,15 @@
 //   SEED_DEMO=1 npm start              on an empty database, loads the sample catalog and prints demo API keys
 // Production settings are explained in docs/RUNNING.md; the server checks them before it starts.
 import { getHeapStatistics } from 'node:v8';
-import { createApp } from '../app';
+import { createApp, type RuntimeChecks } from '../app';
 import { buildServer } from '../api/server';
 import { createPgliteClient } from '../db/pglite';
 import { createPostgresClient } from '../db/postgres';
 import { migrate, migrations } from '../db/migrations';
 import { accessSync, constants, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { Alerter, ChatWebhookSink, EmailSink, type AlertSink } from '../runtime/alerts';
+import { Alerter, ChatWebhookSink, EmailSink, ErrorTrackerSink, type AlertSink } from '../runtime/alerts';
+import { reporterFromEnv } from '../runtime/errors';
 import { checkConfig, checkSpoolDir, checkStandIns } from '../runtime/config';
 import { InstanceLease } from '../runtime/lease';
 import { forEachCompany, JobRunner, type Job } from '../runtime/jobs';
@@ -19,7 +20,7 @@ import { blobStoreFromEnv } from '../modules/assets/blobs';
 import { backup, backupKey, restore } from '../runtime/backup';
 import { backupStoreFromEnv, backupsConfigured } from '../runtime/backupStore';
 import { checkBooksInChild } from '../runtime/booksCheck';
-import { checkCapacity } from '../runtime/capacity';
+import { checkCapacity, checkSpool } from '../runtime/capacity';
 
 const config = checkConfig();
 
@@ -46,8 +47,12 @@ if (config.errors.length) {
   process.exit(1);
 }
 
+// Error tracking (SENTRY_DSN): unexpected errors, 5xx answers, failed jobs, unhandled rejections and every critical or
+// warning alert. Off, and silent, without the setting.
+const reporter = reporterFromEnv();
 const sinks: AlertSink[] = [];
 if (process.env.ALERT_WEBHOOK_URL) sinks.push(new ChatWebhookSink(process.env.ALERT_WEBHOOK_URL, process.env.ALERT_NAME ?? 'FreeWater'));
+if (reporter.enabled) { sinks.push(new ErrorTrackerSink(reporter)); console.log(`Error tracking: on (${reporter.dsn!.envelopeUrl.replace(/\/api\/.*$/, '')}).`); }
 const alerts = new Alerter(sinks);
 
 if (standIns.active.length) {
@@ -67,7 +72,7 @@ const lease = new InstanceLease(db, { onLost: (why) => {
   app?.persistence.fence();
   if (app) app!.runtime.lost = true;
   void alerts.alert('lease', 'critical', 'This server stopped: it could no longer be sure it was the only one', why);
-  setTimeout(() => process.exit(2), 1500).unref();
+  setTimeout(() => process.exit(2), 1500).unref(); // the alert (and the error tracker, which gives up after 2 s) go out meanwhile
 } });
 try { await lease.acquire(Number(process.env.LEASE_WAIT_MS ?? 120_000), (s) => console.log(s)); }
 catch (e) { console.error(`\n${(e as Error).message}\n`); await db.close(); process.exit(1); }
@@ -90,6 +95,7 @@ const hadSpool = !!spoolFile && existsSync(spoolFile);
 
 // With the lease passed in, every write the app makes straight to the database checks it in its own transaction.
 app = await createApp({ db, alerts, seedDemo: process.env.SEED_DEMO === '1', blobs: blobStoreFromEnv(), spoolFile, epoch: lease.holder, lease });
+app.runtime.reporter = reporter;
 if (restored) {
   await db.query(`drop table if exists restore_target`);
   if (hadSpool) void alerts.alert('spool-restored', 'critical', 'Changes waiting from before the restore were set aside, not applied', `This database was restored from a backup, so the changes the old server had waiting would have landed after a gap. They are kept in ${spoolDir} (waiting-changes.jsonl.restored-…) for a developer. See docs/RUNBOOKS.md ("Restore the database from a backup").`);
@@ -121,7 +127,10 @@ const saved = (f: () => Promise<unknown>) => async () => { await f(); await app!
 const companies = () => [...app!.platform.companies.values()];
 // One company's failure is reported with its id and never stops the job for the others.
 const perCompany = (job: string, step: (companyId: string) => Promise<unknown>, which: () => string[] = () => companies().map((c) => c.id)) =>
-  forEachCompany(which(), step, (companyId, error) => void alerts.alert(`job:${job}:${companyId}`, 'warning', `Background job “${job}” failed for company ${companyId}`, String((error as Error)?.stack ?? error)));
+  forEachCompany(which(), step, (companyId, error) => {
+    reporter.captureException(error, { tags: { source: 'job', job, companyId } });
+    void alerts.alert(`job:${job}:${companyId}`, 'warning', `Background job “${job}” failed for company ${companyId}`, String((error as Error)?.stack ?? error), { tracked: reporter.enabled });
+  });
 const capacityState = new Map<string, import('../runtime/alerts').Severity | 'ok'>();
 const jobs: Job[] = [
   { name: 'webhooks', everyMs: 3000, timeoutMs: 120_000, run: saved(() => app!.webhooks.drain()) },
@@ -147,11 +156,18 @@ const jobs: Job[] = [
   { name: 'wallet-seals', everyMs: 600_000, timeoutMs: 10 * 60_000, run: saved(() => app!.chain.sealAll()) },
   // Each day: reconcile the books (against the card processor, the bank, invoices, the wallet, published days); a
   // person is alerted about anything that fails or needs a look. The report is at GET /v1/books/reconciliation.
-  { name: 'reconciliation', everyMs: 24 * 3600_000, timeoutMs: 30 * 60_000, run: () => perCompany('reconciliation', async (id) => {
-    const r = await app!.reconciliation.report(id);
-    const bad = r.checks.filter((c) => c.status !== 'ok');
-    if (bad.length) await alerts.alert(`reconciliation:${id}`, r.ok ? 'warning' : 'critical', `Books reconciliation for ${id} (${r.day}): ${r.failed} failed, ${r.attention} need a look`, bad.map((c) => `${c.status === 'fail' ? '✗' : '!'} ${c.what}: ${c.detail}`).join('\n'));
-  }) },
+  // The last result per company is kept for GET /health/deep.
+  { name: 'reconciliation', everyMs: 24 * 3600_000, timeoutMs: 30 * 60_000, run: async () => {
+    const results: NonNullable<RuntimeChecks['reconciliation']> = { at: new Date().toISOString(), companies: [] };
+    const failed = await perCompany('reconciliation', async (id) => {
+      const r = await app!.reconciliation.report(id);
+      results.companies.push({ companyId: id, day: r.day, ok: r.ok, failed: r.failed, attention: r.attention });
+      const bad = r.checks.filter((c) => c.status !== 'ok');
+      if (bad.length) await alerts.alert(`reconciliation:${id}`, r.ok ? 'warning' : 'critical', `Books reconciliation for ${id} (${r.day}): ${r.failed} failed, ${r.attention} need a look`, bad.map((c) => `${c.status === 'fail' ? '✗' : '!'} ${c.what}: ${c.detail}`).join('\n'));
+    });
+    for (const id of failed) results.companies.push({ companyId: id, ok: false, error: 'the check itself failed (see the alert)' });
+    app!.runtime.checks!.reconciliation = results;
+  } },
   { name: 'chain-check', everyMs: 24 * 3600_000, timeoutMs: 10 * 60_000, run: saved(() => perCompany('chain-check', (id) => app!.chain.reconcile(id))) },
   // Each hour, publish any finished day's books fingerprint not yet published.
   { name: 'fingerprints', everyMs: 3600_000, timeoutMs: 10 * 60_000, run: saved(() => app!.anchors.run()) },
@@ -167,6 +183,8 @@ const jobs: Job[] = [
   // Once a day, delete data older than each company keeps.
   { name: 'data-purge', everyMs: 24 * 3600_000, timeoutMs: 60 * 60_000, run: saved(() => app!.data.purge()) },
   // Every ten minutes: how full the database and the spool's disk are (alerts at 70% and 85%; see src/runtime/capacity.ts).
+  // Each minute: changes piling up while the database refuses them (src/runtime/capacity.ts, checkSpool).
+  { name: 'spool', everyMs: 60_000, remember: false, whilePaused: true, timeoutMs: 30_000, run: () => checkSpool({ waiting: app!.persistence.waiting, spoolFile: app!.persistence.spool.file, alert: (k, sev, title, detail) => alerts.alert(k, sev, title, detail), state: capacityState }) },
   { name: 'capacity', everyMs: 600_000, remember: false, whilePaused: true, timeoutMs: 60_000, run: () => checkCapacity({ db, spoolDir: spoolFile ? spoolDir : undefined, maxDatabaseGb: Number(process.env.DATABASE_MAX_GB) || undefined, alert: (k, sev, title, detail) => alerts.alert(k, sev, title, detail), state: capacityState }) },
 ];
 // Our own encrypted copy of the database each day, and each week, proof that the latest one restores.
@@ -177,6 +195,7 @@ if (backupsConfigured() && url) {
     // The check loads a whole platform from the spare; it runs in its own process so this one's memory isn't shared.
     const r = await checkBooksInChild({ databaseUrl: process.env.RESTORE_TEST_URL! }, { timeoutMs: 2.5 * 3600_000 });
     console.log(`Restore check: ${r.ok ? 'the books check out' : 'FAILED'} (${r.findings.length} finding(s)).`);
+    app!.runtime.checks!.booksCheck = { at: new Date().toISOString(), ok: r.ok, findings: r.findings.length, failed: r.findings.filter((f) => !f.ok).map((f) => f.what).slice(0, 20) };
     if (!r.ok) throw new Error(r.findings.some((f) => !f.ok) ? r.findings.filter((f) => !f.ok).map((f) => f.what).join('; ') : `the books check exited with ${r.code}: ${r.output.slice(-600)}`);
   } });
 } else if (config.production) {
@@ -188,7 +207,12 @@ if (backupsConfigured() && url) {
 const runner = new JobRunner(app!.db, jobs, {
   paused: () => !!app!.persistence.problem,
   mayRun: () => lease.fresh,
-  onFailure: (name, error, n) => void alerts.alert(`job:${name}`, n >= 3 ? 'critical' : 'warning', `Background job “${name}” failed${n > 1 ? ` ${n} times in a row` : ''}`, String(error)),
+  // Each failure goes to the error tracker with its stack; the alert follows, and once it has failed three times in a
+  // row (critical) the alert goes to the tracker as well, as "failing repeatedly".
+  onFailure: (name, error, n) => {
+    reporter.captureException(error, { level: n >= 3 ? 'error' : 'warning', tags: { source: 'job', job: name, consecutiveFailures: n } });
+    void alerts.alert(`job:${name}`, n >= 3 ? 'critical' : 'warning', `Background job “${name}” failed${n > 1 ? ` ${n} times in a row` : ''}`, String((error as Error)?.stack ?? error), { tracked: reporter.enabled && n < 3 });
+  },
   onRecovered: (name) => void alerts.alert(`job:${name}`, 'resolved', `Background job “${name}” is working again`),
 });
 app!.runtime.jobs = runner;
@@ -232,13 +256,20 @@ const stop = async (code = 0) => {
     await lease.release();
     await db.close();
   } finally {
+    await reporter.flush(1000); // anything still on its way to the error tracker
     process.exit(code);
   }
 };
 process.on('SIGINT', () => void stop());
 process.on('SIGTERM', () => void stop());
-process.on('unhandledRejection', (e) => { console.error('Unhandled', e); void alerts.alert('unhandled', 'warning', 'An error wasn’t handled', String((e as Error)?.stack ?? e)); });
+process.on('unhandledRejection', (e) => {
+  console.error('Unhandled', e);
+  reporter.captureException(e, { tags: { source: 'unhandledRejection' } });
+  void alerts.alert('unhandled', 'warning', 'An error wasn’t handled', String((e as Error)?.stack ?? e), { tracked: reporter.enabled });
+});
 process.on('uncaughtException', (e) => {
   console.error('Crashed', e);
-  void alerts.alert('crash', 'critical', 'The server crashed and is restarting', String(e?.stack ?? e)).finally(() => void stop(1));
+  reporter.captureException(e, { level: 'fatal', tags: { source: 'uncaughtException' } });
+  // The alert and the error tracker both get their chance (each gives up quickly) before the clean stop.
+  void Promise.allSettled([alerts.alert('crash', 'critical', 'The server crashed and is restarting', String(e?.stack ?? e), { tracked: reporter.enabled }), reporter.flush(2000)]).finally(() => void stop(1));
 });

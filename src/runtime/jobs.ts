@@ -100,14 +100,14 @@ export class JobRunner {
       const started = this.now();
       s.lastStarted = started; s.stuck = false;
       if (this.remembers(j)) await this.db.query(`insert into job_runs (name, last_started_at) values ($1, $2) on conflict (name) do update set last_started_at = excluded.last_started_at`, [name, new Date(started).toISOString()]).catch(() => {});
-      let ok = true, error: string | null = null;
+      let ok = true, error: string | null = null, thrown: unknown = null;
       // Past its time limit it's reported as stuck, but it still counts as running: a second copy never starts.
       const watch = setTimeout(() => { s.stuck = true; this.opts.onStuck?.(name, this.limit(j)); this.opts.onFailure?.(name, new Error(`still running after ${Math.round(this.limit(j) / 1000)} s`), s.consecutive + 1); }, this.limit(j));
       watch.unref?.();
-      try { await j.run(); } catch (e) { ok = false; error = String((e as Error)?.stack ?? e).slice(0, 2000); } finally { clearTimeout(watch); }
+      try { await j.run(); } catch (e) { ok = false; thrown = e; error = String((e as Error)?.stack ?? e).slice(0, 2000); } finally { clearTimeout(watch); }
       s.lastFinished = this.now(); s.lastOk = ok; s.lastError = error; s.runs++; s.stuck = false;
       if (ok) { if (s.consecutive > 0) this.opts.onRecovered?.(name); s.consecutive = 0; }
-      else { s.failures++; s.consecutive++; this.opts.onFailure?.(name, error, s.consecutive); }
+      else { s.failures++; s.consecutive++; this.opts.onFailure?.(name, thrown ?? error, s.consecutive); } // the error itself, so its stack can be tracked
       if (this.remembers(j)) await this.db.query(
         `insert into job_runs (name, last_started_at, last_finished_at, last_ok, last_error, runs, failures) values ($1,$2,$3,$4,$5,1,$6)
          on conflict (name) do update set last_finished_at = excluded.last_finished_at, last_ok = excluded.last_ok, last_error = excluded.last_error, runs = job_runs.runs + 1, failures = job_runs.failures + excluded.failures`,
