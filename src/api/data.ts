@@ -126,8 +126,10 @@ export function dataRoutes(app: App, route: (r: RouteDef) => void) {
     else if (!camp || pl?.isHouse) reasons.push('This is the company’s own message: no advertiser bought this spot.');
     else {
       reasons.push(`${camp.advertiserName} paid for this spot on the bottle, so the bottle could be free.`);
-      if (t.locations?.length) reasons.push(`They chose ${loc ? `${loc.name} in ${loc.city}` : 'certain machines'} as a place to show it.`);
-      else if (loc) reasons.push(`The bottle came from ${loc.name} in ${loc.city}; this ad runs everywhere.`);
+      // A delivery route is where the bottle's person lives: only ever named as home delivery in the city.
+      const where = loc ? (loc.kind === 'route' ? `home delivery in ${loc.city}` : `${loc.name} in ${loc.city}`) : null;
+      if (t.locations?.length) reasons.push(`They chose ${where ?? 'certain machines'} as a place to show it.`);
+      else if (where) reasons.push(`The bottle came from ${where}; this ad runs everywhere.`);
       if (t.products?.length || t.productCategories?.length) reasons.push('They chose this kind of drink to appear on.');
       if (t.audience) reasons.push('It was printed for a person whose account matches who the ad is for (for example, a delivery customer in a certain area). Bottles for nobody in particular never carry such ads.');
     }

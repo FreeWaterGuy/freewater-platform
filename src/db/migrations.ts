@@ -1521,6 +1521,14 @@ create index if not exists ledger_company_at on ledger_entries(company_id, at);
 alter table sessions add column if not exists second_step_at timestamptz;
 `,
   },
+  {
+    id: '056_video_content',
+    sql: `
+-- Which version of the ad's words, colors and pictures each personalized video was made from. A video made before the
+-- ad changed is never shown again (it could carry an old price or offer); videos made before this have none.
+alter table videos add column if not exists content text;
+`,
+  },
 ];
 
 /** Runs every migration not yet run (or, for tests that start from an older schema, those in `list`). */

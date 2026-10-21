@@ -279,6 +279,10 @@ export async function createApp(opts: AppOptions) {
   experiences.videos = videos;
   const interactions = new InteractionService(db, platform, opts.clock);
   const data = new DataService(db, platform, interactions, opts.clock);
+  // Someone who told us they're under the minimum age gets nothing picked by their interests: not what their scan
+  // page shows, not the videos, and not the ads printed on their own bottles.
+  experiences.mayPersonalize = async (companyId, subjects) => (await data.ageOk(companyId, subjects)) !== false;
+  accounts.mayPersonalize = experiences.mayPersonalize;
   // Phones' keys are secrets: the activity log and the team's screens keep only a keyed fingerprint of each.
   data.tagKey = await loadSecret(db, 'viewer_tags');
   await data.retagActivity();

@@ -18,15 +18,17 @@ export function moreRoutes(app: App, route: (r: RouteDef) => void, parseTarget: 
     if (!c || c.companyId !== key.companyId || (key.advertiserId && c.advertiserId !== key.advertiserId)) throw notFound('Campaign');
     return c;
   };
+  /** Made for one person (their videos, their phone's key): never kept by a browser or a shared cache. */
+  const personal = { 'cache-control': 'private, no-store' };
   const wrap = async <T>(f: () => Promise<T>) => { try { return await f(); } catch (e: any) { if (e?.status && e?.code) throw new ApiError(e.status, e.code, e.message); throw e; } };
 
   route({ method: 'GET', url: '/v1/public/experience/:unitId/:slot/more', scope: 'public', summary: '“Show me more”: what this person gets only because they asked. Personalized videos for this moment, best first.', handler: async (req) => {
     const { unitId, slot } = req.params as any;
-    return { body: await wrap(async () => experiences.more({ kind: 'slot', unitId, slot: Number(slot) }, { key: viewerOf(req), user: await optionalUser(req) })) };
+    return { body: await wrap(async () => experiences.more({ kind: 'slot', unitId, slot: Number(slot) }, { key: viewerOf(req), user: await optionalUser(req) })), headers: personal };
   } });
   route({ method: 'GET', url: '/v1/public/experience/box/:packId/:face/more', scope: 'public', summary: '“Show me more” for one side of a box.', handler: async (req) => {
     const { packId, face } = req.params as any;
-    return { body: await wrap(async () => experiences.more({ kind: 'box-face', packId, face }, { key: viewerOf(req), user: await optionalUser(req) })) };
+    return { body: await wrap(async () => experiences.more({ kind: 'box-face', packId, face }, { key: viewerOf(req), user: await optionalUser(req) })), headers: personal };
   } });
 
   route({ method: 'POST', url: '/v1/public/interactions', scope: 'public', summary: 'What a person did on a page: how long they watched the ad, time in AR, scrolling, “Show me more”, sharing, which video they watched. Anonymous; a browser asking not to be tracked (Global Privacy Control) is never recorded.', body: obj({
