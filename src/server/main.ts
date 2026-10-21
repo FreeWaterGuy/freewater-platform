@@ -138,6 +138,11 @@ const jobs: Job[] = [
   // Model 6 machines: open an "offline" problem for any that stopped calling in, and let go of kept offline labels
   // past their time (their ads' holds are released).
   { name: 'fleet-sweep', everyMs: 15_000, timeoutMs: 120_000, run: () => app!.fleet.sweep() },
+  // Each hour: home deliveries whose day went by without being planned. Planning a night prints bottles, which bills
+  // advertisers, so a person plans each night (docs/RUNBOOKS.md, "Plan tonight's deliveries"); this only tells them.
+  { name: 'deliveries-overdue', everyMs: 3600_000, timeoutMs: 5 * 60_000, run: () => perCompany('deliveries-overdue', (id) => app!.delivery.overdue(id)) },
+  // Each hour: pause the ads of advertisers who owe more than their credit allows (docs/SWITCHES.md). It only pauses.
+  { name: 'credit', everyMs: 3600_000, timeoutMs: 10 * 60_000, run: saved(() => perCompany('credit', (id) => app!.credit.enforce(id))) },
   { name: 'videos', everyMs: 10_000, timeoutMs: 120_000, run: saved(() => app!.videos.tick()) },
   // Each hour: close any month that's due, measure changes whose week is up, read every agent's standing, share out
   // the AI fund, and have the security agent look around.

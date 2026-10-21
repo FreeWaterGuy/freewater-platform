@@ -76,6 +76,27 @@ wait is over. Anyone on the team can cancel a step before it runs.
 | **Withdrawals** (people moving tokens to their own wallets) | Tokens stay in custody. | *Launch → Propose turning on withdrawals*: approvals and the wait, after going live with the token. | *Launch → Turn withdrawals off*, any time. | |
 | **Points into tokens** (a one-time conversion) | — | *Launch → Propose the conversion*, with the rate (1,000,000 units = 1 token): approvals, the wait, then signing in Squads. One at a time. | Cancel it before it runs. Once signed and recorded, it's done. | |
 
+### Credit for advertisers
+
+Advertisers are billed after the fact: each invoice covers what already printed (and scans, AR launches, box sides,
+commission). So the platform doesn't decide who is good for the money; a person does, and until they do it plays safe.
+
+| Rule | What it means |
+|---|---|
+| **Going live** | An ad is approved (or turned back on) only when its advertiser has a **card on file that hasn't been declined**, or a **credit limit** an owner or finance person set. Otherwise the reviewer sees `credit_needed` and why. The company's own house ads never need either. |
+| **Credit limit** | `POST /v1/advertisers/<id>/credit-limit` with `limitCents` and a reason. Only an owner or finance person, signed in with the second step (never an API key). Each change is a new record (who, when, why); none is ever edited. 0 means no credit. With a limit set, it applies even with a card. |
+| **Pausing** | Each hour, and at once when an invoice's card is declined, an advertiser's live ads **pause** when what it owes (unpaid and declined invoices plus charges not yet invoiced) is **more than its limit**, or, with no limit, when it owes anything and has no working card. The team is alerted and the advertiser's staff are emailed in plain words. |
+| **Starting again** | Nothing restarts by itself. Once the advertiser pays, adds a working card, or a person raises the limit, the ad is turned back on (by the advertiser or a reviewer), which checks again. |
+| **See where one stands** | `GET /v1/advertisers/<id>/credit`: card, limit, what it owes now. |
+
+**For the founder to decide:** a card with no limit has no ceiling between invoices (the daily budgets still apply);
+set a limit for card holders too if that's too loose. The demo's sample advertisers get a made-up $5,000 limit.
+Before going live, set a limit or get a card for every real advertiser whose ads are running: with neither, their
+ads pause within the hour once they owe anything.
+
+**A bid's daily amount** (`dailyCapCents`) caps only what its printed labels cost each day. Scans, AR launches, box
+sides and sales commission are billed on top; advertisers are told so where they set it.
+
 **Brand reserves:** credit is never paid from thin air. When a brand's money has really arrived, record it under
 *Points and credit → Brand reserves*. Credit and offer payouts come only from that reserve, never more than it holds.
 

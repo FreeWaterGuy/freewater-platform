@@ -1611,6 +1611,31 @@ update conversions set tag_value_cents = value_cents where source = 'tag' and ta
 alter table videos add column if not exists content text;
 `,
   },
+  {
+    id: '059_advertiser_credit_limits',
+    sql: `
+-- How much each advertiser may owe before its ads pause, set by an owner or finance person. Each change is a new row
+-- (the latest counts), so who allowed what, when and why is kept; rows are never edited or deleted.
+create table advertiser_credit_limits (
+  id text primary key,
+  company_id text not null,
+  advertiser_id text not null,
+  limit_cents bigint not null check (limit_cents >= 0),
+  reason text not null check (length(reason) between 5 and 300),
+  granted_by text not null,
+  granted_at timestamptz not null,
+  seq bigint generated always as identity
+);
+create index advertiser_credit_limits_latest on advertiser_credit_limits(company_id, advertiser_id, seq desc);
+create function advertiser_credit_limits_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' and fw_test_reset(old.company_id) then return old; end if;
+  perform fw_refuse('advertiser_credit_limits', 'is append-only: set a new limit instead.');
+  return null;
+end $$;
+create trigger advertiser_credit_limits_guard before update or delete on advertiser_credit_limits for each row execute function advertiser_credit_limits_guard();
+`,
+  },
 ];
 
 /** Runs every migration not yet run (or, for tests that start from an older schema, those in `list`). */

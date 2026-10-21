@@ -31,6 +31,7 @@ import { join as joinPath, dirname as dirnamePath } from 'node:path';
 import { fileURLToPath as toPath } from 'node:url';
 import type { DesignAssistant } from './modules/ai/designContract';
 import { DeliveryService } from './modules/delivery/service';
+import { CreditService } from './modules/ads/credit';
 import { SimpleRoutePlanner, type RoutePlanner } from './modules/delivery/planner';
 import { TestGeocoder, type Geocoder } from './adapters/geocoding/contract';
 import { OpsService } from './modules/ops/service';
@@ -165,7 +166,7 @@ export interface AppOptions {
   webhookSender?: WebhookSender; // sends webhooks; defaults to real HTTPS
   allowPrivateWebhooks?: boolean; // let webhooks reach localhost and private networks (development only)
   publicUrl?: string; // where the console lives, for links in emails, e.g. https://console.freewater.io
-  fleet?: { claimTimeoutMs?: number; finishTimeoutMs?: number; offlineAfterMs?: number; bufferHours?: number };
+  fleet?: { claimTimeoutMs?: number; finishTimeoutMs?: number; offlineAfterMs?: number; bufferHours?: number; offlineGraceHours?: number };
 }
 
 /** Start the platform on a database: migrate, load everything, and keep writing every change back. */
@@ -193,6 +194,8 @@ export async function createApp(opts: AppOptions) {
     await make('advertiser-joes', 'freewater', ['campaigns', 'purchases', 'invoices'], 'adv-joes');
     for (const c of sampleCampaigns().filter((x) => !x.isHouse)) {
       await db.query(`insert into advertisers (id, company_id, name, category) values ($1,$2,$3,$4) on conflict do nothing`, [c.advertiserId, c.companyId, c.advertiserName, c.category]);
+      // Made-up advertisers get a made-up credit limit, so their sample ads can run (real ones need a card or a person's limit).
+      await db.query(`insert into advertiser_credit_limits (id, company_id, advertiser_id, limit_cents, reason, granted_by, granted_at) select $1,$2,$3,500000,'Demo advertiser (sample data)','demo seed',now() where not exists (select 1 from advertiser_credit_limits where company_id = $2 and advertiser_id = $3)`, [`crl_demo_${c.advertiserId}`, c.companyId, c.advertiserId]);
     }
     // FreeWater gives to Well Aware (wellawareworld.org) by default; two more Austin charities are on the list to choose
     // for particular machines or routes. Contact and bank details are placeholders.
@@ -276,6 +279,9 @@ export async function createApp(opts: AppOptions) {
     return got && got.asset.contentType.startsWith('image/') ? { mimeType: got.asset.contentType, data: Buffer.from(got.bytes).toString('base64') } : null;
   } }) : undefined);
   const videos = new VideoService(db, platform, assets, videoWriter, footage, opts.clock);
+  const footageCeiling = Number(process.env.FOOTAGE_PER_COMPANY_DAY ?? '');
+  if (process.env.FOOTAGE_PER_COMPANY_DAY && Number.isInteger(footageCeiling) && footageCeiling >= 0) videos.perCompanyDay = footageCeiling;
+  videos.alert = (key, title, detail) => void runtime.alerts.alert(key, 'warning', title, detail);
   experiences.videos = videos;
   const interactions = new InteractionService(db, platform, opts.clock);
   const data = new DataService(db, platform, interactions, opts.clock);
@@ -335,6 +341,12 @@ export async function createApp(opts: AppOptions) {
   const builtinAssistant = new BuiltinAdAssistant();
   const assistant = opts.assistant ?? (aiOn ? new ClaudeAdAssistant({ apiKey: anthropicKey, model: process.env.ANTHROPIC_MODEL, fallback: builtinAssistant }) : builtinAssistant);
   const ads = new AdsService(db, platform, made.registry, host, assistant, () => persistence.flush());
+  // Credit for advertisers (billed after the fact): an ad goes live only with a working card or a credit limit a person
+  // set, and pauses once its advertiser owes more than that (docs/SWITCHES.md, "Credit for advertisers").
+  const credit = new CreditService(db, platform, messenger, () => persistence.flush());
+  credit.alert = (key, title, detail) => void runtime.alerts.alert(key, 'warning', title, detail);
+  ads.beforeLive = (c) => credit.needCredit(c);
+  platform.bus.on('invoice.failed', (e) => { void credit.enforce(e.companyId, e.payload.advertiserId).catch(() => {}); });
 
   const builtinDesigner = new BuiltinDesigner();
   const designer = opts.designer ?? (aiOn ? new ClaudeDesigner({ apiKey: anthropicKey, model: process.env.ANTHROPIC_MODEL, fallback: builtinDesigner }) : builtinDesigner);
@@ -397,6 +409,7 @@ export async function createApp(opts: AppOptions) {
 
   const geocoder = opts.geocoder ?? new TestGeocoder({ Austin: { lat: 30.2672, lng: -97.7431, radiusKm: 6 }, Denver: { lat: 39.7392, lng: -104.9903, radiusKm: 6 } });
   const delivery = new DeliveryService(db, platform, packs, accounts, messenger, geocoder, opts.planner ?? new SimpleRoutePlanner(), () => persistence.flush());
+  delivery.alert = (key, title, detail) => void runtime.alerts.alert(key, 'warning', title, detail);
   const ops = new OpsService(db, platform, delivery, host);
 
   const handoff = new HandoffService(db, platform, packs);
@@ -546,7 +559,7 @@ export async function createApp(opts: AppOptions) {
   await attribution.repairUnrecorded();
   await persistence.flush();
 
-  return { ...made, features, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
+  return { ...made, features, db, persistence, runtime, demoKeys, accounts, payments, credit, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

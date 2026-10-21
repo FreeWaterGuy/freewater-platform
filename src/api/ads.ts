@@ -47,7 +47,7 @@ export function adsRoutes(app: App, route: (r: RouteDef) => void, h: { me: (key:
     companyStaff(key);
     const b = req.body as any;
     if (b.decision === 'reject' && !b.note) throw new ApiError(422, 'note_required', 'Say what needs to change, so the advertiser can fix it.');
-    const c = ads.review({ companyId: key!.companyId, campaignId: (req.params as any).id, decision: b.decision, note: b.note });
+    const c = await ads.review({ companyId: key!.companyId, campaignId: (req.params as any).id, decision: b.decision, note: b.note });
     return { body: { id: c.id, review: c.review, active: c.active } };
   } });
 }

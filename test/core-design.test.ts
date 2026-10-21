@@ -125,6 +125,8 @@ describe('a new advertiser, from sign-up to a live ad on a printed label', () =>
     expect(sub.status).toBe(201);
     const id = sub.body.campaignId as string;
     expect(app.platform.campaigns.get(id)!.active).toBe(false);
+    // Billed after the fact: it goes live once the advertiser has a card on file (docs/SWITCHES.md, credit).
+    expect((await call('POST', `/v1/advertisers/${app.platform.campaigns.get(id)!.advertiserId}/cards`, t, { token: 'tok_visa' })).status).toBe(201);
     expect((await call('POST', `/v1/review/campaigns/${id}`, admin, { decision: 'approve' })).status).toBe(200);
     expect(app.platform.campaigns.get(id)!.active).toBe(true);
     expect((await call('GET', '/v1/ads/overview', t)).body.campaigns.find((c: any) => c.id === id).status).toBe('running');

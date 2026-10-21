@@ -674,6 +674,8 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 356 | `POST /v1/platform/jobs/:name/run` | platform | no | — | OK |
 | 357 | `GET /v1/public/features` | public | — | — | OK (public by design: which areas this server runs, no secrets; routes of areas switched off with FW_FEATURES aren't registered at all, so they aren't in this table's walk on a pilot server) |
 | 358 | `GET /health/deep` | platform | no | — | OK (staff only: job freshness, queues, spool, last books checks; no personal data) |
+| 359 | `GET /v1/advertisers/:advertiserId/credit` | invoices | no | an advertiser key only its own | OK (card, limit and what it owes; no card numbers) |
+| 360 | `POST /v1/advertisers/:advertiserId/credit-limit` | invoices | yes | owner or finance, signed in with the second step (an approval route); never an API or advertiser key | OK (each limit a new append-only row; a lower limit pauses at once) |
 
 ---
 

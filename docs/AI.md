@@ -81,7 +81,7 @@ on: `ANTHROPIC_API_KEY`.
 |---|---|---|---|
 | **Personalizer** (Claude Haiku) | At each scan, picks which of the advertiser's versions fits the moment, and writes a one-line greeting (shown on the page and over the camera in AR). | It only chooses among the advertiser's approved versions whose conditions fit. Greetings are checked: short, with no links, numbers or shouting. A scan never waits more than 0.7 seconds, and answers are reused for an hour. | Built-in rules choose the version. |
 | **Video writer** (Claude) | Behind "Show me more": cuts a short motion-graphics video (4 to 6 scenes) in the advertiser's colors, for the moment. | It may only rearrange and tighten the advertiser's own words. Any price or offer must appear in them. | A built-in writer with several cuts. |
-| **Live-action footage** (Google Veo) | Makes 8-second vertical clips with sound for each kind of moment, ahead of time. `GEMINI_API_KEY`, `VEO_MODEL`. | Never anything about the person. Shown only after the advertiser approves the clip. The company pays per second. | Motion graphics only. |
+| **Live-action footage** (Google Veo) | Makes 8-second vertical clips with sound for each kind of moment, ahead of time. `GEMINI_API_KEY`, `VEO_MODEL`. | Never anything about the person. Shown only after the advertiser approves the clip. The company pays per second. At most 12 clips per ad and 60 per company (`FOOTAGE_PER_COMPANY_DAY`) in any 24 hours. | Motion graphics only. |
 | **Learning which cut works** (not a language model) | Every view, completion and tap teaches it which video cut works best (Thompson sampling). | It only chooses among approved cuts. | — |
 
 ### For people using the app and the game

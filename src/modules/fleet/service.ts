@@ -88,7 +88,7 @@ export class FleetService {
     private platform: Platform,
     private messenger: Messenger,
     private flush: () => Promise<void>,
-    private opts: { claimTimeoutMs?: number; finishTimeoutMs?: number; offlineAfterMs?: number; bufferHours?: number } = {},
+    private opts: { claimTimeoutMs?: number; finishTimeoutMs?: number; offlineAfterMs?: number; bufferHours?: number; offlineGraceHours?: number } = {},
   ) {
     this.presence = new MachinePresence(db, () => platform.bus.now());
     // Today's count starts from the bottles already made at this machine today, so a restart can't reset the cap.
@@ -389,14 +389,21 @@ export class FleetService {
     }
   }
 
-  /** Machines that stopped calling in are offline; prepared labels past their time are let go. */
+  /**
+   * How long after a kept label expires a machine may still report it printed (before it expired). A machine that
+   * gave a bottle while offline may stay offline past the label's time; until this has gone by too, the label is kept
+   * (unusable for new prints) so the bottle in someone's hand is billed and its code works once the report comes in.
+   */
+  private get offlineGraceMs() { return (this.opts.offlineGraceHours ?? 48) * 3600_000; }
+
+  /** Machines that stopped calling in are offline; prepared labels past their time and the grace after it are let go. */
   async sweep() {
     const now = this.now().getTime();
     for (const m of this.machines.values()) {
       if (!this.isModel6(m.locationId) || m.lastSeen === null) continue;
       if (now - m.lastSeen > this.offlineAfterMs) await this.openIncident(m.locationId, 'offline', 'critical', `Hasn’t called in since ${new Date(m.lastSeen).toISOString()}.`);
     }
-    const expired = (await this.db.query<any>(`select unit_id from machine_buffer where status = 'held' and expires_at <= $1`, [new Date(now).toISOString()])).rows;
+    const expired = (await this.db.query<any>(`select unit_id from machine_buffer where status = 'held' and expires_at <= $1`, [new Date(now - this.offlineGraceMs).toISOString()])).rows;
     for (const r of expired) {
       if (this.platform.units.get(r.unit_id)?.status === 'dispensed') continue; // a report is billing it right now; it marks it used
       this.platform.abandonPrepared(r.unit_id, 'Prepared label not used in time');
@@ -504,11 +511,11 @@ export class FleetService {
     const { offlinePerHour } = printLimits(this.platform.companies.get(l.companyId!)?.machines);
     const nowMs = this.now().getTime();
     const HOUR = 3600_000;
-    let billed = 0, released = 0, ignored = 0, refused = 0;
-    const rows = new Map<string, { status: string; created: number }>();
+    let billed = 0, released = 0, ignored = 0, refused = 0, late = 0;
+    const rows = new Map<string, { status: string; created: number; expires: number }>();
     for (const it of items) {
-      const row = (await this.db.query<any>(`select status, created_at from machine_buffer where unit_id = $1 and location_id = $2`, [it.unitId, locationId])).rows[0];
-      if (row) rows.set(it.unitId, { status: row.status, created: new Date(row.created_at).getTime() });
+      const row = (await this.db.query<any>(`select status, created_at, expires_at from machine_buffer where unit_id = $1 and location_id = $2`, [it.unitId, locationId])).rows[0];
+      if (row) rows.set(it.unitId, { status: row.status, created: new Date(row.created_at).getTime(), expires: new Date(row.expires_at).getTime() });
     }
     const when = (it: { unitId: string; at: string }) => {
       const created = rows.get(it.unitId)?.created ?? nowMs;
@@ -524,6 +531,14 @@ export class FleetService {
       seen.add(it.unitId);
       if (it.status === 'dispensed') {
         const at = when(it);
+        // A label is good until it expires: one said to be printed after that is let go unbilled (the machine shouldn't
+        // print it; kept past its time only so a bottle given before then can still be reported).
+        if (at > row.expires) {
+          this.platform.abandonPrepared(it.unitId, 'Reported printed after its label expired');
+          await this.db.query(`update machine_buffer set status = 'released' where unit_id = $1 and status = 'held'`, [it.unitId]);
+          late++;
+          continue;
+        }
         // Offline bottles already accepted from this machine near that time, with this one: no hour may hold more than the limit.
         const near = (await this.db.query<{ used_at: string }>(`select used_at from machine_buffer where location_id = $1 and status = 'used' and used_at > $2 and used_at < $3`, [locationId, new Date(at - HOUR).toISOString(), new Date(at + HOUR).toISOString()])).rows.map((r) => new Date(r.used_at).getTime());
         const times = [...near, at].sort((a, b) => a - b);
@@ -552,8 +567,9 @@ export class FleetService {
       await this.db.query(`update machine_buffer set status = 'released' where unit_id = $1 and status = 'held'`, [it.unitId]);
     }
     if (refused) this.alert?.(`offline-cap:${locationId}`, `Machine ${locationId} reported more offline bottles than its limit`, `${refused} of ${items.length} reported offline bottles would have passed ${offlinePerHour} an hour. They were not billed. If the machine wasn't really offline and busy, its key may be stolen: revoke it in the console.`);
+    if (late) this.alert?.(`offline-late:${locationId}`, `Machine ${locationId} reported bottles printed after their labels expired`, `${late} of ${items.length} reported offline bottles were said to be printed after their label's time. They were not billed, and their codes don't work. A machine printing expired labels needs a look (its clock, or its software).`);
     await this.flush();
-    return { billed, released, ignored, refused };
+    return { billed, released, ignored, refused, late };
   }
 
   // ---------- what ops sees ----------

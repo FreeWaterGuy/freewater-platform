@@ -73,6 +73,8 @@ describe('a new business makes an ad by chatting', () => {
     expect(r.draft.formats).toEqual(['label', 'box-face']);
     r = await say(t, d.id, '$20 a day');
     expect(r.draft.buy).toEqual({ type: 'bid', dailyCapCents: 2000 });
+    // The daily amount caps only printed labels; the advertiser is told what comes on top (second-opinion review).
+    expect(r.messages.at(-1).text).toMatch(/a daily cap of \$20 for printed labels only \(scans and other charges are billed on top\)/);
     r = await say(t, d.id, 'A coupon: code TACO5');
     expect(r.draft.experienceConfig).toMatchObject({ code: 'TACO5' });
     expect(r.ready).toBe(true);
@@ -103,6 +105,9 @@ describe('a new business makes an ad by chatting', () => {
     await call('POST', `/v1/review/campaigns/${c.id}`, keys['freewater-admin'], { decision: 'reject', note: 'Say which East 6th location.' });
     let o = (await call('GET', '/v1/ads/overview', t)).json();
     expect(o.campaigns[0]).toMatchObject({ status: 'not_approved', review: { note: 'Say which East 6th location.' } });
+    // Billed after the fact, so an ad goes live only once the advertiser has a card on file (or a credit limit).
+    expect((await call('POST', `/v1/review/campaigns/${c.id}`, keys['freewater-admin'], { decision: 'approve' })).json().error.code).toBe('credit_needed');
+    expect((await call('POST', `/v1/advertisers/${c.advertiserId}/cards`, t, { token: 'tok_visa' })).statusCode).toBe(201);
     await call('POST', `/v1/review/campaigns/${c.id}`, keys['freewater-admin'], { decision: 'approve' });
     expect(app.platform.campaigns.get(c.id)!.active).toBe(true);
 
@@ -155,6 +160,7 @@ describe('a new business makes an ad by chatting', () => {
     expect(r.draft.buy).toEqual({ type: 'guaranteed', prints: 1000 });
     expect(r.ready).toBe(true);
     const sub = (await call('POST', `/v1/ads/drafts/${d.id}/submit`, t, { approved: true })).json();
+    await call('POST', `/v1/advertisers/${app.platform.campaigns.get(sub.campaignId)!.advertiserId}/cards`, t, { token: 'tok_visa' });
     await call('POST', `/v1/review/campaigns/${sub.campaignId}`, keys['freewater-admin'], { decision: 'approve' });
 
     const change = (await call('POST', '/v1/ads/drafts', t, { fromCampaignId: sub.campaignId })).json();
