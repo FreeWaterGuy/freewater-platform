@@ -280,7 +280,8 @@ describe('each kind: pay, plan, exactly the paid bottles at the right houses', (
       expect(d).toMatchObject({ area: 'Test Oak and Elm', atDoor: true, bottles: 1, at: '2026-11-24' }); // aimed at a few houses: the day only, never the time
       expect(Math.round(d.point.lat * 1000)).toBe(d.point.lat * 1000); // ~100 m, never the door
     }
-    expect(p.scansByArea).toEqual([{ area: 'Test Oak and Elm', bottles: 5, scans: 1, scanRatePercent: 20 }]);
+    // Aimed at a few houses (5): whether anyone there scanned stays with the households (docs/COMPLIANCE.md H3).
+    expect(p.scansByArea).toEqual([{ area: 'Test Oak and Elm', bottles: 5, scans: null, scanRatePercent: null }]);
     expect(r.body).not.toMatch(/Testoak St, Austin|hs_|\b10[135] /);
     // Another advertiser can't read it.
     const other = (await createApiKey(db, { companyId: 'freewater', name: 'rb-adv2', scopes: ['campaigns'], advertiserId: box.advertiserId })).key;

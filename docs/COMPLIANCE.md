@@ -88,9 +88,35 @@ Keep days are the US preset; EU/UK/Brazil and unknown places get the shorter str
 | `fillers` (campaign rows with `filler`) | Staff names who proposed and approved | Approved pieces for unsold spots | With the piece | Team | Not consumer data |
 | `area_attributes` | None (neighbourhood or census-block statistics; Austin rows are SAMPLE, labelled) | Choosing ads for an area | Until replaced | Team | Not personal |
 | `household_imports` | Staff name who imported | Which data company, what date, how much was refused | Until deleted by source | Team | Not consumer data |
-| `household_attributes` | **Street address** of a house (often of people who never signed up) + attributes from a closed list (size, income band, owner/renter, dwelling, years, interests), each with source, date, bought/first-party | Choosing ads for that house only; **never sold or passed on**; never shown to advertisers per house | **395 d after import** (`purge`); deleted at once by source or import, by a house's opt-out, or by a resident's erase | Team (`GET /v1/households/audience`, no-store) | A resident's download lists what we hold about their delivery address; erase deletes it and opts the house out (tested) |
-| `drop_photos` (065) | A **photo of the box at someone's door** (their home, maybe a person or a car), the driver who took it, the pack, run and house | Proof that a drop happened (the founder: delivered with its photo is delivered) | **The company's keep, 90 days unless set (1–365)**: then the picture is deleted by the `drop-photos` job (the row with its time stays); a deleted picture can't be put back (database rule). Re-encoded on the way in: no location, camera or owner from the phone's file | Team only (`GET /v1/ops/drop-photos/:id`, `no-store`); a resident who proved the house is theirs, for drops from two weeks before that on (`GET /v1/me/drop-photos`); **never advertisers**; never at a public address (older ones in `assets` refused at `/assets`, and deleted on the same keep) | Not yet in a resident's download (L-26); erase: a person's erase leaves drop photos (the company's records) until the keep ends |
-| `household_optouts` | A per-company **unsalted SHA-256 of the normalised address** (a pseudonym: addresses are guessable, so this is still personal data) | Keeping a house that said no out of every later import | Kept (it is the record of the "no") | No one (no route shows it) | Not deletable by the house itself; see L-21 |
+| `household_attributes` | **Street address** of a house (keyed by the same fingerprint as opt-outs) (often of people who never signed up) + attributes from a closed list (size, income band, owner/renter, dwelling, years, interests), each with source, date, bought/first-party | Choosing ads for that house only; **never sold or passed on**; never shown to advertisers per house | **395 d after import** (`purge`); deleted at once by source or import, by a house's opt-out, or by a resident's erase | Team (`GET /v1/households/audience`, no-store) | A resident's download lists what we hold about their delivery address; erase deletes it and opts the house out (tested) |
+| `drop_photos` (065) | A **photo of the box at someone's door** (their home, maybe a person or a car), the driver who took it, the pack, run and house | Proof that a drop happened (the founder: delivered with its photo is delivered) | **The company's keep, 90 days unless set (1–365)**: then the picture is deleted by the `drop-photos` job (the row with its time stays); a deleted picture can't be put back (database rule). Re-encoded on the way in: no location, camera or owner from the phone's file | Team only (`GET /v1/ops/drop-photos/:id`, `no-store`); a resident who proved the house is theirs, for drops from two weeks before that on (`GET /v1/me/drop-photos`); **never advertisers**; never at a public address (older ones in `assets` refused at `/assets`, and deleted on the same keep) | **Now** listed in the download (H7). Erase: the pictures of a subscriber's own deliveries go at once; drops at a claimed house stay (the company's record of a drop at an address, seen by whoever lives there now) until the keep ends (L-26) |
+| `household_optouts` | A per-company **keyed fingerprint of the normalised address** (HMAC-SHA-256 with the pseudonym secret `FW_SECRET_VIEWER_TAGS`, H5; rows from before keying are a plain hash, still honoured, and moved to the keyed form at start where we hold the address). Without the secret it can't be matched to an address; with it, it can, so it is still pseudonymous personal data | Keeping a house that said no out of every later import and every buy that names it | Kept (it is the record of the "no") | No one (no route shows it) | Not deletable by the house itself; see L-21. **Rotating the pseudonym secret orphans every "no"** (they'd stop matching): don't, without re-keying from the old secret |
+
+### Houses in delivery areas and route buys (since `p-news`; reviewed here, H1–H8)
+
+| Table | Personal data | Why | Kept | Who sees it | Download / erase |
+|---|---|---|---|---|---|
+| `delivery_areas` | None (staff name who made it) | Which streets get packs | With the area | Ops | Not personal |
+| `houses` | **Street address** and map point of every house on the chosen streets (mostly people who never signed up); whether it stopped deliveries (`opted_out`, a household's choice), a driver's skip reason and note (free text, up to 200 characters), **household size** a resident told us, last delivery | Delivering, planning, packs per house | **No keep set (L-31)**; household size cleared when its last claimant erases | Ops (the house list), drivers (stops); advertisers see **street names and counts only**, never an address | The claimant's download (both `GET /v1/me/export` and `GET /v1/me/data`, H7); erase clears household size |
+| `house_claims` | Which account says a house is theirs, the box that proved it | Letting a resident stop deliveries, set household size, block ads, see drop photos; their choices reach the house's audience | Until unclaimed or erased | The person; ops sees "claimed" | Both |
+| `house_events` | Who did what to a house (claims, stops, restarts, driver skips with notes, reviews), **append-only** | The house's history; five wrong claim codes a day | **No keep set (L-31)** | Ops | Erase takes the person's id off (the rest stays) |
+| `house_ad_blocks` | Which account blocked which advertiser (or every ad aimed at the house alone) | A house's say over the ads that come to it | Until taken back (`removed_at`) | The person (`GET /v1/me/house/ads`); never the advertiser | **Now** in the download; erase removes who asked, the block stays (H7) |
+| `route_buys.target` | The **street addresses an advertiser named** (its own list of houses), household-data conditions | What was bought | **No keep set (L-31)** | That advertiser; the team | Not deleted by a resident's erase (the advertiser's order); L-31 |
+| `route_spots` | Which ad went to which house in which week | Placing paid pieces on the right bottles; credit and refunds | With the books | Team; the advertiser sees streets and counts | Not personal on its own (a house id) |
+| `route_settlements` | Why pieces came back (a house stopped, blocked, was skipped) | Credit and refunds | With the books | Team (exact reason); the advertiser reads "the house is no longer on the route for this ad" (H1) | — |
+| `route_runs.stops` (existing table, new fields) | Each drop's **GPS point at the door**, time, metres from the house, photo waiver reason | Proof of delivery | **No keep set (L-31)** | Ops, drivers; the advertiser's report rounds the point to ~100 m and, for a few houses, shows the day only | — |
+| `advertisers.verified_*`, `ad_review_notes`, `ad_ai_verdicts`, `ad_ai_conversation` | Staff ids; an advertiser's (often a sole trader's) messages and the AI's reasons about their ad | Review of paid ads, its record and appeals | Append-only, no keep (business records) | Team; the advertiser sees its own notes | Business data; L-27 |
+
+**What an advertiser can learn about one house** (the release check's question), after this review:
+
+- The quote and the areas list: street names and counts of active houses (a count on a one- or two-house street can
+  change when a house stops: L-29). A named house we can't take reads the same whatever the reason.
+- The report: streets and houses reached (streets under 5 grouped unless the advertiser named the houses), each drop's
+  ~100 m point and time (for under 50 houses: the day only), scans by area (**none** for under 50 houses, H3), what
+  came back (never why a house said no, H1). For a buy aimed by household data: no drops at all (H2).
+- The overview: no saves or taps for a buy under 50 houses (H3). Billed scans if a company turns scan fees on (L-28).
+- Never: an address it didn't send, a house's audience, bought data (a quote can't test one house any more, H2), a
+  resident, a claim, a photo.
 
 #### Household data: the formats (for the data company the founder picks)
 
@@ -164,6 +190,21 @@ Built switched off. Each rule's test was shown failing with its code taken out (
 | N2 | MEDIUM | An advertiser's offered filler ad printed whenever *Approved fillers* was on: the *Advertisers offer ads for unsold spots* switch was registered but never checked. | `FillerService.mayPrint` checks `filler_offers` per company. | `test/fillers.test.ts` (shown failing without the check) |
 | N3 | LOW | Test gap: removing the *Ads aimed at houses* check left every test passing, though residents' shared interests would then reach a house's audience with the switch off. | Test added: with the switch off, a claimed house with consent gives `strongest: none`. | `test/household-data.test.ts` |
 | N4 | LOW | `features/service.ts` had an uncommitted change (an already-off switch no longer turned off what needs it) made only to paper over N1. | Reverted: the shared file is unchanged; N1 fixed at the source. | `test/features-registry.test.ts` |
+
+### Houses, route buys and the law (release check, October 2026, branch `r-priv`)
+
+Each test was shown failing on the code before the fix (`test/privacy-houses.test.ts`, all 8 failed on it).
+
+| # | Severity | Finding | Fix | Test |
+|---|---|---|---|---|
+| H1 | HIGH | An advertiser read why its pieces came back: "the house blocked these ads", "the house stopped deliveries". For a one-house buy it knows the address, so it learned that household's choice. | Advertisers read "the house is no longer on the route for this ad"; the team keeps the reason. | H1 |
+| H2 | HIGH (switch off) | With *Aim route buys by household data* on, a free quote for one named house (or a street, or a small shape) said whether the bought data matched: an oracle for an income band, household size or interests. | Household data aims only across whole areas at 50 houses or more, refused without a count otherwise; no drop list in its report. | H2 |
+| H3 | MEDIUM | A buy for a few houses reported scans by area and saves and taps: whether that household engaged. | Withheld under 50 houses. Scan fees, if turned on, still count them (L-28). | H3, `test/route-buying.test.ts` |
+| H4 | MEDIUM | The no-account opt-out kept a house out of buys for fewer than 50 houses only; a buy naming 50+ addresses still reached it. | Any buy that names houses leaves out houses that said no. | H4 |
+| H5 | MEDIUM | The opt-out kept a plain hash of the address: reversible by anyone with a list of Austin addresses. | Keyed fingerprint; old rows still honoured and re-keyed. | H5 |
+| H6 | MEDIUM | The no-account opt-out had no page: only an API route. | On the scan page: "Don't use information about my home to choose ads". | H6 |
+| H7 | MEDIUM | A resident's download missed their claimed house, blocks and drop photos; erase left their id on blocks and their own door's photos for 90 days. | Added; erase removes who blocked and deletes their own deliveries' pictures. | H7 |
+| H8 | MEDIUM | "Unknown place = strictest" didn't reach houses: routes have no country, so house data and one-house buys applied anywhere. | Routes carry `country`/`state`; a house not known to be in the US gets nothing used and can't be bought for alone. | H8 |
 
 ## 3. The second sign-in step for approvers (R4): how it works
 
@@ -254,10 +295,10 @@ Status: **Code** = done and tested; **Partly** = done with a gap noted; **Lawyer
 
 | Item | Status | Notes |
 |---|---|---|
-| The law of where the house is | Code | Houses in Austin get Texas rules through `jurisdiction.ts` when a resident is known; a house with no account has no person to place. **Lawyer:** L-17. |
-| Targeted-ad opt-out without an account | Code | `POST /v1/public/households/:companyId/opt-out` (address only; same answer whether or not we held anything); a resident's do-not-sell or GPC keeps the whole house out. **Lawyer:** L-17 (is an address-only form enough; must it be on the bottle?). |
-| Sensitive data never in bought-data targeting | Code | Closed attribute list + `SENSITIVE` refuses health, religion, ethnicity, sexuality, immigration, children, politics, precise location by name and by value; a child at home leaves only area statistics. |
-| Bought data never sold onward | Code | No route returns it to anyone but the team; advertisers never see a house's audience (403, tested). **Lawyer:** L-18. |
+| The law of where the house is | Code | A house takes its route's `country`/`state` (H8); unknown or outside the US, nothing about it is used and it can't be bought for alone. Residents' own rules still apply through `jurisdiction.ts`. **Lawyer:** L-17, L-33. |
+| Targeted-ad opt-out without an account | Code | **Yes, a no-account path exists and is always on** (not behind a switch; listed under the locked *Privacy rules by place*): the scan page's "Don't use information about my home to choose ads" (H6) and `POST /v1/public/households/:companyId/opt-out` (address only; same answer whether or not we held anything; keeps a keyed fingerprint, never the address). It deletes bought data, skips later imports, and keeps the house out of data-aimed buys, buys for a few houses and any buy that names it (H4). A resident's do-not-sell or GPC keeps the whole house out. Stopping **deliveries** is separate and app-only (the founder's choice). **Lawyer:** L-17, L-32. |
+| Sensitive data never in bought-data targeting | Code | Closed attribute list + `SENSITIVE` refuses health, religion, ethnicity, sexuality, immigration, children, politics, precise location by name and by value (at import, and again at use); route-buy conditions are a closed list too; a child at home leaves only area statistics. |
+| Bought data never sold onward | Code | No route returns it to anyone but the team; advertisers never see a house's audience (403, tested), and a quote can no longer test one house (H2). **Lawyer:** L-18. |
 | Bought data deletable by source; dated | Code | `DELETE /v1/households/sources/:source`, per-import delete, 395-day purge. |
 | AI-written news | Partly | Two or more outlets, own words (checked for copied wording, links, outlets' names), cited and linked, corrections logged as new versions, a person approves each topic, the bottle prints only a topic. **Lawyer:** L-19. |
 | Household-level scan tracking notice | Lawyer | Scans of a bottle left at a door are counted per bottle and phone, not per household; area and bought data choose the ads. L-20. |
@@ -305,14 +346,14 @@ Status: **Code** = done and tested; **Partly** = done with a gap noted; **Lawyer
   exemption still forbids selling sensitive data without consent); universal opt-out signals (GPC) for a house.
 - **L-18** Buying household data: the contract with the data company (its notice and consent basis, no sensitive
   data, our no-resale promise, deletion on request); Texas data-broker registration (the seller's, and whether we
-  become one); whether the unsalted address hash in `household_optouts` should be keyed.
+  become one). (The address fingerprint in `household_optouts` is now keyed, H5.)
 - **L-19** AI-written news: accuracy and liability (defamation, copyright and "hot news" from summarising other
   outlets' facts), the corrections policy, the "Based on reporting by" credit and links, and whether
   "FreeWater News" needs any disclosure that AI wrote it.
 - **L-20** Household-level scan tracking: what notice a household that never signed up needs that its bottle's
   ads were chosen using data about the house, and that scans are counted (the "why am I seeing this" page explains
   per bottle).
-- **L-21** A house's opt-out is kept forever as a hash of its address so later imports skip it: is that the right
+- **L-21** A house's opt-out is kept forever as a keyed fingerprint of its address (H5) so later imports skip it: is that the right
   balance, and how long should it last when the house changes hands?
 - **L-22** Children taking bottles left at doors: whether ad categories must be limited on undirected bottles
   (alcohol is already a concern, L-12), and whether area statistics such as "share of families with children" may
@@ -331,7 +372,7 @@ Status: **Code** = done and tested; **Partly** = done with a gap noted; **Lawyer
 - **L-25** Credit instead of a refund when a house stops (buys on more than one house): a stored-value or
   unclaimed-property question if credit is never used, and whether advertisers must be able to ask for cash instead.
 - **L-26** Photos of drops (065): a photo of a house's door (sometimes a person, a car plate, the inside through an open
-  door), kept 90 days. Is the keep right; must the photo be in a resident's download; should drivers be told to frame
+  door), kept 90 days. Is the keep right (they are now listed in a resident's download, and a subscriber's own are deleted when they erase; photos at a claimed house stay until the keep: is that right); should drivers be told to frame
   only the box; do we need a notice on the box or in the app that a photo is taken? A privacy lawyer should confirm.
 - **L-27** An AI deciding about a business on its own (066): where a company turns on "AI makes the final call on
   paid ads", the AI reviewer's rejection of an advertiser's paid ad is final without a person (its written reason is
@@ -341,6 +382,47 @@ Status: **Code** = done and tested; **Partly** = done with a gap noted; **Lawyer
   (statement of reasons, internal complaints for business users), the Colorado AI Act and California's ADMT
   regulations, and the FTC's view of unfair practices? Must the advertiser be told up front that an AI may decide, and
   what the appeal is? Is "appeal to a person, once" enough, and does a rejection need a deadline for the appeal?
+
+- **L-28** Scan fees on a buy for a few houses: we no longer report scans, saves or taps for buys under 50 houses (the
+  advertiser knows the houses), but if a company turns on per-scan fees, the bill and statement for such a buy count
+  that household's scans. Should per-scan fees be impossible on small buys (our recommendation), or is a billed count
+  acceptable?
+- **L-29** Exact counts over time: an advertiser can see how many houses on each street get deliveries. On a street
+  with one or two houses, a change in that count can show that a particular house stopped. Exact quotes are a product
+  promise; is that residual risk acceptable, or should short streets be grouped?
+- **L-30** News outlets a reader picks (`news_source_prefs`) may reveal political opinions: a special category under
+  GDPR (not under Texas law). Kept only to write that person's stories, never for ads. Outside the US, is a
+  separate explicit consent needed before we keep it?
+- **L-31** How long to keep house records: every house's address and whether it stopped deliveries (`houses`), the
+  driver's skip notes and the house's history (`house_events`, append-only), which ads went to which house
+  (`route_spots`), the addresses an advertiser named (`route_buys.target`) and each drop's GPS point and time
+  (`route_runs`). None has a keep period today.
+- **L-32** The Texas opt-out method: is our address-only form (no account, no verification, on the scan page and as an
+  API) "clear and conspicuous" enough, must the bottle label or box carry a short line pointing to it, and must the
+  privacy notice describe it? (Opting out needs no verification; a neighbour could opt a house out, which only reduces
+  targeting.)
+- **L-33** Houses outside Austin: houses get US rules only when their route says US and a state. Before any route
+  outside Texas, confirm that state's rules for aiming ads at a house (for example Maryland's limits on targeted ads
+  and data minimisation).
+
+### Before the Austin pilot: what the lawyer must answer (for the founder)
+
+In plain words, the questions that block the pilot (the rest can follow it):
+
+1. **Leaving bottles with ads at houses that didn't ask** (L-16): does Austin city code allow it, signs or not?
+2. **Is choosing ads for a house "targeted advertising" under Texas law** (L-17, L-23), even when only its street or
+   address is used, and is our no-account opt-out (scan page and form, L-32) a valid way to say no? Must the bottle
+   point to it?
+3. **Buying household data** (L-18): the contract with the data company, whether we must register as a Texas data
+   broker, and confirmation that the list we accept has nothing sensitive.
+4. **Buys aimed at one house** (L-23, L-24, L-28): do they need the household's consent; is the advertiser's report
+   (day of the drop, rough place) personal information; should scan fees be impossible on them?
+5. **Photos of doors** (L-26): is 90 days right, is a notice needed, and should drivers frame only the box?
+6. **Children** (L-6, L-12, L-22): bottles at doors reach children; may alcohol or similar ads be on them, and may
+   "share of families with children" choose ads?
+7. **The privacy policy and notices** (L-1), including how long house records are kept (L-31).
+
+What the code already does for each is in the tables above; nothing about houses is switched on until a person does.
 
 ## 6. What this review could not check
 
@@ -356,3 +438,9 @@ News, fillers and household data (`p-news`): the law itself (L-16 to L-22), a re
 was tested with CSV and JSON stand-ins), real census files (the Austin areas are made up and labelled SAMPLE), a
 real Claude model writing stories (the tests use a stand-in writer and a mocked API call), and printed labels with a
 news topic.
+
+Release check (`r-priv`): the law itself (every L line, above all L-16, L-17, L-23, L-32), a real data company's file,
+real phones on the scan page's new opt-out (it was checked only as code, not in a browser), whether the pilot's real
+routes are created with `country`/`state` (the seed's are; there is no console field for routes, so whoever creates the
+pilot's routes must set them, or house data stays unused there), and Postgres itself for `rekey` under concurrent
+imports (run at start, before requests; tested on the in-process database).

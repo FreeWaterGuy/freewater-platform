@@ -83,7 +83,7 @@ export interface RouteQuoteInput {
   attributes?: RouteAttributes;
 }
 
-interface HouseRow { id: string; areaId: string; areaName: string; address: string; street: string; lat: number; lng: number; packs: number; packSize: number; bottles: number; key: string }
+interface HouseRow { id: string; areaId: string; routeId: string; areaName: string; address: string; street: string; lat: number; lng: number; packs: number; packSize: number; bottles: number; key: string }
 interface Draft { houseId: string; week: string; bottle?: number; pack?: number; face?: string; share: Share; units: number }
 interface Occ { units: number; shares: Share[]; campaigns: Set<string>; groups: Set<string> }
 interface HouseWeek { bottles: Map<number, Occ>; faces: Set<string> }
@@ -119,6 +119,8 @@ export const mondayOf = (d: string) => addDays(d, -((new Date(noon(d)).getUTCDay
 const parse = <T>(v: unknown): T => (typeof v === 'string' ? JSON.parse(v) : v) as T;
 /** Streets with fewer houses reached than this are shown together, so a count never points at one house. */
 const STREET_MIN = 5;
+/** Reasons a piece came back that are a house's own business (or a driver's word about it): never shown to the advertiser as such. */
+const HOUSE_REASONS = ['the house stopped deliveries', 'the house is skipped', 'the house blocked these ads'];
 
 export class RouteBuyService {
   /** Set by the app: the company's Features page. */
@@ -178,14 +180,14 @@ export class RouteBuyService {
     if ((w.addresses?.length ?? 0) > 500 || (w.houseIds?.length ?? 0) > 5000 || (w.streets?.length ?? 0) > 500 || (w.areaIds?.length ?? 0) > 50) throw new AdsError(422, 'too_many', 'That’s more than one buy can name: up to 50 areas, 500 streets or 500 addresses.');
     const areaIds = [...new Set([...(w.areaIds ?? []), ...(w.streets ?? []).map((s) => s.areaId)])];
     const rows = (await this.db.query<any>(
-      `select h.id, h.area_id, h.address, h.address_key, h.street, h.lat, h.lng, h.household_size, a.name as area_name, a.pack_size, a.packs_per_house, a.bottles_per_person_week, a.max_packs_per_house, a.frequency_days
+      `select h.id, h.area_id, a.route_id, h.address, h.address_key, h.street, h.lat, h.lng, h.household_size, a.name as area_name, a.pack_size, a.packs_per_house, a.bottles_per_person_week, a.max_packs_per_house, a.frequency_days
        from houses h join delivery_areas a on a.id = h.area_id
        where h.company_id = $1 and a.company_id = $1 and h.status = 'active' and a.frequency_days = 7 and (a.active or ($3 and a.sample))
          and (cardinality($2::text[]) = 0 or a.id = any($2::text[]))`, [companyId, areaIds, !!opts.sample])).rows;
     const householdPacks = this.on(companyId, 'household_packs');
     let houses: HouseRow[] = rows.map((r) => {
       const packs = packsFor({ packsPerHouse: n(r.packs_per_house), bottlesPerPersonWeek: r.bottles_per_person_week === null ? null : n(r.bottles_per_person_week), maxPacksPerHouse: n(r.max_packs_per_house), frequencyDays: n(r.frequency_days), packSize: n(r.pack_size) as 24 }, householdPacks && r.household_size !== null ? n(r.household_size) : null);
-      return { id: r.id, areaId: r.area_id, areaName: r.area_name, address: r.address, street: r.street, lat: n(r.lat), lng: n(r.lng), packs, packSize: n(r.pack_size), bottles: packs * n(r.pack_size), key: r.address_key };
+      return { id: r.id, areaId: r.area_id, routeId: r.route_id, areaName: r.area_name, address: r.address, street: r.street, lat: n(r.lat), lng: n(r.lng), packs, packSize: n(r.pack_size), bottles: packs * n(r.pack_size), key: r.address_key };
     });
     if (any(w.streets)) {
       const want = new Set(w.streets!.map((s) => `${s.areaId}|${splitAddress(`1 ${s.street}`).street}`));
@@ -246,7 +248,7 @@ export class RouteBuyService {
   /** Houses that said no to ads chosen using information about them (household data opt-out). */
   private async saidNo(companyId: string, houses: HouseRow[]) {
     if (!this.households || !houses.length) return new Set<string>();
-    const keys = new Map(houses.map((h) => [this.households!.houseKey(companyId, h.address), h.id]));
+    const keys = new Map(houses.flatMap((h) => this.households!.houseKeys(companyId, h.address).map((k) => [k, h.id] as const)));
     const rows = (await this.db.query<any>(`select house_key from household_optouts where company_id = $1 and house_key = any($2::text[])`, [companyId, [...keys.keys()]])).rows;
     return new Set(rows.map((r) => keys.get(r.house_key)!));
   }
@@ -409,14 +411,23 @@ export class RouteBuyService {
     const blocks = await this.blocks(companyId, found.map((h) => h.id));
     let targeted = found.filter((h) => !blocks.advertiser.get(h.id)?.has(advertiserId));
     const byData = !!input.attributes && Object.keys(input.attributes).length > 0;
-    if (byData) targeted = await this.byAttributes(companyId, targeted, input.attributes!);
     const T = this.smallAudienceHouses(company);
-    const small = targeted.length < T;
-    if (small) {
-      // Aimed at a few houses: never one that blocked ads aimed at it alone, or said no to targeted ads.
-      const no = await this.saidNo(companyId, targeted);
-      targeted = targeted.filter((h) => !blocks.small.has(h.id) && !no.has(h.id));
+    if (byData) {
+      // What a data company or a resident told us about a house never reaches an advertiser, so household data aims
+      // only across whole areas and only at T houses or more: a quote for one named house, a street or a small shape
+      // (or two quotes that differ by one house) would otherwise say whether that house is, say, "150k_plus".
+      const w = input.where ?? {};
+      if (w.addresses?.length || w.houseIds?.length || w.polygon?.length || w.streets?.length) throw new AdsError(422, 'aim_by_area', 'Aim by household data across whole delivery areas only (not streets, a shape on the map or named houses), so nothing about one house can be learned from it.');
+      targeted = await this.byAttributes(companyId, targeted, input.attributes!);
+      if (targeted.length < T) throw new AdsError(422, 'audience_too_small', `Aimed by household data, a buy must reach at least ${T} houses. Choose more areas or fewer conditions.`);
     }
+    // Houses the advertiser named, or a few houses: never one that said no to targeted ads (the household-data
+    // opt-out, no account needed); a few, never one that blocked ads aimed at it alone either.
+    const chose = !!(input.where?.addresses?.length || input.where?.houseIds?.length);
+    // Aimed at a house as such is only for houses known to be in the US: elsewhere, or unknown, the strictest rules.
+    if (chose || targeted.length < T) { const no = await this.saidNo(companyId, targeted); targeted = targeted.filter((h) => !no.has(h.id) && !!this.households?.inUS(h.routeId)); }
+    const small = targeted.length < T;
+    if (small) targeted = targeted.filter((h) => !blocks.small.has(h.id));
     // A house named that we can't take: the same words whatever the reason (never says a house stopped or blocked).
     const named = new Map((input.where.addresses ?? []).map((a) => [normalizeAddress(String(a)).toLowerCase(), String(a)]));
     const cannot = [...unknown, ...[...named].filter(([k]) => found.some((h) => h.key === k) && !targeted.some((h) => h.key === k)).map(([, a]) => a)];
@@ -746,11 +757,17 @@ export class RouteBuyService {
 
   /** Route refunds waiting for a person, and their state. */
   async refunds(companyId: string) {
-    return (await this.db.query<any>(`select * from route_settlements where company_id = $1 and kind = 'refund' order by created_at desc limit 200`, [companyId])).rows.map((r) => this.settlementView(r));
+    return (await this.db.query<any>(`select * from route_settlements where company_id = $1 and kind = 'refund' order by created_at desc limit 200`, [companyId])).rows.map((r) => this.settlementView(r, 'team'));
   }
-  private settlementView(r: any) {
+  /**
+   * A settlement as the team sees it (`team`: why, exactly) or as its advertiser does: a house's own choice (it stopped
+   * deliveries, blocked these ads) is the household's business, and for a buy aimed at one house the advertiser knows
+   * which house it is, so it reads the same as a driver's skip, as the quote's words do (`cannot_reach`).
+   */
+  private settlementView(r: any, viewer: 'team' | 'advertiser') {
     const c = this.platform.campaigns.get(r.campaign_id);
-    return { id: r.id as string, campaignId: r.campaign_id as string, advertiser: c?.advertiserName ?? r.advertiser_id, kind: r.kind as 'credit' | 'refund', reason: r.reason as string, bottles: n(r.bottles), faces: n(r.faces), totalCents: n(r.total_cents), status: r.status as string, failure: r.failure ?? null, at: new Date(r.created_at).toISOString() };
+    const reason = viewer === 'team' ? (r.reason as string) : [...new Set(String(r.reason).split('; ').map((x) => (HOUSE_REASONS.includes(x) ? 'the house is no longer on the route for this ad' : x)))].join('; ');
+    return { id: r.id as string, campaignId: r.campaign_id as string, advertiser: c?.advertiserName ?? r.advertiser_id, kind: r.kind as 'credit' | 'refund', reason, bottles: n(r.bottles), faces: n(r.faces), totalCents: n(r.total_cents), status: r.status as string, failure: r.failure ?? null, at: new Date(r.created_at).toISOString() };
   }
 
   /**
@@ -762,10 +779,10 @@ export class RouteBuyService {
     if (!r) {
       const done = (await this.db.query<any>(`select * from route_settlements where id = $1 and company_id = $2 and kind = 'refund'`, [id, companyId])).rows[0];
       if (!done) throw new AdsError(404, 'not_found', 'Refund not found.');
-      return this.settlementView(done);
+      return this.settlementView(done, 'team');
     }
     await this.sendRefund(r);
-    return this.settlementView((await this.db.query<any>(`select * from route_settlements where id = $1`, [id])).rows[0]);
+    return this.settlementView((await this.db.query<any>(`select * from route_settlements where id = $1`, [id])).rows[0], 'team');
   }
 
   private async sendRefund(r: any) {
@@ -879,8 +896,12 @@ export class RouteBuyService {
     const byStreet = new Map<string, { area: string; street: string; houses: Set<string>; bottles: number }>();
     for (const s of delivered) { const k = `${s.area}|${s.street}`; const x = byStreet.get(k) ?? { area: s.area, street: titleCase(s.street), houses: new Set<string>(), bottles: 0 }; x.houses.add(s.house_id); if (s.bottle !== null) x.bottles++; byStreet.set(k, x); }
     let streets = [...byStreet.values()].map((x) => ({ area: x.area, street: x.street, houses: x.houses.size, bottles: x.bottles }));
-    const chose = !!parse<any>(rb.target)?.addresses?.length || rb.kind === 'houses';
+    const target = parse<any>(rb.target) ?? {};
+    const chose = !!target.addresses?.length || rb.kind === 'houses';
     if (!chose) streets = groupSmall(streets);
+    // Aimed by household data: which houses matched is what a data company or a resident told us, so no drop is listed
+    // (in street order, each drop's time and place would point at the houses that matched).
+    const byData = !!target.attributes && Object.keys(target.attributes).length > 0;
     // Scans of its pieces, by area (the bottles that reached a house).
     const unitSlot = new Map<string, { area: string }>();
     for (const s of delivered) if (s.unit_id) unitSlot.set(s.unit_id, { area: s.area });
@@ -894,24 +915,25 @@ export class RouteBuyService {
       const a = byArea.get(unitSlot.get(r.unit_id)!.area);
       if (a) a.scans += n(r.n);
     }
-    const settlements = (await this.db.query<any>(`select * from route_settlements where campaign_id = $1 order by created_at`, [campaignId])).rows.map((r) => this.settlementView(r));
+    const settlements = (await this.db.query<any>(`select * from route_settlements where campaign_id = $1 order by created_at`, [campaignId])).rows.map((r) => this.settlementView(r, 'advertiser'));
     return {
       campaignId, kind: rb.kind as RouteKind, kindWords: KIND_WORDS[rb.kind as RouteKind], size: shareLabel(n(rb.share) as Share), startWeek: day(rb.start_week), weeks: n(rb.weeks),
       bought: { houses: n(rb.houses), bottles: n(rb.bottles), boxSides: n(rb.faces) },
       progress: { waiting: status('open'), printing: status('held'), printed: placed.length, delivered: delivered.length, credited: status('credited'), refunded: status('refunded') + status('refunding') },
       housesReached: new Set(delivered.map((s) => s.house_id)).size,
       streets: streets.sort((a, b) => a.area.localeCompare(b.area) || a.street.localeCompare(b.street)),
-      drops: [...drops.values()].sort((a, b) => String(a.at).localeCompare(String(b.at))).slice(0, 2000),
-      scansByArea: [...byArea.values()].map((a) => ({ ...a, scanRatePercent: a.bottles ? Math.round((1000 * a.scans) / a.bottles) / 10 : 0 })),
+      drops: byData ? [] : [...drops.values()].sort((a, b) => String(a.at).localeCompare(String(b.at))).slice(0, 2000),
+      // Aimed at a few houses, the advertiser knows the houses: whether someone there scanned is the household's business.
+      scansByArea: [...byArea.values()].map((a) => (rb.small ? { ...a, scans: null, scanRatePercent: null } : { ...a, scanRatePercent: a.bottles ? Math.round((1000 * a.scans) / a.bottles) / 10 : 0 })),
       givenBack: settlements,
-      note: `Streets and areas only: never which house or who lives there. Each drop is where the driver’s phone was when the box was scanned at the door, rounded to about 100 m${rb.small ? ', and the day it was left (aimed at a few houses, the time stays with the household)' : ''}.`,
+      note: `Streets and areas only: never which house or who lives there. ${byData ? 'Aimed by household data, so drops aren’t listed one by one.' : `Each drop is where the driver’s phone was when the box was scanned at the door, rounded to about 100 m${rb.small ? ', and the day it was left (aimed at a few houses, the time stays with the household)' : ''}.`}${rb.small ? ' Scans aren’t shown for an ad aimed at a few houses: whether someone there scanned is theirs to keep.' : ''}`,
     };
   }
 
   /** The advertiser's route buys, credit and refunds, for the portal. */
   async mine(companyId: string, advertiserId: string) {
     const buys = (await this.db.query<any>(`select r.*, o.status as order_status, o.total_cents, o.credit_cents from route_buys r join ad_orders o on o.id = r.order_id where r.company_id = $1 and r.advertiser_id = $2 order by r.created_at desc limit 100`, [companyId, advertiserId])).rows;
-    const settlements = (await this.db.query<any>(`select * from route_settlements where company_id = $1 and advertiser_id = $2 order by created_at desc limit 100`, [companyId, advertiserId])).rows.map((r) => this.settlementView(r));
+    const settlements = (await this.db.query<any>(`select * from route_settlements where company_id = $1 and advertiser_id = $2 order by created_at desc limit 100`, [companyId, advertiserId])).rows.map((r) => this.settlementView(r, 'advertiser'));
     return {
       creditCents: await this.creditBalance(companyId, advertiserId), verified: await this.verified(companyId, advertiserId),
       buys: buys.map((r) => ({ campaignId: r.campaign_id as string, name: this.platform.campaigns.get(r.campaign_id)?.name ?? null, kind: r.kind as RouteKind, kindWords: KIND_WORDS[r.kind as RouteKind], size: shareLabel(n(r.share) as Share), startWeek: day(r.start_week), weeks: n(r.weeks), houses: n(r.houses), bottles: n(r.bottles), boxSides: n(r.faces), small: !!r.small, totalCents: n(r.total_cents), creditCents: n(r.credit_cents), paid: r.order_status === 'paid' })),

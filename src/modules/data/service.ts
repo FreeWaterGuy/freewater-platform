@@ -537,6 +537,12 @@ export class DataService {
       },
       // What a data company told us about their home (only for their own delivery addresses).
       household: userIds.length && this.houseData ? await this.houseData(companyId, userIds) : [],
+      // The house they said is theirs in a delivery area, what they blocked there, and the photos of drops they may see.
+      house: userIds.length ? {
+        claimed: await q(`select h.address, h.status, h.household_size, c.claimed_at from house_claims c join houses h on h.id = c.house_id where c.company_id = $1 and c.user_id = any($2)`, [companyId, userIds]),
+        adBlocks: await q(`select advertiser_id, created_at, removed_at from house_ad_blocks where company_id = $1 and user_id = any($2) order by created_at`, [companyId, userIds]),
+        dropPhotos: this.dropPhotos ? await this.dropPhotos(companyId, userIds) : [],
+      } : null,
       // Everything from the wallet, the games, offers and what they told us, under all their phones and accounts.
       ...(await this.more(companyId, [...new Set([...viewers, ...userIds.map((u) => `user:${u}`)])].filter(Boolean))),
       asAdvertiser: advertiserIds.length ? {
@@ -606,6 +612,10 @@ export class DataService {
   houseData?: (companyId: string, userIds: string[]) => Promise<unknown[]>;
   /** Deletes household data about these people's addresses, and keeps it from coming back in a later import. Set by the app. */
   eraseHouses?: (companyId: string, userIds: string[]) => Promise<number>;
+  /** Photos of drops these people may see as residents (for their download). Set by the app. */
+  dropPhotos?: (companyId: string, userIds: string[]) => Promise<unknown[]>;
+  /** Deletes the photos of these people's own subscription deliveries. Set by the app. */
+  eraseDropPhotos?: (companyId: string, userIds: string[]) => Promise<number>;
 
   /**
    * Erase a person's data: everything kept about them, everything they uploaded or saved, their address, their cards,
@@ -664,6 +674,9 @@ export class DataService {
       await run('house', `update houses h set household_size = null where h.company_id = $1 and h.id in (select house_id from house_claims where company_id = $1 and user_id = any($2)) and not exists (select 1 from house_claims c where c.house_id = h.id and not (c.user_id = any($2)))`, [companyId, users]);
       await run('house claims', `delete from house_claims where company_id = $1 and user_id = any($2)`, [companyId, users]);
       await run('house history', `update house_events set by_user = null where company_id = $1 and by_user = any($2)`, [companyId, users]);
+      // What the house blocked stays blocked (the house's choice, like a stop); who asked for it goes.
+      await run('house blocks', `update house_ad_blocks set user_id = null where company_id = $1 and user_id = any($2)`, [companyId, users]);
+      if (this.eraseDropPhotos) counts['drop photos'] = await this.eraseDropPhotos(companyId, users);
       await run('cards', `delete from payment_methods where customer_id in (select id from payment_customers where company_id = $1 and owner_type = 'user' and owner_id = any($2))`, [companyId, users]);
       if (this.removeUploads) counts.uploads = await this.removeUploads(companyId, users);
     }

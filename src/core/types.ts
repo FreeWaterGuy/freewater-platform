@@ -23,6 +23,12 @@ export interface Location {
   lng?: number;
   /** About how long a bottle takes to print and drop, shown as the countdown. */
   printSeconds?: number;
+  /**
+   * Where it is, for the law that applies to its houses (ISO country, and US state). A route without them is "somewhere
+   * unknown": its houses get the strictest rules, so nothing about them aims an ad (src/modules/households/service.ts).
+   */
+  country?: string;
+  state?: string;
   /** For delivery routes: the area it covers, where vans start, and which days it runs (0 = Sunday). */
   area?: { lat: number; lng: number; radiusKm: number };
   depot?: { lat: number; lng: number; name: string };
