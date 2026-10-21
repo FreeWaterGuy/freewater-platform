@@ -6,7 +6,7 @@ import type { PackService } from '../packs/service';
 import { givingLine } from '../print/renderer';
 import type { ExperienceDoc } from './blocks';
 import type { ScanContext } from './contract';
-import { themeFor, type ExperienceHost } from './host';
+import { fallbackCard, themeFor, type ExperienceHost } from './host';
 import { safeUrl } from './blocks';
 import { builtinPersonalizer, type Personalizer } from '../ai/personalizer';
 import { daypart, describeConditions, fittingVariants, type ScanFacts } from './dynamic';
@@ -43,6 +43,15 @@ export interface OpenedExperience {
   personalizedBy: string | null;
 }
 
+/**
+ * Where a bottle came from, as anyone who holds it may see it. A machine is a public place; a delivery route is where
+ * the person it was made for lives, so it's only ever "home delivery" and the city, never the neighbourhood.
+ */
+export function publicPlace(loc: import('../../core/types').Location | undefined, locationId: string): string {
+  if (!loc) return locationId.startsWith('route') ? 'Home delivery' : locationId;
+  return loc.kind === 'route' ? `Home delivery in ${loc.city}` : `${loc.id}, ${loc.name}`;
+}
+
 export const targetKey = (t: Target) => (t.kind === 'slot' ? `s:${t.unitId}:${t.slot}` : `b:${t.packId}:${t.face}`);
 
 /** Turns a scanned QR into the page that opens: finds the owner, builds the context, and runs their plug-in. */
@@ -65,6 +74,20 @@ export class ExperienceService {
    */
   holdout: (agent: string, key: string) => boolean = () => false;
   onArm: (a: { agent: string; companyId: string; unitId: string; slot: number; viewerKey: string; arm: 'agent' | 'holdout'; campaignId: string }) => void = () => {};
+
+  /**
+   * Set at start-up: may this person's interests pick what they see? False for someone who told us they're under the
+   * minimum age (COPPA and its kind: no personalized advertising to children), whatever they turned on.
+   */
+  mayPersonalize: (companyId: string, subjects: string[]) => Promise<boolean> = async () => true;
+
+  /** The interests a signed-in person chose to share for personalized offers, when they may be used. */
+  private async interestsOf(companyId: string, viewer: { key: string; user?: User | null }): Promise<string[]> {
+    if (!viewer.user) return [];
+    const { interests } = await this.accounts.personalization(viewer.user.viewerKey);
+    if (!interests.length) return interests;
+    return (await this.mayPersonalize(companyId, [viewer.user.viewerKey, viewer.key, `user:${viewer.user.id}`])) ? interests : [];
+  }
 
   /** Set at start-up: the personalized videos behind "Show me more". */
   videos?: import('../video/service').VideoService;
@@ -109,7 +132,7 @@ export class ExperienceService {
     const company = this.platform.companies.get(r.companyId)!;
     const story = await this.story(target, viewerKey);
     const when = daypart(this.platform.bus.now(), company.timezone ?? 'UTC');
-    const interests = viewer.user ? (await this.accounts.personalization(viewer.user.viewerKey)).interests : [];
+    const interests = await this.interestsOf(r.companyId, viewer);
     const facts: ScanFacts = { firstScanner: !story?.firstViewer || story.firstViewer === viewerKey, passedOn: !!story?.firstViewer && story.firstViewer !== viewerKey, newToAdvertiser: r.advertiserId ? !(await this.seenBefore(r.companyId, viewerKey, r.advertiserId)) : true, daypart: when.daypart, day: when.day, interests, keptMinutes: story?.minutesSincePrint ?? 0 };
     const videos = await this.videos.forPerson(c, facts, viewerKey);
     // The video's button goes through click tracking like every other link, so a sale from it is credited to this bottle.
@@ -128,7 +151,7 @@ export class ExperienceService {
     const r = (await this.db.query<any>(`select count(*)::int as scans, count(distinct payload->>'viewerKey')::int as people, count(*) filter (where payload->>'viewerKey' <> $2)::int as others, (array_agg(payload->>'viewerKey' order by seq))[1] as first_viewer from events where type = 'unit.scanned' and payload->>'unitId' = $1`, [unit.id, viewerKey])).rows[0];
     const scans = Number(r?.scans ?? 0), others = Number(r?.others ?? 0);
     return {
-      printedAt: unit.createdAt, place: loc ? `${loc.id}, ${loc.name}` : unit.locationId,
+      printedAt: unit.createdAt, place: publicPlace(loc, unit.locationId),
       minutesSincePrint: Math.max(0, Math.round((this.platform.bus.now().getTime() - Date.parse(unit.createdAt)) / 60000)),
       scans, people: Number(r?.people ?? 0), passedOn: others > 0, mine: scans - others, others, firstViewer: (r?.first_viewer as string | null) ?? null,
     };
@@ -191,7 +214,7 @@ export class ExperienceService {
     const r = this.resolveOwner(target);
     const company = this.platform.companies.get(r.companyId)!;
     const firstTime = r.advertiserId ? !(await this.seenBefore(r.companyId, viewerKey, r.advertiserId)) : true;
-    const interests = viewer.user ? (await this.accounts.personalization(viewer.user.viewerKey)).interests : [];
+    const interests = await this.interestsOf(r.companyId, viewer);
     const now = this.platform.bus.now();
     const story = await this.story(target, viewerKey);
     const when = daypart(now, company.timezone ?? 'UTC');
@@ -209,7 +232,12 @@ export class ExperienceService {
       now, ...(bottle ? { bottle } : {}),
       moment: { daypart: facts.daypart, firstScanner: facts.firstScanner, passedOn: facts.passedOn },
     };
-    const doc = await this.host.open({ pluginId: pick.pluginId, config: pick.config, scan, theme: themeFor(company.brand, r.campaign?.theme) });
+    // Only what content review approved reaches a printed bottle. An advertiser's edit (or a rejected one) waiting for
+    // review shows the owner's simple card until it's approved: never the unreviewed page, and never nothing.
+    const reviewed = !r.campaign?.review || r.campaign.review.status === 'approved';
+    const doc = reviewed
+      ? await this.host.open({ pluginId: pick.pluginId, config: pick.config, scan, theme: themeFor(company.brand, r.campaign?.theme) })
+      : { pluginId: pick.pluginId, owner: { name: r.ownerName, theme: themeFor(company.brand) }, blocks: fallbackCard(r.ownerName), fallback: true };
     doc.blocks = await this.track(doc.blocks, target, r, viewerKey);
     // The advertiser's paid space comes first: their own ad, their AR, their offer. Then proof others bought and a
     // way to pass it on. Anything more (personalized videos) only when the person asks.

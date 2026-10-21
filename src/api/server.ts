@@ -50,7 +50,7 @@ import { newId } from '../core/ids';
 import { AccountsError, roleScopes, type Role } from '../modules/accounts/service';
 import { approvalRoutes, approverStepProblem } from '../modules/accounts/secondStep';
 import { PaymentError } from '../modules/payments/service';
-import { ExperienceError, targetKey, type Target } from '../modules/experiences/service';
+import { ExperienceError, publicPlace, targetKey, type Target } from '../modules/experiences/service';
 import { AssetError, allowedTypes } from '../modules/assets/store';
 import { builtinModel } from '../modules/models/builtin';
 import { glbToUsdz } from '../modules/models/usdz';
@@ -140,7 +140,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const r = platform.ledger.receipt(unitId);
     const company = platform.companies.get(u.companyId)!;
     const loc = platform.locations.get(u.locationId);
-    return { unitId, company: company.name, printedAt: u.createdAt, place: loc ? `${loc.id}, ${loc.name}` : u.locationId, ads: u.placements.filter((p) => !p.isHouse).length, earnedCents: r.earned, donatedCents: r.donatedCents, givingOn: company.giving.mode !== 'none' };
+    return { unitId, company: company.name, printedAt: u.createdAt, place: publicPlace(loc, u.locationId), ads: u.placements.filter((p) => !p.isHouse).length, earnedCents: r.earned, donatedCents: r.donatedCents, givingOn: company.giving.mode !== 'none' };
   };
   const campaignView = (c: Campaign) => ({ id: c.id, advertiserId: c.advertiserId, advertiserName: c.advertiserName, category: c.category, competitorGroup: c.competitorGroup ?? null, sizes: c.sizes, formats: c.formats ?? ['label'], experienceId: c.experienceId, experienceConfig: c.experienceConfig ?? null, theme: c.theme ?? null, targeting: c.targeting, buy: c.buy, active: c.active, isHouse: !!c.isHouse,
     qr: { mode: c.qr?.mode ?? 'dynamic', ...(c.qr?.staticUrl ? { staticUrl: c.qr.staticUrl } : {}), hasLogo: !!c.qr?.logo }, variants: c.variants?.length ?? 0, personalize: c.personalize ?? null, afterEnd: c.afterEnd ?? 'current' });
@@ -222,7 +222,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const rules = await app.data.rulesFor(companyId, [viewer], place);
     const playable = rules.rewards && (await app.data.ageOk(companyId, [viewer])) !== false;
     const privacy = { askFirst: rules.askFirst, region: rules.region, minimumAge: rules.minimumAge, rewards: rules.rewards, doNotSell: await app.data.doesNotSell(companyId, [viewer]), why: target.kind === 'slot' ? `/v1/public/why/${encodeURIComponent(target.unitId)}/${target.slot}` : null };
-    return { body: { ...opened, companyId, lottery: game && playable ? app.lottery.publicInfo(game) : null, privacy, ...(environment ? { environment } : {}) } };
+    return { body: { ...opened, companyId, lottery: game && playable ? app.lottery.publicInfo(game) : null, privacy, ...(environment ? { environment } : {}) }, headers: { 'cache-control': 'private, no-store' } }; // one person's page: their own coupon, key and choices
   };
   route({ method: 'GET', url: '/v1/public/experience/:unitId/:slot', scope: 'public', summary: 'The page a bottle slot opens, as blocks. Opening it is free; the page then reports the scan once it has shown.', handler: async (req) => {
     const { unitId, slot } = req.params as any;

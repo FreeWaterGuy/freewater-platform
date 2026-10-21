@@ -11,6 +11,8 @@ import type { ExperiencePlugin } from './contract';
  *
  * It must answer within the time limit with { "blocks": [...] }. The blocks are checked like any other plug-in's.
  * Viewers are never identified to partners: the viewer key is replaced with a one-way hash unique to that partner.
+ * Nothing about the person goes to a partner either: their interests stay with us (sending them to another business's
+ * server would be sharing personal data, which people haven't agreed to and which "do not sell or share" forbids).
  */
 export interface RemotePluginOptions {
   id: string;
@@ -34,7 +36,7 @@ export function remotePlugin(o: RemotePluginOptions): ExperiencePlugin {
       const body = JSON.stringify({
         plugin: o.id,
         config,
-        scan: { ...scan, now: scan.now.toISOString(), viewer: { ...scan.viewer, key: createHash('sha256').update(`${o.id}:${scan.viewer.key}`).digest('hex').slice(0, 32) } },
+        scan: { ...scan, now: scan.now.toISOString(), viewer: { ...scan.viewer, interests: [], key: createHash('sha256').update(`${o.id}:${scan.viewer.key}`).digest('hex').slice(0, 32) } },
       });
       const t = Math.floor(scan.now.getTime() / 1000);
       const sig = createHmac('sha256', o.secret).update(`${t}.${body}`).digest('hex');
