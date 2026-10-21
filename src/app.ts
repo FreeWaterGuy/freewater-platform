@@ -102,6 +102,7 @@ import { builtinNewsWriter, ClaudeNewsWriter, type NewsWriter } from './modules/
 import { AiReviewService, ClaudeAdReviewer, standInReviewer, type AdReviewer } from './modules/ads/aiReview';
 import { HouseholdService } from './modules/households/service';
 import { sampleAustinAreas } from './modules/households/sampleAustin';
+import { prepaidLeft } from './modules/ads/budget';
 
 /** What the running server adds around the app: alerts, and (in production) the lease and the job runner. */
 /** The last result of the checks people rely on, for GET /health/deep (since this server started). */
@@ -575,6 +576,7 @@ export async function createApp(opts: AppOptions) {
   // Each company's switches (its Features page, src/runtime/registry.ts): routes, jobs, screens and the engine read them.
   // The host's settings (FW_FEATURES) stay the outer limit: a company can't turn on what the host has off.
   const companyFeatures = new FeatureService(db, () => platform.companies, features, consoleSvc, opts.clock);
+  companyFeatures.paidWaiting = (companyId) => [...platform.campaigns.values()].filter((c) => c.companyId === companyId && c.prepaid).map((c) => ({ share: c.prepaid!.share, left: prepaidLeft(c) }));
   await companyFeatures.load();
   const featureOn = (companyId: string, id: string) => companyFeatures.on(companyId, id);
   platform.featureOn = featureOn;

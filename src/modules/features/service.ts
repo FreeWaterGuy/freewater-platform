@@ -4,8 +4,10 @@ import type { Features } from '../../runtime/features';
 import { applyChange, type EditableKey } from '../console/settings';
 import type { ConsoleService, SaveNote } from '../console/service';
 import {
-  ACTION_SWITCHES, CATALOGUE, CATEGORIES, JOB_SWITCH, ROUTE_SWITCH, STARTING_POINTS, SWITCHES, byId, dependantsOf, needsOf, startsOffForNew, switchOfPlugin, whoTurnsOn, type Switch,
+  ACTION_SWITCHES, CATALOGUE, CATEGORIES, JOB_SWITCH, ROUTE_SWITCH, SIZE_SWITCHES, STARTING_POINTS, SWITCHES, byId, dependantsOf, needsOf, startsOffForNew, switchOfPlugin, whoTurnsOn, type Switch,
 } from '../../runtime/registry';
+
+const SIZE_SWITCH_SHARE: Record<string, number> = Object.fromEntries(Object.entries(SIZE_SWITCHES).map(([share, id]) => [id, Number(share)]));
 
 /**
  * Each company's switches (the Features page). One source of truth per switch: a 'feature' switch is kept here (one
@@ -39,7 +41,12 @@ export interface Plan {
   yourself: { id: string; label: string; how: string }[];
   /** True when a change needs an owner who passed the second sign-in step. */
   needsSecondStep: boolean;
+  /** What the change does that a person should know before saving (paid bottles that would wait), in plain words. */
+  warnings: string[];
 }
+
+/** Switches that, off, keep paid bottles from going out (bottles at that size, or any ad). */
+const PRINTS_PAID = (id: string) => id === 'printing' || id === 'ads' || id.startsWith('size_');
 
 const PLATFORM = () => process.env.PLATFORM_COMPANY ?? 'freewater';
 
@@ -48,6 +55,11 @@ export class FeatureService {
   private rows = new Map<string, Map<string, boolean>>();
   private baselines = new Map<string, number>();
   private locks = new Map<string, Promise<unknown>>();
+  /**
+   * Set by the app: the company's paid ads with bottles still to go out (their size, as a share of the label). The
+   * founder's promise is that paid bottles always go out, so a switch that would hold them back says so first.
+   */
+  paidWaiting?: (companyId: string) => { share: number; left: number }[];
 
   constructor(
     private db: SqlClient,
@@ -253,7 +265,12 @@ export class FeatureService {
       if (own(id)) continue;
       if (s.host && !this.host.on(s.host)) { (opts.startingPoint ? yourself : refused).push({ id, label: s.label, ...(opts.startingPoint ? { how: 'Switched off on this server: the host turns it on.' } : { reason: 'It’s switched off on this server (the host’s settings); the host turns it on.' }) } as any); continue; }
       const missing = needsOf(s).filter((n) => !own(n) || (byId.get(n)!.host && !this.host.on(byId.get(n)!.host!)));
-      if (missing.length) { if (!opts.startingPoint) refused.push({ id, label: s.label, reason: `Turn on ${missing.map((m) => `“${label(m)}”`).join(' and ')} first.` }); continue; }
+      if (missing.length) {
+        if (!opts.startingPoint) refused.push({ id, label: s.label, reason: `Turn on ${missing.map((m) => `“${label(m)}”`).join(' and ')} first.` });
+        // Under something the starting point left for a person (money, say): listed too, so nothing it wants is lost.
+        else if (missing.some((m) => yourself.some((y) => y.id === m))) yourself.push({ id, label: s.label, how: `After ${missing.map((m) => `“${label(m)}”`).join(' and ')}: turn it on yourself${s.risk ? ', with the second sign-in step' : ''}.` });
+        continue;
+      }
       // Turned on elsewhere: by an approved step, or on its own page (it needs numbers first). Said, never done here.
       const elsewhere = s.step ? s.link?.via?.on ?? 'Through an approved step.' : s.ownPage ? s.ownPage.on : s.kind === 'linked' && s.link!.set(c, true) === null ? s.link!.via?.on ?? 'On its own page.' : null;
       if (elsewhere) { if (opts.startingPoint) yourself.push({ id, label: s.label, how: elsewhere }); else refused.push({ id, label: s.label, reason: elsewhere }); continue; }
@@ -281,7 +298,18 @@ export class FeatureService {
       if (!opts.startingPoint) break;
       changes = changes.filter((x) => x.id !== linked.problem!.id);
     }
-    return { changes, refused, yourself, needsSecondStep: changes.some((x) => x.to && !!byId.get(x.id)!.risk) };
+    return { changes, refused, yourself, needsSecondStep: changes.some((x) => x.to && !!byId.get(x.id)!.risk), warnings: this.paidWarnings(companyId, changes) };
+  }
+
+  /** Paid bottles a change would hold back (they print again once it's back on, or a person stops them and pays them back). */
+  private paidWarnings(companyId: string, changes: PlannedChange[]): string[] {
+    const off = changes.filter((x) => !x.to && PRINTS_PAID(x.id)).map((x) => x.id);
+    if (!off.length || !this.paidWaiting) return [];
+    const all = off.includes('printing') || off.includes('ads');
+    const held = this.paidWaiting(companyId).filter((p) => p.left > 0 && (all || off.some((id) => SIZE_SWITCH_SHARE[id] === p.share)));
+    if (!held.length) return [];
+    const bottles = held.reduce((a, p) => a + p.left, 0);
+    return [`${bottles.toLocaleString('en-US')} paid bottle${bottles === 1 ? '' : 's'} of ${held.length} ad${held.length === 1 ? '' : 's'} still to go out won’t print while this is off. Paid bottles always go out: they print again once it’s back on, or an owner or finance person stops each ad and pays back what wasn’t printed.`];
   }
 
   /** The one settings change for every linked switch in these changes, and the first problem the settings' checks find. */
