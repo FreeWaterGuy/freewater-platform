@@ -281,6 +281,12 @@ whether the handler refuses service keys (`yes`), only for some changes, or not 
 *Other check*: extra guards in the handler; "second step (owners/finance, R4)" means an owner or finance person must approve from a sign-in that passed the authenticator step at sign-in, with an app set up at least 24 hours before (`approvalRoutes` in `src/modules/accounts/secondStep.ts`, always; `conditionalApprovalRoutes`, when the request touches an approval setting or role). *Docs*: whether this matches README, SWITCHES, RUNNING, AI and the
 route's own OpenAPI summary.
 
+**Areas switched off (`FW_FEATURES`).** A host can take whole areas out (`src/runtime/features.ts`; the pilot preset
+takes out 42 of these routes). Their routes are never registered, so they answer 404 to everyone and the walk below
+only covers what's left; `test/access-routes.test.ts` checks that with the pilot preset exactly the core rows are
+registered, the rest answer 404 even to the platform's admin key, their jobs aren't scheduled, and their launch steps
+can't be proposed.
+
 **Mismatches and gaps (13):**
 
 | Route | Problem | Risk |
@@ -666,6 +672,7 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 354 | `GET /v1/platform/status` | platform | no | — | OK |
 | 355 | `POST /v1/platform/persistence/skip-stuck` | platform | yes | — | OK (R7 fixed): a person’s decision, signed in (RUNNING.md) |
 | 356 | `POST /v1/platform/jobs/:name/run` | platform | no | — | OK |
+| 357 | `GET /v1/public/features` | public | — | — | OK (public by design: which areas this server runs, no secrets; routes of areas switched off with FW_FEATURES aren't registered at all, so they aren't in this table's walk on a pilot server) |
 
 ---
 

@@ -520,11 +520,14 @@
       h('p', { class: 'small muted', style: 'margin:8px 0 0', text: `${info.notice} ${info.use}` }));
   }
 
+  /** Is this area on, on this server? (GET /v1/public/features) */
+  const on = (feature) => !(state.features?.off ?? []).includes(feature);
+
   async function walletScreen() {
     const me = await loadMe();
     const cid = encodeURIComponent(state.config.companyId);
     const vk = viewerKey();
-    const [w, offers] = await Promise.all([me ? api('GET', '/v1/me/wallet') : api('GET', `/v1/public/wallet/${cid}?viewer=${encodeURIComponent(vk)}`), api('GET', `/v1/public/offers/${cid}?viewer=${encodeURIComponent(vk)}`).catch(() => ({ offers: [], mine: [] }))]);
+    const [w, offers] = await Promise.all([me ? api('GET', '/v1/me/wallet') : api('GET', `/v1/public/wallet/${cid}?viewer=${encodeURIComponent(vk)}`), on('offers') ? api('GET', `/v1/public/offers/${cid}?viewer=${encodeURIComponent(vk)}`).catch(() => ({ offers: [], mine: [] })) : { offers: [], mine: [] }]);
     const tok = (n) => (n / 1e6).toLocaleString(undefined, { maximumFractionDigits: 6 });
     const claim = async (o, btn) => {
       if (!me && !(await signIn('Offers pay real money, so they need an account.'))) return;
@@ -556,8 +559,8 @@
           (w.token.live || w.token.balance) ? h('div', {}, h('b', { text: tok(w.token.balance) }), h('span', { text: 'tokens' })) : null),
         w.token.live ? h('p', { style: 'margin:8px 0 0;opacity:.85;font-size:14px', text: w.token.held }) : null),
       lvl?.askNow ? levelPicker(me, lvl, { card: true }) : null,
-      me && w.exchange.enabled && w.credit.balanceCents >= 500 ? giftCardTile(w) : null,
-      link('/play', { class: 'tile blue' }, h('span', { class: 'tile-ico' }, icon(I.scan)), h('span', { class: 'grow' }, h('b', { text: 'Play for points' }), h('span', { text: 'Pick what you’d really choose. Same points whichever you pick.' }))),
+      me && on('gift_cards') && w.exchange.enabled && w.credit.balanceCents >= 500 ? giftCardTile(w) : null,
+      !on('games') ? null : link('/play', { class: 'tile blue' }, h('span', { class: 'tile-ico' }, icon(I.scan)), h('span', { class: 'grow' }, h('b', { text: 'Play for points' }), h('span', { text: 'Pick what you’d really choose. Same points whichever you pick.' }))),
       offers.offers.length || offers.mine.length ? h('h2', { class: 'section' }, 'Offers') : null,
       ...offers.offers.map((o) => { const b = h('button', { class: 'btn small', type: 'button', text: o.pointsCost ? `Claim for ${o.pointsCost} points` : 'Claim' }); b.addEventListener('click', () => claim(o, b)); return h('div', { class: 'list-row' }, h('span', { class: 'grow' }, h('b', { text: o.title }), h('span', { class: 'small muted', text: `${o.deal} · ${o.retailers.includes('any') ? 'any store' : o.retailers.join(', ')}` })), b); }),
       ...offers.mine.map((c) => h('div', { class: 'list-row', style: 'flex-wrap:wrap' }, h('span', { class: 'grow' }, h('b', { text: c.title }), h('span', { class: 'small muted', text: said[c.status] ?? c.status })), c.status === 'claimed' ? receipt(c) : null)),
@@ -804,7 +807,11 @@
 
   // ---------- start ----------
   (async () => {
-    try { state.config = await api('GET', '/v1/public/app-config'); }
+    try {
+      state.config = await api('GET', '/v1/public/app-config');
+      // Areas switched off on this server (FW_FEATURES): their tiles and buttons aren't shown.
+      state.features = await api('GET', '/v1/public/features').catch(() => ({ off: [] }));
+    }
     catch { root.replaceChildren(h('div', { class: 'boot' }, h('p', { text: 'Can’t reach FreeWater. Check your connection and try again.' }))); return; }
     render();
   })();

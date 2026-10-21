@@ -40,6 +40,8 @@ for outside companies live in the host's settings (the environment), never in th
 
 ## 1. The three stages
 
+(On a pilot server, `FW_FEATURES=pilot`, only the first two exist: see section 6.)
+
 You go through them in order and never back.
 
 | Stage | What it means | How you get there | Can it be undone? |
@@ -143,7 +145,30 @@ Every settings change is saved as a version. *History* shows who changed what, a
 
 ---
 
-## 6. Keys for outside companies (in the host's settings)
+## 6. Whole areas off on this server (host settings, `FW_FEATURES`)
+
+Separate from every switch above: the host's settings can take whole areas out of the server, so a small launch
+exposes only what it uses. `FW_FEATURES=pilot` is the preset for the first pilot; `FW_FEATURES_OFF=lottery,offers`
+(a comma list) switches off more. Unset, everything is on.
+
+| Rule | How |
+|---|---|
+| **Off means gone, not refused.** | The area's addresses aren't registered (404, not in the API description), its background jobs aren't scheduled, and the screens hide it. |
+| **Steps that would switch an area on can't be proposed or run.** | With `token` off: going live with the token, minting and switching the chain on. With `token_conversion`, `withdrawals` or `gift_cards` off: their steps under *Launch*. Going live with points, pause and unpause always stay. |
+| **It only takes away.** | Every switch inside an area that's on still starts off and works as above. |
+| **Only the host's settings change it, with a restart.** | Never the console, never a key. |
+| **A typo can't leave something on.** | An unknown name stops a production start. |
+| **Nothing is deleted.** | Switching an area back on brings back everything it had. |
+
+The pilot keeps bottles, ads, scans, AR, attribution, the app (points included), delivery, the portals and consoles,
+giving, the open books, accounts, data rights, transparency, machines, the games and launch up to *live with points*.
+It switches off the token, conversion, withdrawals, gift cards, money partners, the AI agents' fund, the operator
+network, the prize game, Veo footage and brand offers. The full table, with the reason for each, is in
+`docs/RUNNING.md` (*The pilot*); the areas and their routes are in `src/runtime/features.ts`.
+
+---
+
+## 7. Keys for outside companies (in the host's settings)
 
 Each switches from a stand-in to the real company once its key is set. No code changes. The full list is in
 `docs/RUNNING.md`.

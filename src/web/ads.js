@@ -77,9 +77,13 @@
   async function render() {
     if (cleanup) { cleanup(); cleanup = null; }
     if (!(await signedIn())) return;
+    // Areas switched off on this server (FW_FEATURES): their pages and menu entries aren't shown.
+    if (!state.features) state.features = await api('GET', '/v1/public/features').catch(() => ({ off: [] }));
+    if (!on('offers') && /^\/ads\/offers/.test(state.path)) return go('/ads', true);
     for (const [re, fn] of routes) { const m = re.exec(state.path); if (m) { try { await fn(...m.slice(1)); } catch (e) { shell('', h('div', { class: 'notice err', text: e.message })); } window.scrollTo(0, 0); return; } }
     go('/ads', true);
   }
+  const on = (feature) => !(state.features?.off ?? []).includes(feature);
   function shell(active, ...content) {
     const me = state.me;
     root.replaceChildren(h('div', { class: 'shell' },
@@ -89,7 +93,7 @@
           link('/ads', { 'aria-current': active === 'overview' ? 'page' : null }, icon(I.chart), 'Overview'),
           link('/ads/new', { 'aria-current': active === 'new' ? 'page' : null }, icon(I.plus), 'New ad'),
           link('/ads/studio', { 'aria-current': active === 'studio' ? 'page' : null }, icon(I.plus), 'Ad studio'),
-          link('/ads/offers', { 'aria-current': active === 'offers' ? 'page' : null }, icon(I.ticket), 'Offers'),
+          !on('offers') ? null : link('/ads/offers', { 'aria-current': active === 'offers' ? 'page' : null }, icon(I.ticket), 'Offers'),
           link('/ads/tracking', { 'aria-current': active === 'tracking' ? 'page' : null }, icon(I.target), 'Sales tracking'),
           link('/ads/redeem', { 'aria-current': active === 'redeem' ? 'page' : null }, icon(I.ticket), 'Check a coupon'),
           link('/ads/statement', { 'aria-current': active === 'statement' ? 'page' : null }, icon(I.chart), 'Statement'),
