@@ -1521,6 +1521,76 @@ create index if not exists ledger_company_at on ledger_entries(company_id, at);
 alter table sessions add column if not exists second_step_at timestamptz;
 `,
   },
+  {
+    id: '056_cp_bottle_belongs_to_one_person',
+    sql: `
+-- A bottle belongs to one person, and the database keeps it so, not only the code. Once a bottle is someone's (the
+-- account it was printed for, the anonymous key its targeted ads were chosen for, the pack it went in), that never
+-- changes; its company and order never change; and once it's out (dispensed) or let go (failed) its status is final.
+-- A bottle let go keeps its record: a reprint is a new bottle.
+create function units_keep_owner() returns trigger language plpgsql as $$
+begin
+  if new.company_id <> old.company_id or new.order_id is distinct from old.order_id then
+    raise exception 'bottle % can''t move to another company or order', old.id using errcode = '23514';
+  end if;
+  if old.pack_id is not null and new.pack_id is distinct from old.pack_id then
+    raise exception 'bottle % is in pack % and can''t move to another', old.id, old.pack_id using errcode = '23514';
+  end if;
+  if (old.data->>'consumerId') is not null and (new.data->>'consumerId') is distinct from (old.data->>'consumerId') then
+    raise exception 'bottle % belongs to one person and can''t be given to another', old.id using errcode = '23514';
+  end if;
+  if (old.data->>'intendedFor') is not null and (new.data->>'intendedFor') is distinct from (old.data->>'intendedFor') then
+    raise exception 'bottle % was printed for one person and can''t be marked for another', old.id using errcode = '23514';
+  end if;
+  if old.status in ('dispensed', 'failed') and new.status <> old.status then
+    raise exception 'bottle % is % and can''t become %', old.id, old.status, new.status using errcode = '23514';
+  end if;
+  return new;
+end $$;
+create trigger units_keep_owner before update on units for each row execute function units_keep_owner();
+
+-- A label kept for when a machine's internet drops is used or let go once, never both and never back.
+create function machine_buffer_once() returns trigger language plpgsql as $$
+begin
+  if old.status <> 'held' and new.status <> old.status then
+    raise exception 'offline label % is already % and can''t become %', old.unit_id, old.status, new.status using errcode = '23514';
+  end if;
+  if new.unit_id <> old.unit_id or new.location_id <> old.location_id or new.company_id <> old.company_id then
+    raise exception 'offline label % can''t move to another machine', old.unit_id using errcode = '23514';
+  end if;
+  return new;
+end $$;
+create trigger machine_buffer_once before update on machine_buffer for each row execute function machine_buffer_once();
+
+-- Checks for new rows at once, then for rows already stored; an old row that breaks one leaves it for new rows only.
+do $$
+declare c record;
+begin
+  for c in select * from (values
+    ('units', 'units_status_check', 'check (status in (''filled'', ''rendered'', ''printed'', ''dispensed'', ''failed''))'),
+    -- A box never holds more bottles than it's made for (two prints of one pack at once made a 6-pack of 8).
+    ('packs', 'packs_bottles_fit_box', 'check (jsonb_array_length(coalesce(data->''unitIds'', ''[]''::jsonb)) <= coalesce((data->''box''->>''bottles'')::int, 48))'),
+    ('packs', 'packs_status_check', 'check (status in (''composed'', ''box_printed'', ''mismatch'', ''verified'', ''sealed'', ''loaded'', ''delivered'', ''returned''))'),
+    ('machine_buffer', 'machine_buffer_used_at', 'check ((status = ''used'') = (used_at is not null))')
+  ) as v(tbl, name, def) loop
+    execute format('alter table %I add constraint %I %s not valid', c.tbl, c.name, c.def);
+    begin
+      execute format('alter table %I validate constraint %I', c.tbl, c.name);
+    exception when check_violation then
+      raise warning 'Rows already in % break %; it applies to new rows only until they''re corrected.', c.tbl, c.name;
+    end;
+  end loop;
+end $$;
+
+-- One box per stop of a night's run (a box sent back doesn't count): two plans of one night at once made two.
+do $$
+begin
+  create unique index packs_one_per_run_stop on packs(company_id, route_id, (data->>'runId'), stop) where status <> 'returned' and data->>'runId' is not null;
+exception when unique_violation then
+  raise warning 'Not added (old rows break it): packs_one_per_run_stop';
+end $$;
+`,
+  },
 ];
 
 /** Runs every migration not yet run (or, for tests that start from an older schema, those in `list`). */

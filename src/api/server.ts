@@ -43,6 +43,7 @@ import { DesignError } from '../modules/custom/service';
 import type { App } from '../app';
 import { findApiKey, type ApiKey, type Scope , PersistencePaused } from '../db/store';
 import { LeaseLostError } from '../db/leaseChecked';
+import { OrderConflictError } from '../platform';
 import type { Campaign, Share } from '../core/types';
 import { svgCreative } from '../modules/print/svgCreative';
 import { newId } from '../core/ids';
@@ -315,6 +316,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     // Another company's machine is, to this key, a machine that doesn't exist.
     if (!loc || (loc.companyId ?? PLATFORM_COMPANY) !== key!.companyId) throw new ApiError(422, 'unknown_location', `Location ${b.locationId} doesn't exist.`);
     if (!platform.products.has(b.productId)) throw new ApiError(422, 'unknown_product', `Product ${b.productId} doesn't exist.`);
+    // Order ids the platform makes itself (a person's tap, a machine's offline labels) can't be taken from here.
+    if (/^(vend|buffer):/.test(String(b.orderId))) throw new ApiError(422, 'reserved_order_id', 'Order ids starting with "vend:" or "buffer:" are the platform’s own. Use another.');
     let custom;
     if (b.custom) {
       // Never billed here: nobody's money is held for it, so booking its price would be revenue no one pays, and the
@@ -479,6 +482,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const b = req.body as any;
     const loc = platform.locations.get(b.routeId);
     if (!loc || (loc.companyId ?? PLATFORM_COMPANY) !== key!.companyId) throw new ApiError(422, 'unknown_route', `Route ${b.routeId} doesn't exist.`);
+    // The pack's bottles become this customer's: never a person of another company (P5).
+    const owner = (await db.query<{ company_id: string }>(`select company_id from users where id = $1`, [b.customerId])).rows[0];
+    if (owner && owner.company_id !== key!.companyId) throw new ApiError(422, 'unknown_customer', `Customer ${b.customerId} doesn't exist.`);
     try {
       const p = await packs.compose({ companyId: key!.companyId, ...b });
       return { status: 201, body: packView(p.id) };
@@ -995,7 +1001,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       const b: any = req.body ?? {};
       securityLog.record({ kind: 'sign_in_failed', companyId: typeof b.companyId === 'string' && platform.companies.has(b.companyId) ? b.companyId : null, actor: mask(b.to), ip: req.ip, detail: { reason: err.code ?? 'invalid' } }, `sif:${req.ip}:${b.to}`);
     }
-    if (err instanceof ApiError || err instanceof PersistencePaused || err instanceof LeaseLostError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
+    if (err instanceof ApiError || err instanceof PersistencePaused || err instanceof LeaseLostError || err instanceof OrderConflictError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
     if (err instanceof AccountsError || err instanceof PaymentError || err instanceof ExperienceError || err instanceof AssetError || err instanceof AdsError || err instanceof DesignError || err instanceof DeliveryError || err instanceof BooksError || err instanceof WebhookError || err instanceof ConsoleError || err instanceof FleetError || err instanceof AttributionError || err instanceof LotteryError || err instanceof VideoError || err instanceof DataError || err instanceof NumberLineError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
     if (err.code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE') return reply.code(415).send({ error: { code: 'unsupported_type', message: 'Send JSON, or for uploads a .glb, PNG, JPEG, WebP or MP4 file.' } });
     if (err.code === 'FST_ERR_CTP_BODY_TOO_LARGE') return reply.code(413).send({ error: { code: 'too_large', message: 'That is too big to upload.' } });

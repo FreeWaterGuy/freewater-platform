@@ -189,7 +189,8 @@ export class AccountsService {
    * turned on personalized offers), and which advertisers they've already met. Never a name or contact details.
    */
   async audienceFor(userId: string, companyId: string): Promise<import('../ads/contract').PrintAudience | null> {
-    const r = (await this.db.query<any>(`select viewer_key, consents, interests from users where id = $1 and deleted_at is null`, [userId])).rows[0];
+    // Only this company's people: another company's customer id never brings their interests (or their bottles) here.
+    const r = (await this.db.query<any>(`select viewer_key, consents, interests from users where id = $1 and company_id = $2 and deleted_at is null`, [userId, companyId])).rows[0];
     if (!r) return null;
     const consents = parse<Consents>(r.consents);
     // Without their yes to personalized offers, nothing about them is used to pick ads.

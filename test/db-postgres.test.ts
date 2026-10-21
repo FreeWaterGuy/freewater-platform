@@ -34,6 +34,21 @@ describe.skipIf(!url)('the new migrations over data the old code wrote, on real 
     expect((await app.wallet.check('freewater')).ok).toBe(true);
   });
 
+  it('a bottle belongs to one person, kept by the database over the bottles already there (056)', async () => {
+    expect((await db.query(`select 1 from pg_indexes where indexname = 'packs_one_per_run_stop'`)).rows).toHaveLength(1);
+    expect((await db.query(`select 1 from pg_trigger where tgname in ('units_keep_owner', 'machine_buffer_once')`)).rows).toHaveLength(2);
+    const u = (await db.query<any>(`select id from units where status = 'dispensed' limit 1`)).rows[0].id;
+    // A bottle already out: its status, company and order are final; a person can be set once, never changed.
+    await expect(db.query(`update units set status = 'filled' where id = $1`, [u])).rejects.toThrow(/can.t become/);
+    await db.query(`update units set data = jsonb_set(data, '{consumerId}', '"usr_pg_first"') where id = $1`, [u]);
+    await expect(db.query(`update units set data = jsonb_set(data, '{consumerId}', '"usr_pg_other"') where id = $1`, [u])).rejects.toThrow(/belongs to one person/);
+    // The app keeps writing bottles as before (a new order, printed and dispensed).
+    const r = await app.platform.order({ companyId: 'freewater', orderId: `pg-056-${now}`, locationId: 'ATX-022', productId: 'bottle-16oz' });
+    expect(r.ok).toBe(true);
+    await app.persistence.flush();
+    expect((await db.query<any>(`select status from units where id = $1`, [r.unit.id])).rows[0].status).toBe('dispensed');
+  });
+
   it('the app still writes its journals; edits are refused', async () => {
     const fw = app.platform.companies.get('freewater')!;
     fw.wallet = { ...app.wallet.settings('freewater'), credit: { enabled: true } } as any;

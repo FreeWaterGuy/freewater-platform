@@ -53,6 +53,21 @@ export type DeliveryResult =
 export class PackService {
   readonly packs = new Map<string, Pack>();
   private boxTries = new Map<string, number>();
+  /**
+   * Packs whose bottles are printing right now (finish or replace). Two at once on one pack would each print what the
+   * pack still lacks (a 6-pack of 8, all billed) or both reprint the same missing bottle; and a pack can't be checked
+   * or sealed while what's in it is still changing.
+   */
+  private printing = new Map<string, Promise<unknown>>();
+  private busy(packId: string) {
+    if (this.printing.has(packId)) throw new PackStateError(`Pack ${packId} is printing bottles right now; try again when it's done.`);
+  }
+  private exclusive<T>(packId: string, fn: () => Promise<T>): Promise<T> {
+    const run = fn();
+    this.printing.set(packId, run);
+    void run.finally(() => { if (this.printing.get(packId) === run) this.printing.delete(packId); }).catch(() => {});
+    return run;
+  }
 
   constructor(private platform: Platform, private boxes: Map<string, BoxProduct>) {}
 
@@ -78,7 +93,13 @@ export class PackService {
    * Print whatever a pack still needs: bottles not yet printed, then the box. compose() does this for a new pack;
    * after a failure (a bottle or the box wouldn't print) running it again picks up where it stopped.
    */
-  async finish(packId: string, productId: string): Promise<Pack> {
+  finish(packId: string, productId: string): Promise<Pack> {
+    // Already printing (a second plan of the night, a retry): wait for that one rather than print alongside it.
+    const running = this.printing.get(packId);
+    if (running) return running.catch(() => {}).then(() => this.finish(packId, productId));
+    return this.exclusive(packId, () => this.finishNow(packId, productId));
+  }
+  private async finishNow(packId: string, productId: string): Promise<Pack> {
     const p = this.platform;
     const pack = this.need(packId);
     if (pack.status !== 'composed') return pack; // its box is printed already
@@ -138,6 +159,7 @@ export class PackService {
   /** The packing line scans every bottle before the box closes. Returns what is missing or doesn't belong. */
   verify(packId: string, scannedUnitIds: string[]): { ok: boolean; missing: string[]; unexpected: string[] } {
     const pack = this.need(packId);
+    this.busy(packId);
     if (pack.status !== 'box_printed' && pack.status !== 'mismatch') throw new PackStateError(`Pack ${packId} is ${pack.status}; only a printed pack waiting for its check can be checked.`);
     const expected = new Set(pack.unitIds);
     const scanned = new Set(scannedUnitIds);
@@ -157,9 +179,15 @@ export class PackService {
   }
 
   /** Reprint the bottles a check found missing. The new bottle takes the old one's place in the pack. */
-  async replace(packId: string, missingUnitIds: string[], productId: string): Promise<string[]> {
+  replace(packId: string, missingUnitIds: string[], productId: string): Promise<string[]> {
     const pack = this.need(packId);
-    if (pack.status !== 'box_printed' && pack.status !== 'mismatch') throw new PackStateError(`Pack ${packId} is ${pack.status}; bottles can only be replaced before it is checked and sealed.`);
+    if (pack.status !== 'box_printed' && pack.status !== 'mismatch') return Promise.reject(new PackStateError(`Pack ${packId} is ${pack.status}; bottles can only be replaced before it is checked and sealed.`));
+    // A second "replace" of the same box while the first is printing (a double tap, a retry) is refused, not printed twice.
+    try { this.busy(packId); } catch (e) { return Promise.reject(e); }
+    return this.exclusive(packId, () => this.replaceNow(pack, missingUnitIds, productId));
+  }
+  private async replaceNow(pack: Pack, missingUnitIds: string[], productId: string): Promise<string[]> {
+    const packId = pack.id;
     const company = this.platform.companies.get(pack.companyId)!;
     const counts = new Map<string, number>();
     for (const id of pack.unitIds) for (const pl of this.platform.units.get(id)?.placements ?? []) if (!pl.isHouse) counts.set(pl.campaignId, (counts.get(pl.campaignId) ?? 0) + 1);
@@ -186,6 +214,7 @@ export class PackService {
    */
   verifyByHand(packId: string, by: string, reason?: string): Pack {
     const pack = this.need(packId);
+    this.busy(packId);
     if (pack.status !== 'box_printed' && pack.status !== 'mismatch') throw new PackStateError(`Pack ${packId} is ${pack.status}; only a printed pack waiting for its check can be checked.`);
     if (!by) throw new PackStateError('A person must check a box by hand.');
     // The line found this box wrong: overriding it takes a reason, kept with who and when.
@@ -200,6 +229,7 @@ export class PackService {
 
   seal(packId: string): Pack {
     const pack = this.need(packId);
+    this.busy(packId);
     if (pack.status !== 'verified') throw new Error(`Pack ${packId} can't be sealed until every bottle is checked.`);
     pack.status = 'sealed';
     this.save(pack);
@@ -286,7 +316,9 @@ export class PackService {
       return { ok: false, reason, rightPack: right };
     };
     if (input.scannedPackId !== right.id) {
-      const wrong = this.packs.get(input.scannedPackId);
+      // Another company's box is, to this driver, just a code that isn't on the route: never its customer's address.
+      const known = this.packs.get(input.scannedPackId);
+      const wrong = known && known.companyId === right.companyId ? known : undefined;
       return reject(wrong ? `Wrong box. That one is for stop ${wrong.stop}, ${wrong.address}. Grab the box marked ${stopCode(right.routeId, right.stop)}.` : `That code isn't a pack on this route. Grab the box marked ${stopCode(right.routeId, right.stop)}.`);
     }
     if (!input.atAddress) return reject(`You're not at ${right.address} yet.`);

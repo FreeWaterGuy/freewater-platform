@@ -166,7 +166,8 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     const orderId = `vend:${userId}:${b.vendId}`;
     // One tap at a time per person: the daily limit is checked and the bottle created with no other tap in between.
     const started = await oneAtATime(`${key!.companyId}:${userId}`, async () => {
-    const existing = [...platform.units.values()].find((u) => u.companyId === key!.companyId && u.orderId === orderId);
+    const existing = platform.unitForOrder(key!.companyId, orderId);
+    if (existing && existing.consumerId !== userId) throw new ApiError(409, 'order_conflict', 'That tap id is already used for a different bottle. Tap again.');
     if (existing) return { done: { status: existing.status === 'failed' ? 422 : 200, body: existing.status === 'failed' ? { error: { code: 'print_failed', message: vendView(existing, userId).message } } : vendView(existing, userId) } };
     await atMachine(b.locationId, b.presenceCode, key!.companyId);
     limitCheck(userId, key!.companyId);
@@ -190,7 +191,7 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     // A Model 6 takes a while to print: answer now and let the app watch the countdown.
     const r = await Promise.race([running, new Promise<null>((res) => setTimeout(() => res(null), app.fleet.isModel6(b.locationId) ? 1500 : 60_000))]);
     if (r && !r.ok) return { status: 422, body: { error: { code: 'print_failed', message: "The machine couldn't print your bottle. Nothing was used up; try again." } } };
-    const unit = r?.unit ?? [...platform.units.values()].find((u) => u.companyId === key!.companyId && u.orderId === orderId)!;
+    const unit = r?.unit ?? platform.unitForOrder(key!.companyId, orderId)!;
     return { status: r ? 201 : 202, body: vendView(unit, userId) };
   } });
 
@@ -204,8 +205,8 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
 
   route({ method: 'GET', url: '/v1/me/vends/:vendId', scope: 'me', summary: 'How a bottle you asked for is going: printing, ready (in the tray) or failed (nothing was used up).', handler: async (req, key) => {
     const userId = h.me(key);
-    const u = [...platform.units.values()].find((x) => x.companyId === key!.companyId && x.orderId === `vend:${userId}:${(req.params as any).vendId}`);
-    if (!u) throw notFound('Vend');
+    const u = platform.unitForOrder(key!.companyId, `vend:${userId}:${(req.params as any).vendId}`);
+    if (!u || u.consumerId !== userId) throw notFound('Vend');
     return { body: vendView(u, userId) };
   } });
 
@@ -265,7 +266,9 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     const bound = (await app.db.query<any>(`select proof_id, bottles from custom_order_proofs where company_id = $1 and user_id = $2 and order_id = $3`, [company.id, userId, b.orderId])).rows[0];
     if (!bound || bound.proof_id !== proof.id || Number(bound.bottles) !== bottles.length) throw new ApiError(409, 'order_reused', 'That order id was used for another design. Start a new order for this one.');
     const unitIds = bottles.map((_, i) => (i === 0 ? orderId : `${orderId}:${i + 1}`));
-    const unitFor = (oid: string) => [...platform.units.values()].find((u) => u.companyId === company.id && u.orderId === oid);
+    // Only this person's own bottles count as this order's (an id someone else used first is never theirs).
+    const unitFor = (oid: string) => { const u = platform.unitForOrder(company.id, oid); return u && u.consumerId === userId ? u : undefined; };
+    if (unitIds.some((oid) => platform.unitForOrder(company.id, oid) && !unitFor(oid))) throw new ApiError(409, 'order_conflict', 'That order id is already used for a different bottle. Start a new order.'); // before any money is held
     const idempotencyKey = `custom:${company.id}:${userId}:${b.orderId}`;
     const settled = (await app.db.query<any>(`select id, status from payments where idempotency_key = $1`, [idempotencyKey])).rows[0];
     if (settled && (settled.status === 'captured' || settled.status === 'voided')) {

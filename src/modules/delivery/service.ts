@@ -43,6 +43,19 @@ export class DeliveryService {
     private messenger: Messenger, public geocoder: Geocoder, public planner: RoutePlanner, private flush: () => Promise<void>,
   ) {}
 
+  /**
+   * One change at a time per key (a company's night plan, one run). A run is read, changed and written back whole, so
+   * two changes at once (two stops delivered together, a retried scan) would each write over the other; two plans of
+   * one night at once would print the same packs twice. The platform runs as one process, so a queue in memory holds.
+   */
+  private queues = new Map<string, Promise<unknown>>();
+  private serial<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const run = (this.queues.get(key) ?? Promise.resolve()).catch(() => {}).then(fn);
+    this.queues.set(key, run);
+    void run.finally(() => { if (this.queues.get(key) === run) this.queues.delete(key); }).catch(() => {});
+    return run;
+  }
+
   /** Today's date where the company is. */
   private dayFormats = new Map<string, Intl.DateTimeFormat>();
   today(companyId: string, at = this.platform.bus.now()) {
@@ -163,7 +176,10 @@ export class DeliveryService {
    * for each stop with its stop code on the box. Running it twice for the same night does nothing new, except that a
    * run left 'printing' (a box or bottle wouldn't print) picks up its unprinted stops again.
    */
-  async planNight(companyId: string, date: string) {
+  planNight(companyId: string, date: string) {
+    return this.serial(`plan:${companyId}`, () => this.planNightNow(companyId, date));
+  }
+  private async planNightNow(companyId: string, date: string) {
     const due = (await this.db.query<any>(`select * from subscriptions where company_id = $1 and status = 'active' and next_date = $2`, [companyId, date])).rows.map((r) => this.sub(r));
     const out: Run[] = await this.runs(companyId, date); // already planned routes stay as they are
     for (const run of out) if (run.status === 'printing') await this.printRun(run);
@@ -229,7 +245,10 @@ export class DeliveryService {
    * hasn't checked yet, or found wrong, is never sealed here: it's listed so it can be fixed and checked again, by the
    * line or, when there's no line, by a person by hand (checkByHand).
    */
-  async packCheck(runId: string, companyId: string) {
+  packCheck(runId: string, companyId: string) {
+    return this.serial(`run:${runId}`, () => this.packCheckNow(runId, companyId));
+  }
+  private async packCheckNow(runId: string, companyId: string) {
     const run = await this.getRun(runId, companyId);
     if (run.status !== 'packing') throw new DeliveryError(409, 'wrong_stage', `This route is ${run.status}, not waiting to be packed.`);
     const problems: { stop: number; missing: string[]; unexpected: string[]; reason: string }[] = [];
@@ -248,7 +267,10 @@ export class DeliveryService {
    * No packing line: a signed-in person counted every bottle in one stop's box by hand. The box is checked and sealed,
    * with who and when kept on the stop and the pack; once every box is sealed the route is ready to load.
    */
-  async checkByHand(runId: string, companyId: string, stopNo: number, by: string, reason?: string) {
+  checkByHand(runId: string, companyId: string, stopNo: number, by: string, reason?: string) {
+    return this.serial(`run:${runId}`, () => this.checkByHandNow(runId, companyId, stopNo, by, reason));
+  }
+  private async checkByHandNow(runId: string, companyId: string, stopNo: number, by: string, reason?: string) {
     if (!by) throw new DeliveryError(403, 'person_required', 'Sign in as a person to check a box by hand.');
     await this.needOpsPerson(companyId, by, 'check a box by hand');
     const run = await this.getRun(runId, companyId);
@@ -265,7 +287,7 @@ export class DeliveryService {
     if (pack.checkedByHand && !s.checkedByHand) s.checkedByHand = { ...pack.checkedByHand };
     await this.saveRun(run);
     // The rest of the route as the packing check sees it: what's still to check, and ready once every box is sealed.
-    return this.packCheck(run.id, companyId);
+    return this.packCheckNow(run.id, companyId);
   }
 
   /** Only the company's ops team or an owner, signed in as a person (never a driver, never an API key). */
@@ -279,7 +301,10 @@ export class DeliveryService {
    * out so it can't take over a later night: its boxes not delivered go back ('returned'), its stops not delivered are
    * marked so with the reason, and the run is done. Only an ops person or an owner, with a reason.
    */
-  async closeRun(runId: string, companyId: string, by: string, reason: string) {
+  closeRun(runId: string, companyId: string, by: string, reason: string) {
+    return this.serial(`run:${runId}`, () => this.closeRunNow(runId, companyId, by, reason));
+  }
+  private async closeRunNow(runId: string, companyId: string, by: string, reason: string) {
     if (!by) throw new DeliveryError(403, 'person_required', 'Sign in as a person to close out a run.');
     await this.needOpsPerson(companyId, by, 'close out a run');
     const run = (await this.db.query<any>(`select * from route_runs where id = $1 and company_id = $2`, [runId, companyId])).rows[0];
@@ -298,7 +323,10 @@ export class DeliveryService {
   }
 
   /** A driver takes the route. Then each box is scanned into the van, last stop first, so stop 1 ends up by the door. */
-  async start(runId: string, companyId: string, driverId: string) {
+  start(runId: string, companyId: string, driverId: string) {
+    return this.serial(`run:${runId}`, () => this.startNow(runId, companyId, driverId));
+  }
+  private async startNow(runId: string, companyId: string, driverId: string) {
     const run = await this.getRun(runId, companyId);
     if (run.driverId && run.driverId !== driverId) throw new DeliveryError(409, 'taken', 'Another driver has this route.');
     if (run.status === 'out') return this.view(run);
@@ -309,7 +337,10 @@ export class DeliveryService {
   }
 
   /** Scan a box into the van. It must be the next one in load order; once every box is in, the route is out. */
-  async loadScan(input: { runId: string; companyId: string; driverId: string; packId: string }) {
+  loadScan(input: { runId: string; companyId: string; driverId: string; packId: string }) {
+    return this.serial(`run:${input.runId}`, () => this.loadScanNow(input));
+  }
+  private async loadScanNow(input: { runId: string; companyId: string; driverId: string; packId: string }) {
     const run = await this.getRun(input.runId, input.companyId);
     if (run.driverId !== input.driverId || run.status !== 'ready') throw new DeliveryError(409, 'not_your_route', run.status === 'out' ? 'The van is already loaded.' : 'Take this route first.');
     const next = [...run.stops].sort((a, b) => b.stop - a.stop).find((s) => !s.loaded)!;
@@ -328,7 +359,10 @@ export class DeliveryService {
   }
 
   /** At the door. Delivered only when the box is this stop's box and the driver is at this address. */
-  async deliver(input: { runId: string; companyId: string; driverId: string; stop: number; scannedPackId: string; point?: GeoPoint; confirmedAtDoor?: boolean; photoUrl?: string; emptiesCollected: number }) {
+  deliver(input: { runId: string; companyId: string; driverId: string; stop: number; scannedPackId: string; point?: GeoPoint; confirmedAtDoor?: boolean; photoUrl?: string; emptiesCollected: number }) {
+    return this.serial(`run:${input.runId}`, () => this.deliverNow(input));
+  }
+  private async deliverNow(input: { runId: string; companyId: string; driverId: string; stop: number; scannedPackId: string; point?: GeoPoint; confirmedAtDoor?: boolean; photoUrl?: string; emptiesCollected: number }) {
     const run = await this.getRun(input.runId, input.companyId);
     if (run.status !== 'out' || run.driverId !== input.driverId) throw new DeliveryError(409, 'not_your_route', 'Start this route first.');
     const s = run.stops.find((x) => x.stop === input.stop);
@@ -349,7 +383,10 @@ export class DeliveryService {
     return { ok: true as const, run: await this.view(run) };
   }
 
-  async failStop(input: { runId: string; companyId: string; driverId: string; stop: number; reason: string }) {
+  failStop(input: { runId: string; companyId: string; driverId: string; stop: number; reason: string }) {
+    return this.serial(`run:${input.runId}`, () => this.failStopNow(input));
+  }
+  private async failStopNow(input: { runId: string; companyId: string; driverId: string; stop: number; reason: string }) {
     const run = await this.getRun(input.runId, input.companyId);
     if (run.status !== 'out' || run.driverId !== input.driverId) throw new DeliveryError(409, 'not_your_route', 'Start this route first.');
     const s = run.stops.find((x) => x.stop === input.stop);

@@ -46,7 +46,8 @@ interface Pending {
   attempt: number;
   status: 'queued' | 'claimed';
   resolve: (r: PrintResult) => void;
-  timer: NodeJS.Timeout;
+  /** Queued: armed only once the job is next in line (nothing ahead of it). Claimed: the time to finish. */
+  timer: NodeJS.Timeout | null;
 }
 
 const iso = (d: any) => (d ? new Date(d).toISOString() : null);
@@ -173,23 +174,41 @@ export class FleetService {
     const companyId = this.platform.locations.get(job.locationId)!.companyId!;
     const attempt = Number(/:attempt:(\d+)$/.exec(job.idempotencyKey)?.[1] ?? 1);
     return new Promise((resolve) => {
-      const p: Pending = { job, companyId, attempt, status: 'queued', resolve, timer: setTimeout(() => this.expire(job.jobId, 'The machine didn’t pick up the job in time.'), this.claimTimeoutMs) };
+      const p: Pending = { job, companyId, attempt, status: 'queued', resolve, timer: null };
       this.pending.set(job.jobId, p);
       const q = this.queues.get(job.locationId) ?? [];
       q.push(p);
       this.queues.set(job.locationId, q);
+      this.armNext(job.locationId);
       void this.db.query(`insert into machine_jobs (id, location_id, company_id, unit_id, attempt, status, created_at) values ($1,$2,$3,$4,$5,'queued',$6)`, [job.jobId, job.locationId, companyId, job.unitId, attempt, this.now().toISOString()]);
       for (const w of this.waiters.get(job.locationId)?.splice(0) ?? []) w();
     });
   }
 
+  /**
+   * Start the pick-up clock for the job next in line. A job waiting behind another person's bottle isn't late: the
+   * machine prints one at a time, so its clock starts only once nothing is ahead of it. (Before, the second of two
+   * people at one machine was told "failed" whenever a print took longer than the pick-up time.)
+   */
+  private armNext(locationId: string) {
+    const q = this.queues.get(locationId) ?? [];
+    if (q.some((x) => x.status === 'claimed')) return; // the bottle being printed has its own clock
+    const head = q.find((x) => x.status === 'queued');
+    if (head && !head.timer) head.timer = setTimeout(() => this.notPickedUp(locationId), this.claimTimeoutMs);
+  }
+  /** The machine didn't take the job next in line in time: it isn't taking jobs, so nobody behind it will be printed either. */
+  private notPickedUp(locationId: string) {
+    for (const p of (this.queues.get(locationId) ?? []).filter((x) => x.status === 'queued')) this.expire(p.job.jobId, 'The machine didn’t pick up the job in time.');
+  }
+
   private settle(jobId: string, result: PrintResult, row: { status: string; reason?: string | null; printMs?: number; dropMs?: number }) {
     const p = this.pending.get(jobId);
     if (!p) return false;
-    clearTimeout(p.timer);
+    if (p.timer) clearTimeout(p.timer);
     this.pending.delete(jobId);
     const q = this.queues.get(p.job.locationId) ?? [];
     this.queues.set(p.job.locationId, q.filter((x) => x !== p));
+    this.armNext(p.job.locationId);
     void this.db.query(`update machine_jobs set status = $2, reason = $3, print_ms = $4, drop_ms = $5, finished_at = $6 where id = $1`, [jobId, row.status, row.reason ?? null, row.printMs ?? null, row.dropMs ?? null, this.now().toISOString()]);
     p.resolve(result);
     return true;
@@ -204,7 +223,7 @@ export class FleetService {
       const p = (this.queues.get(locationId) ?? []).find((x) => x.status === 'queued');
       if (!p) return null;
       p.status = 'claimed';
-      clearTimeout(p.timer);
+      if (p.timer) clearTimeout(p.timer);
       p.timer = setTimeout(() => this.expire(p.job.jobId, 'The machine didn’t finish the job in time.'), this.finishTimeoutMs);
       void this.db.query(`update machine_jobs set status = 'claimed', claimed_at = $2 where id = $1`, [p.job.jobId, this.now().toISOString()]);
       const loc = this.platform.locations.get(locationId)!;
@@ -242,8 +261,9 @@ export class FleetService {
     const p = this.pending.get(jobId);
     if (!p || p.job.locationId !== locationId || p.status !== 'claimed') return false;
     p.status = 'queued';
-    clearTimeout(p.timer);
-    p.timer = setTimeout(() => this.expire(jobId, 'The machine didn’t pick up the job in time.'), this.claimTimeoutMs);
+    if (p.timer) clearTimeout(p.timer);
+    p.timer = null;
+    this.armNext(locationId);
     void this.db.query(`update machine_jobs set status = 'queued', claimed_at = null where id = $1`, [jobId]);
     for (const w of this.waiters.get(locationId)?.splice(0) ?? []) w();
     return true;
@@ -378,8 +398,9 @@ export class FleetService {
     }
     const expired = (await this.db.query<any>(`select unit_id from machine_buffer where status = 'held' and expires_at <= $1`, [new Date(now).toISOString()])).rows;
     for (const r of expired) {
+      if (this.platform.units.get(r.unit_id)?.status === 'dispensed') continue; // a report is billing it right now; it marks it used
       this.platform.abandonPrepared(r.unit_id, 'Prepared label not used in time');
-      await this.db.query(`update machine_buffer set status = 'released' where unit_id = $1`, [r.unit_id]);
+      await this.db.query(`update machine_buffer set status = 'released' where unit_id = $1 and status = 'held'`, [r.unit_id]);
     }
     await this.flush();
   }
@@ -469,7 +490,16 @@ export class FleetService {
    * it to the same rule: each reported time is taken as no earlier than the label was handed out (nor later than
    * now), and a bottle that would put more than the limit in any hour is refused: let go unbilled, and an alert raised.
    */
-  async offlineReport(locationId: string, items: { unitId: string; status: 'dispensed' | 'failed'; at: string; reason?: string }[]) {
+  private reports = new Map<string, Promise<unknown>>();
+  offlineReport(locationId: string, items: { unitId: string; status: 'dispensed' | 'failed'; at: string; reason?: string }[]) {
+    // One report per machine at a time: two at once would each count the hour's bottles before the other wrote its own,
+    // and both get under the offline limit (a stolen key sending reports in parallel).
+    const run = (this.reports.get(locationId) ?? Promise.resolve()).catch(() => {}).then(() => this.offlineReportNow(locationId, items));
+    this.reports.set(locationId, run);
+    void run.finally(() => { if (this.reports.get(locationId) === run) this.reports.delete(locationId); }).catch(() => {});
+    return run;
+  }
+  private async offlineReportNow(locationId: string, items: { unitId: string; status: 'dispensed' | 'failed'; at: string; reason?: string }[]) {
     const l = this.location(locationId);
     const { offlinePerHour } = printLimits(this.platform.companies.get(l.companyId!)?.machines);
     const nowMs = this.now().getTime();
@@ -500,19 +530,26 @@ export class FleetService {
         const tooMany = times.some((x) => times.filter((y) => y > x - HOUR && y <= x).length > offlinePerHour);
         if (tooMany) {
           this.platform.abandonPrepared(it.unitId, 'Over the machine’s offline bottles an hour');
-          await this.db.query(`update machine_buffer set status = 'released' where unit_id = $1`, [it.unitId]);
+          await this.db.query(`update machine_buffer set status = 'released' where unit_id = $1 and status = 'held'`, [it.unitId]);
           refused++;
           continue;
         }
         if (this.platform.confirmPrepared(it.unitId, `offline:${it.unitId}`)) {
           billed++;
-          await this.db.query(`update machine_buffer set status = 'used', used_at = $2 where unit_id = $1`, [it.unitId, new Date(at).toISOString()]);
+          await this.db.query(`update machine_buffer set status = 'used', used_at = $2 where unit_id = $1 and status = 'held'`, [it.unitId, new Date(at).toISOString()]);
+          continue;
+        }
+        // Billed by an earlier report whose answer never reached the machine (it sends again): it was used, not spoiled.
+        if (this.platform.units.get(it.unitId)?.status === 'dispensed') {
+          ignored++;
+          await this.db.query(`update machine_buffer set status = 'used', used_at = $2 where unit_id = $1 and status = 'held'`, [it.unitId, new Date(at).toISOString()]);
           continue;
         }
       }
+      if (this.platform.units.get(it.unitId)?.status === 'dispensed') { ignored++; continue; } // billed already: never "spoiled" afterwards
       this.platform.abandonPrepared(it.unitId, it.reason ?? 'Spoiled while offline');
       released++;
-      await this.db.query(`update machine_buffer set status = 'released' where unit_id = $1`, [it.unitId]);
+      await this.db.query(`update machine_buffer set status = 'released' where unit_id = $1 and status = 'held'`, [it.unitId]);
     }
     if (refused) this.alert?.(`offline-cap:${locationId}`, `Machine ${locationId} reported more offline bottles than its limit`, `${refused} of ${items.length} reported offline bottles would have passed ${offlinePerHour} an hour. They were not billed. If the machine wasn't really offline and busy, its key may be stolen: revoke it in the console.`);
     await this.flush();
