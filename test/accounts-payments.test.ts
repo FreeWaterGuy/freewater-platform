@@ -195,11 +195,11 @@ describe('custom bottles', () => {
     const s = await signIn('declined@example.com');
     expect((await call('POST', '/v1/me/cards', s.token, { token: 'tok_expired' })).json().error.code).toBe('card_refused');
     await call('POST', '/v1/me/cards', s.token, { token: 'tok_declined' });
-    const printedBefore = app.printer.printed.length;
+    const printedBefore = app.printer.printedCount;
     const r = await customOrder(s.token, 'd-1', art);
     expect(r.statusCode).toBe(402);
     expect(r.json().error.code).toBe('card_declined');
-    expect(app.printer.printed.length).toBe(printedBefore);
+    expect(app.printer.printedCount).toBe(printedBefore);
   });
 });
 

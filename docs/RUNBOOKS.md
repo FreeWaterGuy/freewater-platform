@@ -177,8 +177,8 @@ The log says the spool (changes waiting from a previous server) can't be applied
 **"The database is 70% / 85% full"**:
 
 1. If files are still stored in the database (`FILE_STORAGE` unset): the host sets up file storage
-   (`FILE_STORAGE=s3` and its settings, `docs/RUNNING.md`), restarts, then runs `npm run files:move`. This is usually
-   most of the size.
+   (`FILE_STORAGE=s3` and its settings, `docs/RUNNING.md`), restarts, then runs `npm run files:move` (pictures, team
+   files and door photos). This is usually most of the size.
 2. Otherwise, or as well: the host moves the database to a bigger plan (most providers do this without downtime) and
    raises `DATABASE_MAX_GB` to match.
 3. At 100% the database refuses changes and the platform pauses (see above): nothing is lost, but nothing new is
@@ -223,6 +223,11 @@ working again. Three failures in a row turn the alert red, and `/health/ready` l
      unpausing.
    - `webhooks`: usually a company's own server not answering; the delivery is retried and shown in its webhook list.
    - `capacity`, `memory`: they only watch; the error says what they couldn't read.
+   - `ad-fees`, `ad-payments`, `route-buys`: usually the card processor not answering. Nothing is charged or paid
+     back twice (each uses the same request id every try); invoices stay open and are charged on the next try. If it
+     lasts all day, check the processor's status page.
+   - `drop-photos`: door photos past their keep couldn't be deleted from file storage. See "Photos of drops".
+   - `deliveries-overdue`: it only alerts; the error is usually the database. The deliveries themselves are fine.
 4. "still running after N s" means stuck: it is never started twice. If it doesn't finish within its next interval,
    the host restarts the server (start new, stop old); it's tried again soon after.
 
@@ -234,7 +239,14 @@ Check the provider's status page first.
   payments and payouts are retried with the same request id, so nothing is charged or paid twice.
 - **AI (Anthropic, Google)**: every AI use has a built-in fallback; pages keep working, just plainer.
 - **File storage (S3/R2)**: uploads and pictures fail while it's down; scans, orders and the books carry on. Nothing to
-  do but wait; if it's long, the host checks the keys haven't expired.
+  do but wait; if it's long, the host checks the keys haven't expired. **On a delivery day** drivers' door photos fail
+  too, and with *Photo proof of each drop* on no drop can be completed: an owner turns that switch off for the day
+  (Console → *Features* → *Delivery*), drivers close and reopen the driver app and scan as usual, and it goes back on once storage is back.
+- **The card processor**, when an advertiser pays: they see "Something went wrong"; nothing is charged twice. Pressing
+  pay again in a few minutes finishes the same order (the same request id). An order the processor never answered is
+  let go within the hour by the `ad-payments` job; nothing prints for an unpaid order.
+- **The AI reviewer of paid ads**: every ad simply goes to a person under *Ad review*, as before; talking with the AI
+  about an ad answers with the stand-in. Its record and the final-call switch are untouched.
 - **Solana**: seals and the daily chain check fail and retry; the chain pauses itself on any mismatch.
 - **The alerts channel itself**: alerts still go to the server's log. If the channel's webhook was deleted, make a new
   one and update `ALERT_WEBHOOK_URL`.
@@ -260,6 +272,77 @@ A machine asked to print faster than it physically can. Either the machine is un
 1. Check the machine's status in the console (`/ops`). If the machine isn't that busy, **revoke its key** in the
    console (Keys) and give the machine a new one.
 2. Only a person signed in can change the print limits (console settings, machines), and only to sane whole numbers.
+
+## A pilot day, step by step
+
+The whole day for the house-after-house pilot, in order. Each step links to its own section below if something goes
+wrong. *Ops* is whoever runs the micro-factory that day; they need an ops or owner login (an API key can't plan).
+
+**Once, before the first pilot night (the host):**
+
+1. **Photos go to file storage, not the database**: `FILE_STORAGE=s3` and its settings (`docs/RUNNING.md`). A door
+   photo is kept at about 0.2 to 0.5 MB, so 1,000 drops a week add about 1.5 GB a month, and with the 90-day keep
+   about 4 to 5 GB are stored at any time. In the database that would be most of its size and of every backup. If
+   photos are already in the database: set it up, restart, then `npm run files:move` (it moves door photos too).
+2. **Enough memory for the weeks ahead**: the server keeps every bottle in memory (about 13 KB each). 1,000 houses
+   with one 24-pack each is 24,000 bottles, about **310 MB more every week**. A server with 8 GB
+   (`NODE_OPTIONS=--max-old-space-size=6144`) lasts about 20 weeks; 2 GB lasts about 4. The memory alert warns at 70%.
+   Plan the next stage (`docs/RUNNING.md`, the end) before then.
+3. Console → *Features* → *Delivery*: *Home delivery*, *Delivery areas*, *The driver app*, *Photo at the door* and
+   *Photo proof of each drop* are on. Each area is checked and on (see step 4 of "Plan tonight's deliveries").
+
+**The afternoon before (ops):**
+
+1. Open `https://<site>/health/ready`: it says `"ok": true`. If not, fix what it lists first (the sections below).
+2. Check the alerts channel for anything red from the day.
+3. The printers have labels, boxes and ink for the night (one label per bottle; one box per house per 24-pack).
+
+**Plan and print the night (ops):** follow "Plan tonight's deliveries" below. For a big night this takes a while:
+every bottle is laid out with its own ads and codes and sent to the printer. Measured on a small, busy test machine
+against Postgres it was about 0.1 to 0.2 seconds a bottle, so **1,000 houses (24,000 bottles) can take 40 to 80
+minutes** on the server alone (likely less on a dedicated one; time your first night). Start early.
+- The button may stop with "Something went wrong" after a minute or two. That is the browser (or the host's load
+  balancer) giving up waiting, **not** the planning: it carries on. Wait ten minutes, reload the night's runs, and
+  watch the vans' runs appear and move from *printing* to *packing*.
+- Pressing *Plan and print this night* again is always safe: a second press waits for the first and prints nothing
+  twice. That is also how to finish a run left *printing* (a jam, a restart).
+
+**Pack and check (packing line):** every box is scanned by the packing line; the packing check seals the ones it
+passed (*Routes* → the run → *Packing check*). A bottle it can't read: see "A bottle's label came out wrong". A run
+goes from *packing* to *ready* when every box is sealed.
+
+**Load the vans (each driver):** sign in on the phone at `https://<site>/driver`, take the van's run, and scan the
+boxes into the van in the order the app asks (last stop first, so the first stop comes out on top). The run is *out*
+once every box is in.
+
+**The drive (each driver):** at each house, the app shows which box. Leave it, take a photo of it where it was left,
+scan the box, *Done · next house*. Problems: *Problem at this stop* (the box comes back) or, in an area, *Skip this
+house* with a real reason. A charged phone and a car charger matter: the photo and the scan need the phone.
+
+**End of the day (ops):**
+
+1. Every van's run says *done* (*Routes*). A run with stops still *planned*: ask the driver to finish them (*Done*, or
+   *Problem at this stop*: the box comes back). Boxes that came back are put away. A run that can't be finished that
+   day is closed out the next morning (*Routes* → pick yesterday → *Close out…*, with a reason; only a run from an
+   earlier day can be): its stops are marked not delivered and their boxes go back.
+2. Stops showing "Scanned at the door, no photo yet": see "A drop shows … no photo yet".
+3. *Areas* → "driver skips to review": decide each (see "A driver skipped a house").
+4. The alerts channel: nothing red left. `/health/ready` says `"ok": true`.
+5. Route refunds waiting (`GET /v1/ops/route-refunds`): an owner or finance person approves them (see below).
+
+**When something fails during the day:**
+
+| What happened | What it means | What to do |
+|---|---|---|
+| The server restarted while planning | Runs already made are kept; boxes already printed are kept | Press *Plan and print this night* again: it finishes what's left, prints nothing twice |
+| The server restarted while drivers are out | Every stop already done is saved | Drivers carry on; if a stop says it can't be done, press *Done* (or *Problem*) again: it finishes it, once |
+| The database is down ("changes are paused") | Drivers' scans wait | Drivers wait a few minutes and press again; see "The database is down" |
+| A printer jams mid-plan | That run stays *printing* | Fix the printer, press *Plan and print this night* again |
+| Photos won't send (many drivers at once) | File storage is down, or the phones have no signal | If it's storage (the alerts channel says so, or the host's status page): an owner turns *Photo proof of each drop* off for the day (Console → *Features*), drivers close and reopen the driver app and scan without photos, and it's turned back on at the end of the day. One driver only: see "A drop shows … no photo yet" |
+| A driver's phone dies | Their run is saved on the server | Another phone signs in as that driver and carries on from the next stop |
+| An advertiser pays while the card processor is down | Nothing is charged twice: their order waits | They see "Something went wrong"; ask them to press pay again in a few minutes. An order never charged is let go within the hour (the `ad-payments` job), and no bottle prints without a paid order |
+| The AI reviewer is down | Paid ads aren't looked at by the AI | Nothing to do: every ad goes to a person under *Ad review*, as before. Talking with the AI about an ad answers with the stand-in |
+| The daily fees couldn't be charged ("Background job ad-fees failed") | The card processor didn't answer | The invoices stay open and the next try (after 1 minute, then 2, 4, 8… minutes) charges them. Nothing to do unless it fails all day: then check the processor's status page |
 
 ## Plan tonight's deliveries (a person, every delivery night)
 
@@ -295,7 +378,7 @@ earlier day is still "printing". The alert says which areas and which runs.
    carries on from that night.
 2. A run stuck printing: fix the printer (or the box printer), then plan **that run's night** again (the date in
    the run's id, like `area_….1@2026-11-03`); it finishes the boxes not yet printed and prints nothing twice. If the
-   night is long gone, close the run out instead (*Routes* → close, with a reason): its boxes go back.
+   night is long gone, close the run out instead (*Routes* → that night → *Close out…*, with a reason): its boxes go back.
 3. If an area shouldn't be delivered any more, turn it off under *Areas*: it stops being planned or alerted at once.
 
 ## A driver skipped a house (a locked gate, a dangerous animal, no safe place, not a home)
@@ -336,9 +419,13 @@ left. The scan alone is remembered on the stop but not delivered.
 - They're deleted after the company's keep (90 days unless set; 1 to 365 days, setting `delivery.photoKeepDays`,
   changed by a person signed in) by the daily `drop-photos` job, which runs for every company whatever the switches.
   A deleted photo can't be brought back (the database refuses).
-- If the job fails ("Background job drop-photos failed"): photos may be kept a little longer than promised. Fix the
-  cause (usually file storage unreachable: see *An outside provider is down*), then run it now:
-  `POST /v1/platform/jobs/drop-photos/run`. It's safe to run again.
+- If the job fails ("Background job drop-photos failed … couldn't be deleted from file storage"): photos are being kept
+  longer than promised. Their records stay, so nothing is forgotten. Fix the cause (usually file storage unreachable,
+  or its key lost delete permission: see *An outside provider is down*), then run it now:
+  `POST /v1/platform/jobs/drop-photos/run`. It's safe to run again. It deletes at most 5,000 per company a run,
+  oldest first, so after a long outage it may take a few days' runs (or run it again by hand) to catch up.
+- How much room they take: about 0.2 to 0.5 MB each. 1,000 drops a week is about 1.5 GB a month, and about 4 to 5 GB
+  kept at any time with the 90-day keep. Keep them in file storage (`FILE_STORAGE=s3`), not the database.
 - Someone asks for a photo to be deleted early: ask an engineer to run the job with a shorter keep for that company
   (set `delivery.photoKeepDays`, run the job, set it back). A legal hold (a dispute about a drop) means saving that one
   photo elsewhere first: ask the founder.

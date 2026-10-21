@@ -302,12 +302,20 @@ export class PaymentsService {
       }
       return made;
     });
+    for (const m of made) this.bus.publish('invoice.issued', companyId, { invoiceId: m.id, advertiserId: m.advertiserId, totalCents: m.total, lines: m.lines }, m.id);
+    // Charge the new invoices, and any left open by an earlier run that stopped short (the provider down, a restart
+    // after the invoices were written): their lines are invoiced already, so nothing else would ever charge them.
+    // Each is tried; one that fails doesn't stop the others, and the run then fails so the job alerts and retries.
+    const stranded = (await this.db.query<{ id: string }>(`select id from invoices where company_id = $1 and status = 'open' and period_end <= $2 and not (id = any($3::text[])) order by created_at`, [companyId, periodEnd.toISOString(), made.map((m) => m.id)])).rows.map((r) => r.id);
     const out: Invoice[] = [];
-    for (const m of made) {
-      this.bus.publish('invoice.issued', companyId, { invoiceId: m.id, advertiserId: m.advertiserId, totalCents: m.total, lines: m.lines }, m.id);
-      await this.payInvoice(m.id);
-      out.push((await this.invoice(m.id))!);
+    const errors: string[] = [];
+    let first: unknown = null;
+    for (const id of [...made.map((m) => m.id), ...stranded]) {
+      try { await this.payInvoice(id); } catch (e) { first ??= e; errors.push(`${id}: ${(e as Error)?.message ?? e}`); }
+      if (made.some((m) => m.id === id)) out.push((await this.invoice(id))!);
     }
+    if (errors.length === 1 && first instanceof Error) throw first;
+    if (errors.length) throw new Error(`${errors.length} invoices couldn't be charged now (they stay open and are tried again on the next run): ${errors.slice(0, 10).join('; ')}`);
     return out;
   }
 

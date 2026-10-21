@@ -1,4 +1,5 @@
-import { retryOnConflict, type SqlClient } from '../../db/client';
+import type { SqlClient } from '../../db/client';
+import { retryConflicts } from '../../db/conflicts';
 import type { Platform } from '../../platform';
 import type { Campaign, CompanyConfig, Product, Share } from '../../core/types';
 import { SHARES } from '../../core/types';
@@ -639,11 +640,11 @@ export class RouteBuyService {
   async boxPrinted(pack: Pack) {
     const ids = pack.faces.filter((f) => f.routeSpotId).map((f) => f.routeSpotId!);
     if (!ids.length) return;
-    const flipped = await this.db.transaction(async (tx) => {
+    const flipped = await retryConflicts(() => this.db.transaction(async (tx) => {
       const rows = (await tx.query<any>(`update route_spots set status = 'placed', pack_id = $3 where id = any($1::text[]) and company_id = $2 and status = 'open' and face is not null returning id, campaign_id, price_cents`, [ids, pack.companyId, pack.id])).rows;
       for (const r of rows) await tx.query(`insert into ad_extra_uses (id, company_id, campaign_id, feature, status, charged_cents, cost_cents, ref, at) values ($1,$2,$3,'boxSide','used',$4,0,$5,$6) on conflict do nothing`, [`aex_${r.id}`, pack.companyId, r.campaign_id, n(r.price_cents), pack.id, this.platform.bus.now().toISOString()]);
       return rows;
-    });
+    }));
     for (const r of flipped) {
       const c = this.platform.campaigns.get(r.campaign_id);
       if (!c) continue;
@@ -697,7 +698,7 @@ export class RouteBuyService {
     if (!rb) return null;
     const kind: 'credit' | 'refund' = n(rb.houses) === 1 ? 'refund' : 'credit';
     const status = kind === 'credit' ? 'credited' : 'refunding';
-    const got = await retryOnConflict(() => this.db.transaction(async (tx) => {
+    const got = await retryConflicts(() => this.db.transaction(async (tx) => {
       await tx.query(`select 1 from ad_prepaid where campaign_id = $1 for update`, [campaignId]);
       const unprinted = openIds.length ? (await tx.query<any>(`update route_spots set status = $3, settlement_id = $4 where id = any($1::text[]) and company_id = $2 and status = 'open' returning id, bottle, face, price_cents`, [openIds, companyId, status, id])).rows : [];
       const back = backIds.length ? (await tx.query<any>(`update route_spots set status = $3, settlement_id = $4 where id = any($1::text[]) and company_id = $2 and status = 'placed' returning id, bottle, face, price_cents, unit_id, pack_id`, [backIds, companyId, status, id])).rows : [];

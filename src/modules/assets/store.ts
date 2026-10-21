@@ -83,15 +83,27 @@ export class SqlAssetStore implements AssetStore {
 
   /** A person's own uploads, removed (from file storage too). Photos a driver took of deliveries are the company's records, and stay. */
   async removeForUsers(companyId: string, userIds: string[]) {
-    const rows = (await this.db.query<any>(`delete from assets where company_id = $1 and user_id = any($2) and coalesce(name, '') <> 'delivery-photo' returning blob_key`, [companyId, userIds])).rows;
-    for (const r of rows) if (r.blob_key && this.blobs) await this.blobs.delete(r.blob_key).catch(() => {});
-    return rows.length;
+    return this.remove((await this.db.query<any>(`select id, blob_key from assets where company_id = $1 and user_id = any($2) and coalesce(name, '') <> 'delivery-photo'`, [companyId, userIds])).rows);
   }
 
   async removeIds(companyId: string, ids: string[]) {
-    const rows = (await this.db.query<any>(`delete from assets where company_id = $1 and id = any($2) returning blob_key`, [companyId, ids])).rows;
-    for (const r of rows) if (r.blob_key && this.blobs) await this.blobs.delete(r.blob_key).catch(() => {});
-    return rows.length;
+    return this.remove((await this.db.query<any>(`select id, blob_key from assets where company_id = $1 and id = any($2)`, [companyId, ids])).rows);
+  }
+
+  /**
+   * Each file goes from file storage first, then its record. One whose file can't be removed now keeps its record (so
+   * asking again finds it), and the whole step fails, saying so: an erasure is never reported done with a person's
+   * file still stored and nothing left pointing at it.
+   */
+  private async remove(rows: { id: string; blob_key: string | null }[]) {
+    let n = 0;
+    const stuck: string[] = [];
+    for (const r of rows) {
+      if (r.blob_key && this.blobs) { try { await this.blobs.delete(r.blob_key); } catch (e) { stuck.push(`${r.id} (${(e as Error)?.message ?? e})`); continue; } }
+      n += Number((await this.db.query(`delete from assets where id = $1`, [r.id])).rowCount ?? 1);
+    }
+    if (stuck.length) throw new Error(`${stuck.length} file(s) couldn't be deleted from file storage, so they're kept for now (ask again to finish): ${stuck.slice(0, 5).join(', ')}. ${n} deleted.`);
+    return n;
   }
 
   async list(companyId: string, advertiserId?: string) {

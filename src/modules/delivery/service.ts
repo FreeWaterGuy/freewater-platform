@@ -547,7 +547,10 @@ export class DeliveryService {
       await this.saveRun(run);
       return { ok: false as const, code: 'photo_required', reason: 'Take a photo of the box where you left it, then scan it again. It isn’t delivered until there’s a photo.', grab: null, metersAway: meters };
     }
-    const r = this.packs.deliver({ ...door, photoProof: !!photo });
+    // The box was already marked delivered but the stop never saved (the server stopped in between, or the database
+    // refused the save): pressing again finishes the stop, once, instead of leaving it stuck as "not on the van".
+    const done = s.packId && input.scannedPackId === s.packId ? this.packs.packs.get(s.packId) : undefined;
+    const r = done?.status === 'delivered' && (door.atAddress || !!s.doorScan) ? { ok: true as const, pack: done } : this.packs.deliver({ ...door, photoProof: !!photo });
     if (!r.ok) {
       const right = r.rightPack;
       return { ok: false as const, code: 'wrong_box_or_place', reason: r.reason, grab: right ? stopCode(right.routeId, right.stop) : null, metersAway: meters };
@@ -587,7 +590,8 @@ export class DeliveryService {
     if (!s.doorScan || run.status !== 'out') throw new DeliveryError(409, 'not_scanned_at_door', 'The driver hasn’t scanned this box at the door yet: only a box scanned at its door can be marked delivered without a photo.');
     if (s.doorScan.by === input.by) throw new DeliveryError(403, 'not_your_own', 'Another person on the team vouches for a drop without a photo, not the driver who made it.');
     const scan = s.doorScan;
-    const r = this.packs.deliver({ routeId: run.routeId, runId: run.id, stop: s.stop, scannedPackId: s.packId!, atAddress: true, photoProof: false, emptiesCollected: scan.emptiesCollected });
+    // As in deliverNow: a box already marked delivered whose stop never saved is just finished.
+    const r = this.packs.packs.get(s.packId!)?.status === 'delivered' ? { ok: true as const } : this.packs.deliver({ routeId: run.routeId, runId: run.id, stop: s.stop, scannedPackId: s.packId!, atAddress: true, photoProof: false, emptiesCollected: scan.emptiesCollected });
     if (!r.ok) throw new DeliveryError(409, 'not_deliverable', r.reason);
     delete s.doorScan;
     const at = this.platform.bus.now().toISOString();
@@ -603,7 +607,8 @@ export class DeliveryService {
     if (run.status !== 'out' || run.driverId !== input.driverId) throw new DeliveryError(409, 'not_your_route', 'Start this route first.');
     const s = run.stops.find((x) => x.stop === input.stop);
     if (!s || s.status !== 'planned') throw new DeliveryError(409, 'already_done', 'That stop is already done.');
-    this.packs.fail(s.packId!, input.reason);
+    // Already sent back, but the stop never saved (a restart in between): just finish the stop.
+    if (this.packs.packs.get(s.packId!)?.status !== 'returned') this.packs.fail(s.packId!, input.reason);
     Object.assign(s, { status: 'not_delivered', at: this.platform.bus.now().toISOString(), reason: input.reason });
     if (run.stops.every((x) => x.status !== 'planned')) run.status = 'done';
     await this.saveRun(run);

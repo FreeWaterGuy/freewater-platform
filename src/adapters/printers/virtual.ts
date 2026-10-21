@@ -10,10 +10,21 @@ export interface VirtualPrinterOptions {
   failNext?: string[]; // reasons to fail the next N jobs with, in order (for tests and demos)
 }
 
-/** A printer that needs no hardware. Same contract as a real one, so the rest of the platform can't tell the difference. */
+/**
+ * A printer that needs no hardware. Same contract as a real one, so the rest of the platform can't tell the difference.
+ * It is also what confirms the micro-factory's prints in production (its line fetches each label's SVG from the API),
+ * so it keeps only the most recent jobs: each carries its whole label (about 60 KB), and keeping every one grew memory
+ * by about 1.4 GB a week at a 1,000-house pilot.
+ */
 export class VirtualPrinter implements PrinterAdapter {
+  /** How many recent jobs `printed` keeps, and how many answers are remembered for retries with the same key. */
+  static keepJobs = 200;
+  static keepAnswers = 20_000;
   readonly name = 'virtual-printer';
+  /** The most recent printed jobs, oldest first (at most `keepJobs`). */
   readonly printed: PrintJob[] = [];
+  /** Every job printed since start. */
+  printedCount = 0;
   private done = new Map<string, PrintResult>();
   private opts: VirtualPrinterOptions;
 
@@ -40,9 +51,12 @@ export class VirtualPrinter implements PrinterAdapter {
         await writeFile(join(dir, `${job.unitId}.svg`), job.svg, 'utf8');
       }
       this.printed.push(job);
+      this.printedCount++;
+      if (this.printed.length > VirtualPrinter.keepJobs) this.printed.splice(0, this.printed.length - VirtualPrinter.keepJobs);
       result = { status: 'printed', jobId: job.jobId, at: new Date() };
     }
     this.done.set(job.idempotencyKey, result);
+    if (this.done.size > VirtualPrinter.keepAnswers) this.done.delete(this.done.keys().next().value!); // a retry comes within moments
     return result;
   }
 }
