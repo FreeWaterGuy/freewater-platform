@@ -95,7 +95,10 @@ export function ems(text: string) {
   let n = 0;
   for (const c of text) {
     const code = c.codePointAt(0)!;
-    n += /[iljI.,:;'!|]/.test(c) ? 0.5 : /[ftr()\-"\s]/.test(c) ? 0.65 : /[MW@%]/.test(c) ? 1.75 : /[mw]/.test(c) ? 1.5 : /[A-Z&]/.test(c) ? 1.35 : code >= 0x2e80 || /\p{Extended_Pictographic}/u.test(c) ? 2 : 1;
+    // Arabic and Hebrew letters are counted wide: their widths vary most between the fonts a printer or a phone falls
+    // back to (Arabic in a Naskh font is about half again as wide as a Latin letter), and the label is drawn where we
+    // can't choose the font.
+    n += /[iljI.,:;'!|]/.test(c) ? 0.5 : /[ftr()\-"\s]/.test(c) ? 0.65 : /[MW@%]/.test(c) ? 1.75 : /[mw]/.test(c) ? 1.5 : /[A-Z&]/.test(c) ? 1.35 : code >= 0x2e80 || /\p{Extended_Pictographic}/u.test(c) ? 2 : /\p{Script=Arabic}/u.test(c) ? 1.6 : /\p{Script=Hebrew}/u.test(c) ? 1.25 : 1;
   }
   return n;
 }
@@ -152,7 +155,7 @@ function fit(text: string, boxW: number, boxH: number, maxLines: number, max: nu
 
 function textLines(lines: string[], x: number, y: number, size: number, opts: { font: string; weight: number; fill: string; lead?: number; tracking?: number; anchor?: 'start' | 'middle' }) {
   const lead = opts.lead ?? 1.06;
-  return lines.map((l, i) => `<text x="${f1(x)}" y="${f1(y + size * 0.86 + i * size * lead)}" font-family="${esc(opts.font)}" font-weight="${opts.weight}" font-size="${f1(size)}"${opts.tracking ? ` letter-spacing="${f1(size * opts.tracking)}"` : ''}${opts.anchor === 'middle' ? ' text-anchor="middle"' : ''} fill="${opts.fill}">${esc(l)}</text>`).join('');
+  return lines.map((l, i) => `<text x="${f1(x)}" y="${f1(y + size * 0.86 + i * size * lead)}" font-family="${esc(opts.font)}" font-weight="${opts.weight}" font-size="${f1(size)}"${opts.tracking && !/\p{Script=Arabic}/u.test(l) ? ` letter-spacing="${f1(size * opts.tracking)}"` : ''}${opts.anchor === 'middle' ? ' text-anchor="middle"' : ''} fill="${opts.fill}">${esc(l)}</text>`).join('');
 }
 
 /** The photo, cropped to fill the box around its subject. */
