@@ -1,3 +1,4 @@
+import { FACE_SWITCHES } from '../../runtime/registry';
 import { newId } from '../../core/ids';
 import type { BoxFacePlacement, BoxProduct } from '../../core/types';
 import type { Platform } from '../../platform';
@@ -121,7 +122,7 @@ export class PackService {
 
     // 2. The box itself.
     if (!pack.rendered) {
-      pack.faces = fillBoxFaces({ company, box, routeId: pack.routeId, campaigns: [...p.campaigns.values()], random: p.random });
+      pack.faces = fillBoxFaces({ company, box, routeId: pack.routeId, campaigns: [...p.campaigns.values()], random: p.random, faceOn: (face) => !p.featureOn || (p.featureOn(company.id, 'box_ads') && p.featureOn(company.id, FACE_SWITCHES[face] ?? 'box_ads')) });
       pack.rendered = renderBox({ packId: pack.id, box, company, faces: pack.faces, campaigns: p.campaigns, routeId: pack.routeId, stop: pack.stop, codes: p.codes });
       this.save(pack);
     }

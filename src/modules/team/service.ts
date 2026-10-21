@@ -64,7 +64,7 @@ export class TeamService {
     for (const f of (input.files ?? []).slice(0, 8)) files.push(await this.upload(companyId, f, by));
     const images = (input.files ?? []).filter((f) => /^image\/(png|jpeg|webp)$/.test(f.contentType)).slice(0, 4).map((f) => `data:${f.contentType};base64,${f.dataBase64}`);
     const cities = [...new Set([...this.platform.locations.values()].filter((l) => l.companyId === companyId).map((l) => l.city))];
-    const out = await withCompany(companyId, async () => this.assistant.respond({ message: String(input.message ?? '').slice(0, 4000), images, fileNames: files.map((f) => f.name), today: this.deps.today(companyId), charities: await this.deps.charities(companyId), cities, history: (input.history ?? []).slice(-12) }));
+    const out = await withCompany(companyId, async () => this.assistant.respond({ message: String(input.message ?? '').slice(0, 4000), images, fileNames: files.map((f) => f.name), today: this.deps.today(companyId), charities: await this.deps.charities(companyId), cities, history: (input.history ?? []).slice(-12) }), 'ai_team_assistant');
     return { ...out, files };
   }
 

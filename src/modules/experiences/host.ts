@@ -28,6 +28,9 @@ export class ExperienceHost {
     this.compile = opts.compile ?? ajvCompiler();
   }
 
+  /** Set by the app: is this plug-in on for this company (its Features page)? Without it, all are. */
+  pluginOn?: (companyId: string, pluginId: string) => boolean;
+
   register(plugin: ExperiencePlugin<any>) {
     if (!/^[a-z0-9][a-z0-9-]{1,40}$/.test(plugin.id)) throw new Error(`Plug-in id "${plugin.id}" must be lowercase letters, numbers and dashes`);
     this.validators.set(plugin.id, this.compile(plugin.configSchema));
@@ -73,6 +76,8 @@ export class ExperienceHost {
       return doc(fallbackCard(input.scan.owner.name), true);
     };
 
+    // A plug-in the company switched off (its Features page) opens the advertiser's simple card instead. Not a failure.
+    if (this.pluginOn && !this.pluginOn(input.scan.companyId, input.pluginId)) return doc(fallbackCard(input.scan.owner.name), true);
     const plugin = this.plugins.get(input.pluginId);
     if (!plugin) return fail('plug-in not installed');
     const configErr = this.checkConfig(input.pluginId, input.config);

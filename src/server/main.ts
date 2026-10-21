@@ -126,8 +126,9 @@ server.addHook('preClose', async () => {
 // The background work. Each job saves its changes before it counts as done.
 const saved = (f: () => Promise<unknown>) => async () => { await f(); await app!.persistence.flush(); };
 const companies = () => [...app!.platform.companies.values()];
-// One company's failure is reported with its id and never stops the job for the others.
-const perCompany = (job: string, step: (companyId: string) => Promise<unknown>, which: () => string[] = () => companies().map((c) => c.id)) =>
+// One company's failure is reported with its id and never stops the job for the others. A company that switched the
+// job's feature off (its Features page, src/runtime/registry.ts) is skipped.
+const perCompany = (job: string, step: (companyId: string) => Promise<unknown>, which: () => string[] = () => companies().map((c) => c.id).filter((id) => app!.companyFeatures.jobOn(id, job))) =>
   forEachCompany(which(), step, (companyId, error) => {
     reporter.captureException(error, { tags: { source: 'job', job, companyId } });
     void alerts.alert(`job:${job}:${companyId}`, 'warning', `Background job “${job}” failed for company ${companyId}`, String((error as Error)?.stack ?? error), { tracked: reporter.enabled });

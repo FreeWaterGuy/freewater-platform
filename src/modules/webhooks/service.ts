@@ -70,6 +70,8 @@ const deliveryView = (r: any, withBody = false): Delivery => ({
 export class WebhookService {
   private timer: NodeJS.Timeout | null = null;
   private draining: Promise<void> | null = null;
+  /** Set by the app: false for a company whose webhooks are switched off on its Features page. */
+  companyOn?: (companyId: string) => boolean;
 
   constructor(
     private db: SqlClient,
@@ -215,7 +217,11 @@ export class WebhookService {
   private async drainOnce() {
     await this.flush();
     const endpoints = (await this.db.query<any>(`select id, company_id, events, last_event_seq from webhook_endpoints where status = 'active'`)).rows;
+    // A company with webhooks switched off (its Features page) sends nothing; nothing is dropped either, so switching
+    // them back on carries on from where they stopped.
+    const on = (companyId: string) => !this.companyOn || this.companyOn(companyId);
     for (const ep of endpoints) {
+      if (!on(ep.company_id)) continue;
       const types = internalTypesFor(ep.events);
       const events = (await this.db.query<any>(`select seq, id, type, at, payload from events where company_id = $1 and seq > $2 order by seq limit 1000`, [ep.company_id, ep.last_event_seq])).rows;
       if (!events.length) continue;
@@ -228,10 +234,10 @@ export class WebhookService {
         await tx.query(`update webhook_endpoints set last_event_seq = $2 where id = $1`, [ep.id, Number(events.at(-1).seq)]);
       });
     }
-    const due = (await this.db.query<{ id: string }>(
-      `select d.id from webhook_deliveries d join webhook_endpoints e on e.id = d.endpoint_id where e.status = 'active' and d.status in ('pending', 'retrying') and d.next_attempt_at <= $1 order by d.next_attempt_at, d.created_at limit 100`,
+    const due = (await this.db.query<{ id: string; company_id: string }>(
+      `select d.id, e.company_id from webhook_deliveries d join webhook_endpoints e on e.id = d.endpoint_id where e.status = 'active' and d.status in ('pending', 'retrying') and d.next_attempt_at <= $1 order by d.next_attempt_at, d.created_at limit 100`,
       [this.clock().toISOString()],
-    )).rows;
+    )).rows.filter((d) => on(d.company_id));
     // A few at a time, so one slow partner can't hold up the rest for long.
     for (let i = 0; i < due.length; i += 8) await Promise.all(due.slice(i, i + 8).map((d) => this.attempt(d.id)));
   }

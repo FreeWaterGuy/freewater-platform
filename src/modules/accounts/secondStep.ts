@@ -154,6 +154,7 @@ export const conditionalApprovalRoutes: Readonly<Record<string, string>> = {
   'POST /v1/agents/proposals/:id/decide': 'approving a proposal whose change is to one of approvalSettings',
   'POST /v1/agents/proposals/:id/undo': 'undoing a change to one of approvalSettings',
   'POST /v1/team': 'the role given, or the person’s current role, is owner or finance',
+  'POST /v1/console/features': 'turning ON a money, chain or one-way switch (turning anything off stays quick: any owner signed in)',
 };
 /** Settings that switch money, prizes or the token on or off, or share money out: changing them is an approval too. */
 export const approvalSettings = ['wallet', 'offers', 'chain', 'launch', 'giving', 'agents', 'lottery'] as const;
