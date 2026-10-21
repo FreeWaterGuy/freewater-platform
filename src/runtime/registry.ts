@@ -21,7 +21,7 @@ import { defaultWallet } from '../modules/wallet/assets';
 import { adBilling } from '../modules/ads/billing';
 
 /** Raise this when adding switches (and give them `since: CATALOGUE`). */
-export const CATALOGUE = 4;
+export const CATALOGUE = 5;
 
 export const categoryIds = ['printing', 'ads', 'ar_video', 'studio', 'delivery', 'machines', 'rewards', 'games', 'news', 'data', 'ai', 'money', 'transparency', 'giving', 'partners', 'blockchain', 'safety', 'core'] as const;
 export type CategoryId = (typeof categoryIds)[number];
@@ -49,7 +49,8 @@ export const CATEGORIES: Category[] = [
   { id: 'core', label: 'The platform’s core', main: null, description: 'Signing in, the team, keys, settings and their history. Without them nothing else works.' },
 ];
 
-export type Risk = 'money' | 'chain' | 'one_way';
+/** 'autonomy': an AI deciding something on its own, without a person (docs/AI.md, the autonomy ladder). */
+export type Risk = 'money' | 'chain' | 'one_way' | 'autonomy';
 /**
  * Who may turn it on (turning off is always quick: any owner signed in, never a key).
  *  owner           any owner signed in
@@ -92,6 +93,11 @@ export interface Switch {
   host?: Feature;
   /** Turned on only by an approved step (a chain action of this kind, under Launch or Blockchain), never from a page. */
   step?: string;
+  /**
+   * Turned on only on its own page, with that page's own checks (an AI's track record, say), never from the Features
+   * page or a starting point. Turning it off works from both.
+   */
+  ownPage?: { on: string; page: string };
   link?: Link;
   /** For kind 'setting': the console page. */
   page?: string;
@@ -176,6 +182,13 @@ export const SWITCHES: Switch[] = [
   sw({ id: 'route_attribute_targeting', category: 'ads', group: 'Buying on delivery routes', parent: 'route_buying', dependsOn: ['house_targeting'], default: false, startsOff: 'Aiming at houses by their data is your own decision.', since: 3, label: 'Aim route buys by household data', description: 'Only houses whose household size, income band, owning or renting, or interests fit (first-party first, then bought data, then the area’s). Never anything sensitive; a house that said no is never aimed at. Advertisers see counts, never which houses.' }),
   sw({ id: 'route_proof', category: 'ads', group: 'Buying on delivery routes', since: 3, dependsOn: ['delivery_areas'], label: 'Delivery report for route buys', description: 'Advertisers see the streets their ad reached and how many houses (never which house or who), each drop’s time and rough place from the driver’s scan, and scans by area.',
     routes: ['GET /v1/ads/campaigns/:id/route-report'] }),
+  // The AI reviewer making the final call on paid ads (src/modules/ads/aiReview.ts; docs/SWITCHES.md, "Review of a paid
+  // ad"; docs/AI.md). Off for every company until a person turns it on, and only once the AI's record earns it.
+  sw({ id: 'ai_ad_final_call', category: 'ads', group: 'Review', default: false, risk: 'autonomy', dependsOn: ['prepaid_ads', 'ai_ad_reviewer'], since: 5,
+    startsOff: 'The AI deciding on its own is each company’s own step, once its record earns it.',
+    ownPage: { on: 'On the AI agents page (AI reviewer of paid ads): an owner signed in with the second step, only once the AI’s record meets your bar.', page: 'agents' },
+    label: 'AI makes the final call on paid ads',
+    description: 'The AI reviewer’s rejection of a paid ad is final without a person, with its written reason kept. The advertiser can always appeal to a person; a random sample of its rejections (10% unless set, never under 5%) still goes to your team to audit; an AI pass still waits for a person before it prints; the refund after any rejection is still approved by a person. Turned on only when its record meets your bar (100 decisions and 95% agreeing with your team unless set); anyone on your team turns it off at once, and the governor turns it off by itself if its agreement drops below the bar.' }),
   ...([[1, 'whole', 'The whole label'], [2, 'half', 'Half'], [3, 'third', 'A third'], [4, 'quarter', 'A quarter'], [6, 'sixth', 'A sixth'], [8, 'eighth', 'An eighth'], [10, 'tenth', 'A tenth']] as const).map(([n, name, label]) =>
     sw({ id: `size_${name}`, category: 'ads', group: 'Ad sizes', label: `${label} of the label`, description: n === 1 ? 'One ad across the whole label.' : `Ads that take ${label.toLowerCase()} of the label (cut as square as the bottle allows).` })),
 
@@ -312,6 +325,8 @@ export const SWITCHES: Switch[] = [
     routes: ['GET /v1/agents/books', 'GET /v1/agents/books/search', 'GET /v1/agents/books/passages/:id'],
     link: { get: (c) => (c.ai?.mode ?? 'network') !== 'off', set: (c, on) => ({ ai: on ? { ...(c.ai ?? {}), mode: c.ai?.mode && c.ai.mode !== 'off' ? c.ai.mode : 'network' } : { ...(c.ai ?? {}), mode: 'off' } }) } }),
   sw({ id: 'ai_ad_assistant', category: 'ai', group: 'For advertisers', dependsOn: ['ad_chat'], label: 'Ad assistant', description: 'Claude does the talking in “make an ad by chatting”. Off: the built-in helper.' }),
+  sw({ id: 'ai_ad_reviewer', category: 'ai', group: 'For advertisers', dependsOn: ['ads'], since: 5, label: 'AI reviewer of paid ads',
+    description: 'Claude looks at each paid ad when it’s submitted and passes it or flags it with its reasons, and your team can ask it why and push back; every final decision a person makes is kept as its record. It can only flag (unless you let it make the final call, under Ads). Off: no AI look; a person reviews every ad as before.' }),
   sw({ id: 'ai_studio_designer', category: 'ai', group: 'For advertisers', dependsOn: ['studio'], label: 'Studio AI design help', description: 'Claude picks the words, photo, type and layout for studio designs. Off: three designs by rule.' }),
   sw({ id: 'ai_personalizer', category: 'ai', group: 'For people who scan', dependsOn: ['ad_versions'], label: 'Personalizer', description: 'Picks which of the advertiser’s versions fits the moment and writes a short greeting. Off: built-in rules choose.' }),
   sw({ id: 'ai_video_writer', category: 'ai', group: 'For people who scan', dependsOn: ['motion_videos'], label: 'Video writer', description: 'Claude cuts the motion video from the advertiser’s own words. Off: the built-in writer.' }),
@@ -422,8 +437,11 @@ export const SWITCHES: Switch[] = [
     jobs: ['wallet-seals', 'reconciliation', 'fingerprints'] }),
   sw({ id: 'settle_in_flight', category: 'safety', parent: null, locked: 'Turning something off never strands money already moving: a person can always settle it.', label: 'Settling money already in flight', description: 'Gift-card purchases already made can be settled by the team even with gift cards off; ad payments a restart cut off are finished; route pieces that can’t go out are given back as credit or refunds; a paid ad can always be stopped and what wasn’t printed paid back.',
     routes: ['GET /v1/wallet/gift-cards', 'POST /v1/wallet/gift-cards/:ref/settle', 'POST /v1/ads/campaigns/:id/stop', 'GET /v1/ops/route-refunds', 'POST /v1/ops/route-refunds/:id/approve', 'POST /v1/ops/route-settle'], jobs: ['ad-payments', 'route-buys'] }),
-  sw({ id: 'ad_review', category: 'safety', parent: null, locked: 'A person checks every ad before it prints; an AI or automated check can only flag a paid ad, never reject it: a person talks it over with the advertiser and only a person rejects it, with a reason.', label: 'Ad review', description: 'Each ad is checked on a sample label, at every size, on a box and as its scan page. A flagged paid ad keeps its money held, prints nothing, and can be fixed and sent again at no fee while it’s discussed in notes both sides see; its refund is offered only when a person finally rejects it.',
-    routes: ['GET /v1/review/campaigns', 'POST /v1/review/campaigns/:id', 'GET /v1/review/campaigns/:id/preview', 'GET /v1/review/campaigns/:id/notes', 'POST /v1/review/campaigns/:id/notes', 'GET /v1/ads/campaigns/:id/notes', 'POST /v1/ads/campaigns/:id/notes'] }),
+  sw({ id: 'ad_review', category: 'safety', parent: null, locked: 'A person checks every ad before it prints; an AI or automated check can only flag a paid ad: a person talks it over with the advertiser and rejects it, with a reason, unless the company let its AI reviewer make the final call on rejections (its record earned it; the advertiser can always appeal to a person, a sample is audited, and a person still approves every refund).', label: 'Ad review', description: 'Each ad is checked on a sample label, at every size, on a box and as its scan page. A flagged paid ad keeps its money held, prints nothing, and can be fixed and sent again at no fee while it’s discussed in notes both sides see; its refund is offered only when a person finally rejects it.',
+    routes: ['GET /v1/review/campaigns', 'POST /v1/review/campaigns/:id', 'GET /v1/review/campaigns/:id/preview', 'GET /v1/review/campaigns/:id/notes', 'POST /v1/review/campaigns/:id/notes', 'GET /v1/ads/campaigns/:id/notes', 'POST /v1/ads/campaigns/:id/notes',
+      // The AI reviewer's record, the bar and the switch (always reachable, so anyone on the team can always turn it off),
+      // talking with the AI about an ad, and an advertiser's appeal to a person (never switched off).
+      'GET /v1/review/ai', 'POST /v1/review/ai/final-call', 'POST /v1/review/ai/settings', 'GET /v1/review/campaigns/:id/ai', 'POST /v1/review/campaigns/:id/ai', 'POST /v1/ads/campaigns/:id/appeal'] }),
   sw({ id: 'print_limits', category: 'safety', parent: null, locked: 'Machines’ print limits are a safety limit: stricter, never weaker.', label: 'Machines’ print limits', description: 'A stolen machine key can’t print (and bill) at scale.' }),
   sw({ id: 'security', category: 'safety', parent: null, locked: 'The security log and the security agent keep watch for every company.', label: 'The security log', description: 'Sign-ins, failed sign-ins, keys, team changes and settings saved; the security agent looks around every hour.',
     routes: ['GET /v1/security/events', 'POST /v1/security/review'], pages: ['security'] }),
@@ -450,7 +468,7 @@ export const SIZE_SWITCHES: Record<number, string> = { 1: 'size_whole', 2: 'size
 /** Box sides and their switches (the left side is always the company's own panel). */
 export const FACE_SWITCHES: Record<string, string> = { top: 'box_top', front: 'box_front', back: 'box_back', right: 'box_right' };
 /** The AI uses, by the id the engine passes to withCompany(). */
-export const AI_USES = ['ai_ad_assistant', 'ai_studio_designer', 'ai_personalizer', 'ai_video_writer', 'ai_bottle_designer', 'ai_prompt_helper', 'ai_team_assistant', 'ai_news_writer', 'numberline'] as const;
+export const AI_USES = ['ai_ad_assistant', 'ai_ad_reviewer', 'ai_studio_designer', 'ai_personalizer', 'ai_video_writer', 'ai_bottle_designer', 'ai_prompt_helper', 'ai_team_assistant', 'ai_news_writer', 'numberline'] as const;
 /** Irreversible steps (chain actions) and the switch each one turns on. Going live with points, pause and unpause always stay. */
 export const ACTION_SWITCHES: Record<string, string> = { mint: 'token', switch_on: 'chain_on', go_live_token: 'token', convert: 'token_conversion', withdrawals_on: 'withdrawals', exchanges_on: 'gift_cards' };
 
@@ -478,6 +496,8 @@ export const switchOfPlugin = (pluginId: string) => PLUGIN_SWITCH.get(pluginId) 
 export const risky = (s: Switch) => !!s.risk;
 /** Who may turn it on. */
 export const whoTurnsOn = (s: Switch): Who | null => (s.locked ? null : s.step ? 'approved_step' : s.risk ? 'owner_approved' : 'owner');
+/** Switches where an AI decides on its own: turned on only on their own page, by a person, on a record. */
+export const autonomySwitches = () => SWITCHES.filter((s) => s.risk === 'autonomy');
 /** A new company starts with it off, whatever FreeWater chose. */
 export const startsOffForNew = (s: Switch) => !s.locked && (!!s.risk || !!s.startsOff);
 

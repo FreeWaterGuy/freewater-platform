@@ -255,7 +255,7 @@ export class FeatureService {
       const missing = needsOf(s).filter((n) => !own(n) || (byId.get(n)!.host && !this.host.on(byId.get(n)!.host!)));
       if (missing.length) { if (!opts.startingPoint) refused.push({ id, label: s.label, reason: `Turn on ${missing.map((m) => `“${label(m)}”`).join(' and ')} first.` }); continue; }
       // Turned on elsewhere: by an approved step, or on its own page (it needs numbers first). Said, never done here.
-      const elsewhere = s.step ? s.link?.via?.on ?? 'Through an approved step.' : s.kind === 'linked' && s.link!.set(c, true) === null ? s.link!.via?.on ?? 'On its own page.' : null;
+      const elsewhere = s.step ? s.link?.via?.on ?? 'Through an approved step.' : s.ownPage ? s.ownPage.on : s.kind === 'linked' && s.link!.set(c, true) === null ? s.link!.via?.on ?? 'On its own page.' : null;
       if (elsewhere) { if (opts.startingPoint) yourself.push({ id, label: s.label, how: elsewhere }); else refused.push({ id, label: s.label, reason: elsewhere }); continue; }
       if (opts.startingPoint && s.risk) { yourself.push({ id, label: s.label, how: 'Turn it on yourself: it involves money, the chain or can’t be undone, so it needs an owner with the second sign-in step.' }); continue; }
       target.set(id, true);
@@ -328,6 +328,25 @@ export class FeatureService {
       }
       for (const x of stored) this.mine(companyId).set(x.id, x.to);
       return { ...plan, saved: plan.changes.length };
+    });
+  }
+
+  /**
+   * A switch turned on or off on its own page (`ownPage` in the registry), after that page's own checks: an AI's
+   * record, who may do it. Logged like any change. Off also turns off whatever needs it. Never a key (`by` is a person,
+   * or 'governor' when the governor turns one off by itself).
+   */
+  async setOnOwnPage(companyId: string, id: string, on: boolean, by: string, reason: string, via: string) {
+    const s = byId.get(id);
+    if (!s?.ownPage || s.kind !== 'feature') throw new FeatureError('unknown_switch', `“${id}” isn’t changed on its own page.`);
+    return this.serial(companyId, async () => {
+      const was = this.own(companyId, s);
+      const items = [{ id, was, on, reason }];
+      if (!on) for (const d of dependantsOf(id)) { const ds = byId.get(d)!; if (ds.kind === 'feature' && !ds.locked && this.own(companyId, ds)) items.push({ id: d, was: true, on: false, reason: `needs “${s.label}”, which is being turned off` }); }
+      if (was === on && items.length === 1) return { changed: false };
+      await this.db.transaction((tx) => this.writeMany(tx, companyId, items, by, via));
+      for (const x of items) this.mine(companyId).set(x.id, x.on);
+      return { changed: true };
     });
   }
 

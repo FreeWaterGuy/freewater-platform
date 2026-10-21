@@ -333,6 +333,14 @@ Status: **Code** = done and tested; **Partly** = done with a gap noted; **Lawyer
 - **L-26** Photos of drops (065): a photo of a house's door (sometimes a person, a car plate, the inside through an open
   door), kept 90 days. Is the keep right; must the photo be in a resident's download; should drivers be told to frame
   only the box; do we need a notice on the box or in the app that a photo is taken? A privacy lawyer should confirm.
+- **L-27** An AI deciding about a business on its own (066): where a company turns on "AI makes the final call on
+  paid ads", the AI reviewer's rejection of an advertiser's paid ad is final without a person (its written reason is
+  kept and shown; the advertiser can appeal to a person, once; a sample is audited by people; the refund is always a
+  person's step). Do automated-decision rules apply when the decision is about a business rather than a person: the
+  EU AI Act and GDPR Art. 22 (sole traders and named owners are people), the EU Platform-to-Business Regulation
+  (statement of reasons, internal complaints for business users), the Colorado AI Act and California's ADMT
+  regulations, and the FTC's view of unfair practices? Must the advertiser be told up front that an AI may decide, and
+  what the appeal is? Is "appeal to a person, once" enough, and does a rejection need a deadline for the appeal?
 
 ## 6. What this review could not check
 

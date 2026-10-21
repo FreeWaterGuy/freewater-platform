@@ -2243,6 +2243,107 @@ create index ad_review_notes_campaign on ad_review_notes(company_id, campaign_id
 create trigger ad_review_notes_append_only before update or delete on ad_review_notes for each row execute function forbid_change();
 `,
   },
+  {
+    id: '066_ai_ad_review',
+    sql: `
+-- The AI reviewer of paid ads (docs/AI.md, "AI reviewer of paid ads"; docs/SWITCHES.md, "Review of a paid ad").
+-- The founder: "the AI can flag it and then we can have a conversation with it about why it is or is not okay… but
+-- over time it will need to be able to take over that role and do it without oversight."
+
+-- Its notes in the thread with the advertiser are its own (not an "automated check"), and an advertiser's appeal of
+-- an AI's rejection is a note of its own kind.
+alter table ad_review_notes drop constraint ad_review_notes_kind_check;
+alter table ad_review_notes add constraint ad_review_notes_kind_check check (kind in ('flag', 'note', 'resubmitted', 'approved', 'rejected', 'appeal'));
+alter table ad_review_notes drop constraint ad_review_notes_author_kind_check;
+alter table ad_review_notes add constraint ad_review_notes_author_kind_check check (author_kind in ('team', 'advertiser', 'automated', 'ai'));
+
+-- Each verdict the AI gave on a paid ad, and what a person finally decided: its track record. What it said never
+-- changes; a person's decision is written once (a pass a person approved and later rejected becomes a miss, the only
+-- change allowed). Only a person's decision counts (never a key's).
+create table ad_ai_verdicts (
+  seq bigint generated always as identity,
+  id text primary key,
+  company_id text not null,
+  campaign_id text not null,
+  agent text not null,
+  verdict text not null check (verdict in ('pass', 'flag')),
+  category text not null check (category in ('none', 'misleading', 'prohibited', 'legal', 'offensive', 'personal', 'quality', 'other')),
+  reasons text not null default '' check (length(reasons) <= 2000),
+  final boolean not null default false,
+  audit boolean not null default false,
+  appealed_at timestamptz,
+  superseded_at timestamptz,
+  human_decision text check (human_decision in ('approved', 'rejected')),
+  human_by text,
+  human_at timestamptz,
+  agreed boolean,
+  missed boolean not null default false,
+  changed_view text check (changed_view in ('pass', 'flag')),
+  at timestamptz not null,
+  check ((human_decision is null) = (agreed is null) and (human_decision is null) = (human_by is null) and (human_decision is null) = (human_at is null)),
+  check (not final or verdict = 'flag'),
+  check (not audit or final),
+  check (not missed or (verdict = 'pass' and human_decision = 'rejected'))
+);
+create index ad_ai_verdicts_campaign on ad_ai_verdicts(company_id, campaign_id, seq);
+create index ad_ai_verdicts_record on ad_ai_verdicts(company_id, agent, human_at) where human_decision is not null;
+create function ad_ai_verdicts_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then perform fw_refuse('ad_ai_verdicts', 'rows are kept: the record is the record.'); end if;
+  if not fw_only_changed(to_jsonb(old), to_jsonb(new), array['appealed_at', 'superseded_at', 'human_decision', 'human_by', 'human_at', 'agreed', 'missed', 'changed_view']) then
+    perform fw_refuse('ad_ai_verdicts', 'what the AI said never changes.');
+  end if;
+  if (old.appealed_at is not null and new.appealed_at is distinct from old.appealed_at) or (old.superseded_at is not null and new.superseded_at is distinct from old.superseded_at) then
+    perform fw_refuse('ad_ai_verdicts', 'an appeal or a newer verdict is recorded once.');
+  end if;
+  if old.human_decision is not null and (new.human_decision, new.human_by, new.human_at, new.agreed, new.missed) is distinct from (old.human_decision, old.human_by, old.human_at, old.agreed, old.missed)
+     and not (old.verdict = 'pass' and old.human_decision = 'approved' and new.human_decision = 'rejected' and new.missed and not new.agreed) then
+    perform fw_refuse('ad_ai_verdicts', 'a person''s decision is recorded once (a pass later rejected becomes a miss).');
+  end if;
+  return new;
+end $$;
+create trigger ad_ai_verdicts_guard before update or delete on ad_ai_verdicts for each row execute function ad_ai_verdicts_guard();
+
+-- The team talking with the AI about one ad: kept with the ad, apart from the notes with the advertiser. Only added to.
+create table ad_ai_conversation (
+  seq bigint generated always as identity,
+  id text primary key,
+  company_id text not null,
+  campaign_id text not null,
+  role text not null check (role in ('team', 'ai')),
+  author_id text,
+  text text not null check (length(text) between 1 and 4000),
+  changed_view text check (changed_view in ('pass', 'flag')),
+  by_model text,
+  at timestamptz not null,
+  check (role = 'ai' or (author_id is not null and changed_view is null))
+);
+create index ad_ai_conversation_campaign on ad_ai_conversation(company_id, campaign_id, seq);
+create trigger ad_ai_conversation_append_only before update or delete on ad_ai_conversation for each row execute function forbid_change();
+
+-- Each company's bar for letting the AI make the final call on paid ads, and its audit sample. Never looser than the
+-- floors here, whatever the code says.
+create table ad_ai_review_settings (
+  company_id text primary key,
+  min_decisions integer not null check (min_decisions between 50 and 1000),
+  min_agree_pct integer not null check (min_agree_pct between 90 and 100),
+  sample_pct integer not null check (sample_pct between 5 and 100),
+  updated_by text not null,
+  updated_at timestamptz not null
+);
+create table ad_ai_review_changes (
+  seq bigint generated always as identity,
+  company_id text not null,
+  what text not null,
+  from_value integer,
+  to_value integer not null,
+  by text not null,
+  reason text,
+  at timestamptz not null
+);
+create trigger ad_ai_review_changes_append_only before update or delete on ad_ai_review_changes for each row execute function forbid_change();
+`,
+  },
 ];
 
 /** Runs every migration not yet run (or, for tests that start from an older schema, those in `list`). */

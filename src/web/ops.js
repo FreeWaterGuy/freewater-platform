@@ -126,7 +126,8 @@
     let frame = null, payload = null;
     const onMsg = (e) => { if ((fixture || e.origin === location.origin) && e.data?.type === 'fw-preview-ready' && frame && payload) frame.contentWindow.postMessage({ type: 'fw-preview', ...(payload.scan ?? { doc: null }) }, fixture ? '*' : location.origin); };
     window.addEventListener('message', onMsg); cleanup = () => window.removeEventListener('message', onMsg);
-    const drawList = () => list.replaceChildren(...queue.map((c) => h('button', { type: 'button', 'aria-current': String(c.id === current), onclick: () => { current = c.id; drawList(); show(); } }, h('b', { text: c.advertiser }), h('span', { text: `${c.name ?? c.category} · sent ${new Date(c.submittedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` }))));
+    const tag = (c) => (c.review?.auditPending ? 'audit of the AI’s rejection · ' : c.review?.appealedAt ? 'appealed · ' : c.review?.status === 'flagged' ? 'flagged · ' : '');
+    const drawList = () => list.replaceChildren(...queue.map((c) => h('button', { type: 'button', 'aria-current': String(c.id === current), onclick: () => { current = c.id; drawList(); show(); } }, h('b', { text: c.advertiser }), h('span', { text: `${tag(c)}${c.name ?? c.category} · sent ${new Date(c.submittedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` }))));
     async function show() {
       if (!current) { pane.replaceChildren(h('div', { class: 'empty', text: 'No ads waiting. New ones show up here as soon as an advertiser submits them.' })); return; }
       pane.replaceChildren(h('p', { class: 'caption', text: 'Loading…' }));
@@ -136,13 +137,27 @@
       // A paid ad (paid up front): an automated check can only flag it; the team talks it over with the advertiser in
       // the notes, and only a person finally rejects it, with a reason (that's when its refund is offered).
       const paid = !!item.paid, flagged = item.review?.status === 'flagged';
+      const audit = !!item.review?.auditPending, appealed = !!item.review?.appealedAt;
       const notes = paid ? await api('GET', `/v1/review/campaigns/${c.id}/notes`).catch(() => []) : [];
+      const ai = paid ? await api('GET', `/v1/review/campaigns/${c.id}/ai`).catch(() => null) : null;
       const note = h('textarea', { class: 'input', id: 'r-note', placeholder: paid ? 'Why? Plain words: the advertiser sees this word for word, and it’s kept.' : 'What needs to change? The advertiser sees this word for word.' });
       const say = h('textarea', { class: 'input', id: 'r-say', placeholder: 'Write to the advertiser…' });
       const thread = h('div', { class: 'panel-box' }, h('b', { text: flagged ? 'Being discussed with the advertiser' : 'Notes with the advertiser' }),
-        notes.length ? h('ul', { style: 'margin:0;padding-left:18px;line-height:1.6' }, notes.map((n) => h('li', {}, h('b', { text: `${n.from === 'team' ? 'Team' : n.from === 'advertiser' ? c.advertiser : 'Automated check'}${n.kind === 'flag' ? ' flagged' : n.kind === 'resubmitted' ? ' sent a change' : ''}: ` }), n.text, h('span', { style: 'color:var(--muted)', text: ` · ${new Date(n.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` })))) : h('p', { style: 'margin:0;color:var(--muted)', text: 'No notes yet.' }),
+        notes.length ? h('ul', { style: 'margin:0;padding-left:18px;line-height:1.6' }, notes.map((n) => h('li', {}, h('b', { text: `${n.from === 'team' ? 'Team' : n.from === 'advertiser' ? c.advertiser : n.from === 'AI reviewer' ? 'AI reviewer' : 'Automated check'}${n.kind === 'flag' ? ' flagged' : n.kind === 'resubmitted' ? ' sent a change' : n.kind === 'appeal' ? ' appealed to a person' : n.kind === 'rejected' && n.from === 'AI reviewer' ? ' rejected (its final call)' : ''}: ` }), n.text, h('span', { style: 'color:var(--muted)', text: ` · ${new Date(n.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` })))) : h('p', { style: 'margin:0;color:var(--muted)', text: 'No notes yet.' }),
         h('div', { class: 'field' }, h('label', { for: 'r-say', text: 'Write to the advertiser' }), say),
         h('div', {}, h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { if (!say.value.trim()) return; try { await api('POST', `/v1/review/campaigns/${c.id}/notes`, { text: say.value.trim() }); toast('Sent.'); await show(); } catch (x) { toast(x.message); } } }, 'Send note')));
+      // The AI reviewer: what it said about this ad, and your team's talk with it. Kept with the ad, apart from the
+      // notes with the advertiser (who never sees it). It can explain and change its view; it can't decide anything.
+      const ask = h('textarea', { class: 'input', id: 'r-ask', maxlength: '2000', placeholder: 'Ask the AI why, or push back…' });
+      const latest = ai?.verdicts?.filter((v) => !v.superseded).at(-1) ?? null;
+      const said = (v) => (v.verdict === 'pass' ? 'It passed this ad.' : `${v.final ? 'It rejected this ad on its own (your company lets it make the final call)' : 'It flagged this ad'}: ${v.reasons}`);
+      const aiBox = ai && (ai.verdicts.length || ai.thread.length) ? h('div', { class: 'panel-box', style: 'border-left:3px solid var(--blue, #1E7DB8)' },
+        h('b', { text: 'The AI reviewer (only your team sees this)' }),
+        latest ? h('p', { style: 'margin:4px 0', text: `${said(latest)}${latest.changedView ? ` After talking it over, it now says it would ${latest.changedView === 'pass' ? 'pass' : 'flag'} it.` : ''}` }) : null,
+        ai.thread.length ? h('ul', { style: 'margin:0;padding-left:18px;line-height:1.6' }, ai.thread.map((m) => h('li', {}, h('b', { text: m.from === 'team' ? 'Team: ' : `AI${m.by === 'stand-in (no AI)' ? ' (stand-in)' : ''}${m.changedView ? `, now ${m.changedView === 'pass' ? 'passing' : 'flagging'} it` : ''}: ` }), m.text))) : null,
+        h('div', { class: 'field' }, h('label', { for: 'r-ask', text: 'Ask the AI' }), ask),
+        h('div', {}, h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { if (!ask.value.trim()) return; try { await api('POST', `/v1/review/campaigns/${c.id}/ai`, { text: ask.value.trim() }); await show(); } catch (x) { toast(x.message); } } }, 'Ask')),
+        h('p', { style: 'margin:0;color:var(--muted);font-size:13px', text: 'It explains, and may change its view; it can’t approve, reject or pay anything back. What it said first stays in its record against your decision.' })) : null;
       const decide = async (decision) => {
         if ((decision === 'reject' || decision === 'flag') && !note.value.trim()) { toast(decision === 'flag' ? 'Say what the concern is.' : paid ? 'Write why it’s rejected.' : 'Say what needs to change.'); note.focus(); return; }
         if (decision === 'reject' && paid && !window.confirm(`Reject ${c.advertiser}’s paid ad for good? Its refund is then offered for approval.`)) return;
@@ -160,19 +175,22 @@
       frame = fixture?.scanFrame ? fixture.scanFrame() : h('iframe', { src: '/preview/scan', title: 'Scan page' });
       const buy = c.buy.type === 'guaranteed' ? `${c.buy.remainingPrints.toLocaleString()} bottles` : `${dollars(c.buy.dailyCapCents)} a day`;
       pane.replaceChildren(
-        h('div', { class: 'run-head' }, h('div', {}, h('h2', { style: 'margin:0;font-size:20px', text: c.name ?? c.advertiser }), h('div', { style: 'color:var(--muted)', text: `${c.advertiser} · ${c.category} · ${c.where === 'all' ? 'every machine' : c.where.join(', ')} · ${buy}` })), h('span', { class: 'pill warn', text: flagged ? 'Flagged · being discussed' : 'Waiting for review' })),
-        flagged ? h('div', { class: 'notice', style: 'border-left:3px solid var(--warn, #c80)' }, h('b', { text: 'Flagged: ' }), item.flag?.reasons ?? '', h('div', { style: 'color:var(--muted)', text: 'A flag never rejects or refunds. The money stays held and nothing prints. Talk it over in the notes; the advertiser can change it at no fee.' })) : null,
+        h('div', { class: 'run-head' }, h('div', {}, h('h2', { style: 'margin:0;font-size:20px', text: c.name ?? c.advertiser }), h('div', { style: 'color:var(--muted)', text: `${c.advertiser} · ${c.category} · ${c.where === 'all' ? 'every machine' : c.where.join(', ')} · ${buy}` })), h('span', { class: 'pill warn', text: audit ? 'Audit of the AI’s rejection' : appealed ? 'Appealed · back with you' : flagged ? 'Flagged · being discussed' : 'Waiting for review' })),
+        flagged ? h('div', { class: 'notice', style: 'border-left:3px solid var(--warn, #c80)' }, h('b', { text: appealed ? 'Appealed: ' : 'Flagged: ' }), item.flag?.reasons ?? '', h('div', { style: 'color:var(--muted)', text: appealed ? 'The advertiser appealed the AI reviewer’s rejection to a person. You decide: approve it, or reject it with your reason. The money stays held and nothing prints meanwhile.' : 'A flag never rejects or refunds. The money stays held and nothing prints. Talk it over in the notes; the advertiser can change it at no fee.' })) : null,
+        audit ? h('div', { class: 'notice', style: 'border-left:3px solid var(--warn, #c80)' }, h('b', { text: 'Audit: ' }), `The AI reviewer rejected this ad on its own (${item.review?.note ?? ''}). A sample of its rejections comes to a person. Confirm it (reject, with your reason) or overturn it (approve). Either way it goes in its record.`) : null,
         h('img', { class: 'label-img', style: 'width:100%;border-radius:8px;box-shadow:0 0 0 1px var(--line)', src: svgSrc(payload.labelSvg), alt: 'The ad on a sample label' }),
         h('div', { class: 'row3' },
           h('div', { style: 'display:flex;flex-direction:column;gap:12px' },
             h('div', { class: 'stage', style: 'min-height:0' }, h('div', { class: 'sizes' }, payload.sizes.flatMap((s) => (s.shapes ?? [{ svg: s.svg }]).map((x) => h('figure', {}, h('img', { src: svgSrc(x.svg), alt: s.label, style: 'height:200px' }), h('figcaption', { text: x.w ? `${s.label} · ${(x.w / 100).toFixed(1)} × ${(x.h / 100).toFixed(1)} in` : s.label }))))), ...(payload.boxFaces ?? (payload.boxFaceSvg ? [{ svg: payload.boxFaceSvg }] : [])).map((f) => h('img', { class: 'box-img', src: svgSrc(f.svg), alt: 'On a box side' }))),
             h('div', { class: 'panel-box' }, h('b', { text: 'Check' }), h('ul', { style: 'margin:0;padding-left:18px;line-height:1.8;color:var(--muted)' }, ['Words are true and legal; prices and offers are honest', 'Nothing your rules don’t allow (category, claims, images)', 'Readable at the smallest size', 'Links go where they say; the scan page works'].map((t) => h('li', { text: t })))),
             payload.objections?.length ? h('div', { class: 'panel-box', style: 'border-left:3px solid var(--warn, #c80)' }, h('b', { text: 'Our AI objected to this ad' }), h('p', { style: 'margin:4px 0;color:var(--muted)', text: 'It chose not to help make it, so the built-in helper carried on. You still decide whether it runs.' }), h('ul', { style: 'margin:0;padding-left:18px' }, payload.objections.map((o) => h('li', { text: o.reason })))) : null,
+            aiBox,
             paid ? thread : null,
             h('div', { class: 'field' }, h('label', { for: 'r-note', text: paid ? 'Reason (needed to flag or reject)' : 'Note to the advertiser (needed to send it back)' }), note),
-            h('div', { class: 'toolbar' }, h('button', { class: 'btn', type: 'button', onclick: () => decide('approve') }, 'Approve and start printing'),
-              paid && !flagged ? h('button', { class: 'btn secondary', type: 'button', onclick: () => decide('flag') }, 'Flag to discuss') : null,
-              h('button', { class: 'btn secondary', type: 'button', onclick: () => decide('reject') }, paid ? 'Reject for good (refund offered)' : 'Send back'))),
+            h('div', { class: 'toolbar' }, h('button', { class: 'btn', type: 'button', onclick: () => decide('approve') }, audit ? 'Overturn: approve and start printing' : 'Approve and start printing'),
+              paid && !flagged && !audit ? h('button', { class: 'btn secondary', type: 'button', onclick: () => decide('flag') }, 'Flag to discuss') : null,
+              h('button', { class: 'btn secondary', type: 'button', onclick: () => decide('reject') }, audit ? 'Confirm the rejection' : paid ? 'Reject for good (refund offered)' : 'Send back')),
+            paid ? h('p', { style: 'margin:0;color:var(--muted);font-size:13px', text: 'Paying back a rejected ad is always a separate step an owner or finance person approves (with the second sign-in step), even when the AI reviewer made the rejection.' }) : null),
           frame));
     }
     shell('review', head('Ad review', 'Nothing prints until it’s approved here. Changes to a live ad come back here too.'), queue.length ? h('div', { class: 'queue' }, list, pane) : h('div', { class: 'empty', text: 'No ads waiting. New ones show up here as soon as an advertiser submits them.' }));

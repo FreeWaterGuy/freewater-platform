@@ -99,6 +99,7 @@ import { boxes, builtinCreatives, freewater, locations, peakSpring, products, sa
 import { FillerService } from './modules/fillers/service';
 import { NewsService, newsPlugin } from './modules/news/service';
 import { builtinNewsWriter, ClaudeNewsWriter, type NewsWriter } from './modules/news/writer';
+import { AiReviewService, ClaudeAdReviewer, standInReviewer, type AdReviewer } from './modules/ads/aiReview';
 import { HouseholdService } from './modules/households/service';
 import { sampleAustinAreas } from './modules/households/sampleAustin';
 
@@ -188,6 +189,8 @@ export interface AppOptions {
   fleet?: { claimTimeoutMs?: number; finishTimeoutMs?: number; offlineAfterMs?: number; bufferHours?: number; offlineGraceHours?: number };
   /** Writes FreeWater News stories (Claude with a key, else the stand-in that only points to the reporting). */
   newsWriter?: NewsWriter;
+  /** The AI reviewer of paid ads (tests pass a fake; with no AI key, the stand-in: no verdicts, a person reviews). */
+  adReviewer?: AdReviewer;
 }
 
 /** Start the platform on a database: migrate, load everything, and keep writing every change back. */
@@ -648,7 +651,7 @@ export async function createApp(opts: AppOptions) {
   if (opts.examModels) agents.examModels = opts.examModels;
   else if (process.env.ANTHROPIC_API_KEY) {
     const m = process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-5-5';
-    agents.examModels = { numberline: m, 'ad-assistant': m, designer: m, 'video-writer': m, 'team-assistant': m, personalizer: process.env.ANTHROPIC_PERSONALIZE_MODEL ?? 'claude-haiku-5-5' };
+    agents.examModels = { numberline: m, 'ad-assistant': m, 'ad-reviewer': m, designer: m, 'video-writer': m, 'team-assistant': m, personalizer: process.env.ANTHROPIC_PERSONALIZE_MODEL ?? 'claude-haiku-5-5' };
   }
   if (opts.examinee) agents.examinee = opts.examinee;
   else if (process.env.ANTHROPIC_API_KEY) {
@@ -657,6 +660,13 @@ export async function createApp(opts: AppOptions) {
     agents.examinee = (agentId, model) => claudeExaminee({ apiKey: key, agentId, model, system });
   };
   await agents.init();
+  // The AI reviewer of paid ads: flags (or, where a company let it on its record, rejects) paid ads; its record is every
+  // final decision a person makes; the governor turns its final call off when agreement drops (src/modules/ads/aiReview.ts).
+  const aiReview = new AiReviewService(db, platform, ads, companyFeatures, opts.adReviewer ?? (aiOn ? new ClaudeAdReviewer({ apiKey: anthropicKey, model: process.env.ANTHROPIC_MODEL }) : standInReviewer));
+  aiReview.examProblem = () => agents.examProblem('ad-reviewer');
+  aiReview.alert = (key, title, detail) => void runtime.alerts.alert(key, 'warning', title, detail);
+  ads.afterPaidSubmit = (c) => aiReview.onSubmitted(c);
+  ads.onDecided = (c, decision, personId) => aiReview.onDecided(c, decision, personId);
   // AI continuity: when an operator closes or leaves, its agents are archived by the network and asked what's next.
   const continuity = new ContinuityService(db, platform, opts.clock);
   continuity.fundOf = async (companyId, agentId) => { const f = (await agents.ledger(companyId, agentId)).fund; return f.balanceCents + f.heldCents; };
@@ -697,7 +707,7 @@ export async function createApp(opts: AppOptions) {
   await attribution.repairUnrecorded();
   await persistence.flush();
 
-  return { ...made, fillers, news, households, routeBuys, features, companyFeatures, db, persistence, runtime, demoKeys, accounts, payments, credit, prepaid, messenger, experiences, assets, ads, designs, delivery, houses, dropPhotos, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
+  return { ...made, aiReview, fillers, news, households, routeBuys, features, companyFeatures, db, persistence, runtime, demoKeys, accounts, payments, credit, prepaid, messenger, experiences, assets, ads, designs, delivery, houses, dropPhotos, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

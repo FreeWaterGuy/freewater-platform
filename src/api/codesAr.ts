@@ -84,8 +84,11 @@ export function codesArRoutes(app: App, server: FastifyInstance, route: (r: Rout
     const bad = applyExtras(company, c, x, experiences.host);
     if (bad) throw new ApiError(422, 'campaign_invalid', bad);
     const reviewer = !key!.advertiserId || key!.scopes.includes('admin');
-    if (!reviewer && changesWhatPeopleSee(x)) { c.active = false; c.review = { status: 'submitted', at: platform.bus.now().toISOString() }; }
+    const resubmitted = !reviewer && changesWhatPeopleSee(x);
+    if (resubmitted) { c.active = false; c.review = { status: 'submitted', at: platform.bus.now().toISOString() }; }
     platform.persist.campaign(c);
+    // Sent back to review with new words: the AI reviewer looks again (its earlier verdict was about the old ad).
+    if (resubmitted && c.prepaid) await app.aiReview.onSubmitted(c).catch(() => null);
     return { body: extrasView(c) };
   } });
 

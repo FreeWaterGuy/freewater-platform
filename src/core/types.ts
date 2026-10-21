@@ -352,7 +352,15 @@ export interface Campaign {
    * with the advertiser (notes both see) and only a person signed in finally rejects it, with a reason, which is when a
    * refund is offered. Nothing prints unless 'approved'.
    */
-  review?: { status: 'submitted' | 'approved' | 'rejected' | 'flagged'; note?: string; at: string; by?: string; flaggedAt?: string; resubmittedAt?: string; refundOffered?: boolean };
+  review?: {
+    status: 'submitted' | 'approved' | 'rejected' | 'flagged'; note?: string; at: string; by?: string; flaggedAt?: string; resubmittedAt?: string; refundOffered?: boolean;
+    /** Rejected by the AI reviewer on its own (the company's "AI makes the final call on paid ads" was on): the advertiser can appeal to a person. */
+    aiFinal?: boolean;
+    /** That AI rejection was picked for a person's audit and is waiting in the review queue. */
+    auditPending?: boolean;
+    /** The advertiser appealed the AI's rejection: back with a person, who decides. */
+    appealedAt?: string;
+  };
   /** Paused because the advertiser owes more than its credit allows (docs/SWITCHES.md, "Credit for advertisers"). */
   creditHold?: { at: string; owedCents: number; limitCents: number | null; reason: string };
   /** A short name the advertiser knows it by. */

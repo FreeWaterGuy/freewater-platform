@@ -912,6 +912,41 @@
           }).catch(() => box.replaceChildren(h('p', { class: 'hint', text: 'Couldn’t load the archives.' })));
           return section('Continuity', 'Your agents’ memory and identity belong to the network, not to any one company. If this company closes or leaves, each agent is archived at once (kept, never deleted) and then asked whether to work again in the network or rest. It keeps its lessons, never your customers’ data; what you told it in confidence stays visible only to you. Its fund stays owed to it.', box);
         })(),
+        (() => {
+          // The AI reviewer of paid ads: its record against your team's final decisions, your bar and audit sample, and
+          // whether it makes the final call. Turning that on: an owner with the second step, only on the record. Off:
+          // anyone on the team, at once; the governor turns it off by itself when agreement drops below the bar.
+          const box = h('div', {}, h('p', { class: 'hint', text: 'Loading…' }));
+          api('GET', '/v1/review/ai').then((r) => {
+            const pct = (x) => (x == null ? '–' : `${x}%`);
+            const why = h('input', { class: 'input', placeholder: 'Why (for the record)', maxlength: 300 });
+            const n = (k, label, min, max, suffix) => { const i = h('input', { class: 'input', type: 'number', min, max, step: 1, value: r.bar[k], style: 'max-width:110px', 'aria-label': label }); i.dataset.k = k; return h('label', { class: 'field' }, h('span', { text: label }), h('span', { style: 'display:flex;gap:6px;align-items:center' }, i, suffix ? h('span', { class: 'muted', text: suffix }) : null)); };
+            const fields = [n('minDecisions', 'Decisions it must have', 50, 1000, 'at least 50'), n('minAgreePct', 'Agreeing with your team', 90, 100, '% (at least 90)'), n('samplePct', 'Its rejections a person audits', 5, 100, '% (at least 5)')];
+            const saveBar = () => { const body = { reason: why.value.trim() || undefined }; for (const f of fields) { const i = f.querySelector('input'); body[i.dataset.k] = Number(i.value); } act('POST', '/v1/review/ai/settings', body, 'Saved.'); };
+            const fc = r.finalCall;
+            box.replaceChildren(
+              h('div', { class: 'kpis', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' },
+                h('div', { class: 'kpi dark' }, h('span', { text: `Agreed with your team, last ${r.window}` }), h('b', { text: `${r.last.agreed} of ${r.last.decisions}` }), h('small', { text: pct(r.last.agreementPct) })),
+                h('div', { class: 'kpi' }, h('span', { text: 'False flags' }), h('b', { text: String(r.last.falseFlags) }), h('small', { text: 'it flagged, a person approved' })),
+                h('div', { class: 'kpi' }, h('span', { text: 'Missed problems' }), h('b', { text: String(r.last.missed) }), h('small', { text: 'it passed, a person later rejected' })),
+                h('div', { class: 'kpi' }, h('span', { text: 'Waiting for a person' }), h('b', { text: String(r.sinceItBegan.waitingForAPerson) }), h('small', { text: `${r.sinceItBegan.decisions} decided since it began` }))),
+              r.byReason.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['What it said', 'Decided by your team', 'Agreed'].map((x) => h('th', { text: x })))),
+                h('tbody', {}, r.byReason.map((x) => h('tr', {}, h('td', { text: x.category === 'none' ? 'Passed it' : `Flagged: ${x.label}` }), h('td', { text: String(x.decisions) }), h('td', { text: `${x.agreed} (${pct(Math.floor((x.agreed * 1000) / Math.max(1, x.decisions)) / 10)})` }))))))
+                : h('p', { class: 'hint', text: 'No decisions yet. Every time a person on your team approves or rejects a paid ad it looked at, it goes here.' }),
+              h('p', { style: 'margin:8px 0 4px' }, h('b', { text: `AI makes the final call on paid ads: ${fc.on ? 'on' : 'off'}` }), fc.switchedOn && !fc.on ? ' (switched on, but something it needs is off)' : ''),
+              h('p', { class: 'hint', text: fc.on
+                ? 'Its rejections are final without a person, with its reason. The advertiser can always appeal to a person; a sample of its rejections comes to your team to audit; an AI pass still waits for a person; paying back a rejected ad is still an owner’s or finance person’s step.'
+                : r.meetsBar ? 'Its record meets your bar. An owner signed in with the second step can turn it on.' : `Not yet: it needs ${r.missing.join('; ')}.` }),
+              h('div', { class: 'toolbar' },
+                fc.switchedOn
+                  ? h('button', { class: 'btn small', type: 'button', onclick: () => act('POST', '/v1/review/ai/final-call', { on: false, reason: why.value.trim() || undefined }, 'Off: a person reviews every flag again.') }, 'Turn it off now')
+                  : h('button', { class: 'btn secondary small', type: 'button', disabled: r.meetsBar && fc.aiOn ? null : '', onclick: () => act('POST', '/v1/review/ai/final-call', { on: true, reason: why.value.trim() }, 'On: its rejections are now final, with appeals and audits.') }, 'Let it make the final call')),
+              h('div', { class: 'form' }, ...fields, h('label', { class: 'field' }, h('span', { text: 'Why (needed to turn it on, or to lower any of these)' }), why)),
+              h('div', { class: 'toolbar' }, h('button', { class: 'btn secondary small', type: 'button', onclick: saveBar }, 'Save the bar')),
+              r.history.length ? h('p', { class: 'hint', text: `Changes: ${r.history.slice(0, 5).map((x) => `${x.what} ${x.from}→${x.to} by ${x.by}${x.reason ? ` (${x.reason})` : ''}`).join('; ')}` }) : null);
+          }).catch(() => box.replaceChildren(h('p', { class: 'hint', text: 'Couldn’t load the AI reviewer’s record.' })));
+          return section('AI reviewer of paid ads', 'It looks at each paid ad as it comes in and passes it or flags it with its reasons; your team can ask it why on the review page. Every final decision a person makes is its record. Raising the bar or the audit sample: anyone on your team. Lowering them: an owner with the second step and a reason. It can never change any of this itself.', box);
+        })(),
         section('What winning means', `${o.winCondition.goal} ${o.winCondition.definition}`,
           h('ul', {}, o.winCondition.notAWin.map((x) => h('li', { text: x })))),
         // Hidden when the books can’t be read (e.g. this company’s books aren’t public to this view).
@@ -1178,7 +1213,7 @@
 
   // ---------- features: every switch, in categories (src/runtime/registry.ts) ----------
   const WHO = { owner: 'Any owner, signed in', owner_approved: 'An owner with the second sign-in step', approved_step: 'Proposed under Launch or Blockchain, approved by 2 other people, then a wait' };
-  const RISK = { money: 'Money', chain: 'Blockchain', one_way: 'One way' };
+  const RISK = { money: 'Money', chain: 'Blockchain', one_way: 'One way', autonomy: 'AI decides on its own' };
   async function featuresPage() {
     const qs = new URLSearchParams((S.path.split('#')[0].split('?')[1]) || '');
     const view = qs.get('view') === 'all' ? 'all' : 'main';

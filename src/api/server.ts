@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { ApiError, notFound, obj, S, signedInOwner, type Handler, type RouteDef, Q } from './http';
 import { consumerRoutes } from './consumer';
 import { adsRoutes } from './ads';
+import { aiReviewRoutes } from './aiReview';
 import { deliveryRoutes } from './delivery';
 import { routeBuyRoutes } from './routeBuys';
 import { booksRoutes } from './books';
@@ -490,6 +491,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const reviewer = !key!.advertiserId || key!.scopes.includes('admin');
     const approved = c.review ? c.review.status === 'approved' : false;
     if (b.active === true && !reviewer && !approved) throw new ApiError(403, 'review_required', 'Content review turns campaigns on. You can pause yours any time.');
+    // A paid ad that's flagged (being discussed, or appealed) or that the AI reviewer rejected is decided only in the
+    // review queue, where a person decides and the AI's record is kept: never switched on here (P3).
+    if (b.active === true && !approved && c.prepaid && (c.review?.status === 'flagged' || c.review?.aiFinal)) throw new ApiError(409, 'decide_in_review', 'This paid ad is being discussed, appealed, or was rejected by the AI reviewer: decide it in the review queue (a person, signed in).');
     const changesPage = b.experienceId !== undefined || b.experienceConfig !== undefined || b.theme !== undefined;
     // A route ad aimed at a few houses: the company turns it on, or changes what it says, only as a person (an owner or
     // a reviewer, signed in), with the stricter review run on what it will say (routeBuys.beforeApprove). Checked
@@ -516,6 +520,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     if (reviewer && b.active === true) c.review = { status: 'approved', at: platform.bus.now().toISOString() };
     if (changesPage && !reviewer) c.review = { status: 'submitted', at: platform.bus.now().toISOString() };
     platform.persist.campaign(c);
+    // Sent back to review with a new page: the AI reviewer looks again (its earlier verdict was about the old ad).
+    if (changesPage && !reviewer && c.prepaid) await app.aiReview.onSubmitted(c).catch(() => null);
     return { body: campaignView(c) };
   } });
 
@@ -830,6 +836,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   consumerRoutes(app, route, { me, checkExperience });
   adsRoutes(app, route, { me });
+  aiReviewRoutes(app, route);
   deliveryRoutes(app, route, { me });
   routeBuyRoutes(app, route, { me });
   booksRoutes(app, route);

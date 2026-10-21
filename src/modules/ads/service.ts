@@ -436,6 +436,8 @@ export class AdsService {
       const objections = (await this.db.query<any>(`select agent, reason from ai_objections where company_id = $1 and subject = $2 order by at`, [c.companyId, `draft:${r.id}`])).rows;
       if (objections.length) await this.flag({ companyId: c.companyId, campaignId: c.id, reasons: objections.map((o) => `${o.agent}: ${o.reason}`), by: { kind: 'automated', id: 'ai-objection' } });
     }
+    // The AI reviewer looks at every paid ad as it comes in (src/modules/ads/aiReview.ts).
+    if (c.prepaid) await this.afterPaidSubmit(c).catch(() => {});
     await this.flush();
     return { campaignId: c.id, status: 'in_review', ...(paid ? { paidCents: paid.totalCents, bottles: c.prepaid?.paid ?? 0 } : {}), ...(routePaid ? { route: { houses: routePaid.houses, weeks: routePaid.weeks, creditCents: routePaid.creditCents, cardCents: routePaid.cardCents, small: routePaid.small } } : {}), ...(feeCents ? { changeFeeCents: feeCents } : {}) };
   }
@@ -535,10 +537,18 @@ export class AdsService {
       .map((r) => ({ agent: r.agent, reason: r.reason, at: new Date(r.at).toISOString() }));
   }
 
-  /** Ads waiting for a person: new and changed ads, and paid ads flagged and being discussed with the advertiser. */
+  /**
+   * Ads waiting for a person: new and changed ads, paid ads flagged and being discussed with the advertiser (an appeal
+   * of the AI's rejection among them), and the AI's own rejections picked for a person's audit.
+   */
   reviewQueue(companyId: string) {
-    return [...this.platform.campaigns.values()].filter((c) => c.companyId === companyId && (c.review?.status === 'submitted' || c.review?.status === 'flagged'));
+    return [...this.platform.campaigns.values()].filter((c) => c.companyId === companyId && (c.review?.status === 'submitted' || c.review?.status === 'flagged' || (c.review?.status === 'rejected' && c.review.auditPending)));
   }
+
+  /** Set by the app: the AI reviewer looks at a paid ad just submitted (AiReviewService.onSubmitted). */
+  afterPaidSubmit: (c: Campaign) => Promise<unknown> = async () => {};
+  /** Set by the app: a person finally decided a paid ad; the AI reviewer's record notes it (AiReviewService.onDecided). */
+  onDecided: (c: Campaign, decision: 'approved' | 'rejected', personId: string) => Promise<void> = async () => {};
 
   /** Set by the app: refuses an ad going live when its advertiser's credit doesn't allow it (CreditService). */
   beforeLive: (c: Campaign) => Promise<void> = async () => {};
@@ -560,9 +570,25 @@ export class AdsService {
     if (input.decision === 'flag' || (input.decision === 'reject' && paid && !person)) {
       return this.flag({ companyId: c.companyId, campaignId: c.id, reasons: [note || 'Flagged for a closer look.'], by: person ? { kind: 'team', id: person } : { kind: 'automated', id: null } });
     }
+    // An AI's rejection picked for audit: a person confirms it (reject) or overturns it (approve).
+    const audit = !!(c.review?.status === 'rejected' && c.review.auditPending);
+    // Overturning the AI reviewer's own rejection, or deciding an advertiser's appeal of it, is a person's call: never
+    // a key (which an AI could hold).
+    if (input.decision === 'approve' && !person && (c.review?.aiFinal || c.review?.appealedAt)) throw new AdsError(403, 'person_review', 'The AI reviewer rejected this ad (or the advertiser appealed that): a person on the team decides it, signed in, not with an API key.');
     if (input.decision === 'reject' && paid) {
-      if (c.review?.status !== 'submitted' && c.review?.status !== 'flagged') throw new AdsError(409, 'not_in_review', 'Only an ad waiting for review can be rejected.');
+      if (c.review?.status !== 'submitted' && c.review?.status !== 'flagged' && !audit) throw new AdsError(409, 'not_in_review', 'Only an ad waiting for review can be rejected.');
       if (note.length < 10) throw new AdsError(422, 'reason_required', 'Write why it’s rejected, in plain words (at least 10 characters): it’s kept, and the advertiser sees it.');
+    }
+    // Already stopped and paid back: it can't run again. An audit of the AI's rejection still records what the person
+    // thought (its record stays honest), and the ad stays stopped.
+    if (input.decision === 'approve' && c.prepaid?.stoppedAt) {
+      if (!audit || !person) throw new AdsError(409, 'stopped', 'This ad was stopped and its unprinted bottles paid back. Make a new ad instead.');
+      const { auditPending: _done, ...rest } = c.review!;
+      c.review = rest;
+      this.platform.persist.campaign(c);
+      await this.addReviewNote({ companyId: c.companyId, campaignId: c.id, kind: 'note', authorKind: 'team', authorId: person, text: `On audit, a person disagreed with the AI’s rejection${note ? `: ${note}` : ''}. It was already paid back, so it stays stopped.` });
+      await this.onDecided(c, 'approved', person);
+      return c;
     }
     // Aimed at a few houses: the stricter review (a person, the business verified, no names or addresses).
     if (input.decision === 'approve' && c.routeBuy?.small) await this.routeBuys?.beforeApprove(c, input.by ?? {});
@@ -572,6 +598,34 @@ export class AdsService {
     c.active = input.decision === 'approve';
     this.platform.persist.campaign(c);
     if (paid) await this.addReviewNote({ companyId: c.companyId, campaignId: c.id, kind: input.decision === 'approve' ? 'approved' : 'rejected', authorKind: 'team', authorId: person, text: input.decision === 'approve' ? (note || 'Approved: it prints from now on.') : `Rejected: ${note}. The bottles not printed can be paid back to your card.` });
+    // A person's final decision on a paid ad is the AI reviewer's record (agreed with it or not). A key's never is.
+    if (paid && person) await this.onDecided(c, input.decision === 'approve' ? 'approved' : 'rejected', person);
+    return c;
+  }
+
+  /**
+   * The AI reviewer rejects a paid ad on its own: only where the company let it make the final call (AiReviewService
+   * decides that), with its written reason kept and shown to the advertiser, who can appeal to a person. The refund is
+   * offered, and a person approves it, as after any rejection. `audit`: a person checks this one too.
+   */
+  async aiReject(c: Campaign, reason: string, audit: boolean) {
+    const company = this.platform.companies.get(c.companyId)!;
+    const at = this.platform.bus.now().toISOString();
+    const note = reason.slice(0, 1000);
+    c.review = { status: 'rejected', note, at, by: 'ai:ad-reviewer', refundOffered: true, aiFinal: true, ...(audit ? { auditPending: true } : {}) };
+    c.active = false;
+    this.platform.persist.campaign(c);
+    await this.addReviewNote({ companyId: c.companyId, campaignId: c.id, kind: 'rejected', authorKind: 'ai', authorId: 'ad-reviewer', text: `Rejected by ${company.name}’s AI reviewer (${note}). You can appeal to a person on the team, who will look at it again. If it stays rejected, the bottles not printed can be paid back once a person approves the refund.` });
+    return c;
+  }
+
+  /** The advertiser appealed the AI's rejection: back to a person, flagged (money held, nothing prints, no refund yet). */
+  async reopenForAppeal(c: Campaign, text: string) {
+    const at = this.platform.bus.now().toISOString();
+    c.review = { status: 'flagged', note: `Appeal of the AI reviewer’s rejection (${c.review?.note ?? ''})`.slice(0, 1000), at, flaggedAt: at, appealedAt: at };
+    c.active = false;
+    this.platform.persist.campaign(c);
+    await this.addReviewNote({ companyId: c.companyId, campaignId: c.id, kind: 'appeal', authorKind: 'advertiser', authorId: c.advertiserId, text: text.slice(0, 2000) });
     return c;
   }
 
@@ -580,7 +634,7 @@ export class AdsService {
    * goes to the review queue with the reasons, and the team talks it over with the advertiser in its notes. A flag
    * never rejects and never refunds.
    */
-  async flag(input: { companyId: string; campaignId: string; reasons: string[]; by: { kind: 'automated' | 'team'; id: string | null } }) {
+  async flag(input: { companyId: string; campaignId: string; reasons: string[]; by: { kind: 'automated' | 'team' | 'ai'; id: string | null } }) {
     const c = this.platform.campaigns.get(input.campaignId);
     if (!c || c.companyId !== input.companyId) throw new AdsError(404, 'not_found', 'Campaign not found.');
     if (c.review?.status === 'rejected') throw new AdsError(409, 'already_rejected', 'A person already rejected this ad.');
@@ -600,7 +654,7 @@ export class AdsService {
     const c = this.platform.campaigns.get(campaignId);
     if (!c || c.companyId !== companyId) throw new AdsError(404, 'not_found', 'Campaign not found.');
     return (await this.db.query<any>(`select id, kind, author_kind, author_id, text, at from ad_review_notes where company_id = $1 and campaign_id = $2 order by seq`, [companyId, campaignId])).rows
-      .map((r) => ({ id: r.id as string, kind: r.kind as string, from: r.author_kind === 'advertiser' ? 'advertiser' : r.author_kind === 'automated' ? 'automated check' : 'team', text: r.text as string, at: new Date(r.at).toISOString() }));
+      .map((r) => ({ id: r.id as string, kind: r.kind as string, from: r.author_kind === 'advertiser' ? 'advertiser' : r.author_kind === 'automated' ? 'automated check' : r.author_kind === 'ai' ? 'AI reviewer' : 'team', text: r.text as string, at: new Date(r.at).toISOString() }));
   }
 
   /** Someone writes in an ad's notes: a person on the team, or the advertiser. Only while it's in review or rejected. */
@@ -614,7 +668,7 @@ export class AdsService {
     return this.reviewNotes(c.companyId, c.id);
   }
 
-  private async addReviewNote(n: { companyId: string; campaignId: string; kind: 'flag' | 'note' | 'resubmitted' | 'approved' | 'rejected'; authorKind: 'team' | 'advertiser' | 'automated'; authorId: string | null; text: string }) {
+  private async addReviewNote(n: { companyId: string; campaignId: string; kind: 'flag' | 'note' | 'resubmitted' | 'approved' | 'rejected' | 'appeal'; authorKind: 'team' | 'advertiser' | 'automated' | 'ai'; authorId: string | null; text: string }) {
     await this.db.query(`insert into ad_review_notes (id, company_id, campaign_id, kind, author_kind, author_id, text, at) values ($1,$2,$3,$4,$5,$6,$7,$8)`, [newId('arn'), n.companyId, n.campaignId, n.kind, n.authorKind, n.authorId, n.text.slice(0, 2000), this.platform.bus.now().toISOString()]);
   }
 }

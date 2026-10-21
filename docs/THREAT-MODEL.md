@@ -93,7 +93,7 @@ match or that the docs leave unclear.
 | **Advertiser key** | Bearer key with `advertiserId` | Only `campaigns`, `purchases`, `invoices`, and only that advertiser |
 | **Machine key** | Bearer key with `locationId`, scope `orders` | Print only at its own machine (capped), read only its own bottles and screen code, Model 6 heartbeat/jobs |
 | **White-label company** | Its own keys and team | Only its own company's data; never `platform`; starts in testing with money, chain, offers and AI fund off |
-| **AI agents** | Code inside the server; no credential | Propose only; every call metered and checked by the governor; act alone only where the autonomy ladder allows |
+| **AI agents** | Code inside the server; no credential | Propose only; every call metered and checked by the governor; act alone only where the autonomy ladder allows. The AI reviewer of paid ads (066) flags, and rejects alone only where a company's owner turned on *AI makes the final call* on its record (`src/modules/ads/aiReview.ts` `turnOn`); appeals, audits, approvals and refunds stay with people; its switch, bar and sample are changed only by people (`src/api/aiReview.ts` `person`), and the governor turns it off when its agreement drops (`AiReviewService.governor`) |
 | **Outside providers** | Our keys in the host environment | Payments, payouts, email/SMS, Anthropic, Google, Tremendous, Veryfi, photo libraries, GitHub, OpenTimestamps, S3, Solana RPC |
 | **Partners** | Webhook signing secrets; remote plug-in shared secret | Receive signed webhooks; answer scan-page plug-in calls (data only, 300 ms) |
 | **Charities** | Emailed confirm token | Confirm a transfer arrived |
@@ -339,7 +339,7 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 16 | `POST /v1/refunds` | purchases | no | — | OK |
 | 17 | `GET /v1/campaigns` | campaigns | no | — | OK |
 | 18 | `POST /v1/campaigns` | campaigns | no | — | OK; starts paused until a company key approves |
-| 19 | `PATCH /v1/campaigns/:id` | campaigns | no | own campaigns | OK; only a company key turns a campaign on (README) |
+| 19 | `PATCH /v1/campaigns/:id` | campaigns | no | own campaigns | OK; only a company key turns a campaign on (README); never a paid ad that's flagged, appealed or rejected by the AI reviewer (409 `decide_in_review`: decided in the review queue, 066) |
 | 20 | `GET /v1/experiences` | campaigns | no | — | OK |
 | 21 | `POST /v1/experiences/preview` | campaigns | no | — | OK |
 | 22 | `POST /v1/assets` | campaigns | no | — | OK |
@@ -411,7 +411,7 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 88 | `GET /v1/ads/drafts/:id/preview` | campaigns | no | advertiser only | OK |
 | 89 | `POST /v1/ads/drafts/:id/submit` | campaigns | no | advertiser only | OK |
 | 90 | `GET /v1/review/campaigns` | campaigns | no | team only (no advertiser/machine key) | OK |
-| 91 | `POST /v1/review/campaigns/:id` | campaigns | no | team only (no advertiser/machine key) | OK; company team (reviewer role or company key). A paid ad: a key (an automated check, an AI) can only flag it, its reject becomes a flag; only a person signed in finally rejects it, with a written reason (065) |
+| 91 | `POST /v1/review/campaigns/:id` | campaigns | no | team only (no advertiser/machine key) | OK; company team (reviewer role or company key). A paid ad: a key (an automated check, an AI) can only flag it, its reject becomes a flag; only a person signed in finally rejects it, with a written reason (065). Approving an ad the AI reviewer rejected, or deciding its appeal, is a person only (066). GAP (CONFIRMED by `test/ai-review-autonomy.test.ts` §2, docs/REVIEW-LOG.md 2026-10-21): any company key can still approve other paid ads, though *Ad review* says a person checks every ad |
 | 92 | `POST /v1/public/delivery/check` | public | — | — | OK (public by design) |
 | 93 | `GET /v1/me/delivery` | me | yes | — | OK |
 | 94 | `POST /v1/me/delivery` | me | yes | — | OK |
@@ -753,6 +753,12 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 418 | `POST /v1/review/campaigns/:id/notes` | campaigns | yes | a person on the team, signed in (not a key) | OK (the advertiser sees it word for word) |
 | 419 | `GET /v1/ads/campaigns/:id/notes` | campaigns | no | the ad's own advertiser | OK |
 | 420 | `POST /v1/ads/campaigns/:id/notes` | campaigns | no | the ad's own advertiser; only while it's in review or rejected | OK |
+| 421 | `GET /v1/review/ai` | campaigns | no | team only (no advertiser/machine key) | OK (the AI reviewer's record and the bar; no advertiser's words) |
+| 422 | `POST /v1/review/ai/final-call` | [campaigns, orders, packs, ledger, invoices] | yes | a person on the team, signed in, never a key (an AI can't change its own switch); ON: an owner with the second step (R4), a reason, and the record meeting the bar, and the reviewer's model passed the agents' test; OFF: anyone on the team | OK (066) |
+| 423 | `POST /v1/review/ai/settings` | campaigns | yes | a person on the team, never a key; raising: anyone on the team; lowering: an owner with the second step (R4) and a reason; floors 50 decisions, 90%, 5% sample (also in the database) | OK (066; read and written under a row lock) |
+| 424 | `GET /v1/review/campaigns/:id/ai` | campaigns | no | team only (never the advertiser) | OK |
+| 425 | `POST /v1/review/campaigns/:id/ai` | campaigns | yes | a person on the team, signed in (not a key); only paid ads; at most 60 messages an ad | OK (through the company's AI routing, metered, the governor first; the stand-in without AI; the AI can't approve, reject or refund) |
+| 426 | `POST /v1/ads/campaigns/:id/appeal` | campaigns | no | the ad's own advertiser; only an AI's final rejection, once, not after it was paid back | OK (back to a person, flagged: money held, nothing prints) |
 
 ---
 

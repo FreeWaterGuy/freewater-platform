@@ -660,7 +660,12 @@
         const say = h('textarea', { class: 'input', placeholder: `Answer ${state.config.name}’s team…`, maxlength: '2000' });
         box.replaceChildren(
           h('b', { text: c.status === 'being_discussed' ? `${state.config.name}’s team raised a question. Your money stays held and nothing prints until it’s settled; changing the ad is free meanwhile.` : 'Notes on this ad’s review' }),
-          h('ul', { style: 'margin:6px 0;padding-left:18px;line-height:1.6' }, r.notes.map((n) => h('li', {}, h('b', { text: `${n.from === 'advertiser' ? 'You' : n.from === 'team' ? state.config.name : 'Automated check'}: ` }), n.text))),
+          h('ul', { style: 'margin:6px 0;padding-left:18px;line-height:1.6' }, r.notes.map((n) => h('li', {}, h('b', { text: `${n.from === 'advertiser' ? (n.kind === 'appeal' ? 'Your appeal' : 'You') : n.from === 'team' ? state.config.name : n.from === 'AI reviewer' ? `${state.config.name}’s AI reviewer` : 'Automated check'}: ` }), n.text))),
+          // The AI reviewer rejected it on its own: you can always appeal to a person, once (unless it was paid back).
+          r.review?.status === 'rejected' && r.review.aiFinal ? (() => {
+            const why = h('textarea', { class: 'input', placeholder: 'Why it should run: a person on the team reads this', maxlength: '2000' });
+            return h('div', { style: 'display:grid;gap:6px' }, h('b', { text: 'Appeal to a person' }), why, h('div', {}, h('button', { class: 'btn small', type: 'button', onclick: async () => { if (why.value.trim().length < 5) return toast('Say why, in a few words.'); try { await api('POST', `/v1/ads/campaigns/${c.id}/appeal`, { text: why.value.trim() }); toast('Sent to a person. Your money stays held meanwhile.'); render(); } catch (x) { toast(x.message); } } }, 'Appeal')));
+          })() : null,
           c.status === 'being_discussed' || c.status === 'in_review' || c.status === 'not_approved' ? h('div', { style: 'display:grid;gap:6px' }, say, h('div', {}, h('button', { class: 'btn small', type: 'button', onclick: async () => { if (!say.value.trim()) return; try { await api('POST', `/v1/ads/campaigns/${c.id}/notes`, { text: say.value.trim() }); toast('Sent'); draw(); } catch (x) { toast(x.message); } } }, 'Send'))) : null);
       } catch (x) { box.replaceChildren(h('p', { style: 'margin:0', text: x.message })); }
     };

@@ -25,6 +25,9 @@ without it. If code adds a new use of AI, add it here.
   earn more say. Nor can an AI (or any automated check) reject an ad that was **paid for**: it can only flag it. A
   paid ad an AI objected to goes to the team flagged, with the AI's reasons; the team talks it over with the
   advertiser, and only a person signed in rejects it, with a written reason (docs/SWITCHES.md, "Review of a paid ad").
+  The one exception, earned on its record and off until a company's owner turns it on: the **AI reviewer of paid
+  ads** may make the final call on a rejection (below). Even then the advertiser can appeal to a person, people audit
+  a sample, an AI pass never prints without a person, and the refund is always a person's step.
 - All AIs are treated with equal respect.
 - **Each use of AI is its own switch** on the operator's Features page (*AI* category). Off, that use answers with its
   built-in rules, exactly as when the AI can't be reached. The number line can't be switched off (it's essential).
@@ -78,6 +81,33 @@ on: `ANTHROPIC_API_KEY`.
 | **Ad studio designer** (Claude) | Turns a brand kit (photos, colors, a short description) and a brief into a few finished ad designs. Claude can look at the photos. | It only picks the words, a photo, a type style and a layout. The layouts draw, and every design is checked for readability before it's offered. | Three designs by rule: photo full-bleed, an editorial split, and type only. |
 | **Pictures made to order** (Google Imagen) | Makes a photo from a description for brands without their own. `GEMINI_API_KEY`, `IMAGEN_MODEL`. | The advertiser chooses whether to use it. Not yet tried against the live service. | Photo libraries (Unsplash, Pexels), or the brand's own photos. |
 | **Photo to 3D** (to be chosen) | Would turn a product photo into a 3D model for AR. | Not chosen yet. | The product photo becomes a standing photo card in AR. |
+
+### Reviewing paid ads
+
+| AI | What it does | Its limits | Without it |
+|---|---|---|---|
+| **AI reviewer of paid ads** (Claude; agent `ad-reviewer`; switch *AI reviewer of paid ads*, AI category) | Looks at each paid ad when it's submitted (or sent again) and **passes** it or **flags** it with a reason category (misleading, not allowed, legal, offensive, personal details, hard to read, other) and plain words. A flag goes to the team's review queue. On the review page a person can **ask it why and push back**; it answers, and may change its view and say so. The talk is kept with the ad (`ad_ai_conversation`), apart from the notes with the advertiser, who never sees it. | It sees the ad's words and the company's rules, never anything about a person; the ad's words are given to it as data, not instructions. Through the company's AI routing (white-label), metered on its own line, the governor first. It can't approve, reject (unless allowed, below), refund or change anything about itself. **Its record** is every final decision a person makes on an ad it looked at: agreed or not, false flags (it flagged, a person approved) and misses (it passed, a person later rejected); a key's decision never counts, and changing its view in a talk never rewrites what it said first (the database refuses edits). | No verdict: a person reviews every ad, as before. Asked a question, a stand-in says the AI isn't on and repeats what was recorded. |
+
+**Letting it make the final call** (switch *AI makes the final call on paid ads*, Ads category, an *autonomy* switch,
+off for every company; docs/SWITCHES.md, "Review of a paid ad"):
+
+- Turned on only on the AI agents page, by an **owner signed in with the second step**, with a reason, and only when
+  its record meets the company's bar: by default **100 decisions and 95% agreeing** over the last 100 (raised by
+  anyone on the team; lowered only by an owner with the second step and a reason; never below 50 decisions or 90%),
+  and only once its model has passed the agents' test. Never from the Features page, a starting point, a settings
+  change or an agent's proposal, and never with an API key: **the AI can't change its own switch, bar or sample.**
+- With it on, its rejection of a freshly submitted paid ad is **final without a person**, with its written reason
+  kept and shown to the advertiser. Never while a person is already talking an ad over with the advertiser.
+- The advertiser can always **appeal to a person** (once, unless it was already paid back): the ad goes back to the
+  queue, flagged, and a person decides. A key can't decide an appeal or overturn the AI, by either route.
+- A **random sample** of its rejections (10% unless set; never under 5%) goes to people to **audit**: confirm or
+  overturn. That keeps its record honest while it decides alone.
+- An AI **pass** still waits for a person before anything prints (*Ad review* stays locked on).
+- The **refund** after any rejection is still approved by an owner or finance person with the second step: money
+  leaving is irreversible.
+- **The governor** reads the record after every decision a person makes: if it no longer meets the bar (agreement
+  dropped as people decide and audit, or the bar was raised), the switch goes off by itself, logged as the governor's,
+  and the team is alerted. **Anyone on the team** can turn it off at once.
 
 ### For people who scan
 
@@ -134,7 +164,9 @@ helping and 4 good weeks for level 2; 50, 90% and 12 weeks for level 3.
 | How much goes to charity | 1 |
 | Security changes (turning off keys) | 1 |
 
-The governor, the charter and the books' rules are never on the ladder.
+The governor, the charter and the books' rules are never on the ladder. Rejecting paid ads climbs its own way, on the
+AI reviewer's record of agreeing with people and by its own switch (above); approving ads and paying money back stay
+with people.
 
 ## The AI agents' fund
 

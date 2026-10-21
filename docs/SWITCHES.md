@@ -117,6 +117,28 @@ team to ensure that it was rejected for a valid reason"). The money is already t
 While it's flagged the money stays held and nothing prints. An ad not paid up front is reviewed as before. This rule
 is part of *Ad review* on the Features page, which is locked on.
 
+**The AI reviewer** (*AI reviewer of paid ads*, AI category; docs/AI.md). It looks at every paid ad as it comes in and
+passes it or flags it with its reasons; a flag is a flag like any other (above). On the review page a person can ask
+it why and push back; the talk is kept with the ad, apart from the notes with the advertiser. Every final decision a
+person makes on an ad it looked at is its **record** (*AI agents → AI reviewer of paid ads*): "agreed with your team
+on 96 of the last 100", by reason, false flags and missed problems.
+
+**AI makes the final call on paid ads** (Ads → Review; an *autonomy* switch; off for every company, FreeWater too):
+
+| Who | Can | Can't |
+|---|---|---|
+| An owner, signed in with the second step, with a reason | Turn it on, on the AI agents page, only when the record meets the bar (100 decisions and 95% agreeing unless set) and the reviewer's model passed the agents' test | Turn it on from the Features page or a starting point |
+| Anyone on the team, signed in | Turn it off at once; raise the bar or the audit sample | Lower them |
+| An owner with the second step and a reason | Lower the bar or the sample, never under 50 decisions, 90% agreeing or a 5% sample | — |
+| The governor | Turn it off by itself when the record drops below the bar (logged as the governor's; the team is alerted) | Turn it on |
+| The AI, any API key | — | Change the switch, the bar or the sample; overturn the AI or decide an appeal |
+
+With it on: the AI's rejection of a freshly submitted paid ad is final, with its written reason. The advertiser can
+always **appeal to a person** (once; not after it was paid back): it goes back to the queue, flagged. A random
+**sample** of its rejections (10% unless set) goes to the queue to audit: confirm, or overturn (it goes live). An AI
+pass still waits for a person. **The refund after a rejection is still a person's step** (*Stopping an ad*, below).
+Off (or when what it needs is off): its rejections are flags again.
+
 **In the books:** the payment is the advertiser's money held for them (`prepaid:advertiser:<id>`, a liability); each
 printed bottle moves its price to earned (`revenue:print`); a change fee is earned when paid
 (`revenue:change_fee`); an extra used moves its price to `revenue:extras`. The daily reconciliation checks every
@@ -416,6 +438,7 @@ prices*).
 | **Turning a switch off turns off everything that needs it.** | The page shows the list before saving. Turning the parent back on doesn't turn those back on by itself: each is chosen again. |
 | **Turning off is quick.** | Any owner signed in. Never a key (a key never changes a switch). |
 | **Turning on follows the usual rules.** | Any owner signed in; money, chain and one-way switches need the second sign-in step; gift cards, withdrawals and the chain are turned on only by their approved steps under *Launch* and *Blockchain* (the page links there). |
+| **An AI deciding on its own is earned, never switched on here.** | *Autonomy* switches (*AI makes the final call on paid ads*) are turned on only on their own page, by an owner with the second step, on the AI's record (the page says where); turning them off works here too, and anyone on the team can turn them off on their page. |
 | **One-way stays one-way.** | The AI agents' fund and the giving promise, once on, show "On for good". |
 | **Locked items are shown, never switchable.** | The safety governor ("we are never removing a safety governor"), the number line, the pause switch, approvals and waits, the launch stages, the minimum age, privacy rules by place (strictest when unknown), people's rights to their data, the books' audit trail and append-only journals, settling money already in flight, ad review, machines' print limits, the security log. |
 | **One source of truth.** | Switches that already had a setting (the games, the prize game, offers paying out, dollar credit, the chain, open books, the live feed…) are *linked*: they stay in the company's settings and the page changes them through the same checks. A change made on any settings page shows in the switches' history too. |
