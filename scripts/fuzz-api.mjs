@@ -54,7 +54,8 @@ const run = (label, key) => new Promise((resolve) => {
     '--no-shrink', '--request-timeout', '20', '--max-time', maxTime, '--continue-on-failure', '--seed', process.env.FUZZ_SEED ?? '20261020',
     // Signing out, erasing yourself or turning off keys (the fuzzer finds real key ids in GET /v1/keys) would end the
     // identity mid-run and leave the rest of it testing only the 401; nothing else is left out.
-    '--exclude-path-regex', '^/v1/auth/sign-out$', '--exclude-name', 'DELETE /v1/me', '--exclude-name', 'DELETE /v1/me/data', '--exclude-name', 'DELETE /v1/keys/{id}'];
+    // (By name: Schemathesis joins filters of different kinds with AND, so a path regex beside names excludes nothing.)
+    '--exclude-name', 'POST /v1/auth/sign-out', '--exclude-name', 'DELETE /v1/me', '--exclude-name', 'DELETE /v1/me/data', '--exclude-name', 'DELETE /v1/keys/{id}'];
   if (key) args.push('-H', `Authorization: Bearer ${key}`);
   const p = spawn(st, args, { stdio: 'inherit', env: { ...process.env, NO_COLOR: '1' } });
   p.on('error', (e) => { console.error(`Couldn't run ${st}: ${e.message}. Install it: pip install schemathesis==4.32.2`); resolve(2); });
@@ -72,4 +73,5 @@ console.log('\n=== Fuzz summary ===');
 for (const [label, code] of results) console.log(`${label}: ${code === 0 ? 'no server errors' : `failed (schemathesis exit ${code})`}`);
 if (errors.length) console.log(`Server errors the server logged:\n  ${[...new Set(errors)].join('\n  ')}`);
 if (!alive) console.log(`The server stopped during the run:\n${log.slice(-2000)}`);
-await finish(results.every(([, c]) => c === 0) && alive ? 0 : 1);
+// A server error the server logged fails the run too, even if Schemathesis didn't see it as one.
+await finish(results.every(([, c]) => c === 0) && alive && !errors.length ? 0 : 1);

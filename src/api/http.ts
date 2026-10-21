@@ -43,6 +43,8 @@ export const Q = {
   /** A position in a `bigint` sequence (?after=): up to 15 digits, exact as a JavaScript number. */
   seq: { type: 'string', pattern: '^[0-9]{1,15}$' },
   day,
+  /** A day, or nothing: a date box the person cleared sends `?from=`, which means the default. */
+  dayOrEmpty: { anyOf: [{ type: 'string', maxLength: 0 }, day] },
   text: { type: 'string', maxLength: 200 },
 };
 

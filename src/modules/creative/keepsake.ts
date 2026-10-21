@@ -30,7 +30,7 @@ export function checkKeepsake(s: any): string | null {
   return null;
 }
 
-const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+const esc = (s: string) => s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 const fill = (s: string, name?: string) => s.replace(/\{name\}/g, name ?? 'Name');
 function wrap(s: string, max: number): string[] {
   const out: string[] = []; let cur = '';

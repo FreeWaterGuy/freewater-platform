@@ -69,7 +69,7 @@ export function agentRoutes(app: App, route: (r: RouteDef) => void) {
     const L = books();
     return { body: { about: L.info.about, rules: L.info.rules, books: L.info.books.map((b) => ({ ...b, passages: L.passages.filter((p) => p.book === b.id).length, chapters: [...new Set(L.passages.filter((p) => p.book === b.id).map((p) => p.chapter))] })) } };
   } });
-  route({ method: 'GET', url: '/v1/agents/books/search', query: { q: Q.text, book: Q.text, k: Q.count }, scope: 'admin', summary: 'Search the books: the best passages for a question, each with the id to cite it by.', handler: async (req, key) => {
+  route({ method: 'GET', url: '/v1/agents/books/search', query: { q: { type: 'string', maxLength: 1000 }, book: Q.text, k: Q.count }, scope: 'admin', summary: 'Search the books: the best passages for a question, each with the id to cite it by.', handler: async (req, key) => {
     staff(key);
     const q = req.query as any;
     if (!q.q || String(q.q).length < 2) throw new ApiError(400, 'invalid_request', 'Ask something: ?q=consecutive delivery');

@@ -71,7 +71,7 @@ export function checkStudioSpec(s: any): string | null {
 let assetUrl = (asset: string, ext = 'jpg') => `/assets/${asset}.${ext}`;
 export function setStudioAssetUrl(f: (asset: string, ext?: string) => string) { assetUrl = f; }
 
-const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+const esc = (s: string) => s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 const f1 = (n: number) => (Math.round(n * 10) / 10).toString();
 let uid = 0;
 

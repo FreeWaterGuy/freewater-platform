@@ -21,7 +21,7 @@ export function teamRoutes(app: App, route: (r: RouteDef) => void) {
     if (!b || typeof b.message !== 'string') throw new ApiError(400, 'bad_request', 'Send { message, files?: [{ name, contentType, dataBase64 }] }.');
     return { body: await wrap(() => team.intake(fwPerson(key), { message: b.message, files: Array.isArray(b.files) ? b.files : [], history: Array.isArray(b.history) ? b.history : [] }, who(key!))) };
   } });
-  route({ method: 'POST', url: '/v1/team/files', scope: TEAM, rawBodyLimit: 40 * 1024 * 1024, summary: 'Attach one file (a receipt, photo or document) to keep with a record.', handler: async (req, key) => ({ body: await wrap(() => team.upload(fwPerson(key), req.body as any, who(key!))) }) });
+  route({ method: 'POST', url: '/v1/team/files', scope: TEAM, rawBodyLimit: 40 * 1024 * 1024, summary: 'Attach one file (a receipt, photo or document) to keep with a record.', body: fileProp, handler: async (req, key) => ({ body: await wrap(() => team.upload(fwPerson(key), req.body as any, who(key!))) }) });
   route({ method: 'GET', url: '/v1/team/files/:id', scope: TEAM, summary: 'Open an attached file.', handler: async (req, key) => {
     const f = await wrap(() => team.file(fw(key), (req.params as any).id));
     return { type: f.contentType, raw: f.bytes, headers: { 'content-disposition': `inline; filename="${f.name.replace(/["\\\r\n]/g, '')}"`, 'cache-control': 'private, no-store' } };

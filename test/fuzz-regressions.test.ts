@@ -132,3 +132,56 @@ describe('a number-line correction is a whole placement', () => {
     expect((await call('POST', '/v1/numberline/override', admin, { subject: 'nothing-placed-yet', placement: whole })).code).toBe('not_found');
   });
 });
+
+// The third pass (2026-10-21): the tag's sale reports have no route schema (they come as text/plain from shoppers' browsers).
+describe('a sale reported by the tag is checked field by field', () => {
+  it('ids that aren’t text, a NUL, or an amount sent as text are refused with 400, not a 500', async () => {
+    const adv = keys['advertiser-joes'];
+    const tag = (await call('GET', '/v1/ads/tracking', adv)).body.tagId as string;
+    await call('POST', '/v1/ads/tracking/domains', adv, { domains: ['shop.joes.example'] });
+    const report = (body: unknown) => call('POST', '/v1/public/conversions', undefined, JSON.stringify(body), { 'content-type': 'text/plain', origin: 'https://shop.joes.example' });
+    for (const bad of [{ fwclid: { a: 1 } }, { coupon: ['a'] }, { coupon: { x: 1 } }, { fwb: 12 }, { fwclid: true }, { fwclid: 'FWC\u0000' }, { coupon: 'x\u0000' }, { valueCents: '0x10' }]) {
+      const r = await report({ tag, orderId: 'FUZZ-1', valueCents: 5, ...bad });
+      expect(r, JSON.stringify(bad)).toMatchObject({ status: 400, code: 'invalid_request' });
+    }
+    expect(await report({ tag: 'x\u0000', orderId: 'FUZZ-1', valueCents: 5 })).toMatchObject({ status: 400, code: 'invalid_request' });
+    expect(await report(null)).toMatchObject({ status: 400, code: 'bad_json' });
+    // What the tag really sends still reaches the matching (an unknown click is a 404; a page value that wasn't a number is null).
+    expect(await report({ tag, fwclid: 'FWC00000000000000000', orderId: 'FUZZ-2', valueCents: 1250 })).toMatchObject({ status: 404, code: 'unknown_click' });
+    expect(await report({ tag, fwclid: 'FWC00000000000000000', orderId: 'FUZZ-3', valueCents: null })).toMatchObject({ status: 404, code: 'unknown_click' });
+  });
+});
+
+describe('the tighter query schemas still take what the screens send', () => {
+  it('a cleared date box on the statement means the default, and an agent may ask a long question', async () => {
+    expect((await call('GET', '/v1/ads/statement?from=&to=', keys['advertiser-joes'])).status).toBe(200);
+    expect((await call('GET', `/v1/agents/books/search?q=${encodeURIComponent('consecutive delivery '.repeat(20))}`, keys['freewater-admin'])).status).toBe(200);
+  });
+});
+
+describe('text that can’t be decoded or drawn is the caller’s mistake, not a 500', () => {
+  it('a refund for an order number that won’t decode is a 400', async () => {
+    expect(await call('POST', '/v1/conversions/50%25/refund', keys['advertiser-joes'])).toMatchObject({ status: 400, code: 'bad_order' });
+  });
+  it('control characters in an ad’s words never make a label or picture that can’t be drawn', async () => {
+    const adv = keys['advertiser-joes'];
+    const spec = { brand: 'Joe\u000e', headline: 'Big\u0001 burger', colors: { paper: '#ffffff', ink: '#111111', accent: '#ff0000' }, type: 'serif' };
+    const r = await call('POST', '/v1/studio/preview', adv, { spec });
+    expect(r.status).toBe(200);
+    const svgs = [...r.body.sizes.map((s: any) => s.svg), r.body.labelSvg, r.body.boxFaceSvg];
+    for (const svg of svgs) expect(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(svg)).toBe(false);
+    expect((await call('POST', '/v1/studio/generate', adv, { prompt: 'a burger \u000e on a plate', aspect: '1:1' })).status).toBeLessThan(300);
+  });
+  it('a malformed city header from a CDN is no city', async () => {
+    const { placeFromHeaders } = await import('../src/modules/data/jurisdiction');
+    expect(placeFromHeaders({ 'x-vercel-ip-country': 'US', 'x-vercel-ip-city': '%E0%A4%A' })).toMatchObject({ country: 'US' });
+  });
+});
+
+describe('attaching a file to the books needs a file', () => {
+  it('no body, or one that isn’t { name, contentType, dataBase64 }, is a 400', async () => {
+    expect(await call('POST', '/v1/team/files', owner)).toMatchObject({ status: 400 });
+    expect(await call('POST', '/v1/team/files', owner, { name: 'r.png' })).toMatchObject({ status: 400, code: 'invalid_request' });
+    expect((await call('POST', '/v1/team/files', owner, { name: 'r.png', contentType: 'image/png', dataBase64: 'iVBORw0KGgo=' })).status).toBeLessThan(300);
+  });
+});

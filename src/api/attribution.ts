@@ -102,7 +102,15 @@ export function attributionRoutes(app: App, server: FastifyInstance, route: (r: 
       // The Origin header keeps honest mistakes out but is easy to forge outside a browser: what the tag reports is
       // kept as unverified and never billed until the advertiser's server (or the counter) confirms it.
       const origin = (req.headers.origin as string | undefined) ?? (req.headers.referer as string | undefined) ?? null;
-      const r = await attribution.conversion({ source: 'tag', tagId: String(b?.tag ?? ''), origin, clickId: b?.fwclid ?? undefined, couponCode: b?.coupon ?? undefined, bottleCode: b?.fwb ?? undefined, orderId: String(b?.orderId ?? ''), valueCents: Number(b?.valueCents) });
+      // This body has no route schema (it comes as text/plain from the tag), so its fields are checked here: each id is
+      // text or absent, and the amount is a number as the tag sends it (null when the page's value wasn't one, as
+      // before: 0), never a string to coerce. Anything else used to reach the database as an object, or with a NUL.
+      if (!b || typeof b !== 'object' || Array.isArray(b)) return reply.code(400).send({ error: { code: 'bad_json', message: 'Send a JSON object.' } });
+      const ids = ['tag', 'fwclid', 'coupon', 'fwb', 'orderId'] as const;
+      if (ids.some((f) => b[f] != null && (typeof b[f] !== 'string' || b[f].length > 80 || b[f].includes('\u0000'))) || (b.valueCents != null && typeof b.valueCents !== 'number')) {
+        return reply.code(400).send({ error: { code: 'invalid_request', message: 'tag, fwclid, coupon, fwb and orderId are text (up to 80 characters); valueCents is a number.' } });
+      }
+      const r = await attribution.conversion({ source: 'tag', tagId: b.tag ?? '', origin, clickId: b.fwclid || undefined, couponCode: b.coupon || undefined, bottleCode: b.fwb || undefined, orderId: b.orderId ?? '', valueCents: b.valueCents === null ? 0 : Number(b.valueCents) });
       await app.persistence.flushUnlessPaused();
       return reply.code(r.duplicate ? 200 : 201).send({ ok: true, duplicate: r.duplicate, status: r.conversion.status });
     } catch (e) {
@@ -132,7 +140,12 @@ export function attributionRoutes(app: App, server: FastifyInstance, route: (r: 
     const r = await attribution.conversion({ source: 'server', companyId: key!.companyId, advertiserId: advertiser(key), clickId: b.fwclid, couponCode: b.couponCode, bottleCode: b.fwb, orderId: b.orderId, valueCents: b.valueCents });
     return { status: r.duplicate ? 200 : 201, body: r };
   } });
-  route({ method: 'POST', url: '/v1/conversions/:orderId/refund', scope: 'purchases', summary: 'A sale was refunded. Its commission is given back.', handler: async (req, key) => ({ body: await attribution.refund(advertiser(key), decodeURIComponent((req.params as any).orderId), key!.companyId) }) });
+  route({ method: 'POST', url: '/v1/conversions/:orderId/refund', scope: 'purchases', summary: 'A sale was refunded. Its commission is given back.', handler: async (req, key) => {
+    // The order number may arrive encoded twice (it can hold / and #); one that won't decode isn't an order of ours.
+    let orderId: string;
+    try { orderId = decodeURIComponent((req.params as any).orderId); } catch { throw new ApiError(400, 'bad_order', 'That order number isn’t encoded properly.'); }
+    return { body: await attribution.refund(advertiser(key), orderId, key!.companyId) };
+  } });
   route({ method: 'GET', url: '/v1/coupons/:code', scope: ['campaigns', 'purchases'], summary: 'Check a customer’s coupon: valid, or already used (and when).', handler: async (req, key) => ({ body: await attribution.checkCoupon(String((req.params as any).code), advertiser(key), key!.companyId) }) });
   route({ method: 'POST', url: '/v1/coupons/:code/redeem', scope: ['campaigns', 'purchases'], summary: 'Use a customer’s coupon (once). Send the sale amount; it’s credited to the bottle the coupon came from.', body: obj({ valueCents: S.int, orderId: { type: 'string', maxLength: 80 } }, ['valueCents']), handler: async (req, key) => {
     const b = req.body as any;
