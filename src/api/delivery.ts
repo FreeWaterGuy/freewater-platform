@@ -80,7 +80,7 @@ export function deliveryRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     const b = req.body as any;
     return { status: 201, body: await houses.importHouses((req.params as any).id, key!.companyId, person(key), b.csv, b.polygon ?? null) };
   } });
-  route({ method: 'GET', url: '/v1/ops/house-reviews', scope: ['admin', 'packs'], summary: 'Houses a driver said to skip (a “no soliciting” sign …), waiting for a person to agree or send the van back.', handler: async (_req, key) => { staff(key); return { body: await houses.reviews(key!.companyId) }; } });
+  route({ method: 'GET', url: '/v1/ops/house-reviews', scope: ['admin', 'packs'], summary: 'Houses a driver said to skip (a locked gate, a dangerous animal, no safe place, not a home), waiting for a person to agree or send the van back.', handler: async (_req, key) => { staff(key); return { body: await houses.reviews(key!.companyId) }; } });
   route({ method: 'POST', url: '/v1/ops/houses/:id/review', scope: ['admin', 'packs'], summary: 'Decide a driver’s skip: keep skipping the house, or deliver to it again. A signed-in ops person or owner.', body: obj({ decision: { type: 'string', enum: ['skip', 'deliver'] }, note: { type: 'string', maxLength: 300 } }, ['decision']), handler: async (req, key) => {
     staff(key);
     const b = req.body as any;
@@ -100,34 +100,51 @@ export function deliveryRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     const r = await delivery.loadScan({ runId: (req.params as any).id, companyId: key!.companyId, driverId: person(key), packId: (req.body as any).packId });
     return r.ok ? { body: r.run } : { status: 409, body: { error: { code: 'wrong_box', message: r.reason }, grab: r.grab } };
   } });
-  route({ method: 'POST', url: '/v1/driver/runs/:id/stops/:stop/deliver', params: { stop: Q.count }, scope: 'packs', summary: 'Scan the box at the door. Delivered only if it’s this stop’s box and you’re at the address (by GPS, or you confirm it).', body: obj({ scannedPackId: S.str, lat: { type: 'number' }, lng: { type: 'number' }, confirmedAtDoor: S.bool, photoUrl: { type: 'string', pattern: '^/assets/', maxLength: 200 }, emptiesCollected: { type: 'integer', minimum: 0, maximum: 200 } }, ['scannedPackId', 'emptiesCollected']), handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/driver/runs/:id/stops/:stop/deliver', params: { stop: Q.count }, scope: 'packs', summary: 'Scan the box at the door. Delivered only if it’s this stop’s box, you’re at the address (by GPS, or you confirm it) and, where photo proof is on, you sent a photo of the box where you left it (POST /v1/driver/photos?packId=) first; without one it answers photo_required.', body: obj({ scannedPackId: S.str, lat: { type: 'number' }, lng: { type: 'number' }, confirmedAtDoor: S.bool, emptiesCollected: { type: 'integer', minimum: 0, maximum: 200 } }, ['scannedPackId', 'emptiesCollected']), handler: async (req, key) => {
     const b = req.body as any;
     const p = req.params as any;
     const driverId = person(key);
-    // A photo counts as proof only if this driver took it for this company through /v1/driver/photos.
-    if (b.photoUrl) {
-      const id = /^\/assets\/([A-Za-z0-9_-]+)\.[a-z0-9]+$/.exec(b.photoUrl)?.[1];
-      const found = id ? await app.assets.get(id).catch(() => null) : null;
-      const a = found?.asset;
-      if (!a || a.companyId !== key!.companyId || a.userId !== driverId || a.name !== 'delivery-photo') throw new ApiError(400, 'not_your_photo', 'Take the delivery photo in the driver app, then send its address.');
-    }
-    const r = await delivery.deliver({ runId: p.id, companyId: key!.companyId, driverId, stop: Number(p.stop), scannedPackId: b.scannedPackId, point: typeof b.lat === 'number' && typeof b.lng === 'number' ? { lat: b.lat, lng: b.lng } : undefined, confirmedAtDoor: b.confirmedAtDoor, photoUrl: b.photoUrl, emptiesCollected: b.emptiesCollected });
-    return r.ok ? { body: r.run } : { status: 409, body: { error: { code: 'wrong_box_or_place', message: r.reason }, grab: r.grab, metersAway: r.metersAway } };
+    const r = await delivery.deliver({ runId: p.id, companyId: key!.companyId, driverId, stop: Number(p.stop), scannedPackId: b.scannedPackId, point: typeof b.lat === 'number' && typeof b.lng === 'number' ? { lat: b.lat, lng: b.lng } : undefined, confirmedAtDoor: b.confirmedAtDoor, emptiesCollected: b.emptiesCollected });
+    return r.ok ? { body: r.run } : { status: 409, body: { error: { code: r.code, message: r.reason }, grab: r.grab, metersAway: r.metersAway } };
   } });
   route({ method: 'POST', url: '/v1/driver/runs/:id/stops/:stop/fail', params: { stop: Q.count }, scope: 'packs', summary: 'Couldn’t deliver (no safe place, locked gate). The box comes back and the customer is told.', body: obj({ reason: { type: 'string', minLength: 3, maxLength: 120 } }, ['reason']), handler: async (req, key) => {
     const p = req.params as any;
     return { body: await delivery.failStop({ runId: p.id, companyId: key!.companyId, driverId: person(key), stop: Number(p.stop), reason: (req.body as any).reason }) };
   } });
-  route({ method: 'POST', url: '/v1/driver/runs/:id/stops/:stop/skip-house', params: { stop: Q.count }, scope: 'packs', summary: 'Pass a house in a delivery area by (a “no soliciting” sign, they asked not to, not a home …). Its boxes come back and it’s skipped from the next plan until a person reviews it.', body: obj({ reason: { type: 'string', enum: [...SKIP_REASONS] }, note: { type: 'string', maxLength: 200 } }, ['reason']), handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/driver/runs/:id/stops/:stop/skip-house', params: { stop: Q.count }, scope: 'packs', summary: 'Pass a house in a delivery area by, only for a real access or safety problem (locked_gate, dangerous_animal, unsafe, no_safe_place) or not_a_home. A sign on the door or what someone says there is never a reason: people stop deliveries in the app. Its boxes come back and it’s skipped from the next plan until a person reviews it.', body: obj({ reason: { type: 'string', enum: [...SKIP_REASONS] }, note: { type: 'string', maxLength: 200 } }, ['reason']), handler: async (req, key) => {
     const p = req.params as any;
     const b = req.body as any;
     return { body: await delivery.skipHouse({ runId: p.id, companyId: key!.companyId, driverId: person(key), stop: Number(p.stop), reason: b.reason, note: b.note }) };
   } });
-  route({ method: 'POST', url: '/v1/driver/photos', scope: 'packs', summary: 'Upload a photo of a delivered box (JPEG, PNG or WebP as the body). Returns its address for the delivery.', rawBodyLimit: 6 * 1024 * 1024, handler: async (req, key) => {
-    person(key);
+  route({ method: 'POST', url: '/v1/driver/photos', query: { packId: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,80}$' } }, scope: 'packs', summary: 'A photo of the box where you left it (?packId= the box; JPEG, PNG or WebP as the body, up to 8 MB). Kept without the phone’s hidden data, seen only by the team and the house’s resident, and deleted after the company’s keep (90 days unless set).', rawBodyLimit: 8 * 1024 * 1024, handler: async (req, key) => {
+    const by = person(key);
+    if (key!.advertiserId || key!.locationId) throw new ApiError(403, 'missing_scope', 'Only the company’s drivers take delivery photos.');
+    const packId = String((req.query as any).packId ?? '');
+    if (!packId) throw new ApiError(400, 'pack_required', 'Say which box the photo is of (?packId=).');
     const type = String(req.headers['content-type'] ?? '').split(';')[0]!.trim();
-    if (!Buffer.isBuffer(req.body) || !type.startsWith('image/')) throw new ApiError(415, 'unsupported_type', 'Send a photo: JPEG, PNG or WebP.');
-    const asset = await app.assets.put({ companyId: key!.companyId, userId: key!.userId, contentType: type, bytes: new Uint8Array(req.body), name: 'delivery-photo' });
-    return { status: 201, body: { url: asset.url } };
+    if (!Buffer.isBuffer(req.body)) throw new ApiError(415, 'unsupported_type', 'Send a photo: JPEG, PNG or WebP.');
+    const made = await app.dropPhotos.put({ companyId: key!.companyId, packId, takenBy: by, contentType: type, bytes: new Uint8Array(req.body) });
+    return { status: 201, body: made };
+  } });
+  // The team, a person signed in (never a service key, never an advertiser): a drop's photo, while it's kept.
+  route({ method: 'GET', url: '/v1/ops/drop-photos/:id', scope: ['admin', 'packs'], summary: 'A drop’s photo, for a person on the company’s team, signed in (gone once the keep is over). Never shown to advertisers or to service keys.', handler: async (req, key) => {
+    staff(key);
+    person(key);
+    const bytes = await app.dropPhotos.bytes(key!.companyId, (req.params as any).id);
+    if (!bytes) throw new ApiError(404, 'not_found', 'No such photo (or it was deleted after the keep).');
+    return { raw: bytes, type: 'image/jpeg', headers: { 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff' } };
+  } });
+  route({ method: 'POST', url: '/v1/ops/runs/:id/stops/:stop/deliver-without-photo', params: { stop: Q.count }, scope: ['admin', 'packs'], summary: 'The driver scanned the right box at the door but couldn’t send its photo: a signed-in ops person or owner (not the driver) marks it delivered, with why, kept on the stop.', body: obj({ reason: { type: 'string', minLength: 5, maxLength: 300 } }, ['reason']), handler: async (req, key) => {
+    staff(key);
+    const p = req.params as any;
+    return { body: await delivery.deliverWithoutPhoto({ runId: p.id, companyId: key!.companyId, stop: Number(p.stop), by: person(key), reason: (req.body as any).reason }) };
+  } });
+  // A resident: the photos of drops at the house they proved is theirs (from when they proved it), or of their own deliveries.
+  route({ method: 'GET', url: '/v1/me/drop-photos', scope: 'me', summary: 'Photos of the boxes left at your house (since you said it’s yours in the app) or of your deliveries, while they’re kept.', handler: async (_req, key) => ({ body: await app.dropPhotos.forResident(key!.companyId, h.me(key)) }) });
+  route({ method: 'GET', url: '/v1/me/drop-photos/:id', scope: 'me', summary: 'One photo of a box left at your house.', handler: async (req, key) => {
+    const id = (req.params as any).id;
+    const bytes = (await app.dropPhotos.residentMay(key!.companyId, h.me(key), id)) ? await app.dropPhotos.bytes(key!.companyId, id) : null;
+    if (!bytes) throw new ApiError(404, 'not_found', 'No such photo (or it was deleted after the keep).');
+    return { raw: bytes, type: 'image/jpeg', headers: { 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff' } };
   } });
 }

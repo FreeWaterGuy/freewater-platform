@@ -36,7 +36,9 @@ platform is the software that runs all of it. Other companies can also run it un
 - The pilot: **house after house** on streets FreeWater chooses (about 1,000 homes in Austin to start). Nobody signs
   up; every house gets a free 24-pack a week unless someone there stops it in the app. How often, pack size and packs
   per house are set per area, and bigger households get more once they tell us their size.
-- Drivers can skip a house ("no soliciting") with a reason; a person reviews it.
+- Signs on the door ("no soliciting") are ignored: people who don't want free water stop it in the app and we skip
+  their house. Drivers can skip a house only for a real access or safety problem (a locked gate, a dangerous animal,
+  no safe place to leave it) or because it isn't a home; a person reviews it.
 - **Advertisers buy the routes**, paid up front at an exact price: N bottles spread over an area, one bottle in every
   box at every house, a whole box (every bottle and its sides), or chosen houses (as little as a tenth of one label at
   one house), for chosen weeks, by area, street, a shape on the map or address, optionally by household data. Every
@@ -48,7 +50,13 @@ platform is the software that runs all of it. Other companies can also run it un
 - Every bottle in a pack is different, and the box itself carries ads.
 - Each night is planned: routes are set, boxes are packed and checked, and the van is loaded so the next stop is
   always by the door.
-- The driver app only marks a delivery done when the right box is scanned at the right house.
+- The driver app only marks a delivery done when the right box is scanned at the right house **and** the driver took
+  a photo of it on the doorstep (or a person on the team vouches for it, with a reason). Delivered with its photo is
+  delivered: a box taken from the porch afterwards isn't our failure. The photos show people's homes, so only the team
+  and the people who live there see them, never advertisers; nothing hidden in the phone's file is kept; and they're
+  deleted after 90 days (each company can set 1 to 365).
+- A bottle whose label comes out wrong at the packing check is reprinted with exactly the same ads; the bad one never
+  counts against an advertiser, who pays once, for the bottle that went out.
 
 **4. Scanning, AR and buying**
 - Our own QR codes. They can't be faked or guessed, and every scan reaches us first.
@@ -71,6 +79,9 @@ platform is the software that runs all of it. Other companies can also run it un
   out" until every one is. There's no end date and no cancelling; pausing only delays.
 - Changing a running ad costs a fee ($100 by default), paid up front; the new ad is reviewed before it prints.
 - If FreeWater stops an ad, a person on the team pays back the bottles not printed, to the card.
+- If review has a concern about a paid ad, an AI or automated check can only flag it. The team talks it over with
+  the advertiser in notes both see; the advertiser can fix it for free meanwhile; only a person rejects it, with a
+  written reason, and only then is a refund offered. The money stays held and nothing prints until it's settled.
 - Fees on top (per scan, per AR launch, per box side, commission on sales) each have their own switch and are off.
   Turned on, they're charged to the card each day, and a declined card pauses the ads at once.
 - Brands can fund **offers** for people.

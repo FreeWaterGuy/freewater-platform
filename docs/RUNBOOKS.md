@@ -298,16 +298,68 @@ earlier day is still "printing". The alert says which areas and which runs.
    night is long gone, close the run out instead (*Routes* → close, with a reason): its boxes go back.
 3. If an area shouldn't be delivered any more, turn it off under *Areas*: it stops being planned or alerted at once.
 
-## A driver skipped a house ("no soliciting", they asked, not a home …)
+## A driver skipped a house (a locked gate, a dangerous animal, no safe place, not a home)
 
 The house is left out of every plan until a person decides. *Areas* lists them under "driver skips to review"
-(`GET /v1/ops/house-reviews`).
+(`GET /v1/ops/house-reviews`). A driver can only skip for a real access or safety problem, or because it isn't a home:
+signs on the door ("no soliciting") and what someone says at the door are never reasons (the founder: "we will ignore
+the no soliciting signs; if they don't want any free stuff they can opt out in our app"). The app refuses any other
+reason.
 
-1. Read what the driver said. A "no soliciting" sign usually means sales calls; free water isn't one, but respect a
-   sign that says no deliveries, and anything a person at the door said.
+1. Read what the driver said. Is it still true (a gate that's locked only at night, a dog that's kept in now)?
 2. *Keep skipping* (the house stays out until someone there starts deliveries again in the app) or *Deliver again*
    (back on the next night its route drives). Who decided and why is kept with the house.
 3. Someone at a skipped house who wants water can claim the house in the app and press *Start deliveries again*.
+4. If a driver tells you someone at the door doesn't want it: that person stops it in the app (scan the code on the
+   side of the box, *Your house → Stop deliveries*). Drivers don't decide it for them.
+
+## A drop shows "Scanned at the door, no photo yet" (photo proof)
+
+With *Photo proof of each drop* on (FreeWater: on), a box is delivered only with the driver's photo of it where it was
+left. The scan alone is remembered on the stop but not delivered.
+
+1. Ask the driver to take the photo again in the driver app and scan the box again (a weak signal is the usual cause:
+   the photo didn't send). That delivers it.
+2. If the photo can't be taken (the phone's camera broke, the driver has left), an ops person or owner, signed in,
+   opens *Routes*, presses *Delivered without photo…* on that stop and writes why (for example "camera broke; driver
+   confirmed by phone it's on the porch"). It's kept on the stop with who and when. It must be someone other than the
+   driver, and only a box scanned at its door and still on the van can be marked so.
+3. If the box isn't there, use *Problem at this stop* in the driver app: the box comes back.
+4. A box delivered with its photo and gone later (taken from the porch) is delivered: it isn't a failed delivery and
+   isn't tracked as ours. If the resident asks, they can see the photo in the app (*Your house → Where we left it*).
+
+## Photos of drops: who sees them, and how long they're kept
+
+- They show people's homes. Only the team (*Routes → Photo*, `GET /v1/ops/drop-photos/:id`) and someone who proved in
+  the app the house is theirs see them; never advertisers (their *Where it went* report is street level only). They
+  are never at a public address.
+- They're deleted after the company's keep (90 days unless set; 1 to 365 days, setting `delivery.photoKeepDays`,
+  changed by a person signed in) by the daily `drop-photos` job, which runs for every company whatever the switches.
+  A deleted photo can't be brought back (the database refuses).
+- If the job fails ("Background job drop-photos failed"): photos may be kept a little longer than promised. Fix the
+  cause (usually file storage unreachable: see *An outside provider is down*), then run it now:
+  `POST /v1/platform/jobs/drop-photos/run`. It's safe to run again.
+- Someone asks for a photo to be deleted early: ask an engineer to run the job with a shorter keep for that company
+  (set `delivery.photoKeepDays`, run the job, set it back). A legal hold (a dispute about a drop) means saving that one
+  photo elsewhere first: ask the founder.
+
+## A bottle's label came out wrong at the packing check
+
+The packing line can't read a bottle (a label torn, smudged, printed off, or missing): it stops the box. Bottles don't
+get lost in packing; a bad label is replaced.
+
+1. Take the bad bottle out and press *Reprint* for it (`POST /v1/packs/:id/replace` with its id). The new bottle has
+   exactly the same ads in the same places, for the same house or person.
+2. The bad bottle is voided: it counts against no advertiser (its books lines are reversed, no paid bottle is used, no
+   refund or credit is needed); the reprint is billed instead, once. Throw the bad bottle away (it was never handed
+   out; its codes open a page but are never billed).
+3. Scan the box again (or check it by hand): it can't be sealed until it's checked with the reprint in it.
+4. Pressing *Reprint* twice gives one reprint (the database refuses a second live reprint of one bottle). If the
+   printer fails, nothing was billed for the reprint: fix the printer and press it again.
+5. If the server stopped in the middle (a deploy, a crash), the next start finishes it by itself (the log says
+   "reprint(s) cut off by a restart were finished"): the bad bottle voided, the reprint billed and in the box. Then
+   the daily reconciliation checks the counts (`prepaid_bottles`, `prepaid_balances`). A reprint cut off before it
+   printed is let go at the next press of *Reprint*.
 
 ## Someone at a house wants deliveries to stop (or to start again)
 
@@ -319,6 +371,20 @@ person gets five wrong tries a day.
 
 If they can't use the app (no smartphone, never had a box), an ops person can't stop it for them yet: the founder chose
 app-only. Note the address and pass it on; see "Decisions for the founder" in the delivery section of the README.
+
+## A paid ad was flagged in review
+
+An AI or an automated check (anything using an API key) can't reject a paid ad: it can only flag it. The ad shows
+"Flagged · being discussed" under *Ad review*, with the reasons. Its money stays held and nothing prints.
+
+1. Read the reasons and the ad. If the concern is wrong, *Approve and start printing* (say why in the note).
+2. Otherwise, write to the advertiser in the ad's notes, in plain words: what the concern is and what would fix it.
+   They see it in FreeWater Ads and can answer there, or change the ad (free while it's flagged; it comes back here).
+3. Only when it truly can't run: a person signed in presses *Reject for good*, with a written reason (at least a
+   sentence; it's kept and the advertiser sees it). Only then is the refund offered.
+4. The refund: an owner or finance person, signed in with the second step, stops the ad (*Books*, or
+   `POST /v1/ads/campaigns/:id/stop`): the unprinted bottles go back to the card, once. While the ad is flagged, stopping
+   it is refused: decide first.
 
 ## "A route refund waits for approval" (buying on delivery routes)
 

@@ -21,7 +21,8 @@ export function statement(platform: Platform, advertiserId: string, companyId: s
   // picked: a machine's offline bottle can be filled one day and printed the next.
   const signed = (l: (typeof platform.ledger.entries)[number]) => (l.debit === acct || l.debit === pre ? l.amountCents : -l.amountCents);
   for (const u of platform.units.values()) {
-    if (u.companyId !== companyId || (u.status !== 'dispensed' && u.status !== 'printed')) continue;
+    // A bottle voided at the packing check never went out and is billed to no one: its reprint is the line.
+    if (u.companyId !== companyId || (u.status !== 'dispensed' && u.status !== 'printed') || u.voided) continue;
     for (const p of u.placements) {
       if (p.isHouse || p.advertiserId !== advertiserId) continue;
       const ls = (byUnit.get(u.id) ?? []).filter((l) => l.campaignId === p.campaignId);

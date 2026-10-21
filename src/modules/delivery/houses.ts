@@ -28,9 +28,14 @@ export interface House {
 }
 export type AreaSettings = Partial<Pick<Area, 'name' | 'polygon' | 'frequencyDays' | 'packSize' | 'packsPerHouse' | 'bottlesPerPersonWeek' | 'maxPacksPerHouse' | 'vanPacks' | 'active'>>;
 
-/** Why a driver says to pass a house by. "no_soliciting" is a sign on the door; the rest are what they say. */
-export const SKIP_REASONS = ['no_soliciting', 'asked_not_to', 'not_a_home', 'unsafe', 'dog', 'other'] as const;
+/**
+ * Why a driver can pass a house by: only real access or safety problems, or it isn't a home. Never a sign on the door
+ * or what someone says there (the founder: "we will ignore the no soliciting signs; if they don't want any free stuff
+ * they can opt out in our app"): stopping deliveries is only ever done in the app. A person reviews every skip.
+ */
+export const SKIP_REASONS = ['locked_gate', 'dangerous_animal', 'unsafe', 'no_safe_place', 'not_a_home'] as const;
 export type SkipReason = (typeof SKIP_REASONS)[number];
+export const SKIP_LABELS: Record<SkipReason, string> = { locked_gate: 'Locked gate', dangerous_animal: 'Dangerous animal', unsafe: 'Not safe', no_safe_place: 'No safe place to leave it', not_a_home: 'Not a home' };
 
 const day = (v: unknown) => (v === null || v === undefined ? null : typeof v === 'string' ? v.slice(0, 10) : new Date(v as string).toISOString().slice(0, 10));
 const parse = <T>(v: unknown): T => (typeof v === 'string' ? JSON.parse(v) : v) as T;
@@ -280,8 +285,8 @@ export class HouseService {
   // ---------- drivers ----------
 
   /**
-   * A driver says to pass this house by (a "no soliciting" sign, they asked, it isn't a home …). It's skipped from the
-   * next plan until a person reviews it. A house that already stopped deliveries (or was skipped) stays as it is.
+   * A driver says to pass this house by (a locked gate, a dangerous animal, no safe place, not a home …). It's skipped
+   * from the next plan until a person reviews it. A house that already stopped deliveries (or was skipped) stays as it is.
    */
   async driverSkip(houseId: string, companyId: string, driverId: string, reason: SkipReason, note?: string) {
     const why = `${reason}${note ? `: ${note.slice(0, 200)}` : ''}`;

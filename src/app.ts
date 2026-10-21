@@ -14,6 +14,7 @@ import { builtinPlugins } from './modules/experiences/builtins';
 import { ExperienceService } from './modules/experiences/service';
 import type { ExperiencePlugin } from './modules/experiences/contract';
 import { SqlAssetStore, type AssetStore } from './modules/assets/store';
+import { DropPhotoService } from './modules/delivery/photos';
 import { builtinModelIds } from './modules/models/builtin';
 import { AdsService } from './modules/ads/service';
 import { BuiltinAdAssistant } from './modules/ai/builtinAssistant';
@@ -258,11 +259,14 @@ export async function createApp(opts: AppOptions) {
   for (const u of state.units) platform.restoreUnit(u, state.labels.get(u.id));
   packs.restore(state.packs);
   platform.bus.restoreSeen(state.seen);
-  const printedUnits = state.units.filter((u) => u.status === 'dispensed' || u.status === 'printed').map((u) => ({ unitId: u.id, placements: u.placements, locationId: u.locationId }));
+  const printedUnits = state.units.filter((u) => (u.status === 'dispensed' || u.status === 'printed') && !u.voided).map((u) => ({ unitId: u.id, placements: u.placements, locationId: u.locationId }));
   const printedBoxes = state.packs.filter((p) => p.faces.length > 0).map((p) => ({ packId: p.id, faces: p.faces }));
   platform.ledger.restore({ entries: state.ledger, printed: printedUnits, boxes: printedBoxes, engagementEvents: state.engagementEvents, saleEvents: state.saleEvents });
+  // A reprint that printed just before a crash: its bad bottle voided and its pack holding it, now (before anything counts bottles).
+  const reprintsFinished = platform.repairReprints();
+  if (reprintsFinished) console.warn(`${reprintsFinished} reprint(s) cut off by a restart were finished: their bad bottles voided.`);
   // The auction picks up where it left off: what each ad has earned per bottle.
-  for (const l of state.ledger) if (l.campaignId && l.unitId) { if (l.kind === 'print') platform.auctionStats.add(l.campaignId, 'prints'); if (l.kind === 'scan') platform.auctionStats.add(l.campaignId, 'scans'); if (l.kind === 'ar') platform.auctionStats.add(l.campaignId, 'arLaunches'); }
+  for (const l of state.ledger) if (l.campaignId && l.unitId) { if (l.kind === 'print' && l.credit === 'revenue:print' && !platform.units.get(l.unitId)?.voided) platform.auctionStats.add(l.campaignId, 'prints'); if (l.kind === 'scan') platform.auctionStats.add(l.campaignId, 'scans'); if (l.kind === 'ar') platform.auctionStats.add(l.campaignId, 'arLaunches'); }
 
   const messenger = opts.messenger ?? new TestOutbox(process.env.ECHO_CODES === '1');
   const accounts = new AccountsService(db, messenger, opts.clock, (id) => platform.companies.get(id)?.name ?? 'FreeWater');
@@ -465,6 +469,10 @@ export async function createApp(opts: AppOptions) {
     return /\/(?:p|b)\/(pk_[A-Za-z0-9]+)/.exec(text)?.[1] ?? (/^pk_[A-Za-z0-9]+$/.test(text) ? text : null);
   };
   delivery.houses = houses;
+  // Photos of each drop: only the team and the house's resident see them, and they're deleted after the keep.
+  const dropPhotos = new DropPhotoService(db, platform, opts.blobs, opts.clock);
+  dropPhotos.packs = packs.packs;
+  delivery.photos = dropPhotos;
   packs.houseContextFor = (houseId, companyId) => houses.contextFor(houseId, companyId);
   if (demoKeys) await houses.seedSample('freewater', 'route-3', pilotHouses);
   const ops = new OpsService(db, platform, delivery, host);
@@ -689,7 +697,7 @@ export async function createApp(opts: AppOptions) {
   await attribution.repairUnrecorded();
   await persistence.flush();
 
-  return { ...made, fillers, news, households, routeBuys, features, companyFeatures, db, persistence, runtime, demoKeys, accounts, payments, credit, prepaid, messenger, experiences, assets, ads, designs, delivery, houses, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
+  return { ...made, fillers, news, households, routeBuys, features, companyFeatures, db, persistence, runtime, demoKeys, accounts, payments, credit, prepaid, messenger, experiences, assets, ads, designs, delivery, houses, dropPhotos, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

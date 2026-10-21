@@ -48,7 +48,7 @@ import { FeatureError } from '../modules/features/service';
 import type { App } from '../app';
 import { findApiKey, type ApiKey, type Scope , PersistencePaused } from '../db/store';
 import { LeaseLostError } from '../db/leaseChecked';
-import { OrderConflictError } from '../platform';
+import { OrderConflictError, ReprintError } from '../platform';
 import type { Campaign, Share } from '../core/types';
 import { checkSvgPictures, svgCreative } from '../modules/print/svgCreative';
 import { newId } from '../core/ids';
@@ -570,11 +570,11 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     try { return { body: packs.verify(p.id, (req.body as any).scannedUnitIds) }; } catch (e: any) { if (e instanceof PackStateError) throw new ApiError(409, 'wrong_stage', e.message); throw e; }
   } });
 
-  route({ method: 'POST', url: '/v1/packs/:id/replace', scope: 'packs', summary: 'Reprint missing bottles; the new ones take their place in the pack.', body: obj({ missingUnitIds: { type: 'array', items: S.str, maxItems: 48 }, productId: S.str }, ['missingUnitIds', 'productId']), handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/packs/:id/replace', scope: 'packs', summary: 'Reprint bottles the packing check found wrong (a torn, smudged or missing label the line couldn’t read): each is printed again with exactly the same ads and takes its place in the pack; the bad one is voided and never billed to anyone. productId is ignored (a reprint is always the same product).', body: obj({ missingUnitIds: { type: 'array', items: S.str, maxItems: 48 }, productId: S.str }, ['missingUnitIds']), handler: async (req, key) => {
     const p = packFor(key!, (req.params as any).id);
     const b = req.body as any;
     let fresh: string[];
-    try { fresh = await packs.replace(p.id, b.missingUnitIds, b.productId); } catch (e: any) { if (e instanceof PackStateError) throw new ApiError(409, 'wrong_stage', e.message); throw e; }
+    try { fresh = await packs.replace(p.id, b.missingUnitIds); } catch (e: any) { if (e instanceof PackStateError || e instanceof ReprintError) throw new ApiError(409, 'wrong_stage', e.message); throw e; }
     return { body: { reprinted: fresh, pack: packView(p.id) } };
   } });
 
@@ -603,7 +603,13 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     if (!planned || planned.companyId !== key!.companyId) throw notFound('Stop');
     // A planned night run has its own driver, GPS check and photo: it can't be marked delivered around them here.
     if (await app.delivery.getRun(run, key.companyId).then(() => true, () => false)) throw new ApiError(409, 'use_driver_app', 'This box is on a planned run. Its driver delivers it in the driver app (/v1/driver/runs).');
-    const r = packs.deliver(b);
+    // Photo proof of each drop: the same rule as the driver app. The caller's word (photoProof) is never the photo.
+    const photo = await app.dropPhotos.proofFor(key.companyId, planned.id, key.userId);
+    if (!photo && app.delivery.photoNeeded(key.companyId)) {
+      const check = packs.deliver({ ...b, checkOnly: true });
+      if (check.ok) return { status: 409, body: { error: { code: 'photo_required', message: 'Take a photo of the box where you left it (POST /v1/driver/photos?packId=), then scan it again. It isn’t delivered until there’s a photo.' } } };
+    }
+    const r = packs.deliver({ ...b, photoProof: !!photo });
     if (!r.ok) return { status: 409, body: { error: { code: 'wrong_box', message: r.reason }, grab: r.rightPack ? { packId: r.rightPack.id, stopCode: `R${r.rightPack.routeId.replace(/^route-/, '')} · ${r.rightPack.stop}` } : null } };
     return { body: packView(r.pack.id) };
   } });
@@ -1106,7 +1112,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   server.get('/assets/:file', async (req, reply) => {
     const m = /^([A-Za-z0-9_-]+)\.([a-z0-9]+)$/.exec((req.params as any).file);
     const found = m ? await app.assets.get(m[1]!) : null;
-    if (!found) return reply.code(404).send({ error: { code: 'not_found', message: 'File not found.' } });
+    // A delivery photo shows someone's home: never served here to whoever has its address (before 065 they were kept
+    // with the uploads). The team sees drops' photos through /v1/ops/drop-photos, residents through /v1/me/drop-photos.
+    if (!found || found.asset.name === 'delivery-photo') return reply.code(404).send({ error: { code: 'not_found', message: 'File not found.' } });
     if (m![2] === 'usdz' && found.asset.contentType === 'model/gltf-binary') {
       try { return reply.type('model/vnd.usdz+zip').header('cache-control', 'public, max-age=31536000, immutable').header('access-control-allow-origin', '*').send(usdz(`a:${m![1]}`, found.bytes, 'Model')); } catch { return reply.code(422).send({ error: { code: 'not_convertible', message: 'This model can’t be shown in iPhone AR.' } }); }
     }

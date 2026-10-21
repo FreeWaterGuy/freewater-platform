@@ -402,6 +402,10 @@ export class SqlPersistence implements Persistence {
       : `update route_spots set status = 'open', unit_id = null where id = any($1::text[]) and company_id = $2 and status = 'held'`, move === 'printed' ? [spotIds, companyId, unitId, packId ?? null] : [spotIds, companyId]);
   }
 
+  routeSpotsMoved(companyId: string, fromUnitId: string, toUnitId: string) {
+    this.enqueue('route-spots', `update route_spots set unit_id = $3 where company_id = $1 and unit_id = $2 and status in ('placed', 'held')`, [companyId, fromUnitId, toUnitId]);
+  }
+
   pack(p: Pack) {
     const data = JSON.stringify(p);
     this.enqueue('pack', 

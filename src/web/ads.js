@@ -647,7 +647,26 @@
   }
 
   // ---------- overview ----------
-  const statusText = { running: 'Running', in_review: 'In review', paused: 'Paused', finished: 'Finished', not_approved: 'Needs changes', stopped: 'Stopped', not_paid: 'Not paid for' };
+  const statusText = { running: 'Running', in_review: 'In review', being_discussed: 'Being discussed', paused: 'Paused', finished: 'Finished', not_approved: 'Needs changes', stopped: 'Stopped', not_paid: 'Not paid for' };
+  /**
+   * The notes on a paid ad's review: what the team raised and what you both wrote. A flag never rejects or charges:
+   * your money stays held, and changing the ad is free while it's being discussed.
+   */
+  function reviewNotes(c) {
+    const box = h('div', { class: 'note' }, h('p', { style: 'margin:0;color:var(--muted)', text: 'Loading the notes…' }));
+    const draw = async () => {
+      try {
+        const r = await api('GET', `/v1/ads/campaigns/${c.id}/notes`);
+        const say = h('textarea', { class: 'input', placeholder: `Answer ${state.config.name}’s team…`, maxlength: '2000' });
+        box.replaceChildren(
+          h('b', { text: c.status === 'being_discussed' ? `${state.config.name}’s team raised a question. Your money stays held and nothing prints until it’s settled; changing the ad is free meanwhile.` : 'Notes on this ad’s review' }),
+          h('ul', { style: 'margin:6px 0;padding-left:18px;line-height:1.6' }, r.notes.map((n) => h('li', {}, h('b', { text: `${n.from === 'advertiser' ? 'You' : n.from === 'team' ? state.config.name : 'Automated check'}: ` }), n.text))),
+          c.status === 'being_discussed' || c.status === 'in_review' || c.status === 'not_approved' ? h('div', { style: 'display:grid;gap:6px' }, say, h('div', {}, h('button', { class: 'btn small', type: 'button', onclick: async () => { if (!say.value.trim()) return; try { await api('POST', `/v1/ads/campaigns/${c.id}/notes`, { text: say.value.trim() }); toast('Sent'); draw(); } catch (x) { toast(x.message); } } }, 'Send'))) : null);
+      } catch (x) { box.replaceChildren(h('p', { style: 'margin:0', text: x.message })); }
+    };
+    draw();
+    return box;
+  }
   // How ads are paid for here, in plain words (prepaid: up front, per bottle; otherwise billed after the fact).
   const prepaidTerms = (b) => `You pay up front for a number of bottles, and exactly that many go out with your ad: there's no end date and nothing to cancel, and pausing only delays. ${b.included}. ${b.feesOn.length ? `On top: ${b.feesOn.join(', ')}, charged to your card each day.` : 'Nothing is charged per scan, AR launch or sale.'} Changing a running ad costs ${dollars(b.changeFeeCents)}, paid when you submit the change.`;
   async function overview() {
@@ -677,7 +696,7 @@
     if (c.status === 'running') actions.push(h('button', { class: 'btn small secondary', type: 'button', onclick: async () => { await api('PATCH', `/v1/campaigns/${c.id}`, { active: false }); toast('Paused'); render(); } }, 'Pause'));
     if (c.status === 'paused') actions.push(h('button', { class: 'btn small', type: 'button', onclick: async () => { try { await api('PATCH', `/v1/campaigns/${c.id}`, { active: true }); toast('Running again'); render(); } catch (x) { toast(x.message); } } }, 'Resume'));
     const paid = c.budget.type === 'prepaid' ? c.budget : null;
-    if (c.editable && c.status !== 'in_review' && c.status !== 'stopped' && c.status !== 'finished') actions.push(link(`/ads/campaigns/${c.id}/change`, { class: 'btn small secondary' }, paid ? `Change it (${dollars(state.changeFeeCents ?? 0)})` : 'Change it'));
+    if (c.editable && c.status !== 'in_review' && c.status !== 'stopped' && c.status !== 'finished') actions.push(link(`/ads/campaigns/${c.id}/change`, { class: 'btn small secondary' }, c.status === 'being_discussed' ? 'Change it (free while it’s discussed)' : paid ? `Change it (${dollars(state.changeFeeCents ?? 0)})` : 'Change it'));
     actions.push(link(`/ads/campaigns/${c.id}/code`, { class: 'btn small secondary' }, 'Code, versions and AI'));
     if (c.route && on('route_proof')) actions.push(link(`/ads/campaigns/${c.id}/report`, { class: 'btn small secondary' }, 'Where it went'));
     // Paid up front: how many of the bottles paid for are out. No end date and no cancelling: it runs until they are.
@@ -691,7 +710,8 @@
         h('h3', { text: c.name }),
         h('div', { class: 'meta', text: `${c.route ? `On delivery routes: ${ROUTE_KINDS[c.route.kind] ?? c.route.kind}, ${num(c.route.houses)} houses` : c.where === 'all' ? 'Every machine' : c.where.join(', ')} · ${budget} · ${c.formats.includes('box-face') ? 'bottles and boxes' : 'bottles'}` }),
         h('div', { class: 'nums' }, [['Bottles', num(r.prints)], ['Scans', num(r.scans)], ['AR', num(r.arLaunches)], ['Spent', dollars(r.spendCents)]].map(([k, v]) => h('div', {}, h('b', { text: v }), k))),
-        c.status === 'not_approved' && c.review?.note ? h('div', { class: 'note' }, h('b', { text: 'What to change: ' }), c.review.note) : null,
+        c.status === 'not_approved' && c.review?.note && !paid ? h('div', { class: 'note' }, h('b', { text: 'What to change: ' }), c.review.note) : null,
+        paid && (c.status === 'being_discussed' || c.status === 'not_approved') ? reviewNotes(c) : null,
         actions.length ? h('div', { class: 'actions' }, actions) : null));
   }
   function chart(daily) {

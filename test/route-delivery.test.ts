@@ -10,6 +10,7 @@ import { insidePolygon, streetOrder } from '../src/modules/delivery/planner';
 import { packsFor, parseCsv, splitAddress } from '../src/modules/delivery/houses';
 import { boxNumber } from '../src/modules/packs/boxRenderer';
 import { SWITCHES } from '../src/runtime/registry';
+import { doorPhoto } from './door-photo';
 
 // Residential consecutive delivery (the Austin pilot): FreeWater picks the streets, every house on them gets packs in
 // street order with no sign-up, and the only ways a house stops are someone there saying so in the app, or a driver's
@@ -61,9 +62,11 @@ async function packAndLoad(runId: string, token = driver) {
   expect(out.status).toBe('out');
   return out;
 }
-/** At the door: scan the stop's own box, standing at the house. */
-const drop = (runId: string, s: any, token = driver) =>
-  call('POST', `/v1/driver/runs/${encodeURIComponent(runId)}/stops/${s.stop}/deliver`, token, { scannedPackId: s.packId, lat: s.point.lat + 0.00005, lng: s.point.lng, emptiesCollected: 0 });
+/** At the door: a photo of the box where it's left, then scan the stop's own box, standing at the house. */
+const drop = async (runId: string, s: any, token = driver) => {
+  await server.inject({ method: 'POST', url: `/v1/driver/photos?packId=${s.packId}`, payload: await doorPhoto(), headers: { authorization: `Bearer ${token}`, 'content-type': 'image/jpeg' } });
+  return call('POST', `/v1/driver/runs/${encodeURIComponent(runId)}/stops/${s.stop}/deliver`, token, { scannedPackId: s.packId, lat: s.point.lat + 0.00005, lng: s.point.lng, emptiesCollected: 0 });
+};
 const plan = async (date: string, token = ops) => {
   const r = await call('POST', '/v1/ops/runs/plan', token, { date });
   expect(r.statusCode, r.body).toBe(201);
@@ -307,27 +310,29 @@ describe('an area of houses, from the map to the door', () => {
     const refused = await drop(r.id, bens[0]);
     expect(refused.statusCode).toBe(409);
     expect(refused.json().error.message).toMatch(/stopped deliveries/);
-    const after = (await call('POST', `/v1/driver/runs/${encodeURIComponent(r.id)}/stops/${bens[0].stop}/skip-house`, driver, { reason: 'asked_not_to' })).json();
+    const after = (await call('POST', `/v1/driver/runs/${encodeURIComponent(r.id)}/stops/${bens[0].stop}/skip-house`, driver, { reason: 'no_safe_place' })).json();
     for (const s of after.stops.filter((x: any) => x.houseId === next.houseId)) {
-      expect(s).toMatchObject({ status: 'not_delivered', skipped: 'asked_not_to', houseStatus: 'opted_out' });
+      expect(s).toMatchObject({ status: 'not_delivered', skipped: 'no_safe_place', houseStatus: 'opted_out' });
       expect(app.packs.packs.get(s.packId)!.status).toBe('returned');
     }
     expect((await call('GET', '/v1/ops/house-reviews', admin())).json()).toEqual([]); // they asked: nothing to review
   });
 
   let flagged: any;
-  it('a driver marks a house "no soliciting": skipped from the next plan until a person reviews it', async () => {
+  it('a driver can’t get to a house (a locked gate): skipped from the next plan until a person reviews it; a sign on the door is never a reason', async () => {
     const all = (await call('GET', '/v1/ops/runs?date=2026-11-17', admin())).json().runs.filter((x: any) => x.areaId === area.id);
     const r = all.find((x: any) => x.status === 'out')!; // the van that's out: the other one is still at the micro-factory
     flagged = r.stops.find((s: any) => s.status === 'planned');
     // Only the run's own driver, and only for a reason on the list.
     expect((await call('POST', `/v1/driver/runs/${encodeURIComponent(r.id)}/stops/${flagged.stop}/skip-house`, driver, { reason: 'too far' })).statusCode).toBe(400);
-    const done = (await call('POST', `/v1/driver/runs/${encodeURIComponent(r.id)}/stops/${flagged.stop}/skip-house`, driver, { reason: 'no_soliciting', note: 'Sign on the gate' })).json();
-    expect(done.stops.find((s: any) => s.stop === flagged.stop)).toMatchObject({ status: 'not_delivered', skipped: 'no_soliciting', houseStatus: 'skip_pending' });
+    // The founder: "we will ignore the no soliciting signs". Opting out is only ever done in the app.
+    for (const reason of ['no_soliciting', 'asked_not_to', 'other']) expect((await call('POST', `/v1/driver/runs/${encodeURIComponent(r.id)}/stops/${flagged.stop}/skip-house`, driver, { reason })).statusCode, reason).toBe(400);
+    const done = (await call('POST', `/v1/driver/runs/${encodeURIComponent(r.id)}/stops/${flagged.stop}/skip-house`, driver, { reason: 'locked_gate', note: 'Gate padlocked' })).json();
+    expect(done.stops.find((s: any) => s.stop === flagged.stop)).toMatchObject({ status: 'not_delivered', skipped: 'locked_gate', houseStatus: 'skip_pending' });
     for (const s of done.stops.filter((x: any) => x.status === 'planned')) expect((await drop(r.id, s)).statusCode).toBe(200);
     for (const x of all.filter((y: any) => y.id !== r.id)) { const out = await packAndLoad(x.id); for (const s of out.stops) expect((await drop(x.id, s)).statusCode).toBe(200); }
     const reviews = (await call('GET', '/v1/ops/house-reviews', admin())).json();
-    expect(reviews).toEqual([expect.objectContaining({ id: flagged.houseId, status: 'skip_pending', skipReason: 'no_soliciting: Sign on the gate', areaName: 'Ravey and Sunny' })]);
+    expect(reviews).toEqual([expect.objectContaining({ id: flagged.houseId, status: 'skip_pending', skipReason: 'locked_gate: Gate padlocked', areaName: 'Ravey and Sunny' })]);
     // Next week it's left out; the rest still come.
     at('2026-11-23T16:00:00Z');
     const runs = await plan('2026-11-24');
@@ -339,7 +344,7 @@ describe('an area of houses, from the map to the door', () => {
   it('a person decides: deliver again (it comes back on the next night), or keep skipping', async () => {
     expect((await call('POST', `/v1/ops/houses/${flagged.houseId}/review`, admin(), { decision: 'deliver' })).json().error.code).toBe('person_required');
     expect((await call('POST', `/v1/ops/houses/${flagged.houseId}/review`, driver, { decision: 'deliver' })).json().error.code).toBe('ops_only');
-    expect((await call('POST', `/v1/ops/houses/${flagged.houseId}/review`, ops, { decision: 'deliver', note: 'The sign is for sales calls, not free water' })).json().status).toBe('active');
+    expect((await call('POST', `/v1/ops/houses/${flagged.houseId}/review`, ops, { decision: 'deliver', note: 'The gate is open on delivery days' })).json().status).toBe('active');
     expect((await call('POST', `/v1/ops/houses/${flagged.houseId}/review`, ops, { decision: 'skip' })).json().error.code).toBe('not_pending');
     at('2026-11-26T16:00:00Z');
     const runs = await plan('2026-11-27'); // its own night (the 24th) went by while it waited: caught up on the next one

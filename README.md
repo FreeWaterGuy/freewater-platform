@@ -59,7 +59,7 @@ Failed prints, failed AR and duplicate orders are never billed. Ledger lines are
 
 - **Every bottle is different.** The ad engine is told which labels are already in the pack and picks a different one, and no campaign can take more than its share of a pack (`maxPackShare`, 50% by default).
 - **The box is ad space.** Top, front, back and right are sold to four different advertisers (never two competitors), each with its own QR. The left face is the locked company panel with the pack's QR. The bottom stays blank. A small stop code (`R3 · 14`) sits in the corner of the front and top. Box faces are billed only when the box print is confirmed.
-- **Checked before sealing.** The packing line scans every bottle (where there's no line, a signed-in person counts the box by hand and that check is recorded with who and when). A missing bottle or one from another pack stops the line; the missing bottle is reprinted and the pack is checked again before it can be sealed.
+- **Checked before sealing.** The packing line scans every bottle (where there's no line, a signed-in person counts the box by hand and that check is recorded with who and when). A bottle it can't read (a label torn, smudged, printed off or missing; bottles don't get lost in packing) or one from another pack stops the line. A bad label is **reprinted exactly**: the same ads in the same places, for the same house or person (`POST /v1/packs/:id/replace`). The bad bottle is voided: its books lines are reversed and it counts against no one (no paid bottle used, nothing charged, nothing to give back); the reprint is billed instead, once, and an ad paid for N bottles still reaches exactly N. Voiding, billing the reprint, moving its route pieces and putting it in the pack happen in one write; a crash in the middle is finished at the next start. The pack is checked again before it can be sealed.
 - **Loaded in reverse.** The last stop goes in the van first, so the next box is always by the door.
 - **Right box, right door.** A stop is marked delivered only when the driver scans the box planned for that address while at that address. Anything else is rejected with what to grab instead.
 
@@ -163,10 +163,14 @@ junk mail but free water that gives to charity. Houses don't sign up and aren't 
   (with an hourly "overdue" alert until then).
 - **Packs per house**: the area's packs per house; once a household tells us its size, enough for its people (one
   24-pack a week for one or two people, two for three or four, three for five or more, by default).
-- **At the door** nothing changes: the driver scans the house's own box there (GPS within 100 m, or confirms), and the
-  drop time and the phone's position are kept on the stop, with the house and area on the `pack.delivered` event, as
-  proof for advertisers. The driver can **skip a house** with a reason ("no soliciting" sign, they asked, not a home,
-  not safe, a dog): its boxes come back and the house is left out until a person reviews it (*Areas*).
+- **At the door**: the driver leaves the box, takes a **photo of it where it was left**, and scans it (GPS within
+  100 m, or confirms). Delivered with its photo means delivered; what happens on the porch afterwards isn't a failed
+  delivery. The drop time and the phone's position are kept on the stop, with the house and area on the
+  `pack.delivered` event, as proof for advertisers (street level only: they never see photos). The driver can **skip a
+  house** only for a real access or safety problem (a locked gate, a dangerous animal, not safe, no safe place to
+  leave it) or because it isn't a home: its boxes come back and the house is left out until a person reviews it
+  (*Areas*). Signs on the door ("no soliciting") and what someone says at the door are never reasons: a house stops
+  only when someone there says so in the app.
 - **Stopping, in the app** (*Me → Your house's deliveries*, `/v1/me/house`). Someone at the house shows it's theirs by
   scanning the code on the side of a box delivered there in the last 60 days (or typing the box number from its corner
   with their house number; five wrong tries a day), then presses *Stop deliveries*: the house is left out of every
@@ -202,14 +206,14 @@ junk mail but free water that gives to charity. Houses don't sign up and aren't 
 **The driver app (`/driver`).**
 - **Load the van.** The driver takes a route, then scans each box into the van in load order (`POST /v1/driver/runs/:id/load`), last stop first, so stop 1 ends up by the door. A box out of order is refused.
 - **House after house.** Each stop shows the address, the note, the box to grab (stop code and box number) and the next few houses.
-- **At the door.** The driver scans the box. It's delivered only if it's that house's box and the driver is there: GPS within 100 m, or the driver confirms. A wrong box shows a full-screen "Wrong box. Don't leave it." and names the right one. Ops sees every wrong scan.
-- **Proof and empties.** A photo of the box at the door, and a count of the empty bottles picked up.
+- **At the door.** The driver leaves the box, takes a photo of it where it was left (`POST /v1/driver/photos?packId=`), and scans it. It's delivered only if it's that house's box, the driver is there (GPS within 100 m, or the driver confirms) and, with *Photo proof of each drop* on (FreeWater: on), there's that driver's photo of that box. The scan alone answers `photo_required` and is remembered; if the phone couldn't send the photo, a person on the team (ops or an owner, signed in, not the driver) can mark it delivered with a reason (`POST /v1/ops/runs/:id/stops/:stop/deliver-without-photo`). A wrong box shows a full-screen "Wrong box. Don't leave it." and names the right one. Ops sees every wrong scan.
+- **Proof and empties.** The photo, and a count of the empty bottles picked up. Photos show people's homes: each is re-encoded (JPEG, at most 1600 pixels a side; nothing the phone hid in the file, like where it was taken, is kept), 8 MB and 40 megapixels at most on the way in, kept apart from uploads and never at a public address, seen only by the team, a person signed in (*Routes*, `GET /v1/ops/drop-photos/:id`; never a service key) and by someone who proved in the app the house is theirs (*Your house*, `GET /v1/me/drop-photos`; only drops from two weeks before they proved it on, never a previous household's), and deleted after the company's keep (90 days unless set, 1 to 365: setting `delivery.photoKeepDays`) by the `drop-photos` job, whatever the switches say.
 - **Can't deliver.** "Problem at this stop" sends the box back and tells the customer why.
 - **The customer hears about it.** They get a text or email when the box is delivered, or if it couldn't be left.
 
 **The ops console (`/ops`).** For the company's own team.
 - **Today:** bottles, scans, money earned and given, deliveries, and what needs attention (ads to review, failed prints, scan pages that fell back, wrong boxes).
-- **Ad review:** each ad on a sample label, at every size, on a box and as its scan page, with a checklist. Approve, or send it back with a note.
+- **Ad review:** each ad on a sample label, at every size, on a box and as its scan page, with a checklist. Approve, or send it back with a note. A paid ad flagged (by an automated check, an AI or a person) shows its reasons and a notes thread with the advertiser; only a person finally rejects it, with a reason (see *How advertisers pay*).
 - **Machines:** prints today, failures and the last print for each machine, plus any scan pages that fell back.
 - **Routes:** plan and print a night, run the packing check, and follow every stop.
 - **Areas:** the delivery areas, their settings and houses, adding houses from CSV, and drivers' skips to review.
@@ -348,6 +352,7 @@ the scan page and AR). Switches: *Ads → Buying on delivery routes* (docs/SWITC
 - **Only paid bottles print.** Each bottle's paid ads are claimed in the database before its label is drawn (`ad_prepaid`, one guarded statement each), so the last paid bottle prints once even with two servers or a restart. A failed or abandoned print gives its bottle back. Bottles in delivery packs and at machines draw the same way; a bottle with ten tenth-ads draws one from each of ten ads.
 - **Books:** the payment sits in `prepaid:advertiser:<id>` (a liability) until each bottle prints and moves its price to `revenue:print`. The database refuses a prepaid balance below nothing, more printed than paid, and a second refund for one ad. The daily reconciliation and `npm run books:check` compare paid, printed and printing bottles with the bottles themselves and the books.
 - **Changing a running ad** costs the change fee ($100 by default, per company), paid up front; the new ad is reviewed, then the bottles not printed yet carry it.
+- **If review has a problem with a paid ad** ("that will need to be discussed with the FreeWater team to ensure that it was rejected for a valid reason"): an automated check or AI can only **flag** it (a reject sent with an API key becomes a flag). A flagged ad goes to the team's queue with the reasons; the team and the advertiser talk it over in notes both see (`/v1/review/campaigns/:id/notes`, `/v1/ads/campaigns/:id/notes`); the advertiser can fix it and send it again at no change fee while it's flagged. The money stays held and nothing prints. Only a person signed in finally rejects it, with a written reason, kept and shown to the advertiser; only then is its refund offered, approved by an owner or finance person as below (stopping a flagged ad is refused). Ads not paid up front are reviewed as before.
 - **If FreeWater stops an ad**, an owner or finance person (signed in, second step) pays back the unprinted bottles and unused extras to the card, once (`POST /v1/ads/campaigns/:id/stop`).
 - **Fees on top** (per scan 25¢, per AR launch 40¢, per box side, 3% commission) each have their own switch, all off. Turned on, they're charged to the card on file once a day (the `ad-fees` job), never left on an invoice to wait; a declined card pauses that advertiser's ads at once.
 - **Costly extras** (AI video clips from Veo): cost plus the company's markup, in the quote and paid up front. No paid clip left, no clip made. What each use really cost is recorded; if it passes what was charged the team is alerted, and the advertiser is never billed more.

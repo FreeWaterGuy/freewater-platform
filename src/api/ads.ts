@@ -88,17 +88,40 @@ export function adsRoutes(app: App, route: (r: RouteDef) => void, h: { me: (key:
     return { body: await app.prepaid.chargeFees(key!.companyId) };
   } });
 
-  route({ method: 'GET', url: '/v1/review/campaigns', scope: 'campaigns', summary: 'Ads waiting for content review.', handler: async (_req, key) => {
+  route({ method: 'GET', url: '/v1/review/campaigns', scope: 'campaigns', summary: 'Ads waiting for content review: new and changed ads, and paid ads flagged (by an automated check or a person) and being discussed with the advertiser, with the reasons.', handler: async (_req, key) => {
     companyStaff(key);
     // A route buy aimed at a few houses says so, with what the content check found: it gets the stricter review.
-    return { body: await Promise.all(ads.reviewQueue(key!.companyId).map(async (c) => ({ id: c.id, advertiser: c.advertiserName, name: c.name ?? null, category: c.category, submittedAt: c.review?.at, experienceId: c.experienceId, sizes: c.sizes, ...(c.routeBuy ? { routeBuy: await app.routeBuys.reviewInfo(c) } : {}) }))) };
+    return { body: await Promise.all(ads.reviewQueue(key!.companyId).map(async (c) => ({ id: c.id, advertiser: c.advertiserName, name: c.name ?? null, category: c.category, submittedAt: c.review?.at, experienceId: c.experienceId, sizes: c.sizes, review: c.review ?? null, paid: !!c.prepaid,
+      ...(c.review?.status === 'flagged' ? { flag: { reasons: c.review.note ?? '', flaggedAt: c.review.flaggedAt ?? c.review.at, resubmittedAt: c.review.resubmittedAt ?? null }, notes: (await ads.reviewNotes(key!.companyId, c.id)).length } : {}),
+      ...(c.routeBuy ? { routeBuy: await app.routeBuys.reviewInfo(c) } : {}) }))) };
   } });
-  route({ method: 'POST', url: '/v1/review/campaigns/:id', scope: 'campaigns', summary: 'Approve an ad (it starts running) or send it back with a note.', body: obj({ decision: { type: 'string', enum: ['approve', 'reject'] }, note: { type: 'string', maxLength: 500 } }, ['decision']), handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/review/campaigns/:id', scope: 'campaigns', summary: 'Approve an ad (it starts running), flag it for the team, or send it back with a note. A paid ad (paid up front) is finally rejected only by a person signed in, with a written reason, which is when its refund is offered; an automated check (an API key) can only flag it, so its reject becomes a flag.', body: obj({ decision: { type: 'string', enum: ['approve', 'reject', 'flag'] }, note: { type: 'string', maxLength: 500 } }, ['decision']), handler: async (req, key) => {
     companyStaff(key);
     const b = req.body as any;
-    if (b.decision === 'reject' && !b.note) throw new ApiError(422, 'note_required', 'Say what needs to change, so the advertiser can fix it.');
+    if ((b.decision === 'reject' || b.decision === 'flag') && !b.note) throw new ApiError(422, 'note_required', 'Say what needs to change, so the advertiser can fix it.');
     const u = key!.userId ? await app.accounts.get(key!.userId) : null;
     const c = await ads.review({ companyId: key!.companyId, campaignId: (req.params as any).id, decision: b.decision, note: b.note, by: { userId: u && u.companyId === key!.companyId ? u.id : null, role: u && u.companyId === key!.companyId ? u.role : null } });
-    return { body: { id: c.id, review: c.review, active: c.active } };
+    return { body: { id: c.id, review: c.review, active: c.active, ...(b.decision === 'reject' && c.review?.status === 'flagged' ? { flaggedInstead: true, message: 'A paid ad is only rejected by a person signed in, with a reason. It was flagged for the team instead.' } : {}) } };
+  } });
+  // The notes on an ad's review: the team and the advertiser talk a flagged paid ad over, in plain words, both see them.
+  route({ method: 'GET', url: '/v1/review/campaigns/:id/notes', scope: 'campaigns', summary: 'The notes on an ad’s review: flags with their reasons, and what the team and the advertiser wrote.', handler: async (req, key) => {
+    companyStaff(key);
+    return { body: await ads.reviewNotes(key!.companyId, (req.params as any).id) };
+  } });
+  route({ method: 'POST', url: '/v1/review/campaigns/:id/notes', scope: 'campaigns', summary: 'Write to the advertiser in an ad’s review notes. A person on the team, signed in.', body: obj({ text: { type: 'string', minLength: 1, maxLength: 2000 } }, ['text']), handler: async (req, key) => {
+    companyStaff(key);
+    const u = key!.userId ? await app.accounts.get(key!.userId) : null;
+    if (!u || u.companyId !== key!.companyId) throw new ApiError(403, 'person_required', 'A person on the team writes to the advertiser, signed in, not with an API key.');
+    return { status: 201, body: await ads.writeReviewNote({ companyId: key!.companyId, campaignId: (req.params as any).id, from: 'team', authorId: u.id, text: (req.body as any).text }) };
+  } });
+  route({ method: 'GET', url: '/v1/ads/campaigns/:id/notes', scope: 'campaigns', summary: 'The notes on your ad’s review: what the team raised and what you both wrote.', handler: async (req, key) => {
+    const adv = advertiserOf(key);
+    const c = app.platform.campaigns.get((req.params as any).id);
+    if (!c || c.companyId !== key!.companyId || c.advertiserId !== adv) throw new ApiError(404, 'not_found', 'Campaign not found.');
+    return { body: { review: c.review ?? null, notes: await ads.reviewNotes(key!.companyId, c.id) } };
+  } });
+  route({ method: 'POST', url: '/v1/ads/campaigns/:id/notes', scope: 'campaigns', summary: 'Answer the team in your ad’s review notes.', body: obj({ text: { type: 'string', minLength: 1, maxLength: 2000 } }, ['text']), handler: async (req, key) => {
+    const adv = advertiserOf(key);
+    return { status: 201, body: await ads.writeReviewNote({ companyId: key!.companyId, campaignId: (req.params as any).id, from: 'advertiser', authorId: key!.userId ?? adv, advertiserId: adv, text: (req.body as any).text }) };
   } });
 }

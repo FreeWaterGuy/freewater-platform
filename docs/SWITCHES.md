@@ -99,7 +99,23 @@ company reviews it → it prints until every paid bottle is out ("N of M bottles
 cancel button**: pausing only delays. A failed or abandoned print gives its bottle back.
 
 **Bottles in delivery packs and at machines** each draw one paid bottle from every paid ad on them; a pack's bottles
-are printed one by one, so a pack of 12 with a paid ad on 6 of its bottles draws 6.
+are printed one by one, so a pack of 12 with a paid ad on 6 of its bottles draws 6. A bottle whose label comes out
+wrong at the packing check is reprinted with exactly the same ads and draws nothing more: the bad one is voided (its
+books lines reversed, no paid bottle used, nothing to give back), and the advertiser is billed once, for the bottle
+that went out (`Platform.reprint`; a crash in the middle is finished at the next start).
+
+**Review of a paid ad** (the founder: "if review rejects a paid ad, that will need to be discussed with the FreeWater
+team to ensure that it was rejected for a valid reason"). The money is already taken, so:
+
+| Who | Can | Can't |
+|---|---|---|
+| An AI, an automated check, anything with an API key | **Flag** it, with reasons (a *reject* it sends becomes a flag) | Reject it, refund it |
+| The team, signed in | Write to the advertiser in the ad's notes; approve it; **finally reject** it with a written reason (kept, shown to the advertiser) | Stop it and pay it back while it's flagged (refused: decide first) |
+| The advertiser | Read and answer the notes; change the ad and send it again **at no change fee** while it's flagged | — |
+| An owner or finance person, second step | Pay it back once it was finally rejected (*Stopping an ad*, below) | — |
+
+While it's flagged the money stays held and nothing prints. An ad not paid up front is reviewed as before. This rule
+is part of *Ad review* on the Features page, which is locked on.
 
 **In the books:** the payment is the advertiser's money held for them (`prepaid:advertiser:<id>`, a liability); each
 printed bottle moves its price to earned (`revenue:print`); a change fee is earned when paid
@@ -225,7 +241,9 @@ size⌉, never more than *most packs per house* (`packsFor` in `src/modules/deli
 24-pack a week: 1–2 people get one box, 3–4 get two, 5 or more get three.
 
 A house stops getting packs only if someone there stops it in the app (at once, and they can start again), or a
-driver marks it to skip and a person agrees (*Areas → driver skips to review*). Houses are addresses, never people.
+driver marks it to skip for an access or safety problem and a person agrees (*Areas → driver skips to review*). "No
+soliciting" signs are ignored (the founder's decision): opting out is only ever done in the app. Houses are
+addresses, never people.
 
 The company's switches for delivery areas (*Console → Features → Delivery*, section 8; `src/runtime/registry.ts`):
 
@@ -234,7 +252,15 @@ The company's switches for delivery areas (*Console → Features → Delivery*, 
 | **Delivery areas (house after house)** | On | Home delivery | Any owner signed in | No area is planned, printed or alerted; the *Areas* page, its routes and the app's *Your house* are gone. Houses keep their place. |
 | **More packs for bigger households** | On | Delivery areas | Any owner signed in | Every house gets the area's packs per house; the app doesn't ask how many live there. |
 | **Ads know the house's street and area** | On | Delivery areas, Ads | Any owner signed in | The ad engine gets no house context; ads are chosen as for any pack on that route. |
-| **Drivers skip a house, with a reason** | On | The driver app, Delivery areas | Any owner signed in | No *Skip this house* button; the driver uses *Problem at this stop* and the house stays on the next plan. |
+| **Drivers skip a house, with a reason** | On | The driver app, Delivery areas | Any owner signed in | No *Skip this house* button; the driver uses *Problem at this stop* and the house stays on the next plan. On, the reasons are only real access or safety problems (a locked gate, a dangerous animal, not safe, no safe place to leave it) or not a home: never a sign on the door or what someone says there (people stop it in the app). |
+| **Photo at the door** (`door_photos`) | On | The driver app | Any owner signed in | No photos are taken; nothing else changes. Photos already kept are still deleted on time. |
+| **Photo proof of each drop** (`drop_photo_proof`, new in catalogue 4) | On | Photo at the door | Any owner signed in | The scan at the right door is enough. On: a box is delivered only with the driver's photo of it where it was left (the scan alone answers `photo_required`), unless an ops person or owner, signed in and not the driver, vouches for it with a reason. Delivered with its photo is delivered: theft from the porch afterwards isn't a failed delivery. |
+
+**Photos of drops** show people's homes: re-encoded without the phone's hidden data, 8 MB and 40 megapixels at most,
+seen only by the team and by someone who proved in the app the house is theirs, never by advertisers, and deleted
+after the company's keep: **Days a photo of a drop is kept** (`delivery.photoKeepDays`, 1 to 365, 90 unless set; a
+person signed in changes it through `PATCH /v1/console/settings`, no console field yet). The deleting job
+(`drop-photos`) is part of the locked *Privacy rules by place*, so it runs whatever the switches say.
 | **Houses block ads** | On | Delivery areas | Any owner signed in | No blocking in the app's *Your house*; and no route buys aimed at fewer than 50 houses (they need it). |
 
 Companies that existed before these switches see them as **New** and off until their own people decide.
@@ -253,7 +279,7 @@ README, "Buying on delivery routes"). Paid up front like every ad here; every si
 | **At print time** | Each bottle of a house's pack carries exactly the pieces reserved for it, each printed once; the rest of the label gets other paid ads, approved fillers, then the house ad. A route ad never prints anywhere else. |
 | **When a house stops** | Pieces that can't go out (the house stopped or was skipped, blocked the business or every ad aimed at it alone, the week went by before they printed, the box came back) come back: a buy aimed at **one house** gets a **refund** of that part to the card, approved by an owner or finance person with the second step (`POST /v1/ops/route-refunds/:id/approve`; the list is `GET /v1/ops/route-refunds`, no console page yet); any other buy gets **credit for other houses**, used first on the advertiser's next route buy (not on a one-house buy, so a refund never exceeds what the card paid). Nobody pays for a house that stopped. Runs daily (job `route-buys`), at once when a house stops or blocks, and on `POST /v1/ops/route-settle`. |
 | **Fewer than 50 houses** | A **small-audience** buy (the company's number, 50 or more: the setting `adRules.smallAudienceHouses` through `PATCH /v1/console/settings`, no console field yet; it can be raised, never lowered below 50): only with the switch below on; only a business the company verified (`POST /v1/advertisers/:id/verify`, an owner or reviewer signed in); no names, street addresses, phone numbers, emails or personal messages in the ad (checked when paying and again when approved); approved by an owner or reviewer signed in, never an API key (the review queue marks it); never a house that blocked ads aimed at it alone or said no to targeted ads. Sensitive kinds of data are never targetable (household data refuses them). |
-| **Proof** | *Where it went*: streets and houses reached (streets with fewer than 5 houses shown together), each drop's time and rough place from the driver's scan (to about 100 m), scans by area, what came back. Never which house or who lives there. |
+| **Proof** | *Where it went*: streets and houses reached (streets with fewer than 5 houses shown together), each drop's time and rough place from the driver's scan (to about 100 m), scans by area, what came back. Never which house or who lives there, and never a photo of a drop. |
 
 The switches (*Console → Features*, category Ads, *Buying on delivery routes*):
 

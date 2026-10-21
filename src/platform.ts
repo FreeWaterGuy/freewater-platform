@@ -35,6 +35,9 @@ export type OrderOutcome =
   | { ok: true; unit: Unit; label: RenderedLabel; attempts: number }
   | { ok: false; unit: Unit; reason: string; attempts: number };
 
+/** A bottle that can't be reprinted (already replaced, or never printed). */
+export class ReprintError extends Error {}
+
 /** An order id already used for a different order (another person, place or kind of bottle): nothing is printed or shown. */
 export class OrderConflictError extends Error {
   status = 409; code = 'order_conflict';
@@ -106,6 +109,8 @@ export class Platform {
     });
     // The auction learns how each ad does: bottles printed, scans and AR launches that loaded.
     this.bus.on('label.printed', (e) => { for (const p of e.payload.placements) if (!p.isHouse) this.auctionStats.add(p.campaignId, 'prints'); });
+    // A bottle voided at the packing check never went out: it isn't one of its ads' bottles (its reprint is).
+    this.bus.on('unit.voided', (e) => { for (const p of this.units.get(e.payload.unitId)?.placements ?? []) if (!p.isHouse) this.auctionStats.add(p.campaignId, 'prints', -1); });
     const engaged = (kind: 'scans' | 'arLaunches') => (e: any) => {
       const loaded = e.payload.experienceLoaded ?? e.payload.loaded;
       const p = loaded && !e.payload.unbilled ? this.units.get(e.payload.unitId)?.placements.find((x) => x.slotIndex === e.payload.slotIndex) : undefined;
@@ -316,9 +321,12 @@ export class Platform {
 
   private fail(unit: Unit, reason: string, orderId?: string) {
     unit.status = 'failed';
-    release(unit.placements, this.campaigns);
-    this.persistPrepaid(unit, 'released');
-    this.persistCampaigns(unit.placements);
+    // A reprint holds nothing of its own: its ads were claimed by the bottle it replaces, which keeps them.
+    if (!unit.replaces) {
+      release(unit.placements, this.campaigns);
+      this.persistPrepaid(unit, 'released');
+      this.persistCampaigns(unit.placements);
+    }
     this.persist.unit(unit);
     this.bus.publish('unit.failed', unit.companyId, { unitId: unit.id, orderId, reason }, unit.id);
   }
@@ -383,6 +391,119 @@ export class Platform {
     this.fail(unit, reason, unit.orderId);
     return true;
   }
+
+  /**
+   * A bottle whose label came out wrong at the packing check (torn, smudged, printed off, no label) is printed again,
+   * exactly: the same ads in the same places, for the same person or house, in the same pack. Bottles aren't lost in
+   * packing; a bad label is replaced. Its ads were claimed (and paid bottles used) by the bottle it replaces, so nothing
+   * is claimed again: an ad paid for N bottles still reaches exactly N. When the new one has printed, in one step
+   * (written together): it's billed, the bad one is voided (its books lines reversed, so it never counts against any
+   * advertiser), its route pieces move to the new one, and the pack holds the new one. A crash in between is finished
+   * at the next start (repairReprints). At most one live reprint per bottle (the database refuses a second).
+   */
+  reprint(oldUnitId: string, reason: string): Promise<OrderOutcome> {
+    const old = need(this.units, oldUnitId, 'unit');
+    const orderId = `reprint:${old.id}`;
+    const key = `${old.companyId}:${orderId}`;
+    const running = this.orders.get(key);
+    if (running) return running;
+    const done = this.units.get(this.orderUnits.get(key) ?? '');
+    if (done && (done.status === 'printed' || done.status === 'dispensed')) {
+      this.finishReprint(done, reason); // already printed: make sure the rest happened too
+      return Promise.resolve({ ok: true, unit: done, label: this.labels.get(done.id)!, attempts: 0 });
+    }
+    if (old.voided) return Promise.reject(new ReprintError(`Bottle ${old.id} was already replaced by ${old.voided.by}.`));
+    if (old.status !== 'dispensed' && old.status !== 'printed') return Promise.reject(new ReprintError(`Bottle ${old.id} isn't printed, so there's nothing to reprint.`));
+    if (done && (done.status === 'filled' || done.status === 'rendered')) this.fail(done, 'A reprint cut off before it printed');
+    const run = this.reprintNow(old, orderId, reason);
+    this.orders.set(key, run);
+    run.finally(() => this.orders.delete(key)).catch(() => {});
+    return run;
+  }
+
+  private async reprintNow(old: Unit, orderId: string, reason: string): Promise<OrderOutcome> {
+    const company = need(this.companies, old.companyId, 'company');
+    const product = need(this.products, old.productId, 'product');
+    const location = need(this.locations, old.locationId, 'location');
+    this.bus.publish('order.created', company.id, { orderId, locationId: location.id, productId: product.id, kind: old.kind, customerId: old.ownerId, packId: old.packId }, orderId);
+    const unit: Unit = {
+      id: newId('u'), companyId: company.id, productId: product.id, locationId: location.id, kind: old.kind, ownerId: old.ownerId,
+      placements: structuredClone(old.placements), layout: [...old.layout], status: 'filled', orderId, packId: old.packId, createdAt: this.bus.now().toISOString(), replaces: old.id,
+      ...(old.consumerId ? { consumerId: old.consumerId } : {}), ...(old.intendedFor ? { intendedFor: old.intendedFor } : {}), ...(old.experienceConfig ? { experienceConfig: old.experienceConfig } : {}),
+    };
+    this.units.set(unit.id, unit);
+    this.orderUnits.set(`${company.id}:${orderId}`, unit.id);
+    this.persist.unit(unit);
+    this.bus.publish('slots.filled', company.id, { unitId: unit.id, layout: unit.layout, placements: unit.placements }, unit.id);
+    const on = (id: string) => !this.featureOn || this.featureOn(company.id, id);
+    const trackSlots = on('ar_tracking') ? this.arTracking?.(unit) ?? [] : [];
+    const label = await this.registry.rendererFor(company).render({ unit, product, company, campaigns: this.campaigns, codes: this.codes, ...(trackSlots.length ? { tracking: true, trackSlots } : {}) });
+    unit.status = 'rendered';
+    this.keepLabel(label);
+    this.persist.label(label, company.id);
+    this.persist.unit(unit);
+    this.bus.publish('label.rendered', company.id, { unitId: unit.id, widthIn: label.widthIn, heightIn: label.heightIn, renderMs: 0 }, unit.id);
+    const printer = this.registry.printerFor(company);
+    let printSvg: string;
+    try { printSvg = await this.forPrint(label.svg); }
+    catch (e: any) { this.fail(unit, `artwork_missing: ${e?.message ?? e}`, orderId); return { ok: false, unit, reason: 'artwork_missing', attempts: 0 }; }
+    for (let attempt = 1; attempt <= this.maxAttempts; attempt++) {
+      const jobId = newId('job');
+      const result = await printer.print({ jobId, idempotencyKey: `${unit.id}:attempt:${attempt}`, unitId: unit.id, locationId: location.id, svg: printSvg, widthIn: label.widthIn, heightIn: label.heightIn });
+      if (result.status === 'printed') {
+        // From here to the end nothing waits: every change below is queued together, in this order, and written
+        // together. The bad bottle is voided first (its money back where it came from), then the reprint is billed,
+        // so an advertiser's prepaid balance never dips below nothing in between.
+        unit.status = 'dispensed';
+        unit.printJob = jobId;
+        this.persist.unit(unit); // first: whatever happens next, a restart finds it printed and finishes the rest
+        this.finishReprint(unit, reason);
+        return { ok: true, unit, label, attempts: attempt };
+      }
+      this.bus.publish('print.failed', company.id, { unitId: unit.id, jobId, reason: result.reason, attempt }, `${unit.id}:${attempt}`);
+      if (result.final) break;
+    }
+    this.fail(unit, 'Printing failed after retrying', orderId);
+    return { ok: false, unit, reason: 'Printing failed after retrying', attempts: this.maxAttempts };
+  }
+
+  /**
+   * The rest of a reprint once the new bottle printed: the bad one voided (its lines reversed in the books), its route
+   * pieces moved to the new one, the pack holding the new one. Each part happens once, however often this runs.
+   */
+  finishReprint(unit: Unit, reason = 'label wrong at the packing check') {
+    const old = unit.replaces ? this.units.get(unit.replaces) : undefined;
+    if (!old || (unit.status !== 'dispensed' && unit.status !== 'printed')) return false;
+    // 1. The bad bottle voided: its books lines reversed. (Each step is keyed, so running this again adds nothing.)
+    if (!old.voided) {
+      old.voided = { by: unit.id, at: this.bus.now().toISOString(), reason: reason.slice(0, 200) };
+      this.persist.unit(old);
+    }
+    this.bus.publish('unit.voided', old.companyId, { unitId: old.id, replacedBy: unit.id, packId: old.packId, reason: old.voided.reason }, `void:${old.id}`);
+    // 2. The reprint billed, once, for the same ads; its claims are the bad bottle's, so nothing is drawn again.
+    this.bus.publish('label.printed', unit.companyId, { unitId: unit.id, jobId: unit.printJob ?? `reprint:${old.id}`, locationId: unit.locationId, placements: unit.placements, kind: unit.kind, customerId: unit.ownerId }, unit.id);
+    this.bus.publish('unit.dispensed', unit.companyId, { unitId: unit.id, locationId: unit.locationId }, unit.id);
+    // 3. Its route pieces on the reprint, and the reprint in the pack.
+    if (old.placements.some((p) => p.routeSpotId && !p.isHouse)) this.persist.routeSpotsMoved?.(old.companyId, old.id, unit.id);
+    this.onReprinted?.(old, unit);
+    return true;
+  }
+  /** Set by the pack service: the new bottle takes the bad one's place in its pack. */
+  onReprinted?: (old: Unit, fresh: Unit) => void;
+
+  /** After a crash: reprints that printed but whose bad bottle wasn't voided (or whose pack still held it) are finished. */
+  repairReprints() {
+    let n = 0;
+    for (const u of this.units.values()) if (u.replaces && (u.status === 'dispensed' || u.status === 'printed')) {
+      const old = this.units.get(u.replaces);
+      if (!old) continue;
+      const billed = this.bus.publishedBefore(u.companyId, 'label.printed', u.id);
+      if (!old.voided || !billed || this.reprintPending?.(old, u)) { this.finishReprint(u); n++; }
+    }
+    return n;
+  }
+  /** Set by the pack service: does a pack still hold this bad bottle instead of its reprint? */
+  reprintPending?: (old: Unit, fresh: Unit) => boolean;
 
   private persistPrepaid(unit: Unit, move: 'printed' | 'released') {
     this.persist.prepaid?.(unit.companyId, unit.placements.filter((p) => p.prepaid && !p.isHouse).map((p) => p.campaignId), move);

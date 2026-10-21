@@ -14,6 +14,7 @@ import { TestPaymentProvider } from '../src/adapters/payments/test';
 import { createApiKey } from '../src/db/store';
 import { personalContent, type RouteQuoteInput } from '../src/modules/ads/routeBuys';
 import { freshDb } from './db-helpers';
+import { doorPhoto } from './door-photo';
 
 let db: SqlClient, app: App, server: FastifyInstance, provider: TestPaymentProvider;
 let now = new Date('2026-11-02T15:00:00Z').getTime(); // a Monday morning in Austin; route-3 drives Tuesdays and Fridays
@@ -79,6 +80,7 @@ async function deliverAll(runs: any[]) {
     expect((await call('POST', `/v1/driver/runs/${encodeURIComponent(r.id)}/start`, driver)).statusCode).toBe(200);
     for (const s of run.loadOrder) await call('POST', `/v1/driver/runs/${encodeURIComponent(r.id)}/load`, driver, { packId: s.packId });
     for (const s of run.stops) {
+      await app.dropPhotos.put({ companyId: 'freewater', packId: s.packId, takenBy: driverId, contentType: 'image/jpeg', bytes: await doorPhoto() }).catch(() => null);
       const d = await call('POST', `/v1/driver/runs/${encodeURIComponent(r.id)}/stops/${s.stop}/deliver`, driver, { scannedPackId: s.packId, lat: s.point.lat + 0.00005, lng: s.point.lng, emptiesCollected: 0 });
       if (d.statusCode !== 200) await call('POST', `/v1/driver/runs/${encodeURIComponent(r.id)}/stops/${s.stop}/fail`, driver, { reason: 'House stopped' });
     }
@@ -506,7 +508,7 @@ describe('a house that stops or blocks: nobody pays for it', () => {
     for (const id of ['prepaid_balances', 'route_buys_add_up', 'route_spots_printed', 'prepaid_bottles']) expect(r[id]?.status, `${id}: ${JSON.stringify(r[id])}`).toBe('ok');
   }, 120_000);
 
-  it('a bottle with a paid piece swapped out at the packing check: the reprint doesn’t charge again, and the piece comes back', async () => {
+  it('a bottle with a paid piece whose label came out wrong at the packing check: the reprint carries the same piece, billed once, nothing to give back', async () => {
     const houses = await housesOf();
     const h = houses[5];
     const c = await newAd(4);
@@ -514,17 +516,24 @@ describe('a house that stops or blocks: nobody pays for it', () => {
     await plan('2026-12-08');
     const [b] = pieces(c, h.id, '2026-12-08');
     expect(b).toBeTruthy();
-    // The packing line finds that bottle missing; it's reprinted.
-    const fresh = await app.packs.replace(b!.pack.id, [b!.unit.id], 'bottle-16oz');
+    // The packing line couldn't read that bottle's label; it's reprinted exactly.
+    const fresh = await app.packs.replace(b!.pack.id, [b!.unit.id]);
     expect(fresh).toHaveLength(1);
-    expect(app.platform.units.get(fresh[0]!)!.placements.some((p) => p.campaignId === c.id)).toBe(false);
+    const reprint = app.platform.units.get(fresh[0]!)!;
+    expect(reprint.placements).toEqual(b!.unit.placements);
+    expect(reprint.placements.some((p) => p.campaignId === c.id)).toBe(true);
     expect(c.prepaid).toMatchObject({ paid: 1, printed: 1 });
-    const out = await app.routeBuys.settle('freewater');
-    expect(out.find((x) => x.campaignId === c.id)).toMatchObject({ kind: 'refund', totalCents: 42 });
     await app.persistence.flush();
-    expect(app.platform.ledger.entries.filter((l) => l.campaignId === c.id && l.debit === 'revenue:print')).toHaveLength(1);
+    // The piece moved to the reprint, still placed: nothing to give back, no refund to approve.
+    expect((await db.query<any>(`select status, unit_id from route_spots where campaign_id = $1`, [c.id])).rows).toEqual([{ status: 'placed', unit_id: reprint.id }]);
+    expect((await app.routeBuys.settle('freewater')).find((x) => x.campaignId === c.id)).toBeUndefined();
+    // Billed once: the bad bottle's line was reversed, the reprint's stands.
+    const lines = app.platform.ledger.entries.filter((l) => l.campaignId === c.id && l.kind === 'print');
+    const net = (u: string) => lines.filter((l) => l.unitId === u).reduce((a, l) => a + (l.credit === 'revenue:print' ? l.amountCents : -l.amountCents), 0);
+    expect(net(b!.unit.id)).toBe(0);
+    expect(net(reprint.id)).toBe(42);
     const r = await recon();
-    for (const id of ['prepaid_balances', 'route_buys_add_up', 'route_spots_printed']) expect(r[id]?.status, `${id}: ${JSON.stringify(r[id])}`).toBe('ok');
+    for (const id of ['prepaid_balances', 'prepaid_bottles', 'route_buys_add_up', 'route_spots_printed']) expect(r[id]?.status, `${id}: ${JSON.stringify(r[id])}`).toBe('ok');
   }, 120_000);
 
   it('pieces whose week went by unprinted (the ad wasn’t approved in time) come back as credit', async () => {

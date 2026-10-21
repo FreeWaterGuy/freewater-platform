@@ -411,7 +411,7 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 88 | `GET /v1/ads/drafts/:id/preview` | campaigns | no | advertiser only | OK |
 | 89 | `POST /v1/ads/drafts/:id/submit` | campaigns | no | advertiser only | OK |
 | 90 | `GET /v1/review/campaigns` | campaigns | no | team only (no advertiser/machine key) | OK |
-| 91 | `POST /v1/review/campaigns/:id` | campaigns | no | team only (no advertiser/machine key) | OK; company team (reviewer role or company key) |
+| 91 | `POST /v1/review/campaigns/:id` | campaigns | no | team only (no advertiser/machine key) | OK; company team (reviewer role or company key). A paid ad: a key (an automated check, an AI) can only flag it, its reject becomes a flag; only a person signed in finally rejects it, with a written reason (065) |
 | 92 | `POST /v1/public/delivery/check` | public | — | — | OK (public by design) |
 | 93 | `GET /v1/me/delivery` | me | yes | — | OK |
 | 94 | `POST /v1/me/delivery` | me | yes | — | OK |
@@ -444,7 +444,7 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 110 | `POST /v1/driver/runs/:id/stops/:stop/deliver` | packs | yes | — | OK |
 | 111 | `POST /v1/driver/runs/:id/stops/:stop/fail` | packs | yes | — | OK |
 | 812 | `POST /v1/driver/runs/:id/stops/:stop/skip-house` | packs | yes | — | OK (the run's own driver; a person reviews the skip) |
-| 112 | `POST /v1/driver/photos` | packs | yes | — | OK |
+| 112 | `POST /v1/driver/photos` | packs | yes | a person; the box must be out on a van (`?packId=`) | OK (065: re-encoded without the phone's hidden data, 8 MB / 40 MP at most, kept apart from uploads and never at a public address; deleted after the company's keep) |
 | 113 | `GET /v1/public/books` | public | — | — | OK (public by design) |
 | 114 | `GET /v1/public/books/:companyId` | public | — | — | OK (public by design) |
 | 115 | `GET /v1/public/books/:companyId/days` | public | — | — | OK (public by design) |
@@ -745,6 +745,14 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 410 | `GET /v1/me/house/ads` | me | yes | only the house this person claimed; *Houses block ads* | OK (business names that came to this house; nothing about other houses) |
 | 411 | `POST /v1/me/house/ad-blocks` | me | yes | only the house this person claimed | OK (from the next box on; what was bought for the house goes back to the advertiser) |
 | 412 | `DELETE /v1/me/house/ad-blocks/:id` | me | yes | only the house this person claimed | OK |
+| 413 | `GET /v1/ops/drop-photos/:id` | [admin, packs] | yes | a person on the team, signed in (no service, advertiser or machine key) | OK (a drop's photo; 404 once deleted after the keep; `private, no-store`) |
+| 414 | `GET /v1/me/drop-photos` | me | yes | only drops at the house this person claimed, from when they claimed it, or their own subscription | OK (never another household's) |
+| 415 | `GET /v1/me/drop-photos/:id` | me | yes | the same rule, checked per photo | OK |
+| 416 | `POST /v1/ops/runs/:id/stops/:stop/deliver-without-photo` | [admin, packs] | yes | an ops person or owner signed in, not the driver who scanned it; a reason | OK (only a box scanned at its door and still on the van) |
+| 417 | `GET /v1/review/campaigns/:id/notes` | campaigns | no | team only | OK |
+| 418 | `POST /v1/review/campaigns/:id/notes` | campaigns | yes | a person on the team, signed in (not a key) | OK (the advertiser sees it word for word) |
+| 419 | `GET /v1/ads/campaigns/:id/notes` | campaigns | no | the ad's own advertiser | OK |
+| 420 | `POST /v1/ads/campaigns/:id/notes` | campaigns | no | the ad's own advertiser; only while it's in review or rejected | OK |
 
 ---
 

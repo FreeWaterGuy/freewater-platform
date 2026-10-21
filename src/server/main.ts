@@ -198,6 +198,8 @@ const jobs: Job[] = [
   } },
   // Once a day, delete data older than each company keeps.
   { name: 'data-purge', everyMs: 24 * 3600_000, timeoutMs: 60 * 60_000, run: saved(() => app!.data.purge()) },
+  // Photos of drops show people's homes: each company's keep (90 days unless set), then the picture is deleted.
+  { name: 'drop-photos', everyMs: 24 * 3600_000, timeoutMs: 30 * 60_000, run: saved(() => app!.dropPhotos.purge()) },
   // Every ten minutes: how full the database and the spool's disk are (alerts at 70% and 85%; see src/runtime/capacity.ts).
   // Each minute: changes piling up while the database refuses them (src/runtime/capacity.ts, checkSpool).
   { name: 'spool', everyMs: 60_000, remember: false, whilePaused: true, timeoutMs: 30_000, run: () => checkSpool({ waiting: app!.persistence.waiting, spoolFile: app!.persistence.spool.file, alert: (k, sev, title, detail) => alerts.alert(k, sev, title, detail), state: capacityState }) },

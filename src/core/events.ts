@@ -21,6 +21,8 @@ export interface EventPayloads {
   'pack.verified': { packId: string; scanned: number };
   'pack.mismatch': { packId: string; missing: string[]; unexpected: string[] };
   'unit.replaced': { packId: string; oldUnitId: string; newUnitId: string };
+  /** A bottle whose label came out wrong, reprinted as `replacedBy` with the same ads: its books lines are reversed. */
+  'unit.voided': { unitId: string; replacedBy: string; packId?: string; reason: string };
   'pack.sealed': { packId: string };
   'pack.loaded': { packId: string; routeId: string; loadPosition: number };
   'pack.delivered': { packId: string; routeId: string; stop: number; emptiesCollected: number; photoProof: boolean };
@@ -120,6 +122,11 @@ export class EventBus {
 
   now(): Date {
     return this.clock();
+  }
+
+  /** Was this action already recorded (here, or before a restart)? */
+  publishedBefore(companyId: string, type: EventType, idempotencyKey: string): boolean {
+    return this.seen.has(`${companyId}:${type}:${idempotencyKey}`);
   }
 
   on<T extends EventType>(type: T, handler: Handler<T>): void {

@@ -2171,6 +2171,78 @@ create table house_ad_blocks (
 create unique index house_ad_blocks_once on house_ad_blocks(house_id, coalesce(advertiser_id, '*')) where removed_at is null;
 `,
   },
+  {
+    id: '065_founder_adjustments',
+    sql: `
+-- 1. Photo proof of each drop (docs/SWITCHES.md, Delivery). A photo of the box at the door, taken by the driver for
+-- one pack. It shows someone's home, so it is kept only as long as the company says (90 days unless set), then its
+-- picture is deleted by the drop-photos job; the row stays (that a photo was taken, when), the picture doesn't.
+-- Re-encoded on the way in, so nothing hidden in the phone's file (where, which phone) is kept.
+create table drop_photos (
+  id text primary key,
+  company_id text not null,
+  pack_id text not null,
+  run_id text,
+  stop integer,
+  house_id text,
+  customer_id text,
+  taken_by text not null,
+  content_type text not null check (content_type = 'image/jpeg'),
+  bytes bytea,
+  blob_key text,
+  size_bytes integer not null check (size_bytes > 0 and size_bytes <= 3145728),
+  sha256 text not null,
+  taken_at timestamptz not null,
+  deleted_at timestamptz,
+  check ((deleted_at is null) = (bytes is not null or blob_key is not null))
+);
+create index drop_photos_pack on drop_photos(company_id, pack_id);
+create index drop_photos_house on drop_photos(house_id) where house_id is not null;
+create index drop_photos_keep on drop_photos(company_id, taken_at) where deleted_at is null;
+-- A picture deleted stays deleted, and a photo never moves to another pack or company.
+create function drop_photos_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then perform fw_refuse('drop_photos', 'rows are kept; only the picture is deleted.'); end if;
+  if old.deleted_at is not null or not fw_only_changed(to_jsonb(old), to_jsonb(new), array['bytes', 'blob_key', 'deleted_at']) or new.deleted_at is null then
+    perform fw_refuse('drop_photos', 'only the picture can be deleted, once.');
+  end if;
+  return new;
+end $$;
+create trigger drop_photos_guard before update or delete on drop_photos for each row execute function drop_photos_guard();
+
+-- 3. A bottle whose label came out wrong at the packing check is reprinted with exactly the same ads; the bad one is
+-- voided (it never counts against an advertiser). A bottle is reprinted at most once (its reprint can be, in turn),
+-- and once voided it stays voided; which bottle a reprint replaces never changes.
+create unique index units_one_reprint on units ((data->>'replaces')) where data->>'replaces' is not null;
+create function units_void_once() returns trigger language plpgsql as $$
+begin
+  if (old.data->'voided') is not null and (new.data->'voided') is distinct from (old.data->'voided') then
+    raise exception 'bottle % was voided and stays voided', old.id using errcode = '23514';
+  end if;
+  if (new.data->>'replaces') is distinct from (old.data->>'replaces') then
+    raise exception 'bottle % can''t change which bottle it replaces', old.id using errcode = '23514';
+  end if;
+  return new;
+end $$;
+create trigger units_void_once before update on units for each row execute function units_void_once();
+
+-- 4. Review of paid ads: an automated check can only flag; the team talks it over with the advertiser in a notes
+-- thread both can read, and only a person signed in finally rejects, with a reason. Only added to.
+create table ad_review_notes (
+  seq bigint generated always as identity,
+  id text primary key,
+  company_id text not null,
+  campaign_id text not null,
+  kind text not null check (kind in ('flag', 'note', 'resubmitted', 'approved', 'rejected')),
+  author_kind text not null check (author_kind in ('team', 'advertiser', 'automated')),
+  author_id text,
+  text text not null check (length(text) between 1 and 2000),
+  at timestamptz not null
+);
+create index ad_review_notes_campaign on ad_review_notes(company_id, campaign_id, seq);
+create trigger ad_review_notes_append_only before update or delete on ad_review_notes for each row execute function forbid_change();
+`,
+  },
 ];
 
 /** Runs every migration not yet run (or, for tests that start from an older schema, those in `list`). */

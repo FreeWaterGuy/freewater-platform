@@ -14,6 +14,7 @@ let server: FastifyInstance;
 let keys: Record<string, string>;
 let now = new Date('2026-11-02T15:00:00Z').getTime(); // a Monday morning in Austin
 const clock = () => new Date(now);
+import { doorPhoto } from './door-photo';
 const call = (method: string, url: string, token?: string, payload?: unknown, headers: Record<string, string> = {}) =>
   server.inject({ method: method as any, url, payload: payload as any, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...headers } });
 async function signIn(to: string) {
@@ -122,10 +123,10 @@ describe('home delivery, from sign-up to the door', () => {
     // The right box, but a block away and not confirmed, is refused too.
     const far = await call('POST', `/v1/driver/runs/${run.id}/stops/1/deliver`, driver, { scannedPackId: s1.packId, lat: s1.point.lat + 0.004, lng: s1.point.lng, emptiesCollected: 0 });
     expect(far.json().metersAway).toBeGreaterThan(300);
-    // At the door, with a photo and empties.
-    const photo = (await call('POST', '/v1/driver/photos', driver, Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 74, 70, 73, 70, 0]), { 'content-type': 'image/jpeg' })).json();
-    const done1 = (await call('POST', `/v1/driver/runs/${run.id}/stops/1/deliver`, driver, { scannedPackId: s1.packId, lat: s1.point.lat, lng: s1.point.lng, photoUrl: photo.url, emptiesCollected: 9 })).json();
-    expect(done1.stops[0]).toMatchObject({ status: 'delivered', atAddressBy: 'gps', emptiesCollected: 9, photoUrl: photo.url });
+    // At the door, with a photo of the box where it was left, and empties.
+    const photo = (await call('POST', `/v1/driver/photos?packId=${s1.packId}`, driver, await doorPhoto(), { 'content-type': 'image/jpeg' })).json();
+    const done1 = (await call('POST', `/v1/driver/runs/${run.id}/stops/1/deliver`, driver, { scannedPackId: s1.packId, lat: s1.point.lat, lng: s1.point.lng, emptiesCollected: 9 })).json();
+    expect(done1.stops[0]).toMatchObject({ status: 'delivered', atAddressBy: 'gps', emptiesCollected: 9, photo: { id: photo.id } });
     expect(done1.nextStop).toBe(2);
     const who = s1.userId === mine.userId ? 'ana@example.com' : 'ben@example.com';
     expect((app.messenger as TestOutbox).lastTo(who)!.text).toMatch(/was delivered, and we picked up 9 empties/);

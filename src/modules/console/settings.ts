@@ -23,10 +23,10 @@ export const fontChoices: { id: string; label: string; value: string }[] = [
 export const adCategories = ['food', 'drink', 'coffee', 'fitness', 'health', 'news', 'retail', 'local-services', 'real-estate', 'auto', 'finance', 'entertainment', 'events', 'travel', 'tech', 'education', 'nonprofit', 'politics', 'alcohol', 'tobacco', 'cannabis', 'gambling', 'weapons', 'dating'];
 
 /** The parts of the settings a PATCH may send. Anything else is refused. */
-export const editableKeys = ['name', 'receiptBaseUrl', 'scanBaseUrl', 'brand', 'productFacts', 'giving', 'openBooks', 'unitCosts', 'consumerPricing', 'timezone', 'consumer', 'machines', 'qr', 'ar', 'standardProductId', 'adRules', 'prices', 'modules', 'lottery', 'data', 'transparency', 'agents', 'ratchet', 'security', 'research', 'wallet', 'offers', 'games', 'minimumAge', 'chain', 'launch', 'ai', 'adBilling', 'news'] as const;
+export const editableKeys = ['name', 'receiptBaseUrl', 'scanBaseUrl', 'brand', 'productFacts', 'giving', 'openBooks', 'unitCosts', 'consumerPricing', 'timezone', 'consumer', 'machines', 'qr', 'ar', 'standardProductId', 'adRules', 'prices', 'modules', 'lottery', 'data', 'transparency', 'agents', 'ratchet', 'security', 'research', 'wallet', 'offers', 'games', 'minimumAge', 'chain', 'launch', 'ai', 'adBilling', 'news', 'delivery'] as const;
 export type EditableKey = (typeof editableKeys)[number];
 /** Settings only a person signed in may change or put back: money, the chain, and every one-way or money-adjacent promise. */
-export const personOnlyKeys: readonly EditableKey[] = ['wallet', 'offers', 'chain', 'ratchet', 'agents', 'minimumAge', 'giving', 'lottery', 'ai', 'data', 'launch', 'security', 'adBilling', 'news'];
+export const personOnlyKeys: readonly EditableKey[] = ['wallet', 'offers', 'chain', 'ratchet', 'agents', 'minimumAge', 'giving', 'lottery', 'ai', 'data', 'launch', 'security', 'adBilling', 'news', 'delivery'];
 
 /** The highest a machine's print limits may be set: a bottle takes several seconds, so more is a leaked key, not a busy machine. */
 export const PRINT_LIMITS = { perMinute: 20, perDay: 20_000 };
@@ -127,6 +127,9 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
   if (!isInt(p.customUnit, 0, 10_000) || !isInt(p.perBoxFace, 0, 5000)) return 'The custom bottle price must be $0 to $100, and a box side $0 to $50.';
   const billing = checkAdBilling(c.adBilling);
   if (billing) return `How advertisers pay: ${billing}`;
+  // Photos of drops show people's homes: kept 1 to 365 days (90 unless set), then deleted.
+  const dv = c.delivery as Record<string, unknown> | undefined;
+  if (dv !== undefined && (typeof dv !== 'object' || dv === null || Array.isArray(dv) || Object.keys(dv).some((k) => k !== 'photoKeepDays') || (dv.photoKeepDays !== undefined && !isInt(dv.photoKeepDays, 1, 365)))) return 'Photos of drops are kept 1 to 365 days.';
 
   const pol = checkPolicy(c.data);
   if (pol) return `Data: ${pol}`;
@@ -251,7 +254,7 @@ export function applyChange(cur: CompanyConfig, change: Partial<Record<EditableK
 }
 
 const labels: Record<string, string> = {
-  news: 'News on unsold spots',
+  news: 'News on unsold spots', 'delivery.photoKeepDays': 'Days a photo of a drop is kept',
   name: 'Company name', receiptBaseUrl: 'QR web address', 'brand.logoTop': 'Logo top line', 'brand.logoBottom': 'Logo bottom line', 'brand.tagline': 'Tagline',
   'brand.panelColor': 'Panel color', 'brand.accentColor': 'Accent color', 'brand.textColor': 'Text color', 'brand.fontFamily': 'Lettering', productFacts: 'Product facts',
   'giving.mode': 'How you give', 'giving.centsPerUnit': 'Giving per bottle', 'giving.percentOfRevenue': 'Share of ad money given', 'giving.percentOfExtra': 'Share of every other dollar given', 'giving.percentOfProfit': 'Share of the upside’s profit given', 'giving.extraAboveCents': 'Extra giving starts above', 'giving.defaultCharity': 'Charity', 'giving.charitySplit': 'Giving split between charities',
@@ -267,7 +270,7 @@ const labels: Record<string, string> = {
   adBilling: 'How advertisers pay', 'adBilling.pricingMode': 'Pricing (flat or auction)', 'adBilling.requirePrepay': 'Advertisers pay up front', 'adBilling.fees': 'Fees on top of bottles (scan, AR, box side, commission)', 'adBilling.changeFeeCents': 'Fee for changing an ad', 'adBilling.extras': 'Costly extras and their markup',
   'lottery.enabled': 'Prize game', 'lottery.oddsPercent': 'Chance of winning', 'lottery.chancesPerDay': 'Chances per person a day', 'lottery.winsPerDay': 'Prizes per person a day', 'lottery.watchSeconds': 'Watching before the ball', 'lottery.ballMs': 'Time the ball is on screen', 'lottery.prizes': 'Prizes', 'lottery.minAge': 'Youngest age to play', 'lottery.rulesUrl': 'Official rules link', 'lottery.rulesText': 'Rules note',
 };
-const deep = new Set(['brand', 'giving', 'consumer', 'machines', 'qr', 'ar', 'adRules', 'prices', 'modules', 'lottery', 'transparency', 'agents', 'security', 'adBilling']);
+const deep = new Set(['brand', 'giving', 'consumer', 'machines', 'qr', 'ar', 'adRules', 'prices', 'modules', 'lottery', 'transparency', 'agents', 'security', 'adBilling', 'delivery']);
 const show = (v: unknown) => (v === undefined ? 'none' : typeof v === 'string' ? (v.length > 30 ? `${v.slice(0, 28)}…` : v || 'blank') : typeof v === 'boolean' ? (v ? 'on' : 'off') : Array.isArray(v) ? (v.length ? v.join(', ').slice(0, 40) : 'none') : typeof v === 'object' && v ? 'changed' : String(v));
 
 /** What changed, as a short list a person can read in the history. */

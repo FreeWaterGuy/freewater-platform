@@ -89,6 +89,7 @@ Keep days are the US preset; EU/UK/Brazil and unknown places get the shorter str
 | `area_attributes` | None (neighbourhood or census-block statistics; Austin rows are SAMPLE, labelled) | Choosing ads for an area | Until replaced | Team | Not personal |
 | `household_imports` | Staff name who imported | Which data company, what date, how much was refused | Until deleted by source | Team | Not consumer data |
 | `household_attributes` | **Street address** of a house (often of people who never signed up) + attributes from a closed list (size, income band, owner/renter, dwelling, years, interests), each with source, date, bought/first-party | Choosing ads for that house only; **never sold or passed on**; never shown to advertisers per house | **395 d after import** (`purge`); deleted at once by source or import, by a house's opt-out, or by a resident's erase | Team (`GET /v1/households/audience`, no-store) | A resident's download lists what we hold about their delivery address; erase deletes it and opts the house out (tested) |
+| `drop_photos` (065) | A **photo of the box at someone's door** (their home, maybe a person or a car), the driver who took it, the pack, run and house | Proof that a drop happened (the founder: delivered with its photo is delivered) | **The company's keep, 90 days unless set (1–365)**: then the picture is deleted by the `drop-photos` job (the row with its time stays); a deleted picture can't be put back (database rule). Re-encoded on the way in: no location, camera or owner from the phone's file | Team only (`GET /v1/ops/drop-photos/:id`, `no-store`); a resident who proved the house is theirs, for drops from two weeks before that on (`GET /v1/me/drop-photos`); **never advertisers**; never at a public address (older ones in `assets` refused at `/assets`, and deleted on the same keep) | Not yet in a resident's download (L-26); erase: a person's erase leaves drop photos (the company's records) until the keep ends |
 | `household_optouts` | A per-company **unsalted SHA-256 of the normalised address** (a pseudonym: addresses are guessable, so this is still personal data) | Keeping a house that said no out of every later import | Kept (it is the record of the "no") | No one (no route shows it) | Not deletable by the house itself; see L-21 |
 
 #### Household data: the formats (for the data company the founder picks)
@@ -295,7 +296,9 @@ Status: **Code** = done and tested; **Partly** = done with a gap noted; **Lawyer
 
 - **L-16** Austin rules on leaving items at doors: does a bottle with ads left at a house that didn't sign up count
   as a handbill or unsolicited advertising under Austin city code (no-solicitation signs, litter, door-hanger
-  rules)? Must we honour "no soliciting" signs, and how would drivers know?
+  rules)? Must we honour "no soliciting" signs, and how would drivers know? **The founder decided (2026-10-21): signs are
+  ignored; anyone who doesn't want the water opts out in the app and the house is skipped; drivers skip only for access
+  or safety problems.** A lawyer should still confirm the city code allows leaving it at a house with such a sign.
 - **L-17** Texas Data Privacy and Security Act: is choosing ads for a house from bought data "targeted advertising"
   or "profiling" for the people living there; is our address-only opt-out (no account, no verification) a valid
   method, and must the bottle itself carry it; do we qualify for the small-business exemption (and note that the
@@ -327,6 +330,9 @@ Status: **Code** = done and tested; **Partly** = done with a gap noted; **Lawyer
   on small ones, personal information about a household?
 - **L-25** Credit instead of a refund when a house stops (buys on more than one house): a stored-value or
   unclaimed-property question if credit is never used, and whether advertisers must be able to ask for cash instead.
+- **L-26** Photos of drops (065): a photo of a house's door (sometimes a person, a car plate, the inside through an open
+  door), kept 90 days. Is the keep right; must the photo be in a resident's download; should drivers be told to frame
+  only the box; do we need a notice on the box or in the app that a photo is taken? A privacy lawyer should confirm.
 
 ## 6. What this review could not check
 

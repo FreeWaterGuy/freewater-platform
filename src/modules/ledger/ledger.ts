@@ -87,6 +87,7 @@ export class Ledger {
     this.onCeiling = hooks.onCeiling ?? (() => {});
     this.premium = hooks.engagementPremium ?? (() => 0);
     bus.on('label.printed', (e) => this.onPrinted(e));
+    bus.on('unit.voided', (e) => this.onVoided(e));
     bus.on('unit.scanned', (e) => this.onEngagement(e, 'scan'));
     bus.on('ar.launched', (e) => this.onEngagement(e, 'ar'));
     bus.on('purchase.completed', (e) => this.onPurchase(e, false));
@@ -206,6 +207,34 @@ export class Ledger {
     if (g.mode === 'percent_of_revenue') donation = Math.round((revenue * (g.percentOfRevenue ?? 0)) / 100);
     this.give(e, company, { unitId }, locationId, donation, (name) => memo.replace(charity, name));
     this.fundAgents(e, company, Math.max(0, revenue - extraAboveCents(g)), { unitId }, 'print money above the starting price');
+  }
+
+  /**
+   * A bottle whose label came out wrong at the packing check, reprinted with the same ads: whatever its printing put in
+   * the books (the ads' print money, the gift, the AI agents' share, a custom design) is taken back with new lines, so
+   * it nets to nothing; its reprint was billed instead. Netted per kind and pair of accounts, so a line already given
+   * back (a route piece credited) isn't given back twice. It never counts toward an ad's printed bottles again.
+   */
+  private onVoided(e: PlatformEvent<'unit.voided'>) {
+    const { unitId, replacedBy, reason } = e.payload;
+    const net = new Map<string, { kind: LedgerEntry['kind']; campaignId?: string; from: string; to: string; cents: number }>();
+    for (const l of this.byUnit.get(unitId) ?? []) {
+      if (l.eventId === e.id || !['print', 'custom', 'donation', 'ai_fund'].includes(l.kind)) continue;
+      const fwd = l.debit < l.credit, from = fwd ? l.debit : l.credit, to = fwd ? l.credit : l.debit;
+      const k = `${l.kind}|${l.campaignId ?? ''}|${from}|${to}`;
+      const x = net.get(k) ?? { kind: l.kind, ...(l.campaignId ? { campaignId: l.campaignId } : {}), from, to, cents: 0 };
+      x.cents += fwd ? l.amountCents : -l.amountCents;
+      net.set(k, x);
+    }
+    for (const x of net.values()) {
+      if (!x.cents) continue;
+      this.add(e, { unitId, ...(x.campaignId ? { campaignId: x.campaignId } : {}), debit: x.cents > 0 ? x.to : x.from, credit: x.cents > 0 ? x.from : x.to, amountCents: Math.abs(x.cents), kind: x.kind, memo: `Voided at the packing check (${reason}): reprinted as ${replacedBy} with the same ads, billed instead` });
+    }
+    const printed = this.printedUnits.get(unitId);
+    if (printed) {
+      for (const p of printed.placements) if (!p.isHouse) this.printedPerCampaign.set(p.campaignId, Math.max(0, (this.printedPerCampaign.get(p.campaignId) ?? 1) - 1));
+      this.printedUnits.delete(unitId);
+    }
   }
 
   /**

@@ -239,6 +239,8 @@ export interface CompanyConfig {
    * outlets people can pick from.
    */
   news?: { on: boolean; sources?: { id: string; name: string; url: string }[] };
+  /** Home delivery: how many days a photo of a drop is kept before it's deleted (1 to 365; 90 unless set). */
+  delivery?: { photoKeepDays?: number };
   /** Which registered implementation each module slot uses. Swapping one never touches the others. */
   modules: {
     ads: string;
@@ -345,7 +347,12 @@ export interface Campaign {
   avoidNews?: boolean;
   active: boolean;
   /** Content review. A campaign only runs once the company has approved it. */
-  review?: { status: 'submitted' | 'approved' | 'rejected'; note?: string; at: string };
+  /**
+   * Content review. 'flagged': an automated check (or a person) raised a concern about a paid ad; the team talks it over
+   * with the advertiser (notes both see) and only a person signed in finally rejects it, with a reason, which is when a
+   * refund is offered. Nothing prints unless 'approved'.
+   */
+  review?: { status: 'submitted' | 'approved' | 'rejected' | 'flagged'; note?: string; at: string; by?: string; flaggedAt?: string; resubmittedAt?: string; refundOffered?: boolean };
   /** Paused because the advertiser owes more than its credit allows (docs/SWITCHES.md, "Credit for advertisers"). */
   creditHold?: { at: string; owedCents: number; limitCents: number | null; reason: string };
   /** A short name the advertiser knows it by. */
@@ -492,6 +499,12 @@ export interface Unit {
   intendedFor?: string;
   /** For custom bottles: what scanning it opens (the sender's message, video, photos). */
   experienceConfig?: Record<string, unknown>;
+  /** A reprint: the bottle whose bad label this one replaces, with exactly the same ads (Platform.reprint). */
+  replaces?: string;
+  /** A reprint: the printer job that printed it (so a repair after a crash books it under the same job). */
+  printJob?: string;
+  /** Its label came out wrong at the packing check and it was reprinted: it never went out and counts against no one. */
+  voided?: { by: string; at: string; reason: string };
 }
 
 /**

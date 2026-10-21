@@ -15,6 +15,7 @@ import { posterCreative } from '../src/modules/creative/poster';
 import { TestPaymentProvider } from '../src/adapters/payments/test';
 import { seededRandom } from '../src/core/ids';
 import type { RouteQuoteInput } from '../src/modules/ads/routeBuys';
+import { doorPhoto } from './door-photo';
 import { engines, freshDb } from './db-helpers';
 
 const CSV = ['address,lat,lng', ...Array.from({ length: 8 }, (_, i) => `"${301 + 2 * i} Ctrlpine St, Austin, TX",${(30.2456 + i * 0.0002).toFixed(4)},-97.7400`)].join('\n');
@@ -43,7 +44,7 @@ async function world(engine: string) {
   expect((await call('PATCH', `/v1/ops/areas/${area.id}`, ops, { active: true, packSize: 12 })).statusCode).toBe(200);
   const houses = (await db.query<any>(`select id, address from houses where area_id = $1 order by number`, [area.id])).rows as { id: string; address: string }[];
   // Sign-ins expire as the clock moves on: a fresh one each time.
-  return { db, app, server, call, signIn, get ops() { return app.accounts.createSession(opsUser.id); }, get driver() { return app.accounts.createSession(driverUser.id); }, ownerId: owner.id, area, houses, at: (iso: string) => { now = new Date(iso).getTime(); } };
+  return { db, app, server, call, signIn, get ops() { return app.accounts.createSession(opsUser.id); }, get driver() { return app.accounts.createSession(driverUser.id); }, driverId: driverUser.id, ownerId: owner.id, area, houses, at: (iso: string) => { now = new Date(iso).getTime(); } };
 }
 type World = Awaited<ReturnType<typeof world>>;
 
@@ -179,6 +180,7 @@ for (const engine of engines) {
             for (const s of v.loadOrder) await w.call('POST', `/v1/driver/runs/${encodeURIComponent(run.id)}/load`, driver, { packId: s.packId });
             for (const s of v.stops) {
               const back = random() < 0.15;
+              if (!back) await w.app.dropPhotos.put({ companyId: 'freewater', packId: s.packId, takenBy: w.driverId, contentType: 'image/jpeg', bytes: await doorPhoto() });
               const d = back ? null : await w.call('POST', `/v1/driver/runs/${encodeURIComponent(run.id)}/stops/${s.stop}/deliver`, driver, { scannedPackId: s.packId, lat: s.point.lat + 0.00005, lng: s.point.lng, emptiesCollected: 0 });
               if (!d || d.statusCode !== 200) await w.call('POST', `/v1/driver/runs/${encodeURIComponent(run.id)}/stops/${s.stop}/fail`, driver, { reason: 'Gate locked' });
             }

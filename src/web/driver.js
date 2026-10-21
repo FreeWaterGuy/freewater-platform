@@ -209,9 +209,12 @@
   }
   function skipSheet(s) {
     const note = h('input', { class: 'input', id: 'skip-note', maxlength: '200', placeholder: 'What you saw (optional)' });
-    const reasons = [['no_soliciting', 'No soliciting sign'], ['asked_not_to', 'They asked us not to'], ['not_a_home', 'Not a home (empty, business, building site)'], ['unsafe', 'Not safe to leave it'], ['dog', 'Dog in the way'], ['other', 'Something else']];
-    screen(h('div', { class: 'dhead' }, h('div', { text: `Stop ${s.stop} · ${s.address.split(',')[0]}` })), h('h1', { class: 'dtitle', text: 'Skip this house?' }),
-      h('p', { class: 'dsub', text: 'Its box comes back with you. The house is left out of the next deliveries until the office has looked at why.' }),
+    // Only real access or safety problems. A sign on the door, or someone saying they don't want it, isn't a reason:
+    // people stop deliveries themselves in the app (the code on the side of the box takes them there).
+    const reasons = [['locked_gate', 'Locked gate'], ['dangerous_animal', 'Dangerous animal'], ['unsafe', 'Not safe'], ['no_safe_place', 'No safe place to leave it'], ['not_a_home', 'Not a home (empty, business, building site)']];
+    screen(h('div', { class: 'dhead' }, h('div', { text: `Stop ${s.stop} · ${s.address.split(',')[0]}` })), h('h1', { class: 'dtitle', text: 'Can’t leave it here?' }),
+      h('p', { class: 'dsub', text: 'Only for a real access or safety problem. Its box comes back with you, and the house is left out of the next deliveries until the office has looked at why.' }),
+      h('p', { class: 'small muted', text: 'Signs on the door don’t count. If someone tells you they don’t want it, leave the box and tell them they can stop deliveries in the app (scan the code on the side of the box).' }),
       h('label', { for: 'skip-note', style: 'font-weight:700', text: 'Note' }), note,
       h('div', { class: 'reasons' }, reasons.map(([r, label]) => h('button', { type: 'button', onclick: () => skipHouse(s, r, note.value.trim()) }, label))),
       dock(h('button', { class: 'btn secondary', type: 'button', onclick: nextStop }, 'Back to this stop')));
@@ -239,7 +242,8 @@
         h('p', { class: 'small muted', text: 'This stop can’t be marked delivered until the right box is scanned here. Every box’s bottles were already checked at the micro-factory.' }),
         dock(h('button', { class: 'btn', type: 'button', onclick: () => atDoor(s) }, 'Scan the right box'), h('button', { class: 'btn secondary', type: 'button', onclick: () => problem(s) }, 'Box missing or damaged')));
     }
-    let point = null, gpsOk = false, empties = 0, photoUrl = null, confirmed = false;
+    let point = null, gpsOk = false, empties = 0, photoOk = false, confirmed = false;
+    const needPhoto = on('drop_photo_proof');
     const whereBox = h('div', {}, h('p', { text: `#${s.boxNumber} belongs to this house. Checking your location…` }));
     here().then((p) => {
       point = p;
@@ -251,11 +255,13 @@
             h('label', { class: 'check', style: 'background:#fff;color:var(--ink);margin-top:10px;text-align:left' }, h('input', { type: 'checkbox', onchange: (e) => { confirmed = e.target.checked; } }), h('span', { text: `I’m at ${s.address.split(',')[0]}` }))));
     });
     const out = h('output', { text: '0' });
-    const photoBtn = h('button', { class: 'photo', type: 'button', onclick: () => cam.click() }, 'Tap to take a photo of the box at the door');
-    const cam = h('input', { type: 'file', accept: 'image/*', capture: 'environment', hidden: true, onchange: async () => {
+    const photoBtn = h('button', { class: 'photo', type: 'button', onclick: () => cam.click() }, needPhoto ? 'Take a photo of the box where you left it (needed)' : 'Tap to take a photo of the box at the door');
+    // The photo proves the drop: only the office and the people who live there see it, and it's deleted after a while.
+    const cam = h('input', { type: 'file', accept: 'image/jpeg,image/png,image/webp', capture: 'environment', hidden: true, onchange: async () => {
       const f = cam.files[0]; if (!f) return;
+      photoOk = false;
       photoBtn.replaceChildren(h('img', { src: URL.createObjectURL(f), alt: 'Photo of the box at the door' }));
-      try { photoUrl = (await api('POST', '/v1/driver/photos', null, f)).url; } catch (x) { toast(x.message); }
+      try { await api('POST', `/v1/driver/photos?packId=${encodeURIComponent(packId)}`, null, f); photoOk = true; } catch (x) { toast(x.message); photoBtn.replaceChildren(document.createTextNode('That photo didn’t send. Tap to take it again.')); }
     } });
     screen(h('div', { class: 'dhead' }, h('div', { text: `Stop ${s.stop} · ${s.address.split(',')[0]}` })),
       h('div', { class: 'verdict ok' }, h('div', { class: 'mark', text: '✓' }), h('h2', { text: 'Right box' }), whereBox),
@@ -264,8 +270,9 @@
         h('div', { class: 'ctl' }, h('button', { type: 'button', 'aria-label': 'One fewer', onclick: () => { empties = Math.max(0, empties - 1); out.textContent = String(empties); } }, '−'), out, h('button', { type: 'button', 'aria-label': 'One more', onclick: () => { empties += 1; out.textContent = String(empties); } }, '+'))),
       dock(h('button', { class: 'btn', type: 'button', onclick: async (e) => {
         if (!confirmed) return toast(point || gpsOk ? 'Confirm you’re at the door first.' : 'Still checking your location. Or tick “I’m at” to confirm.');
+        if (needPhoto && !photoOk) return toast('Take a photo of the box where you left it first. It isn’t delivered without one.');
         e.currentTarget.disabled = true;
-        try { S.run = await api('POST', `/v1/driver/runs/${r.id}/stops/${s.stop}/deliver`, { scannedPackId: packId, ...(point ? { lat: point.lat, lng: point.lng } : {}), confirmedAtDoor: confirmed, ...(photoUrl ? { photoUrl } : {}), emptiesCollected: empties }); navigator.vibrate?.(40); toast(`Stop ${s.stop} delivered`); nextStop(); }
+        try { S.run = await api('POST', `/v1/driver/runs/${r.id}/stops/${s.stop}/deliver`, { scannedPackId: packId, ...(point ? { lat: point.lat, lng: point.lng } : {}), confirmedAtDoor: confirmed, emptiesCollected: empties }); navigator.vibrate?.(40); toast(`Stop ${s.stop} delivered`); nextStop(); }
         catch (x) { toast(x.message); e.currentTarget.disabled = false; }
       } }, 'Done · next house'), h('button', { class: 'link-btn', type: 'button', onclick: () => problem(s) }, 'Problem at this stop')));
   }
@@ -273,7 +280,7 @@
     const go = async (reason) => { try { S.run = await api('POST', `/v1/driver/runs/${encodeURIComponent(S.run.id)}/stops/${s.stop}/fail`, { reason }); toast(s.houseId ? 'Noted. The box comes back.' : 'Noted. The customer will be told.'); nextStop(); } catch (x) { toast(x.message); } };
     screen(h('div', { class: 'dhead' }, h('div', { text: `Stop ${s.stop} · ${s.address.split(',')[0]}` })), h('h1', { class: 'dtitle', text: 'What happened?' }), h('p', { class: 'dsub', text: 'The box goes back to the micro-factory and the customer gets a message.' }),
       h('div', { class: 'reasons' }, ['No safe place to leave it', 'Gate or door locked', 'Box missing from the van', 'Box damaged', 'Can’t find the address'].map((r) => h('button', { type: 'button', onclick: () => go(r) }, r))),
-      s.houseId && on('driver_house_skip') ? h('button', { class: 'link-btn', type: 'button', onclick: () => skipSheet(s) }, 'No soliciting sign, or they don’t want it? Skip this house') : null,
+      s.houseId && on('driver_house_skip') ? h('button', { class: 'link-btn', type: 'button', onclick: () => skipSheet(s) }, 'Can’t get to the door safely? Skip this house') : null,
       dock(h('button', { class: 'btn secondary', type: 'button', onclick: nextStop }, 'Back to this stop')));
   }
   function finished() {

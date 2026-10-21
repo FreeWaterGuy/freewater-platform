@@ -8,7 +8,7 @@ import type { AccountsService } from '../accounts/service';
 import { PackStateError, type PackService } from '../packs/service';
 import { boxNumber, stopCode } from '../packs/boxRenderer';
 import { streetOrder, type RoutePlanner } from './planner';
-import { packsFor, SKIP_REASONS, type HouseService, type SkipReason } from './houses';
+import { packsFor, SKIP_LABELS, SKIP_REASONS, type HouseService, type SkipReason } from './houses';
 
 import { DeliveryError } from './errors';
 export { DeliveryError };
@@ -29,9 +29,17 @@ export interface RunStop {
   /** A house in a delivery area: the house, its area, and which of its boxes this is when it gets more than one. */
   houseId?: string; areaId?: string; pack?: { n: number; of: number };
   packId: string | null; address: string; point: GeoPoint; packSize: number; notes: string | null;
-  status: 'planned' | 'delivered' | 'not_delivered'; loaded?: boolean; checkedByHand?: { by: string; at: string; reason?: string }; at?: string; emptiesCollected?: number; photoUrl?: string; atAddressBy?: 'gps' | 'driver'; reason?: string;
+  status: 'planned' | 'delivered' | 'not_delivered'; loaded?: boolean; checkedByHand?: { by: string; at: string; reason?: string }; at?: string; emptiesCollected?: number; atAddressBy?: 'gps' | 'driver'; reason?: string;
   /** Proof of the drop: where the driver's phone was when the box was scanned at the door, and how far from the house. */
   dropPoint?: GeoPoint; metersFromHouse?: number;
+  /** The photo of the box at the door (src/modules/delivery/photos.ts): only the team and the house's resident see it. */
+  photo?: { id: string; at: string };
+  /** The right box was scanned at the door but no photo came with it: not delivered until there's one, or a person on the team vouches for it. */
+  doorScan?: { at: string; by: string; atAddressBy: 'gps' | 'driver'; dropPoint?: GeoPoint; metersFromHouse?: number; emptiesCollected: number };
+  /** Delivered without a photo because a person on the team said so, with why. */
+  photoWaived?: { by: string; at: string; reason: string };
+  /** Before 065: the address of a photo kept with the uploads. */
+  photoUrl?: string;
   /** The driver passed the house by, and why (it waits for a person's review). */
   skipped?: SkipReason;
 }
@@ -60,6 +68,8 @@ export class DeliveryService {
   alert?: (key: string, title: string, detail: string) => void;
   /** Delivery areas and their houses. Set by the app. */
   houses?: HouseService;
+  /** Photos of each drop. Set by the app. */
+  photos?: import('./photos').DropPhotoService;
   /** Whether a switch on the company's Features page is on (src/runtime/registry.ts). Set by the app; unset: all on. */
   featureOn?: (companyId: string, id: string) => boolean;
   private on(companyId: string, id: string) { return !this.featureOn || this.featureOn(companyId, id); }
@@ -502,11 +512,19 @@ export class DeliveryService {
     return { ok: true as const, run: await this.view(run) };
   }
 
-  /** At the door. Delivered only when the box is this stop's box and the driver is at this address. */
-  deliver(input: { runId: string; companyId: string; driverId: string; stop: number; scannedPackId: string; point?: GeoPoint; confirmedAtDoor?: boolean; photoUrl?: string; emptiesCollected: number }) {
+  /**
+   * At the door. Delivered only when the box is this stop's box, the driver is at this address and (with *Photo proof
+   * of each drop* on) the driver took a photo of the box where it was left. The right box scanned without a photo is
+   * remembered but not delivered: the driver takes the photo and scans again, or a person on the team vouches for it
+   * (deliverWithoutPhoto). Once delivered with its photo it's delivered; what happens to it on the porch afterwards
+   * isn't a failed delivery.
+   */
+  deliver(input: { runId: string; companyId: string; driverId: string; stop: number; scannedPackId: string; point?: GeoPoint; confirmedAtDoor?: boolean; emptiesCollected: number }) {
     return this.serial(`run:${input.runId}`, () => this.deliverNow(input));
   }
-  private async deliverNow(input: { runId: string; companyId: string; driverId: string; stop: number; scannedPackId: string; point?: GeoPoint; confirmedAtDoor?: boolean; photoUrl?: string; emptiesCollected: number }) {
+  /** Is a photo needed for each drop of this company? */
+  photoNeeded(companyId: string) { return !!this.photos && this.on(companyId, 'drop_photo_proof'); }
+  private async deliverNow(input: { runId: string; companyId: string; driverId: string; stop: number; scannedPackId: string; point?: GeoPoint; confirmedAtDoor?: boolean; emptiesCollected: number }) {
     const run = await this.getRun(input.runId, input.companyId);
     if (run.status !== 'out' || run.driverId !== input.driverId) throw new DeliveryError(409, 'not_your_route', 'Start this route first.');
     const s = run.stops.find((x) => x.stop === input.stop);
@@ -516,22 +534,65 @@ export class DeliveryService {
     // A house that stopped deliveries after tonight's plan (or was marked to skip) gets nothing: the box comes back.
     const houseStatus = s.houseId && this.houses ? (await this.houses.statuses([s.houseId])).get(s.houseId) : undefined;
     if (houseStatus && houseStatus !== 'active') {
-      return { ok: false as const, reason: houseStatus === 'opted_out' ? 'This house stopped deliveries in the app after tonight’s plan. Don’t leave the box: skip this house.' : 'This house is marked to skip. Don’t leave the box: skip this house.', grab: null, metersAway: meters };
+      return { ok: false as const, code: 'house_stopped', reason: houseStatus === 'opted_out' ? 'This house stopped deliveries in the app after tonight’s plan. Don’t leave the box: skip this house.' : 'This house is marked to skip. Don’t leave the box: skip this house.', grab: null, metersAway: meters };
     }
     const byGps = meters !== null && meters <= 100;
-    const r = this.packs.deliver({ routeId: run.routeId, runId: run.id, stop: s.stop, scannedPackId: input.scannedPackId, atAddress: byGps || !!input.confirmedAtDoor, photoProof: !!input.photoUrl, emptiesCollected: input.emptiesCollected });
+    const door = { routeId: run.routeId, runId: run.id, stop: s.stop, scannedPackId: input.scannedPackId, atAddress: byGps || !!input.confirmedAtDoor, emptiesCollected: input.emptiesCollected };
+    const photo = this.photos && s.packId ? await this.photos.proofFor(input.companyId, s.packId, input.driverId) : null;
+    if (!photo && this.photoNeeded(input.companyId)) {
+      // The right box at the right door, but no photo yet: remembered (so a person can vouch for it), not delivered.
+      const check = this.packs.deliver({ ...door, photoProof: false, checkOnly: true });
+      if (!check.ok) return { ok: false as const, code: 'wrong_box_or_place', reason: check.reason, grab: check.rightPack ? stopCode(check.rightPack.routeId, check.rightPack.stop) : null, metersAway: meters };
+      s.doorScan = { at: this.platform.bus.now().toISOString(), by: input.driverId, atAddressBy: byGps ? 'gps' : 'driver', emptiesCollected: input.emptiesCollected, ...(input.point ? { dropPoint: input.point, metersFromHouse: meters! } : {}) };
+      await this.saveRun(run);
+      return { ok: false as const, code: 'photo_required', reason: 'Take a photo of the box where you left it, then scan it again. It isn’t delivered until there’s a photo.', grab: null, metersAway: meters };
+    }
+    const r = this.packs.deliver({ ...door, photoProof: !!photo });
     if (!r.ok) {
       const right = r.rightPack;
-      return { ok: false as const, reason: r.reason, grab: right ? stopCode(right.routeId, right.stop) : null, metersAway: meters };
+      return { ok: false as const, code: 'wrong_box_or_place', reason: r.reason, grab: right ? stopCode(right.routeId, right.stop) : null, metersAway: meters };
     }
-    Object.assign(s, { status: 'delivered', at: this.platform.bus.now().toISOString(), emptiesCollected: input.emptiesCollected, atAddressBy: byGps ? 'gps' : 'driver', ...(input.photoUrl ? { photoUrl: input.photoUrl } : {}), ...(input.point ? { dropPoint: input.point, metersFromHouse: meters! } : {}) });
+    delete s.doorScan;
+    Object.assign(s, { status: 'delivered', at: this.platform.bus.now().toISOString(), emptiesCollected: input.emptiesCollected, atAddressBy: byGps ? 'gps' : 'driver', ...(photo ? { photo: { id: photo.id, at: photo.takenAt } } : {}), ...(input.point ? { dropPoint: input.point, metersFromHouse: meters! } : {}) });
+    return { ok: true as const, run: await this.delivered(run, s) };
+  }
+
+  /** A stop just delivered: the run saved (done once every stop is), the house's last delivery, and the subscriber told. */
+  private async delivered(run: Run, s: RunStop) {
     if (run.stops.every((x) => x.status !== 'planned')) run.status = 'done';
     await this.saveRun(run);
     if (s.houseId) await this.houses?.delivered(s.houseId, s.at!);
     await this.flush();
-    if (!s.userId) return { ok: true as const, run: await this.view(run) }; // a house: nobody to tell
-    await this.notify(s.userId, `Your ${s.packSize}-pack of FreeWater was delivered${input.emptiesCollected ? `, and we picked up ${input.emptiesCollected} empties` : ''}. Leave your empties out next time and we'll take them.`);
-    return { ok: true as const, run: await this.view(run) };
+    if (s.userId) await this.notify(s.userId, `Your ${s.packSize}-pack of FreeWater was delivered${s.emptiesCollected ? `, and we picked up ${s.emptiesCollected} empties` : ''}. Leave your empties out next time and we'll take them.`);
+    return this.view(run);
+  }
+
+  /**
+   * The driver scanned the right box at the door but couldn't send a photo (the camera broke, no signal): a person on
+   * the team (ops or an owner, signed in) vouches that it was left, with why, kept on the stop. Never a driver for their
+   * own drop, never an API key; only a stop whose box was scanned at the door and is still on the van.
+   */
+  deliverWithoutPhoto(input: { runId: string; companyId: string; stop: number; by: string; reason: string }) {
+    return this.serial(`run:${input.runId}`, () => this.deliverWithoutPhotoNow(input));
+  }
+  private async deliverWithoutPhotoNow(input: { runId: string; companyId: string; stop: number; by: string; reason: string }) {
+    if (!input.by) throw new DeliveryError(403, 'person_required', 'Sign in as a person to vouch for a drop.');
+    await this.needOpsPerson(input.companyId, input.by, 'mark a drop delivered without its photo');
+    const why = String(input.reason ?? '').trim();
+    if (why.length < 5) throw new DeliveryError(422, 'reason_required', 'Say why it was delivered without a photo, for the record.');
+    const run = await this.getRun(input.runId, input.companyId);
+    const s = run.stops.find((x) => x.stop === input.stop);
+    if (!s) throw new DeliveryError(404, 'not_found', 'No such stop.');
+    if (s.status !== 'planned') throw new DeliveryError(409, 'already_done', `Stop ${s.stop} is already ${s.status === 'delivered' ? 'delivered' : 'marked not delivered'}.`);
+    if (!s.doorScan || run.status !== 'out') throw new DeliveryError(409, 'not_scanned_at_door', 'The driver hasn’t scanned this box at the door yet: only a box scanned at its door can be marked delivered without a photo.');
+    if (s.doorScan.by === input.by) throw new DeliveryError(403, 'not_your_own', 'Another person on the team vouches for a drop without a photo, not the driver who made it.');
+    const scan = s.doorScan;
+    const r = this.packs.deliver({ routeId: run.routeId, runId: run.id, stop: s.stop, scannedPackId: s.packId!, atAddress: true, photoProof: false, emptiesCollected: scan.emptiesCollected });
+    if (!r.ok) throw new DeliveryError(409, 'not_deliverable', r.reason);
+    delete s.doorScan;
+    const at = this.platform.bus.now().toISOString();
+    Object.assign(s, { status: 'delivered', at, emptiesCollected: scan.emptiesCollected, atAddressBy: scan.atAddressBy, photoWaived: { by: input.by, at, reason: why.slice(0, 300) }, ...(scan.dropPoint ? { dropPoint: scan.dropPoint, metersFromHouse: scan.metersFromHouse } : {}) });
+    return this.delivered(run, s);
   }
 
   failStop(input: { runId: string; companyId: string; driverId: string; stop: number; reason: string }) {
@@ -552,10 +613,11 @@ export class DeliveryService {
   }
 
   /**
-   * A driver passes a house in a delivery area by: a "no soliciting" sign, they asked not to, it isn't a home, it isn't
-   * safe … Every box of the house on this run comes back, and the house is skipped from the next plan until a person
-   * reviews it (GET /v1/ops/house-reviews). A house that already stopped deliveries in the app just has its boxes
-   * brought back.
+   * A driver can't leave anything at a house in a delivery area: a real access or safety problem (a locked gate, a
+   * dangerous animal, not safe, no safe place to leave it) or it isn't a home. Every box of the house on this run comes
+   * back, and the house is skipped from the next plan until a person reviews it (GET /v1/ops/house-reviews). Signs on
+   * the door and what someone says at the door aren't reasons: a house stops getting packs only when someone there
+   * says so in the app. A house that already stopped deliveries in the app just has its boxes brought back.
    */
   skipHouse(input: { runId: string; companyId: string; driverId: string; stop: number; reason: SkipReason; note?: string }) {
     return this.serial(`run:${input.runId}`, () => this.skipHouseNow(input));
@@ -572,7 +634,7 @@ export class DeliveryService {
     if (!mine.length) throw new DeliveryError(409, 'already_done', 'That house is already done.');
     await this.houses.driverSkip(s.houseId, input.companyId, input.driverId, input.reason, input.note);
     const at = this.platform.bus.now().toISOString();
-    const label = { no_soliciting: 'No soliciting sign', asked_not_to: 'Asked us not to leave it', not_a_home: 'Not a home', unsafe: 'Not safe to leave it', dog: 'Dog in the way', other: 'Driver skipped' }[input.reason];
+    const label = SKIP_LABELS[input.reason];
     for (const x of mine) {
       if (x.packId && this.packs.packs.get(x.packId)?.status === 'loaded') this.packs.fail(x.packId, label);
       Object.assign(x, { status: 'not_delivered', at, reason: input.note ? `${label}: ${input.note.slice(0, 100)}` : label, skipped: input.reason });

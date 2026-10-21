@@ -24,7 +24,7 @@ export class OpsService {
     const count = (t: string) => events.filter((e) => e.type === t).length;
     const runs = await this.delivery.runs(companyId, today);
     const stops = runs.flatMap((r) => r.stops);
-    const review = [...p.campaigns.values()].filter((c) => c.companyId === companyId && c.review?.status === 'submitted').length;
+    const review = [...p.campaigns.values()].filter((c) => c.companyId === companyId && (c.review?.status === 'submitted' || c.review?.status === 'flagged')).length;
     return {
       date: today,
       bottles: { printed: units.filter((u) => u.status === 'dispensed' || u.status === 'printed').length, failed: units.filter((u) => u.status === 'failed').length, custom: units.filter((u) => u.kind === 'custom' && u.status !== 'failed').length, inPacks: units.filter((u) => u.packId && u.status !== 'failed').length },

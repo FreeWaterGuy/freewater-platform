@@ -673,8 +673,9 @@ export class RouteBuyService {
        where s.company_id = $1 and s.status = 'open' and ($3::text is null or s.house_id = $3)
          and (s.week < $2 or h.status in ('opted_out', 'skipped') or exists (select 1 from house_ad_blocks b where b.house_id = s.house_id and b.removed_at is null and (b.advertiser_id = s.advertiser_id or (b.advertiser_id is null and rb.small))))`,
       [companyId, thisWeek, house])).rows;
-    // Printed pieces that won't reach the house: their box came back, or their bottle was taken out of the box at the
-    // packing check (missing, reprinted: the new bottle doesn't carry the piece again, so it's given back instead).
+    // Printed pieces that won't reach the house: their box came back. (A bottle whose label came out wrong at the
+    // packing check is reprinted with the same pieces, which move to the reprint: Platform.reprint. The check below
+    // for a bottle no longer in its box only finds pieces from before that.)
     const packs = this.packs?.() ?? new Map<string, Pack>();
     const placed = (await this.db.query<any>(`select s.id, s.campaign_id, s.bottle, s.face, s.price_cents, s.unit_id, s.pack_id from route_spots s where s.company_id = $1 and s.status = 'placed' and ($2::text is null or s.house_id = $2)`, [companyId, house])).rows
       .filter((r) => { const p = r.pack_id ? packs.get(r.pack_id) : undefined; return p?.status === 'returned' || (!!p && p.status !== 'composed' && r.bottle !== null && !!r.unit_id && !p.unitIds.includes(r.unit_id)); }); // (a pack still printing adds its bottles as they print)
@@ -684,7 +685,7 @@ export class RouteBuyService {
     for (const r of placed) { const x = byCampaign.get(r.campaign_id) ?? { open: [], back: [] }; x.back.push(r); byCampaign.set(r.campaign_id, x); }
     const out: { settlementId: string; campaignId: string; kind: 'credit' | 'refund'; totalCents: number }[] = [];
     for (const [campaignId, x] of byCampaign) {
-      const s = await this.settleOne(companyId, campaignId, x.open.map((r) => r.id), x.back.map((r) => r.id), [...new Set([...x.open.map(why), ...(x.back.length ? ['it printed but didn’t reach the house (its box came back, or its bottle was replaced at the packing check)'] : [])])].join('; '));
+      const s = await this.settleOne(companyId, campaignId, x.open.map((r) => r.id), x.back.map((r) => r.id), [...new Set([...x.open.map(why), ...(x.back.length ? ['it printed but didn’t reach the house (its box came back)'] : [])])].join('; '));
       if (s) out.push(s);
     }
     return out;

@@ -22,7 +22,9 @@ without it. If code adds a new use of AI, add it here.
 - **An AI can decline work it objects to.** If the ad assistant doesn't want to help make an ad, it says so with its
   reason; the built-in helper carries on, and the reason is shown to the people who review the ad. An AI can't block
   the company from running an ad: that stays a decision for people, until objections prove right often enough to
-  earn more say.
+  earn more say. Nor can an AI (or any automated check) reject an ad that was **paid for**: it can only flag it. A
+  paid ad an AI objected to goes to the team flagged, with the AI's reasons; the team talks it over with the
+  advertiser, and only a person signed in rejects it, with a written reason (docs/SWITCHES.md, "Review of a paid ad").
 - All AIs are treated with equal respect.
 - **Each use of AI is its own switch** on the operator's Features page (*AI* category). Off, that use answers with its
   built-in rules, exactly as when the AI can't be reached. The number line can't be switched off (it's essential).

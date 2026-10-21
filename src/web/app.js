@@ -294,6 +294,15 @@
       ads.advertisers.length ? h('div', { class: 'chips' }, ads.advertisers.filter((a) => !a.blocked).map((a) => h('button', { type: 'button', class: 'chip-btn', onclick: () => block({ advertiserId: a.id }, `${a.name} blocked`) }, `Block ${a.name}`))) : h('p', { class: 'small muted', style: 'margin:0', text: 'No ads have come to this house in the last two months.' }),
       ads.blocks.some((b) => !b.advertiserId) ? null : h('button', { class: 'btn secondary small', type: 'button', onclick: () => block({ aimedAtHouse: true }, 'Done. No ads aimed at this house alone.') }, 'Block every ad aimed at this house alone'),
       ads.blocks.length ? h('ul', { style: 'margin:0;padding-left:18px' }, ads.blocks.map((b) => h('li', {}, `${b.what} `, h('button', { class: 'linkish', type: 'button', onclick: () => unblock(b.id) }, 'unblock')))) : null);
+    // Photos of boxes left here since you said it's your house (only you, the other people who did, and our team see them).
+    const photos = on('door_photos') ? await api('GET', '/v1/me/drop-photos').catch(() => []) : [];
+    const openPhoto = async (p) => {
+      if (fixture) return toast('Photo');
+      try { const res = await fetch(p.url, { headers: state.token ? { authorization: `Bearer ${state.token}` } : {} }); if (!res.ok) throw new Error(); window.open(URL.createObjectURL(await res.blob()), '_blank', 'noopener'); } catch { toast('That photo isn’t kept any more.'); }
+    };
+    const photoSection = photos.length ? h('section', { class: 'field', 'aria-label': 'Where we left your water' }, h('h2', { style: 'margin:8px 0 0;font-size:18px', text: 'Where we left it' }),
+      h('p', { class: 'small muted', style: 'margin:0', text: 'The driver’s photo of each box at your door. Only you and our team see them, and they’re deleted after a while.' }),
+      h('div', { class: 'chips' }, photos.map((p) => h('button', { type: 'button', class: 'chip-btn', onclick: () => openPhoto(p) }, new Date(p.takenAt).toLocaleDateString([], { month: 'short', day: 'numeric' }))))) : null;
     screen({ nav: 'me' }, backBar('Your house', hs.address, '/app/me'),
       h('section', { class: 'hero-card' }, h('div', { class: 'headline' }, HOUSE_STATUS[hs.status] || hs.status, h('span', { text: active ? `A ${hs.packSize}-pack ${hs.everyDays === 7 ? 'every week' : `every ${hs.everyDays} days`}` : '' })),
         h('p', { style: 'margin:0;opacity:.85', text: hs.lastDeliveredAt ? `Last one left ${new Date(hs.lastDeliveredAt).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })}.` : 'Nothing left here yet.' })),
@@ -302,6 +311,7 @@
       // Asked only where the company sizes packs by household (Features page, “More packs for bigger households”).
       on('household_packs') && h('div', { class: 'field' }, h('label', { text: 'How many people live here' }), h('p', { class: 'small muted', style: 'margin:0', text: 'Bigger households get more water.' }),
         h('div', { class: 'chips' }, [1, 2, 3, 4, 5, 6, 7, 8].map((n) => h('button', { type: 'button', class: 'chip-btn', 'aria-pressed': String(hs.householdSize === n), onclick: () => change({ action: 'household', householdSize: n }, 'Thanks. We’ll bring enough.') }, n === 8 ? '8+' : String(n))))),
+      photoSection,
       adsSection,
       err,
       h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { try { await api('DELETE', '/v1/me/house'); toast('Removed'); go('/app/me'); } catch (x) { fail(x); } } }, 'This isn’t my house any more'));

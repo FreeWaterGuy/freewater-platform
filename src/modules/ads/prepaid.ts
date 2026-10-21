@@ -300,6 +300,9 @@ export class PrepaidService {
     const c = this.platform.campaigns.get(o.campaignId);
     if (!c || c.companyId !== o.companyId || c.isHouse) throw new AdsError(404, 'not_found', 'Campaign not found.');
     if (!c.prepaid) throw new AdsError(409, 'not_prepaid', 'This ad wasn’t paid up front, so there’s nothing to pay back. Pause it instead.');
+    // A paid ad flagged in review is being talked over with the advertiser: its money stays held until a person decides
+    // (approves it, or rejects it with a reason, which is when its refund is offered). docs/SWITCHES.md, "Ad review".
+    if (c.review?.status === 'flagged') throw new AdsError(409, 'in_review', 'This ad is being discussed with the advertiser. Its money stays held until a person decides: approve it, or reject it with a reason (then its refund can be approved).');
     const prior = (await this.db.query<any>(`select * from ad_refunds where campaign_id = $1`, [c.id])).rows[0];
     if (prior) {
       // Already stopped: a refund that didn't finish is tried again (the same refund, never a second one).
@@ -484,7 +487,9 @@ export class PrepaidService {
   private countUnits() {
     const out = new Map<string, { printed: number; held: number }>();
     for (const u of this.platform.units.values()) for (const p of u.placements) {
-      if (!p.prepaid || p.isHouse) continue;
+      // A bottle voided at the packing check counts for no one; its reprint holds nothing until it prints (its ads
+      // were claimed by the bottle it replaces), then counts in its place.
+      if (!p.prepaid || p.isHouse || u.voided || (u.replaces && u.status !== 'printed' && u.status !== 'dispensed')) continue;
       const k = out.get(p.campaignId) ?? { printed: 0, held: 0 };
       if (u.status === 'printed' || u.status === 'dispensed') k.printed++;
       else if (u.status === 'filled' || u.status === 'rendered') k.held++;
@@ -564,7 +569,8 @@ export class PrepaidService {
     const units = this.countUnits();
     const entries = this.platform.ledger.entries.filter((l) => l.companyId === companyId);
     const printLines = new Map<string, number>();
-    for (const l of entries) if (l.kind === 'print' && l.campaignId && l.debit.startsWith('prepaid:')) printLines.set(l.campaignId, (printLines.get(l.campaignId) ?? 0) + 1);
+    // A voided bottle's print line was reversed (its reprint has its own): it isn't counted.
+    for (const l of entries) if (l.kind === 'print' && l.campaignId && l.debit.startsWith('prepaid:') && !(l.unitId && this.platform.units.get(l.unitId)?.voided)) printLines.set(l.campaignId, (printLines.get(l.campaignId) ?? 0) + 1);
     const off: { campaignId: string; paid: number; ordered: number; printed: number; bottlesPrinted: number; printLines: number; held: number; printing: number }[] = [];
     const used = new Map<string, Map<string, number>>();
     for (const u of (await this.db.query<any>(`select campaign_id, feature, count(*)::int as n from ad_extra_uses where company_id = $1 and status = 'used' group by 1, 2`, [companyId])).rows) {

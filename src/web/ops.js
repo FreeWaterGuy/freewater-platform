@@ -132,12 +132,24 @@
       pane.replaceChildren(h('p', { class: 'caption', text: 'Loading…' }));
       payload = await api('GET', `/v1/review/campaigns/${current}/preview`);
       const c = payload.campaign;
-      const note = h('textarea', { class: 'input', id: 'r-note', placeholder: 'What needs to change? The advertiser sees this word for word.' });
+      const item = queue.find((q) => q.id === c.id) ?? {};
+      // A paid ad (paid up front): an automated check can only flag it; the team talks it over with the advertiser in
+      // the notes, and only a person finally rejects it, with a reason (that's when its refund is offered).
+      const paid = !!item.paid, flagged = item.review?.status === 'flagged';
+      const notes = paid ? await api('GET', `/v1/review/campaigns/${c.id}/notes`).catch(() => []) : [];
+      const note = h('textarea', { class: 'input', id: 'r-note', placeholder: paid ? 'Why? Plain words: the advertiser sees this word for word, and it’s kept.' : 'What needs to change? The advertiser sees this word for word.' });
+      const say = h('textarea', { class: 'input', id: 'r-say', placeholder: 'Write to the advertiser…' });
+      const thread = h('div', { class: 'panel-box' }, h('b', { text: flagged ? 'Being discussed with the advertiser' : 'Notes with the advertiser' }),
+        notes.length ? h('ul', { style: 'margin:0;padding-left:18px;line-height:1.6' }, notes.map((n) => h('li', {}, h('b', { text: `${n.from === 'team' ? 'Team' : n.from === 'advertiser' ? c.advertiser : 'Automated check'}${n.kind === 'flag' ? ' flagged' : n.kind === 'resubmitted' ? ' sent a change' : ''}: ` }), n.text, h('span', { style: 'color:var(--muted)', text: ` · ${new Date(n.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` })))) : h('p', { style: 'margin:0;color:var(--muted)', text: 'No notes yet.' }),
+        h('div', { class: 'field' }, h('label', { for: 'r-say', text: 'Write to the advertiser' }), say),
+        h('div', {}, h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { if (!say.value.trim()) return; try { await api('POST', `/v1/review/campaigns/${c.id}/notes`, { text: say.value.trim() }); toast('Sent.'); await show(); } catch (x) { toast(x.message); } } }, 'Send note')));
       const decide = async (decision) => {
-        if (decision === 'reject' && !note.value.trim()) { toast('Say what needs to change.'); note.focus(); return; }
+        if ((decision === 'reject' || decision === 'flag') && !note.value.trim()) { toast(decision === 'flag' ? 'Say what the concern is.' : paid ? 'Write why it’s rejected.' : 'Say what needs to change.'); note.focus(); return; }
+        if (decision === 'reject' && paid && !window.confirm(`Reject ${c.advertiser}’s paid ad for good? Its refund is then offered for approval.`)) return;
         try {
-          await api('POST', `/v1/review/campaigns/${c.id}`, { decision, ...(note.value.trim() ? { note: note.value.trim() } : {}) });
-          toast(decision === 'approve' ? `Approved. ${c.advertiser} is printing.` : 'Sent back with your note.');
+          const out = await api('POST', `/v1/review/campaigns/${c.id}`, { decision, ...(note.value.trim() ? { note: note.value.trim() } : {}) });
+          toast(decision === 'approve' ? `Approved. ${c.advertiser} is printing.` : out.review?.status === 'flagged' ? 'Flagged: talk it over with the advertiser in the notes.' : paid ? 'Rejected. Its refund can now be approved (Books).' : 'Sent back with your note.');
+          if (out.review?.status === 'flagged') { item.review = out.review; return show(); }
           queue.splice(queue.findIndex((q) => q.id === c.id), 1); current = queue[0]?.id ?? null; drawList(); show();
         } catch (x) {
           // Someone else may have decided it already, or it changed: show why and reload the queue.
@@ -148,15 +160,19 @@
       frame = fixture?.scanFrame ? fixture.scanFrame() : h('iframe', { src: '/preview/scan', title: 'Scan page' });
       const buy = c.buy.type === 'guaranteed' ? `${c.buy.remainingPrints.toLocaleString()} bottles` : `${dollars(c.buy.dailyCapCents)} a day`;
       pane.replaceChildren(
-        h('div', { class: 'run-head' }, h('div', {}, h('h2', { style: 'margin:0;font-size:20px', text: c.name ?? c.advertiser }), h('div', { style: 'color:var(--muted)', text: `${c.advertiser} · ${c.category} · ${c.where === 'all' ? 'every machine' : c.where.join(', ')} · ${buy}` })), h('span', { class: 'pill warn', text: 'Waiting for review' })),
+        h('div', { class: 'run-head' }, h('div', {}, h('h2', { style: 'margin:0;font-size:20px', text: c.name ?? c.advertiser }), h('div', { style: 'color:var(--muted)', text: `${c.advertiser} · ${c.category} · ${c.where === 'all' ? 'every machine' : c.where.join(', ')} · ${buy}` })), h('span', { class: 'pill warn', text: flagged ? 'Flagged · being discussed' : 'Waiting for review' })),
+        flagged ? h('div', { class: 'notice', style: 'border-left:3px solid var(--warn, #c80)' }, h('b', { text: 'Flagged: ' }), item.flag?.reasons ?? '', h('div', { style: 'color:var(--muted)', text: 'A flag never rejects or refunds. The money stays held and nothing prints. Talk it over in the notes; the advertiser can change it at no fee.' })) : null,
         h('img', { class: 'label-img', style: 'width:100%;border-radius:8px;box-shadow:0 0 0 1px var(--line)', src: svgSrc(payload.labelSvg), alt: 'The ad on a sample label' }),
         h('div', { class: 'row3' },
           h('div', { style: 'display:flex;flex-direction:column;gap:12px' },
             h('div', { class: 'stage', style: 'min-height:0' }, h('div', { class: 'sizes' }, payload.sizes.flatMap((s) => (s.shapes ?? [{ svg: s.svg }]).map((x) => h('figure', {}, h('img', { src: svgSrc(x.svg), alt: s.label, style: 'height:200px' }), h('figcaption', { text: x.w ? `${s.label} · ${(x.w / 100).toFixed(1)} × ${(x.h / 100).toFixed(1)} in` : s.label }))))), ...(payload.boxFaces ?? (payload.boxFaceSvg ? [{ svg: payload.boxFaceSvg }] : [])).map((f) => h('img', { class: 'box-img', src: svgSrc(f.svg), alt: 'On a box side' }))),
             h('div', { class: 'panel-box' }, h('b', { text: 'Check' }), h('ul', { style: 'margin:0;padding-left:18px;line-height:1.8;color:var(--muted)' }, ['Words are true and legal; prices and offers are honest', 'Nothing your rules don’t allow (category, claims, images)', 'Readable at the smallest size', 'Links go where they say; the scan page works'].map((t) => h('li', { text: t })))),
             payload.objections?.length ? h('div', { class: 'panel-box', style: 'border-left:3px solid var(--warn, #c80)' }, h('b', { text: 'Our AI objected to this ad' }), h('p', { style: 'margin:4px 0;color:var(--muted)', text: 'It chose not to help make it, so the built-in helper carried on. You still decide whether it runs.' }), h('ul', { style: 'margin:0;padding-left:18px' }, payload.objections.map((o) => h('li', { text: o.reason })))) : null,
-            h('div', { class: 'field' }, h('label', { for: 'r-note', text: 'Note to the advertiser (needed to send it back)' }), note),
-            h('div', { class: 'toolbar' }, h('button', { class: 'btn', type: 'button', onclick: () => decide('approve') }, 'Approve and start printing'), h('button', { class: 'btn secondary', type: 'button', onclick: () => decide('reject') }, 'Send back'))),
+            paid ? thread : null,
+            h('div', { class: 'field' }, h('label', { for: 'r-note', text: paid ? 'Reason (needed to flag or reject)' : 'Note to the advertiser (needed to send it back)' }), note),
+            h('div', { class: 'toolbar' }, h('button', { class: 'btn', type: 'button', onclick: () => decide('approve') }, 'Approve and start printing'),
+              paid && !flagged ? h('button', { class: 'btn secondary', type: 'button', onclick: () => decide('flag') }, 'Flag to discuss') : null,
+              h('button', { class: 'btn secondary', type: 'button', onclick: () => decide('reject') }, paid ? 'Reject for good (refund offered)' : 'Send back'))),
           frame));
     }
     shell('review', head('Ad review', 'Nothing prints until it’s approved here. Changes to a live ad come back here too.'), queue.length ? h('div', { class: 'queue' }, list, pane) : h('div', { class: 'empty', text: 'No ads waiting. New ones show up here as soon as an advertiser submits them.' }));
@@ -228,6 +244,22 @@
   }
 
   // ---------- routes ----------
+  /** A drop's photo, for the team only: fetched with the sign-in (never a public address) and opened in a new tab. */
+  async function openDropPhoto(id) {
+    if (fixture) return toast('Photo');
+    try {
+      const res = await fetch(`/v1/ops/drop-photos/${encodeURIComponent(id)}`, { headers: S.token ? { authorization: `Bearer ${S.token}` } : {} });
+      if (!res.ok) return toast(res.status === 404 ? 'That photo was deleted after the keep.' : 'The photo didn’t load.');
+      window.open(URL.createObjectURL(await res.blob()), '_blank', 'noopener');
+    } catch { toast('The photo didn’t load.'); }
+  }
+  /** The driver scanned the right box at the door but no photo came: a person (not the driver) vouches for it, with why. */
+  async function vouch(r, s) {
+    const reason = window.prompt(`Box #${s.boxNumber ?? '—'} was scanned at ${s.address.split(',')[0]} but has no photo. Why is it delivered? (kept on the record)`);
+    if (!reason || reason.trim().length < 5) return;
+    try { await api('POST', `/v1/ops/runs/${encodeURIComponent(r.id)}/stops/${s.stop}/deliver-without-photo`, { reason: reason.trim() }); toast('Marked delivered, with your reason.'); } catch (x) { toast(x.message); }
+    render();
+  }
   async function routesPage() {
     const q = new URLSearchParams(S.path.split('?')[1] || '');
     const date = q.get('date') || (await api('GET', '/v1/ops/overview')).date;
@@ -245,7 +277,8 @@
           h('div', { class: 'steps' }, stages.map((s, i) => h('span', { class: i < at ? 'done' : i === at ? 'on' : '', text: stageName[s] }))),
           h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Stop', 'Address', 'Box', 'Pack', 'Status', ''].map((x) => h('th', { text: x })))),
             h('tbody', {}, r.stops.map((s) => h('tr', {}, h('td', {}, h('b', { text: s.stopCode })), h('td', { text: s.address }), h('td', { text: `#${s.boxNumber ?? '—'}` }), h('td', { text: `${s.packSize}` }),
-              h('td', {}, s.status === 'delivered' ? h('span', { class: 'pill ok', text: `Delivered${s.atAddressBy === 'driver' ? ' (driver confirmed)' : ''}` }) : s.status === 'not_delivered' ? h('span', { class: `pill ${s.skipped ? 'warn' : 'bad'}`, text: `${s.skipped ? 'Skipped' : 'Not delivered'}: ${s.reason}` }) : s.houseStatus && s.houseStatus !== 'active' ? h('span', { class: 'pill warn', text: 'Stopped since the plan: keep the box' }) : h('span', { class: 'pill', text: s.packStatus === 'loaded' ? 'On the van' : s.packStatus === 'sealed' ? 'Sealed' : s.packStatus ?? 'Planned' })),
+              h('td', {}, s.status === 'delivered' ? h('span', {}, h('span', { class: 'pill ok', text: `Delivered${s.atAddressBy === 'driver' ? ' (driver confirmed)' : ''}${s.photoWaived ? ' without a photo' : ''}` }), s.photo ? h('button', { class: 'linkish', type: 'button', onclick: () => openDropPhoto(s.photo.id) }, ' Photo') : null) :
+                s.doorScan ? h('span', {}, h('span', { class: 'pill warn', text: 'Scanned at the door, no photo yet' }), h('button', { class: 'btn secondary small', type: 'button', onclick: () => vouch(r, s) }, 'Delivered without photo…')) : s.status === 'not_delivered' ? h('span', { class: `pill ${s.skipped ? 'warn' : 'bad'}`, text: `${s.skipped ? 'Skipped' : 'Not delivered'}: ${s.reason}` }) : s.houseStatus && s.houseStatus !== 'active' ? h('span', { class: 'pill warn', text: 'Stopped since the plan: keep the box' }) : h('span', { class: 'pill', text: s.packStatus === 'loaded' ? 'On the van' : s.packStatus === 'sealed' ? 'Sealed' : s.packStatus ?? 'Planned' })),
               h('td', { style: 'color:var(--muted);font-size:13px' }, s.emptiesCollected ? `${s.emptiesCollected} empties` : '', s.checkedByHand ? `Checked by hand, ${ago(s.checkedByHand.at)}` : '',
                 // No packing line for this box: a signed-in person counts every bottle and checks it by hand (who and when are kept).
                 r.status === 'packing' && (s.packStatus === 'box_printed' || s.packStatus === 'mismatch') ? h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { if (!confirm(`Did you count all ${s.packSize} bottles in box #${s.boxNumber ?? '—'} and check each one belongs? It's sealed and recorded under your name.`)) return; try { const x = await api('POST', `/v1/ops/runs/${encodeURIComponent(r.id)}/stops/${s.stop}/check-by-hand`); toast(x.problems.length ? `Checked and sealed. ${x.problems.length} box(es) still need a check` : 'Checked and sealed. Every box is ready to load'); } catch (e) { toast(e.message); } render(); } }, 'Checked by hand') : null)))))));

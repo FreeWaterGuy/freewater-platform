@@ -21,6 +21,8 @@ export interface Persistence {
   prepaid?(companyId: string, campaignIds: string[], move: 'printed' | 'released'): void;
   /** Route pieces on a bottle printed (held → placed, with the bottle and its pack) or given back by a failed print (held → open). */
   routeSpots?(companyId: string, spotIds: string[], move: 'printed' | 'released', unitId: string, packId?: string): void;
+  /** A bottle reprinted (its label came out wrong): the route pieces it carried are now on the reprint. */
+  routeSpotsMoved?(companyId: string, fromUnitId: string, toUnitId: string): void;
 }
 
 export const noPersistence: Persistence = {
