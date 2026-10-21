@@ -6,6 +6,7 @@ import { newId } from '../../core/ids';
 import { randomCode, scanBase } from '../codes/service';
 import { campaignQrStyle } from '../codes/style';
 import { qrSvg } from '../print/qr';
+import { commissionPercent } from '../ads/billing';
 
 export class AttributionError extends Error {
   constructor(public code: string, message: string, public status = 400) {
@@ -86,8 +87,9 @@ export class AttributionService {
 
   // ---------- sales ----------
 
+  /** What the books charge on a sale: nothing for a prepaid company unless its commission fee is switched on. */
   private commission(companyId: string, valueCents: number) {
-    return Math.round((valueCents * this.platform.companies.get(companyId)!.prices.commissionPercent) / 100);
+    return Math.round((valueCents * (commissionPercent(this.platform.companies.get(companyId)!) ?? 0)) / 100);
   }
 
   /**

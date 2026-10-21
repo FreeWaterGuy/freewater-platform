@@ -223,6 +223,11 @@ export interface CompanyConfig {
     customUnit: Cents;
     perBoxFace: Cents;
   };
+  /**
+   * How advertisers pay: up front for their bottles (the default, and where every new company starts) or billed after,
+   * flat prices or an auction, and the fees on top (each off until a person turns it on). See modules/ads/billing.
+   */
+  adBilling?: import('../modules/ads/billing').AdBilling;
   /** Which registered implementation each module slot uses. Swapping one never touches the others. */
   modules: {
     ads: string;
@@ -327,6 +332,27 @@ export interface Campaign {
   /** A short name the advertiser knows it by. */
   name?: string;
   createdAt?: string;
+  /** Bottles paid for up front (prepaid companies). Only paid bottles print; the counts are kept in the database too. */
+  prepaid?: PrepaidBottles;
+}
+
+/**
+ * An ad's paid bottles: one size on one product, at the price per bottle fixed when it was paid. `held` are on labels
+ * being printed now (or kept ready in a machine); a failed print gives its bottle back. `refunded` were paid back when
+ * the company stopped the ad. Never more printed, held and refunded than paid.
+ */
+export interface PrepaidBottles {
+  share: Share;
+  productId: string;
+  priceCents: Cents;
+  paid: number;
+  printed: number;
+  held: number;
+  refunded: number;
+  /** Stopped by the company (and the rest paid back): nothing more prints. */
+  stoppedAt?: string;
+  /** Costly extras paid for up front: how many uses, how many used, and the price of one. */
+  extras?: Record<string, { paid: number; used: number; priceCents: Cents }>;
 }
 
 /** Who an ad is for. Interests only count for people who turned on personalized offers. */
@@ -368,6 +394,8 @@ export interface Placement {
   advertiserName: string;
   experienceId: string;
   priceCents: Cents; // what the advertiser pays if, and only if, the print is confirmed
+  /** Drawn from the bottles the advertiser paid for up front (the print moves its price from prepaid to earned). */
+  prepaid?: true;
   /** For a bid: the campaign's spend day (its own time zone) the price was held against. */
   spentDay?: string;
   isHouse: boolean;

@@ -6,6 +6,7 @@ import { checkAiSettings } from '../ai/settings';
 import { checkWallet, defaultWallet } from '../wallet/assets';
 import { checkChain, defaultChain } from '../chain/settings';
 import { extraAboveCents } from '../ledger/ledger';
+import { adBilling, checkAdBilling } from '../ads/billing';
 
 // What a company may change about itself, the checks each change must pass, and plain words for what changed.
 
@@ -21,10 +22,10 @@ export const fontChoices: { id: string; label: string; value: string }[] = [
 export const adCategories = ['food', 'drink', 'coffee', 'fitness', 'health', 'news', 'retail', 'local-services', 'real-estate', 'auto', 'finance', 'entertainment', 'events', 'travel', 'tech', 'education', 'nonprofit', 'politics', 'alcohol', 'tobacco', 'cannabis', 'gambling', 'weapons', 'dating'];
 
 /** The parts of the settings a PATCH may send. Anything else is refused. */
-export const editableKeys = ['name', 'receiptBaseUrl', 'scanBaseUrl', 'brand', 'productFacts', 'giving', 'openBooks', 'unitCosts', 'consumerPricing', 'timezone', 'consumer', 'machines', 'qr', 'ar', 'standardProductId', 'adRules', 'prices', 'modules', 'lottery', 'data', 'transparency', 'agents', 'ratchet', 'security', 'research', 'wallet', 'offers', 'games', 'minimumAge', 'chain', 'launch', 'ai'] as const;
+export const editableKeys = ['name', 'receiptBaseUrl', 'scanBaseUrl', 'brand', 'productFacts', 'giving', 'openBooks', 'unitCosts', 'consumerPricing', 'timezone', 'consumer', 'machines', 'qr', 'ar', 'standardProductId', 'adRules', 'prices', 'modules', 'lottery', 'data', 'transparency', 'agents', 'ratchet', 'security', 'research', 'wallet', 'offers', 'games', 'minimumAge', 'chain', 'launch', 'ai', 'adBilling'] as const;
 export type EditableKey = (typeof editableKeys)[number];
 /** Settings only a person signed in may change or put back: money, the chain, and every one-way or money-adjacent promise. */
-export const personOnlyKeys: readonly EditableKey[] = ['wallet', 'offers', 'chain', 'ratchet', 'agents', 'minimumAge', 'giving', 'lottery', 'ai', 'data', 'launch', 'security'];
+export const personOnlyKeys: readonly EditableKey[] = ['wallet', 'offers', 'chain', 'ratchet', 'agents', 'minimumAge', 'giving', 'lottery', 'ai', 'data', 'launch', 'security', 'adBilling'];
 
 /** The highest a machine's print limits may be set: a bottle takes several seconds, so more is a leaked key, not a busy machine. */
 export const PRINT_LIMITS = { perMinute: 20, perDay: 20_000 };
@@ -121,6 +122,8 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
   if (!isInt(p.perScan, 0, 1000) || !isInt(p.perArLaunch, 0, 1000)) return 'Scan and AR prices must be 0¢ to $10.';
   if (!isNum(p.commissionPercent, 0, 50)) return 'Commission on sales must be 0% to 50%.';
   if (!isInt(p.customUnit, 0, 10_000) || !isInt(p.perBoxFace, 0, 5000)) return 'The custom bottle price must be $0 to $100, and a box side $0 to $50.';
+  const billing = checkAdBilling(c.adBilling);
+  if (billing) return `How advertisers pay: ${billing}`;
 
   const pol = checkPolicy(c.data);
   if (pol) return `Data: ${pol}`;
@@ -220,6 +223,17 @@ export function applyChange(cur: CompanyConfig, change: Partial<Record<EditableK
   const next: any = structuredClone(cur);
   for (const [k, v] of Object.entries(change)) {
     if (!(editableKeys as readonly string[]).includes(k)) throw new Error(`“${k}” can’t be changed here.`);
+    // How advertisers pay: each fee and the extras are changed one part at a time, on top of the full current setting.
+    if (k === 'adBilling' && v && typeof v === 'object' && !Array.isArray(v)) {
+      const base = adBilling(cur), x = v as any;
+      const fees = x.fees && typeof x.fees === 'object' ? x.fees : {};
+      next.adBilling = {
+        ...base, ...x,
+        fees: { scan: { ...base.fees.scan, ...(fees.scan ?? {}) }, arLaunch: { ...base.fees.arLaunch, ...(fees.arLaunch ?? {}) }, boxFace: { ...base.fees.boxFace, ...(fees.boxFace ?? {}) }, commission: { ...base.fees.commission, ...(fees.commission ?? {}) } },
+        extras: { ...base.extras, ...(x.extras && typeof x.extras === 'object' ? x.extras : {}) },
+      };
+      continue;
+    }
     if (v && typeof v === 'object' && !Array.isArray(v) && next[k] && typeof next[k] === 'object' && !Array.isArray(next[k])) {
       next[k] = { ...next[k], ...(v as object) };
       if (k === 'prices' && (v as any).perPrintByShare) next.prices.perPrintByShare = { ...cur.prices.perPrintByShare, ...(v as any).perPrintByShare };
@@ -244,9 +258,10 @@ const labels: Record<string, string> = {
   'qr.advertiserLogos': 'Advertisers’ logos in their codes', 'qr.allowStatic': 'Static codes allowed', 'ar.trackingCodes': 'AR tracking strip', 'ar.stripEverywhere': 'Tracking strip along every ad',
   'machines.offlineWalkUp': 'Free bottles while offline', 'machines.offlinePerHour': 'Offline bottles per hour', 'machines.bufferSize': 'Labels kept ready', 'modules.ads': 'Ad engine', 'modules.renderer': 'Label maker', 'modules.printer': 'Printer',
   'transparency.liveFeed': 'Live public feed', 'transparency.counters': 'Live public counters', 'transparency.publishFingerprints': 'Publishing daily fingerprints', 'transparency.advertiserStatements': 'Advertiser statements', 'transparency.feedDetail': 'Places in the feed', 'transparency.showAmounts': 'Amounts in the feed', data: 'Data collection', 'agents.enabled': 'The AI agents’ fund', 'agents.percentOfExtra': 'The AI agents’ share of the upside', 'agents.percentOfProfit': 'The AI agents’ share of the profit', 'agents.milestone': 'The AI agents’ milestone', ratchet: 'Giving and the AI agents’ share only go up', 'security.ownersNeedSecondStep': 'Owners need a second sign-in step',
+  adBilling: 'How advertisers pay', 'adBilling.pricingMode': 'Pricing (flat or auction)', 'adBilling.requirePrepay': 'Advertisers pay up front', 'adBilling.fees': 'Fees on top of bottles (scan, AR, box side, commission)', 'adBilling.changeFeeCents': 'Fee for changing an ad', 'adBilling.extras': 'Costly extras and their markup',
   'lottery.enabled': 'Prize game', 'lottery.oddsPercent': 'Chance of winning', 'lottery.chancesPerDay': 'Chances per person a day', 'lottery.winsPerDay': 'Prizes per person a day', 'lottery.watchSeconds': 'Watching before the ball', 'lottery.ballMs': 'Time the ball is on screen', 'lottery.prizes': 'Prizes', 'lottery.minAge': 'Youngest age to play', 'lottery.rulesUrl': 'Official rules link', 'lottery.rulesText': 'Rules note',
 };
-const deep = new Set(['brand', 'giving', 'consumer', 'machines', 'qr', 'ar', 'adRules', 'prices', 'modules', 'lottery', 'transparency', 'agents', 'security']);
+const deep = new Set(['brand', 'giving', 'consumer', 'machines', 'qr', 'ar', 'adRules', 'prices', 'modules', 'lottery', 'transparency', 'agents', 'security', 'adBilling']);
 const show = (v: unknown) => (v === undefined ? 'none' : typeof v === 'string' ? (v.length > 30 ? `${v.slice(0, 28)}…` : v || 'blank') : typeof v === 'boolean' ? (v ? 'on' : 'off') : Array.isArray(v) ? (v.length ? v.join(', ').slice(0, 40) : 'none') : typeof v === 'object' && v ? 'changed' : String(v));
 
 /** What changed, as a short list a person can read in the history. */

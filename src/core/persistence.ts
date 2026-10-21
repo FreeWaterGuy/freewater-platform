@@ -17,6 +17,8 @@ export interface Persistence {
   campaign(c: Campaign): void;
   pack(p: Pack): void;
   code(c: CodeRow): void;
+  /** A paid bottle printed, or given back by a failed print: its database count moves, in order with everything else. */
+  prepaid?(companyId: string, campaignId: string, move: 'printed' | 'released'): void;
 }
 
 export const noPersistence: Persistence = {

@@ -1,6 +1,7 @@
 import type { App } from '../app';
 import type { ApiKey } from '../db/store';
 import { ApiError, obj, S, type RouteDef, Q } from './http';
+import { prepaidModel } from '../modules/ads/billing';
 
 /** The advertiser portal's API: sign up, make an ad by chatting, preview, submit, results. Plus the company's review queue. */
 export function adsRoutes(app: App, route: (r: RouteDef) => void, h: { me: (key: ApiKey | null) => string }) {
@@ -37,7 +38,54 @@ export function adsRoutes(app: App, route: (r: RouteDef) => void, h: { me: (key:
     return { body: await ads.chat({ id: (req.params as any).id, companyId: key!.companyId, advertiserId: advertiserOf(key), text: b.text, attachments: b.attachments ?? [] }) };
   } });
   route({ method: 'GET', url: '/v1/ads/drafts/:id/preview', scope: 'campaigns', summary: 'The ad at every size, on a real label, on a box, and its scan page.', handler: async (req, key) => ({ body: await ads.preview((req.params as any).id, key!.companyId, advertiserOf(key)) }) });
-  route({ method: 'POST', url: '/v1/ads/drafts/:id/submit', scope: 'campaigns', summary: 'Send the ad for review. Send approved: true to confirm you checked the preview.', body: obj({ approved: { const: true } }, ['approved']), handler: async (req, key) => ({ status: 201, body: await ads.submit({ id: (req.params as any).id, companyId: key!.companyId, advertiserId: advertiserOf(key) }) }) });
+  // Paying up front (docs/SWITCHES.md, "How advertisers pay"): the size, product and extras chosen, and the total the
+  // advertiser saw. The price is always worked out here; a total that no longer matches charges nothing.
+  const extrasProp = { type: 'object', maxProperties: 20, additionalProperties: { type: 'integer', minimum: 0, maximum: 1000 } };
+  const choice = { share: { type: 'integer', enum: [1, 2, 3, 4, 6, 8, 10] }, productId: { type: 'string', maxLength: 60 }, extras: extrasProp };
+  const payProp = obj({ ...choice, expectedTotalCents: { type: 'integer', minimum: 0 }, expectedFeeCents: { type: 'integer', minimum: 0 } });
+  route({ method: 'POST', url: '/v1/ads/drafts/:id/quote', scope: 'campaigns', summary: 'What this ad costs, paid up front: its bottles at one size (AR, video and scans included), plus any extras. Nothing is charged.', body: obj(choice), handler: async (req, key) => ({ body: await ads.quoteDraft((req.params as any).id, key!.companyId, advertiserOf(key), (req.body ?? {}) as any) }) });
+  route({ method: 'POST', url: '/v1/ads/drafts/:id/submit', scope: 'campaigns', summary: 'Send the ad for review. Send approved: true to confirm you checked the preview. Where ads are paid up front, this pays: a new ad’s bottles (send pay.expectedTotalCents, the total you saw), or a change’s fee (pay.expectedFeeCents).', body: obj({ approved: { const: true }, pay: payProp }, ['approved']), handler: async (req, key) => ({ status: 201, body: await ads.submit({ id: (req.params as any).id, companyId: key!.companyId, advertiserId: advertiserOf(key), pay: (req.body as any).pay }) }) });
+
+  // An ad made through the API (uploaded artwork) is paid for here, once, before review can turn it on.
+  const prepaidCampaign = (key: ApiKey, id: string) => {
+    const c = app.platform.campaigns.get(id);
+    if (!c || c.companyId !== key.companyId || c.isHouse || (key.advertiserId && c.advertiserId !== key.advertiserId)) throw new ApiError(404, 'not_found', 'Campaign not found.');
+    return c;
+  };
+  route({ method: 'POST', url: '/v1/ads/campaigns/:id/pay', scope: 'campaigns', summary: 'Pay up front for an ad’s bottles: how many, at one size it has artwork for, on one product, plus any extras. Send expectedTotalCents (from the quote). Charged to the advertiser’s card; only paid bottles print.', body: obj({ bottles: { type: 'integer', minimum: 1, maximum: 1_000_000 }, ...choice, expectedTotalCents: { type: 'integer', minimum: 0 } }, ['bottles', 'expectedTotalCents']), handler: async (req, key) => {
+    const c = prepaidCampaign(key!, (req.params as any).id);
+    if (c.prepaid) throw new ApiError(409, 'already_paid', 'This ad’s bottles are already paid for.');
+    const b = req.body as any;
+    const out = await app.prepaid.payBottles({ companyId: c.companyId, advertiserId: c.advertiserId, campaignId: c.id, quote: { bottles: b.bottles, share: b.share, productId: b.productId, extras: b.extras }, expectedTotalCents: b.expectedTotalCents, sizes: c.sizes });
+    await app.persistence.flush();
+    return { status: 201, body: { orderId: out.orderId, campaignId: c.id, paidCents: out.totalCents, bottles: app.prepaid.progress(c) } };
+  } });
+  route({ method: 'POST', url: '/v1/ads/campaigns/:id/quote', scope: 'campaigns', summary: 'What paying up front for this ad’s bottles would cost. Nothing is charged.', body: obj({ bottles: { type: 'integer', minimum: 1, maximum: 1_000_000 }, ...choice }, ['bottles']), handler: async (req, key) => {
+    const c = prepaidCampaign(key!, (req.params as any).id);
+    const b = req.body as any;
+    return { body: app.prepaid.quote(c.companyId, { bottles: b.bottles, share: b.share, productId: b.productId, extras: b.extras }, c.sizes) };
+  } });
+
+  // The company stops an ad: what wasn't printed goes back to the card. A money step: an owner or finance person,
+  // signed in, with the second step (approvalRoutes), never an API key.
+  route({ method: 'POST', url: '/v1/ads/campaigns/:id/stop', scope: ['invoices', 'admin'], summary: 'Stop a paid ad for good and pay back what wasn’t printed (and extras not used) to the advertiser’s card. An owner or finance person, signed in with the second step, with a reason. Once per ad.', body: obj({ reason: { type: 'string', minLength: 5, maxLength: 300 } }, ['reason']), handler: async (req, key) => {
+    if (!key!.userId || key!.advertiserId || key!.locationId) throw new ApiError(403, 'people_only', 'An owner or finance person stops an ad and pays it back, signed in, not with an API key.');
+    const u = await app.accounts.get(key!.userId);
+    if (!u || u.companyId !== key!.companyId || !['owner', 'finance'].includes(u.role)) throw new ApiError(403, 'owner_or_finance', 'Only an owner or a finance person stops an ad and pays it back.');
+    const out = await app.prepaid.stop({ companyId: key!.companyId, campaignId: (req.params as any).id, by: `user:${u.id}`, reason: (req.body as any).reason });
+    return { status: 201, body: out };
+  } });
+
+  route({ method: 'GET', url: '/v1/ads/billing', scope: 'campaigns', summary: 'How you pay here: up front for bottles (what’s included, fees switched on, the change fee, extras and their prices) and every payment you made.', handler: async (_req, key) => {
+    const company = app.platform.companies.get(key!.companyId)!;
+    const adv = advertiserOf(key);
+    if (!prepaidModel(company)) return { body: { model: 'billed_after' } };
+    return { body: { model: 'prepaid', ...ads.prepaidTerms(company.id), orders: await app.prepaid.orders(company.id, adv) } };
+  } });
+  route({ method: 'POST', url: '/v1/ads/fees/charge', scope: 'invoices', summary: 'Charge now what prepaid advertisers owe for fees switched on (scans, AR, box sides, commission). It runs by itself once a day; a declined card pauses that advertiser’s ads.', handler: async (_req, key) => {
+    if (key!.advertiserId || key!.locationId) throw new ApiError(403, 'missing_scope', 'Only the company charges fees.');
+    return { body: await app.prepaid.chargeFees(key!.companyId) };
+  } });
 
   route({ method: 'GET', url: '/v1/review/campaigns', scope: 'campaigns', summary: 'Ads waiting for content review.', handler: async (_req, key) => {
     companyStaff(key);

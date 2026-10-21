@@ -1,7 +1,8 @@
 import type { Campaign, CompanyConfig, Placement, Product, Share, SlotRect } from '../../core/types';
 import { layoutsFor, type Layout } from './layouts';
 import type { AdEngine, FillRequest, FillResult, PrintAudience } from './contract';
-import { canAfford, priceFor } from './budget';
+import { canAfford, floorPrice, priceFor } from './budget';
+import { flatPricing, prepaidModel } from './billing';
 import { AuctionStats, momentAt, nextRival, paced, piecePrice, rankBidders, rollDay, secondPrice, type AuctionMoment, type Bidder } from './auction';
 
 /**
@@ -25,12 +26,18 @@ export const freewaterAdEngine: AdEngine = {
     const eligible = req.campaigns.filter((c) => isEligible(c, company, location.id, { product, audience: req.audience ?? null }) && !capped(c) && !tooOften(c) && paced(c, moment));
     const why = new Map(eligible.filter((c) => c.targeting.audience).map((c) => [c.id, audienceMatch(c, req.audience ?? null) ?? []]));
 
-    // Shuffle first so equal offers rotate fairly, then rank by the auction.
-    const bidders = rankBidders(shuffle(eligible, random), company, moment, req.stats ?? new AuctionStats());
-    const ranked = bidders.map((b) => b.campaign);
+    // Flat prices: every ad pays its size's price (a prepaid ad, the price it paid), and equal ads take turns.
+    // Otherwise shuffle first so equal offers rotate fairly, then rank by the auction.
+    const flat = flatPricing(company);
+    const bidders = flat ? [] : rankBidders(shuffle(eligible, random), company, moment, req.stats ?? new AuctionStats());
+    const ranked = flat ? shuffle(eligible, random) : bidders.map((b) => b.campaign);
     // What each one pays for the whole label: the second price.
     const labelPrice = new Map<string, { paid: number; bidder: Bidder }>(bidders.map((b, i) => [b.campaign.id, { paid: secondPrice(b, nextRival(bidders, i), company, product), bidder: b }]));
-    const priceOf = (c: Campaign, share: Share) => { const lp = labelPrice.get(c.id); return lp ? piecePrice(lp.paid, company, share, product) : priceFor(c, company, share, factor); };
+    const priceOf = (c: Campaign, share: Share) => {
+      if (c.prepaid) return c.prepaid.priceCents;
+      if (flat) return floorPrice(company, share, factor);
+      const lp = labelPrice.get(c.id); return lp ? piecePrice(lp.paid, company, share, product) : priceFor(c, company, share, factor);
+    };
 
     const chosen: Campaign[] = [];
     const groups = new Set<string>();
@@ -96,6 +103,9 @@ export function isEligible(c: Campaign, company: CompanyConfig, locationId: stri
   if (c.targeting.products?.length && (!p || !c.targeting.products.includes(p.id))) return false;
   if (c.targeting.productCategories?.length && (!p?.category || !c.targeting.productCategories.includes(p.category))) return false;
   if (c.targeting.audience && !audienceMatch(c, ctx.audience ?? null)) return false;
+  // Prepaid companies print only bottles paid for up front, of the product they were paid for.
+  if (prepaidModel(company) && !c.prepaid) return false;
+  if (c.prepaid) return (!p || p.id === c.prepaid.productId) && canAfford(c, company, c.prepaid.share, p?.priceFactor ?? 1);
   const cheapest = Math.max(...c.sizes) as Share; // the smallest piece costs least
   return canAfford(c, company, cheapest, p?.priceFactor ?? 1);
 }
@@ -134,7 +144,7 @@ function assign(layout: Layout, chosen: Campaign[], house: Campaign | undefined,
   for (const { share, slotIndex } of order) {
     const rect = layout.rects[slotIndex]!;
     const cost = (c: Campaign) => (priceOf ? priceOf(c, share) : priceFor(c, company, share, factor));
-    const affordable = (c: Campaign) => (c.buy.type === 'guaranteed' ? c.buy.remainingPrints > 0 : priceOf ? c.buy.spentTodayCents + cost(c) <= c.buy.dailyCapCents : canAfford(c, company, share, factor));
+    const affordable = (c: Campaign) => (c.prepaid ? canAfford(c, company, share, factor) : c.buy.type === 'guaranteed' ? c.buy.remainingPrints > 0 : priceOf ? c.buy.spentTodayCents + cost(c) <= c.buy.dailyCapCents : canAfford(c, company, share, factor));
     const i = pool.findIndex((c) => c.sizes.includes(share) && affordable(c));
     if (i >= 0) {
       const c = pool.splice(i, 1)[0]!;

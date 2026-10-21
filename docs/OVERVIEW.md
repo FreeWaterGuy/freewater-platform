@@ -4,17 +4,17 @@
 
 FreeWater gives people free, high-quality bottled water, paid for by the ads on the bottle. Each bottle is printed on
 the spot with up to ten ads, and each ad has its own QR code. When someone scans a code they get the advertiser's
-page, an offer, a 3D model to view in AR, or a way to buy. Advertisers pay only for what really happened: bottles
-actually printed, scans and AR launches that actually loaded, and a commission on sales that can be traced back to
-that exact bottle. Taps on links are counted, never billed. Part of every
+page, an offer, a 3D model to view in AR, or a way to buy. Advertisers pay up front for a number of bottles at a
+flat price per size, with AR, video and scans included, and exactly that many bottles go out with their ad. Taps on
+links are counted, never billed. Part of every
 bottle's money goes to clean-water wells through Well Aware, and the books are open for anyone to check. This
 platform is the software that runs all of it. Other companies can also run it under their own brand.
 
 ## The big pieces
 
 **1. The bottle**
-- It takes an order, picks the ads (an auction like Google's), lays out a print-ready label, prints it and drops the
-  bottle.
+- It takes an order, picks the ads (flat prices for the pilot; an auction like Google's for a company that chooses
+  it), lays out a print-ready label, prints it and drops the bottle. Only bottles an advertiser paid for carry its ad.
 - The label is cut into near-square pieces, from the whole label down to a tenth. No two competitors share a
   bottle.
 - It works for any drink and any size. There are samples for a 16 oz bottle, a 25 oz bottle and a 12 oz can.
@@ -46,8 +46,13 @@ platform is the software that runs all of it. Other companies can also run it un
 **6. FreeWater Ads (for advertisers)**
 - Advertisers sign up in a minute and make an ad by chatting with the AI, which can't break anything because every
   change is checked.
-- They preview the ad at every size, then it's approved twice: once by them and once by FreeWater.
-- They see results from the books and pay by invoice or card.
+- They preview the ad at every size, see the exact price, and **pay up front** by card for a number of bottles.
+  Then it's approved twice: once by them and once by FreeWater. Only paid bottles print, and they see "N of M bottles
+  out" until every one is. There's no end date and no cancelling; pausing only delays.
+- Changing a running ad costs a fee ($100 by default), paid up front; the new ad is reviewed before it prints.
+- If FreeWater stops an ad, a person on the team pays back the bottles not printed, to the card.
+- Fees on top (per scan, per AR launch, per box side, commission on sales) each have their own switch and are off.
+  Turned on, they're charged to the card each day, and a declined card pauses the ads at once.
 - Brands can fund **offers** for people.
 
 **7. The game**

@@ -17,6 +17,8 @@ import { boxFaceQr, boxFaceSizes } from '../packs/boxRenderer';
 import type { AdAssistant, ChatMessage } from '../ai/contract';
 import { allowedSizes, applyPatch, draftTargeting, estimate, missing, missingLabels, themeFromPoster, type AdDraft } from './draft';
 import { withCompany } from '../ai/routing';
+import { adBilling, extraPrice, prepaidModel } from './billing';
+import type { PrepaidService, Quote } from './prepaid';
 
 export class AdsError extends Error {
   constructor(public status: number, public code: string, message: string) {
@@ -90,7 +92,35 @@ export class AdsService {
       draft: { ...rest, poster: poster ? { ...poster, image: poster.image ? { role: poster.image.role, attached: true } : undefined } : undefined },
       messages: r.messages, missing: left.map((m) => ({ id: m, label: missingLabels[m] })), ready: left.length === 0,
       estimate: estimate(r.draft, company, this.maxFactor(company.id), r.campaignId ? this.platform.campaigns.get(r.campaignId) : undefined), assistant: this.assistant.name,
+      payment: this.paymentFor(r),
     };
+  }
+
+  /** Set by the app: paying up front for bottles (modules/ads/prepaid). */
+  prepaid?: PrepaidService;
+
+  /**
+   * What submitting this draft will charge, for a company where ads are paid up front: the bottles (a new ad) or the
+   * change fee (a change to a running ad). Null where advertisers are billed after.
+   */
+  private paymentFor(r: DraftRow): { kind: 'bottles'; quote: Quote | null; problem: string | null } | { kind: 'change'; feeCents: number } | null {
+    const company = this.platform.companies.get(r.companyId)!;
+    if (!prepaidModel(company) || !this.prepaid) return null;
+    const live = r.campaignId ? this.platform.campaigns.get(r.campaignId) : undefined;
+    if (live?.prepaid) return { kind: 'change', feeCents: adBilling(company).changeFeeCents };
+    const d = r.draft;
+    if (d.buy?.type !== 'guaranteed') return { kind: 'bottles', quote: null, problem: 'Say how many bottles (at least 100). Ads here are paid up front.' };
+    try { return { kind: 'bottles', quote: this.prepaid.quote(r.companyId, { bottles: d.buy.prints }, d.sizes), problem: null }; }
+    catch (e) { return { kind: 'bottles', quote: null, problem: (e as Error).message }; }
+  }
+
+  /** The exact quote for a draft with the size, product and extras chosen (the review page shows it before paying). */
+  async quoteDraft(id: string, companyId: string, advertiserId: string, choice: { share?: number; productId?: string; extras?: Record<string, number> }) {
+    const r = await this.row(id, companyId, advertiserId);
+    if (!this.prepaid) throw new AdsError(409, 'not_prepaid', 'Ads here are billed after the fact.');
+    const d = r.draft;
+    if (d.buy?.type !== 'guaranteed') throw new AdsError(422, 'bottles_needed', 'Say how many bottles first (at least 100). Ads here are paid up front.');
+    return this.prepaid.quote(companyId, { bottles: d.buy.prints, ...choice }, d.sizes);
   }
 
   async createDraft(input: { companyId: string; advertiserId: string; userId?: string; fromCampaignId?: string }) {
@@ -106,7 +136,12 @@ export class AdsService {
         buy: c.buy.type === 'guaranteed' ? { type: 'guaranteed', prints: c.buy.remainingPrints, unchanged: true } : { type: 'bid', dailyCapCents: c.buy.dailyCapCents, maxCentsPerLabel: c.buy.maxCentsPerLabel, unchanged: true },
         experienceId: c.experienceId, experienceConfig: c.experienceConfig, theme: c.theme,
       };
-      greeting = 'What would you like to change? Changes go back to review before they print.';
+      const company = this.platform.companies.get(input.companyId)!;
+      if (c.prepaid?.stoppedAt) throw new AdsError(409, 'stopped', 'This ad was stopped and its unprinted bottles paid back. Make a new ad instead.');
+      const fee = adBilling(company).changeFeeCents;
+      greeting = c.prepaid
+        ? `What would you like to change? The bottles not printed yet will carry the new ad once it’s reviewed. Changing it costs $${(fee / 100).toFixed(2)}, paid when you submit; the size and the bottles you paid for stay as they are.`
+        : 'What would you like to change? Changes go back to review before they print.';
     }
     const r: DraftRow = { id: newId('dr'), companyId: input.companyId, advertiserId: input.advertiserId, status: 'open', draft, messages: [{ role: 'assistant', text: greeting, at: this.platform.bus.now().toISOString() }], campaignId: input.fromCampaignId ?? null, updatedAt: this.platform.bus.now().toISOString() };
     await this.db.query(`insert into ad_drafts (id, company_id, advertiser_id, created_by, status, data, messages, campaign_id) values ($1,$2,$3,$4,'open',$5,$6,$7)`, [r.id, r.companyId, r.advertiserId, input.userId ?? null, JSON.stringify(r.draft), JSON.stringify(r.messages), r.campaignId]);
@@ -149,7 +184,7 @@ export class AdsService {
         machines: locations.map((l) => ({ id: l.id, name: l.name, kind: l.kind })),
         plugins: this.host.list().filter((p) => p.id !== 'custom-experience' && p.id !== 'house-promo').map(({ id, name, description, example, configSchema }) => ({ id, name, description, example, configSchema })),
         icons: posterIcons, fonts: Object.keys(posterFonts), sizes: allowedSizes,
-        prices: { perPrintByShare: company.prices.perPrintByShare as any, bidStartsAt: bidFloor(company), perScan: company.prices.perScan, perArLaunch: company.prices.perArLaunch, commissionPercent: company.prices.commissionPercent },
+        prices: { perPrintByShare: company.prices.perPrintByShare as any, bidStartsAt: bidFloor(company), perScan: company.prices.perScan, perArLaunch: company.prices.perArLaunch, commissionPercent: company.prices.commissionPercent, ...(prepaidModel(company) ? { prepaid: this.prepaidTerms(company.id) } : {}) },
         missing: missing(r.draft, this.host),
       },
     }));
@@ -168,6 +203,17 @@ export class AdsService {
     r.draft = draft;
     await this.save(r);
     return { ...this.view({ ...r, updatedAt: now }), suggestions: left.length || out.suggestions.length ? out.suggestions : ['Review and submit'] };
+  }
+
+  /** How ads are paid for here, in the terms the assistant and the portal use. */
+  prepaidTerms(companyId: string) {
+    const company = this.platform.companies.get(companyId)!;
+    const b = adBilling(company);
+    return {
+      minBottles: 100, changeFeeCents: b.changeFeeCents, included: 'AR, video and scans are included at every size',
+      feesOn: [b.fees.scan.on ? `${b.fees.scan.cents}¢ per scan` : '', b.fees.arLaunch.on ? `${b.fees.arLaunch.cents}¢ per AR launch` : '', b.fees.boxFace.on ? `${company.prices.perBoxFace}¢ per box side` : '', b.fees.commission.on ? `${b.fees.commission.percent}% of sales` : ''].filter(Boolean),
+      extras: Object.entries(b.extras.perUse).map(([id, x]) => ({ id, label: x.label, perUseCents: extraPrice(company, id)! })),
+    };
   }
 
   /** See it before submitting: every size, on a real label, on a box, and the scan page. */
@@ -224,7 +270,7 @@ export class AdsService {
   async campaignPreview(campaignId: string, companyId: string) {
     const c = this.platform.campaigns.get(campaignId);
     if (!c || c.companyId !== companyId) throw new AdsError(404, 'not_found', 'Campaign not found.');
-    return { campaign: { id: c.id, name: c.name ?? null, advertiser: c.advertiserName, category: c.category, where: c.targeting.locations ?? 'all', buy: c.buy, review: c.review ?? null, experienceId: c.experienceId },
+    return { campaign: { id: c.id, name: c.name ?? null, advertiser: c.advertiserName, category: c.category, where: c.targeting.locations ?? 'all', buy: c.buy, paid: this.prepaid?.progress(c) ?? null, review: c.review ?? null, experienceId: c.experienceId },
       ...(await this.render({ companyId, advertiserId: c.advertiserId, advertiserName: c.advertiserName, category: c.category, draw: (w, h, ctx) => c.creative.svg(w, h, ctx), sizes: c.sizes, formats: c.formats ?? ['label'], experience: { id: c.experienceId, config: c.experienceConfig ?? {} }, theme: c.theme ?? {} })) };
   }
 
@@ -298,7 +344,12 @@ export class AdsService {
     };
   }
 
-  async submit(input: { id: string; companyId: string; advertiserId: string }) {
+  /**
+   * Send the ad for review. Where ads are paid up front, this is also when it's paid for: a new ad's bottles (at the
+   * total the advertiser saw, or nothing is charged), or a change's fee. Nothing is sent for review unless that went
+   * through, and pressing it twice never pays twice.
+   */
+  async submit(input: { id: string; companyId: string; advertiserId: string; pay?: { share?: number; productId?: string; extras?: Record<string, number>; expectedTotalCents?: number; expectedFeeCents?: number } }) {
     const r = await this.row(input.id, input.companyId, input.advertiserId);
     if (r.status !== 'open') throw new AdsError(409, 'already_submitted', 'This ad was already submitted.');
     const left = missing(r.draft, this.host);
@@ -314,6 +365,20 @@ export class AdsService {
     const art = d.studio ? { creative: studioCreative(d.studio), creativeRef: { kind: 'studio' as const, spec: d.studio } } : { creative: posterCreative(spec), creativeRef: { kind: 'poster' as const, spec } };
     const now = this.platform.bus.now().toISOString();
     const existing = r.campaignId ? this.platform.campaigns.get(r.campaignId) : undefined;
+
+    // Paid up front: a new ad pays for its bottles, a change to a paid ad pays the change fee. Then it's reviewed.
+    let paid: { campaignId: string; prepaid: import('../../core/types').PrepaidBottles | null; totalCents: number } | null = null;
+    let feeCents = 0;
+    if (prepaidModel(company) && this.prepaid) {
+      if (existing?.prepaid) {
+        if (existing.prepaid.stoppedAt) throw new AdsError(409, 'stopped', 'This ad was stopped and its unprinted bottles paid back. Make a new ad instead.');
+        feeCents = (await this.prepaid.payChangeFee({ companyId: r.companyId, advertiserId: r.advertiserId, campaignId: existing.id, draftId: r.id, expectedFeeCents: input.pay?.expectedFeeCents }))?.feeCents ?? 0;
+      } else if (!existing) {
+        if (d.buy.type !== 'guaranteed') throw new AdsError(422, 'bottles_needed', 'Ads here are paid up front for a number of bottles (at least 100). Tell the assistant how many.');
+        paid = await this.prepaid.payBottles({ companyId: r.companyId, advertiserId: r.advertiserId, draftId: r.id, quote: { bottles: d.buy.prints, share: input.pay?.share, productId: input.pay?.productId, extras: input.pay?.extras }, expectedTotalCents: input.pay?.expectedTotalCents ?? -1, sizes: d.sizes });
+      }
+    }
+
     // Changing an ad never buys it more bottles or drops its bid settings: a budget left as it was keeps the live
     // ad's own (the bottles left now, which may be fewer than when the change began); a bid keeps its adjustments,
     // pacing, frequency cap and today's spend.
@@ -322,44 +387,53 @@ export class AdsService {
       ? { type: 'guaranteed', remainingPrints: d.buy.unchanged && live?.type === 'guaranteed' ? live.remainingPrints : d.buy.prints }
       : live?.type === 'bid' && d.buy.unchanged ? { ...live }
       : { ...(live?.type === 'bid' ? live : {}), type: 'bid', dailyCapCents: d.buy.dailyCapCents, maxCentsPerLabel: Math.max(d.buy.maxCentsPerLabel ?? (live?.type === 'bid' ? live.maxCentsPerLabel : 0), bidFloor(company)), spentTodayCents: live?.type === 'bid' ? live.spentTodayCents : 0 };
+    const prepaid = existing?.prepaid ?? paid?.prepaid ?? undefined;
     const c: Campaign = {
       ...(existing ?? {}),
-      id: existing?.id ?? newId('cmp'), companyId: r.companyId, advertiserId: r.advertiserId, advertiserName: adv.name,
-      name: d.name ?? (d.studio?.headline ?? spec.headline), category: d.category, sizes: d.sizes, formats: d.formats ?? ['label'],
+      id: existing?.id ?? paid?.campaignId ?? newId('cmp'), companyId: r.companyId, advertiserId: r.advertiserId, advertiserName: adv.name,
+      // A paid ad prints at the one size it was paid for, whatever the change says.
+      name: d.name ?? (d.studio?.headline ?? spec.headline), category: d.category, sizes: prepaid ? [prepaid.share] : d.sizes, formats: d.formats ?? ['label'],
       ...art,
       experienceId: d.experienceId, experienceConfig: d.experienceConfig ?? {}, theme: themeFromPoster(d),
-      targeting: draftTargeting(d, existing), buy,
+      targeting: draftTargeting(d, existing), buy: prepaid ? (existing?.buy ?? buy) : buy,
+      ...(prepaid ? { prepaid } : {}),
       active: false, review: { status: 'submitted', at: now }, createdAt: existing?.createdAt ?? now,
     };
     this.platform.campaigns.set(c.id, c);
+    if (paid) await this.prepaid!.attach(c.id);
     this.platform.persist.campaign(c);
     r.status = 'submitted';
     r.campaignId = c.id;
-    r.messages.push({ role: 'assistant', text: `Submitted. ${company.name} reviews new ads, usually within a day. You'll see it running in your campaigns once it's approved.`, at: now });
+    const money = paid ? `Paid $${(paid.totalCents / 100).toFixed(2)} for ${(c.prepaid?.paid ?? 0).toLocaleString('en-US')} bottles. ` : feeCents ? `Paid the $${(feeCents / 100).toFixed(2)} change fee. ` : '';
+    r.messages.push({ role: 'assistant', text: `${money}Submitted. ${company.name} reviews new ads, usually within a day. You'll see it running in your campaigns once it's approved.`, at: now });
     await this.save(r);
     await this.flush();
-    return { campaignId: c.id, status: 'in_review' };
+    return { campaignId: c.id, status: 'in_review', ...(paid ? { paidCents: paid.totalCents, bottles: c.prepaid?.paid ?? 0 } : {}), ...(feeCents ? { changeFeeCents: feeCents } : {}) };
   }
 
   // ---------- results ----------
 
-  status(c: Campaign): 'in_review' | 'not_approved' | 'running' | 'paused' | 'finished' {
+  status(c: Campaign): 'in_review' | 'not_approved' | 'running' | 'paused' | 'finished' | 'stopped' | 'not_paid' {
+    if (c.prepaid?.stoppedAt) return 'stopped';
+    // Every paid bottle printed (or paid back): done. No end date otherwise; pausing only delays.
+    if (c.prepaid && c.prepaid.printed + c.prepaid.refunded >= c.prepaid.paid) return 'finished';
     if (c.review?.status === 'submitted') return 'in_review';
     if (c.review?.status === 'rejected') return 'not_approved';
+    if (!c.prepaid && !c.isHouse && prepaidModel(this.platform.companies.get(c.companyId)!)) return 'not_paid';
     if (c.buy.type === 'guaranteed' && c.buy.remainingPrints <= 0) return 'finished';
     return c.active ? 'running' : 'paused';
   }
 
   async overview(input: { companyId: string; advertiserId: string; days: number }) {
     const company = this.platform.companies.get(input.companyId)!;
-    const acct = `receivable:advertiser:${input.advertiserId}`;
+    const acct = `receivable:advertiser:${input.advertiserId}`, pre = `prepaid:advertiser:${input.advertiserId}`;
     // Days as the company counts them (its time zone), the same days its advertisers' daily budgets run on.
     const tz = company.timezone ?? 'UTC';
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(this.platform.bus.now());
     const dayBefore = (d: string, n: number) => new Date(Date.parse(`${d}T12:00:00Z`) - n * 86_400_000).toISOString().slice(0, 10);
     const lines = (await this.db.query<any>(
-      `select campaign_id, kind, to_char(at at time zone $3, 'YYYY-MM-DD') as day, debit = $2 as owes, count(*)::int as n, sum(amount_cents)::bigint as cents
-       from ledger_entries where company_id = $1 and (debit = $2 or credit = $2) group by 1, 2, 3, 4`, [input.companyId, acct, tz])).rows;
+      `select campaign_id, kind, to_char(at at time zone $3, 'YYYY-MM-DD') as day, debit in ($2, $4) as owes, count(*)::int as n, sum(amount_cents)::bigint as cents
+       from ledger_entries where company_id = $1 and (debit in ($2, $4) or credit in ($2, $4)) and kind not in ('payment', 'prepay_refund') group by 1, 2, 3, 4`, [input.companyId, acct, tz, pre])).rows;
     const engaged = (await this.db.query<any>(
       `select payload->>'campaignId' as campaign_id, payload->>'action' as action, count(*)::int as n from events
        where company_id = $1 and type = 'experience.engaged' and payload->>'advertiserId' = $2 group by 1, 2`, [input.companyId, input.advertiserId])).rows;
@@ -377,7 +451,7 @@ export class AdsService {
       if (r.kind === 'scan') t.scans += n;
       if (r.kind === 'ar') t.arLaunches += n;
       if (r.kind === 'box_face') t.boxFaces += n;
-      if (r.kind === 'commission' || r.kind === 'commission_reversal') { t.sales += n; t.salesCents += Math.round((cents * 100) / company.prices.commissionPercent); }
+      if ((r.kind === 'commission' || r.kind === 'commission_reversal') && company.prices.commissionPercent) { t.sales += n; t.salesCents += Math.round((cents * 100) / company.prices.commissionPercent); }
     };
     const total = blank(), period = blank();
     const byCampaign = new Map<string, Totals>();
@@ -404,13 +478,14 @@ export class AdsService {
       .map((c) => ({
         id: c.id, name: c.name ?? (c.creativeRef?.kind === 'poster' || c.creativeRef?.kind === 'studio' ? c.creativeRef.spec.headline : c.advertiserName), status: this.status(c), review: c.review ?? null, creditHold: c.creditHold ?? null,
         sizes: c.sizes, formats: c.formats ?? ['label'], where: c.targeting.locations ?? 'all', experienceId: c.experienceId,
-        budget: c.buy.type === 'guaranteed' ? { type: 'guaranteed', bottlesLeft: c.buy.remainingPrints } : { type: 'bid', dailyCapCents: c.buy.dailyCapCents, spentTodayCents: c.buy.spentTodayCents },
+        budget: c.prepaid ? { type: 'prepaid', ...this.prepaid!.progress(c)! } : c.buy.type === 'guaranteed' ? { type: 'guaranteed', bottlesLeft: c.buy.remainingPrints } : { type: 'bid', dailyCapCents: c.buy.dailyCapCents, spentTodayCents: c.buy.spentTodayCents },
         editable: c.creativeRef?.kind === 'poster' || c.creativeRef?.kind === 'studio',
         thumbSvg: `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(thumbW)}" height="450" viewBox="0 0 ${thumbW.toFixed(1)} 450">${c.creative.svg(thumbW, 450)}</svg>`,
         results: byCampaign.get(c.id) ?? blank(),
       }));
     const adv = await this.advertiser(input.companyId, input.advertiserId);
-    return { advertiser: adv, days: input.days, total, period, daily: [...days.entries()].map(([day, t]) => ({ day, ...t })), campaigns, drafts: await this.listDrafts(input.companyId, input.advertiserId), prices: estimate({}, company, this.maxFactor(company.id)) };
+    const billing = prepaidModel(company) ? { model: 'prepaid' as const, ...this.prepaidTerms(company.id), orders: this.prepaid ? await this.prepaid.orders(input.companyId, input.advertiserId) : [] } : { model: 'billed_after' as const };
+    return { advertiser: adv, days: input.days, total, period, daily: [...days.entries()].map(([day, t]) => ({ day, ...t })), campaigns, drafts: await this.listDrafts(input.companyId, input.advertiserId), prices: estimate({}, company, this.maxFactor(company.id)), billing };
   }
 
   // ---------- content review (the company) ----------

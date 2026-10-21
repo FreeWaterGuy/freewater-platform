@@ -383,6 +383,17 @@ export class SqlPersistence implements Persistence {
         [c.id, c.companyId, c.advertiserId, data]);
   }
 
+  /**
+   * A paid bottle printed (held → printed) or let go (held → free). Guarded so it can never break the table's rules and
+   * hold up every other change: a move the counts can't take is left out, and the daily reconciliation, which counts
+   * printed bottles from the bottles themselves, reports the difference for a person.
+   */
+  prepaid(companyId: string, campaignId: string, move: 'printed' | 'released') {
+    this.enqueue('prepaid', move === 'printed'
+      ? `update ad_prepaid set held = greatest(held - 1, 0), printed = printed + 1 where campaign_id = $1 and company_id = $2 and printed + 1 + greatest(held - 1, 0) + refunded <= paid`
+      : `update ad_prepaid set held = held - 1 where campaign_id = $1 and company_id = $2 and held > 0`, [campaignId, companyId]);
+  }
+
   pack(p: Pack) {
     const data = JSON.stringify(p);
     this.enqueue('pack', 

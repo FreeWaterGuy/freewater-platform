@@ -9,7 +9,8 @@ it off again. Read it before going live, and keep it open the first time you fli
   itself on.
 - **Turning something off is always quick.** Turning it on is the slow, careful direction.
 - **Only a person signed in can flip a money or one-way switch.** That covers money, offers, the blockchain, launch,
-  giving, the giving promise, the AI agents' fund, minimum age, the prize game, data rules, security and which AI.
+  giving, the giving promise, the AI agents' fund, minimum age, the prize game, data rules, security, which AI and
+  how advertisers pay.
   A service key (the kind a machine or a script uses) can't, and neither can it approve an AI agent's proposal,
   fund a reserve, correct an entry, or record anything on the team page.
 - **Minimum age, the AI agents' fund and (once live) the blockchain's approval rules only ever go up.**
@@ -21,7 +22,7 @@ it off again. Read it before going live, and keep it open the first time you fli
   step was proposed (and still hold it) can approve it. Finance people can propose, approve and press pause; running a
   step, cancelling it and going live with points stay with owners.
 - **New companies always start safe.** A new licensee starts in testing with every money, blockchain, offer and AI
-  fund switch off, whatever FreeWater's own switches are.
+  fund switch off, whatever FreeWater's own switches are, and with its advertisers paying up front, every fee off.
 - **Machines have a print limit** (6 a minute and 1,500 a day by default; *Machines* settings), so a stolen machine key
   can't bill advertisers at scale. Revoke a lost machine's key at once.
 - **The safety limits never come off.** The pause switch, the daily check of the books, the approval rules and the
@@ -76,10 +77,51 @@ wait is over. Anyone on the team can cancel a step before it runs.
 | **Withdrawals** (people moving tokens to their own wallets) | Tokens stay in custody. | *Launch → Propose turning on withdrawals*: approvals and the wait, after going live with the token. | *Launch → Turn withdrawals off*, any time. | |
 | **Points into tokens** (a one-time conversion) | — | *Launch → Propose the conversion*, with the rate (1,000,000 units = 1 token): approvals, the wait, then signing in Squads. One at a time. | Cancel it before it runs. Once signed and recorded, it's done. | |
 
-### Credit for advertisers
+### How advertisers pay
 
-Advertisers are billed after the fact: each invoice covers what already printed (and scans, AR launches, box sides,
-commission). So the platform doesn't decide who is good for the money; a person does, and until they do it plays safe.
+**We don't print anything until it's paid for.** Each company sets this under *Ads and prices → How advertisers pay*
+(the `adBilling` setting). FreeWater and every new company start like this:
+
+| Setting | FreeWater (and every new company) | What it means |
+|---|---|---|
+| **Paying up front** (`requirePrepay`) | On | An advertiser pays by card for a number of bottles before its ad is reviewed. Only paid bottles print. |
+| **Pricing** (`pricingMode`) | Flat | One price per bottle for each size: whole label $1, ½ 65¢, ⅓ 51¢, ¼ 42¢, ⅙ 33¢, ⅛ 24¢, 1/10 20¢, times the product's price factor (the 25 oz bottle is 1.25×). AR, video and scans are included at every size. The auction is for companies that bill after (below). |
+| **Fee per scan** (`fees.scan`) | Off (25¢ when on) | Each its own switch and price. When one is on it's charged to the advertiser's card **once a day**, automatically; there's no invoice to wait on. A declined card pauses that advertiser's ads at once (the same pause as credit, below); they start again once the card works and the ad is turned back on. |
+| **Fee per AR launch** (`fees.arLaunch`) | Off (40¢ when on) | |
+| **Fee per box side** (`fees.boxFace`) | Off (the box side price, 40¢) | Off: box sides with a paid ad are included. |
+| **Commission on sales** (`fees.commission`) | Off (3% when on) | Off: sales are still tracked and shown, never charged. |
+| **Fee for changing an ad** (`changeFeeCents`) | $100 | Paid up front when the change is submitted. The new ad is reviewed before it prints; the bottles not printed yet carry it once approved. The fee is the guard against changes every day. |
+| **Costly extras** (`extras`) | AI video clip (Veo): $3 cost, 50% markup = $4.50 a clip | Cost plus the markup, paid up front with the bottles; the advertiser sees it in the quote. No paid clip left, no clip made. What each use really cost is recorded; if an ad's extras cost more than it paid, the team is told (it's never billed more). |
+
+**The advertiser, step by step:** make the ad in the chat → the review page shows the exact total (bottles × price,
+plus extras) → **Pay and submit** charges the card (a total that changed since it was shown charges nothing) → the
+company reviews it → it prints until every paid bottle is out ("N of M bottles out"). There's **no end date and no
+cancel button**: pausing only delays. A failed or abandoned print gives its bottle back.
+
+**Bottles in delivery packs and at machines** each draw one paid bottle from every paid ad on them; a pack's bottles
+are printed one by one, so a pack of 12 with a paid ad on 6 of its bottles draws 6.
+
+**In the books:** the payment is the advertiser's money held for them (`prepaid:advertiser:<id>`, a liability); each
+printed bottle moves its price to earned (`revenue:print`); a change fee is earned when paid
+(`revenue:change_fee`); an extra used moves its price to `revenue:extras`. The daily reconciliation checks every
+prepaid ad's paid, printed and printing bottles against the bottles themselves and the books, and each advertiser's
+prepaid balance against what's left to print. The database refuses a prepaid balance below nothing and more bottles
+printed than paid.
+
+**Stopping an ad (FreeWater, not the advertiser).** *Ads → the ad → Stop and pay back*
+(`POST /v1/ads/campaigns/<id>/stop` with a reason). Only an owner or finance person, signed in with the second step,
+never an API key. Nothing more prints; the bottles not printed (at the price paid) and extras not used go back to
+the card, once, and the books record it. While bottles with the ad are printing it waits: pause the ad first.
+
+**Changing these settings** is a money switch: a person signed in, with the second step. Paying up front needs flat
+pricing; turning it off brings back billing after the fact, with credit (below).
+
+### Credit for advertisers (only when paying up front is off)
+
+With paying up front turned off, advertisers are billed after the fact: each invoice covers what already printed (and
+scans, AR launches, box sides, commission). So the platform doesn't decide who is good for the money; a person does,
+and until they do it plays safe. Where paying up front is on, credit limits can't be set (there's nothing to lend),
+and only the fee rules above apply.
 
 | Rule | What it means |
 |---|---|
@@ -94,8 +136,9 @@ set a limit for card holders too if that's too loose. The demo's sample advertis
 Before going live, set a limit or get a card for every real advertiser whose ads are running: with neither, their
 ads pause within the hour once they owe anything.
 
-**A bid's daily amount** (`dailyCapCents`) caps only what its printed labels cost each day. Scans, AR launches, box
-sides and sales commission are billed on top; advertisers are told so where they set it.
+**A bid's daily amount** (`dailyCapCents`, billed-after companies with the auction) caps only what its printed labels
+cost each day. Scans, AR launches, box sides and sales commission are billed on top; advertisers are told so where
+they set it.
 
 **Brand reserves:** credit is never paid from thin air. When a brand's money has really arrived, record it under
 *Points and credit → Brand reserves*. Credit and offer payouts come only from that reserve, never more than it holds.

@@ -1,4 +1,5 @@
 // Sample data for the demo and tests. All advertisers here are made-up brands; prices are placeholders.
+import { defaultAdBilling } from '../modules/ads/billing';
 import { SHARES, type BoxProduct, type Campaign, type CompanyConfig, type Creative, type Location, type Product, type Share } from '../core/types';
 
 export const bottle16oz: Product = {
@@ -86,6 +87,9 @@ export const freewater: CompanyConfig = {
   unitCosts: { water: 4, bottle: 18, label: 3, machine: 6 }, // placeholders until real costs are known
   adRules: { minAdsPerUnit: 1, maxAdsPerUnit: 10, blockedCategories: ['alcohol', 'tobacco', 'gambling', 'weapons'], competitorSeparation: true, repeatScanWindowSec: 600, maxPackShare: 0.5 },
   prices: freewaterPrices,
+  // The pilot: advertisers pay up front for their bottles at these flat prices, AR, video and scans included. Fees on
+  // top (per scan, per AR launch, per box side, commission) are each off until a person turns one on.
+  adBilling: defaultAdBilling(),
   modules: { ads: 'freewater-ads', renderer: 'svg-label', printer: 'virtual-printer' },
   standardProductId: 'bottle-16oz',
   qr: { logo: 'brand', advertiserLogos: true, allowStatic: true },

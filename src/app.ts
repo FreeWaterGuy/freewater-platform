@@ -32,6 +32,8 @@ import { fileURLToPath as toPath } from 'node:url';
 import type { DesignAssistant } from './modules/ai/designContract';
 import { DeliveryService } from './modules/delivery/service';
 import { CreditService } from './modules/ads/credit';
+import { PrepaidService } from './modules/ads/prepaid';
+import { prepaidModel } from './modules/ads/billing';
 import { SimpleRoutePlanner, type RoutePlanner } from './modules/delivery/planner';
 import { TestGeocoder, type Geocoder } from './adapters/geocoding/contract';
 import { OpsService } from './modules/ops/service';
@@ -282,6 +284,8 @@ export async function createApp(opts: AppOptions) {
   const footageCeiling = Number(process.env.FOOTAGE_PER_COMPANY_DAY ?? '');
   if (process.env.FOOTAGE_PER_COMPANY_DAY && Number.isInteger(footageCeiling) && footageCeiling >= 0) videos.perCompanyDay = footageCeiling;
   videos.alert = (key, title, detail) => void runtime.alerts.alert(key, 'warning', title, detail);
+  // Each footage clip is a costly extra: paid up front, or not made (what it really cost is recorded against it).
+  videos.extras = { claim: (c) => prepaid.claimExtra(c, 'aiVideoClip'), settle: (id, made, cost) => prepaid.settleExtra(id, made, cost) };
   experiences.videos = videos;
   const interactions = new InteractionService(db, platform, opts.clock);
   const data = new DataService(db, platform, interactions, opts.clock);
@@ -345,8 +349,27 @@ export async function createApp(opts: AppOptions) {
   // set, and pauses once its advertiser owes more than that (docs/SWITCHES.md, "Credit for advertisers").
   const credit = new CreditService(db, platform, messenger, () => persistence.flush());
   credit.alert = (key, title, detail) => void runtime.alerts.alert(key, 'warning', title, detail);
-  ads.beforeLive = (c) => credit.needCredit(c);
   platform.bus.on('invoice.failed', (e) => { void credit.enforce(e.companyId, e.payload.advertiserId).catch(() => {}); });
+  // Paying up front (docs/SWITCHES.md, "How advertisers pay"): quote, pay, review; only paid bottles print, each claimed
+  // in the database before its label is drawn; fees switched on are charged daily; a stopped ad is paid back.
+  const prepaid = new PrepaidService(db, platform, payments, () => persistence.flush());
+  prepaid.alert = (key, title, detail) => void runtime.alerts.alert(key, 'warning', title, detail);
+  prepaid.credit = credit;
+  ads.prepaid = prepaid;
+  ads.beforeLive = (c) => prepaid.beforeLive(c);
+  platform.claimPrepaid = (companyId, ids) => prepaid.claim(companyId, ids);
+  await prepaid.restore();
+  // The demo's made-up advertisers have paid for their sample ads (the test card, no real money), so they print.
+  if (demoKeys) for (const c of sampleCampaigns().filter((x) => !x.isHouse && x.buy.type === 'guaranteed')) {
+    const live = platform.campaigns.get(c.id);
+    if (!live || live.prepaid || !prepaidModel(platform.companies.get(c.companyId)!)) continue;
+    try {
+      await payments.addMethod(c.companyId, 'advertiser', c.advertiserId, 'tok_visa');
+      const share = [...c.sizes].sort((a, b) => a - b)[Math.floor((c.sizes.length - 1) / 2)]!;
+      const quote = prepaid.quote(c.companyId, { bottles: c.buy.type === 'guaranteed' ? c.buy.remainingPrints : 0, share }, c.sizes);
+      await prepaid.payBottles({ companyId: c.companyId, advertiserId: c.advertiserId, campaignId: c.id, quote: { bottles: quote.bottles, share }, expectedTotalCents: quote.totalCents, sizes: c.sizes });
+    } catch { /* a provider that doesn't know the test card: the sample ad stays unpaid */ }
+  }
 
   const builtinDesigner = new BuiltinDesigner();
   const designer = opts.designer ?? (aiOn ? new ClaudeDesigner({ apiKey: anthropicKey, model: process.env.ANTHROPIC_MODEL, fallback: builtinDesigner }) : builtinDesigner);
@@ -549,6 +572,7 @@ export async function createApp(opts: AppOptions) {
     wallet, flush: () => persistence.flush(), today: (companyId, at) => delivery.today(companyId, at),
     anchors: (companyId) => anchors.list(companyId), days: (companyId) => books.days(companyId),
     charities: async (companyId) => (await books.charities(companyId)).map((c: any) => c.name),
+    more: (companyId) => prepaid.checks(companyId),
   });
   await payments.repairUnrecorded();
   for (const c of platform.companies.values()) { await books.repairUnrecorded(c.id); await profit.repairShares(c.id); }
@@ -559,7 +583,7 @@ export async function createApp(opts: AppOptions) {
   await attribution.repairUnrecorded();
   await persistence.flush();
 
-  return { ...made, features, db, persistence, runtime, demoKeys, accounts, payments, credit, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
+  return { ...made, features, db, persistence, runtime, demoKeys, accounts, payments, credit, prepaid, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

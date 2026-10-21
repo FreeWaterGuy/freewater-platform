@@ -4,6 +4,10 @@ type EventPayloadsEngagement = EventPayloads['unit.scanned'] | EventPayloads['ar
 type BoxEngagement = EventPayloads['box.scanned'] | EventPayloads['box.ar_launched'];
 import { newId } from '../../core/ids';
 import type { BoxFacePlacement, Cents, CompanyConfig, Placement } from '../../core/types';
+import { commissionPercent, engagementFee } from '../ads/billing';
+
+/** Where an advertiser's money paid up front sits until bottles print (a liability: it's still theirs). */
+export const prepaidAccount = (advertiserId: string) => `prepaid:advertiser:${advertiserId}`;
 
 /** The most scans (and, separately, AR launches) of one ad on one bottle or box side billed in a day. */
 export const MAX_BILLED_PER_SLOT_PER_DAY = 10;
@@ -36,7 +40,7 @@ export interface LedgerEntry {
   debit: string;
   credit: string;
   amountCents: Cents;
-  kind: 'print' | 'scan' | 'ar' | 'commission' | 'commission_reversal' | 'custom' | 'donation' | 'box_face' | 'payment' | 'charity_transfer' | 'expense' | 'prize' | 'ai_fund' | 'ai_allocation' | 'ai_spend' | 'reinvestment' | 'owner_payout' | 'giving_redirect' | 'reserve';
+  kind: 'print' | 'scan' | 'ar' | 'commission' | 'commission_reversal' | 'custom' | 'donation' | 'box_face' | 'payment' | 'charity_transfer' | 'expense' | 'prize' | 'ai_fund' | 'ai_allocation' | 'ai_spend' | 'reinvestment' | 'owner_payout' | 'giving_redirect' | 'reserve' | 'extra' | 'prepay_refund';
   memo: string;
 }
 
@@ -90,8 +94,13 @@ export class Ledger {
     bus.on('box.ar_launched', (e) => this.onBoxEngagement(e, 'ar'));
     bus.on('payment.captured', (e) => {
       const p = e.payload;
+      // Paid up front for an ad's bottles: held for the advertiser until they print. A change fee is earned when paid.
+      if (p.purpose === 'ad_order') return this.add(e, { debit: `cash:${p.provider}`, credit: prepaidAccount(p.payerId), amountCents: p.amountCents, kind: 'payment', memo: `Paid in advance for an ad's bottles (order ${p.ref})` });
+      if (p.purpose === 'ad_change') return this.add(e, { debit: `cash:${p.provider}`, credit: 'revenue:change_fee', amountCents: p.amountCents, kind: 'payment', memo: `Fee for changing an ad (order ${p.ref})` });
       this.add(e, { debit: `cash:${p.provider}`, credit: `receivable:${p.payerType === 'user' ? 'customer' : 'advertiser'}:${p.payerId}`, amountCents: p.amountCents, kind: 'payment', memo: p.purpose === 'invoice' ? `Invoice ${p.ref} paid` : `Custom bottle order ${p.ref} paid` });
     });
+    bus.on('ad.extra_used', (e) => this.add(e, { campaignId: e.payload.campaignId, debit: prepaidAccount(e.payload.advertiserId), credit: 'revenue:extras', amountCents: e.payload.chargedCents, kind: 'extra', memo: `${e.payload.advertiserName}, one ${e.payload.feature} (paid in advance)` }));
+    bus.on('ad.refunded', (e) => this.add(e, { campaignId: e.payload.campaignId, debit: prepaidAccount(e.payload.advertiserId), credit: `cash:${e.payload.provider}`, amountCents: e.payload.totalCents, kind: 'prepay_refund', memo: `${e.payload.advertiserName}'s ad stopped by the company: ${e.payload.bottles} unprinted bottle(s) and unused extras paid back (refund ${e.payload.refundId})` }));
     // Money going out: donations sent to charities, and the costs of running the business.
     bus.on('charity.transferred', (e) => this.add(e, { debit: `payable:charity:${e.payload.charity}`, credit: `cash:${e.payload.provider}`, amountCents: e.payload.amountCents, kind: 'charity_transfer', memo: `Transfer ${e.payload.number} to ${e.payload.charity}` }));
     // A prize won: owed to the winner until it's handed over.
@@ -171,7 +180,8 @@ export class Ledger {
     for (const p of placements) {
       if (p.isHouse) continue;
       revenue += p.priceCents;
-      this.add(e, { unitId, campaignId: p.campaignId, debit: `receivable:advertiser:${p.advertiserId}`, credit: 'revenue:print', amountCents: p.priceCents, kind: 'print', memo: `${p.advertiserName}, ${p.share ? (p.share === 1 ? 'whole label' : `1/${p.share} of the label`) : `${p.sixths}/6 slot`}, printed` });
+      // A bottle paid for up front moves its price from what the advertiser prepaid to what's earned.
+      this.add(e, { unitId, campaignId: p.campaignId, debit: p.prepaid ? prepaidAccount(p.advertiserId) : `receivable:advertiser:${p.advertiserId}`, credit: 'revenue:print', amountCents: p.priceCents, kind: 'print', memo: `${p.advertiserName}, ${p.share ? (p.share === 1 ? 'whole label' : `1/${p.share} of the label`) : `${p.sixths}/6 slot`}, printed${p.prepaid ? ' (paid in advance)' : ''}` });
     }
 
     const g = company.giving;
@@ -244,6 +254,8 @@ export class Ledger {
   private onBoxPrinted(e: PlatformEvent<'box.printed'>) {
     this.printedBoxes.set(e.payload.packId, e.payload.faces);
     for (const f of e.payload.faces) if (!f.isHouse) this.countPrinted(f.campaignId);
+    // Prepaid companies charge for box sides only when a person switched that fee on.
+    if (engagementFee(this.company(e.companyId), 'boxFace') === null) return;
     for (const f of e.payload.faces) {
       if (f.isHouse) continue;
       this.add(e, { packId: e.payload.packId, campaignId: f.campaignId, debit: `receivable:advertiser:${f.advertiserId}`, credit: 'revenue:box', amountCents: f.priceCents, kind: 'box_face', memo: `${f.advertiserName}, ${f.face} of the box, printed` });
@@ -261,6 +273,10 @@ export class Ledger {
     const unit = this.printedUnits.get(p.unitId);
     const placement = unit?.placements.find((x) => x.slotIndex === p.slotIndex);
     if (!placement || placement.isHouse) return;
+    // Prepaid: scans and AR are included unless a person switched their fee on. Nothing is billed, nothing counted
+    // toward a billing ceiling.
+    const fee = engagementFee(company, kind);
+    if (fee === null) return;
 
     if (this.isRepeat(`${kind}:${p.unitId}:${p.slotIndex}:${p.viewerKey}`, e.at.getTime(), company)) return; // repeat, free
     if (this.overDailyCap(`${kind}:${p.unitId}:${placement.campaignId}`, e.at, company)) return; // more than a bottle's few holders: free
@@ -268,7 +284,7 @@ export class Ledger {
 
     // Targeted ads pay more per engagement: the base price plus the campaign's targeting premium.
     const pct = this.premium(placement.campaignId);
-    const amount = Math.round((kind === 'scan' ? company.prices.perScan : company.prices.perArLaunch) * (1 + pct / 100));
+    const amount = Math.round(fee * (1 + pct / 100));
     this.add(e, { unitId: p.unitId, campaignId: placement.campaignId, debit: `receivable:advertiser:${placement.advertiserId}`, credit: `revenue:${kind}`, amountCents: amount, kind, memo: `${placement.advertiserName}, ${kind === 'scan' ? 'scan' : 'AR launch'}${pct ? ` (+${pct}% for targeting)` : ''}` });
     this.giveShare(e, company, amount, { unitId: p.unitId }, unit!.locationId, kind === 'scan' ? 'a scan' : 'an AR launch');
   }
@@ -291,11 +307,13 @@ export class Ledger {
     if (!loaded || p.unbilled) return;
     const face = this.printedBoxes.get(p.packId)?.find((f) => f.face === p.face);
     if (!face || face.isHouse) return;
+    const fee = engagementFee(company, kind);
+    if (fee === null) return;
     if (this.isRepeat(`box-${kind}:${p.packId}:${p.face}:${p.viewerKey}`, e.at.getTime(), company)) return;
     if (this.overDailyCap(`box-${kind}:${p.packId}:${face.campaignId}`, e.at, company)) return;
     if (this.overCampaignCeiling(e.companyId, face.campaignId, face.advertiserId, kind, e.at, company)) { this.uncount(`box-${kind}:${p.packId}:${face.campaignId}`, e.at, company); return; }
     const pct = this.premium(face.campaignId);
-    const amount = Math.round((kind === 'scan' ? company.prices.perScan : company.prices.perArLaunch) * (1 + pct / 100));
+    const amount = Math.round(fee * (1 + pct / 100));
     this.add(e, { packId: p.packId, campaignId: face.campaignId, debit: `receivable:advertiser:${face.advertiserId}`, credit: `revenue:${kind}`, amountCents: amount, kind, memo: `${face.advertiserName}, ${kind === 'scan' ? 'scan' : 'AR launch'} from the ${p.face} of a box` });
     this.giveShare(e, company, amount, { packId: p.packId }, undefined, kind === 'scan' ? 'a scan' : 'an AR launch');
   }
@@ -441,7 +459,8 @@ export class Ledger {
       return;
     }
     if (this.sales.has(key)) return; // the same order again: billed once
-    const amount = Math.round((p.amountCents * company.prices.commissionPercent) / 100);
+    // Prepaid: commission only when a person switched it on. The sale is still recorded (for refunds and the checks).
+    const amount = Math.round((p.amountCents * (commissionPercent(company) ?? 0)) / 100);
     const adv = `receivable:advertiser:${placement.advertiserId}`;
     const where = p.unitId !== undefined ? { unitId: p.unitId } : { packId: p.packId };
     const loc = p.unitId !== undefined ? this.printedUnits.get(p.unitId)?.locationId : undefined;

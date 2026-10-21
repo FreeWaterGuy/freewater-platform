@@ -65,7 +65,7 @@ export interface StoryWriter {
 export interface FootageProvider {
   readonly name: string;
   readonly styles: readonly VideoStyle[];
-  start(brief: VideoBrief, style: Exclude<VideoStyle, 'motion'>): Promise<{ jobId: string; prompt: string }>;
+  start(brief: VideoBrief, style: Exclude<VideoStyle, 'motion'>): Promise<{ jobId: string; prompt: string; /** What this clip really cost, when the provider says. */ costCents?: number }>;
   /** Not done yet: null. Done: the video's bytes (MP4). Failed: throws. */
   check(jobId: string): Promise<Uint8Array | null>;
 }

@@ -485,8 +485,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       if (b.theme !== undefined) c.theme = b.theme;
       if (!reviewer) c.active = false;
     }
-    // Going live (approved by a reviewer, or turned back on by the advertiser) needs the advertiser's credit to allow it.
-    if (b.active === true && !c.active && (reviewer || (approved && !changesPage))) await app.credit.needCredit(c);
+    // Going live (approved by a reviewer, or turned back on by the advertiser): paid up front with bottles left, or (billed
+    // after) the advertiser's credit allows it. The same check as the review queue's (one rule, every route).
+    if (b.active === true && !c.active && (reviewer || (approved && !changesPage))) await app.ads.beforeLive(c);
     if (b.active !== undefined && (reviewer || b.active === false || (approved && !changesPage))) c.active = b.active;
     if (reviewer && b.active === true) c.review = { status: 'approved', at: platform.bus.now().toISOString() };
     if (changesPage && !reviewer) c.review = { status: 'submitted', at: platform.bus.now().toISOString() };

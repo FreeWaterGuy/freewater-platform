@@ -18,7 +18,11 @@ export interface AdAssistantInput {
     icons: readonly string[];
     fonts: string[];
     sizes: number[];
-    prices: { perPrintByShare: Record<string, number>; bidStartsAt: number; perScan: number; perArLaunch: number; commissionPercent: number };
+    prices: {
+      perPrintByShare: Record<string, number>; bidStartsAt: number; perScan: number; perArLaunch: number; commissionPercent: number;
+      /** Set where ads are paid up front for a number of bottles (then there are no bids or daily amounts). */
+      prepaid?: { minBottles: number; changeFeeCents: number; included: string; feesOn: string[]; extras: { id: string; label: string; perUseCents: number }[] };
+    };
     missing: Missing[];
   };
 }

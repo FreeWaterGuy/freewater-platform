@@ -143,6 +143,11 @@ const jobs: Job[] = [
   { name: 'deliveries-overdue', everyMs: 3600_000, timeoutMs: 5 * 60_000, run: () => perCompany('deliveries-overdue', (id) => app!.delivery.overdue(id)) },
   // Each hour: pause the ads of advertisers who owe more than their credit allows (docs/SWITCHES.md). It only pauses.
   { name: 'credit', everyMs: 3600_000, timeoutMs: 10 * 60_000, run: saved(() => perCompany('credit', (id) => app!.credit.enforce(id))) },
+  // Each day: fees a person switched on for prepaid advertisers (scans, AR, box sides, commission) are charged to their
+  // card; a declined card pauses their ads at once (docs/SWITCHES.md, "How advertisers pay"). Each hour, payments for
+  // ads and refunds a restart or a timeout cut off are finished from the provider's answer.
+  { name: 'ad-fees', everyMs: 24 * 3600_000, timeoutMs: 30 * 60_000, run: saved(() => perCompany('ad-fees', (id) => app!.prepaid.chargeFees(id))) },
+  { name: 'ad-payments', everyMs: 3600_000, timeoutMs: 10 * 60_000, run: saved(() => perCompany('ad-payments', (id) => app!.prepaid.recover(id))) },
   { name: 'videos', everyMs: 10_000, timeoutMs: 120_000, run: saved(() => app!.videos.tick()) },
   // Each hour: close any month that's due, measure changes whose week is up, read every agent's standing, share out
   // the AI fund, and have the security agent look around.

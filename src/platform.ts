@@ -3,7 +3,7 @@ import { newId, seededRandom } from './core/ids';
 import { noPersistence, type Persistence } from './core/persistence';
 import { Registry } from './core/registry';
 import type { Campaign, CompanyConfig, Creative, Location, Placement, Product, Unit } from './core/types';
-import { release, reserve } from './modules/ads/budget';
+import { drawn, release, reserve } from './modules/ads/budget';
 import { targetingPremium } from './modules/ads/targeting';
 import { AuctionStats, momentAt } from './modules/ads/auction';
 import { Ledger } from './modules/ledger/ledger';
@@ -70,6 +70,12 @@ export class Platform {
   readonly auctionStats = new AuctionStats();
   /** Which slots on a bottle use AR that follows the bottle, so its label gets the tracking strip there. Set at start-up. */
   arTracking?: (unit: Unit) => number[];
+  /**
+   * The database's word on paid bottles (set by the app): claims one paid bottle for each campaign named, all or none,
+   * and returns the campaigns that have none left there. Memory decides first; this is the guard that holds even if
+   * memory is wrong (two servers, a restart mid-print), so a bottle nobody paid for never prints.
+   */
+  claimPrepaid?: (companyId: string, campaignIds: string[]) => Promise<string[]>;
 
   constructor(
     readonly registry: Registry,
@@ -203,11 +209,27 @@ export class Platform {
 
     this.bus.publish('order.created', company.id, { orderId: opts.orderId, locationId: location.id, productId: product.id, kind, customerId: opts.custom?.customerId, packId: opts.packId }, opts.orderId);
 
-    // 1. Fill slots (custom units have no ads).
-    const fill = opts.custom
+    // 1. Fill slots (custom units have no ads). Paid bottles are claimed in the database too; an ad the database says
+    // has none left is taken out and the label filled again without it.
+    const audience = this.withToday(opts.audience ?? null, company.timezone);
+    const without = new Set<string>();
+    const fillNow = () => (opts.custom
       ? { layout: [1 as const], placements: [] }
-      : this.registry.adsFor(company).fill({ company, product, location, campaigns: [...this.campaigns.values()], random: this.random, frequency: opts.frequency, avoidSignatures: opts.avoidSignatures, audience: this.withToday(opts.audience ?? null, company.timezone), moment: momentAt(this.bus.now(), company.timezone ?? 'UTC'), stats: this.auctionStats });
+      : this.registry.adsFor(company).fill({ company, product, location, campaigns: [...this.campaigns.values()].filter((c) => !without.has(c.id)), random: this.random, frequency: opts.frequency, avoidSignatures: opts.avoidSignatures, audience, moment: momentAt(this.bus.now(), company.timezone ?? 'UTC'), stats: this.auctionStats }));
+    let fill = fillNow();
     reserve(fill.placements, this.campaigns);
+    for (let tries = 0; this.claimPrepaid; tries++) {
+      const paid = fill.placements.filter((p) => p.prepaid).map((p) => p.campaignId);
+      if (!paid.length) break;
+      let refused: string[];
+      try { refused = await this.claimPrepaid(company.id, paid); } catch (e) { release(fill.placements, this.campaigns); throw e; }
+      if (!refused.length) break;
+      release(fill.placements, this.campaigns);
+      for (const id of refused) without.add(id);
+      if (tries >= 3) for (const id of paid) without.add(id); // still disagreeing: this bottle carries no paid ads
+      fill = fillNow();
+      reserve(fill.placements, this.campaigns);
+    }
     this.persistCampaigns(fill.placements);
 
     const unit: Unit = {
@@ -247,6 +269,9 @@ export class Platform {
   /** A confirmed print: billed now, then the bottle is out. */
   private confirm(unit: Unit, jobId: string, extra: { customerId?: string; customPriceCents?: number } = {}) {
     unit.status = 'printed';
+    drawn(unit.placements, this.campaigns);
+    this.persistPrepaid(unit, 'printed');
+    this.persistCampaigns(unit.placements.filter((p) => p.prepaid));
     this.bus.publish('label.printed', unit.companyId, { unitId: unit.id, jobId, locationId: unit.locationId, placements: unit.placements, kind: unit.kind, customerId: extra.customerId, customPriceCents: extra.customPriceCents }, unit.id);
     unit.status = 'dispensed';
     this.persist.unit(unit);
@@ -256,6 +281,7 @@ export class Platform {
   private fail(unit: Unit, reason: string, orderId?: string) {
     unit.status = 'failed';
     release(unit.placements, this.campaigns);
+    this.persistPrepaid(unit, 'released');
     this.persistCampaigns(unit.placements);
     this.persist.unit(unit);
     this.bus.publish('unit.failed', unit.companyId, { unitId: unit.id, orderId, reason }, unit.id);
@@ -320,6 +346,10 @@ export class Platform {
     if (unit.orderId && this.orders.has(`${unit.companyId}:${unit.orderId}`)) return false; // still running here
     this.fail(unit, reason, unit.orderId);
     return true;
+  }
+
+  private persistPrepaid(unit: Unit, move: 'printed' | 'released') {
+    for (const p of unit.placements) if (p.prepaid && !p.isHouse) this.persist.prepaid?.(unit.companyId, p.campaignId, move);
   }
 
   private persistCampaigns(placements: Placement[]) {

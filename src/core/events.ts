@@ -63,8 +63,12 @@ export interface EventPayloads {
   'machine.incident_opened': { incidentId: string; locationId: string; kind: string; severity: 'warning' | 'critical'; message: string };
   'machine.incident_resolved': { incidentId: string; locationId: string; kind: string; minutes: number };
   'unit.failed': { unitId: string; orderId?: string; reason: string };
-  'payment.authorized': { paymentId: string; payerType: 'user' | 'advertiser'; payerId: string; amountCents: Cents; purpose: 'custom_order' | 'invoice'; ref: string };
-  'payment.captured': { paymentId: string; payerType: 'user' | 'advertiser'; payerId: string; amountCents: Cents; purpose: 'custom_order' | 'invoice'; ref: string; provider: string };
+  'payment.authorized': { paymentId: string; payerType: 'user' | 'advertiser'; payerId: string; amountCents: Cents; purpose: 'custom_order' | 'invoice' | 'ad_order' | 'ad_change'; ref: string };
+  'payment.captured': { paymentId: string; payerType: 'user' | 'advertiser'; payerId: string; amountCents: Cents; purpose: 'custom_order' | 'invoice' | 'ad_order' | 'ad_change'; ref: string; provider: string };
+  /** One use of a costly extra (an AI video clip) paid for up front: its price moves from prepaid to earned. */
+  'ad.extra_used': { useId: string; campaignId: string; advertiserId: string; advertiserName: string; feature: string; chargedCents: Cents; costCents: Cents };
+  /** The company stopped an ad: what wasn't printed (and unused extras) went back to the advertiser's card. */
+  'ad.refunded': { refundId: string; campaignId: string; advertiserId: string; advertiserName: string; bottles: number; totalCents: Cents; provider: string };
   'payment.voided': { paymentId: string; ref: string };
   'payment.declined': { paymentId: string; payerType: 'user' | 'advertiser'; payerId: string; reason: string; ref: string };
   'invoice.issued': { invoiceId: string; advertiserId: string; totalCents: Cents; lines: number };

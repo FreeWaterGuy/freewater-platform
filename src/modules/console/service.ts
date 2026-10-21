@@ -13,6 +13,7 @@ import { lotteryDefaults } from '../lottery/rules';
 import { quietTransparency } from '../transparency/service';
 import { preset } from '../data/policy';
 import { adCategories, applyChange, checkSettings, describeChange, editableKeys, fontChoices, personOnlyKeys, ratchetProblem, chainProblem, walletProblem, printLimitsChanged, type EditableKey } from './settings';
+import { defaultAdBilling } from '../ads/billing';
 
 export class ConsoleError extends Error {
   constructor(public code: string, message: string, public status = 400) {
@@ -282,6 +283,8 @@ export class ConsoleService {
       wallet: defaultWallet(name.slice(0, 33).trim()), // its points carry its own name (up to 40 characters)
       offers: { enabled: false },
       ai: { mode: 'network' },
+      // Advertisers pay up front at flat prices with no fees on top, whatever the template charges (P13).
+      adBilling: defaultAdBilling(),
     };
     delete config.lottery;
     delete config.agents;

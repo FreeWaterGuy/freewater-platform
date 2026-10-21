@@ -29,4 +29,9 @@ export interface PaymentProvider {
    * capture or release whose answer never came (a timeout, a crash). Without it, such a payment waits for a person.
    */
   status?(ref: string): Promise<PaymentState>;
+  /**
+   * Give back part or all of money already taken, to the same card. Same idempotency key = same refund (a retry after
+   * a timeout never pays back twice). Without it, refunds are made by a person at the provider.
+   */
+  refund?(ref: string, amountCents: number, idempotencyKey: string): Promise<{ status: 'refunded' } | { status: 'failed'; reason: string }>;
 }

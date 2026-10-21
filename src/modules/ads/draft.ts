@@ -1,5 +1,6 @@
 import { SHARES, type Campaign, type CompanyConfig, type Location, type Share } from '../../core/types';
 import { bidFloor } from './budget';
+import { prepaidModel } from './billing';
 import { engagementPrice } from './targeting';
 import { checkStudioSpec, type StudioSpec } from '../studio/layout';
 import { checkPosterSpec, posterIcons, posterFonts, readableOn, contrast, type PosterSpec } from '../creative/poster';
@@ -151,6 +152,8 @@ export function applyPatch(d: AdDraft, patch: DraftPatch, ctx: DraftContext): { 
   if (p.buy !== undefined) {
     const b: any = p.buy;
     if (b?.type === 'guaranteed' && Number.isInteger(b.prints) && b.prints >= 100 && b.prints <= 1_000_000) next.buy = { type: 'guaranteed', prints: b.prints };
+    // Paid up front: a number of bottles, never a daily amount (that's the auction, for companies that bill after).
+    else if (prepaidModel(ctx.company)) problems.push('Ads here are paid up front for a number of bottles (at least 100), like “2,000 bottles”.');
     else if (b?.type === 'bid' && Number.isInteger(b.dailyCapCents) && b.dailyCapCents >= 500 && b.dailyCapCents <= 10_000_000) next.buy = { type: 'bid', dailyCapCents: b.dailyCapCents, ...(Number.isInteger(b.maxCentsPerLabel) && b.maxCentsPerLabel > 0 ? { maxCentsPerLabel: Math.max(b.maxCentsPerLabel, bidFloor(ctx.company)) } : {}) };
     else problems.push('A budget is either a number of bottles (at least 100) or a daily amount (at least $5).');
   }

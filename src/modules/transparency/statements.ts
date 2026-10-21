@@ -12,13 +12,14 @@ export interface StatementLine {
 
 export function statement(platform: Platform, advertiserId: string, companyId: string, from: Date, to: Date, dayOf: (at: Date) => string) {
   const lines: StatementLine[] = [];
-  const acct = `receivable:advertiser:${advertiserId}`;
+  // Billed after (receivable) or paid up front (prepaid): a print draws on one or the other.
+  const acct = `receivable:advertiser:${advertiserId}`, pre = `prepaid:advertiser:${advertiserId}`;
   const byUnit = new Map<string, typeof platform.ledger.entries>();
-  for (const l of platform.ledger.entries) if (l.unitId && l.companyId === companyId && (l.debit === acct || l.credit === acct)) { const a = byUnit.get(l.unitId) ?? []; a.push(l); byUnit.set(l.unitId, a); }
+  for (const l of platform.ledger.entries) if (l.unitId && l.companyId === companyId && (l.debit === acct || l.credit === acct || l.debit === pre || l.credit === pre)) { const a = byUnit.get(l.unitId) ?? []; a.push(l); byUnit.set(l.unitId, a); }
   // What the advertiser paid comes from the books, not from the bottle: a line charging them adds, a line giving back
   // subtracts. A bottle is dated when it was billed (its print line), as the invoice dates it, not when its ads were
   // picked: a machine's offline bottle can be filled one day and printed the next.
-  const signed = (l: (typeof platform.ledger.entries)[number]) => (l.debit === acct ? l.amountCents : -l.amountCents);
+  const signed = (l: (typeof platform.ledger.entries)[number]) => (l.debit === acct || l.debit === pre ? l.amountCents : -l.amountCents);
   for (const u of platform.units.values()) {
     if (u.companyId !== companyId || (u.status !== 'dispensed' && u.status !== 'printed')) continue;
     for (const p of u.placements) {

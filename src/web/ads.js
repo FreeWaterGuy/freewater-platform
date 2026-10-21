@@ -646,10 +646,13 @@
   }
 
   // ---------- overview ----------
-  const statusText = { running: 'Running', in_review: 'In review', paused: 'Paused', finished: 'Finished', not_approved: 'Needs changes' };
+  const statusText = { running: 'Running', in_review: 'In review', paused: 'Paused', finished: 'Finished', not_approved: 'Needs changes', stopped: 'Stopped', not_paid: 'Not paid for' };
+  // How ads are paid for here, in plain words (prepaid: up front, per bottle; otherwise billed after the fact).
+  const prepaidTerms = (b) => `You pay up front for a number of bottles, and exactly that many go out with your ad: there's no end date and nothing to cancel, and pausing only delays. ${b.included}. ${b.feesOn.length ? `On top: ${b.feesOn.join(', ')}, charged to your card each day.` : 'Nothing is charged per scan, AR launch or sale.'} Changing a running ad costs ${dollars(b.changeFeeCents)}, paid when you submit the change.`;
   async function overview() {
     const o = await api('GET', '/v1/ads/overview?days=14');
     state.business = o.advertiser;
+    state.changeFeeCents = o.billing?.changeFeeCents;
     const p = o.period, t = o.total;
     shell('overview',
       h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: o.advertiser.name }), h('p', { text: 'The last 14 days. Every number comes from the books.' })), link('/ads/new', { class: 'btn' }, icon(I.plus), 'New ad')),
@@ -663,16 +666,22 @@
       o.drafts.length ? h('div', {}, h('h2', { class: 'section', text: 'Unfinished ads' }), h('div', { class: 'drafts' }, o.drafts.map((d) => link(`/ads/drafts/${d.id}`, {}, h('span', { text: d.headline || 'New ad' }), h('span', { style: 'color:var(--muted)', text: `${d.campaignId ? 'Change to a live ad · ' : ''}Continue` }))))) : null,
       h('h2', { class: 'section', text: 'Your ads' }),
       o.campaigns.length ? h('div', { class: 'cards' }, o.campaigns.map(campaignCard)) : h('div', { class: 'empty' }, 'No ads yet. ', link('/ads/new', {}, 'Make your first one'), ' — it takes a few minutes.'),
-      h('p', { style: 'color:var(--muted);font-size:13px;margin-top:22px', text: `Starting prices per bottle printed: ${Object.entries(o.prices.perPrintCents).map(([s, c]) => `${cents(c)} for ${sizeName(s)}`).join(', ')}. Bids start at ${cents(o.prices.bidStartsAtCents)} for the whole label and go up from there. Then ${cents(o.prices.perScanCents)} per scan that loads, ${cents(o.prices.perArLaunchCents)} per AR launch, and ${o.prices.commissionPercent}% of sales. The more an ad targets (places, products, interests, new or returning customers), the more each scan and AR launch costs. Repeat scans and failed prints are free.` }));
+      h('p', { style: 'color:var(--muted);font-size:13px;margin-top:22px', text: o.billing?.model === 'prepaid'
+        ? `Price per bottle: ${Object.entries(o.prices.perPrintCents).map(([s, c]) => `${cents(c)} for ${sizeName(s)}`).join(', ')}. ${prepaidTerms(o.billing)}`
+        : `Starting prices per bottle printed: ${Object.entries(o.prices.perPrintCents).map(([s, c]) => `${cents(c)} for ${sizeName(s)}`).join(', ')}. Bids start at ${cents(o.prices.bidStartsAtCents)} for the whole label and go up from there. Then ${cents(o.prices.perScanCents)} per scan that loads, ${cents(o.prices.perArLaunchCents)} per AR launch, and ${o.prices.commissionPercent}% of sales. The more an ad targets (places, products, interests, new or returning customers), the more each scan and AR launch costs. Repeat scans and failed prints are free.` }));
   }
   function campaignCard(c) {
     const r = c.results;
     const actions = [];
     if (c.status === 'running') actions.push(h('button', { class: 'btn small secondary', type: 'button', onclick: async () => { await api('PATCH', `/v1/campaigns/${c.id}`, { active: false }); toast('Paused'); render(); } }, 'Pause'));
     if (c.status === 'paused') actions.push(h('button', { class: 'btn small', type: 'button', onclick: async () => { try { await api('PATCH', `/v1/campaigns/${c.id}`, { active: true }); toast('Running again'); render(); } catch (x) { toast(x.message); } } }, 'Resume'));
-    if (c.editable && c.status !== 'in_review') actions.push(link(`/ads/campaigns/${c.id}/change`, { class: 'btn small secondary' }, 'Change it'));
+    const paid = c.budget.type === 'prepaid' ? c.budget : null;
+    if (c.editable && c.status !== 'in_review' && c.status !== 'stopped' && c.status !== 'finished') actions.push(link(`/ads/campaigns/${c.id}/change`, { class: 'btn small secondary' }, paid ? `Change it (${dollars(state.changeFeeCents ?? 0)})` : 'Change it'));
     actions.push(link(`/ads/campaigns/${c.id}/code`, { class: 'btn small secondary' }, 'Code, versions and AI'));
-    const budget = c.budget.type === 'guaranteed' ? `${num(c.budget.bottlesLeft)} bottles left` : `up to ${dollars(c.budget.dailyCapCents)} a day for printed labels (scans and other charges on top)`;
+    // Paid up front: how many of the bottles paid for are out. No end date and no cancelling: it runs until they are.
+    const budget = paid ? (paid.stopped ? `stopped by ${state.config.name}: ${num(paid.printed)} of ${num(paid.paid)} bottles went out, ${num(paid.refunded)} paid back`
+      : `${num(paid.printed)} of ${num(paid.paid)} bottles out${paid.printing ? ` (${num(paid.printing)} printing)` : ''}, ${sizeName(paid.share)} at ${cents(paid.perBottleCents)} each, paid`)
+      : c.budget.type === 'guaranteed' ? `${num(c.budget.bottlesLeft)} bottles left` : `up to ${dollars(c.budget.dailyCapCents)} a day for printed labels (scans and other charges on top)`;
     return h('article', { class: 'camp' },
       h('div', { class: 'thumb' }, h('img', { src: svgSrc(c.thumbSvg), alt: `Your ad: ${c.name}` })),
       h('div', {},
@@ -771,7 +780,14 @@
         frame = fixture?.scanFrame ? fixture.scanFrame() : h('iframe', { src: '/preview/scan', title: 'Your scan page' });
         stage.replaceChildren(frame, h('p', { class: 'caption', text: 'What opens on a phone when someone scans your ad.' }));
       }
-      if (tab === 'cost') {
+      if (tab === 'cost' && d.payment) {
+        // Paid up front: the exact total for the bottles (or the change fee), before anything is charged.
+        const pay = d.payment, q = pay.kind === 'bottles' ? pay.quote : null;
+        const rows = pay.kind === 'change' ? [['Changing this ad (paid when you submit the change)', dollars(pay.feeCents)], ['Your bottles', 'unchanged: the ones not printed yet carry the new ad once it’s approved']]
+          : q ? [[`${num(q.bottles)} bottles with your ad on ${sizeName(q.share)}`, `${cents(q.perBottleCents)} each`], ['AR, video and scans', 'included'], ['You pay up front', dollars(q.totalCents)]] : [];
+        stage.replaceChildren(h('table', { class: 'cost' }, h('tbody', {}, rows.map(([a, b]) => h('tr', {}, h('td', { text: a }), h('td', { text: b }))))),
+          h('p', { class: 'caption', style: 'text-align:left', text: pay.kind === 'change' ? 'The new ad is reviewed before it prints.' : q ? 'Exactly that many bottles go out. You can pick another size before you pay.' : pay.problem }));
+      } else if (tab === 'cost') {
         const e = d.estimate;
         const rows = [...Object.entries(e.perPrintCents).map(([s, c]) => [`Each bottle printed with your ad on ${sizeName(s)} (starting price)`, cents(c)]), ['Each scan that loads', cents(e.perScanCents)], ['Each AR launch', cents(e.perArLaunchCents)], ['Sales from the bottle', `${e.commissionPercent}%`]];
         if (d.draft.formats?.includes('box-face')) rows.push(['Each delivery box side', cents(e.perBoxFaceCents)]);
@@ -816,13 +832,33 @@
     const err = h('div', { class: 'notice err', hidden: true });
     const dr = d.draft;
     const budget = dr.buy?.type === 'guaranteed' ? `${num(dr.buy.prints)} bottles` : dr.buy ? `up to ${dollars(dr.buy.dailyCapCents)} a day for printed labels (scans and other charges on top)` : 'Not set';
+    // Paid up front: pick the size (and any extras), see the exact total, then pay and submit in one step.
+    const pay = d.payment;
+    let quote = pay?.kind === 'bottles' ? pay.quote : null;
+    const sizePick = pay?.kind === 'bottles' && quote ? h('select', { class: 'input', id: 'pay-size' }, (dr.sizes || []).map((s) => h('option', { value: String(s), text: sizeName(s), ...(String(s) === String(quote.share) ? { selected: true } : {}) }))) : null;
+    const terms = pay ? (await api('GET', '/v1/ads/billing').catch(() => null)) : null;
+    const extraInputs = pay?.kind === 'bottles' && terms?.extras?.length ? terms.extras.map((x) => ({ x, input: h('input', { class: 'input', type: 'number', min: 0, max: 1000, value: 0, style: 'max-width:100px', 'aria-label': x.label }) })) : [];
+    const totalEl = h('b', { text: quote ? dollars(quote.totalCents) : '' });
+    const payLine = h('span', { text: quote ? `${num(quote.bottles)} bottles × ${cents(quote.perBottleCents)}${quote.extrasCents ? ` + extras ${dollars(quote.extrasCents)}` : ''}` : '' });
+    const requote = async () => {
+      try {
+        quote = await api('POST', `/v1/ads/drafts/${id}/quote`, { share: Number(sizePick.value), extras: Object.fromEntries(extraInputs.map(({ x, input }) => [x.id, Math.max(0, Math.floor(Number(input.value) || 0))])) });
+        totalEl.textContent = dollars(quote.totalCents); payLine.textContent = `${num(quote.bottles)} bottles × ${cents(quote.perBottleCents)}${quote.extrasCents ? ` + extras ${dollars(quote.extrasCents)}` : ''}`;
+        submit.textContent = `Pay ${dollars(quote.totalCents)} and submit for review`;
+      } catch (x) { err.textContent = x.message; err.hidden = false; }
+    };
+    if (sizePick) sizePick.addEventListener('change', requote);
+    for (const { input } of extraInputs) input.addEventListener('change', requote);
+    const submitLabel = pay?.kind === 'bottles' ? (quote ? `Pay ${dollars(quote.totalCents)} and submit for review` : 'Submit for review') : pay?.kind === 'change' && pay.feeCents ? `Pay the ${dollars(pay.feeCents)} change fee and submit` : 'Submit for review';
     const submit = h('button', { class: 'btn wide', type: 'button', onclick: async () => {
       err.hidden = true;
       if (!agree.checked) { err.textContent = 'Check the box to confirm you looked it over.'; err.hidden = false; return; }
+      if (pay?.kind === 'bottles' && !quote) { err.textContent = pay.problem || 'Tell the assistant how many bottles first.'; err.hidden = false; return; }
       submit.disabled = true;
-      try { await api('POST', `/v1/ads/drafts/${id}/submit`, { approved: true }); done(); } catch (x) { err.textContent = x.message; err.hidden = false; submit.disabled = false; }
-    } }, 'Submit for review');
-    const done = () => shell('new', h('div', { class: 'review' }, h('div', { class: 'notice ok' }, h('b', { text: 'Submitted. ' }), `${state.config.name} reviews new ads, usually within a day. It starts printing as soon as it's approved, and you'll see results on your Overview.`), link('/ads', { class: 'btn' }, 'Go to Overview')));
+      const body = { approved: true, ...(pay?.kind === 'bottles' ? { pay: { share: quote.share, extras: Object.fromEntries(extraInputs.map(({ x, input }) => [x.id, Math.max(0, Math.floor(Number(input.value) || 0))])), expectedTotalCents: quote.totalCents } } : pay?.kind === 'change' ? { pay: { expectedFeeCents: pay.feeCents } } : {}) };
+      try { const out = await api('POST', `/v1/ads/drafts/${id}/submit`, body); done(out); } catch (x) { err.textContent = x.code === 'card_needed' ? `${x.message} Add one under Billing.` : x.message; err.hidden = false; submit.disabled = false; }
+    } }, submitLabel);
+    const done = (out) => shell('new', h('div', { class: 'review' }, h('div', { class: 'notice ok' }, h('b', { text: out?.paidCents ? `Paid ${dollars(out.paidCents)} for ${num(out.bottles)} bottles. Submitted. ` : out?.changeFeeCents ? `Paid the ${dollars(out.changeFeeCents)} change fee. Submitted. ` : 'Submitted. ' }), `${state.config.name} reviews new ads, usually within a day. It starts printing as soon as it's approved, and you'll see results on your Overview.`), link('/ads', { class: 'btn' }, 'Go to Overview')));
     let frame;
     const onMsg = (e) => { if ((fixture || e.origin === location.origin) && e.data?.type === 'fw-preview-ready' && frame) frame.contentWindow.postMessage({ type: 'fw-preview', ...(p.scan ?? { doc: null }) }, fixture ? '*' : location.origin); };
     window.addEventListener('message', onMsg); cleanup = () => window.removeEventListener('message', onMsg);
@@ -836,7 +872,11 @@
         h('div', {}, h('span', { text: 'Where' }), dr.locations === 'all' ? 'Every machine' : (dr.locations || []).join(', ')),
         h('div', {}, h('span', { text: 'Budget' }), budget),
         h('div', {}, h('span', { text: 'Prints on' }), dr.formats?.includes('box-face') ? 'Bottles and delivery boxes' : 'Bottles'),
-        h('div', {}, h('span', { text: 'You pay' }), `${Object.entries(d.estimate.perPrintCents).map(([s, c]) => `from ${cents(c)} per bottle for ${sizeName(s)}`).join(', ')}; ${cents(d.estimate.perScanCents)} per scan; ${cents(d.estimate.perArLaunchCents)} per AR launch; ${d.estimate.commissionPercent}% of sales`)),
+        pay?.kind === 'bottles' && quote ? h('div', {}, h('label', { for: 'pay-size', text: 'Size you pay for' }), sizePick) : null,
+        ...extraInputs.map(({ x, input }) => h('div', {}, h('span', { text: `${x.label} (${dollars(x.perUseCents)} each, paid now)` }), input)),
+        pay?.kind === 'bottles' ? h('div', {}, h('span', { text: 'You pay now' }), totalEl, ' ', payLine, h('br'), h('small', { text: terms ? prepaidTerms(terms) : 'AR, video and scans included.' }))
+          : pay?.kind === 'change' ? h('div', {}, h('span', { text: 'You pay now' }), `${dollars(pay.feeCents)} to change it. Your bottles stay as they are; the ones not printed yet carry the new ad once it's approved.`)
+          : h('div', {}, h('span', { text: 'You pay' }), `${Object.entries(d.estimate.perPrintCents).map(([s, c]) => `from ${cents(c)} per bottle for ${sizeName(s)}`).join(', ')}; ${cents(d.estimate.perScanCents)} per scan; ${cents(d.estimate.perArLaunchCents)} per AR launch; ${d.estimate.commissionPercent}% of sales`)),
       h('label', { class: 'check', for: 'agree' }, agree, h('span', {}, h('b', { text: 'It looks right. ' }), 'I checked the words, colors, picture and scan page, and I have the right to use them.')),
       err, submit));
   }
@@ -844,17 +884,24 @@
   // ---------- billing ----------
   async function billing() {
     const advId = state.me.advertiserId;
-    const [invoices, cards] = await Promise.all([api('GET', '/v1/invoices'), api('GET', `/v1/advertisers/${advId}/cards`).catch(() => [])]);
+    const [invoices, cards, terms] = await Promise.all([api('GET', '/v1/invoices'), api('GET', `/v1/advertisers/${advId}/cards`).catch(() => []), api('GET', '/v1/ads/billing').catch(() => ({ model: 'billed_after' }))]);
+    const prepaid = terms.model === 'prepaid';
+    const kindText = { bottles: 'Bottles, paid in advance', change: 'Changing an ad' };
+    const statusOf = (o) => (o.refund ? (o.refund.status === 'refunded' ? `Paid; ${dollars(o.refund.totalCents)} paid back` : 'Paid; paying back') : { paid: 'Paid', paying: 'Being paid', declined: 'Card declined' }[o.status] || o.status);
     shell('billing',
-      h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Billing' }), h('p', { text: 'Invoices list every print, scan, AR launch and sale they charge for.' }))),
+      h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Billing' }), h('p', { text: prepaid ? prepaidTerms(terms) : 'Invoices list every print, scan, AR launch and sale they charge for.' }))),
       h('h2', { class: 'section', text: 'Card' }),
-      cards.length ? h('p', { text: `${cards[0].brand} •••• ${cards[0].last4}, charged automatically when an invoice is made.` })
+      cards.length ? h('p', { text: `${cards[0].brand} •••• ${cards[0].last4}, ${prepaid ? 'charged when you pay for an ad' : 'charged automatically when an invoice is made'}.` })
         : h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px' }, h('span', { style: 'background:#FFF4D6;color:#7A5300;border-radius:6px;padding:1px 6px;font-size:12px;font-weight:700', text: 'Test mode' }), 'Add a test card:', ...[['tok_visa', 'Visa 4242'], ['tok_amex', 'Amex 0005']].map(([t, l]) => h('button', { class: 'btn small secondary', type: 'button', onclick: async () => { await api('POST', `/v1/advertisers/${advId}/cards`, { token: t }); toast('Card saved'); render(); } }, l))),
-      h('h2', { class: 'section', style: 'margin-top:22px', text: 'Invoices' }),
+      prepaid ? h('h2', { class: 'section', style: 'margin-top:22px', text: 'What you paid' }) : null,
+      prepaid ? (terms.orders.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['When', 'For', 'Bottles', 'Total', 'Status'].map((x) => h('th', { text: x })))),
+        h('tbody', {}, terms.orders.map((o) => h('tr', {}, h('td', { text: new Date(o.at).toLocaleDateString() }), h('td', { text: kindText[o.kind] || o.kind }), h('td', { text: o.bottles ? `${num(o.bottles)} × ${cents(o.perBottleCents)}` : '–' }), h('td', { text: dollars(o.totalCents) }), h('td', { text: statusOf(o) }))))))
+        : h('div', { class: 'empty', text: 'Nothing paid yet. You pay for an ad’s bottles when you submit it.' })) : null,
+      !prepaid || invoices.length ? h('h2', { class: 'section', style: 'margin-top:22px', text: prepaid ? 'Fees charged after the fact' : 'Invoices' }) : null,
       invoices.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Up to', 'Lines', 'Total', 'Status', ''].map((x) => h('th', { text: x })))),
         h('tbody', {}, invoices.map((i) => h('tr', {}, h('td', { text: new Date(i.periodEnd).toLocaleDateString() }), h('td', { text: String(i.lines) }), h('td', { text: dollars(i.totalCents) }), h('td', { text: { open: 'Open', paid: 'Paid', failed: 'Card declined' }[i.status] || i.status }),
           h('td', {}, i.status !== 'paid' && cards.length ? h('button', { class: 'btn small', type: 'button', onclick: async () => { await api('POST', `/v1/invoices/${i.id}/pay`); toast('Paid'); render(); } }, 'Pay now') : null))))))
-        : h('div', { class: 'empty', text: 'No invoices yet. They’re made from what your ads actually did: prints that printed, scans that loaded, and sales.' }));
+        : prepaid ? null : h('div', { class: 'empty', text: 'No invoices yet. They’re made from what your ads actually did: prints that printed, scans that loaded, and sales.' }));
   }
 
   render();

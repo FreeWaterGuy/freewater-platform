@@ -4,9 +4,12 @@ import type { Messenger } from '../../adapters/messaging/contract';
 import type { Campaign } from '../../core/types';
 import { newId } from '../../core/ids';
 import { AdsError } from './service';
+import { prepaidModel } from './billing';
 
-// Advertisers are billed after the fact (invoices for what printed), so nothing stops one that never pays from running
-// up a debt unless someone decides how much credit it gets. The safe default: an ad goes live only for an advertiser
+// Where advertisers are billed after the fact (a company that turned paying up front off: docs/SWITCHES.md, "How
+// advertisers pay"), nothing stops one that never pays from running up a debt unless someone decides how much credit
+// it gets. Where they pay up front, only fees a person switched on are charged after the fact, to the card on file,
+// and a declined card pauses their ads at once (enforce, below). The safe default: an ad goes live only for an advertiser
 // with a working card on file, or one a person (an owner or finance, signed in, with the second step) has given a
 // credit limit; and once what an advertiser owes (unpaid and failed invoices plus what isn't invoiced yet) passes its
 // limit, or its card is declined with no limit to cover it, its ads pause. Rules in docs/SWITCHES.md.
@@ -79,6 +82,9 @@ export class CreditService {
 
   /** A person (an owner or finance, checked by the route) sets how much an advertiser may owe. A new row each time. */
   async grant(companyId: string, advertiserId: string, limitCents: number, by: string, reason: string) {
+    // Credit is an option only where advertisers are billed after; where they pay up front, nobody runs up a debt.
+    const company = this.platform.companies.get(companyId);
+    if (company && prepaidModel(company)) throw new CreditError('prepaid_company', `Advertisers at ${company.name} pay up front, so there's no credit to give. Credit limits apply only when paying up front is turned off (How advertisers pay, in the console).`, 409);
     const known = (await this.db.query(`select 1 from advertisers where id = $1 and company_id = $2`, [advertiserId, companyId])).rows.length
       || [...this.platform.campaigns.values()].some((c) => c.companyId === companyId && c.advertiserId === advertiserId);
     if (!known) throw new CreditError('not_found', 'Advertiser not found.', 404);

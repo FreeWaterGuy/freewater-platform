@@ -1636,6 +1636,119 @@ end $$;
 create trigger advertiser_credit_limits_guard before update or delete on advertiser_credit_limits for each row execute function advertiser_credit_limits_guard();
 `,
   },
+  {
+    id: '060_prepaid_advertisers',
+    sql: `
+-- Advertisers pay up front (docs/SWITCHES.md, "How advertisers pay"). Payments can now be for an ad's bottles (and the
+-- extras paid with them) or for changing an ad.
+alter table payments drop constraint if exists payments_purpose_check;
+alter table payments add constraint payments_purpose_check check (purpose in ('custom_order', 'invoice', 'ad_order', 'ad_change'));
+
+-- Each payment an advertiser makes for an ad: its bottles (one size, one product, a fixed price per bottle, and any
+-- extras), or the fee for changing it. 'paying' until the card is charged and the bottles are counted in ad_prepaid.
+create table ad_orders (
+  id text primary key,
+  company_id text not null,
+  advertiser_id text not null,
+  campaign_id text not null,
+  draft_id text,
+  kind text not null check (kind in ('bottles', 'change')),
+  bottles integer not null default 0 check (bottles >= 0),
+  share integer,
+  product_id text,
+  price_cents integer not null default 0 check (price_cents >= 0),
+  extras jsonb not null default '{}',
+  extras_cents bigint not null default 0 check (extras_cents >= 0),
+  total_cents bigint not null check (total_cents > 0),
+  payment_id text,
+  status text not null check (status in ('paying', 'paid', 'declined')),
+  failure text,
+  created_at timestamptz not null default now(),
+  paid_at timestamptz
+);
+create index ad_orders_company on ad_orders(company_id, campaign_id);
+-- One payment for an ad's bottles (and one change fee per change), however often the button is pressed.
+create unique index ad_orders_bottles_once on ad_orders(campaign_id) where kind = 'bottles' and status <> 'declined';
+create unique index ad_orders_change_once on ad_orders(draft_id) where kind = 'change' and status <> 'declined';
+
+-- Each prepaid ad's bottles: paid, printed, being printed now (held), and paid back. A paid bottle is claimed here
+-- before its label is drawn (one guarded statement), so a bottle nobody paid for never prints, even if two servers
+-- or a restart disagree with memory.
+create table ad_prepaid (
+  campaign_id text primary key,
+  company_id text not null,
+  advertiser_id text not null,
+  share integer not null,
+  product_id text not null,
+  price_cents integer not null check (price_cents >= 0),
+  paid integer not null check (paid >= 0),
+  printed integer not null default 0 check (printed >= 0),
+  held integer not null default 0 check (held >= 0),
+  refunded integer not null default 0 check (refunded >= 0),
+  extras jsonb not null default '{}',
+  stopped_at timestamptz,
+  check (printed + held + refunded <= paid)
+);
+
+-- When the company stops an ad, what wasn't printed is paid back: once per ad.
+create table ad_refunds (
+  id text primary key,
+  company_id text not null,
+  campaign_id text not null unique,
+  advertiser_id text not null,
+  bottles integer not null check (bottles >= 0),
+  bottles_cents bigint not null check (bottles_cents >= 0),
+  extras_cents bigint not null check (extras_cents >= 0),
+  total_cents bigint not null check (total_cents >= 0),
+  payment_id text,
+  status text not null check (status in ('refunding', 'refunded', 'failed')),
+  failure text,
+  reason text not null,
+  stopped_by text not null,
+  created_at timestamptz not null default now(),
+  done_at timestamptz
+);
+
+-- Each use of a costly extra (an AI video clip): what it was charged (0 if it wasn't paid for) and what it really cost.
+create table ad_extra_uses (
+  id text primary key,
+  company_id text not null,
+  campaign_id text not null,
+  feature text not null,
+  status text not null check (status in ('claimed', 'used', 'returned')),
+  charged_cents integer not null check (charged_cents >= 0),
+  cost_cents integer check (cost_cents >= 0),
+  ref text,
+  at timestamptz not null
+);
+create index ad_extra_uses_campaign on ad_extra_uses(campaign_id);
+
+-- What each advertiser has paid up front and not yet used, kept by the database from the ledger itself: it can never
+-- go below nothing (a print, an extra or a refund drawing more than was paid is refused).
+create table ad_prepaid_balances (
+  company_id text not null,
+  account text not null,
+  cents bigint not null check (cents >= 0),
+  primary key (company_id, account)
+);
+create function ad_prepaid_balance() returns trigger language plpgsql as $$
+begin
+  if new.credit like 'prepaid:%' then
+    insert into ad_prepaid_balances (company_id, account, cents) values (new.company_id, new.credit, new.amount_cents)
+      on conflict (company_id, account) do update set cents = ad_prepaid_balances.cents + excluded.cents;
+  end if;
+  if new.debit like 'prepaid:%' then
+    -- (An update, not an insert's conflict: a negative row offered for insert fails its check before any conflict.)
+    update ad_prepaid_balances set cents = cents - new.amount_cents where company_id = new.company_id and account = new.debit;
+    if not found then
+      insert into ad_prepaid_balances (company_id, account, cents) values (new.company_id, new.debit, -new.amount_cents);
+    end if;
+  end if;
+  return null;
+end $$;
+create trigger ad_prepaid_balance after insert on ledger_entries for each row execute function ad_prepaid_balance();
+`,
+  },
 ];
 
 /** Runs every migration not yet run (or, for tests that start from an older schema, those in `list`). */

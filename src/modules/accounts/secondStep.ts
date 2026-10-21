@@ -142,6 +142,7 @@ export const approvalRoutes: ReadonlySet<string> = new Set([
   'POST /v1/wallet/reserve', 'POST /v1/wallet/correct', 'POST /v1/wallet/gift-cards/:ref/settle',
   'POST /v1/environment/experiments/:id/decide',
   'POST /v1/advertisers/:advertiserId/credit-limit',
+  'POST /v1/ads/campaigns/:id/stop',
 ]);
 /**
  * Routes that are approvals only for some requests, so their handlers check the second step themselves (with
@@ -156,7 +157,7 @@ export const conditionalApprovalRoutes: Readonly<Record<string, string>> = {
   'POST /v1/team': 'the role given, or the person’s current role, is owner or finance',
 };
 /** Settings that switch money, prizes or the token on or off, or share money out: changing them is an approval too. */
-export const approvalSettings = ['wallet', 'offers', 'chain', 'launch', 'giving', 'agents', 'lottery'] as const;
+export const approvalSettings = ['wallet', 'offers', 'chain', 'launch', 'giving', 'agents', 'lottery', 'adBilling'] as const;
 
 export const approverStepMessage = {
   setUp: 'Owners and finance people need a second sign-in step before approving money or token steps. Set up an authenticator app first (in the console under Security, or POST /v1/me/second-step/start, then /confirm), then sign in again with its code. A new app can approve 24 hours after it’s set up.',
