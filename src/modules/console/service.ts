@@ -58,6 +58,8 @@ export class ConsoleService {
   onCommit?: (tx: SqlClient, companyId: string, before: CompanyConfig, after: CompanyConfig, by: string, note: SaveNote) => Promise<void>;
   /** Set by the app: a new company's switches, copied from FreeWater's (money, chain and one-way ones off), in its own transaction. */
   onCreate?: (tx: SqlClient, companyId: string, by: string) => Promise<void>;
+  /** Set by the app: the switches kept in the settings that this change turns on or off (a key never changes a switch). */
+  switchesChanged?: (before: CompanyConfig, after: CompanyConfig) => string[];
 
   /**
    * Saves and restores for one company run one at a time (the platform runs as a single owner, so an in-process lock
@@ -151,6 +153,7 @@ export class ConsoleService {
     let next: CompanyConfig;
     try { next = applyChange(cur, change); } catch (e: any) { throw new ConsoleError('not_editable', e.message); }
     if (opts.person === false && printLimitsChanged(cur, next)) throw new ConsoleError('person_needed', 'The machines’ print limits are a safety limit: a person signed in changes them, not a service key.', 403);
+    if (opts.person === false) { const flips = this.switchesChanged?.(cur, next) ?? []; if (flips.length) throw new ConsoleError('person_needed', `This turns a switch on or off (${flips.join(', ')}): a person signed in does that, never a service key.`, 403); }
     const problem = checkSettings(next, this.registry.names()) ?? ratchetProblem(cur, next) ?? chainProblem(cur, next, opts.chainApproved) ?? walletProblem(cur, next, opts.chainApproved);
     if (problem) throw new ConsoleError('invalid_settings', problem, 422);
     const changes = describeChange(cur, next);
@@ -197,8 +200,8 @@ export class ConsoleService {
     const cur = this.company(companyId);
     const next = { ...old, id: companyId };
     // Putting back an old version passes the same checks as any other change (the chain can't come back on this way).
-    const money = personOnlyKeys.some((k) => JSON.stringify((cur as any)[k] ?? null) !== JSON.stringify((next as any)[k] ?? null)) || printLimitsChanged(cur, next);
-    if (money && !opts.person) throw new ConsoleError('person_needed', 'This version changes money, chain or one-way settings; a person signed in has to put it back.', 403);
+    const money = personOnlyKeys.some((k) => JSON.stringify((cur as any)[k] ?? null) !== JSON.stringify((next as any)[k] ?? null)) || printLimitsChanged(cur, next) || !!this.switchesChanged?.(cur, next).length;
+    if (money && !opts.person) throw new ConsoleError('person_needed', 'This version changes money, chain or one-way settings, or turns a switch on or off; a person signed in has to put it back.', 403);
     if (opts.approval) {
       const changed = [...new Set([...Object.keys(cur), ...Object.keys(next)])].filter((k) => JSON.stringify((cur as any)[k] ?? null) !== JSON.stringify((next as any)[k] ?? null));
       await opts.approval(changed);

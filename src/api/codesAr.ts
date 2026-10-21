@@ -12,7 +12,7 @@ import { checkProduct } from '../modules/products/check';
 import { targetingPremium } from '../modules/ads/targeting';
 import { engagementFee } from '../modules/ads/billing';
 import { ExperienceError } from '../modules/experiences/service';
-import { ApiError, notFound, obj, S, type RouteDef } from './http';
+import { ApiError, notFound, obj, S, teamPersonOf, type RouteDef } from './http';
 
 /**
  * QR codes (logos, static or dynamic, versions of the call to action, AI personalization), AR that follows the
@@ -81,9 +81,17 @@ export function codesArRoutes(app: App, server: FastifyInstance, route: (r: Rout
     const c = campaignFor(key!, (req.params as any).id);
     const company = platform.companies.get(c.companyId)!;
     const x = req.body as CampaignExtras;
+    const reviewer = !key!.advertiserId || key!.scopes.includes('admin');
+    // The company changing what a paid ad shows: a person on the team, never a key (P3, P4: the same rule as approving
+    // it). Aimed at a few houses, only an owner or reviewer, and the new versions pass the stricter check. All checked
+    // before anything changes.
+    if (reviewer && (c.prepaid || c.routeBuy) && changesWhatPeopleSee(x)) {
+      const u = await teamPersonOf(app.accounts, key);
+      if (!u) throw new ApiError(403, 'person_review', 'What a paid ad shows is changed by a person on the team signed in, not with an API key.');
+      if (c.routeBuy?.small) await app.routeBuys.beforeApprove({ ...c, ...(x.variants !== undefined ? { variants: x.variants as Campaign['variants'] } : {}) }, { userId: u.id, role: u.role });
+    }
     const bad = applyExtras(company, c, x, experiences.host);
     if (bad) throw new ApiError(422, 'campaign_invalid', bad);
-    const reviewer = !key!.advertiserId || key!.scopes.includes('admin');
     const resubmitted = !reviewer && changesWhatPeopleSee(x);
     if (resubmitted) { c.active = false; c.review = { status: 'submitted', at: platform.bus.now().toISOString() }; }
     platform.persist.campaign(c);

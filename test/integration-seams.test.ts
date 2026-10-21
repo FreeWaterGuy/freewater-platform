@@ -39,7 +39,7 @@ async function newAd(size: Share): Promise<Campaign> {
 async function payAndApprove(c: Campaign, bottles: number) {
   const q = app.prepaid.quote('freewater', { bottles, share: c.sizes[0]! }, c.sizes);
   await app.prepaid.payBottles({ companyId: 'freewater', advertiserId: c.advertiserId, campaignId: c.id, quote: { bottles, share: c.sizes[0]! }, expectedTotalCents: q.totalCents, sizes: c.sizes });
-  await app.ads.review({ companyId: 'freewater', campaignId: c.id, decision: 'approve' });
+  await app.ads.review({ companyId: 'freewater', campaignId: c.id, decision: 'approve', by: { userId: 'usr_test_reviewer', role: 'reviewer' } });
 }
 const housePlacements = (runs: any[]) => runs.flatMap((r) => r.stops.flatMap((s: any) => app.packs.packs.get(s.packId)!.unitIds.flatMap((u) => app.platform.units.get(u)!.placements)));
 

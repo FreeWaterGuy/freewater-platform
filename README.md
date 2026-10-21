@@ -78,7 +78,7 @@ One API for every app, machine, micro-factory, driver, advertiser and partner. T
 | Finance | `GET /v1/ledger`, `GET /v1/events`, `POST /v1/invoices/run`, `GET /v1/invoices`, `POST /v1/invoices/:id/pay`, `POST /v1/advertisers/:id/cards` |
 | Owners | `POST /v1/team` |
 
-**Keys.** Every call except the public ones needs `Authorization: Bearer <key>`. A key belongs to one company and only ever sees that company. It has scopes (`orders`, `packs`, `campaigns`, `purchases`, `ledger`, `events`, `admin`), and an advertiser's key only sees that advertiser's campaigns and sales. New campaigns start paused until a company key turns them on (content review). Only a hash of each key is stored. Make one with `npm run key -- freewater "ATX-022 machine" orders`.
+**Keys.** Every call except the public ones needs `Authorization: Bearer <key>`. A key belongs to one company and only ever sees that company. It has scopes (`orders`, `packs`, `campaigns`, `purchases`, `ledger`, `events`, `admin`), and an advertiser's key only sees that advertiser's campaigns and sales. New campaigns start paused until the company turns them on (content review); a paid ad (paid up front, a route buy, or a change to one) is approved, switched on or changed only by a person on the team signed in, never a key. Only a hash of each key is stored. Make one with `npm run key -- freewater "ATX-022 machine" orders`.
 
 ## Accounts and payments
 

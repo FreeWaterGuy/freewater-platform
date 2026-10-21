@@ -1,5 +1,5 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
-import { ApiError, notFound, obj, S, signedInOwner, type Handler, type RouteDef, Q } from './http';
+import { ApiError, notFound, obj, S, signedInOwner, teamPersonOf, type Handler, type RouteDef, Q } from './http';
 import { consumerRoutes } from './consumer';
 import { adsRoutes } from './ads';
 import { aiReviewRoutes } from './aiReview';
@@ -151,6 +151,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     if (!p || p.companyId !== key.companyId) throw notFound('Pack');
     return p;
   };
+  const teamPerson = (key: ApiKey | null) => teamPersonOf(app.accounts, key);
   const campaignFor = (key: ApiKey, id: string) => {
     const c = platform.campaigns.get(id);
     if (!c || c.companyId !== key.companyId || (key.advertiserId && c.advertiserId !== key.advertiserId)) throw notFound('Campaign');
@@ -495,6 +496,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     // review queue, where a person decides and the AI's record is kept: never switched on here (P3).
     if (b.active === true && !approved && c.prepaid && (c.review?.status === 'flagged' || c.review?.aiFinal)) throw new ApiError(409, 'decide_in_review', 'This paid ad is being discussed, appealed, or was rejected by the AI reviewer: decide it in the review queue (a person, signed in).');
     const changesPage = b.experienceId !== undefined || b.experienceConfig !== undefined || b.theme !== undefined;
+    // A paid ad goes live, or changes what it shows, only by a person's decision: the same rule as the review queue's
+    // (P3, P4). A company key can still pause it.
+    if (reviewer && (c.prepaid || c.routeBuy) && ((b.active === true && !approved) || changesPage) && !(await teamPerson(key!))) throw new ApiError(403, 'person_review', 'A paid ad is approved, and what it shows is changed, by a person on the team signed in, not with an API key.');
     // A route ad aimed at a few houses: the company turns it on, or changes what it says, only as a person (an owner or
     // a reviewer, signed in), with the stricter review run on what it will say (routeBuys.beforeApprove). Checked
     // before anything changes.

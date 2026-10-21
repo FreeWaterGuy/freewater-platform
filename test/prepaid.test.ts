@@ -51,7 +51,7 @@ async function newAd(a: App, size: Share, opts: { token?: string; formats?: Camp
 async function payAndApprove(a: App, c: Campaign, bottles: number, extras?: Record<string, number>) {
   const q = a.prepaid.quote('freewater', { bottles, share: c.sizes[0], extras }, c.sizes);
   await a.prepaid.payBottles({ companyId: 'freewater', advertiserId: c.advertiserId, campaignId: c.id, quote: { bottles, share: c.sizes[0], extras }, expectedTotalCents: q.totalCents, sizes: c.sizes });
-  await a.ads.review({ companyId: 'freewater', campaignId: c.id, decision: 'approve' });
+  await a.ads.review({ companyId: 'freewater', campaignId: c.id, decision: 'approve', by: { userId: 'usr_test_reviewer', role: 'reviewer' } });
   return q;
 }
 
@@ -127,7 +127,7 @@ describe('quote, pay, review, print: only paid bottles', () => {
 
   it('an ad nobody paid for never prints, even approved; review refuses it', async () => {
     const c = await newAd(app, 4);
-    await expect(app.ads.review({ companyId: 'freewater', campaignId: c.id, decision: 'approve' })).rejects.toMatchObject({ code: 'payment_needed' });
+    await expect(app.ads.review({ companyId: 'freewater', campaignId: c.id, decision: 'approve', by: { userId: 'usr_test_reviewer', role: 'reviewer' } })).rejects.toMatchObject({ code: 'payment_needed' });
     c.active = true; // even if something turned it on
     onlyThese(app, [c.id]);
     const u = await print(app);
@@ -331,7 +331,7 @@ describe('changing a running ad', () => {
       expect(sub.body).toMatchObject({ status: 'in_review', paidCents: quote.totalCents, bottles: 200 });
       const c = app.platform.campaigns.get(sub.body.campaignId)!;
       expect(c.sizes).toEqual([quote.share]);
-      await app.ads.review({ companyId: 'freewater', campaignId: c.id, decision: 'approve' });
+      await app.ads.review({ companyId: 'freewater', campaignId: c.id, decision: 'approve', by: { userId: 'usr_test_reviewer', role: 'reviewer' } });
       onlyThese(app, [c.id]);
       const first = (await print(app)).unit;
       expect(first.placements.some((p) => p.campaignId === c.id)).toBe(true);
@@ -349,7 +349,7 @@ describe('changing a running ad', () => {
       expect(app.platform.ledger.entries.slice(before).filter((l) => l.credit === 'revenue:change_fee').map((l) => l.amountCents)).toEqual([10_000]);
       expect(c.prepaid).toMatchObject({ paid: 200, printed: 1 }); // the bottles paid for are unchanged
       expect((await print(app)).unit.placements.some((p) => p.campaignId === c.id)).toBe(false); // in review: not printing
-      await app.ads.review({ companyId: 'freewater', campaignId: c.id, decision: 'approve' });
+      await app.ads.review({ companyId: 'freewater', campaignId: c.id, decision: 'approve', by: { userId: 'usr_test_reviewer', role: 'reviewer' } });
       const after = (await print(app)).unit;
       expect(after.placements.some((p) => p.campaignId === c.id)).toBe(true);
       const changed = app.platform.campaigns.get(c.id)!;
@@ -659,7 +659,7 @@ describe('the Features page: each part of how advertisers pay is a switch, per c
     expect(app.companyFeatures.on('freewater', 'fee_scan')).toBe(false);
     try {
       await app.prepaid.payBottles({ companyId: 'peak-spring', advertiserId: adv, campaignId: c.id, quote: { bottles: 2, share: 4 }, expectedTotalCents: q.totalCents });
-      await app.ads.review({ companyId: 'peak-spring', campaignId: c.id, decision: 'approve' });
+      await app.ads.review({ companyId: 'peak-spring', campaignId: c.id, decision: 'approve', by: { userId: 'usr_test_reviewer', role: 'reviewer' } });
       const u = (await app.platform.order({ companyId: 'peak-spring', orderId: 'pp-peak-1', locationId: 'PS-001', productId: 'bottle-16oz' })).unit;
       const p = u.placements.find((x) => x.campaignId === c.id)!;
       expect(p).toMatchObject({ prepaid: true, priceCents: q.perBottleCents });

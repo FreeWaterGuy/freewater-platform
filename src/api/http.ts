@@ -58,6 +58,16 @@ export const obj = (props: Record<string, unknown>, required: string[] = []) => 
  * who is on the team, or making keys that can do that, must be a person, so a leaked key can't make itself people.
  * The owners' second sign-in step, when the company turns it on, is checked by `authenticate` before this runs.
  */
+/**
+ * The person on the company's team behind this key (a session, never a service, advertiser or machine key), or null.
+ * For steps the docs give to people, such as approving a paid ad (P4).
+ */
+export async function teamPersonOf(accounts: { get(id: string): Promise<{ id: string; companyId: string; role: string } | null> }, key: ApiKey | null) {
+  if (!key?.userId || key.advertiserId || key.locationId) return null;
+  const u = await accounts.get(key.userId);
+  return u && u.companyId === key.companyId ? u : null;
+}
+
 export const signedInOwner = (key: ApiKey | null, what: string): ApiKey => {
   if (!key || key.advertiserId || key.locationId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.');
   if (!key.userId || !key.scopes.includes('admin')) throw new ApiError(403, 'person_needed', `${what} is done by an owner signed in, not a service key.`);

@@ -59,6 +59,8 @@ export class FeatureService {
     // Switches kept in the settings are logged with each settings save, wherever it came from.
     console.onCommit = (tx, companyId, before, after, by, note) => this.logLinked(tx, companyId, before, after, by, note);
     console.onCreate = (tx, companyId, by) => this.copyForNewCompany(tx, companyId, by);
+    // A key never changes a switch, including one kept in the settings (SWITCHES "Features page"; P4).
+    console.switchesChanged = (before, after) => SWITCHES.filter((s) => s.kind === 'linked' && s.link!.get(before) !== s.link!.get(after)).map((s) => s.label);
   }
 
   private now() { return this.clock().toISOString(); }
