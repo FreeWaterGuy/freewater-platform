@@ -17,7 +17,8 @@ const tagScript = `/* FreeWater tag: remembers the FreeWater click id (fwclid) a
     try { var v = JSON.parse(localStorage.getItem(K) || 'null'); if (v && Date.now() - v.t < DAYS * 864e5) return v.id; } catch (e) {}
     var m = document.cookie.match(/(?:^|; )_fwclid=([0-9A-Z]{20})/); return m ? m[1] : null;
   }
-  var fromLink = new URLSearchParams(location.search).get('fwclid');
+  // Some apps and link shorteners change the case of a link or add spaces: the click id is still ours.
+  var fromLink = (new URLSearchParams(location.search).get('fwclid') || '').trim().toUpperCase();
   if (fromLink && /^FWC[0-9A-Z]{17}$/.test(fromLink)) {
     try { localStorage.setItem(K, JSON.stringify({ id: fromLink, t: Date.now() })); } catch (e) {}
     document.cookie = K + '=' + fromLink + '; max-age=' + DAYS * 86400 + '; path=/; SameSite=Lax';
@@ -27,7 +28,7 @@ const tagScript = `/* FreeWater tag: remembers the FreeWater click id (fwclid) a
     try { var v = JSON.parse(localStorage.getItem(B) || 'null'); if (v && Date.now() - v.t < DAYS * 864e5) return v.id; } catch (e) {}
     return null;
   }
-  var fromCode = new URLSearchParams(location.search).get('fwb');
+  var fromCode = (new URLSearchParams(location.search).get('fwb') || '').trim().toUpperCase();
   if (fromCode && /^[0-9A-Z]{14}$/.test(fromCode)) { try { localStorage.setItem(B, JSON.stringify({ id: fromCode, t: Date.now() })); } catch (e) {} }
   function send(event, d) {
     if (event !== 'purchase') return;
@@ -140,11 +141,16 @@ export function attributionRoutes(app: App, server: FastifyInstance, route: (r: 
     const r = await attribution.conversion({ source: 'server', companyId: key!.companyId, advertiserId: advertiser(key), clickId: b.fwclid, couponCode: b.couponCode, bottleCode: b.fwb, orderId: b.orderId, valueCents: b.valueCents });
     return { status: r.duplicate ? 200 : 201, body: r };
   } });
-  route({ method: 'POST', url: '/v1/conversions/:orderId/refund', scope: 'purchases', summary: 'A sale was refunded. Its commission is given back.', handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/conversions/:orderId/refund', scope: 'purchases', summary: 'A sale was refunded: with no body, all of it (or what is left of it); with amountCents less than what is left, that part, named by a refundId so a retry counts once (the same refundId through POST /v1/refunds is the same part). The commission is given back in proportion, never more than the sale’s.', handler: async (req, key) => {
     // The order number may arrive encoded twice (it can hold / and #); one that won't decode isn't an order of ours.
     let orderId: string;
     try { orderId = decodeURIComponent((req.params as any).orderId); } catch { throw new ApiError(400, 'bad_order', 'That order number isn’t encoded properly.'); }
-    return { body: await attribution.refund(advertiser(key), orderId, key!.companyId) };
+    // The body is optional (a whole refund needs none), so its two fields are checked here.
+    const b = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? (req.body as any) : {};
+    if ((b.amountCents !== undefined && !Number.isInteger(b.amountCents)) || (b.refundId !== undefined && (typeof b.refundId !== 'string' || b.refundId.length > 80))) {
+      throw new ApiError(400, 'invalid_request', 'amountCents is a whole number of cents; refundId is text (up to 80 characters).');
+    }
+    return { body: await attribution.refund(advertiser(key), orderId, key!.companyId, { amountCents: b.amountCents, refundId: b.refundId }) };
   } });
   route({ method: 'GET', url: '/v1/coupons/:code', scope: ['campaigns', 'purchases'], summary: 'Check a customer’s coupon: valid, or already used (and when).', handler: async (req, key) => ({ body: await attribution.checkCoupon(String((req.params as any).code), advertiser(key), key!.companyId) }) });
   route({ method: 'POST', url: '/v1/coupons/:code/redeem', scope: ['campaigns', 'purchases'], summary: 'Use a customer’s coupon (once). Send the sale amount; it’s credited to the bottle the coupon came from.', body: obj({ valueCents: S.int, orderId: { type: 'string', maxLength: 80 } }, ['valueCents']), handler: async (req, key) => {

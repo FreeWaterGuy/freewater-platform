@@ -377,6 +377,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       const before = platform.ledger.entries.length;
       const idem = b.refundId ? `${orderKey}:refund:${b.refundId}` : `${orderKey}:refund:rest`;
       const e = platform.bus.publish('purchase.refunded', unit.companyId, { unitId: b.unitId, slotIndex: b.slot, orderId: orderKey, amountCents: b.amountCents }, idem);
+      // A sale matched through the conversions API keeps how much of it was refunded, so what the advertiser sees
+      // (Sales tracking) equals what the books bill, whichever route the refund came by.
+      if (orderKey !== b.orderId) await app.attribution.syncRefunded(key!.companyId, placement.advertiserId, b.orderId);
       return { status: 202, body: { recorded: !!e, ledgerLines: platform.ledger.entries.length - before, refundedCents: platform.ledger.refundedCents(key!.companyId, placement.advertiserId, orderKey) ?? 0, amountCents: sold.amountCents } };
     }
     const before = platform.ledger.entries.length;

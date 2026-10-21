@@ -29,12 +29,20 @@ export function statement(platform: Platform, advertiserId: string, companyId: s
       if (billedAt < from || billedAt >= to) continue;
       const sum = (k: string) => ls.filter((l) => l.kind === k).reduce((a, l) => a + signed(l), 0);
       const count = (k: string) => ls.filter((l) => l.kind === k).reduce((a, l) => a + Math.sign(signed(l)), 0);
+      // Sales still standing: a refund in parts adds a reversal line each time, so counting reversal lines would take
+      // one sale off per part. A sale counts until its commission is all given back.
+      const net = new Map<string, number>();
+      for (const l of ls) {
+        const m = l.kind === 'commission' ? /^Commission on order (.+)$/.exec(l.memo) : l.kind === 'commission_reversal' ? /^Refund on order (.+), commission returned$/.exec(l.memo) : null;
+        if (m) net.set(m[1]!, (net.get(m[1]!) ?? 0) + signed(l));
+      }
+      const sales = [...net.values()].filter((v) => v > 0).length;
       const loc = platform.locations.get(u.locationId);
       const share = placementShare(p);
       lines.push({
         date: dayOf(billedAt), at: billedAt.toISOString(), bottle: u.id, place: loc ? `${loc.id}, ${loc.name}` : u.locationId, product: platform.products.get(u.productId)?.name ?? u.productId,
         piece: share === 1 ? 'Whole label' : `1/${share}`, bidCents: p.auction?.bidCents ?? null, paidLabelCents: p.auction?.paidLabelCents ?? null, paidCents: sum('print'), adjustments: p.auction?.adjustments ?? [],
-        scans: count('scan'), arLaunches: count('ar'), sales: count('commission') + count('commission_reversal'), engagementCents: sum('scan') + sum('ar'), commissionCents: sum('commission') + sum('commission_reversal'),
+        scans: count('scan'), arLaunches: count('ar'), sales, engagementCents: sum('scan') + sum('ar'), commissionCents: sum('commission') + sum('commission_reversal'),
       });
     }
   }

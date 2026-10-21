@@ -537,6 +537,7 @@ export async function createApp(opts: AppOptions) {
   await environment.repairDirections();
   await wallet.repairReserveLines();
   await offers.repairCauseGifts();
+  await attribution.repairUnrecorded();
   await persistence.flush();
 
   return { ...made, features, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
