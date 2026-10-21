@@ -19,7 +19,11 @@ export interface AdDraft {
   sizes?: Share[];
   formats?: ('label' | 'box-face')[];
   locations?: string[] | 'all';
-  buy?: { type: 'guaranteed'; prints: number } | { type: 'bid'; dailyCapCents: number; maxCentsPerLabel?: number };
+  /**
+   * `unchanged` marks the budget of an ad being changed, as it was when the change began: submitting keeps the live
+   * ad's own budget (bottles left now, not then). Only the platform sets it; any change in the chat drops it.
+   */
+  buy?: { type: 'guaranteed'; prints: number; unchanged?: true } | { type: 'bid'; dailyCapCents: number; maxCentsPerLabel?: number; unchanged?: true };
   experienceId?: string;
   experienceConfig?: Record<string, unknown>;
   theme?: Partial<Theme>;
