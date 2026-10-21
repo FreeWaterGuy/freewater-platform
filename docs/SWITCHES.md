@@ -40,6 +40,8 @@ for outside companies live in the host's settings (the environment), never in th
 
 ## 1. The three stages
 
+(On a pilot server, `FW_FEATURES=pilot`, only the first two exist: see section 6.)
+
 You go through them in order and never back.
 
 | Stage | What it means | How you get there | Can it be undone? |
@@ -73,6 +75,27 @@ wait is over. Anyone on the team can cancel a step before it runs.
 | **Gift cards** (spending credit on gift cards) | Credit can't be spent. | *Launch → Propose turning on gift cards*: 2 other people approve, then the wait. Only after going live. | *Points and credit → Money switches → Gift cards*, any time. Turning on again needs new approvals. | |
 | **Withdrawals** (people moving tokens to their own wallets) | Tokens stay in custody. | *Launch → Propose turning on withdrawals*: approvals and the wait, after going live with the token. | *Launch → Turn withdrawals off*, any time. | |
 | **Points into tokens** (a one-time conversion) | — | *Launch → Propose the conversion*, with the rate (1,000,000 units = 1 token): approvals, the wait, then signing in Squads. One at a time. | Cancel it before it runs. Once signed and recorded, it's done. | |
+
+### Credit for advertisers
+
+Advertisers are billed after the fact: each invoice covers what already printed (and scans, AR launches, box sides,
+commission). So the platform doesn't decide who is good for the money; a person does, and until they do it plays safe.
+
+| Rule | What it means |
+|---|---|
+| **Going live** | An ad is approved (or turned back on) only when its advertiser has a **card on file that hasn't been declined**, or a **credit limit** an owner or finance person set. Otherwise the reviewer sees `credit_needed` and why. The company's own house ads never need either. |
+| **Credit limit** | `POST /v1/advertisers/<id>/credit-limit` with `limitCents` and a reason. Only an owner or finance person, signed in with the second step (never an API key). Each change is a new record (who, when, why); none is ever edited. 0 means no credit. With a limit set, it applies even with a card. |
+| **Pausing** | Each hour, and at once when an invoice's card is declined, an advertiser's live ads **pause** when what it owes (unpaid and declined invoices plus charges not yet invoiced) is **more than its limit**, or, with no limit, when it owes anything and has no working card. The team is alerted and the advertiser's staff are emailed in plain words. |
+| **Starting again** | Nothing restarts by itself. Once the advertiser pays, adds a working card, or a person raises the limit, the ad is turned back on (by the advertiser or a reviewer), which checks again. |
+| **See where one stands** | `GET /v1/advertisers/<id>/credit`: card, limit, what it owes now. |
+
+**For the founder to decide:** a card with no limit has no ceiling between invoices (the daily budgets still apply);
+set a limit for card holders too if that's too loose. The demo's sample advertisers get a made-up $5,000 limit.
+Before going live, set a limit or get a card for every real advertiser whose ads are running: with neither, their
+ads pause within the hour once they owe anything.
+
+**A bid's daily amount** (`dailyCapCents`) caps only what its printed labels cost each day. Scans, AR launches, box
+sides and sales commission are billed on top; advertisers are told so where they set it.
 
 **Brand reserves:** credit is never paid from thin air. When a brand's money has really arrived, record it under
 *Points and credit → Brand reserves*. Credit and offer payouts come only from that reserve, never more than it holds.
@@ -143,7 +166,30 @@ Every settings change is saved as a version. *History* shows who changed what, a
 
 ---
 
-## 6. Keys for outside companies (in the host's settings)
+## 6. Whole areas off on this server (host settings, `FW_FEATURES`)
+
+Separate from every switch above: the host's settings can take whole areas out of the server, so a small launch
+exposes only what it uses. `FW_FEATURES=pilot` is the preset for the first pilot; `FW_FEATURES_OFF=lottery,offers`
+(a comma list) switches off more. Unset, everything is on.
+
+| Rule | How |
+|---|---|
+| **Off means gone, not refused.** | The area's addresses aren't registered (404, not in the API description), its background jobs aren't scheduled, and the screens hide it. |
+| **Steps that would switch an area on can't be proposed or run.** | With `token` off: going live with the token, minting and switching the chain on. With `token_conversion`, `withdrawals` or `gift_cards` off: their steps under *Launch*. Going live with points, pause and unpause always stay. |
+| **It only takes away.** | Every switch inside an area that's on still starts off and works as above. |
+| **Only the host's settings change it, with a restart.** | Never the console, never a key. |
+| **A typo can't leave something on.** | An unknown name stops a production start. |
+| **Nothing is deleted.** | Switching an area back on brings back everything it had. |
+
+The pilot keeps bottles, ads, scans, AR, attribution, the app (points included), delivery, the portals and consoles,
+giving, the open books, accounts, data rights, transparency, machines, the games and launch up to *live with points*.
+It switches off the token, conversion, withdrawals, gift cards, money partners, the AI agents' fund, the operator
+network, the prize game, Veo footage and brand offers. The full table, with the reason for each, is in
+`docs/RUNNING.md` (*The pilot*); the areas and their routes are in `src/runtime/features.ts`.
+
+---
+
+## 7. Keys for outside companies (in the host's settings)
 
 Each switches from a stand-in to the real company once its key is set. No code changes. The full list is in
 `docs/RUNNING.md`.

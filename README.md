@@ -35,7 +35,7 @@ npm test             # checks every business rule
 One order goes through the print pipeline:
 
 1. **Order**: `order.created`
-2. **Fill slots** (ad engine): picks 1 to 6 different ads, skips blocked categories, never puts two competitors on one bottle, respects location targeting and budgets, and fills any gap with the house ad.
+2. **Fill slots** (ad engine): picks 1 to as many different ads as the company allows (10 for FreeWater), skips blocked categories, never puts two competitors on one bottle, respects location targeting and budgets, and fills any gap with the house ad.
 3. **Render** (label renderer): seam, ad slots, and the locked company panel. Each slot gets its own QR (`/s/<unit>/<slot>`), owned by the advertiser. The panel QR opens the bottle's receipt (`/r/<unit>`).
 4. **Print** (printer adapter): retries a jam once. A sale is confirmed only when the printer confirms.
 5. **Dispense**, then scans, AR launches and purchases come in as events.
@@ -46,6 +46,8 @@ The **ledger** listens to events and bills:
 - each scan and AR launch that loads (repeats by one viewer inside the repeat window are free)
 - commission on completed sales, given back on refunds
 - the donation for each bottle, when the company has giving turned on
+
+Advertisers are billed for nothing else. In particular there is no charge per click: a tap on a link out of an ad, a save or a call is counted for the advertiser, never billed. What they pay is prints (bottles and box sides), scans and AR launches that loaded, and commission on confirmed sales.
 
 Failed prints, failed AR and duplicate orders are never billed. Ledger lines are only ever added, and debits always equal credits.
 
@@ -177,8 +179,10 @@ npm run demo:ops-preview   # builds out/ops-preview/ and out/driver-preview/, cl
 **Seeing the sale (`src/modules/attribution`).** Sales are matched to the exact bottle and ad by the platform itself, not on the advertiser's word.
 - **Click ids:** every link out of an ad goes through `/go/…` (signed, so it can't be used to send people elsewhere). We record the click and send the person on with `fwclid=FWC…`.
 - **Our tag** (`/t.js`): advertisers put it on their site. It remembers the fwclid for 30 days and reports `freewater('purchase', { orderId, value, coupon })`. It's only accepted from the advertiser's own listed websites. The tag runs in the shopper's browser and anyone can forge its Origin, so a sale it reports proves a click led to the site but is **unverified**: shown to the advertiser and the company, never billed on its own.
-- **Server to server:** `POST /v1/conversions` with the advertiser's key and the fwclid or coupon code. This is what bills commission, and it confirms a sale the tag reported (same order number; the tag's click is used if none is sent). A coupon redeemed at the counter confirms it too.
-- **What counts:** only sales matched to one of our clicks or coupons. The same order counts once, at most 5 sales per click, within 30 days. Refunds give the commission back.
+- **Server to server:** `POST /v1/conversions` with the advertiser's key and the fwclid or coupon code. This is what bills commission, and it confirms a sale the tag reported (same order number; the tag's click is used if none is sent). A coupon redeemed at the counter confirms it too. Confirming with the order number alone vouches for the click the tag saw, so a server that has the fwclid (the tag keeps it in the site's own `_fwclid` cookie) should send it: its own click id always wins.
+- **What counts:** only sales matched to one of our clicks, coupons or a static code's bottle reference. The same order counts once, at most 5 sales per click (or per bottle reference), within 30 days of the click (or of the bottle's printing, for a static code); a sale the tag saw inside the 30 days still counts when the server confirms it later. A coupon has no time limit and counts once. A sale is at most $5,000. The one exception: `POST /v1/purchases`, by which an advertiser's or the company's own key reports a sale from a bottle slot, bills commission on that report without our match. Click ids, coupons and order numbers are matched without regard to spaces around them or letter case (order numbers keep their case).
+- **Refunds:** `POST /v1/conversions/{orderId}/refund` with no body refunds the whole sale; with `amountCents` (less than what's left) and a `refundId`, that part. The commission comes back in proportion, never more than the sale's, and a part counts once whether it comes this way or through `POST /v1/refunds`. Sales tracking shows each sale net of its refunds, the same as the books.
+- **Checks:** the daily reconciliation (`GET /v1/books/reconciliation`, "sales match conversions") fails when a billed sale isn't in the books for its amount and refunds, and asks a person to look at sales the tag saw that the advertiser's server never confirmed within a week, or confirmed for less than the tag saw (both show in Sales tracking too). A sale whose books entry was lost in a crash is booked when it's reported again, and at start-up.
 - **One-time coupons:** every person gets their own code (e.g. `BOTTLE2X-7F3A9Q`) with its own QR.
   - The cashier scans it with a phone camera, which opens FreeWater Ads → Check a coupon. It shows valid or already used, then the sale amount is entered and credited to that bottle.
   - Tills can use `POST /v1/coupons/{code}/redeem`.
@@ -245,11 +249,13 @@ npm run demo:ops-preview   # builds out/ops-preview/ and out/driver-preview/, cl
 **The auction (`src/modules/ads/auction.ts`).** It works like Google's and Meta's:
 - Bid adjustments by machine, product, time of day, day of week, interests, and new or returning customers. They multiply together.
 - Ad rank is the bid plus the engagement the ad is expected to earn, so a good ad can win with less.
-- Second price: the winner pays just enough to beat the next ad, never more than its bid and never below $1.
+- Second price: the winner pays just enough to beat the next other advertiser's ad (an advertiser's own ads never set each other's price), never more than its bid and never below $1.
 - Even pacing of daily budgets, reset each day in the company's time zone.
 - A cap on how many bottles one person gets with the same ad each day.
 
 Each placement records what it bid, what it paid and which adjustments applied. Advertisers set all of this under "Your bid" on the ad's code page.
+
+**When the price is set, and rounding.** A bottle's price is fixed when its ads are picked, and the money is held from that day's budget then; it's billed only if the bottle prints, and a failed print gives the hold back. Prices are whole cents: a piece's share of a bid rounds to the nearest cent (half a cent up), so a piece can cost up to half a cent more than its exact share of the bid. A machine's labels kept ready for when its internet drops (up to 24 hours) keep the price and the day of the moment they were made: a bid lowered or an ad paused afterwards doesn't change them, and if one prints offline it's billed at that price, against that day's budget, and shows on the statement and invoice on the day it was billed. Changing an ad in the chat keeps its bid settings and never adds bottles to a set number unless the advertiser asks for a new number.
 
 ## The prize game (`src/modules/lottery`)
 
@@ -419,7 +425,7 @@ npm run demo:ads-preview   # builds out/ads-preview/, a clickable copy that need
 - **The AI can't break anything.** It only proposes changes; every change is checked before it's kept (`src/modules/ads/draft.ts`). Colors that would be hard to read are fixed, sizes that aren't sold are dropped, unknown machines and unfinished scan pages are explained back in plain words.
 - **Swappable AI.** `AdAssistant` is a contract (`src/modules/ai/contract.ts`). With `ANTHROPIC_API_KEY` set, Claude does the talking (`ANTHROPIC_MODEL` picks the model) through one tool, `update_ad`, and sees attached pictures. Without a key, or if Claude can't be reached, the built-in helper answers: it reads offers, prices, colors, places, links and codes out of what people type. Any other AI can plug in the same way.
 - **Artwork that works at every size.** The assistant designs with a template (`src/modules/creative/poster.ts`) that lays the ad out for a thin 1/6 slot, a half label, the full wrap and the side of a box, with text always escaped and contrast always readable.
-- **See it before submitting** (`GET /v1/ads/drafts/:id/preview`): every size, a real sample label with the company panel, the side of a box, the real scan page in a phone frame, and what it costs.
+- **See it before submitting** (`GET /v1/ads/drafts/:id/preview`): every size at every shape it can print at, on every product (a sixth can be a wide strip on one bottle and a tall column on the next), each drawn the way the label renderer draws it with its QR code where it prints; a real sample label with the company panel; each box side; the real scan page in a phone frame; and what it costs. An ad whose sizes fit no bottle can't be submitted.
 - **Review twice.** The advertiser confirms the preview (`submit` needs `approved: true`), then the company approves or sends it back with a note (`GET /v1/review/campaigns`, `POST /v1/review/campaigns/:id`). Nothing prints before that. Once approved, the advertiser can pause and resume; changing the artwork or scan page sends it back to review. Changes are made the same way, by chatting (`POST /v1/ads/drafts` with `fromCampaignId`).
 - **Results from the books** (`GET /v1/ads/overview`): spend, bottles printed, box sides, scans, AR launches, sales, saves and link taps, day by day and per ad. Every ledger line now carries its campaign, so each number traces to the lines it adds up.
 - **Billing**: invoices made from those ledger lines, a saved card charged automatically, and pay-now for open ones.

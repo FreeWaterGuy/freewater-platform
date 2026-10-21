@@ -200,7 +200,7 @@ describe('the daily reconciliation report', () => {
     expect((await call('GET', '/v1/books/reconciliation', keys['advertiser-joes'])).status).toBe(403);
     expect((await call('GET', '/v1/books/reconciliation?date=nope', finance)).status).toBe(400);
     const r = (await call('GET', '/v1/books/reconciliation', finance)).body;
-    expect(r.checks.map((c: any) => c.id)).toEqual(['ledger_balanced', 'books_equal_ledger', 'payments_match_processor', 'invoices_match_ledger', 'customers_paid', 'charities_match_bank', 'wallet_and_reserves', 'ai_fund', 'published_days_unchanged', 'billing_ceilings']);
+    expect(r.checks.map((c: any) => c.id)).toEqual(['ledger_balanced', 'books_equal_ledger', 'payments_match_processor', 'invoices_match_ledger', 'customers_paid', 'charities_match_bank', 'wallet_and_reserves', 'ai_fund', 'published_days_unchanged', 'billing_ceilings', 'sales_match_conversions']);
     expect(r.failed).toBe(0);
     expect(r.totals).toMatchObject({ lines: expect.any(Number), fingerprint: expect.any(String) });
     // The card processor took money the books never heard of: the report fails, naming it.
@@ -256,6 +256,8 @@ describe('randomized money sequences keep every invariant (seeded)', () => {
     const seenDays = new Map<string, string>(); // published day → fingerprint
     const funded: string[] = [];
     const viewers = Array.from({ length: 6 }, (_, i) => `viewer-rnd-${seed}-${i}`);
+    // Sales matched to our clicks (the commission model): Joe's clicks, and the orders its server reported.
+    const clicks: string[] = [], convOrders: string[] = [];
     const checkDeep = async (ctx: string) => {
       await app.persistence.flush();
       // Published days never change: every day before today keeps its fingerprint.
@@ -274,7 +276,7 @@ describe('randomized money sequences keep every invariant (seeded)', () => {
     };
 
     for (let i = 0; i < steps; i++) {
-      const op = r.pick(['print', 'print', 'scan', 'scan', 'scan', 'ar', 'purchase', 'refund', 'custom', 'expense', 'expense-key', 'payouts', 'invoices', 'fund', 'unfund', 'clock']);
+      const op = r.pick(['print', 'print', 'scan', 'scan', 'scan', 'ar', 'purchase', 'refund', 'custom', 'expense', 'expense-key', 'payouts', 'invoices', 'fund', 'unfund', 'clock', 'click', 'convert', 'convert', 'conv-refund']);
       const ctx = `seed ${seed} step ${i} (${op})`;
       const before = lines().length;
       if (op === 'print') {
@@ -325,6 +327,23 @@ describe('randomized money sequences keep every invariant (seeded)', () => {
       } else if (op === 'unfund') {
         const t = (await db.query<any>(`select id from wallet_tx where company_id = $1 and kind = 'fund' and reversed_by is null order by at limit 1`, [CO])).rows[0];
         if (t) expect([200, 409], ctx).toContain((await call('POST', '/v1/wallet/correct', owner, { entry: t.id, reason: 'random undo' })).status);
+      } else if (op === 'click') {
+        const spots = printed.flatMap((p) => app.platform.units.get(p.unitId)!.placements.filter((x) => x.advertiserId === 'adv-joes' && !x.isHouse).map((x) => ({ unitId: p.unitId, slot: x.slotIndex, campaignId: x.campaignId })));
+        if (spots.length) {
+          const s = r.pick(spots);
+          const link = app.attribution.linkFor({ unitId: s.unitId, slot: s.slot }, { advertiserId: 'adv-joes', campaignId: s.campaignId, companyId: CO }, 'https://example.com/joes/order');
+          clicks.push((await app.attribution.click(link.slice('/go/'.length), r.pick(viewers))).clickId);
+        }
+      } else if (op === 'convert' && clicks.length) {
+        // Sometimes an order reported again (a retry, or the same order with a different amount): booked once.
+        const orderId = r.chance(0.25) && convOrders.length ? r.pick(convOrders) : `cv-${seed}-${i}`;
+        const res = await call('POST', '/v1/conversions', keys['advertiser-joes'], { fwclid: r.pick(clicks), orderId, valueCents: r.int(0, 30_000) });
+        expect([200, 201, 422], ctx).toContain(res.status); // 422: a click past its 30 days or its 5 sales
+        if (res.status === 201) convOrders.push(orderId);
+      } else if (op === 'conv-refund' && convOrders.length) {
+        const whole = r.chance(0.3);
+        const res = await call('POST', `/v1/conversions/${r.pick(convOrders)}/refund`, keys['advertiser-joes'], whole ? undefined : { amountCents: r.int(1, 12_000), refundId: `crf-${r.int(0, 2)}` });
+        expect([200, 409], ctx).toContain(res.status);
       } else if (op === 'clock') {
         now += r.int(1, 30) * 3_600_000;
       }

@@ -1,3 +1,4 @@
+/* eslint-disable security/detect-non-literal-fs-filename -- the repository's books folder and the files its own index lists */
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';

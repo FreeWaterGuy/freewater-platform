@@ -281,6 +281,12 @@ whether the handler refuses service keys (`yes`), only for some changes, or not 
 *Other check*: extra guards in the handler; "second step (owners/finance, R4)" means an owner or finance person must approve from a sign-in that passed the authenticator step at sign-in, with an app set up at least 24 hours before (`approvalRoutes` in `src/modules/accounts/secondStep.ts`, always; `conditionalApprovalRoutes`, when the request touches an approval setting or role). *Docs*: whether this matches README, SWITCHES, RUNNING, AI and the
 route's own OpenAPI summary.
 
+**Areas switched off (`FW_FEATURES`).** A host can take whole areas out (`src/runtime/features.ts`; the pilot preset
+takes out 42 of these routes). Their routes are never registered, so they answer 404 to everyone and the walk below
+only covers what's left; `test/access-routes.test.ts` checks that with the pilot preset exactly the core rows are
+registered, the rest answer 404 even to the platform's admin key, their jobs aren't scheduled, and their launch steps
+can't be proposed.
+
 **Mismatches and gaps (13):**
 
 | Route | Problem | Risk |
@@ -302,11 +308,11 @@ route's own OpenAPI summary.
 **Endpoints outside the route table** (no key, by design): `GET /q/:code`, `/Q/:code` (smart code open; issues the
 scan token), `GET /v/:code`, `/V/:code` (coupon check redirect), `GET /go/:token` (signed click redirect), `GET /t.js`,
 `POST /v1/public/conversions` (tag sales, unverified), `GET /v1/public/labels/:file`,
-`GET /v1/public/companies/:companyId/live`, `GET /health`, `/health/live`, `/health/ready`, `GET /v1/openapi.json`,
+`GET /v1/public/companies/:companyId/live`, `GET /health`, `/health/live`, `/health/ready`, `/health/uptime`, `GET /v1/openapi.json`,
 the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/console`, `/developers`, `/books`,
 `/play`, `/preview/scan`), `/static/*`, `/models/builtin/*`, `/assets/*`.
 
-**Every route (356):**
+**Every route (358):**
 
 | # | Route | Scope | Person | Other check | Docs |
 |---|---|---|---|---|---|
@@ -478,7 +484,7 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 166 | `GET /v1/ads/tracking` | [campaigns, purchases] | no | advertiser only | OK |
 | 167 | `POST /v1/ads/tracking/domains` | [campaigns, purchases] | no | advertiser only | OK |
 | 168 | `POST /v1/conversions` | purchases | no | advertiser only | OK; advertiser's own key; bills commission |
-| 169 | `POST /v1/conversions/:orderId/refund` | purchases | no | advertiser only | OK |
+| 169 | `POST /v1/conversions/:orderId/refund` | purchases | no | advertiser only | OK; whole or in parts (a part needs a refundId; same key as `/v1/refunds`); never more than the sale |
 | 170 | `GET /v1/coupons/:code` | [campaigns, purchases] | no | advertiser only | OK |
 | 171 | `POST /v1/coupons/:code/redeem` | [campaigns, purchases] | no | advertiser only | OK; advertiser's own key |
 | 172 | `GET /v1/ops/attribution` | [admin, ledger] | no | team only (no advertiser/machine key) | OK |
@@ -666,6 +672,10 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 354 | `GET /v1/platform/status` | platform | no | — | OK |
 | 355 | `POST /v1/platform/persistence/skip-stuck` | platform | yes | — | OK (R7 fixed): a person’s decision, signed in (RUNNING.md) |
 | 356 | `POST /v1/platform/jobs/:name/run` | platform | no | — | OK |
+| 357 | `GET /v1/public/features` | public | — | — | OK (public by design: which areas this server runs, no secrets; routes of areas switched off with FW_FEATURES aren't registered at all, so they aren't in this table's walk on a pilot server) |
+| 358 | `GET /health/deep` | platform | no | — | OK (staff only: job freshness, queues, spool, last books checks; no personal data) |
+| 359 | `GET /v1/advertisers/:advertiserId/credit` | invoices | no | an advertiser key only its own | OK (card, limit and what it owes; no card numbers) |
+| 360 | `POST /v1/advertisers/:advertiserId/credit-limit` | invoices | yes | owner or finance, signed in with the second step (an approval route); never an API or advertiser key | OK (each limit a new append-only row; a lower limit pauses at once) |
 
 ---
 

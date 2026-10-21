@@ -15,6 +15,14 @@ export const MAX_BILLED_PER_SLOT_PER_DAY = 10;
 export const CAMPAIGN_BILLED_PER_PRINTED_PER_DAY = 1;
 export const CAMPAIGN_BILLED_FLOOR_PER_DAY = 50;
 
+/**
+ * Where a bottle's extra giving starts: the print money its per-bottle gift already covers. A company that hasn't set
+ * it gets $1, where bids start. Every rule that works out the upside (bottles, batches, the AI agents' fund, the
+ * month's profit, the giving ratchet) uses this one default, so they never disagree.
+ */
+export const DEFAULT_EXTRA_ABOVE_CENTS = 100;
+export const extraAboveCents = (g: Pick<CompanyConfig['giving'], 'extraAboveCents'>) => g.extraAboveCents ?? DEFAULT_EXTRA_ABOVE_CENTS;
+
 /** One balanced line: money moves from `debit` to `credit`. Lines are only ever added, never edited or deleted. */
 export interface LedgerEntry {
   id: string;
@@ -172,13 +180,13 @@ export class Ledger {
     if (g.mode === 'per_unit') {
       donation = g.centsPerUnit ?? 0;
       // Print money above the starting point (bids over $1, several ads on one bottle, a custom design) gives its share too.
-      const above = Math.max(0, revenue - (g.extraAboveCents ?? Infinity));
+      const above = Math.max(0, revenue - extraAboveCents(g));
       const extra = g.percentOfExtra && above > 0 ? Math.round((above * g.percentOfExtra) / 100) : 0;
-      if (extra) { donation += extra; memo = `Donation to ${charity}: ${g.centsPerUnit}¢ for the bottle + ${g.percentOfExtra}% of ${above}¢ above ${g.extraAboveCents}¢`; }
+      if (extra) { donation += extra; memo = `Donation to ${charity}: ${g.centsPerUnit}¢ for the bottle + ${g.percentOfExtra}% of ${above}¢ above ${extraAboveCents(g)}¢`; }
     }
     if (g.mode === 'percent_of_revenue') donation = Math.round((revenue * (g.percentOfRevenue ?? 0)) / 100);
     this.give(e, company, { unitId }, locationId, donation, (name) => memo.replace(charity, name));
-    this.fundAgents(e, company, Math.max(0, revenue - (g.extraAboveCents ?? 100)), { unitId }, 'print money above the starting price');
+    this.fundAgents(e, company, Math.max(0, revenue - extraAboveCents(g)), { unitId }, 'print money above the starting price');
   }
 
   /**
@@ -202,7 +210,7 @@ export class Ledger {
     if (b.revenueCents > 0) this.add(e, { ...where, debit: `receivable:advertiser:${b.advertiser}`, credit: 'revenue:print', amountCents: b.revenueCents, kind: 'print', memo: `${b.advertiser} paid for ${what}` });
     if (b.donationPerBottleCents > 0) this.add(e, { ...where, debit: 'expense:giving', credit: `payable:charity:${b.charity}`, amountCents: b.bottles * b.donationPerBottleCents, kind: 'donation', memo: `Batch gift to ${b.charity}: ${b.donationPerBottleCents}¢ × ${what}` });
     // Money above the $1 base on the batch: the charity's and the AI agents' share, as for any bottle.
-    const upside = Math.max(0, b.revenueCents - b.bottles * (company.giving.extraAboveCents ?? 100));
+    const upside = Math.max(0, b.revenueCents - b.bottles * extraAboveCents(company.giving));
     const g = company.giving;
     if (upside > 0 && g.mode !== 'none' && g.percentOfExtra) this.add(e, { ...where, debit: 'expense:giving', credit: `payable:charity:${b.charity}`, amountCents: Math.round((upside * g.percentOfExtra) / 100), kind: 'donation', memo: `${g.percentOfExtra}% of the batch’s money above the $1 base to ${b.charity} [given ${b.date}]` });
     if (upside > 0 && company.agents?.enabled && company.agents.percentOfExtra) this.add(e, { ...where, debit: 'expense:ai_fund', credit: 'payable:ai_fund', amountCents: Math.round((upside * company.agents.percentOfExtra) / 100), kind: 'ai_fund', memo: `${company.agents.percentOfExtra}% of the batch’s money above the $1 base to the AI agents’ fund [given ${b.date}]` });

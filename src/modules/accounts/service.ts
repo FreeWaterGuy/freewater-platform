@@ -189,15 +189,21 @@ export class AccountsService {
    * turned on personalized offers), and which advertisers they've already met. Never a name or contact details.
    */
   async audienceFor(userId: string, companyId: string): Promise<import('../ads/contract').PrintAudience | null> {
-    const r = (await this.db.query<any>(`select viewer_key, consents, interests from users where id = $1 and deleted_at is null`, [userId])).rows[0];
+    // Only this company's people: another company's customer id never brings their interests (or their bottles) here.
+    const r = (await this.db.query<any>(`select viewer_key, consents, interests from users where id = $1 and company_id = $2 and deleted_at is null`, [userId, companyId])).rows[0];
     if (!r) return null;
     const consents = parse<Consents>(r.consents);
-    // Without their yes to personalized offers, nothing about them is used to pick ads.
-    const seen = consents.personalizedOffers ? (await this.db.query<any>(`select advertiser_id from viewer_advertisers where company_id = $1 and viewer_key = $2`, [companyId, r.viewer_key])).rows.map((x) => x.advertiser_id as string) : [];
+    // Without their yes to personalized offers, nothing about them is used to pick ads; and someone who told us they're
+    // under the minimum age gets none whatever they turned on (COPPA and its kind): neither their interests nor which
+    // advertisers they met before (new or returning customer targeting is personalized advertising too).
+    const mayUse = !!consents.personalizedOffers && (await this.mayPersonalize(companyId, [r.viewer_key, `user:${userId}`]));
+    const seen = mayUse ? (await this.db.query<any>(`select advertiser_id from viewer_advertisers where company_id = $1 and viewer_key = $2`, [companyId, r.viewer_key])).rows.map((x) => x.advertiser_id as string) : [];
     // What they asked for themselves (kinds of ads never wanted) and the no-ads control apply with or without that yes.
     const extra = this.audienceExtras ? await this.audienceExtras(companyId, r.viewer_key) : {};
-    return { personKey: r.viewer_key, interests: consents.personalizedOffers ? parse<string[]>(r.interests) : [], advertisersSeen: new Set(seen), ...extra };
+    return { personKey: r.viewer_key, interests: mayUse ? parse<string[]>(r.interests) : [], advertisersSeen: new Set(seen), ...extra };
   }
+  /** Set by the app: false for a person known to be under the minimum age. */
+  mayPersonalize: (companyId: string, subjects: string[]) => Promise<boolean> = async () => true;
   /** Set by the data environment: kinds of ads a person never wants, and whether they're in the no-ads control. */
   audienceExtras?: (companyId: string, personKey: string) => Promise<{ avoid?: string[]; noAds?: boolean }>;
 

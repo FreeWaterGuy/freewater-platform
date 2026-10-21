@@ -1,14 +1,22 @@
 import type { FastifyInstance } from 'fastify';
 import { getHeapStatistics } from 'node:v8';
 import type { App } from '../app';
+import { statSync } from 'node:fs';
 import { ApiError, type RouteDef } from './http';
+import { pathOnly } from './logging';
 
 /**
  * Keeping the platform running: health checks for the load balancer, and a status page for the people running it.
  *
- *   GET /health          the process is up (cheap; for "restart it if this fails")
+ *   GET /health          the process is up, with its version (cheap; never touches the database)
+ *   GET /health/live     the process is up (for "restart it if this fails"; answers even while restarting)
  *   GET /health/ready    it can do its work: database answering, every change saved, owns the data, jobs not failing
  *                        (for "send it traffic only if this passes"). Says what's wrong, never anything secret.
+ *                        503 only when it really can't serve (database down, or doesn't own the data).
+ *   GET /health/uptime   for an outside uptime checker: 200 only if the database answers within 2 s and this server
+ *                        owns the data and is sure of it (lease held and fresh); otherwise 503. Cheap: one `select 1`.
+ *   GET /health/deep     for staff (platform key): each job's freshness, what's queued, the spool, the last books
+ *                        reconciliation and the last books check, the error tracker's counts.
  */
 export function operationsRoutes(app: App, server: FastifyInstance, route: (r: RouteDef) => void) {
   const { db, persistence, runtime } = app;
@@ -34,6 +42,15 @@ export function operationsRoutes(app: App, server: FastifyInstance, route: (r: R
   };
 
   server.get('/health', async () => ({ ok: true, database: db.name, version }));
+  server.get('/health/uptime', async (_req, reply) => {
+    const database = await ping();
+    const problems: string[] = [];
+    if (!database.ok) problems.push('database not answering');
+    if (runtime.lease && !runtime.lease.held) problems.push('doesn’t own the data');
+    else if (runtime.lease && !runtime.lease.fresh) problems.push('can’t confirm it owns the data');
+    reply.code(problems.length ? 503 : 200).header('cache-control', 'no-store');
+    return { ok: problems.length === 0, problems };
+  });
   server.get('/health/live', async () => ({ ok: true }));
   server.get('/health/ready', async (_req, reply) => {
     const r = await readiness();
@@ -43,7 +60,37 @@ export function operationsRoutes(app: App, server: FastifyInstance, route: (r: R
     return r;
   });
 
-  route({ method: 'GET', url: '/v1/platform/status', scope: 'platform', summary: 'How the platform is running: health, background jobs, saving, which server owns the data, recent alerts.', handler: async () => {
+  route({ method: 'GET', url: '/health/deep', scope: 'platform', noWait: true, summary: 'For staff: each background job’s freshness, what’s queued (changes waiting, webhooks), the spool, the last books reconciliation and books check, and the error tracker’s counts.', handler: async () => {
+    const now = Date.now();
+    const jobs = (runtime.jobs?.status() ?? []).map((j) => {
+      const ageSec = j.lastFinishedAt ? Math.round((now - new Date(j.lastFinishedAt).getTime()) / 1000) : null;
+      // Fresh: it worked within two of its intervals (and a minute's grace).
+      const fresh = j.lastOk === true && ageSec !== null && ageSec * 1000 <= 2 * j.everyMs + 60_000;
+      return { name: j.name, everySec: Math.round(j.everyMs / 1000), lastOk: j.lastOk, lastFinishedAt: j.lastFinishedAt, ageSec, fresh, running: j.running, stuck: j.stuck, overdue: j.overdue, consecutiveFailures: j.consecutiveFailures, nextAt: j.nextAt };
+    });
+    const webhooksWaiting = await Promise.race([
+      db.query<{ n: string }>(`select count(*)::text as n from webhook_deliveries where status in ('pending', 'retrying')`).then((r) => Number(r.rows[0]?.n ?? 0)),
+      new Promise<null>((r) => setTimeout(() => r(null), 2000).unref?.()),
+    ]).catch(() => null);
+    const spool = persistence.spool;
+    let spoolBytes: number | null = null;
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- the spool path comes from host settings, never a request
+    if (spool.file) { try { spoolBytes = statSync(spool.file).size; } catch { spoolBytes = 0; } }
+    const ready = await readiness();
+    const problems = [...ready.problems, ...jobs.filter((j) => j.lastOk === false && !ready.problems.some((p) => p.includes(j.name))).map((j) => `job ${j.name} failed last time`)];
+    return { body: {
+      ok: problems.length === 0, problems, version, uptimeSec: ready.uptimeSec, database: ready.database,
+      lease: runtime.lease ? { held: runtime.lease.held, fresh: runtime.lease.fresh, sinceRenewedMs: runtime.lease.sinceRenewedMs } : null,
+      jobs,
+      queue: { changesWaiting: persistence.waiting, webhooksWaiting, paused: persistence.problem },
+      spool: { file: spool.file, active: spool.active, bytes: spoolBytes },
+      lastReconciliation: runtime.checks?.reconciliation ?? null,
+      lastBooksCheck: runtime.checks?.booksCheck ?? null,
+      errorTracking: runtime.reporter?.enabled ? { on: true, ...runtime.reporter.stats } : { on: false },
+    } };
+  } });
+
+  route({ method: 'GET', url: '/v1/platform/status', scope: 'platform', noWait: true, summary: 'How the platform is running: health, background jobs, saving, which server owns the data, recent alerts.', handler: async () => {
     const mem = process.memoryUsage();
     const heap = getHeapStatistics();
     return { body: {
@@ -72,6 +119,24 @@ export function operationsRoutes(app: App, server: FastifyInstance, route: (r: R
     await runtime.jobs.runNow(name);
     return { body: runtime.jobs.status().find((j) => j.name === name) };
   } });
+
+  // Every other 5xx answer (503 paused, database unavailable, restarting…) to the error tracker too, grouped by status
+  // and code rather than by address, so an outage is one issue a minute, not one per visitor. Unexpected errors were
+  // already sent, with their stack, by the error handler. The health checks are the uptime checker's business.
+  server.addHook('onSend', async (req, reply, payload) => {
+    if (reply.statusCode >= 500 && typeof payload === 'string' && payload.length < 4096) {
+      try { const code = JSON.parse(payload)?.error?.code; if (typeof code === 'string') (req as any).fwErrorCode = code.slice(0, 60); } catch {}
+    }
+    return payload;
+  });
+  server.addHook('onResponse', async (req, reply) => {
+    const reporter = runtime.reporter;
+    if (reply.statusCode < 500 || !reporter?.enabled || (req as any).fwTracked) return;
+    const route = req.routeOptions?.url ?? null;
+    if ((route ?? pathOnly(req.url)).startsWith('/health')) return;
+    const code = (req as any).fwErrorCode ?? 'none';
+    reporter.captureMessage(`${reply.statusCode} ${code}`, reply.statusCode === 503 ? 'warning' : 'error', { fingerprint: ['http-5xx', String(reply.statusCode), code], request: { method: req.method, route }, tags: { source: 'http', status: reply.statusCode, code, companyId: (req as any).apiKey?.companyId } });
+  });
 
   // While a change couldn't be saved, take no more: memory and database may disagree, and money is never counted
   // from a guess. Reading still works, and so do signing in and the platform's own repair routes.

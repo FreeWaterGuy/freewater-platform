@@ -240,6 +240,7 @@
   // through our click tracking, so a sale made from inside AR is credited to this bottle like any other.
   const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   const isAndroid = /Android/i.test(navigator.userAgent);
+  // eslint-disable-next-line security/detect-unsafe-regex -- anchored at the end, linear; the input is our own model URL
   const usdzFor = (glbUrl) => glbUrl.replace(/\.glb(\?.*)?$/, '.usdz');
   function quickLookSrc(model, buy) {
     const p = new URLSearchParams({ callToAction: buy.label, checkoutTitle: buy.title, checkoutSubtitle: model.alt });

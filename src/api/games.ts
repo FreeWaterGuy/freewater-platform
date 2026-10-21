@@ -1,6 +1,6 @@
 import type { App } from '../app';
 import type { ApiKey } from '../db/store';
-import { ApiError, obj, type RouteDef } from './http';
+import { ApiError, obj, type RouteDef, Q } from './http';
 
 /** The games: screens of choices, "which ad works" rounds, the feedback box and the prompt box, for points. */
 export function gamesRoutes(app: App, route: (r: RouteDef) => void) {
@@ -48,11 +48,11 @@ export function gamesRoutes(app: App, route: (r: RouteDef) => void) {
     const b = req.body as any;
     return { status: 201, body: await wrap(() => games.setImage(staff(key).companyId, (req.params as any).itemId, { contentType: b.contentType, bytes: new Uint8Array(Buffer.from(b.dataBase64, 'base64')) }, b.credit ?? 'Provided by the company')) };
   } });
-  route({ method: 'GET', url: '/v1/games/winners', scope: ['admin', 'ledger'], summary: 'What people picked most in one category (?category=), real people only.', handler: async (req, key) => ({ body: await games.winners(staff(key).companyId, String((req.query as any).category ?? '')) }) });
+  route({ method: 'GET', url: '/v1/games/winners', query: { category: Q.text }, scope: ['admin', 'ledger'], summary: 'What people picked most in one category (?category=), real people only.', handler: async (req, key) => ({ body: await games.winners(staff(key).companyId, String((req.query as any).category ?? '')) }) });
   route({ method: 'GET', url: '/v1/games/launches', scope: ['admin', 'ledger'], summary: 'Picks that came true.', handler: async (_req, key) => ({ body: await games.launches(staff(key).companyId) }) });
   route({ method: 'POST', url: '/v1/games/come-true', scope: 'admin', summary: 'Make the winning pick of a “may come true” category come true (link the offer you made for it). Everyone who picked it is told.', body: obj({ category: { type: 'string', maxLength: 60 }, itemId: { type: 'string', maxLength: 80 }, offerId: { type: 'string', maxLength: 60 } }, ['category']), handler: async (req, key) => {
     const b = req.body as any;
     return { status: 201, body: await wrap(() => games.comeTrue(staff(key).companyId, b.category, `${key!.name ?? 'team'} (key ${key!.id})`, { itemId: b.itemId, offerId: b.offerId })) };
   } });
-  route({ method: 'GET', url: '/v1/games/report', scope: ['admin', 'ledger'], summary: 'What the games learned, last ?days= (default 30): picks by price setup and by position on screen, how fast and how sure people were, the tiers, and answers marked as too fast or failing a check.', handler: async (req, key) => ({ body: await games.report(staff(key).companyId, Math.min(365, Math.max(1, Number((req.query as any).days ?? 30) || 30))) }) });
+  route({ method: 'GET', url: '/v1/games/report', query: { days: Q.count }, scope: ['admin', 'ledger'], summary: 'What the games learned, last ?days= (default 30): picks by price setup and by position on screen, how fast and how sure people were, the tiers, and answers marked as too fast or failing a check.', handler: async (req, key) => ({ body: await games.report(staff(key).companyId, Math.min(365, Math.max(1, Number((req.query as any).days ?? 30) || 30))) }) });
 }

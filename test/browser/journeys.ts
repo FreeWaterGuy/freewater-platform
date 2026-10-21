@@ -107,4 +107,6 @@ await browser.close();
 await server.close();
 await db.close();
 for (const [name, err] of results) console.log(`${err ? 'FAIL' : 'ok  '} ${name}${err ? `: ${err}` : ''}`);
+// On GitHub, failures also show as annotations on the check (the raw log isn't always reachable).
+if (process.env.GITHUB_ACTIONS) for (const [name, err] of results) if (err) console.log(`::error title=Browser journey failed::${name}: ${err.replace(/[\r\n%]/g, ' ')}`);
 process.exit(results.some(([, e]) => e) ? 1 : 0);

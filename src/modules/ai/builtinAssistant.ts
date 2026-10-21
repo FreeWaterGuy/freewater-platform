@@ -1,5 +1,6 @@
 import { missingLabels, type DraftPatch, type Missing } from '../ads/draft';
 import type { AdAssistant, AdAssistantInput, AdAssistantOutput } from './contract';
+import type { Share } from '../../core/types';
 
 /**
  * The built-in stand-in for an AI. It reads simple things out of what people type (offers, colors, prices,
@@ -34,6 +35,7 @@ const PALETTES: Record<string, { bg: string; fg: string; accent: string }> = {
   pets: { bg: '#2B1A3F', fg: '#FFFFFF', accent: '#F7A6C9' }, events: { bg: '#1F2A44', fg: '#FFFFFF', accent: '#F2C14E' },
   auto: { bg: '#0B0B0B', fg: '#FFFFFF', accent: '#F2C14E' }, retail: { bg: '#FBF3E3', fg: '#1B1B1B', accent: '#D7262E' },
 };
+// eslint-disable-next-line security/detect-unsafe-regex -- every repeat is bounded ({2,30}); chat text is capped at 2,000 characters
 const OFFER = /\b(free [a-z0-9' ]{2,30}|buy one,? get one(?: free)?|bogo|\d{1,2}% off(?: [a-z ]{2,24})?|\$\d+(?:\.\d\d)? off(?: [a-z ]{2,24})?|(?:two|2|three|3) [a-z]+ for \$\d+|\$\d+(?:\.\d\d)? [a-z][a-z ]{2,20}|first [a-z]+ (?:is )?free|half off(?: [a-z ]{2,24})?)/i;
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const trimEnd = (s: string) => s.replace(/\s+(on|at|for|in|with|and|every|this|to)$/i, '').replace(/[.,!;:]+$/, '').trim();
@@ -89,8 +91,16 @@ export class BuiltinAdAssistant implements AdAssistant {
     }
     if (/\b(no|remove|without) (the )?(photo|picture|image|logo)\b/.test(low)) patch.removeImage = true;
 
-    // Sizes.
-    if (/\b(full wrap|whole (label|bottle)|full label)\b/.test(low)) patch.sizes = [1];
+    // Sizes. Named ones first ("a quarter and a sixth", "1/4", "sizes 4 and 6"), then the rough words.
+    const sizeNames = new Set<number>();
+    for (const [re, s] of [[/\bquarters?\b/, 4], [/\bthirds?\b/, 3], [/\bsixths?\b/, 6], [/\beighths?\b/, 8], [/\btenths?\b/, 10]] as const) if (re.test(low)) sizeNames.add(s);
+    for (const m of low.matchAll(/\b1\s*\/\s*(2|3|4|6|8|10)\b/g)) sizeNames.add(Number(m[1]));
+    // "sizes 4 and 6": the numbers right after the word, up to the first thing that isn't one.
+    const at = low.search(/\bsizes?\s+\d/);
+    if (at >= 0) for (const w of low.slice(at).split(/[\s,&]+/).slice(1)) { if (w === 'and' || w === 'or') continue; if (!/^(1|2|3|4|6|8|10)$/.test(w)) break; sizeNames.add(Number(w)); }
+    if (sizeNames.size) { if (/\bhalf\b/.test(low)) sizeNames.add(2); if (/\b(full wrap|whole (label|bottle)|full label)\b/.test(low)) sizeNames.add(1); }
+    if (sizeNames.size) patch.sizes = [...sizeNames].sort((a, b) => a - b) as Share[];
+    else if (/\b(full wrap|whole (label|bottle)|full label)\b/.test(low)) patch.sizes = [1];
     else if (/\bhalf\b/.test(low)) patch.sizes = [2];
     else if (/\b(small|smallest|cheap(est)?)\b/.test(low)) patch.sizes = [6, 8, 10];
     else if (/\b(big|large|biggest)\b/.test(low)) patch.sizes = [2, 3];
@@ -108,7 +118,7 @@ export class BuiltinAdAssistant implements AdAssistant {
     // Budget: "$20 a day" or "5,000 bottles".
     const perDay = /\$\s?(\d[\d,]*)(?:\.\d\d)?\s*(?:a|per|\/)\s*day/i.exec(text);
     const bottles = /(\d[\d,]{2,})\s*(bottles|prints|labels)/i.exec(text);
-    if (perDay) { patch.buy = { type: 'bid', dailyCapCents: Number(perDay[1]!.replace(/,/g, '')) * 100 }; did.push(`a budget of $${perDay[1]} a day`); }
+    if (perDay) { patch.buy = { type: 'bid', dailyCapCents: Number(perDay[1]!.replace(/,/g, '')) * 100 }; did.push(`a daily cap of $${perDay[1]} for printed labels only (scans and other charges are billed on top)`); }
     else if (bottles) { patch.buy = { type: 'guaranteed', prints: Number(bottles[1]!.replace(/,/g, '')) }; did.push(`${bottles[1]} bottles`); }
 
     // What opens when people scan it.

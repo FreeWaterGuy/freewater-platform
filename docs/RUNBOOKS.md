@@ -20,6 +20,72 @@ plan. Some steps need the host; they say so.
    point-in-time recovery are on too. Without our backups an alert ("Our own backups are off") goes out at each start.
 5. **`DATABASE_MAX_GB`** is the database plan's size, so an alert comes before it fills.
 6. **`TRUST_PROXY`** is the number of proxies in front of the server (usually `1`), or their addresses. Never `true`.
+7. **Someone outside watches the site** (an uptime checker), because a server that is down can't send its own alert.
+   See "Set up uptime checks and error tracking" below: about 15 minutes, free.
+8. **Errors are tracked** (`SENTRY_DSN`), so an error that happens a hundred times shows as one issue with its count
+   and stack, not a hundred lines in the log. Same section.
+
+## Set up uptime checks and error tracking (free, once)
+
+### Uptime checker: UptimeRobot (free plan) or Better Stack (free plan)
+
+Either one; both are free for this. Replace `<site>` with the address in `PUBLIC_URL` (e.g. `freewater.io`).
+
+**UptimeRobot** (uptimerobot.com → sign up → *Add New Monitor*):
+
+| Monitor | Type | URL | Interval | Alert when |
+|---|---|---|---|---|
+| FreeWater up | HTTP(s) | `https://<site>/health/uptime` | 5 min (the free plan's shortest) | not 2xx (UptimeRobot's default: down = any 4xx/5xx or no answer within 30 s) |
+| FreeWater site | Keyword | `https://<site>/health/ready`, keyword `"ok":true`, alert when the keyword **does not exist** | 5 min | the keyword is missing (this one also catches "changes paused" and failing jobs, which still answer 200) |
+
+Then *My Settings → Alert Contacts*: add both founders' emails and the phone app (push), and, if the alerts channel
+is Slack or Discord, its webhook as an alert contact too. On each monitor, tick those contacts and set
+"notify after **2** failures" (so one slow answer during a deploy doesn't wake anyone). Optionally a public status
+page (*Status Pages → New*) with the first monitor only.
+
+**Better Stack** (betterstack.com → Uptime → *Create monitor*), if you prefer it (3-minute checks on the free plan):
+
+- Monitor 1: *Alert us when* "URL becomes unavailable", URL `https://<site>/health/uptime`, check every 3 minutes,
+  *Confirmation period* 2 minutes, *Recovery period* 3 minutes, regions: at least two.
+- Monitor 2: *Alert us when* "URL doesn't contain keyword", URL `https://<site>/health/ready`, keyword `"ok":true`,
+  every 3 minutes, confirmation period 5 minutes.
+- *On-call / escalation*: email and push to both founders; add the Slack or Discord integration for the channel.
+
+Don't point an uptime checker at `/health/deep` or `/v1/platform/status`: they need the platform key, which must
+never sit in a third party's settings. Don't use `/health/live` for it either: that only says the process is running.
+
+What each answer means: `/health/uptime` 503 with `database not answering` → see "The database is down"; `doesn't own
+the data` or `can't confirm it owns the data` → see "This server stopped…" (it usually comes back by itself within
+two minutes, which is why the checker waits for two failures). No answer at all → the host's dashboard: is the
+container running? Restart it.
+
+### Error tracking: Sentry (free "Developer" plan: one person, 5,000 errors a month)
+
+1. sentry.io → sign up → *Create project* → platform **Node.js** → name it `freewater` → skip the SDK instructions
+   (FreeWater sends to Sentry directly; nothing to install).
+2. *Settings → Projects → freewater → Client Keys (DSN)*: copy the DSN (`https://<key>@o….ingest.sentry.io/<number>`).
+3. The host puts it in the server's settings as `SENTRY_DSN=<that DSN>` (and `SENTRY_ENVIRONMENT=production`, or
+   `staging` on the staging copy) and restarts. The start log says "Error tracking: on".
+4. *Settings → Projects → freewater → Security & Privacy*: turn on **Data Scrubber** and **Use Default Scrubbers**,
+   and turn on **Prevent Storing of IP Addresses**. FreeWater already sends nothing personal; this is a second net.
+5. *Settings → Projects → freewater → Inbound Filters*: nothing to change.
+6. *Alerts → Create Alert → Issues*, three rules, each sending to email (and to the Slack/Discord integration if
+   connected):
+   - **"New problem"**: *When* "A new issue is created", *If* (none), *Then* notify. Action interval: 30 minutes.
+   - **"Critical alert"**: *When* "A new issue is created" **or** "The issue changes state from resolved to
+     unresolved", *If* "The event's level is equal to **fatal**", *Then* notify. (Every critical FreeWater alert —
+     books not reconciling, the chain paused, the lease lost, the spool growing, a job failing three times in a row,
+     the database or disk at 85% — and every crash arrives as level fatal.)
+   - **"Error storm"**: *When* "The issue is seen more than **50** times in **1 hour**", *Then* notify. Action
+     interval: 1 hour.
+7. *Settings → Subscription → Spend*: keep the on-demand budget at **$0**, so a bad day can't cost money; the server
+   already sends at most 20 events a minute and the same error at most once a minute.
+
+How to read an issue: the title is the error; *Tags* show `job` (which background job), `companyId` (only the
+company, never a person), `source` (`http`, `job`, `alert`, `unhandledRejection`, `uncaughtException`) and `status`;
+*Request* shows only the method and the route's pattern (`POST /v1/orders`), never the address as typed, the body,
+headers or cookies. *Release* is the deployed version, so "first seen in release X" says which deploy brought it.
+Resolve an issue once the fix is deployed; if it comes back, Sentry reopens it and the "Critical alert" rule fires again.
 
 ## How to see what's wrong
 
@@ -30,6 +96,9 @@ plan. Some steps need the host; they say so.
 - **`GET /v1/platform/status`** with the platform key (the host can run
   `curl -H "Authorization: Bearer <platform key>" https://<your site>/v1/platform/status`): background jobs, saving,
   which server owns the data, memory, the last 50 alerts.
+- **`GET /health/deep`** with the platform key: each job's last success and whether it's fresh, changes and webhooks
+  waiting, the spool file's size, the last books reconciliation per company and the last books (restore) check.
+- **Sentry** (if `SENTRY_DSN` is set): every error grouped, with how often, since which release, and its stack.
 - **The server's log**, in the hosting dashboard.
 
 ---
@@ -79,6 +148,18 @@ settings get "paused, try again shortly". Nothing is lost: every change waits in
    change aside: `POST /v1/platform/persistence/skip-stuck` with the platform key. It is kept word for word in the
    `persistence_failures` table. Then a developer fixes the bug, puts the change back by hand, and the host restarts
    the server.
+
+## "Changes waiting for the database keep piling up"
+
+What it means: the database has been refusing changes for a while and the waiting ones are growing (orange at 1,000
+or a 50 MB spool file, red at 20,000 or 500 MB). They are safe in memory and in the spool, and go in by themselves
+when the database is back; but memory and the server's disk are what run out next.
+
+1. Follow "The database is down or refusing changes" above. That is the cause; this alert only says how far it got.
+2. Red: the host checks the server's disk has room (`/health/deep` → `spool.bytes`) and gives the volume more if
+   it's close. Don't restart the server unless the database is back: the spool is written first on the next start,
+   but a restart while it's down only adds a wait.
+3. A green alert, "The waiting changes have all been saved", ends it.
 
 ## The server won't start because of the spool
 
@@ -179,6 +260,49 @@ A machine asked to print faster than it physically can. Either the machine is un
 1. Check the machine's status in the console (`/ops`). If the machine isn't that busy, **revoke its key** in the
    console (Keys) and give the machine a new one.
 2. Only a person signed in can change the print limits (console settings, machines), and only to sane whole numbers.
+
+## Plan tonight's deliveries (a person, every delivery night)
+
+Nothing plans the night by itself on purpose: planning prints every box and bottle, and printing bills advertisers.
+
+1. In the ops console, the night's runs → *Plan and print this night* (or `POST /v1/ops/runs/plan` with the date) for each night routes
+   drive, before printing starts. Running it twice for the same night does nothing new (a run stuck "printing"
+   picks up its unprinted boxes).
+2. Anyone whose delivery day went by without a plan is included on the next night their route drives, once, and
+   their next date carries on from their usual day.
+
+## "Home deliveries are overdue"
+
+Someone's delivery day went by and they aren't on a planned, printed run (a night nobody planned, a run stuck
+printing, or they signed up after their route's night was planned). The alert lists who and the route.
+
+1. Plan the next night their route drives (above). They're included automatically; the alert stops once they're on
+   a printed run.
+2. If a run is stuck "printing", read its failures in the console, fix the printer, and plan that night again.
+3. Tell the customers it's coming a few days late, if it is.
+
+## "An advertiser's ads were paused: credit"
+
+Its unpaid balance passed its credit limit, or its card was declined with no limit to cover it (docs/SWITCHES.md,
+"Credit for advertisers"). Its staff have been emailed.
+
+1. `GET /v1/advertisers/<id>/credit` shows the card, the limit and what it owes; `GET /v1/invoices` the open ones.
+2. If it pays (`POST /v1/invoices/<id>/pay` after adding a card, or a transfer recorded in the books), or an owner or
+   finance person raises its limit with a reason, turn its ads back on (the advertiser can, or a reviewer).
+3. Don't raise a limit only to make the alert go away: that's lending the advertiser money.
+
+## "Machine … reported bottles printed after their labels expired"
+
+A machine said it printed offline labels after their time. Those bottles weren't billed and their codes don't work.
+Labels a machine gave out before they expired are still billed when it comes back online, up to 48 hours after
+(kept until then, then let go). Check the machine's clock and software version; if it keeps happening, take it out of
+service and call the machine's maker.
+
+## "Company … reached its ceiling of … video clips a day"
+
+Live-action and animated clips cost money each. A company stops starting new ones at `FOOTAGE_PER_COMPANY_DAY`
+(default 60) in any 24 hours; each ad stops at 12. Motion videos still show. If the company really is that busy, raise
+the host setting and restart; if not, check which ads are making clips (`GET /v1/campaigns/<id>/videos`).
 
 ## A backup or the restore check failed
 

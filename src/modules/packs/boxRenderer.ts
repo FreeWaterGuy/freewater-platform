@@ -52,12 +52,12 @@ export function renderBox(input: {
     const r = rects[f.face];
     const c = campaigns.get(f.campaignId);
     if (!c) throw new Error(`Box face ${f.face} points at unknown campaign ${f.campaignId}`);
-    const q = Math.min(64, r.h * 0.35);
-    parts.push(`<svg x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" viewBox="0 0 ${r.w} ${r.h}" overflow="hidden">${c.creative.svg(r.w, r.h, { qr: { x: r.w - q - 8, y: r.h - q - 8, size: q } })}</svg>`);
+    const qr = boxFaceQr(r.w, r.h), q = qr.size;
+    parts.push(`<svg x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" viewBox="0 0 ${r.w} ${r.h}" overflow="hidden">${c.creative.svg(r.w, r.h, { qr })}</svg>`);
     const smart = input.codes ? input.codes.box(company, packId, f.face) : `${base}/b/${packId}/${f.face}`;
     const url = qrMode(company, c) === 'static' ? staticTarget(c, input.codes ? smart : null) : smart;
     faceUrls[f.face] = url;
-    parts.push(qrSvg(url, r.x + r.w - q - 8, r.y + r.h - q - 8, q, 'H', campaignQrStyle(company, c)));
+    parts.push(qrSvg(url, r.x + qr.x, r.y + qr.y, q, 'H', campaignQrStyle(company, c)));
   }
 
   // Locked company panel.
@@ -84,6 +84,19 @@ export function renderBox(input: {
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${(totalW / PX).toFixed(2)}in" height="${(totalH / PX).toFixed(2)}in" viewBox="0 0 ${totalW} ${totalH}">${parts.join('')}${folds.join('')}</svg>`;
   return { packId, svg, widthIn: totalW / PX, heightIn: totalH / PX, faceUrls, packUrl };
+}
+
+/** Where an ad's QR code goes on a box side (w by h drawing units, 40 to the inch). The box renderer and previews use this. */
+export function boxFaceQr(w: number, h: number) {
+  const q = Math.min(64, h * 0.35);
+  return { x: w - q - 8, y: h - q - 8, size: q };
+}
+
+/** The ad sides of a box, as drawn: each one's size in drawing units. */
+export function boxFaceSizes(box: BoxProduct): { face: BoxFace; w: number; h: number }[] {
+  const L = box.lengthIn * PX, Wd = box.widthIn * PX, H = box.heightIn * PX;
+  const size: Record<BoxFace, { w: number; h: number }> = { top: { w: L, h: Wd }, bottom: { w: L, h: Wd }, front: { w: L, h: H }, back: { w: L, h: H }, left: { w: Wd, h: H }, right: { w: Wd, h: H } };
+  return box.adFaces.map((face) => ({ face, ...size[face] }));
 }
 
 /** The box's own number, printed under the stop code, for typing in when a QR won't scan. */
@@ -131,5 +144,5 @@ function wrap(text: string, max: number): string[] {
 }
 
 function esc(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/'/g, '&#39;');
+  return s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/'/g, '&#39;');
 }

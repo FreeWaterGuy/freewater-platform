@@ -5,7 +5,8 @@
 FreeWater gives people free, high-quality bottled water, paid for by the ads on the bottle. Each bottle is printed on
 the spot with up to ten ads, and each ad has its own QR code. When someone scans a code they get the advertiser's
 page, an offer, a 3D model to view in AR, or a way to buy. Advertisers pay only for what really happened: bottles
-actually printed, scans that actually loaded, and sales that can be traced back to that exact bottle. Part of every
+actually printed, scans and AR launches that actually loaded, and a commission on sales that can be traced back to
+that exact bottle. Taps on links are counted, never billed. Part of every
 bottle's money goes to clean-water wells through Well Aware, and the books are open for anyone to check. This
 platform is the software that runs all of it. Other companies can also run it under their own brand.
 
@@ -91,7 +92,7 @@ platform is the software that runs all of it. Other companies can also run it un
 
 ## How it's built
 
-- One server (TypeScript) and one Postgres database. It's tested by about 370 automatic checks on every change.
+- One server (TypeScript) and one Postgres database. It's tested by about 800 automatic tests on every change.
 - **Swappable parts:** every part can be replaced, including the database, the printer, payments, messages, maps,
   the AI, gift cards and the blockchain. Until a real provider is chosen, a safe stand-in runs and says so.
 - **White-label:** another company can run it all with its own brand, prices, giving and rules, and can never see

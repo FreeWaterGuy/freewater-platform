@@ -1,3 +1,4 @@
+/* eslint-disable security/detect-non-literal-fs-filename -- journal and spool paths come from the server's own settings, never a request */
 import { studioCreative } from '../modules/studio/layout';
 import { shareFromSixths } from '../modules/ads/layouts';
 import { createHash, randomBytes } from 'node:crypto';
@@ -74,6 +75,11 @@ export class SqlPersistence implements Persistence {
     this.epoch = opts.epoch ?? `p_${randomBytes(8).toString('hex')}`;
   }
 
+  /** How many changes are waiting to be written right now (normally 0, or a handful for a moment). */
+  get waiting() { return this.pending.length; }
+  /** Where waiting changes are kept on disk, and whether they're being written there now (the database refusing). */
+  get spool() { return { file: this.opts.spoolFile ?? null, active: this.spooled }; }
+
   /** Paused: changes have been waiting for the database longer than a moment. */
   get problem(): PersistenceProblem | null {
     if (this.failingSince === null || Date.now() - this.failingSince < (this.opts.pauseAfterMs ?? 1500)) return null;
@@ -91,6 +97,7 @@ export class SqlPersistence implements Persistence {
   private schedule() {
     if (this.running) return;
     this.running = (async () => {
+      // eslint-disable-next-line @typescript-eslint/await-thenable -- deliberate: yields one microtask so changes made in the same moment batch together
       await null; // let changes made in the same moment gather into one batch
       try {
         while (this.pending.length && !this.fenced) {

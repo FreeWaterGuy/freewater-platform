@@ -5,6 +5,7 @@ import { checkPolicy } from '../data/policy';
 import { checkAiSettings } from '../ai/settings';
 import { checkWallet, defaultWallet } from '../wallet/assets';
 import { checkChain, defaultChain } from '../chain/settings';
+import { extraAboveCents } from '../ledger/ledger';
 
 // What a company may change about itself, the checks each change must pass, and plain words for what changed.
 
@@ -210,7 +211,7 @@ export function ratchetProblem(cur: CompanyConfig, next: CompanyConfig): string 
   const g0 = cur.giving, g1 = next.giving;
   if (g0.mode !== 'none' && g1.mode !== g0.mode) return 'Giving can’t be switched to a different kind once promised; raise it instead.';
   if (down(g0.centsPerUnit, g1.centsPerUnit) || down(g0.percentOfRevenue, g1.percentOfRevenue) || down(g0.percentOfExtra, g1.percentOfExtra) || down(g0.percentOfProfit, g1.percentOfProfit)) return 'Giving can be raised, never lowered.';
-  if ((g1.extraAboveCents ?? 0) > (g0.extraAboveCents ?? 0)) return 'Where extra giving starts can be lowered (giving more), never raised.';
+  if (extraAboveCents(g1) > extraAboveCents(g0)) return 'Where extra giving starts can be lowered (giving more), never raised.';
   return null;
 }
 

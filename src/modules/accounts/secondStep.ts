@@ -16,7 +16,7 @@ const unbase32 = (s: string) => { let bits = 0, v = 0; const out: number[] = [];
 /** The code an authenticator shows for a 30-second step. */
 export function totp(secretB32: string, step: number) {
   const msg = Buffer.alloc(8); msg.writeBigUInt64BE(BigInt(step));
-  const h = createHmac('sha1', unbase32(secretB32)).update(msg).digest();
+  const h = createHmac('sha1', unbase32(secretB32)).update(msg).digest(); // nosemgrep: fw-weak-hash -- TOTP (RFC 6238) is HMAC-SHA1 by definition; HMAC-SHA1 is not broken
   const o = h[h.length - 1]! & 15;
   return String(((h.readUInt32BE(o) & 0x7fffffff) % 1_000_000)).padStart(6, '0');
 }
@@ -141,6 +141,7 @@ export const approvalRoutes: ReadonlySet<string> = new Set([
   'POST /v1/payouts/run', 'POST /v1/books/owner-payouts', 'POST /v1/books/reinvestments',
   'POST /v1/wallet/reserve', 'POST /v1/wallet/correct', 'POST /v1/wallet/gift-cards/:ref/settle',
   'POST /v1/environment/experiments/:id/decide',
+  'POST /v1/advertisers/:advertiserId/credit-limit',
 ]);
 /**
  * Routes that are approvals only for some requests, so their handlers check the second step themselves (with

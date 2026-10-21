@@ -1,3 +1,4 @@
+/* eslint-disable security/detect-non-literal-fs-filename -- GEOIP_DB is the host's setting */
 import { readFileSync, existsSync } from 'node:fs';
 import { Reader, type CityResponse } from 'maxmind';
 import type { GeoIp, Place } from './jurisdiction';

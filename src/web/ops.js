@@ -51,7 +51,11 @@
   const routes = [[/^\/ops\/?$/, today, 'today'], [/^\/ops\/review$/, reviewPage, 'review'], [/^\/ops\/machines$/, machinesPage, 'machines'], [/^\/ops\/machines\/([\w-]+)$/, machinePage, 'machines'], [/^\/ops\/routes$/, routesPage, 'routes'], [/^\/ops\/subscriptions$/, subsPage, 'subs'], [/^\/ops\/books$/, booksPage, 'books']];
   // The scopes each page's main call needs (from its route in src/api). 'admin' passes them all.
   const PAGE_SCOPES = { today: ['packs', 'events', 'ledger', 'campaigns'], review: ['campaigns'], machines: ['orders', 'packs', 'events'], routes: ['packs'], subs: ['packs'], books: ['ledger'] };
-  const can = (page) => { const sc = S.me?.scopes; if (!Array.isArray(sc)) return true; return sc.includes('admin') || (PAGE_SCOPES[page] ?? []).some((x) => sc.includes(x)); };
+  // The area each page belongs to, if any (src/runtime/features.ts). Every ops page is part of the core loop today, so
+  // none is listed; a page for an area that can be switched off goes here and disappears when it's off.
+  const PAGE_FEATURES = {};
+  const on = (page) => !PAGE_FEATURES[page] || !(S.features?.off ?? []).includes(PAGE_FEATURES[page]);
+  const can = (page) => { if (!on(page)) return false; const sc = S.me?.scopes; if (!Array.isArray(sc)) return true; return sc.includes('admin') || (PAGE_SCOPES[page] ?? []).some((x) => sc.includes(x)); };
   let cleanup = null;
   function go(path, replace) { S.path = path; if (!fixture) history[replace ? 'replaceState' : 'pushState'](null, '', path); render(); }
   window.addEventListener('popstate', () => { S.path = location.pathname + location.search; render(); });
@@ -59,6 +63,8 @@
   async function render() {
     if (cleanup) { cleanup(); cleanup = null; }
     if (!S.config) S.config = await api('GET', '/v1/public/app-config');
+    // Areas switched off on this server (FW_FEATURES): pages that belong to one aren't shown or opened.
+    if (!S.features) S.features = await api('GET', '/v1/public/features').catch(() => ({ off: [] }));
     if (S.token && !S.me) { try { S.me = await api('GET', '/v1/me'); } catch { S.me = null; } }
     if (!S.me) return signIn();
     if (S.me.advertiserId || S.me.role === 'consumer') return shell('', h('div', { class: 'notice err', text: 'This console is for the company’s team. Ask an owner to add you.' }));
@@ -146,7 +152,7 @@
         h('img', { class: 'label-img', style: 'width:100%;border-radius:8px;box-shadow:0 0 0 1px var(--line)', src: svgSrc(payload.labelSvg), alt: 'The ad on a sample label' }),
         h('div', { class: 'row3' },
           h('div', { style: 'display:flex;flex-direction:column;gap:12px' },
-            h('div', { class: 'stage', style: 'min-height:0' }, h('div', { class: 'sizes' }, payload.sizes.map((s) => h('figure', {}, h('img', { src: svgSrc(s.svg), alt: s.label, style: 'height:200px' }), h('figcaption', { text: s.label })))), payload.boxFaceSvg ? h('img', { class: 'box-img', src: svgSrc(payload.boxFaceSvg), alt: 'On a box' }) : null),
+            h('div', { class: 'stage', style: 'min-height:0' }, h('div', { class: 'sizes' }, payload.sizes.flatMap((s) => (s.shapes ?? [{ svg: s.svg }]).map((x) => h('figure', {}, h('img', { src: svgSrc(x.svg), alt: s.label, style: 'height:200px' }), h('figcaption', { text: x.w ? `${s.label} · ${(x.w / 100).toFixed(1)} × ${(x.h / 100).toFixed(1)} in` : s.label }))))), ...(payload.boxFaces ?? (payload.boxFaceSvg ? [{ svg: payload.boxFaceSvg }] : [])).map((f) => h('img', { class: 'box-img', src: svgSrc(f.svg), alt: 'On a box side' }))),
             h('div', { class: 'panel-box' }, h('b', { text: 'Check' }), h('ul', { style: 'margin:0;padding-left:18px;line-height:1.8;color:var(--muted)' }, ['Words are true and legal; prices and offers are honest', 'Nothing your rules don’t allow (category, claims, images)', 'Readable at the smallest size', 'Links go where they say; the scan page works'].map((t) => h('li', { text: t })))),
             payload.objections?.length ? h('div', { class: 'panel-box', style: 'border-left:3px solid var(--warn, #c80)' }, h('b', { text: 'Our AI objected to this ad' }), h('p', { style: 'margin:4px 0;color:var(--muted)', text: 'It chose not to help make it, so the built-in helper carried on. You still decide whether it runs.' }), h('ul', { style: 'margin:0;padding-left:18px' }, payload.objections.map((o) => h('li', { text: o.reason })))) : null,
             h('div', { class: 'field' }, h('label', { for: 'r-note', text: 'Note to the advertiser (needed to send it back)' }), note),

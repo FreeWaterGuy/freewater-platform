@@ -8,7 +8,10 @@
     "demo": "tsx src/demo/run.ts",
     "test": "vitest run",
     "test:browser": "tsx test/browser/journeys.ts",
+    "fuzz:api": "node scripts/fuzz-api.mjs",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint src test",
+    "lint:semgrep": "semgrep scan --config .semgrep/rules.yml --error --metrics=off --disable-version-check src",
     "demo:packs": "tsx src/demo/night.ts",
     "start": "node --import tsx src/server/main.ts",
     "key": "tsx src/server/keys.ts",
@@ -57,7 +60,12 @@
     "@types/node": "^22.10.2",
     "@types/pg": "^8.11.10",
     "@types/three": "0.163.0",
+    "eslint": "^9.39.5",
+    "eslint-plugin-no-unsanitized": "^4.1.5",
+    "eslint-plugin-security": "^3.0.1",
+    "fast-check": "^3.23.2",
     "typescript": "^5.6.3",
+    "typescript-eslint": "^8.72.0",
     "vitest": "^4.1.11"
   },
   "overrides": {

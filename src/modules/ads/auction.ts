@@ -59,9 +59,13 @@ export function adjustment(adj: BidAdjustments | undefined, m: AuctionMoment, ad
   return { factor: Math.max(0.1, Math.min(5, factor)), applied };
 }
 
-/** A new day in the company's time zone: yesterday's spend no longer counts against today's budget. */
+/**
+ * A new day in the company's time zone: yesterday's spend no longer counts against today's budget. Days only move
+ * forward (keys are YYYY-MM-DD, so they compare as text): a moment from an earlier day (the clock stepped back, the
+ * company's time zone changed) must not wipe today's spend, or the same day could be charged its cap twice.
+ */
 export function rollDay(c: Campaign, dayKey: string) {
-  if (c.buy.type === 'bid' && c.buy.spentDay !== dayKey) { c.buy.spentTodayCents = 0; c.buy.spentDay = dayKey; }
+  if (c.buy.type === 'bid' && (!c.buy.spentDay || dayKey > c.buy.spentDay)) { c.buy.spentTodayCents = 0; c.buy.spentDay = dayKey; }
 }
 
 /** Even pacing: by this point in the day, at most this share of the budget (plus a little room) should be spent. */
@@ -89,7 +93,7 @@ export function rankBidders(campaigns: Campaign[], company: CompanyConfig, m: Au
 }
 
 /**
- * Second price: what a winner pays for the whole label is just enough to keep its place above the next bidder
+ * Second price: what a winner pays for the whole label is just enough to keep its place above the next rival bidder
  * (that bidder's rank, less the winner's own expected engagement, plus 1¢), between the starting price and its own
  * adjusted bid. Guaranteed buys pay the starting price. Smaller pieces pay the same share as their starting prices.
  */
@@ -99,6 +103,15 @@ export function secondPrice(winner: Bidder, next: Bidder | undefined, company: C
   if (!next || next.campaign.buy.type === 'guaranteed') return Math.max(whole, Math.min(winner.adjustedBid, whole));
   const needed = Math.ceil(next.rank - winner.quality) + 1;
   return Math.max(whole, Math.min(winner.adjustedBid, needed));
+}
+
+/**
+ * The bidder a winner has to beat: the next one in line from another advertiser. An advertiser's own ads never set
+ * each other's price (as on Google), so running two ads can't make an advertiser outbid itself.
+ */
+export function nextRival(bidders: Bidder[], i: number): Bidder | undefined {
+  const me = bidders[i]!.campaign.advertiserId;
+  return bidders.slice(i + 1).find((b) => b.campaign.advertiserId !== me);
 }
 
 /** A whole-label price, for one piece of a given size. */

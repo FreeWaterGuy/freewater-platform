@@ -2,7 +2,7 @@ import type { Campaign, CompanyConfig, Placement, Product, Share, SlotRect } fro
 import { layoutsFor, type Layout } from './layouts';
 import type { AdEngine, FillRequest, FillResult, PrintAudience } from './contract';
 import { canAfford, priceFor } from './budget';
-import { AuctionStats, momentAt, paced, piecePrice, rankBidders, rollDay, secondPrice, type AuctionMoment, type Bidder } from './auction';
+import { AuctionStats, momentAt, nextRival, paced, piecePrice, rankBidders, rollDay, secondPrice, type AuctionMoment, type Bidder } from './auction';
 
 /**
  * FreeWater's default ad engine.
@@ -29,7 +29,7 @@ export const freewaterAdEngine: AdEngine = {
     const bidders = rankBidders(shuffle(eligible, random), company, moment, req.stats ?? new AuctionStats());
     const ranked = bidders.map((b) => b.campaign);
     // What each one pays for the whole label: the second price.
-    const labelPrice = new Map<string, { paid: number; bidder: Bidder }>(bidders.map((b, i) => [b.campaign.id, { paid: secondPrice(b, bidders[i + 1], company, product), bidder: b }]));
+    const labelPrice = new Map<string, { paid: number; bidder: Bidder }>(bidders.map((b, i) => [b.campaign.id, { paid: secondPrice(b, nextRival(bidders, i), company, product), bidder: b }]));
     const priceOf = (c: Campaign, share: Share) => { const lp = labelPrice.get(c.id); return lp ? piecePrice(lp.paid, company, share, product) : priceFor(c, company, share, factor); };
 
     const chosen: Campaign[] = [];

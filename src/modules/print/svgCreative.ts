@@ -1,3 +1,4 @@
+import { overPixelLimit, pixelsText } from '../studio/photos';
 import type { Creative } from '../../core/types';
 
 /**
@@ -29,13 +30,17 @@ export function checkSvg(markup: string): string | null {
   // Checked on the text as a browser reads it: character references (&#106; &#x6a; &colon; …) decoded first.
   const d = decodeEntities(s);
   // Element names are checked by their local name, so a prefix (<x:script>, <svg:foreignObject>) changes nothing.
-  const names = [...d.matchAll(/<\s*\/?\s*([A-Za-z_][\w.-]*(?::[\w.-]+)?)/g)].map((m) => m[1]!.split(':').pop()!.toLowerCase());
+  // (No two `\s*` side by side: on a long run of spaces that backtracks quadratically, and a 2 MB upload stalls the server.)
+  // eslint-disable-next-line security/detect-unsafe-regex -- linear since the whitespace runs were split (measured on 2 MB in test/review-ads.test.ts)
+  const names = [...d.matchAll(/<\s*(?:\/\s*)?([A-Za-z_][\w.-]*(?::[\w.-]+)?)/g)].map((m) => m[1]!.split(':').pop()!.toLowerCase());
   if (names.includes('script')) return 'scripts are not allowed';
   if (names.includes('foreignobject')) return 'embedded HTML (foreignObject) is not allowed';
   if (names.some((n) => n === 'iframe' || n === 'embed' || n === 'object' || n === 'handler' || n === 'listener')) return 'embedded documents and handlers are not allowed';
   // Animation can't rewrite a link (<set attributeName="href" to="javascript:…">).
+  // eslint-disable-next-line security/detect-unsafe-regex -- each start scans to the next '>' once; measured on 2 MB in test/review-ads.test.ts
   for (const m of d.matchAll(/<\s*(?:[\w.-]+:)?(?:animate|animateMotion|animateTransform|set)\b[^>]*>/gi)) {
-    if (/attributeName\s*=\s*["']?\s*(?:[\w.-]+:)?href\b/i.test(m[0])) return 'animations may not change links';
+    // eslint-disable-next-line security/detect-unsafe-regex -- linear since the whitespace runs were split; runs on one tag
+    if (/attributeName\s*=\s*(?:["']\s*)?(?:[\w.-]+:)?href\b/i.test(m[0])) return 'animations may not change links';
   }
   if (/[\s"'\/:]on[a-z]+\s*=/i.test(d)) return 'event handlers (onclick and similar) are not allowed';
   if (/j\s*a\s*v\s*a\s*s\s*c\s*r\s*i\s*p\s*t\s*:/i.test(d) || /vbscript:/i.test(d)) return 'javascript: links are not allowed';
@@ -60,3 +65,21 @@ function decodeEntities(s: string): string {
   return s;
 }
 function safeChar(n: number) { try { return n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : ''; } catch { return ''; } }
+
+/**
+ * Pictures inside the artwork (data: URLs), checked by their size in pixels: a small file can claim to be 20,000 by
+ * 20,000 pixels, and the printer (or a phone showing the preview) would need gigabytes to draw it. Same 40 megapixel
+ * limit as uploads and the ad studio.
+ */
+export async function checkSvgPictures(markup: string): Promise<string | null> {
+  for (const m of markup.matchAll(/data:image\/(?:png|jpe?g|webp|gif);base64,([A-Za-z0-9+/=\s]{16,})/gi)) {
+    const problem = await picturePixelsProblem(Buffer.from(m[1]!.replace(/\s+/g, ''), 'base64'));
+    if (problem) return problem;
+  }
+  return null;
+}
+
+async function picturePixelsProblem(bytes: Uint8Array): Promise<string | null> {
+  const over = await overPixelLimit(bytes);
+  return over ? `a picture in it is ${pixelsText(over)}; the most is 40 megapixels (like 8,000 × 5,000), so make it smaller` : null;
+}

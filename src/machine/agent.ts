@@ -171,6 +171,7 @@ export class MachineAgent {
     if (this.presence?.code !== p.code) this.presence = { code: p.code, url: p.url, qrSvg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">${qrSvg(p.url, 0, 0, 200)}</svg>`, changesAt: Date.now() + p.changesInSec * 1000 };
     if (this.presenceTimer) clearTimeout(this.presenceTimer);
     // Fetch the next code the moment this one changes, so the screen is never out of date.
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- the callback catches everything itself; nothing is left to reject
     this.presenceTimer = setTimeout(async () => {
       try { const r = await this.call('GET', '/v1/machine/presence'); if (r.status === 200) this.setPresence(r.data); } catch {}
     }, Math.max(500, p.changesInSec * 1000 + 300));

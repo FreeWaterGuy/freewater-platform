@@ -27,6 +27,12 @@ export type OrderOutcome =
   | { ok: true; unit: Unit; label: RenderedLabel; attempts: number }
   | { ok: false; unit: Unit; reason: string; attempts: number };
 
+/** An order id already used for a different order (another person, place or kind of bottle): nothing is printed or shown. */
+export class OrderConflictError extends Error {
+  status = 409; code = 'order_conflict';
+  constructor() { super('That order id is already used for a different bottle. Start a new order.'); }
+}
+
 export interface PlatformOptions {
   seed?: number;
   clock?: () => Date;
@@ -146,9 +152,19 @@ export class Platform {
     }
   }
 
+  /** The bottle an order came to: the live one, if a restart made it print anew (never the one let go). */
+  unitForOrder(companyId: string, orderId: string): Unit | undefined {
+    return this.units.get(this.orderUnits.get(`${companyId}:${orderId}`) ?? '');
+  }
+
   order(opts: OrderOptions): Promise<OrderOutcome> {
     const orderId = opts.orderId ?? newId('ord');
     const key = `${opts.companyId}:${orderId}`;
+    // The same order id means the same order: for the same person (or nobody), the same kind of bottle, the same pack.
+    // An id first used for someone else's bottle never hands that bottle (or its "ready") to this person. (A resend
+    // from another place still gets the bottle it already made: nothing prints twice.)
+    const known = this.unitForOrder(opts.companyId, orderId);
+    if (known && (known.consumerId !== opts.consumerId || known.kind !== (opts.custom ? 'custom' : 'ad_supported') || known.packId !== opts.packId)) return Promise.reject(new OrderConflictError());
     const running = this.orders.get(key);
     if (running) return running; // same order twice → same result, no second print
     const doneUnitId = this.orderUnits.get(key);

@@ -17,6 +17,7 @@ const csp = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-
 
 export function startScreen(agent: MachineAgent, opts: { port: number; host?: string; extra?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean> }): Promise<Server> {
   const send = (res: ServerResponse, status: number, type: string, body: string | Buffer) => { res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store', 'content-security-policy': csp, 'x-content-type-options': 'nosniff' }); res.end(body); };
+  // eslint-disable-next-line @typescript-eslint/no-misused-promises -- the handler catches everything itself and answers 500
   const server = createServer(async (req, res) => {
     const path = (req.url ?? '/').split('?')[0]!;
     try {
@@ -24,7 +25,8 @@ export function startScreen(agent: MachineAgent, opts: { port: number; host?: st
       if (req.method === 'GET' && path === '/local/state') return send(res, 200, 'application/json', JSON.stringify({ ...agent.screen(), now: Date.now() }));
       if (req.method === 'POST' && path === '/local/tap') return send(res, 200, 'application/json', JSON.stringify(await agent.walkUp()));
       const f = files[path];
-      if (req.method === 'GET' && f) return send(res, 200, f[1], readFileSync(join(webDir, f[0])));
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- f comes from the fixed files table, never the raw URL
+      if (req.method === 'GET' && f) return send(res, 200, f[1], readFileSync(join(webDir, f[0]))); // nosemgrep: fw-path-from-request -- f comes from the fixed files table
       send(res, 404, 'text/plain', 'Not found');
     } catch (e: any) {
       send(res, 500, 'application/json', JSON.stringify({ error: String(e?.message ?? e) }));

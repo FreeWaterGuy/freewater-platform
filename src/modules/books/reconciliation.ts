@@ -161,6 +161,32 @@ export class Reconciliation {
     add('billing_ceilings', 'No ad got more billable scans or AR launches than its bottles plausibly could', hits.length ? 'attention' : 'ok',
       hits.length ? `${hits.length} ad(s) reached the ceiling; ${hits.reduce((a, h) => a + h.unbilled, 0)} engagement(s) counted, not billed. Check where they came from before invoicing.` : 'No ad reached its ceiling', { hits });
 
+    // 11. Sales matched to our clicks and coupons: every billed conversion is in the books once, for its amount; every
+    // refund of one is there too; and what advertisers see refunded equals the books. Sales only the advertiser's tag
+    // saw and their server never confirmed, and sales confirmed for less than the tag saw, are for a person to look at
+    // (a brand under-reporting looks like this).
+    const conv = (await this.db.query<any>(`select advertiser_id, order_id, unit_id, slot, value_cents, refunded_cents, refunded_at, status, tag_value_cents, created_at from conversions where company_id = $1 and (status = 'billed' and value_cents > 0 or status = 'unverified' and refunded_at is null)`, [companyId])).rows;
+    const missing: string[] = [], wrong: string[] = [];
+    let unconfirmed = 0, below = 0;
+    const weekAgo = this.platform.bus.now().getTime() - 7 * 86_400_000;
+    for (const c of conv) {
+      if (c.status === 'unverified') { if (new Date(c.created_at).getTime() < weekAgo) unconfirmed++; continue; }
+      if (c.tag_value_cents !== null && n(c.tag_value_cents) > n(c.value_cents)) below++;
+      // A house ad earns nothing from a sale; the ledger books none.
+      if (c.unit_id && this.platform.units.get(c.unit_id)?.placements.find((p) => p.slotIndex === n(c.slot))?.isHouse) continue;
+      const sale = `${c.advertiser_id}:${c.order_id}`;
+      const booked = this.platform.ledger.sale(companyId, c.advertiser_id, sale);
+      if (!booked) { missing.push(sale); continue; }
+      const refunded = this.platform.ledger.refundedCents(companyId, c.advertiser_id, sale) ?? 0;
+      if (booked.amountCents !== n(c.value_cents) || (c.refunded_at && !booked.refunded) || Math.min(refunded, n(c.value_cents)) !== n(c.refunded_cents)) wrong.push(sale);
+    }
+    add('sales_match_conversions', 'Every sale billed through our clicks and coupons is in the books once, for its amount, with its refunds',
+      missing.length || wrong.length ? 'fail' : unconfirmed || below ? 'attention' : 'ok',
+      missing.length || wrong.length ? `${missing.length} billed sale(s) not in the books; ${wrong.length} with a different amount or refund than the books`
+        : unconfirmed || below ? `${unconfirmed} sale(s) the advertiser's tag saw over a week ago that their server never confirmed; ${below} confirmed for less than the tag saw`
+        : `${conv.length} sale(s) agree with the books`,
+      { missing: missing.slice(0, 50), wrong: wrong.slice(0, 50), unconfirmedOverAWeek: unconfirmed, confirmedBelowTag: below });
+
     // The day itself: what came in and went out, by kind, and its fingerprint.
     const lines = mem.filter((l) => this.deps.today(companyId, l.at) === date);
     const byKind: Record<string, number> = {};

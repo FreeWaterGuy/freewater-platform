@@ -1,6 +1,8 @@
 import { readUpdatePrivateKey } from '../machine/updates';
 import { secretEnvName, secretNames } from '../modules/codes/service';
 import { isIP } from 'node:net';
+import { parseDsn } from './errors';
+import { featuresFrom } from './features';
 
 /**
  * Which load balancers' word to take for a visitor's address (X-Forwarded-For). Never "everyone": each visitor can
@@ -55,6 +57,11 @@ export function checkConfig(env: NodeJS.ProcessEnv = process.env) {
   if (env.HOST === '127.0.0.1' || !env.HOST) advise(!production, 'HOST is 127.0.0.1, so only this machine can reach the server. In a container, set HOST=0.0.0.0.');
   advise(!!env.ALERT_WEBHOOK_URL || !!env.ALERT_EMAIL, 'No ALERT_WEBHOOK_URL or ALERT_EMAIL: alerts will only go to the log, where no one will see them.');
   if (env.ALERT_WEBHOOK_URL) need(/^https:\/\//.test(env.ALERT_WEBHOOK_URL), 'ALERT_WEBHOOK_URL must be https.');
+  if (env.SENTRY_DSN) {
+    const dsn = parseDsn(env.SENTRY_DSN);
+    need(!!dsn, 'SENTRY_DSN isn’t a Sentry DSN (it looks like https://<key>@o123.ingest.sentry.io/456; copy it from the project’s Client Keys).');
+    if (dsn) need(dsn.envelopeUrl.startsWith('https://'), 'SENTRY_DSN must be https.');
+  } else if (production) advise(false, 'No SENTRY_DSN: unexpected errors are only in the log and the alert channel, with no error tracker to group them (docs/RUNBOOKS.md, "Before anything goes wrong").');
   if (env.FW_AI_PRICES) { try { JSON.parse(env.FW_AI_PRICES); } catch { errors.push('FW_AI_PRICES is not valid JSON.'); } }
   const files = env.FILE_STORAGE ?? 'database';
   if (files === 's3') for (const k of ['S3_BUCKET', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY']) need(!!env[k], `FILE_STORAGE=s3 needs ${k}.`);
@@ -68,6 +75,9 @@ export function checkConfig(env: NodeJS.ProcessEnv = process.env) {
   if (production) for (const k of secretNames.map(secretEnvName)) need((env[k]?.length ?? 0) >= 32, `${k} must be set to 32 or more random characters (or hex:<64 hex digits>). If the database already has it in platform_secrets, use that value: ${k}=hex:<value>.`);
   if (env.MACHINE_UPDATE_SIGNING_KEY) { try { readUpdatePrivateKey(env.MACHINE_UPDATE_SIGNING_KEY); } catch { errors.push('MACHINE_UPDATE_SIGNING_KEY is not an Ed25519 private key. Make one with npm run key:machine-updates.'); } }
   for (const [k, v] of Object.entries(env)) if (/_(KEY|SECRET|TOKEN)$/.test(k) && v && /^(changeme|test|xxx+|todo)$/i.test(v)) need(false, `${k} looks like a placeholder.`);
+  // Which areas are switched off (FW_FEATURES, FW_FEATURES_OFF): an unknown name stops a production start.
+  const features = featuresFrom(env);
+  errors.push(...features.errors); warnings.push(...features.warnings);
   return { production, errors, warnings };
 }
 
@@ -80,11 +90,13 @@ export function checkStandIns(wired: { payments?: unknown; payouts?: unknown; me
   const production = env.NODE_ENV === 'production';
   // Gift cards come from the host's settings: without Tremendous's keys (or with its sandbox) the stand-in answers.
   const realGiftCards = !!wired.giftCards || (!!env.TREMENDOUS_API_KEY && !!env.TREMENDOUS_FUNDING_SOURCE && env.TREMENDOUS_SANDBOX !== '1');
+  // With gift cards switched off (FW_FEATURES), nothing can reach the gift-card stand-in, so it doesn't count.
+  const giftCardsOff = !featuresFrom(env).features.on('gift_cards');
   const active = [
     !wired.payments && 'TestPaymentProvider (no real money is taken)',
     !wired.payouts && 'TestPayoutProvider (no real money is sent to charities)',
     !wired.messenger && 'TestOutbox (no email or text is sent)',
-    !realGiftCards && 'test gift cards (no real gift card is bought; set TREMENDOUS_API_KEY and TREMENDOUS_FUNDING_SOURCE)',
+    !realGiftCards && !giftCardsOff && 'test gift cards (no real gift card is bought; set TREMENDOUS_API_KEY and TREMENDOUS_FUNDING_SOURCE)',
   ].filter((s): s is string => !!s);
   const allowed = env.ALLOW_STANDINS === '1';
   const errors = production && active.length && !allowed

@@ -1,7 +1,7 @@
 import type { App } from '../app';
 import { createApiKey, revokeApiKey, scopeInfo, type ApiKey, type Scope } from '../db/store';
 import { publicEvents, testEvent } from '../modules/webhooks/catalog';
-import { ApiError, obj, S, signedInOwner, type RouteDef } from './http';
+import { ApiError, obj, S, signedInOwner, type RouteDef, Q } from './http';
 import { personOnlyKeys } from '../modules/console/settings';
 import { approvalSettings, approverStepProblem } from '../modules/accounts/secondStep';
 
@@ -37,8 +37,8 @@ export function consoleRoutes(app: App, route: (r: RouteDef) => void) {
   } });
   route({ method: 'POST', url: '/v1/console/preview-label', scope: 'admin', summary: 'A sample bottle label with these settings, before saving. Problems are listed instead of saving anything.', body: obj({ changes: changesProp }), handler: async (req, key) => ({ body: await cons.previewLabel(staff(key).companyId, (req.body as any).changes ?? {}) }) });
   route({ method: 'GET', url: '/v1/console/history', scope: 'admin', summary: 'Every saved change to your settings, newest first: who, when and what.', handler: async (_req, key) => ({ body: await cons.history(staff(key).companyId) }) });
-  route({ method: 'GET', url: '/v1/console/history/:version', scope: 'admin', summary: 'Your settings as they were at one version.', handler: async (req, key) => ({ body: await cons.version(staff(key).companyId, Number((req.params as any).version)) }) });
-  route({ method: 'POST', url: '/v1/console/history/:version/restore', scope: 'admin', summary: 'Put an earlier version back. It is saved as a new version. A version that switches money, prizes or the token is an approval, like the same change in PATCH /v1/console/settings.', handler: async (req, key) => ({ body: await cons.restore(staff(key).companyId, Number((req.params as any).version), by(key!), {
+  route({ method: 'GET', url: '/v1/console/history/:version', params: { version: Q.count }, scope: 'admin', summary: 'Your settings as they were at one version.', handler: async (req, key) => ({ body: await cons.version(staff(key).companyId, Number((req.params as any).version)) }) });
+  route({ method: 'POST', url: '/v1/console/history/:version/restore', params: { version: Q.count }, scope: 'admin', summary: 'Put an earlier version back. It is saved as a new version. A version that switches money, prizes or the token is an approval, like the same change in PATCH /v1/console/settings.', handler: async (req, key) => ({ body: await cons.restore(staff(key).companyId, Number((req.params as any).version), by(key!), {
     person: !!key!.userId,
     // Putting back a version that differs in any approval setting is that same approval: the second step (R4).
     approval: async (changed) => { if (approvalSettings.some((k) => changed.includes(k))) await approverStep(key!); },
@@ -102,7 +102,7 @@ export function consoleRoutes(app: App, route: (r: RouteDef) => void) {
   route({ method: 'DELETE', url: '/v1/webhooks/:id', scope: 'webhooks', summary: 'Remove a webhook and its delivery log.', handler: async (req, key) => { await webhooks.remove(staff(key).companyId, (req.params as any).id); return { status: 204 }; } });
   route({ method: 'POST', url: '/v1/webhooks/:id/rotate-secret', scope: 'webhooks', summary: 'Replace the signing secret. The new one is used from now on.', handler: async (req, key) => ({ body: await webhooks.rotateSecret(staff(key).companyId, (req.params as any).id) }) });
   route({ method: 'POST', url: '/v1/webhooks/:id/test', scope: 'webhooks', summary: 'Send a made-up webhook.test event now and see what your server answered.', handler: async (req, key) => ({ body: await webhooks.sendTest(staff(key).companyId, (req.params as any).id) }) });
-  route({ method: 'GET', url: '/v1/webhooks/:id/deliveries', scope: 'webhooks', summary: 'Recent deliveries to this webhook, newest first. Filter with ?status=delivered|retrying|gave_up|pending.', handler: async (req, key) => {
+  route({ method: 'GET', url: '/v1/webhooks/:id/deliveries', query: { status: { type: 'string', enum: ['pending', 'retrying', 'delivered', 'gave_up'] }, limit: Q.count }, scope: 'webhooks', summary: 'Recent deliveries to this webhook, newest first. Filter with ?status=delivered|retrying|gave_up|pending.', handler: async (req, key) => {
     const q = req.query as any;
     if (q.status && !['pending', 'retrying', 'delivered', 'gave_up'].includes(q.status)) throw new ApiError(400, 'bad_status', 'status must be pending, retrying, delivered or gave_up.');
     return { body: await webhooks.deliveries(staff(key).companyId, (req.params as any).id, { status: q.status, limit: q.limit ? Number(q.limit) : undefined }) };

@@ -7,6 +7,7 @@ import type { Messenger } from '../../adapters/messaging/contract';
 import type { PayoutProvider } from '../../adapters/payouts/contract';
 import type { PackService } from '../packs/service';
 import { withCharityLock } from './charityLock';
+import { publicPlace } from '../experiences/service';
 
 export class BooksError extends Error {
   constructor(public status: number, public code: string, message: string) {
@@ -207,7 +208,7 @@ export class BooksService {
   /** The charity confirms the money arrived, with the link in the email it got. */
   async confirm(id: string, token: string) {
     const r = (await this.db.query<any>(`select confirm_token_hash, status from charity_transfers where id = $1`, [id])).rows[0];
-    if (!r || r.confirm_token_hash !== sha(token)) throw new BooksError(404, 'not_found', 'That confirmation link isn’t valid.');
+    if (!r || r.confirm_token_hash !== sha(token)) throw new BooksError(404, 'not_found', 'That confirmation link isn’t valid.'); // nosemgrep: fw-timing-unsafe-compare -- compares SHA-256 hashes of the token, not the token
     // Once: the charity clicking twice at the same moment confirms it once (the database refuses a second change).
     if (r.status === 'sent') await this.db.query(`update charity_transfers set status = 'confirmed', confirmed_at = $2 where id = $1 and status = 'sent'`, [id, this.platform.bus.now().toISOString()]);
     return this.transfer(id);
@@ -401,7 +402,7 @@ export class BooksService {
     }
     const ads = u.placements.filter((p) => !p.isHouse);
     return {
-      unitId, company: company.name, companyId: company.id, printedAt: u.createdAt, place: loc ? `${loc.id}, ${loc.name}` : u.locationId, kind: u.kind,
+      unitId, company: company.name, companyId: company.id, printedAt: u.createdAt, place: publicPlace(loc, u.locationId), kind: u.kind,
       ads: ads.length, earned: receipt.earned, earnedLines: receipt.lines.filter((l) => l.kind !== 'donation').map((l) => ({ kind: l.kind, memo: l.memo, amountCents: l.amountCents, at: l.at.toISOString() })),
       standardCosts: company.unitCosts ?? null, giving: donation && to.length ? { cents: to.reduce((a, [, c]) => a + c, 0), charity: to.map(([k]) => k).join(' & '), transfer } : null, givingOn: company.giving.mode !== 'none',
     };

@@ -30,6 +30,8 @@ with a plain explanation.
 | Setting | What it's for |
 |---|---|
 | `NODE_ENV=production` | Turns on the strict checks and caching. |
+| `FW_FEATURES` | `pilot` switches off everything outside the core loop (see *The pilot* below). Unset (or `all`): everything on. |
+| `FW_FEATURES_OFF` | Comma list of further areas to switch off, e.g. `lottery,offers` (added to the preset). The areas: `token`, `token_conversion`, `withdrawals`, `gift_cards`, `partners`, `agents_fund`, `network`, `lottery`, `video_generation`, `offers`, `games`. An unknown name stops a production start. |
 | `ALLOW_STANDINS=1` | Required in production for now: real payment, payout and email/text providers aren't wired yet, so the server runs on stand-ins (no real money moves, no message is sent) and refuses to start in production unless this says it's a staging rehearsal. It logs and alerts which stand-ins are active. Remove it once the real providers are in. |
 | `DATABASE_URL` | Postgres 13–17, e.g. `postgres://user:pass@host:5432/freewater?sslmode=require`. Use a managed one with automatic backups and point-in-time recovery. |
 | `PUBLIC_URL` | The https address of the site. It goes on every printed QR code and in every email. |
@@ -37,6 +39,7 @@ with a plain explanation.
 | `HOST`, `PORT` | `0.0.0.0` and `8080` in the container (already set in the image). |
 | `ALERT_WEBHOOK_URL` | A chat channel's incoming webhook (Slack, Discord, Google Chat). Alerts go there. |
 | `ALERT_EMAIL` | Also email alerts (once email is connected). |
+| `SENTRY_DSN` | Error tracking (Sentry's free plan, or GlitchTip): the project's DSN from Settings → Client Keys, `https://<key>@o….ingest.sentry.io/<project>`. Unexpected errors (with their stack), other 5xx answers, failed background jobs, unhandled rejections and crashes, and every critical or warning alert go there, scrubbed of personal data (no query, body, headers, cookies, keys, emails, phones, cards or addresses). Without it nothing is sent. Must be https in production. `SENTRY_ENVIRONMENT` names the environment (default `NODE_ENV`); the release is `FW_VERSION` or `GIT_SHA`. Setup: `docs/RUNBOOKS.md`. |
 | `FILE_STORAGE` | `database` (default), `s3`, or `disk` (single server, backed-up disk only). |
 | `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_ENDPOINT`, `S3_REGION`, `S3_PREFIX` | For `FILE_STORAGE=s3`. `S3_ENDPOINT` for R2, B2 or MinIO (e.g. `https://<account>.r2.cloudflarestorage.com`); leave it out for Amazon S3 and set `S3_REGION`. Give the key read, write, delete **and list** on the bucket (without list, a missing file looks like "access denied"). |
 | `FW_SPOOL_DIR` | Where changes waiting for the database are also kept. Default in the image: `/var/lib/freewater/spool`. Mount a volume. In production, an unwritable one stops the start. |
@@ -51,6 +54,7 @@ with a plain explanation.
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `ANTHROPIC_PERSONALIZE_MODEL` | Claude, for the agents, ad assistant, designer, video writer and team assistant. Without it the built-in rules run. |
 | `AI_KEY_<COMPANY ID>` | An operator's own Anthropic key, when it chose "our own AI" in the console (for example `AI_KEY_PEAK_SPRING`). Only that operator's AI calls use it. |
 | `GEMINI_API_KEY`, `VEO_MODEL` | Veo, for live-action and animated footage. Optional; costs money per clip. |
+| `FOOTAGE_PER_COMPANY_DAY` | Most footage clips one company may start in any 24 hours, across all its ads (default 60; each ad also stops at 12). The team is alerted when a company reaches it. |
 | `GEOIP_DB` | Path to MaxMind's GeoLite2 City file, to tell where each visitor is so their own law applies. Without it (and without trusted headers), everyone gets the strictest rules. |
 | `TRUST_GEO_HEADERS` | `1` when the host adds a visitor-country header (Cloudflare `CF-IPCountry`, Vercel, Fastly). Only behind such a host: otherwise anyone could send it. |
 | `SANCTIONED_COUNTRIES` | Comma-separated country codes where points and prizes aren't offered (default `CU,IR,KP,SY`). |
@@ -68,6 +72,45 @@ with a plain explanation.
 | `RUN_JOBS=0` | A server that answers requests but runs no background jobs (for a one-off debug copy). |
 
 Never in production: `SEED_DEMO=1`, `ECHO_CODES=1`, `ALLOW_PRIVATE_WEBHOOKS=1`. The server refuses to start with them.
+
+## The pilot (`FW_FEATURES=pilot`)
+
+The first small launch runs only the core loop, so there's less to secure, explain and watch. Set `FW_FEATURES=pilot`
+in the host's settings. Whole areas are then **gone, not refused**: their addresses aren't registered (404, and not in
+`/v1/openapi.json`), their background jobs aren't scheduled, the several-people steps that would switch them on can't
+be proposed or run, and the console, app, ads portal and ops console hide them (they read `GET /v1/public/features`).
+The server logs what's off when it starts. It's a deploy setting: to switch an area back on, change the setting and
+restart. Nothing stored is deleted.
+
+**On in the pilot:** bottles, ads and printing; scans, AR, attribution (tracked sales and coupons); the app (free
+bottle, points in the wallet, data levels); delivery, packs and the driver app; the advertiser portal and studio; the
+ops console, the owner console and the open books; giving; accounts, team and keys (and webhooks); data and privacy
+rights; transparency; machines; the games; the AI governor and the AI assistants; and launch up to **live with
+points** (testing, bots, reset, going live with points, the pause switch, the hourly seals of the wallet books).
+
+**Off in the pilot**, and why:
+
+| Area | What goes | Why off |
+|---|---|---|
+| `token` | Going live with the token, minting, switching the chain on, signing in Squads; the daily `chain-check` job | Needs the lawyer and 2 other approvers; nothing in the core loop uses it. |
+| `token_conversion` | Turning points into tokens | Comes after the token. (Sales "conversions" are attribution and stay on.) |
+| `withdrawals` | Moving tokens to one's own wallet | Comes after the token; not built yet. |
+| `gift_cards` | Spending credit on gift cards, and the step that turns exchanges on | Moves money; needs Tremendous and approvals. The team's list and settle screens for purchases already made stay. With it off, the gift-card stand-in no longer counts against `ALLOW_STANDINS`. |
+| `partners` | Exchanging points or credit through a money partner (card issuer, treasury stand-ins) | Neither partner is connected. |
+| `agents_fund` | Sharing out, spending from and unlocking with the AI agents' fund | Money for the agents waits for the trust the lawyer sets up. The governor, number line, exams, proposals and assistants keep running. |
+| `network` | Setting up licensees; archiving agents when an operator leaves (continuity) | One operator in the pilot. |
+| `lottery` | The prize game (chances on scan pages, claims, fairness, redeeming) | Off until a lawyer approves its rules. |
+| `video_generation` | Veo footage for "Show me more" and its `videos` job | Costs money per clip. Motion videos, made on the spot, stay. |
+| `offers` | Brand offers, receipts, barcode lookup, value-back tests on offers, and the `offers` job | They pay people real money from brand reserves and need receipt checking; not needed to give free water. |
+
+**Kept on, by judgment:** points and going live with points, because the app's wallet shows points, the full data
+level earns them, the games pay them, and only going live ends the test stage (where points are marked as test and
+wiped). The games, because they're how the platform learns honestly what people want and they move no money.
+
+Turning an area off is quick and safe at any time; turning one back on is a deliberate restart. Before switching off
+`gift_cards` or `offers` on a server that has used them, settle what's in flight (unknown gift-card purchases are
+settled from `GET /v1/wallet/gift-cards`, which stays; offer claims waiting for a receipt wait until offers are on
+again).
 
 ## First start
 
@@ -91,16 +134,30 @@ with the owner's email, turn on the second sign-in step, and add team, machines 
 
 ## Health, status and alerts
 
-- `GET /health/live`: the process is up. Use it for "restart it if this fails".
+- `GET /health`: the process is up, and its version. Never touches the database.
+- `GET /health/live`: the process is up. Use it for "restart it if this fails". It answers even while the server is
+  stopping itself.
 - `GET /health/ready`: it can do its work (database answering, owns the data, every change saved, jobs not failing).
-  Use it for "send it traffic only if this passes". It returns 503 only when it really can't serve.
+  Use it for "send it traffic only if this passes". It returns 503 only when it really can't serve; otherwise
+  `problems` lists what's wrong (changes paused, a job failing) with a 200.
+- `GET /health/uptime`: for an outside uptime checker (UptimeRobot, Better Stack). 200 only when the database answers
+  within 2 seconds and this server owns the data and is sure of it; otherwise 503 with the reason. One `select 1`;
+  `HEAD` works too.
+- `GET /health/deep` (platform key): each background job's freshness (did it work within two of its intervals),
+  what's queued (changes waiting for the database, webhooks waiting), the spool file, the last books reconciliation
+  per company and the last books check (the weekly restore check), and the error tracker's counts.
 - `GET /v1/platform/status` (platform key): the background jobs, saving, which server owns the data, memory,
-  recent alerts.
+  recent alerts. Both staff pages answer at once even while changes are waiting for the database.
 - Alerts go out for: a change that couldn't be saved, a job failing (and again when it recovers), a server error,
   memory at 70% and 85%, the database at 70% and 85% of `DATABASE_MAX_GB`, less than 2 GB (then 0.5 GB) free on the
   spool's disk, visitors' uploads at 80% of the day's ceiling and when it's reached, the server losing its claim to
-  the data, a crash, our own backups being off, and an older version running on a newer database (a rollback). The
-  same alert repeats at most every 30 minutes.
+  the data, a crash, our own backups being off, an older version running on a newer database (a rollback), books
+  that don't reconcile, the chain paused, and changes piling up while the database refuses them (1,000 waiting or a
+  50 MB spool, then 20,000 or 500 MB). The same alert repeats at most every 30 minutes, but one that gets worse
+  (warning to critical) goes out at once.
+- With `SENTRY_DSN`, every critical and warning alert also goes to the error tracker (one issue per alert), and so
+  do unexpected errors, other 5xx answers (one issue per status and code), failed jobs and crashes, each at most once
+  a minute and at most 20 events a minute in all.
 - What to do about each, step by step: `docs/RUNBOOKS.md`.
 
 ## If changes are waiting (the database refusing them)
@@ -138,8 +195,10 @@ decision start once with `FW_SPOOL_SKIP=1` to set it aside unapplied (`….skipp
 | Job | How often | What it does | Safe to run again? |
 |---|---|---|---|
 | `webhooks` | 3 s | Sends webhooks to companies' systems, with retries. | Yes: each delivery is tracked. |
-| `fleet-sweep` | 15 s | Opens an "offline" problem for Model 6 machines that stopped calling in; lets go of kept offline labels past their time. | Yes. |
-| `videos` | 10 s | Checks on footage being made. | Yes. |
+| `fleet-sweep` | 15 s | Opens an "offline" problem for Model 6 machines that stopped calling in; lets go of kept offline labels 48 hours after their time (a machine still offline may yet report a bottle it gave before then). | Yes. |
+| `videos` | 10 s | Checks on footage being made; a clip claimed but never started (the server stopped) fails after 15 minutes so it can be tried again. | Yes. |
+| `credit` | hourly | Pauses the live ads of advertisers who owe more than their credit allows, alerting the team and emailing the advertiser (docs/SWITCHES.md, "Credit for advertisers"). Also runs at once when an invoice's card is declined. It never turns anything back on. | Yes: an ad already paused is left alone. |
+| `deliveries-overdue` | hourly | Alerts when active home deliveries' day went by without being planned or printed. It never plans a night itself (printing bills advertisers): a person does (docs/RUNBOOKS.md). | Yes: it only reads. |
 | `books-and-agents` | hourly | Closes any month that's due, measures agents' changes, reads every agent's standing, shares out the AI fund, security review. Company by company. | Yes: a month closes once, a day's share-out once (crash-tested). |
 | `agent-exams` | daily | Any agent whose model hasn't passed the current test takes it. | Yes. |
 | `game-photos` | 6 hours | Finds photos of the real products for the games' cards, a few at a time. | Yes. |
@@ -148,6 +207,7 @@ decision start once with `FW_SPOOL_SKIP=1` to set it aside unapplied (`….skipp
 | `chain-check` | daily | Checks the books against the chain; pauses on a mismatch. | Yes. |
 | `fingerprints` | hourly | Publishes each finished day's books fingerprint. | Yes: a day is published once. |
 | `memory` | 1 min | Alerts when memory is filling. Runs while paused. | Yes. |
+| `spool` | 1 min | Alerts when changes keep piling up while the database refuses them (1,000 / 20,000 waiting, or a 50 / 500 MB spool file), and when they've all been saved. Runs while paused. | Yes: it only watches. |
 | `data-purge` | daily | Deletes data older than each company keeps. | Yes. |
 | `capacity` | 10 min | Alerts when the database or the spool's disk is filling. Runs while paused. | Yes. |
 | `backup` | daily | Our own encrypted copy of the database (when `BACKUP_KEY` and a backup bucket are set). Runs while paused. | Yes: each copy is new. |
@@ -157,6 +217,8 @@ Each job (except the minute-by-minute watches) remembers when it last ran and wh
 one that failed or was interrupted is tried again soon (after 1 minute, then 2, 4, 8… up to its interval). A job
 never runs twice at once: one past its time limit is reported as stuck and still counts as running until it ends.
 Failures alert, and so does recovery. Run one now with `POST /v1/platform/jobs/<name>/run`.
+Jobs that belong to an area switched off with `FW_FEATURES` (`chain-check`: token, `videos`: video generation, `offers`:
+offers, `game-photos`: games) aren't scheduled at all; with the agents' fund off, `books-and-agents` skips the share-out.
 
 ## Backups by hand
 

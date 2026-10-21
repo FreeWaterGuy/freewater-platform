@@ -1,3 +1,4 @@
+/* eslint-disable security/detect-non-literal-fs-filename -- the stand-in printer writes under the operator's outDir; names are server-made ids */
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { PrintJob, PrintResult, PrinterAdapter } from './contract';

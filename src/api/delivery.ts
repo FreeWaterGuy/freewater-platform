@@ -1,6 +1,6 @@
 import type { App } from '../app';
 import type { ApiKey } from '../db/store';
-import { ApiError, obj, S, type RouteDef } from './http';
+import { ApiError, obj, S, type RouteDef, Q } from './http';
 
 /** Home delivery for people, the night's routes for ops, and the driver's day. */
 export function deliveryRoutes(app: App, route: (r: RouteDef) => void, h: { me: (key: ApiKey | null) => string }) {
@@ -10,7 +10,7 @@ export function deliveryRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
   const packSize = { type: 'integer', enum: [6, 12, 24] };
   const frequency = { type: 'string', enum: ['weekly', 'biweekly', 'every4weeks'] };
   const day = { type: 'integer', minimum: 0, maximum: 6 };
-  const date = { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' };
+  const date = S.day;
 
   // ---------- people ----------
   route({ method: 'POST', url: '/v1/public/delivery/check', scope: 'public', summary: 'Do you deliver to this address? Returns the route and the days it runs.', body: obj({ companyId: S.str, address: { type: 'string', minLength: 6, maxLength: 200 } }, ['companyId', 'address']), handler: async (req) => {
@@ -28,7 +28,7 @@ export function deliveryRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
   route({ method: 'GET', url: '/v1/ops/machines', scope: ['admin', 'orders', 'packs', 'events'], summary: 'Every machine: prints today, failures, last print, and whether it needs a look.', handler: async (_req, key) => { staff(key); return { body: await ops.machines(key!.companyId) }; } });
   route({ method: 'GET', url: '/v1/ops/plugin-failures', scope: ['admin', 'events', 'campaigns'], summary: 'Recent scan pages that failed or were too slow, and why.', handler: async (_req, key) => { staff(key); return { body: app.experiences.host.failures.slice(0, 50) }; } });
   route({ method: 'GET', url: '/v1/ops/subscriptions', scope: ['admin', 'packs'], summary: 'Everyone getting deliveries.', handler: async (_req, key) => { staff(key); return { body: await delivery.listSubscriptions(key!.companyId) }; } });
-  route({ method: 'GET', url: '/v1/ops/runs', scope: ['admin', 'packs'], summary: 'A night’s route runs (?date=YYYY-MM-DD, today by default).', handler: async (req, key) => {
+  route({ method: 'GET', url: '/v1/ops/runs', query: { date: Q.day }, scope: ['admin', 'packs'], summary: 'A night’s route runs (?date=YYYY-MM-DD, today by default).', handler: async (req, key) => {
     staff(key);
     const d = String((req.query as any).date ?? delivery.today(key!.companyId));
     return { body: { date: d, runs: await Promise.all((await delivery.runs(key!.companyId, d)).map((r) => delivery.view(r))) } };
@@ -39,7 +39,7 @@ export function deliveryRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     return { status: 201, body: await Promise.all(runs.map((r) => delivery.view(r))) };
   } });
   route({ method: 'POST', url: '/v1/ops/runs/:id/pack-check', scope: ['admin', 'packs'], summary: 'Check every bottle in every box of a route and seal them.', handler: async (req, key) => { staff(key); return { body: await delivery.packCheck((req.params as any).id, key!.companyId) }; } });
-  route({ method: 'POST', url: '/v1/ops/runs/:id/stops/:stop/check-by-hand', scope: ['admin', 'packs'], summary: 'No packing line: a signed-in ops person or owner counted every bottle in this stop’s box by hand. Checks and seals it, recording who and when. A box the line found wrong needs a reason ({ reason }), kept on the record.', handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/ops/runs/:id/stops/:stop/check-by-hand', params: { stop: Q.count }, scope: ['admin', 'packs'], summary: 'No packing line: a signed-in ops person or owner counted every bottle in this stop’s box by hand. Checks and seals it, recording who and when. A box the line found wrong needs a reason ({ reason }), kept on the record.', handler: async (req, key) => {
     staff(key);
     const p = req.params as any;
     return { body: await delivery.checkByHand(p.id, key!.companyId, Number(p.stop), person(key), typeof (req.body as any)?.reason === 'string' ? String((req.body as any).reason).slice(0, 300) : undefined) };
@@ -62,7 +62,7 @@ export function deliveryRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     const r = await delivery.loadScan({ runId: (req.params as any).id, companyId: key!.companyId, driverId: person(key), packId: (req.body as any).packId });
     return r.ok ? { body: r.run } : { status: 409, body: { error: { code: 'wrong_box', message: r.reason }, grab: r.grab } };
   } });
-  route({ method: 'POST', url: '/v1/driver/runs/:id/stops/:stop/deliver', scope: 'packs', summary: 'Scan the box at the door. Delivered only if it’s this stop’s box and you’re at the address (by GPS, or you confirm it).', body: obj({ scannedPackId: S.str, lat: { type: 'number' }, lng: { type: 'number' }, confirmedAtDoor: S.bool, photoUrl: { type: 'string', pattern: '^/assets/', maxLength: 200 }, emptiesCollected: { type: 'integer', minimum: 0, maximum: 200 } }, ['scannedPackId', 'emptiesCollected']), handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/driver/runs/:id/stops/:stop/deliver', params: { stop: Q.count }, scope: 'packs', summary: 'Scan the box at the door. Delivered only if it’s this stop’s box and you’re at the address (by GPS, or you confirm it).', body: obj({ scannedPackId: S.str, lat: { type: 'number' }, lng: { type: 'number' }, confirmedAtDoor: S.bool, photoUrl: { type: 'string', pattern: '^/assets/', maxLength: 200 }, emptiesCollected: { type: 'integer', minimum: 0, maximum: 200 } }, ['scannedPackId', 'emptiesCollected']), handler: async (req, key) => {
     const b = req.body as any;
     const p = req.params as any;
     const driverId = person(key);
@@ -76,7 +76,7 @@ export function deliveryRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     const r = await delivery.deliver({ runId: p.id, companyId: key!.companyId, driverId, stop: Number(p.stop), scannedPackId: b.scannedPackId, point: typeof b.lat === 'number' && typeof b.lng === 'number' ? { lat: b.lat, lng: b.lng } : undefined, confirmedAtDoor: b.confirmedAtDoor, photoUrl: b.photoUrl, emptiesCollected: b.emptiesCollected });
     return r.ok ? { body: r.run } : { status: 409, body: { error: { code: 'wrong_box_or_place', message: r.reason }, grab: r.grab, metersAway: r.metersAway } };
   } });
-  route({ method: 'POST', url: '/v1/driver/runs/:id/stops/:stop/fail', scope: 'packs', summary: 'Couldn’t deliver (no safe place, locked gate). The box comes back and the customer is told.', body: obj({ reason: { type: 'string', minLength: 3, maxLength: 120 } }, ['reason']), handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/driver/runs/:id/stops/:stop/fail', params: { stop: Q.count }, scope: 'packs', summary: 'Couldn’t deliver (no safe place, locked gate). The box comes back and the customer is told.', body: obj({ reason: { type: 'string', minLength: 3, maxLength: 120 } }, ['reason']), handler: async (req, key) => {
     const p = req.params as any;
     return { body: await delivery.failStop({ runId: p.id, companyId: key!.companyId, driverId: person(key), stop: Number(p.stop), reason: (req.body as any).reason }) };
   } });

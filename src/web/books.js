@@ -54,6 +54,7 @@
       if (p.get('company')) state.company = p.get('company');
       if (!state.company) state.company = (await api('/v1/public/app-config')).companyId;
       if (path === '/books/confirm') return await confirmPage();
+      // eslint-disable-next-line security/detect-unsafe-regex -- anchored, linear; the input is this page's own path
       const m = /^\/books\/bottle(?:\/([\w-]+))?$/.exec(path) ?? /^\/r\/([\w-]+)$/.exec(path);
       if (m) return await bottlePage(m[1] || p.get('code'));
       if (path === '/books/months') return await monthsPage();

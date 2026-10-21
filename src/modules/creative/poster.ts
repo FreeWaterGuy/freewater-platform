@@ -43,7 +43,7 @@ const lum = (hex: string) => {
 export const contrast = (a: string, b: string) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x! + 0.05) / (y! + 0.05); };
 export const readableOn = (bg: string) => (contrast(bg, '#FFFFFF') >= contrast(bg, '#0B0B0B') ? '#FFFFFF' : '#0B0B0B');
 
-const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+const esc = (s: string) => s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 function wrap(s: string, max: number): string[] {
   const out: string[] = [];
   let cur = '';

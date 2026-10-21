@@ -100,14 +100,14 @@ export class JobRunner {
       const started = this.now();
       s.lastStarted = started; s.stuck = false;
       if (this.remembers(j)) await this.db.query(`insert into job_runs (name, last_started_at) values ($1, $2) on conflict (name) do update set last_started_at = excluded.last_started_at`, [name, new Date(started).toISOString()]).catch(() => {});
-      let ok = true, error: string | null = null;
+      let ok = true, error: string | null = null, thrown: unknown = null;
       // Past its time limit it's reported as stuck, but it still counts as running: a second copy never starts.
       const watch = setTimeout(() => { s.stuck = true; this.opts.onStuck?.(name, this.limit(j)); this.opts.onFailure?.(name, new Error(`still running after ${Math.round(this.limit(j) / 1000)} s`), s.consecutive + 1); }, this.limit(j));
       watch.unref?.();
-      try { await j.run(); } catch (e) { ok = false; error = String((e as Error)?.stack ?? e).slice(0, 2000); } finally { clearTimeout(watch); }
+      try { await j.run(); } catch (e) { ok = false; thrown = e; error = String((e as Error)?.stack ?? e).slice(0, 2000); } finally { clearTimeout(watch); }
       s.lastFinished = this.now(); s.lastOk = ok; s.lastError = error; s.runs++; s.stuck = false;
       if (ok) { if (s.consecutive > 0) this.opts.onRecovered?.(name); s.consecutive = 0; }
-      else { s.failures++; s.consecutive++; this.opts.onFailure?.(name, error, s.consecutive); }
+      else { s.failures++; s.consecutive++; this.opts.onFailure?.(name, thrown ?? error, s.consecutive); } // the error itself, so its stack can be tracked
       if (this.remembers(j)) await this.db.query(
         `insert into job_runs (name, last_started_at, last_finished_at, last_ok, last_error, runs, failures) values ($1,$2,$3,$4,$5,1,$6)
          on conflict (name) do update set last_finished_at = excluded.last_finished_at, last_ok = excluded.last_ok, last_error = excluded.last_error, runs = job_runs.runs + 1, failures = job_runs.failures + excluded.failures`,
@@ -120,13 +120,13 @@ export class JobRunner {
     return this.jobs.map((j) => {
       const s = this.state.get(j.name)!;
       const iso = (t: number | null) => (t === null ? null : new Date(t).toISOString());
-      return { name: j.name, everyMs: j.everyMs, running: !!s.running, stuck: s.stuck, nextAt: s.running ? null : iso(Math.max(this.now(), this.dueAt(j, s))), lastStartedAt: iso(s.lastStarted), lastFinishedAt: iso(s.lastFinished), lastOk: s.lastOk, lastError: s.lastError, runs: s.runs, failures: s.failures, consecutiveFailures: s.consecutive,
+      return { name: j.name, everyMs: j.everyMs, running: s.running !== null, stuck: s.stuck, nextAt: s.running ? null : iso(Math.max(this.now(), this.dueAt(j, s))), lastStartedAt: iso(s.lastStarted), lastFinishedAt: iso(s.lastFinished), lastOk: s.lastOk, lastError: s.lastError, runs: s.runs, failures: s.failures, consecutiveFailures: s.consecutive,
         overdue: s.stuck || (!this.stopping && this.timer !== null && !(this.opts.paused?.() && !j.whilePaused) && !s.running && this.now() - Math.max(this.dueAt(j, s), this.startedAt) > j.everyMs + 60_000) };
     });
   }
 
   /** Is anything still running? */
-  get busy() { return [...this.state.values()].some((s) => s.running); }
+  get busy() { return [...this.state.values()].some((s) => s.running !== null); }
 
   /** Stop starting jobs, and wait (up to `waitMs`) for running ones to finish. Returns the ones still running. */
   async stop(waitMs = 30_000): Promise<string[]> {
@@ -135,7 +135,7 @@ export class JobRunner {
     this.timer = null;
     const running = [...this.state.values()].map((s) => s.running).filter(Boolean) as Promise<void>[];
     await Promise.race([Promise.allSettled(running), new Promise((r) => setTimeout(r, waitMs).unref?.())]);
-    return [...this.state.entries()].filter(([, s]) => s.running).map(([n]) => n);
+    return [...this.state.entries()].filter(([, s]) => s.running !== null).map(([n]) => n);
   }
 }
 

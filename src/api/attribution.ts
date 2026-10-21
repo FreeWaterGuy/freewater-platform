@@ -17,7 +17,8 @@ const tagScript = `/* FreeWater tag: remembers the FreeWater click id (fwclid) a
     try { var v = JSON.parse(localStorage.getItem(K) || 'null'); if (v && Date.now() - v.t < DAYS * 864e5) return v.id; } catch (e) {}
     var m = document.cookie.match(/(?:^|; )_fwclid=([0-9A-Z]{20})/); return m ? m[1] : null;
   }
-  var fromLink = new URLSearchParams(location.search).get('fwclid');
+  // Some apps and link shorteners change the case of a link or add spaces: the click id is still ours.
+  var fromLink = (new URLSearchParams(location.search).get('fwclid') || '').trim().toUpperCase();
   if (fromLink && /^FWC[0-9A-Z]{17}$/.test(fromLink)) {
     try { localStorage.setItem(K, JSON.stringify({ id: fromLink, t: Date.now() })); } catch (e) {}
     document.cookie = K + '=' + fromLink + '; max-age=' + DAYS * 86400 + '; path=/; SameSite=Lax';
@@ -27,7 +28,7 @@ const tagScript = `/* FreeWater tag: remembers the FreeWater click id (fwclid) a
     try { var v = JSON.parse(localStorage.getItem(B) || 'null'); if (v && Date.now() - v.t < DAYS * 864e5) return v.id; } catch (e) {}
     return null;
   }
-  var fromCode = new URLSearchParams(location.search).get('fwb');
+  var fromCode = (new URLSearchParams(location.search).get('fwb') || '').trim().toUpperCase();
   if (fromCode && /^[0-9A-Z]{14}$/.test(fromCode)) { try { localStorage.setItem(B, JSON.stringify({ id: fromCode, t: Date.now() })); } catch (e) {} }
   function send(event, d) {
     if (event !== 'purchase') return;
@@ -68,13 +69,13 @@ export function attributionRoutes(app: App, server: FastifyInstance, route: (r: 
     // Rationed per network (a fingerprint of it, never the address): reloading a code in a loop opens the page, unbilled.
     const source = app.wallet.sourceOf(req.ip);
     const t = row.kind === 'slot' ? app.scanTokens.issue(`s:${row.unitId}:${row.slot}`, source) : row.kind === 'box' ? app.scanTokens.issue(`b:${row.packId}:${row.face}`, source) : null;
-    return reply.header('cache-control', 'no-store').redirect(`${to}?c=${row.code}${t ? `&t=${t}` : ''}`, 302);
+    return reply.header('cache-control', 'no-store').redirect(`${to}?c=${row.code}${t ? `&t=${t}` : ''}`, 302); // nosemgrep: fw-open-redirect -- `to` is our own path built from the code's row
   };
   server.get('/q/:code', openCode);
   server.get('/Q/:code', openCode);
 
   // A coupon's code, scanned by the cashier: opens the advertiser portal's check-and-redeem screen.
-  const openCoupon = async (req: FastifyRequest, reply: FastifyReply) => reply.header('cache-control', 'no-store').redirect(`/ads/redeem/${encodeURIComponent(String((req.params as any).code).toUpperCase())}`, 302);
+  const openCoupon = async (req: FastifyRequest, reply: FastifyReply) => reply.header('cache-control', 'no-store').redirect(`/ads/redeem/${encodeURIComponent(String((req.params as any).code).toUpperCase())}`, 302); // nosemgrep: fw-open-redirect -- a fixed path of ours; the code is URL-encoded
   server.get('/v/:code', openCoupon);
   server.get('/V/:code', openCoupon);
 
@@ -87,7 +88,7 @@ export function attributionRoutes(app: App, server: FastifyInstance, route: (r: 
       const out = new URL(url);
       for (const [k, v] of Object.entries(q)) if (k !== 'v' && k !== 'from' && k !== 'fwclid' && typeof v === 'string') out.searchParams.set(k, v);
       await app.persistence.flushUnlessPaused();
-      return reply.header('cache-control', 'no-store').header('referrer-policy', 'no-referrer').redirect(out.toString(), 302);
+      return reply.header('cache-control', 'no-store').header('referrer-policy', 'no-referrer').redirect(out.toString(), 302); // nosemgrep: fw-open-redirect -- the address comes from the signed link's ad (reviewed), not the request; the query only adds parameters
     } catch (e) { return fail(reply, e); }
   });
 
@@ -102,7 +103,15 @@ export function attributionRoutes(app: App, server: FastifyInstance, route: (r: 
       // The Origin header keeps honest mistakes out but is easy to forge outside a browser: what the tag reports is
       // kept as unverified and never billed until the advertiser's server (or the counter) confirms it.
       const origin = (req.headers.origin as string | undefined) ?? (req.headers.referer as string | undefined) ?? null;
-      const r = await attribution.conversion({ source: 'tag', tagId: String(b?.tag ?? ''), origin, clickId: b?.fwclid ?? undefined, couponCode: b?.coupon ?? undefined, bottleCode: b?.fwb ?? undefined, orderId: String(b?.orderId ?? ''), valueCents: Number(b?.valueCents) });
+      // This body has no route schema (it comes as text/plain from the tag), so its fields are checked here: each id is
+      // text or absent, and the amount is a number as the tag sends it (null when the page's value wasn't one, as
+      // before: 0), never a string to coerce. Anything else used to reach the database as an object, or with a NUL.
+      if (!b || typeof b !== 'object' || Array.isArray(b)) return reply.code(400).send({ error: { code: 'bad_json', message: 'Send a JSON object.' } });
+      const ids = ['tag', 'fwclid', 'coupon', 'fwb', 'orderId'] as const;
+      if (ids.some((f) => b[f] != null && (typeof b[f] !== 'string' || b[f].length > 80 || b[f].includes('\u0000'))) || (b.valueCents != null && typeof b.valueCents !== 'number')) {
+        return reply.code(400).send({ error: { code: 'invalid_request', message: 'tag, fwclid, coupon, fwb and orderId are text (up to 80 characters); valueCents is a number.' } });
+      }
+      const r = await attribution.conversion({ source: 'tag', tagId: b.tag ?? '', origin, clickId: b.fwclid || undefined, couponCode: b.coupon || undefined, bottleCode: b.fwb || undefined, orderId: b.orderId ?? '', valueCents: b.valueCents === null ? 0 : Number(b.valueCents) });
       await app.persistence.flushUnlessPaused();
       return reply.code(r.duplicate ? 200 : 201).send({ ok: true, duplicate: r.duplicate, status: r.conversion.status });
     } catch (e) {
@@ -132,7 +141,17 @@ export function attributionRoutes(app: App, server: FastifyInstance, route: (r: 
     const r = await attribution.conversion({ source: 'server', companyId: key!.companyId, advertiserId: advertiser(key), clickId: b.fwclid, couponCode: b.couponCode, bottleCode: b.fwb, orderId: b.orderId, valueCents: b.valueCents });
     return { status: r.duplicate ? 200 : 201, body: r };
   } });
-  route({ method: 'POST', url: '/v1/conversions/:orderId/refund', scope: 'purchases', summary: 'A sale was refunded. Its commission is given back.', handler: async (req, key) => ({ body: await attribution.refund(advertiser(key), decodeURIComponent((req.params as any).orderId), key!.companyId) }) });
+  route({ method: 'POST', url: '/v1/conversions/:orderId/refund', scope: 'purchases', summary: 'A sale was refunded: with no body, all of it (or what is left of it); with amountCents less than what is left, that part, named by a refundId so a retry counts once (the same refundId through POST /v1/refunds is the same part). The commission is given back in proportion, never more than the sale’s.', handler: async (req, key) => {
+    // The order number may arrive encoded twice (it can hold / and #); one that won't decode isn't an order of ours.
+    let orderId: string;
+    try { orderId = decodeURIComponent((req.params as any).orderId); } catch { throw new ApiError(400, 'bad_order', 'That order number isn’t encoded properly.'); }
+    // The body is optional (a whole refund needs none), so its two fields are checked here.
+    const b = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? (req.body as any) : {};
+    if ((b.amountCents !== undefined && !Number.isInteger(b.amountCents)) || (b.refundId !== undefined && (typeof b.refundId !== 'string' || b.refundId.length > 80))) {
+      throw new ApiError(400, 'invalid_request', 'amountCents is a whole number of cents; refundId is text (up to 80 characters).');
+    }
+    return { body: await attribution.refund(advertiser(key), orderId, key!.companyId, { amountCents: b.amountCents, refundId: b.refundId }) };
+  } });
   route({ method: 'GET', url: '/v1/coupons/:code', scope: ['campaigns', 'purchases'], summary: 'Check a customer’s coupon: valid, or already used (and when).', handler: async (req, key) => ({ body: await attribution.checkCoupon(String((req.params as any).code), advertiser(key), key!.companyId) }) });
   route({ method: 'POST', url: '/v1/coupons/:code/redeem', scope: ['campaigns', 'purchases'], summary: 'Use a customer’s coupon (once). Send the sale amount; it’s credited to the bottle the coupon came from.', body: obj({ valueCents: S.int, orderId: { type: 'string', maxLength: 80 } }, ['valueCents']), handler: async (req, key) => {
     const b = req.body as any;

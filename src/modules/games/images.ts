@@ -14,6 +14,7 @@ export interface FoundImage { bytes: Uint8Array; contentType: 'image/jpeg'; cred
 export interface ProductImageSource { readonly name: string; find(item: CatalogItem, cat: Category): Promise<FoundImage | null> }
 
 const UA = 'FreeWater/1.0 (https://freewater.io; hello@freewater.io)';
+// eslint-disable-next-line security/detect-unsafe-regex -- anchored, linear; the input is a short license name
 const FREE_LICENSE = /^(cc0|cc[ -]by(-sa)?([ -][0-9.]+)?|public domain|pd[- ]?.*|attribution)$/i;
 const stripTags = (s: string) => s.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().slice(0, 120);
 

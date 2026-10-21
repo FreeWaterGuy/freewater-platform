@@ -56,6 +56,13 @@
 
 ## The launch order
 
+**Launch with `FW_FEATURES=pilot`** in the host's settings. The pilot runs only the core loop (bottles, ads, scans and
+AR, attribution, the app with points, delivery, the portals and consoles, giving and the open books, data rights,
+machines, the games) and takes the token, gift cards, withdrawals, money partners, the AI agents' fund, the operator
+network, the prize game, Veo footage and brand offers out of the server entirely (`docs/RUNNING.md`, *The pilot*). So
+for the pilot you don't need items 10e (gift cards) or 10f (Solana), Veo in item 10, or approvers for token steps;
+steps 4's offers and gift cards and step 5 below wait until those areas are switched back on with a restart.
+
 The full guide to every switch is `docs/SWITCHES.md`. In short:
 
 1. **Invite approvers.** Under *Team*, add at least 2 other owners or finance people. Only people already on the team

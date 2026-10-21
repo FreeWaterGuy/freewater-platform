@@ -168,7 +168,7 @@ function luminance(hex: string) {
 /** A simple logo made from a company's brand, used until it uploads its own: its initials on its panel color. */
 export function monogramLogo(brand: { logoTop: string; logoBottom: string; panelColor: string; accentColor: string; textColor: string; fontFamily: string }): string {
   const a = (brand.logoTop[0] ?? '').toLowerCase(), b = (brand.logoBottom[0] ?? '').toLowerCase();
-  const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  const esc = (s: string) => s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="22" fill="${brand.panelColor}"/>` +
     `<text x="50" y="64" text-anchor="middle" font-family="${esc(brand.fontFamily)}" font-size="46" font-weight="700"><tspan fill="${brand.textColor}">${esc(a)}</tspan><tspan fill="${brand.accentColor}">${esc(b)}</tspan></text></svg>`;
 }

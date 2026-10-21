@@ -2,6 +2,7 @@ import type { SqlClient } from '../../db/client';
 import type { CompanyConfig } from '../../core/types';
 import type { Platform } from '../../platform';
 import { newId } from '../../core/ids';
+import { extraAboveCents } from '../ledger/ledger';
 
 // Monthly profit sharing, milestones, and the growth gate.
 //
@@ -102,7 +103,7 @@ export class ProfitService {
     const rev = (l: (typeof lines)[number]) => (l.credit.startsWith('revenue:') ? l.amountCents : l.debit.startsWith('revenue:') ? -l.amountCents : 0);
     const cost = (l: (typeof lines)[number]) => (l.debit.startsWith('expense:') ? l.amountCents : l.credit.startsWith('expense:') ? -l.amountCents : 0);
     const net = (f: (l: (typeof lines)[number]) => boolean, by: typeof rev) => lines.filter(f).reduce((a, l) => a + by(l), 0);
-    const base = c.giving.extraAboveCents ?? 100;
+    const base = extraAboveCents(c.giving);
     // Each bottle's print (and custom) money above the base, plus every other kind of revenue.
     const perUnit = new Map<string, number>();
     for (const l of lines) if ((l.kind === 'print' || l.kind === 'custom') && l.unitId) perUnit.set(l.unitId, (perUnit.get(l.unitId) ?? 0) + rev(l));

@@ -25,6 +25,11 @@
   const num = (n) => n.toLocaleString();
   const sizeName = (s) => (String(s) === '1' ? 'the whole label' : `1/${s} of the label`);
   const svgSrc = (s) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(s)}`;
+  // Every shape the ad prints at, size by size, then each box side: what's approved is what prints.
+  const everyShape = (p) => h('div', { class: 'stack' },
+    ...p.sizes.map((s) => ({ ...s, shapes: s.shapes ?? [{ svg: s.svg, w: 0, h: 0 }] })).map((s) => h('div', {}, h('h3', { text: `${s.label}${s.shapes.length > 1 ? ` · ${s.shapes.length} shapes` : ''}` }),
+      s.shapes.length ? h('div', { class: 'sizes' }, s.shapes.map((x) => h('figure', {}, h('img', { src: svgSrc(x.svg), alt: `Your ad at ${s.label}, ${Math.round(x.w)} by ${Math.round(x.h)}` }), h('figcaption', { text: x.w ? `${(x.w / 100).toFixed(1)} × ${(x.h / 100).toFixed(1)} in` : s.label })))) : h('p', { class: 'muted', text: 'This size doesn’t fit on the bottles here, so it won’t print. Pick another size.' }))),
+    ...(p.boxFaces?.length ? [h('div', {}, h('h3', { text: 'Box sides' }), h('div', { class: 'sizes' }, p.boxFaces.map((f) => h('figure', {}, h('img', { class: 'box-img', src: svgSrc(f.svg), alt: 'Your ad on a box side' }), h('figcaption', { text: `${(f.w / 40).toFixed(1)} × ${(f.h / 40).toFixed(1)} in` })))))] : []));
   const toastEl = h('div', { class: 'toast', role: 'status' }); document.body.append(toastEl);
   let tt; const toast = (m) => { toastEl.textContent = m; toastEl.classList.add('show'); clearTimeout(tt); tt = setTimeout(() => toastEl.classList.remove('show'), 2600); };
 
@@ -68,6 +73,7 @@
   // ---------- routing ----------
   const routes = [
     [/^\/ads\/?$/, overview], [/^\/ads\/new$/, newAd], [/^\/ads\/drafts\/([\w-]+)$/, builder], [/^\/ads\/drafts\/([\w-]+)\/review$/, review],
+    // eslint-disable-next-line security/detect-unsafe-regex -- route patterns, anchored and linear; the input is this page's own path
     [/^\/ads\/campaigns\/([\w-]+)\/change$/, changeAd], [/^\/ads\/campaigns\/([\w-]+)\/code$/, codePage], [/^\/ads\/billing$/, billing], [/^\/ads\/studio(?:\?.*)?$/, studioPage], [/^\/ads\/tracking$/, tracking], [/^\/ads\/redeem(?:\/([\w-]+))?$/, redeem], [/^\/ads\/statement$/, statementPage], [/^\/ads\/offers$/, offersPage],
   ];
   let cleanup = null;
@@ -77,9 +83,13 @@
   async function render() {
     if (cleanup) { cleanup(); cleanup = null; }
     if (!(await signedIn())) return;
+    // Areas switched off on this server (FW_FEATURES): their pages and menu entries aren't shown.
+    if (!state.features) state.features = await api('GET', '/v1/public/features').catch(() => ({ off: [] }));
+    if (!on('offers') && /^\/ads\/offers/.test(state.path)) return go('/ads', true);
     for (const [re, fn] of routes) { const m = re.exec(state.path); if (m) { try { await fn(...m.slice(1)); } catch (e) { shell('', h('div', { class: 'notice err', text: e.message })); } window.scrollTo(0, 0); return; } }
     go('/ads', true);
   }
+  const on = (feature) => !(state.features?.off ?? []).includes(feature);
   function shell(active, ...content) {
     const me = state.me;
     root.replaceChildren(h('div', { class: 'shell' },
@@ -89,7 +99,7 @@
           link('/ads', { 'aria-current': active === 'overview' ? 'page' : null }, icon(I.chart), 'Overview'),
           link('/ads/new', { 'aria-current': active === 'new' ? 'page' : null }, icon(I.plus), 'New ad'),
           link('/ads/studio', { 'aria-current': active === 'studio' ? 'page' : null }, icon(I.plus), 'Ad studio'),
-          link('/ads/offers', { 'aria-current': active === 'offers' ? 'page' : null }, icon(I.ticket), 'Offers'),
+          !on('offers') ? null : link('/ads/offers', { 'aria-current': active === 'offers' ? 'page' : null }, icon(I.ticket), 'Offers'),
           link('/ads/tracking', { 'aria-current': active === 'tracking' ? 'page' : null }, icon(I.target), 'Sales tracking'),
           link('/ads/redeem', { 'aria-current': active === 'redeem' ? 'page' : null }, icon(I.ticket), 'Check a coupon'),
           link('/ads/statement', { 'aria-current': active === 'statement' ? 'page' : null }, icon(I.chart), 'Statement'),
@@ -104,7 +114,8 @@
     let data = await api('GET', '/v1/studio');
     let designs = [], made3d = null;
     const out = h('div', { class: 'studio' });
-    const inline = (svg) => { const d = h('div', { class: 'art' }); d.innerHTML = svg; return d; }; // our own drawing (it loads your photos from this site)
+    // eslint-disable-next-line no-unsanitized/property -- our own server-drawn SVG (text escaped, colours and photos validated); the page's CSP blocks inline script
+    const inline = (svg) => { const d = h('div', { class: 'art' }); d.innerHTML = svg; return d; }; // our own drawing (it loads your photos from this site); nosemgrep: fw-web-unsafe-html -- our own server-drawn SVG; see the ESLint note above
     const field = (label, control, hint) => { const fid = `s${Math.random().toString(36).slice(2, 8)}`; control.id ||= fid; return h('div', { class: 'field' }, h('label', { for: control.id, text: label }), control, hint ? h('div', { class: 'hint', text: hint }) : null); };
     const upload = async (url, file) => {
       const res = await fetch(url, { method: 'POST', headers: { 'content-type': file.type, authorization: `Bearer ${state.token}` }, body: file });
@@ -231,7 +242,7 @@
         const blob = await res.blob(); const a = h('a', { href: URL.createObjectURL(blob), download: `statement-${fromI.value}-to-${toI.value}.csv` }); document.body.append(a); a.click(); a.remove();
       } catch (x) { toast(x.message); }
     };
-    shell('statement', h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Statement' }), h('p', { text: 'Every bottle you paid for: your bid, what the auction charged and why, and what each one earned you. You pay just enough to beat the next ad, never your whole bid.' })), h('button', { class: 'btn secondary', type: 'button', onclick: csv }, 'Download spreadsheet')),
+    shell('statement', h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Statement' }), h('p', { text: 'Every bottle you paid for: your bid, what the auction charged and why, and what each one earned you. You pay just enough to beat the next other advertiser’s ad, never more than your bid.' })), h('button', { class: 'btn secondary', type: 'button', onclick: csv }, 'Download spreadsheet')),
       h('div', { class: 'form', style: 'max-width:520px;margin-bottom:16px' }, h('div', { class: 'field' }, h('label', { text: 'From' }), fromI), h('div', { class: 'field' }, h('label', { text: 'To' }), toI)),
       h('div', {}, h('button', { class: 'btn', type: 'button', onclick: load }, 'Show')), out);
     load();
@@ -283,7 +294,7 @@
     const plain = (x) => {
       if (x.code !== 'invalid_request') return x.message;
       if (/website/i.test(x.message)) return 'Your website needs to start with https:// (a secure address), like https://titostacos.com.';
-      if (/businessName/i.test(x.message)) return 'Give your business name (2 to 60 characters).';
+      if (/business ?name/i.test(x.message)) return 'Give your business name (2 to 60 characters).';
       return 'Something in the form isn’t right. Check it and try again.';
     };
     const err = h('div', { class: 'notice err', hidden: true });
@@ -356,10 +367,11 @@
     shell('tracking',
       h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Sales tracking' }), h('p', { text: `Every sale that came from your ads, matched to the exact bottle. Last 30 days.` }))),
       h('div', { class: 'kpis' },
-        kpi('Taps on your links', num(s.clicks), 'each gets its own click id', true),
+        kpi('Taps on your links', num(s.clicks), 'each gets its own click id; taps are never billed', true),
         kpi('Sales from bottles', num(s.sales.count), `${s.sales.bySource.tag} website · ${s.sales.bySource.server} your server · ${s.sales.bySource.coupon} at the counter`),
         kpi('Those sales', dollars(s.sales.valueCents), 'what customers spent'),
-        kpi('Commission', dollars(s.sales.commissionCents), 'on your invoice'),
+        kpi('Commission', dollars(s.sales.commissionCents), 'on confirmed sales only; on your invoice'),
+        kpi('Sales from AR', num(s.sales.fromAr?.count ?? 0), `${dollars(s.sales.fromAr?.valueCents ?? 0)} bought from the buy button inside AR`),
         kpi('Coupons used', `${num(s.coupons.redeemed)}/${num(s.coupons.issued)}`, 'used / given out'),
         s.unverified && s.unverified.count ? kpi('Waiting for your server', num(s.unverified.count), `${dollars(s.unverified.valueCents)} reported by your website, not billed until your server confirms`) : null),
       h('div', { class: 'review', style: 'max-width:900px' },
@@ -575,8 +587,8 @@
         return { maxCentsPerLabel: Math.round(Number(f.bid.value) * 100), dailyCapCents: Math.round(Number(f.cap.value) * 100), pacing: f.pacing.value, frequencyCap: num(f.freq) ?? null, adjustments: Object.keys(adjustments).length ? adjustments : null };
       };
       return h('section', { class: 'panel', style: 'gap:12px' }, h('h2', { class: 'section', text: 'Your bid' }),
-        h('p', { style: 'margin:0', text: `You bid for the whole label; smaller pieces pay the same share. Bidding starts at ${cents(c.engagement?.floorCents ?? 100)}. You pay only enough to beat the next ad in line, never more than your bid. Ads people engage with more can win with lower bids.` }),
-        h('div', { class: 'form' }, field('Most you’ll pay for the whole label ($)', f.bid), field('Daily budget ($)', f.cap), field('Budget pacing', f.pacing), field('Most bottles one person gets a day', f.freq)),
+        h('p', { style: 'margin:0', text: `You bid for the whole label; smaller pieces pay the same share. Bidding starts at ${cents(c.engagement?.floorCents ?? 100)}. You pay only enough to beat the next other advertiser’s ad (your own ads never raise each other’s price), never more than your bid. Ads people engage with more can win with lower bids.` }),
+        h('div', { class: 'form' }, field('Most you’ll pay for the whole label ($)', f.bid), field('Most you’ll pay a day for printed labels ($)', f.cap, 'Covers only what you pay for labels printed. Scans, AR launches, box sides and sales commission are billed on top.'), field('Budget pacing', f.pacing), field('Most bottles one person gets a day', f.freq)),
         h('div', { class: 'field' }, h('label', { text: 'Bid more or less (%) by time of day' }), h('div', { class: 'chips' }, f.parts.map(([, l, i]) => h('label', { class: 'chip-check' }, `${l} `, i)))),
         h('div', { class: 'form' }, field('New customers (%)', f.newC), field('Returning customers (%)', f.retC), field('By interest', f.ints, 'Only for people who shared their interests.'), field('By machine or route', f.locs)));
     })();
@@ -660,7 +672,7 @@
     if (c.status === 'paused') actions.push(h('button', { class: 'btn small', type: 'button', onclick: async () => { try { await api('PATCH', `/v1/campaigns/${c.id}`, { active: true }); toast('Running again'); render(); } catch (x) { toast(x.message); } } }, 'Resume'));
     if (c.editable && c.status !== 'in_review') actions.push(link(`/ads/campaigns/${c.id}/change`, { class: 'btn small secondary' }, 'Change it'));
     actions.push(link(`/ads/campaigns/${c.id}/code`, { class: 'btn small secondary' }, 'Code, versions and AI'));
-    const budget = c.budget.type === 'guaranteed' ? `${num(c.budget.bottlesLeft)} bottles left` : `${dollars(c.budget.dailyCapCents)} a day`;
+    const budget = c.budget.type === 'guaranteed' ? `${num(c.budget.bottlesLeft)} bottles left` : `up to ${dollars(c.budget.dailyCapCents)} a day for printed labels (scans and other charges on top)`;
     return h('article', { class: 'camp' },
       h('div', { class: 'thumb' }, h('img', { src: svgSrc(c.thumbSvg), alt: `Your ad: ${c.name}` })),
       h('div', {},
@@ -752,7 +764,7 @@
     function drawStage() {
       if (!preview) { stage.replaceChildren(h('p', { class: 'caption', text: 'Your ad appears here as you chat.' })); return; }
       if (tab === 'bottle') stage.replaceChildren(h('img', { class: 'label-img', src: svgSrc(preview.labelSvg), alt: 'A sample label with your ad on it' }), h('p', { class: 'caption', text: 'A sample label. Your ad is on the left; the other slots go to other advertisers. The black panel is the same on every bottle.' }));
-      if (tab === 'sizes') stage.replaceChildren(h('div', { class: 'sizes' }, preview.sizes.map((s) => h('figure', {}, h('img', { src: svgSrc(s.svg), alt: `Your ad at ${s.label}` }), h('figcaption', { text: s.label })))), h('p', { class: 'caption', text: 'The same ad, laid out for each size you chose. The QR code is added in the corner when it prints.' }));
+      if (tab === 'sizes') stage.replaceChildren(everyShape(preview), h('p', { class: 'caption', text: 'Your ad exactly as it prints, at every shape each size comes in (a piece can be wide on one bottle and tall on the next), with its QR code where it prints.' }));
       if (tab === 'box') stage.replaceChildren(h('img', { class: 'box-img', src: svgSrc(preview.boxFaceSvg), alt: 'Your ad on the side of a delivery box' }), h('p', { class: 'caption', text: 'One side of a delivery box. Each side has its own QR code.' }));
       if (tab === 'scan') {
         frameReady = false;
@@ -803,7 +815,7 @@
     const agree = h('input', { type: 'checkbox', id: 'agree' });
     const err = h('div', { class: 'notice err', hidden: true });
     const dr = d.draft;
-    const budget = dr.buy?.type === 'guaranteed' ? `${num(dr.buy.prints)} bottles` : dr.buy ? `${dollars(dr.buy.dailyCapCents)} a day` : 'Not set';
+    const budget = dr.buy?.type === 'guaranteed' ? `${num(dr.buy.prints)} bottles` : dr.buy ? `up to ${dollars(dr.buy.dailyCapCents)} a day for printed labels (scans and other charges on top)` : 'Not set';
     const submit = h('button', { class: 'btn wide', type: 'button', onclick: async () => {
       err.hidden = true;
       if (!agree.checked) { err.textContent = 'Check the box to confirm you looked it over.'; err.hidden = false; return; }
@@ -818,7 +830,7 @@
     shell('new', h('div', { class: 'review' },
       h('div', { class: 'page-head', style: 'margin:0' }, h('div', {}, link(`/ads/drafts/${id}`, {}, '← Back to the chat'), h('h1', { style: 'margin-top:8px', text: 'Review your ad' }), h('p', { text: 'This is exactly what prints and what opens. Look it over before you submit.' }))),
       h('div', { class: 'stage' }, h('img', { class: 'label-img', src: svgSrc(p.labelSvg), alt: 'A sample label with your ad' })),
-      h('div', { class: 'stage' }, h('div', { class: 'sizes' }, p.sizes.map((s) => h('figure', {}, h('img', { src: svgSrc(s.svg), alt: `At ${s.label}` }), h('figcaption', { text: s.label })))), p.boxFaceSvg ? h('img', { class: 'box-img', src: svgSrc(p.boxFaceSvg), alt: 'On a box' }) : null),
+      h('div', { class: 'stage' }, everyShape(p)),
       h('div', { class: 'stage' }, frame),
       h('div', { class: 'facts' },
         h('div', {}, h('span', { text: 'Where' }), dr.locations === 'all' ? 'Every machine' : (dr.locations || []).join(', ')),

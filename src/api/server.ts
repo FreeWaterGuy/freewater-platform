@@ -1,5 +1,5 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
-import { ApiError, notFound, obj, S, signedInOwner, type Handler, type RouteDef } from './http';
+import { ApiError, notFound, obj, S, signedInOwner, type Handler, type RouteDef, Q } from './http';
 import { consumerRoutes } from './consumer';
 import { adsRoutes } from './ads';
 import { deliveryRoutes } from './delivery';
@@ -25,7 +25,7 @@ import { UploadQuota, uploadLimitsFrom } from '../runtime/uploads';
 import { printLimits } from '../modules/fleet/printCap';
 import { BadKeyGuard, classify, limits, RateLimiter, securityHeaders, SecurityLog, shortIp } from './security';
 import { teamRoutes } from './team';
-import { loggerOptions } from './logging';
+import { loggerOptions, pathOnly } from './logging';
 import { operationsRoutes } from './operations';
 import { VideoError } from '../modules/video/service';
 import { DataError, DataService } from '../modules/data/service';
@@ -43,13 +43,14 @@ import { DesignError } from '../modules/custom/service';
 import type { App } from '../app';
 import { findApiKey, type ApiKey, type Scope , PersistencePaused } from '../db/store';
 import { LeaseLostError } from '../db/leaseChecked';
+import { OrderConflictError } from '../platform';
 import type { Campaign, Share } from '../core/types';
-import { svgCreative } from '../modules/print/svgCreative';
+import { checkSvgPictures, svgCreative } from '../modules/print/svgCreative';
 import { newId } from '../core/ids';
 import { AccountsError, roleScopes, type Role } from '../modules/accounts/service';
 import { approvalRoutes, approverStepProblem } from '../modules/accounts/secondStep';
 import { PaymentError } from '../modules/payments/service';
-import { ExperienceError, targetKey, type Target } from '../modules/experiences/service';
+import { ExperienceError, publicPlace, targetKey, type Target } from '../modules/experiences/service';
 import { AssetError, allowedTypes } from '../modules/assets/store';
 import { builtinModel } from '../modules/models/builtin';
 import { glbToUsdz } from '../modules/models/usdz';
@@ -68,6 +69,35 @@ const PLATFORM_COMPANY = process.env.PLATFORM_COMPANY ?? 'freewater';
 /** A machine prints a bottle in several seconds: more than this through the API is a leaked key, not a busy machine. */
 export { DEFAULT_PRINTS_PER_MINUTE, DEFAULT_PRINTS_PER_DAY } from '../modules/fleet/printCap';
 
+/**
+ * A request that doesn't fit a route's schema, said in plain words ("The headline can be at most 60 characters."),
+ * with the field it's about for programs. The schema's own wording ("body/spec/headline must NOT have more than 60
+ * characters") is what people saw before.
+ */
+export function plainValidation(errors: { instancePath?: string; keyword?: string; params?: any }[], context: string | undefined, fallback: string) {
+  const e = errors[0];
+  if (!e) return { message: fallback };
+  const path = (e.instancePath ?? '').split('/').filter(Boolean);
+  const name = (e.keyword === 'required' ? e.params?.missingProperty : [...path].reverse().find((x) => !/^\d+$/.test(x))) ?? '';
+  const field = [context ?? 'body', ...path, ...(e.keyword === 'required' ? [name] : [])].join('/');
+  const what = name ? `The ${String(name).replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()}` : context === 'querystring' ? 'The address' : 'What was sent';
+  const p = e.params ?? {};
+  const pattern = String(p.pattern ?? '');
+  const message =
+    e.keyword === 'maxLength' ? `${what} can be at most ${p.limit} characters.` :
+    e.keyword === 'minLength' ? (p.limit <= 1 ? `${what} can’t be empty.` : `${what} needs at least ${p.limit} characters.`) :
+    e.keyword === 'required' ? `${what} is missing.` :
+    e.keyword === 'pattern' ? (pattern.includes('[0-9a-fA-F]{6}') ? `${what} must be a color like #D7262E.` : pattern.startsWith('^https://') ? `${what} must start with https:// (a secure address).` : `${what} isn’t in a form we can read.`) :
+    e.keyword === 'enum' ? `${what} must be one of: ${(p.allowedValues ?? []).join(', ')}.` :
+    e.keyword === 'type' ? `${what} must be ${p.type === 'string' ? 'text' : p.type === 'integer' ? 'a whole number' : `a ${p.type}`}.` :
+    e.keyword === 'maximum' ? `${what} can be at most ${p.limit}.` :
+    e.keyword === 'minimum' ? `${what} must be at least ${p.limit}.` :
+    e.keyword === 'maxItems' ? `${what} can have at most ${p.limit}.` :
+    e.keyword === 'const' ? `${what} must be ${JSON.stringify(p.allowedValue)}.` :
+    fallback;
+  return { message, field };
+}
+
 export async function buildServer(app: App, opts: { logger?: boolean } = {}): Promise<FastifyInstance> {
   // Behind a load balancer, TRUST_PROXY says how many hops (or which addresses) to believe, never every hop: the
   // visitor writes X-Forwarded-For too (docs/RUNNING.md). Unsafe values stop a production start (checkConfig).
@@ -75,11 +105,26 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   // further left is ignored. (Fastify's own number option trusts no hop at all, so it's spelled out here.)
   const proxySetting = trustProxyFrom(process.env.TRUST_PROXY).value;
   const trustProxy = typeof proxySetting === 'number' ? (_addr: string, hop: number) => hop < proxySetting : proxySetting;
-  const server = Fastify({ logger: opts.logger ? loggerOptions : false, bodyLimit: 3 * 1024 * 1024, routerOptions: { maxParamLength: 1000 }, trustProxy });
+  // Schemas refuse a value of the wrong type rather than repair it: Fastify's default turns "0x10", true or [30] into
+  // an amount of cents. Path and query schemas are strings with patterns, so nothing needs coercing. (Fields a schema
+  // doesn't list are still dropped before any code sees them; clients rely on that.)
+  const ajv = { customOptions: { coerceTypes: false } } as const;
+  const server = Fastify({ logger: opts.logger ? loggerOptions : false, bodyLimit: 3 * 1024 * 1024, routerOptions: { maxParamLength: 1000 }, trustProxy, ajv });
   const { platform, packs, persistence, db, experiences } = app;
-  for (const type of Object.keys(allowedTypes)) server.addContentTypeParser(type, { parseAs: 'buffer', bodyLimit: 64 * 1024 * 1024 }, (_req, body, done) => done(null, body));
+  // Files arrive as themselves. An SVG is taken too (a logo is often one); only the studio's logo route accepts it.
+  for (const type of [...Object.keys(allowedTypes), 'image/svg+xml']) server.addContentTypeParser(type, { parseAs: 'buffer', bodyLimit: 64 * 1024 * 1024 }, (_req, body, done) => done(null, body));
+  // Postgres can't store the NUL character in text: refuse it anywhere in the path, query or JSON body, before any
+  // code (and the database) sees it, rather than fail the save with a 500.
+  server.addHook('preValidation', async (req, reply) => {
+    if (hasNul(req.params) || hasNul(req.query) || (!Buffer.isBuffer(req.body) && hasNul(req.body))) {
+      return reply.code(400).send({ error: { code: 'invalid_request', message: 'Text can’t contain the NUL character (\\u0000).' } });
+    }
+  });
   const routes: RouteDef[] = [];
-  const route = (r: RouteDef) => routes.push(r);
+  // A route whose area is switched off in the host's settings (FW_FEATURES, src/runtime/features.ts) is never
+  // registered: it answers 404 like any address that doesn't exist, and isn't in /v1/openapi.json.
+  const route = (r: RouteDef) => { if (app.features.routeOn(r)) routes.push(r); };
+  route({ method: 'GET', url: '/v1/public/features', scope: 'public', summary: 'Which areas of the platform this server runs (the rest are switched off in its settings and their addresses don’t exist). The screens hide what’s off.', handler: async () => ({ body: app.features.view() }) });
 
   const unitFor = (key: ApiKey, id: string) => {
     const u = platform.units.get(id);
@@ -125,7 +170,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const r = platform.ledger.receipt(unitId);
     const company = platform.companies.get(u.companyId)!;
     const loc = platform.locations.get(u.locationId);
-    return { unitId, company: company.name, printedAt: u.createdAt, place: loc ? `${loc.id}, ${loc.name}` : u.locationId, ads: u.placements.filter((p) => !p.isHouse).length, earnedCents: r.earned, donatedCents: r.donatedCents, givingOn: company.giving.mode !== 'none' };
+    return { unitId, company: company.name, printedAt: u.createdAt, place: publicPlace(loc, u.locationId), ads: u.placements.filter((p) => !p.isHouse).length, earnedCents: r.earned, donatedCents: r.donatedCents, givingOn: company.giving.mode !== 'none' };
   };
   const campaignView = (c: Campaign) => ({ id: c.id, advertiserId: c.advertiserId, advertiserName: c.advertiserName, category: c.category, competitorGroup: c.competitorGroup ?? null, sizes: c.sizes, formats: c.formats ?? ['label'], experienceId: c.experienceId, experienceConfig: c.experienceConfig ?? null, theme: c.theme ?? null, targeting: c.targeting, buy: c.buy, active: c.active, isHouse: !!c.isHouse,
     qr: { mode: c.qr?.mode ?? 'dynamic', ...(c.qr?.staticUrl ? { staticUrl: c.qr.staticUrl } : {}), hasLogo: !!c.qr?.logo }, variants: c.variants?.length ?? 0, personalize: c.personalize ?? null, afterEnd: c.afterEnd ?? 'current' });
@@ -198,7 +243,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     // The prize game, if this company runs it: only on ads (not someone's own custom bottle).
     const custom = target.kind === 'slot' && platform.units.get(target.unitId)?.kind === 'custom';
     const companyId = experiences.ownerOf(target).companyId;
-    const game = custom ? null : app.lottery.settings(companyId);
+    const game = custom || !app.features.on('lottery') ? null : app.lottery.settings(companyId);
     const environment = target.kind === 'slot' && !custom ? await app.environment.forScanPage(target.unitId, target.slot, viewer).catch(() => null) : null;
     // The person's own law applies: where they are decides what's asked first, the youngest age that may play, and
     // whether rewards are offered at all.
@@ -207,7 +252,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const rules = await app.data.rulesFor(companyId, [viewer], place);
     const playable = rules.rewards && (await app.data.ageOk(companyId, [viewer])) !== false;
     const privacy = { askFirst: rules.askFirst, region: rules.region, minimumAge: rules.minimumAge, rewards: rules.rewards, doNotSell: await app.data.doesNotSell(companyId, [viewer]), why: target.kind === 'slot' ? `/v1/public/why/${encodeURIComponent(target.unitId)}/${target.slot}` : null };
-    return { body: { ...opened, companyId, lottery: game && playable ? app.lottery.publicInfo(game) : null, privacy, ...(environment ? { environment } : {}) } };
+    return { body: { ...opened, companyId, lottery: game && playable ? app.lottery.publicInfo(game) : null, privacy, ...(environment ? { environment } : {}) }, headers: { 'cache-control': 'private, no-store' } }; // one person's page: their own coupon, key and choices
   };
   route({ method: 'GET', url: '/v1/public/experience/:unitId/:slot', scope: 'public', summary: 'The page a bottle slot opens, as blocks. Opening it is free; the page then reports the scan once it has shown.', handler: async (req) => {
     const { unitId, slot } = req.params as any;
@@ -301,6 +346,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     // Another company's machine is, to this key, a machine that doesn't exist.
     if (!loc || (loc.companyId ?? PLATFORM_COMPANY) !== key!.companyId) throw new ApiError(422, 'unknown_location', `Location ${b.locationId} doesn't exist.`);
     if (!platform.products.has(b.productId)) throw new ApiError(422, 'unknown_product', `Product ${b.productId} doesn't exist.`);
+    // Order ids the platform makes itself (a person's tap, a machine's offline labels) can't be taken from here.
+    if (/^(vend|buffer):/.test(String(b.orderId))) throw new ApiError(422, 'reserved_order_id', 'Order ids starting with "vend:" or "buffer:" are the platform’s own. Use another.');
     let custom;
     if (b.custom) {
       // Never billed here: nobody's money is held for it, so booking its price would be revenue no one pays, and the
@@ -308,6 +355,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       // for goes through POST /v1/me/custom-orders, where the money is held first and taken once it prints. A price
       // sent here is ignored.
       try { custom = { customerId: b.custom.customerId, art: svgCreative(b.custom.svg), priceCents: 0 }; } catch (e: any) { throw new ApiError(422, 'artwork_refused', e.message); }
+      const big = await checkSvgPictures(b.custom.svg);
+      if (big) throw new ApiError(422, 'artwork_refused', `Artwork refused: ${big}.`);
     }
     if (key!.locationId && key!.locationId !== b.locationId) throw new ApiError(403, 'wrong_machine', `This key belongs to ${key!.locationId} and can only print there.`);
     const capped = key!.locationId ? printCap(key!.companyId, key!.locationId, b.orderId, req) : null;
@@ -332,7 +381,10 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   // ---------- purchases: advertisers' point-of-sale systems ----------
 
   const sale = (refund: boolean): Handler => async (req, key) => {
-    const b = req.body as any;
+    // An order number with a space around it (as a till may send it) is the same order, as on /v1/conversions: one
+    // sale reported both ways is billed once.
+    const b = { ...(req.body as any), orderId: String((req.body as any).orderId).trim() };
+    if (!b.orderId) throw new ApiError(422, 'bad_order', 'Send the order number.');
     const { placement } = placementFor(key, b.unitId, b.slot);
     if (!placement || placement.isHouse) throw new ApiError(422, 'not_sold', 'That slot has no advertiser to credit.');
     if (key!.advertiserId && placement.advertiserId !== key!.advertiserId) throw notFound('Slot');
@@ -360,6 +412,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       const before = platform.ledger.entries.length;
       const idem = b.refundId ? `${orderKey}:refund:${b.refundId}` : `${orderKey}:refund:rest`;
       const e = platform.bus.publish('purchase.refunded', unit.companyId, { unitId: b.unitId, slotIndex: b.slot, orderId: orderKey, amountCents: b.amountCents }, idem);
+      // A sale matched through the conversions API keeps how much of it was refunded, so what the advertiser sees
+      // (Sales tracking) equals what the books bill, whichever route the refund came by.
+      if (orderKey !== b.orderId) await app.attribution.syncRefunded(key!.companyId, placement.advertiserId, b.orderId);
       return { status: 202, body: { recorded: !!e, ledgerLines: platform.ledger.entries.length - before, refundedCents: platform.ledger.refundedCents(key!.companyId, placement.advertiserId, orderKey) ?? 0, amountCents: sold.amountCents } };
     }
     const before = platform.ledger.entries.length;
@@ -394,11 +449,14 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     if (!advertiserId) throw new ApiError(422, 'advertiser_required', 'Send advertiserId (company keys) or use an advertiser key.');
     let creative;
     try { creative = svgCreative(b.svg); } catch (e: any) { throw new ApiError(422, 'artwork_refused', e.message); }
+    const big = await checkSvgPictures(b.svg);
+    if (big) throw new ApiError(422, 'artwork_refused', `Artwork refused: ${big}.`);
     const company = platform.companies.get(key!.companyId)!;
     if (company.adRules.blockedCategories.includes(b.category)) throw new ApiError(422, 'category_blocked', `${company.name} doesn't print ${b.category} ads.`);
     checkExperience(b.experienceId, b.experienceConfig ?? {}, b.theme);
     const c: Campaign = {
-      id: newId('cmp'), companyId: key!.companyId, advertiserId, advertiserName: b.advertiserName, category: b.category, competitorGroup: b.competitorGroup,
+      // An advertiser's own key prints under the name the business signed up with, never a name it sends.
+      id: newId('cmp'), companyId: key!.companyId, advertiserId, advertiserName: key!.advertiserId ? (await app.ads.advertiser(key!.companyId, key!.advertiserId).catch(() => null))?.name ?? b.advertiserName : b.advertiserName, category: b.category, competitorGroup: b.competitorGroup,
       sizes: b.sizes as Share[], formats: b.formats, experienceId: b.experienceId, experienceConfig: b.experienceConfig ?? {}, theme: b.theme, targeting: b.targeting ?? {},
       buy: b.buy.type === 'bid' ? { ...b.buy, spentTodayCents: 0 } : b.buy,
       creative, creativeRef: { kind: 'svg', markup: b.svg }, active: false, createdAt: platform.bus.now().toISOString(),
@@ -427,6 +485,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       if (b.theme !== undefined) c.theme = b.theme;
       if (!reviewer) c.active = false;
     }
+    // Going live (approved by a reviewer, or turned back on by the advertiser) needs the advertiser's credit to allow it.
+    if (b.active === true && !c.active && (reviewer || (approved && !changesPage))) await app.credit.needCredit(c);
     if (b.active !== undefined && (reviewer || b.active === false || (approved && !changesPage))) c.active = b.active;
     if (reviewer && b.active === true) c.review = { status: 'approved', at: platform.bus.now().toISOString() };
     if (changesPage && !reviewer) c.review = { status: 'submitted', at: platform.bus.now().toISOString() };
@@ -465,6 +525,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const b = req.body as any;
     const loc = platform.locations.get(b.routeId);
     if (!loc || (loc.companyId ?? PLATFORM_COMPANY) !== key!.companyId) throw new ApiError(422, 'unknown_route', `Route ${b.routeId} doesn't exist.`);
+    // The pack's bottles become this customer's: never a person of another company (P5).
+    const owner = (await db.query<{ company_id: string }>(`select company_id from users where id = $1`, [b.customerId])).rows[0];
+    if (owner && owner.company_id !== key!.companyId) throw new ApiError(422, 'unknown_customer', `Customer ${b.customerId} doesn't exist.`);
     try {
       const p = await packs.compose({ companyId: key!.companyId, ...b });
       return { status: 201, body: packView(p.id) };
@@ -522,14 +585,14 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   // ---------- books and events ----------
 
-  route({ method: 'GET', url: '/v1/ledger', scope: 'ledger', summary: "Your company's ledger lines, oldest first. Page with ?after=<seq>.", handler: async (req, key) => {
+  route({ method: 'GET', url: '/v1/ledger', query: { after: Q.seq, limit: Q.count }, scope: 'ledger', summary: "Your company's ledger lines, oldest first. Page with ?after=<seq>.", handler: async (req, key) => {
     const q = req.query as any;
     const after = Number(q.after ?? 0), limit = Math.min(500, Number(q.limit ?? 100));
     const rows = (await db.query<any>(`select seq, id, at, unit_id, pack_id, debit, credit, amount_cents, kind, memo from ledger_entries where company_id = $1 and seq > $2 order by seq limit $3`, [key!.companyId, after, limit])).rows;
     return { body: rows.map((r) => ({ seq: Number(r.seq), id: r.id, at: r.at, unitId: r.unit_id, packId: r.pack_id, debit: r.debit, credit: r.credit, amountCents: Number(r.amount_cents), kind: r.kind, memo: r.memo })) };
   } });
 
-  route({ method: 'GET', url: '/v1/events', scope: 'events', summary: "Your company's events, oldest first. Page with ?after=<seq>; filter with ?type=.", handler: async (req, key) => {
+  route({ method: 'GET', url: '/v1/events', query: { after: Q.seq, limit: Q.count, type: Q.text }, scope: 'events', summary: "Your company's events, oldest first. Page with ?after=<seq>; filter with ?type=.", handler: async (req, key) => {
     const q = req.query as any;
     const after = Number(q.after ?? 0), limit = Math.min(500, Number(q.limit ?? 100));
     const rows = (await db.query<any>(`select seq, id, type, at, payload from events where company_id = $1 and seq > $2 and ($3::text is null or type = $3) order by seq limit $4`, [key!.companyId, after, q.type ?? null, limit])).rows;
@@ -682,18 +745,36 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   route({ method: 'GET', url: '/v1/me/cards', scope: 'me', summary: 'Your saved cards (brand and last 4 digits only).', handler: async (_req, key) => ({ body: await app.payments.methods(key!.companyId, 'user', me(key)) }) });
   route({ method: 'POST', url: '/v1/me/cards', scope: 'me', summary: "Save a card using the token from the payment provider's form. Card numbers never reach FreeWater.", body: obj({ token: S.str }, ['token']), handler: async (req, key) => ({ status: 201, body: await app.payments.addMethod(key!.companyId, 'user', me(key), (req.body as any).token) }) });
 
-  const advertiserScope = (key: ApiKey, advertiserId: string) => {
+  // The advertiser must be the caller's own (an advertiser key) and belong to the caller's company (P5).
+  const advertiserScope = async (key: ApiKey, advertiserId: string) => {
     if (key.advertiserId && key.advertiserId !== advertiserId) throw notFound('Advertiser');
+    const known = (await db.query(`select 1 from advertisers where id = $1 and company_id = $2`, [advertiserId, key.companyId])).rows.length;
+    if (!known) throw notFound('Advertiser');
   };
   route({ method: 'GET', url: '/v1/advertisers/:advertiserId/cards', scope: 'invoices', summary: "An advertiser's saved cards (brand and last 4 digits only).", handler: async (req, key) => {
     const id = (req.params as any).advertiserId;
-    advertiserScope(key!, id);
+    await advertiserScope(key!, id);
     return { body: await app.payments.methods(key!.companyId, 'advertiser', id) };
   } });
   route({ method: 'POST', url: '/v1/advertisers/:advertiserId/cards', scope: 'invoices', summary: "Save an advertiser's card for paying invoices.", body: obj({ token: S.str }, ['token']), handler: async (req, key) => {
     const id = (req.params as any).advertiserId;
-    advertiserScope(key!, id);
+    await advertiserScope(key!, id);
     return { status: 201, body: await app.payments.addMethod(key!.companyId, 'advertiser', id, (req.body as any).token) };
+  } });
+
+  // Credit for advertisers (docs/SWITCHES.md, "Credit for advertisers").
+  route({ method: 'GET', url: '/v1/advertisers/:advertiserId/credit', scope: 'invoices', summary: 'Whether an advertiser’s ads may run: its card, its credit limit (if a person set one) and what it owes now (unpaid invoices and charges not invoiced yet).', handler: async (req, key) => {
+    const id = (req.params as any).advertiserId;
+    await advertiserScope(key!, id);
+    return { body: { ...(await app.credit.standing(key!.companyId, id)), limit: await app.credit.limit(key!.companyId, id) } };
+  } });
+  route({ method: 'POST', url: '/v1/advertisers/:advertiserId/credit-limit', scope: 'invoices', summary: 'Set how much an advertiser may owe before its ads pause (0 for none: then it needs a working card). An owner or finance person, signed in with the second step, with a reason. Each change is kept.', body: obj({ limitCents: { type: 'integer', minimum: 0, maximum: 100_000_000 }, reason: { type: 'string', minLength: 5, maxLength: 300 } }, ['limitCents', 'reason']), handler: async (req, key) => {
+    if (!key!.userId || key!.advertiserId) throw new ApiError(403, 'people_only', 'An owner or finance person sets credit limits, signed in, not with an API key.');
+    const u = await app.accounts.get(key!.userId);
+    if (!u || u.companyId !== key!.companyId || !['owner', 'finance'].includes(u.role)) throw new ApiError(403, 'owner_or_finance', 'Only an owner or a finance person sets credit limits.');
+    const b = req.body as any;
+    await advertiserScope(key!, (req.params as any).advertiserId);
+    return { status: 201, body: await app.credit.grant(key!.companyId, (req.params as any).advertiserId, b.limitCents, `user:${u.id}`, b.reason) };
   } });
 
   route({ method: 'POST', url: '/v1/invoices/run', scope: 'invoices', summary: 'Invoice every advertiser for everything billed since their last invoice. Saved cards are charged; others stay open.', body: obj({ periodEnd: { type: 'string', format: 'date-time' } }), handler: async (req, key) => {
@@ -788,6 +869,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     limit(req, reply, req.ip, 'everything');
   });
   server.addHook('onSend', async (req, reply, payload) => {
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- `set` returns the reply (a thenable), not work left pending; the header is set synchronously
     securityHeaders({ get: (k) => reply.getHeader(k), set: (k, v) => reply.header(k, v) }, req.protocol === 'https' || process.env.HSTS === '1');
     return payload;
   });
@@ -838,7 +920,11 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     server.route({
       method: r.method,
       url: r.url,
-      schema: r.body ? { body: r.body } : undefined,
+      schema: r.body || r.query || r.params ? {
+        ...(r.body ? { body: r.body } : {}),
+        ...(r.query ? { querystring: { type: 'object', properties: r.query } } : {}),
+        ...(r.params ? { params: { type: 'object', properties: r.params } } : {}),
+      } : undefined,
       ...(r.rawBodyLimit ? { bodyLimit: r.rawBodyLimit } : {}),
       // Check the key before the body is even read, so a caller without access learns nothing and uploads nothing.
       onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
@@ -861,7 +947,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
         const out = await r.handler(req, (req as any).apiKey as ApiKey | null);
         // Answer only once the change is safely stored. Things recorded on the way past (a scan, what someone did on
         // the page) don't wait while the database is refusing changes: they're queued in order and go in with the rest.
-        if (r.scope === 'public') await persistence.flushUnlessPaused(); else await persistence.flush();
+        if (r.noWait && r.method === 'GET') { /* a status page: answers while changes wait */ } else if (r.scope === 'public') await persistence.flushUnlessPaused(); else await persistence.flush();
         logActivity(r, req, (req as any).apiKey as ApiKey | null, out.status ?? 200);
         const what = sensitive[`${r.method} ${r.url}`];
         if (what) {
@@ -904,6 +990,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     'jsqr.js': { type: 'text/javascript', path: createRequire(import.meta.url).resolve('jsqr/dist/jsQR.js') },
   };
   const cache = new Map<string, Buffer>();
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- only paths from the fixed static-file table above
   const file = (p: string) => { let b = cache.get(p); if (!b || process.env.NODE_ENV !== 'production') cache.set(p, (b = readFileSync(p))); return b; };
   const page = async (_req: FastifyRequest, reply: FastifyReply) => reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', "default-src 'self'; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' blob: data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; frame-ancestors 'none'").send(file(join(webDir, 'scan.html')));
   for (const u of ['/s/:unitId/:slot', '/p/:packId', '/b/:packId/:face']) server.get(u, page);
@@ -975,18 +1062,31 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       const b: any = req.body ?? {};
       securityLog.record({ kind: 'sign_in_failed', companyId: typeof b.companyId === 'string' && platform.companies.has(b.companyId) ? b.companyId : null, actor: mask(b.to), ip: req.ip, detail: { reason: err.code ?? 'invalid' } }, `sif:${req.ip}:${b.to}`);
     }
-    if (err instanceof ApiError || err instanceof PersistencePaused || err instanceof LeaseLostError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
+    if (err instanceof ApiError || err instanceof PersistencePaused || err instanceof LeaseLostError || err instanceof OrderConflictError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
     if (err instanceof AccountsError || err instanceof PaymentError || err instanceof ExperienceError || err instanceof AssetError || err instanceof AdsError || err instanceof DesignError || err instanceof DeliveryError || err instanceof BooksError || err instanceof WebhookError || err instanceof ConsoleError || err instanceof FleetError || err instanceof AttributionError || err instanceof LotteryError || err instanceof VideoError || err instanceof DataError || err instanceof NumberLineError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
     if (err.code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE') return reply.code(415).send({ error: { code: 'unsupported_type', message: 'Send JSON, or for uploads a .glb, PNG, JPEG, WebP or MP4 file.' } });
     if (err.code === 'FST_ERR_CTP_BODY_TOO_LARGE') return reply.code(413).send({ error: { code: 'too_large', message: 'That is too big to upload.' } });
-    if (err.validation) return reply.code(400).send({ error: { code: 'invalid_request', message: err.message } });
+    if (err.validation) return reply.code(400).send({ error: { code: 'invalid_request', ...plainValidation(err.validation, err.validationContext, err.message) } });
+    // Fastify's own refusals of a malformed request (bad JSON, empty body with a JSON type, a body method with no
+    // type, a bad URL): the caller's mistake, so its 4xx and a plain message, never a 500 and an alert.
+    if (typeof err.code === 'string' && err.code.startsWith('FST_') && err.statusCode >= 400 && err.statusCode < 500) {
+      return reply.code(err.statusCode).send({ error: { code: err.statusCode === 415 ? 'unsupported_type' : 'invalid_request', message: err.message } });
+    }
     if (/^Unknown (bottle|unit|pack)/i.test(err.message)) return reply.code(404).send({ error: { code: 'not_found', message: err.message } });
     // The database unreachable (restarting, failing over): say so plainly, and leave the alerting to the saving check.
     if (/ECONNREFUSED|ECONNRESET|ETIMEDOUT|Connection terminated|terminating connection|the database system is (starting up|shutting down)|timeout exceeded when trying to connect|Client has encountered a connection error/i.test(String(err?.message ?? '') + String(err?.code ?? ''))) {
       return reply.code(503).header('retry-after', '5').send({ error: { code: 'database_unavailable', message: 'FreeWater can’t reach its database for a moment. Please try again shortly.' } });
     }
     server.log.error(err);
-    void app.runtime.alerts.alert(`500:${req.method} ${req.routeOptions?.url ?? '?'}`, 'warning', `Server error on ${req.method} ${req.routeOptions?.url ?? req.url.split('?')[0]}`, String(err?.stack ?? err?.message ?? err));
+    // To the error tracker with its stack, the route's pattern and the company (never the address, body or headers);
+    // then to the alert channel, marked as tracked so it isn't sent to the tracker a second time.
+    const reporter = app.runtime.reporter;
+    if (reporter?.enabled) {
+      (req as any).fwTracked = true;
+      const companyId = (req as any).apiKey?.companyId;
+      reporter.captureException(err, { request: { method: req.method, route: req.routeOptions?.url }, tags: { source: 'http', status: 500, companyId } });
+    }
+    void app.runtime.alerts.alert(`500:${req.method} ${req.routeOptions?.url ?? '?'}`, 'warning', `Server error on ${req.method} ${req.routeOptions?.url ?? pathOnly(req.url)}`, String(err?.stack ?? err?.message ?? err), { tracked: !!reporter?.enabled });
     return reply.code(500).send({ error: { code: 'server_error', message: 'Something went wrong on our side. It has been logged.' } });
   });
 
@@ -1037,8 +1137,17 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   return server;
 }
 
+/** Is there a NUL character in this text, or in any key or text inside this JSON value? */
+function hasNul(v: unknown, depth = 0): boolean {
+  if (typeof v === 'string') return v.includes('\u0000');
+  if (!v || typeof v !== 'object' || depth > 64) return false;
+  if (Array.isArray(v)) return v.some((x) => hasNul(x, depth + 1));
+  return Object.entries(v).some(([k, x]) => k.includes('\u0000') || hasNul(x, depth + 1));
+}
+
 function openapi(routes: RouteDef[]) {
   const paths: Record<string, any> = {};
+  const refusal = { description: 'Not done: { error: { code, message } }.', content: { 'application/json': { schema: { type: 'object', required: ['error'], properties: { error: { type: 'object', properties: { code: { type: 'string' }, message: { type: 'string' } }, required: ['code', 'message'] } } } } } };
   for (const r of routes) {
     const p = r.url.replace(/:([a-zA-Z]+)/g, '{$1}');
     paths[p] ??= {};
@@ -1046,8 +1155,13 @@ function openapi(routes: RouteDef[]) {
       summary: r.summary,
       security: r.scope === 'public' ? [] : [{ apiKey: [] }],
       'x-scopes': r.scope === 'public' ? [] : [r.scope].flat(),
-      parameters: [...r.url.matchAll(/:([a-zA-Z]+)/g)].map((m) => ({ name: m[1], in: 'path', required: true, schema: { type: 'string' } })),
+      parameters: [
+        ...[...r.url.matchAll(/:([a-zA-Z]+)/g)].map((m) => ({ name: m[1], in: 'path', required: true, schema: r.params?.[m[1]!] ?? { type: 'string' } })),
+        ...Object.entries(r.query ?? {}).map(([name, schema]) => ({ name, in: 'query', required: false, schema })),
+      ],
       requestBody: r.body ? { required: true, content: { 'application/json': { schema: r.body } } } : undefined,
+      // Every refusal and failure has the same shape, so clients (and fuzzers) can check it.
+      responses: { '2XX': { description: 'Done.' }, '4XX': refusal, '5XX': refusal },
     };
   }
   return {

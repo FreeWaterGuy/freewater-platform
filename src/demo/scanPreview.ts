@@ -101,6 +101,7 @@ scenes.push({ id: 'receipt', label: 'Receipt', note: 'The open-books receipt for
 
 const outDir = 'out/scan-preview';
 mkdirSync(`${outDir}/models`, { recursive: true });
+// eslint-disable-next-line security/detect-non-literal-fs-filename -- demo script: a fixed output folder and built-in model ids
 for (const id of builtinModelIds) writeFileSync(`${outDir}/models/${id}.glb`, builtinModel(id)!);
 const arJs = await arBundle();
 const json = JSON.stringify(scenes).replace(/\/models\/builtin\//g, 'models/').replace(/</g, '\\u003c');

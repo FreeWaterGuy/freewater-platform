@@ -26,9 +26,24 @@ jobs:
       - name: Every installed package is signed by the registry
         run: npm audit signatures
       - run: npm run typecheck
+      - name: Static analysis - ESLint (bug and security rules, type-aware; eslint.config.js)
+        run: npm run lint
+      - name: Static analysis - Semgrep (local rules in .semgrep/; the registry isn't needed)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/semgrep"
+          "$RUNNER_TEMP/semgrep/bin/pip" install --quiet semgrep==1.182.0
+          export PATH="$RUNNER_TEMP/semgrep/bin:$PATH"
+          node scripts/semgrep-selftest.mjs semgrep # the rules still catch the planted mistakes
+          npm run lint:semgrep
       - run: npx vitest run --reporter=default --reporter=github-actions # failures show as annotations
       - name: Known security holes in what runs in production (moderate and above; allowed ones are listed with reasons)
         run: node scripts/audit.mjs
+      - name: Fuzz the running API (Schemathesis, pinned; no key and the sample admin key) - any server error fails
+        timeout-minutes: 8
+        run: |
+          python3 -m venv /tmp/schemathesis
+          /tmp/schemathesis/bin/pip install --quiet schemathesis==4.32.2
+          SCHEMATHESIS=/tmp/schemathesis/bin/schemathesis npm run fuzz:api
 
   browser:
     # The main journeys in a real browser (test/browser/journeys.ts). Playwright isn't a dependency of the app, so

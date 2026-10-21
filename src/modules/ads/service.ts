@@ -1,17 +1,21 @@
-import type { Campaign, Share, Unit } from '../../core/types';
-import { adArea, layoutsFor, shareLabel } from './layouts';
+import type { BoxProduct, Campaign, Share, Unit } from '../../core/types';
+import { layoutsFor, shareLabel } from './layouts';
 import { bidFloor } from './budget';
 import { newId } from '../../core/ids';
 import type { SqlClient } from '../../db/client';
 import type { Platform } from '../../platform';
 import type { Registry } from '../../core/registry';
 import { checkStudioSpec, renderStudio, studioCreative, type StudioSpec } from '../studio/layout';
+import { overPixelLimit, pixelsText } from '../studio/photos';
 import { posterCreative, posterFonts, posterIcons, renderPoster, type PosterSpec } from '../creative/poster';
 import type { ExperienceHost } from '../experiences/host';
 import { themeFor } from '../experiences/host';
-import { givingLine } from '../print/renderer';
+import { givingLine, pieceOf, slotQr } from '../print/renderer';
+import { qrSvg } from '../print/qr';
+import { companyQrStyle } from '../codes/style';
+import { boxFaceQr, boxFaceSizes } from '../packs/boxRenderer';
 import type { AdAssistant, ChatMessage } from '../ai/contract';
-import { allowedSizes, applyPatch, estimate, missing, missingLabels, themeFromPoster, type AdDraft } from './draft';
+import { allowedSizes, applyPatch, draftTargeting, estimate, missing, missingLabels, themeFromPoster, type AdDraft } from './draft';
 import { withCompany } from '../ai/routing';
 
 export class AdsError extends Error {
@@ -85,7 +89,7 @@ export class AdsService {
       id: r.id, status: r.status, campaignId: r.campaignId, updatedAt: r.updatedAt,
       draft: { ...rest, poster: poster ? { ...poster, image: poster.image ? { role: poster.image.role, attached: true } : undefined } : undefined },
       messages: r.messages, missing: left.map((m) => ({ id: m, label: missingLabels[m] })), ready: left.length === 0,
-      estimate: estimate(r.draft, company, this.maxFactor(company.id)), assistant: this.assistant.name,
+      estimate: estimate(r.draft, company, this.maxFactor(company.id), r.campaignId ? this.platform.campaigns.get(r.campaignId) : undefined), assistant: this.assistant.name,
     };
   }
 
@@ -99,7 +103,7 @@ export class AdsService {
       if (c.creativeRef?.kind !== 'poster' && c.creativeRef?.kind !== 'studio') throw new AdsError(422, 'not_editable_here', 'This ad’s artwork was uploaded as a file. Upload a new file to change it.');
       draft = {
         name: c.name, category: c.category, ...(c.creativeRef.kind === 'studio' ? { studio: c.creativeRef.spec } : { poster: c.creativeRef.spec }), sizes: c.sizes, formats: c.formats ?? ['label'], locations: c.targeting.locations ?? 'all',
-        buy: c.buy.type === 'guaranteed' ? { type: 'guaranteed', prints: Math.max(100, c.buy.remainingPrints) } : { type: 'bid', dailyCapCents: c.buy.dailyCapCents, maxCentsPerLabel: c.buy.maxCentsPerLabel },
+        buy: c.buy.type === 'guaranteed' ? { type: 'guaranteed', prints: c.buy.remainingPrints, unchanged: true } : { type: 'bid', dailyCapCents: c.buy.dailyCapCents, maxCentsPerLabel: c.buy.maxCentsPerLabel, unchanged: true },
         experienceId: c.experienceId, experienceConfig: c.experienceConfig, theme: c.theme,
       };
       greeting = 'What would you like to change? Changes go back to review before they print.';
@@ -115,13 +119,18 @@ export class AdsService {
 
   async listDrafts(companyId: string, advertiserId: string) {
     const rows = (await this.db.query<any>(`select id, status, data, campaign_id, updated_at from ad_drafts where company_id = $1 and advertiser_id = $2 and status = 'open' order by updated_at desc limit 20`, [companyId, advertiserId])).rows;
-    return rows.map((r) => { const d = parse<AdDraft>(r.data); return { id: r.id, campaignId: r.campaign_id, headline: d.poster?.headline ?? null, updatedAt: new Date(r.updated_at).toISOString() }; });
+    return rows.map((r) => { const d = parse<AdDraft>(r.data); return { id: r.id, campaignId: r.campaign_id, headline: d.studio?.headline ?? d.poster?.headline ?? null, updatedAt: new Date(r.updated_at).toISOString() }; });
   }
 
   /** One turn of the chat: the assistant proposes, the platform checks, and the draft is saved. */
   async chat(input: { id: string; companyId: string; advertiserId: string; text: string; attachments: { dataUrl: string; name?: string }[] }) {
     const r = await this.row(input.id, input.companyId, input.advertiserId);
     if (r.status !== 'open') throw new AdsError(409, 'already_submitted', 'This ad was already submitted. Start a change from the campaign instead.');
+    // A picture goes on the label as it is: one claiming more than 40 megapixels couldn't be drawn or printed.
+    for (const a of input.attachments) {
+      const over = await overPixelLimit(Buffer.from(a.dataUrl.slice(a.dataUrl.indexOf(',') + 1), 'base64'));
+      if (over) throw new AdsError(413, 'too_many_pixels', `${a.name ? `“${a.name}”` : 'That picture'} is ${pixelsText(over)}. The most is 40 megapixels (like 8,000 × 5,000): make it smaller and attach it again.`);
+    }
     const company = this.platform.companies.get(r.companyId)!;
     const adv = await this.advertiser(r.companyId, r.advertiserId);
     const locations = [...this.platform.locations.values()].filter((l) => l.companyId === r.companyId);
@@ -172,7 +181,9 @@ export class AdsService {
   }
 
   /** Puts the photos an ad points at inside its preview (set by the app; previews without photos need nothing). */
-  inlineAssets: (svg: string) => Promise<string> = async (svg) => svg;
+  inlineAssets: (svg: string, maxSide?: number) => Promise<string> = async (svg) => svg;
+  /** The delivery boxes this platform prints (set by the app), so box sides are previewed at their real sizes. */
+  boxProducts: () => BoxProduct[] = () => [];
 
   /** Use a design from the ad studio as this draft's artwork. */
   async useStudioDesign(id: string, companyId: string, advertiserId: string, spec: StudioSpec) {
@@ -220,12 +231,31 @@ export class AdsService {
   private async render(o: { companyId: string; advertiserId: string; advertiserName: string; category: string; draw: (w: number, h: number, ctx?: import('../../core/types').CreativeContext) => string; sizes: Share[]; formats: string[]; experience: { id: string; config: unknown } | null; theme: Partial<import('../experiences/blocks').Theme> }) {
     const company = this.platform.companies.get(o.companyId)!;
     const product = this.platform.standardProduct(o.companyId);
-    const area = adArea(product);
-    const layouts = layoutsFor(product, { maxAds: company.adRules.maxAdsPerUnit });
-    const wrap = (w: number, h: number) => `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(w)}" height="${Math.round(h)}" viewBox="0 0 ${w.toFixed(1)} ${h.toFixed(1)}">${o.draw(w, h)}</svg>`;
-    // Each size as it really prints: the piece of the label it gets (as square as the layout allows).
-    const pieceOf = (s: Share) => { const l = layouts.find((x) => x.shares.includes(s)); const r = l?.rects[l.shares.indexOf(s)] ?? { w: 1 / s, h: 1 }; return { w: r.w * area.w * 100, h: r.h * area.h * 100 }; };
-    const sizes = o.sizes.map((s) => { const p = pieceOf(s); return { share: s, label: shareLabel(s), svg: wrap(p.w, p.h) }; });
+    const rules = { maxAds: company.adRules.maxAdsPerUnit, minAds: company.adRules.minAdsPerUnit };
+    const layouts = layoutsFor(product, rules);
+    const sampleQr = `${company.receiptBaseUrl.replace(/\/$/, '')}/s/preview/0`;
+    // A piece drawn exactly as it prints: the artwork told where its code goes, and the code drawn there.
+    const piece = (w: number, h: number, qr: { x: number; y: number; size: number }, code: string) =>
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(w)}" height="${Math.round(h)}" viewBox="0 0 ${w} ${h}"><svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" overflow="hidden">${o.draw(w, h, { qr })}</svg>${code}</svg>`;
+    // Each size, at every shape it can print at: a sixth can be a wide strip on one bottle and a tall column on the
+    // next, and the design lays itself out differently for each. On every product the company's ads go on.
+    const products = [product, ...[...this.platform.products.values()].filter((p) => p.id !== product.id && (!p.companyId || p.companyId === o.companyId))];
+    const sizes = o.sizes.map((s) => {
+      const seen = new Map<string, { productId: string; products: string[]; w: number; h: number; count: number; qr: { x: number; y: number; size: number } }>();
+      for (const p of products) {
+        for (const l of layoutsFor(p, rules)) l.shares.forEach((share, i) => {
+          if (share !== s) return;
+          const { w, h } = pieceOf(p, l.rects[i]!), qr = slotQr(p, w, h);
+          const key = `${w.toFixed(1)}x${h.toFixed(1)}:${qr.size.toFixed(1)}`;
+          const had = seen.get(key);
+          if (had) { had.count++; if (!had.products.includes(p.id)) had.products.push(p.id); } else seen.set(key, { productId: p.id, products: [p.id], w, h, count: 1, qr });
+        });
+      }
+      // The shape it most often gets on the company's standard bottle comes first.
+      const shapes = [...seen.values()].sort((a, b) => Number(b.productId === product.id) - Number(a.productId === product.id) || b.count - a.count)
+        .map((x) => ({ productId: x.productId, products: x.products, w: x.w, h: x.h, svg: piece(x.w, x.h, x.qr, qrSvg(sampleQr, x.qr.x, x.qr.y, x.qr.size, 'H', companyQrStyle(company))) }));
+      return { share: s, label: shareLabel(s), printable: shapes.length > 0, svg: shapes[0]?.svg ?? '', shapes };
+    });
 
     // A sample label: this ad at its biggest size, the rest filled with the company's own ad.
     const biggest = Math.min(...o.sizes) as Share;
@@ -242,7 +272,16 @@ export class AdsService {
     const unit: Unit = { id: 'preview', companyId: o.companyId, productId: product.id, locationId: 'preview', kind: 'ad_supported', placements, layout, status: 'rendered', createdAt: this.platform.bus.now().toISOString() };
     const label = await this.registry.rendererFor(company).render({ unit, product, company, campaigns });
 
-    const boxFace = o.formats.includes('box-face') ? wrap(424, 312) : null;
+    // Box sides, each as it prints (its own size, the code in its corner). The 12-pack's front is the one shown first.
+    const faceSeen = new Map<string, { w: number; h: number; boxes: string[] }>();
+    if (o.formats.includes('box-face')) for (const b of this.boxProducts()) for (const f of boxFaceSizes(b)) {
+      const key = `${f.w}x${f.h}`, had = faceSeen.get(key);
+      if (had) { if (!had.boxes.includes(b.id)) had.boxes.push(b.id); } else faceSeen.set(key, { w: f.w, h: f.h, boxes: [b.id] });
+    }
+    if (o.formats.includes('box-face') && !faceSeen.size) faceSeen.set('424x312', { w: 424, h: 312, boxes: [] });
+    const boxFaces = [...faceSeen.values()].sort((a, b) => Number(b.w === 424 && b.h === 312) - Number(a.w === 424 && a.h === 312))
+      .map((f) => { const qr = boxFaceQr(f.w, f.h); return { boxes: f.boxes, w: f.w, h: f.h, svg: piece(f.w, f.h, qr, qrSvg(sampleQr, qr.x, qr.y, qr.size, 'H', companyQrStyle(company))) }; });
+    const boxFace = boxFaces[0]?.svg ?? null;
     const theme = themeFor(company.brand, o.theme);
     const scan = o.experience
       ? await this.host.open({ pluginId: o.experience.id, config: o.experience.config, theme, scan: { target: { kind: 'slot', unitId: 'preview', slot: 0 }, companyId: o.companyId, locationId: 'preview', owner: { name: o.advertiserName, advertiserId: o.advertiserId, campaignId: 'preview' }, viewer: { key: 'preview', signedIn: false, interests: [], firstTimeWithAdvertiser: true }, now: this.platform.bus.now() } })
@@ -250,7 +289,13 @@ export class AdsService {
     const footer = { company: company.name, brand: company.brand, ads: 3, giving: givingLine(company, 'preview'), receiptUrl: null, packUrl: null };
     // Previews are shown as pictures, which can't fetch the photos they point at: the photos go inside them.
     const inline = this.inlineAssets;
-    return { sizes: await Promise.all(sizes.map(async (s) => ({ ...s, svg: await inline(s.svg) }))), labelSvg: await inline(label.svg), boxFaceSvg: boxFace ? await inline(boxFace) : null, scan: scan ? { doc: scan, footer } : null };
+    // The main picture of each size at full preview quality; the other shapes smaller, so the whole preview stays light.
+    return {
+      sizes: await Promise.all(sizes.map(async (s) => ({ ...s, svg: await inline(s.svg), shapes: await Promise.all(s.shapes.map(async (x) => ({ ...x, svg: await inline(x.svg, 240) }))) }))),
+      labelSvg: await inline(label.svg), boxFaceSvg: boxFace ? await inline(boxFace) : null,
+      boxFaces: await Promise.all(boxFaces.map(async (f) => ({ ...f, svg: await inline(f.svg, 240) }))),
+      scan: scan ? { doc: scan, footer } : null,
+    };
   }
 
   async submit(input: { id: string; companyId: string; advertiserId: string }) {
@@ -259,22 +304,31 @@ export class AdsService {
     const left = missing(r.draft, this.host);
     if (left.length) throw new AdsError(422, 'not_ready', `Before submitting, add ${left.map((m) => missingLabels[m]).join(', ')}.`);
     const company = this.platform.companies.get(r.companyId)!;
+    // An ad whose sizes fit on none of the company's bottles would be approved and then never print.
+    const rules = { maxAds: company.adRules.maxAdsPerUnit, minAds: company.adRules.minAdsPerUnit };
+    const prints = new Set([...this.platform.products.values()].filter((p) => !p.companyId || p.companyId === r.companyId).flatMap((p) => layoutsFor(p, rules).flatMap((l) => l.shares)));
+    if (!(r.draft.sizes ?? []).some((s) => prints.has(s))) throw new AdsError(422, 'sizes_never_print', `None of those sizes fit on ${company.name}'s bottles, so the ad would never print. Pick from: ${[...prints].sort((a, b) => a - b).map(shareLabel).join(', ')}.`);
     const adv = await this.advertiser(r.companyId, r.advertiserId);
     const d = r.draft as Required<Pick<AdDraft, 'sizes' | 'buy' | 'experienceId' | 'locations' | 'category'>> & AdDraft;
     const spec = d.poster as PosterSpec;
     const art = d.studio ? { creative: studioCreative(d.studio), creativeRef: { kind: 'studio' as const, spec: d.studio } } : { creative: posterCreative(spec), creativeRef: { kind: 'poster' as const, spec } };
     const now = this.platform.bus.now().toISOString();
     const existing = r.campaignId ? this.platform.campaigns.get(r.campaignId) : undefined;
+    // Changing an ad never buys it more bottles or drops its bid settings: a budget left as it was keeps the live
+    // ad's own (the bottles left now, which may be fewer than when the change began); a bid keeps its adjustments,
+    // pacing, frequency cap and today's spend.
+    const live = existing?.buy;
     const buy: Campaign['buy'] = d.buy.type === 'guaranteed'
-      ? { type: 'guaranteed', remainingPrints: d.buy.prints }
-      : { type: 'bid', dailyCapCents: d.buy.dailyCapCents, maxCentsPerLabel: Math.max(d.buy.maxCentsPerLabel ?? 0, bidFloor(company)), spentTodayCents: existing?.buy.type === 'bid' ? existing.buy.spentTodayCents : 0, ...(existing?.buy.type === 'bid' && existing.buy.spentDay ? { spentDay: existing.buy.spentDay } : {}) };
+      ? { type: 'guaranteed', remainingPrints: d.buy.unchanged && live?.type === 'guaranteed' ? live.remainingPrints : d.buy.prints }
+      : live?.type === 'bid' && d.buy.unchanged ? { ...live }
+      : { ...(live?.type === 'bid' ? live : {}), type: 'bid', dailyCapCents: d.buy.dailyCapCents, maxCentsPerLabel: Math.max(d.buy.maxCentsPerLabel ?? (live?.type === 'bid' ? live.maxCentsPerLabel : 0), bidFloor(company)), spentTodayCents: live?.type === 'bid' ? live.spentTodayCents : 0 };
     const c: Campaign = {
       ...(existing ?? {}),
       id: existing?.id ?? newId('cmp'), companyId: r.companyId, advertiserId: r.advertiserId, advertiserName: adv.name,
       name: d.name ?? (d.studio?.headline ?? spec.headline), category: d.category, sizes: d.sizes, formats: d.formats ?? ['label'],
       ...art,
       experienceId: d.experienceId, experienceConfig: d.experienceConfig ?? {}, theme: themeFromPoster(d),
-      targeting: d.locations === 'all' ? {} : { locations: d.locations as string[] }, buy,
+      targeting: draftTargeting(d, existing), buy,
       active: false, review: { status: 'submitted', at: now }, createdAt: existing?.createdAt ?? now,
     };
     this.platform.campaigns.set(c.id, c);
@@ -299,32 +353,36 @@ export class AdsService {
   async overview(input: { companyId: string; advertiserId: string; days: number }) {
     const company = this.platform.companies.get(input.companyId)!;
     const acct = `receivable:advertiser:${input.advertiserId}`;
-    const since = new Date(this.platform.bus.now().getTime() - (input.days - 1) * 86_400_000);
-    since.setUTCHours(0, 0, 0, 0);
+    // Days as the company counts them (its time zone), the same days its advertisers' daily budgets run on.
+    const tz = company.timezone ?? 'UTC';
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(this.platform.bus.now());
+    const dayBefore = (d: string, n: number) => new Date(Date.parse(`${d}T12:00:00Z`) - n * 86_400_000).toISOString().slice(0, 10);
     const lines = (await this.db.query<any>(
-      `select campaign_id, kind, to_char(date_trunc('day', at at time zone 'UTC'), 'YYYY-MM-DD') as day, count(*)::int as n, sum(amount_cents)::bigint as cents
-       from ledger_entries where company_id = $1 and (debit = $2 or credit = $2) group by 1, 2, 3`, [input.companyId, acct])).rows;
+      `select campaign_id, kind, to_char(at at time zone $3, 'YYYY-MM-DD') as day, debit = $2 as owes, count(*)::int as n, sum(amount_cents)::bigint as cents
+       from ledger_entries where company_id = $1 and (debit = $2 or credit = $2) group by 1, 2, 3, 4`, [input.companyId, acct, tz])).rows;
     const engaged = (await this.db.query<any>(
       `select payload->>'campaignId' as campaign_id, payload->>'action' as action, count(*)::int as n from events
        where company_id = $1 and type = 'experience.engaged' and payload->>'advertiserId' = $2 group by 1, 2`, [input.companyId, input.advertiserId])).rows;
 
     const blank = () => ({ spendCents: 0, prints: 0, scans: 0, arLaunches: 0, sales: 0, salesCents: 0, boxFaces: 0, saves: 0, linkTaps: 0 });
     type Totals = ReturnType<typeof blank>;
+    // A line charging the advertiser adds; a line giving back (a refunded commission, a voided batch, a value-back
+    // taken back) subtracts, whatever its kind, so the totals match the invoices to the cent.
     const add = (t: Totals, r: any) => {
-      const n = Number(r.n), cents = Number(r.cents);
-      if (r.kind === 'commission_reversal') { t.spendCents -= cents; t.sales -= n; t.salesCents -= Math.round((cents * 100) / company.prices.commissionPercent); return; }
       if (r.kind === 'payment') return;
+      const sign = r.owes === true || r.owes === 't' ? 1 : -1;
+      const n = sign * Number(r.n), cents = sign * Number(r.cents);
       t.spendCents += cents;
       if (r.kind === 'print') t.prints += n;
       if (r.kind === 'scan') t.scans += n;
       if (r.kind === 'ar') t.arLaunches += n;
       if (r.kind === 'box_face') t.boxFaces += n;
-      if (r.kind === 'commission') { t.sales += n; t.salesCents += Math.round((cents * 100) / company.prices.commissionPercent); }
+      if (r.kind === 'commission' || r.kind === 'commission_reversal') { t.sales += n; t.salesCents += Math.round((cents * 100) / company.prices.commissionPercent); }
     };
     const total = blank(), period = blank();
     const byCampaign = new Map<string, Totals>();
     const days = new Map<string, Totals>();
-    for (let i = 0; i < input.days; i++) days.set(new Date(since.getTime() + i * 86_400_000).toISOString().slice(0, 10), blank());
+    for (let i = input.days - 1; i >= 0; i--) days.set(dayBefore(today, i), blank());
     for (const r of lines) {
       add(total, r);
       const key = r.campaign_id ?? 'other';
@@ -344,7 +402,7 @@ export class AdsService {
     const campaigns = [...this.platform.campaigns.values()].filter((c) => c.companyId === input.companyId && c.advertiserId === input.advertiserId && !c.isHouse)
       .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '') || a.id.localeCompare(b.id))
       .map((c) => ({
-        id: c.id, name: c.name ?? (c.creativeRef?.kind === 'poster' || c.creativeRef?.kind === 'studio' ? c.creativeRef.spec.headline : c.advertiserName), status: this.status(c), review: c.review ?? null,
+        id: c.id, name: c.name ?? (c.creativeRef?.kind === 'poster' || c.creativeRef?.kind === 'studio' ? c.creativeRef.spec.headline : c.advertiserName), status: this.status(c), review: c.review ?? null, creditHold: c.creditHold ?? null,
         sizes: c.sizes, formats: c.formats ?? ['label'], where: c.targeting.locations ?? 'all', experienceId: c.experienceId,
         budget: c.buy.type === 'guaranteed' ? { type: 'guaranteed', bottlesLeft: c.buy.remainingPrints } : { type: 'bid', dailyCapCents: c.buy.dailyCapCents, spentTodayCents: c.buy.spentTodayCents },
         editable: c.creativeRef?.kind === 'poster' || c.creativeRef?.kind === 'studio',
@@ -367,9 +425,13 @@ export class AdsService {
     return [...this.platform.campaigns.values()].filter((c) => c.companyId === companyId && c.review?.status === 'submitted');
   }
 
-  review(input: { companyId: string; campaignId: string; decision: 'approve' | 'reject'; note?: string }) {
+  /** Set by the app: refuses an ad going live when its advertiser's credit doesn't allow it (CreditService). */
+  beforeLive: (c: Campaign) => Promise<void> = async () => {};
+
+  async review(input: { companyId: string; campaignId: string; decision: 'approve' | 'reject'; note?: string }) {
     const c = this.platform.campaigns.get(input.campaignId);
     if (!c || c.companyId !== input.companyId) throw new AdsError(404, 'not_found', 'Campaign not found.');
+    if (input.decision === 'approve') await this.beforeLive(c);
     const at = this.platform.bus.now().toISOString();
     c.review = { status: input.decision === 'approve' ? 'approved' : 'rejected', ...(input.note ? { note: input.note } : {}), at };
     c.active = input.decision === 'approve';

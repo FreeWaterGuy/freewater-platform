@@ -38,7 +38,8 @@ export class HandoffService {
   private handedOver(unit: import('../../core/types').Unit): UnitHandoff['handedOver'] {
     if (unit.packId) {
       const pack = this.packs.packs.get(unit.packId);
-      return pack?.status === 'delivered' ? { how: 'door' } : null;
+      // Only a bottle still in the box at the door: one the packing check found missing and replaced never went out.
+      return pack?.status === 'delivered' && pack.unitIds.includes(unit.id) ? { how: 'door' } : null;
     }
     return unit.status === 'dispensed' && unit.consumerId ? { how: 'machine' } : null;
   }

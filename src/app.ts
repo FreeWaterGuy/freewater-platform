@@ -31,6 +31,7 @@ import { join as joinPath, dirname as dirnamePath } from 'node:path';
 import { fileURLToPath as toPath } from 'node:url';
 import type { DesignAssistant } from './modules/ai/designContract';
 import { DeliveryService } from './modules/delivery/service';
+import { CreditService } from './modules/ads/credit';
 import { SimpleRoutePlanner, type RoutePlanner } from './modules/delivery/planner';
 import { TestGeocoder, type Geocoder } from './adapters/geocoding/contract';
 import { OpsService } from './modules/ops/service';
@@ -47,6 +48,7 @@ import { LotteryService } from './modules/lottery/service';
 import { VideoService } from './modules/video/service';
 import { ClaudeWriter, builtinWriter } from './modules/video/motion';
 import { VeoProvider } from './modules/video/veo';
+import { featuresFrom, type Features } from './runtime/features';
 import type { FootageProvider, StoryWriter } from './modules/video/contract';
 import { InteractionService } from './modules/interactions/service';
 import { geoFromEnv } from './modules/data/geoip';
@@ -88,7 +90,12 @@ import type { JobRunner } from './runtime/jobs';
 import { boxes, builtinCreatives, freewater, locations, peakSpring, products, sampleCampaigns } from './demo/seed';
 
 /** What the running server adds around the app: alerts, and (in production) the lease and the job runner. */
-export interface Runtime { alerts: Alerter; startedAt: Date; lease?: InstanceLease; jobs?: JobRunner; /** Lost its claim to the data: answers nothing more. */ lost?: boolean; /** Today's public uploads against their ceilings (set by the API server). */ uploads?: import('./runtime/uploads').UploadQuota }
+/** The last result of the checks people rely on, for GET /health/deep (since this server started). */
+export interface RuntimeChecks {
+  reconciliation?: { at: string; companies: { companyId: string; day?: string; ok: boolean; failed?: number; attention?: number; error?: string }[] };
+  booksCheck?: { at: string; ok: boolean; findings: number; failed: string[] };
+}
+export interface Runtime { alerts: Alerter; startedAt: Date; /** Error tracking (SENTRY_DSN); off when absent. */ reporter?: import('./runtime/errors').ErrorReporter; checks?: RuntimeChecks; lease?: InstanceLease; jobs?: JobRunner; /** Lost its claim to the data: answers nothing more. */ lost?: boolean; /** Today's public uploads against their ceilings (set by the API server). */ uploads?: import('./runtime/uploads').UploadQuota }
 
 export interface AppOptions {
   db: SqlClient;
@@ -109,6 +116,8 @@ export interface AppOptions {
    */
   lease?: InstanceLease;
   builtins?: Record<string, Creative>;
+  /** Which areas are switched off (src/runtime/features.ts). Default: read FW_FEATURES and FW_FEATURES_OFF. */
+  features?: Features;
   seedDemo?: boolean; // load FreeWater's sample catalog and print demo API keys when the database is empty
   clock?: () => Date;
   seed?: number;
@@ -157,12 +166,13 @@ export interface AppOptions {
   webhookSender?: WebhookSender; // sends webhooks; defaults to real HTTPS
   allowPrivateWebhooks?: boolean; // let webhooks reach localhost and private networks (development only)
   publicUrl?: string; // where the console lives, for links in emails, e.g. https://console.freewater.io
-  fleet?: { claimTimeoutMs?: number; finishTimeoutMs?: number; offlineAfterMs?: number; bufferHours?: number };
+  fleet?: { claimTimeoutMs?: number; finishTimeoutMs?: number; offlineAfterMs?: number; bufferHours?: number; offlineGraceHours?: number };
 }
 
 /** Start the platform on a database: migrate, load everything, and keep writing every change back. */
 export async function createApp(opts: AppOptions) {
   const raw = opts.db;
+  const features = opts.features ?? featuresFrom().features;
   await migrate(raw);
   // Changes a stopped server had waiting go in first, so what's read below is complete.
   await SqlPersistence.recoverSpool(raw, opts.spoolFile);
@@ -184,6 +194,8 @@ export async function createApp(opts: AppOptions) {
     await make('advertiser-joes', 'freewater', ['campaigns', 'purchases', 'invoices'], 'adv-joes');
     for (const c of sampleCampaigns().filter((x) => !x.isHouse)) {
       await db.query(`insert into advertisers (id, company_id, name, category) values ($1,$2,$3,$4) on conflict do nothing`, [c.advertiserId, c.companyId, c.advertiserName, c.category]);
+      // Made-up advertisers get a made-up credit limit, so their sample ads can run (real ones need a card or a person's limit).
+      await db.query(`insert into advertiser_credit_limits (id, company_id, advertiser_id, limit_cents, reason, granted_by, granted_at) select $1,$2,$3,500000,'Demo advertiser (sample data)','demo seed',now() where not exists (select 1 from advertiser_credit_limits where company_id = $2 and advertiser_id = $3)`, [`crl_demo_${c.advertiserId}`, c.companyId, c.advertiserId]);
     }
     // FreeWater gives to Well Aware (wellawareworld.org) by default; two more Austin charities are on the list to choose
     // for particular machines or routes. Contact and bank details are placeholders.
@@ -195,7 +207,7 @@ export async function createApp(opts: AppOptions) {
 
   const now = opts.clock?.() ?? new Date();
   const state = await loadState(db, builtins, now);
-  const runtime: Runtime = { alerts: opts.alerts ?? new Alerter(), startedAt: new Date(), ...(opts.lease ? { lease: opts.lease } : {}) };
+  const runtime: Runtime = { alerts: opts.alerts ?? new Alerter(), startedAt: new Date(), checks: {}, ...(opts.lease ? { lease: opts.lease } : {}) };
   const persistence = new SqlPersistence(raw, {
     spoolFile: opts.spoolFile,
     epoch: opts.epoch,
@@ -261,14 +273,22 @@ export async function createApp(opts: AppOptions) {
   const assets = opts.assets ?? new SqlAssetStore(db, opts.blobs);
   // Personalized videos behind "Show me more", and every interaction people have with a page.
   const videoWriter = opts.videoWriter ?? (aiOn ? new ClaudeWriter({ apiKey: anthropicKey, model: process.env.ANTHROPIC_MODEL }) : builtinWriter);
-  const footage = opts.footage === null ? undefined : opts.footage ?? (process.env.GEMINI_API_KEY ? new VeoProvider({ apiKey: process.env.GEMINI_API_KEY, model: process.env.VEO_MODEL, image: async (url) => {
+  // Veo footage only while video generation is on (FW_FEATURES); motion videos are made either way.
+  const footage = opts.footage === null || !features.on('video_generation') ? undefined : opts.footage ?? (process.env.GEMINI_API_KEY ? new VeoProvider({ apiKey: process.env.GEMINI_API_KEY, model: process.env.VEO_MODEL, image: async (url) => {
     const m = /^\/assets\/([A-Za-z0-9_-]+)\./.exec(url); const got = m ? await assets.get(m[1]!) : null;
     return got && got.asset.contentType.startsWith('image/') ? { mimeType: got.asset.contentType, data: Buffer.from(got.bytes).toString('base64') } : null;
   } }) : undefined);
   const videos = new VideoService(db, platform, assets, videoWriter, footage, opts.clock);
+  const footageCeiling = Number(process.env.FOOTAGE_PER_COMPANY_DAY ?? '');
+  if (process.env.FOOTAGE_PER_COMPANY_DAY && Number.isInteger(footageCeiling) && footageCeiling >= 0) videos.perCompanyDay = footageCeiling;
+  videos.alert = (key, title, detail) => void runtime.alerts.alert(key, 'warning', title, detail);
   experiences.videos = videos;
   const interactions = new InteractionService(db, platform, opts.clock);
   const data = new DataService(db, platform, interactions, opts.clock);
+  // Someone who told us they're under the minimum age gets nothing picked by their interests: not what their scan
+  // page shows, not the videos, and not the ads printed on their own bottles.
+  experiences.mayPersonalize = async (companyId, subjects) => (await data.ageOk(companyId, subjects)) !== false;
+  accounts.mayPersonalize = experiences.mayPersonalize;
   // Phones' keys are secrets: the activity log and the team's screens keep only a keyed fingerprint of each.
   data.tagKey = await loadSecret(db, 'viewer_tags');
   await data.retagActivity();
@@ -321,6 +341,12 @@ export async function createApp(opts: AppOptions) {
   const builtinAssistant = new BuiltinAdAssistant();
   const assistant = opts.assistant ?? (aiOn ? new ClaudeAdAssistant({ apiKey: anthropicKey, model: process.env.ANTHROPIC_MODEL, fallback: builtinAssistant }) : builtinAssistant);
   const ads = new AdsService(db, platform, made.registry, host, assistant, () => persistence.flush());
+  // Credit for advertisers (billed after the fact): an ad goes live only with a working card or a credit limit a person
+  // set, and pauses once its advertiser owes more than that (docs/SWITCHES.md, "Credit for advertisers").
+  const credit = new CreditService(db, platform, messenger, () => persistence.flush());
+  credit.alert = (key, title, detail) => void runtime.alerts.alert(key, 'warning', title, detail);
+  ads.beforeLive = (c) => credit.needCredit(c);
+  platform.bus.on('invoice.failed', (e) => { void credit.enforce(e.companyId, e.payload.advertiserId).catch(() => {}); });
 
   const builtinDesigner = new BuiltinDesigner();
   const designer = opts.designer ?? (aiOn ? new ClaudeDesigner({ apiKey: anthropicKey, model: process.env.ANTHROPIC_MODEL, fallback: builtinDesigner }) : builtinDesigner);
@@ -354,8 +380,9 @@ export async function createApp(opts: AppOptions) {
   const STUDIO_IMAGE = /<image data-fw-photo="1" href="\/assets\/(as_[A-Za-z0-9_-]+)\.(?:jpg|png)"([^>]*)\/>/g;
   const fillPhotos = async (svg: string, cache: ReturnType<typeof photoCache>, size: number | null) => {
     if (!svg.includes('data-fw-photo')) return svg;
+    const keyOf = (id: string) => `${id}@${size ?? 'full'}`; // the same photo at another size is another copy
     for (const id of new Set([...svg.matchAll(STUDIO_IMAGE)].map((m) => m[1]!))) {
-      if (cache.get(id) !== undefined) continue;
+      if (cache.get(keyOf(id)) !== undefined) continue;
       // A storage hiccup throws: the print fails cleanly (nothing billed) and the next one tries again.
       const f = await assets.get(id);
       if (!f || !['image/jpeg', 'image/png'].includes(f.asset.contentType)) {
@@ -369,18 +396,20 @@ export async function createApp(opts: AppOptions) {
       }
       const png = f.asset.contentType === 'image/png';
       const bytes = size ? await (await import('sharp')).default(f.bytes, { limitInputPixels: 40_000_000 }).resize(size, size, { fit: 'inside', withoutEnlargement: true })[png ? 'png' : 'jpeg']().toBuffer() : Buffer.from(f.bytes);
-      cache.set(id, `data:${f.asset.contentType};base64,${bytes.toString('base64')}`);
+      cache.set(keyOf(id), `data:${f.asset.contentType};base64,${bytes.toString('base64')}`);
     }
     // A picture that can't be found is left out; the rest of the label prints.
-    return svg.replace(STUDIO_IMAGE, (m, id, rest) => { const d = cache.get(id); return d ? `<image href="${d}"${rest}/>` : ''; });
+    return svg.replace(STUDIO_IMAGE, (m, id, rest) => { const d = cache.get(keyOf(id)); return d ? `<image href="${d}"${rest}/>` : ''; });
   };
   const printCopies = photoCache(256 * 1024 * 1024), previewCopies = photoCache(64 * 1024 * 1024);
   platform.forPrint = (svg) => fillPhotos(svg, printCopies, null);
   platform.forView = (svg) => fillPhotos(svg, previewCopies, 900).catch(() => svg);
-  ads.inlineAssets = platform.forView;
+  ads.inlineAssets = (svg, maxSide) => (maxSide ? fillPhotos(svg, previewCopies, maxSide).catch(() => svg) : platform.forView(svg));
+  ads.boxProducts = () => [...state.boxes];
 
   const geocoder = opts.geocoder ?? new TestGeocoder({ Austin: { lat: 30.2672, lng: -97.7431, radiusKm: 6 }, Denver: { lat: 39.7392, lng: -104.9903, radiusKm: 6 } });
   const delivery = new DeliveryService(db, platform, packs, accounts, messenger, geocoder, opts.planner ?? new SimpleRoutePlanner(), () => persistence.flush());
+  delivery.alert = (key, title, detail) => void runtime.alerts.alert(key, 'warning', title, detail);
   const ops = new OpsService(db, platform, delivery, host);
 
   const handoff = new HandoffService(db, platform, packs);
@@ -395,7 +424,9 @@ export async function createApp(opts: AppOptions) {
   const anchors = new AnchorService(db, platform, (id) => books.days(id), publishers, (id) => delivery.today(id), opts.clock);
   // The chain layer, switched off: hourly seals of the wallet journal, actions needing several people, the daily check.
   const chain = new ChainService(db, platform, wallet, publishers, opts.clock);
-  chain.alert = (companyId, message) => void runtime.alerts.alert('chain', 'critical', `Chain (${companyId})`, message);
+  // A step that would switch on an area that's off (FW_FEATURES) can't be proposed or run.
+  chain.kindAllowed = (kind) => features.actionOn(kind);
+  chain.alert = (companyId, message) => void runtime.alerts.alert(`chain:${companyId}`, 'critical', `Chain (${companyId})`, message);
   // An ad reached its daily ceiling of billed scans or AR launches (R3): more are counted, never billed, and a person looks.
   platform.ledger.onCeiling = (h) => void runtime.alerts.alert(`billing-ceiling:${h.companyId}:${h.campaignId}:${h.kind}:${h.day}`, 'warning', `Ad ${h.campaignId} reached its daily ceiling of ${h.ceiling} billed ${h.kind === 'scan' ? 'scans' : 'AR launches'} (${h.companyId}, ${h.day})`, `More are counted but not billed today. Far more ${h.kind === 'scan' ? 'scans' : 'AR launches'} than its bottles could get usually means fake scans: check where they come from (GET /v1/books/reconciliation) before the advertiser is invoiced.`);
   // Solana: the free test network before going live with the token, the real network after. Keys live in the host's
@@ -525,9 +556,10 @@ export async function createApp(opts: AppOptions) {
   await environment.repairDirections();
   await wallet.repairReserveLines();
   await offers.repairCauseGifts();
+  await attribution.repairUnrecorded();
   await persistence.flush();
 
-  return { ...made, db, persistence, runtime, demoKeys, accounts, payments, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
+  return { ...made, features, db, persistence, runtime, demoKeys, accounts, payments, credit, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

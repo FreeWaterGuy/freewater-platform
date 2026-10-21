@@ -520,11 +520,14 @@
       h('p', { class: 'small muted', style: 'margin:8px 0 0', text: `${info.notice} ${info.use}` }));
   }
 
+  /** Is this area on, on this server? (GET /v1/public/features) */
+  const on = (feature) => !(state.features?.off ?? []).includes(feature);
+
   async function walletScreen() {
     const me = await loadMe();
     const cid = encodeURIComponent(state.config.companyId);
     const vk = viewerKey();
-    const [w, offers] = await Promise.all([me ? api('GET', '/v1/me/wallet') : api('GET', `/v1/public/wallet/${cid}?viewer=${encodeURIComponent(vk)}`), api('GET', `/v1/public/offers/${cid}?viewer=${encodeURIComponent(vk)}`).catch(() => ({ offers: [], mine: [] }))]);
+    const [w, offers] = await Promise.all([me ? api('GET', '/v1/me/wallet') : api('GET', `/v1/public/wallet/${cid}?viewer=${encodeURIComponent(vk)}`), on('offers') ? api('GET', `/v1/public/offers/${cid}?viewer=${encodeURIComponent(vk)}`).catch(() => ({ offers: [], mine: [] })) : { offers: [], mine: [] }]);
     const tok = (n) => (n / 1e6).toLocaleString(undefined, { maximumFractionDigits: 6 });
     const claim = async (o, btn) => {
       if (!me && !(await signIn('Offers pay real money, so they need an account.'))) return;
@@ -556,8 +559,8 @@
           (w.token.live || w.token.balance) ? h('div', {}, h('b', { text: tok(w.token.balance) }), h('span', { text: 'tokens' })) : null),
         w.token.live ? h('p', { style: 'margin:8px 0 0;opacity:.85;font-size:14px', text: w.token.held }) : null),
       lvl?.askNow ? levelPicker(me, lvl, { card: true }) : null,
-      me && w.exchange.enabled && w.credit.balanceCents >= 500 ? giftCardTile(w) : null,
-      link('/play', { class: 'tile blue' }, h('span', { class: 'tile-ico' }, icon(I.scan)), h('span', { class: 'grow' }, h('b', { text: 'Play for points' }), h('span', { text: 'Pick what you’d really choose. Same points whichever you pick.' }))),
+      me && on('gift_cards') && w.exchange.enabled && w.credit.balanceCents >= 500 ? giftCardTile(w) : null,
+      !on('games') ? null : link('/play', { class: 'tile blue' }, h('span', { class: 'tile-ico' }, icon(I.scan)), h('span', { class: 'grow' }, h('b', { text: 'Play for points' }), h('span', { text: 'Pick what you’d really choose. Same points whichever you pick.' }))),
       offers.offers.length || offers.mine.length ? h('h2', { class: 'section' }, 'Offers') : null,
       ...offers.offers.map((o) => { const b = h('button', { class: 'btn small', type: 'button', text: o.pointsCost ? `Claim for ${o.pointsCost} points` : 'Claim' }); b.addEventListener('click', () => claim(o, b)); return h('div', { class: 'list-row' }, h('span', { class: 'grow' }, h('b', { text: o.title }), h('span', { class: 'small muted', text: `${o.deal} · ${o.retailers.includes('any') ? 'any store' : o.retailers.join(', ')}` })), b); }),
       ...offers.mine.map((c) => h('div', { class: 'list-row', style: 'flex-wrap:wrap' }, h('span', { class: 'grow' }, h('b', { text: c.title }), h('span', { class: 'small muted', text: said[c.status] ?? c.status })), c.status === 'claimed' ? receipt(c) : null)),
@@ -618,7 +621,7 @@
       h('p', { class: 'small muted', style: 'margin:0', text: 'Everything starts off. Turn on only what you want.' }),
       h('div', {},
         consent('personalizedOffers', 'Offers picked for me', 'Use the interests below to choose which offers you see when you scan.'),
-        consent('shareInterestsWithAdvertisers', 'Share my interests with advertisers', 'Advertisers see your interests, never your name or contact details.'),
+        consent('shareInterestsWithAdvertisers', 'Share my interests with advertisers', 'Not used yet: today no advertiser sees anyone’s interests. If that changes, it will be only with this on, and never your name or contact details.'),
         consent('location', 'Use my location', 'Show the nearest machines first.'),
         consent('marketing', 'News from FreeWater', 'Now and then, by email or text.')),
       me.consents.personalizedOffers && h('div', { class: 'field' }, h('label', { text: 'Your interests' }), h('div', { class: 'chips' }, allInterests.map((i) => h('button', { type: 'button', class: 'chip-btn', 'aria-pressed': String(mine.has(i)), onclick: async (e) => {
@@ -710,7 +713,8 @@
         h('span', { class: 'small muted', text: d.design.names?.length ? `A name on each: ${d.design.names.slice(0, 4).join(', ')}${d.design.names.length > 4 ? '…' : ''}` : 'No ads. All yours.' }),
         h('span', { class: 'small', text: `${money(d.totalCents)}${d.design.quantity > 1 ? ` (${money(d.priceCents)} each)` : ''}` }));
       bottle.querySelector('.wrap').style.backgroundImage = `url("${svgData(d.designSvg)}")`;
-      flat.innerHTML = d.designSvg;
+      // eslint-disable-next-line no-unsanitized/property -- designSvg is drawn by our server (renderKeepsake escapes text; checkKeepsake validates colours and photo); CSP blocks inline script
+      flat.innerHTML = d.designSvg; // nosemgrep: fw-web-unsafe-html -- our own server-drawn SVG; see the ESLint note above
       msgs.replaceChildren(...d.messages.map((m) => h('div', { style: m.role === 'user' ? 'align-self:flex-end;max-width:85%;background:#000;color:#fff;padding:10px 14px;border-radius:18px 18px 4px 18px;white-space:pre-wrap' : 'max-width:92%;white-space:pre-wrap' }, m.text,
         m.attachments?.length ? h('div', { class: 'small', style: 'opacity:.75;margin-top:4px', text: m.attachments.map((a) => `${a.kind === 'video' ? '🎬' : '🖼'} ${a.name || a.kind}`).join('  ') }) : null)));
       if (busy) msgs.append(h('div', { class: 'muted', text: 'Designing…' }));
@@ -804,7 +808,11 @@
 
   // ---------- start ----------
   (async () => {
-    try { state.config = await api('GET', '/v1/public/app-config'); }
+    try {
+      state.config = await api('GET', '/v1/public/app-config');
+      // Areas switched off on this server (FW_FEATURES): their tiles and buttons aren't shown.
+      state.features = await api('GET', '/v1/public/features').catch(() => ({ off: [] }));
+    }
     catch { root.replaceChildren(h('div', { class: 'boot' }, h('p', { text: 'Can’t reach FreeWater. Check your connection and try again.' }))); return; }
     render();
   })();

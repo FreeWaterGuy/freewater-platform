@@ -61,6 +61,8 @@ Keep days are the US preset; EU/UK/Brazil and unknown places get the shorter str
 | `person_details` | birth year (only if old enough), age ok, zip, household, language | Age check, optional details | With the person | Team via person search | Both |
 | `people`, `person_links` | joins phones, accounts, hashed email/phone | One profile (Full only, where allowed) | With the person | Team | Both |
 | `viewer_advertisers`, `video_seen`, `clicks`, `coupon_codes` | phone key, advertiser, link opened | Frequency, billing | Not purged by age (see L-9) | Team; advertisers see counts | Download yes; erase: deleted or key replaced |
+| `videos` (not personal) | the kind of moment a video was made for, which can include one shared interest word (`segment`); never a phone key | "Show me more" | With the ad | The advertiser (`GET /v1/campaigns/:id/videos`) | Not personal; a child's interests never make one (C3) |
+| Scan page (`GET /v1/public/experience/...`, not stored) | to anyone with the code: the ad, the bottle's story (printed when, at which machine or "home delivery in <city>", how many scans and people), the giving line; to the phone itself: its own key, coupon, privacy choices | Showing the ad | `no-store` | Whoever holds the bottle | Nothing about the person the bottle was made for (C5) |
 | `ad_preferences`, `research_panel`, `bottle_holders`, `giving_directions`, `value_arms` | person | Data environment, panel, gifts | With the person | Team reports | Both (books ones keyed to a random code) |
 | `lottery_chances` | phone key, draw key (**now** fingerprint), prize, claim code | The prize game | Not purged by age | Team overview (no keys); public draw list (fingerprints) | Download yes; erase: key replaced |
 | `agent_arms` | phone key | Holdout tests for AI agents | Not purged by age | Agents' reports (counts) | Erase: key replaced |
@@ -89,6 +91,22 @@ Keep days are the US preset; EU/UK/Brazil and unknown places get the shorter str
 | P5 | MEDIUM | The prize game let anyone over the app's minimum age (13) play, despite its own `minAge` (18); it could be turned on without official rules or a "No purchase necessary" statement. | The chance route checks `minAge` against the birth year; `checkLottery` requires an https rules link and the words "No purchase necessary". | `privacy-data` |
 | P6 | MEDIUM | No notice of financial incentive with the points for Full (California). | `financialIncentiveNotice` returned with the level wherever Full pays. | `privacy-data` |
 | P7 | LOW | Erasing an account left its authenticator secret and recovery codes; gift cards kept the phone key; expired sign-in codes, challenges and old sessions were never purged. | Deleted / re-keyed on erase; purged daily (codes and challenges after 7 days, ended sessions after a year). | `privacy-data` |
+
+### Core slice 3 review (scan, AR and video; October 2026, branch `c-ar`)
+
+What a scan shows, to whom, and what it lets anyone learn about the person a bottle was made for. All in
+`test/core-experience.test.ts`, which runs the loop end to end in the pilot (`FW_FEATURES=pilot`): a bottle printed
+for one person, its code scanned, the page, AR, what they do, what's billed; a stranger with the same bottle; an ad
+edited or paused while its bottles are out; "Show me more" with no video model.
+
+| # | Severity | Finding | Fix |
+|---|---|---|---|
+| C1 | HIGH | An advertiser's edit to an approved ad's page showed on bottles already out before content review (and minted coupons from it). | `ExperienceService.open`: only approved pages; until then the owner's simple card, unbilled. |
+| C2 | HIGH | "Show me more" kept replaying videos made from the ad's old words (an old price) after it changed. | Videos carry a fingerprint of what they were made from (`videos.content`). |
+| C3 | HIGH | A person known to be under the minimum age still had their interests pick their scan page, their videos (and the AI prompts behind them) and the ads printed on their own bottles. | `mayPersonalize` (age on file) gates every use of interests: `ExperienceService`, `AccountsService.audienceFor`. |
+| C4 | MEDIUM | Partners' plug-ins received the person's interests on every scan. | Never sent (`remotePlugin`). |
+| C5 | MEDIUM | A home-delivery bottle named its neighbourhood (a ~2 km area round the person's home) to whoever held it: scan page, receipt, public bottle page, "why". | `publicPlace`: "Home delivery in <city>". |
+| C6 | MEDIUM | One person's scan page (their coupon, phone key, choices) could be cached. | `cache-control: private, no-store`. |
 
 Existing tests changed because they encoded the old behaviour: `test/console.test.ts`, `test/wallet.test.ts`,
 `test/review-money.test.ts`, `test/review2-money.test.ts`, `test/review3-money.test.ts` (their owners and finance
@@ -153,6 +171,7 @@ Status: **Code** = done and tested; **Partly** = done with a gap noted; **Lawyer
 |---|---|---|
 | Age gate | Code | Birthday asked (`/age`); an under-age answer keeps only "not old enough"; a known adult can only be changed from an account. |
 | No profiling of known children | Code | No details, interactions (P4), rewards or prize game. |
+| No personalized advertising to known children | Code | Their interests never pick their scan page, their videos, or the ads on their own bottles, whatever they turned on (C3). **Lawyer:** see L-12 for ads a child may still see (alcohol). |
 | Actual knowledge from other signals | Lawyer | The scan page itself isn't age-gated (a free bottle is never gated). Is the service "directed to children"? |
 
 ### Sweepstakes (the prize game)
@@ -194,8 +213,26 @@ Status: **Code** = done and tested; **Partly** = done with a gap noted; **Lawyer
 - **L-9** Retention for billing tables not purged by age (`clicks`, `coupon_codes`, `viewer_advertisers`,
   `video_seen`, `lottery_chances`, `agent_arms`, `security_events`): set keep periods or confirm "with the books".
 - **L-10** Breach-notification plan and the 30-day session length for approvers.
+- **L-11** Lite says "counted, not profiled", but a person's own "personalized offers" yes still lets their shared
+  interests pick their scan page and video at any level, and every level keeps which advertisers a phone has met
+  (`viewer_advertisers`, for "first order?" offers and new/returning ads) and which video it was shown (`video_seen`).
+  Should Lite (or GPC / do-not-sell) turn these off, or are they "needed to run things"?
+- **L-12** Ads with age limits on their own scan pages (the sample alcohol ad says "21+ only"): nothing checks the
+  scanner's age, and a bottle can reach a child. Rules for alcohol (and similar) advertising on a free, ungated bottle.
+- **L-13** Interest words in AI prompts: the personalizer (Claude) and the video writer get a signed-in adult's shared
+  interests; Veo gets one interest word per kind of moment (pooled, never per person). Is that covered by processor
+  terms, and should "Show me more" footage ever be made from interests at all?
+- **L-14** Partners' plug-ins still get a stable per-partner pseudonymous id for each phone (a hash of its key) with
+  every scan. Is that "sharing" a persistent identifier (CCPA cross-context advertising) for people who said do not
+  sell or share, and should it be left out for them?
+- **L-15** Custom bottles: the sender's message and photos (often a name, sometimes a child's) open for anyone who
+  holds the bottle. Is a notice to the sender enough?
 
 ## 6. What this review could not check
+
+Core slice 3: real phones (AR on iPhone Quick Look and Android Scene Viewer, a phone without AR, a slow network, a
+missing model file), real CDN caching behaviour, and Veo itself; see `docs/REVIEW-LOG.md` for what each would prove.
+
 
 Real phones and browsers sending GPC, real geolocation, the law itself (every **Lawyer** line), printed labels, and
 whether advertisers ever receive anything beyond counts outside the code paths read here (PLAUSIBLE: proven by a
