@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomBytes } from 'node:crypto';
+import { BOUGHT_KEEP_DAYS } from '../households/service';
 import type { SqlClient } from '../../db/client';
 import type { Platform } from '../../platform';
 import type { InteractionService, Interaction } from '../interactions/service';
@@ -534,6 +535,8 @@ export class DataService {
         designs: userIds.length ? await q(`select id, status, data, messages, created_at from custom_designs where company_id = $2 and user_id = any($1) order by created_at desc limit 50`, [userIds, companyId]).catch(() => []) : [],
         lottery: await q(`select via, status, prize, created_at from lottery_chances where company_id = $1 and viewer_key = any($2) order by created_at desc limit 100`, [companyId, viewers]),
       },
+      // What a data company told us about their home (only for their own delivery addresses).
+      household: userIds.length && this.houseData ? await this.houseData(companyId, userIds) : [],
       // Everything from the wallet, the games, offers and what they told us, under all their phones and accounts.
       ...(await this.more(companyId, [...new Set([...viewers, ...userIds.map((u) => `user:${u}`)])].filter(Boolean))),
       asAdvertiser: advertiserIds.length ? {
@@ -589,6 +592,7 @@ export class DataService {
       linksOpened: await q(`select advertiser_id, campaign_id, url, created_at from clicks where company_id = $1 and viewer_key = any($2) order by created_at desc limit 500`, [companyId, keys]),
       coupons: await q(`select code, advertiser_id, headline, created_at, redeemed_at from coupon_codes where company_id = $1 and viewer_key = any($2) order by created_at desc limit 200`, [companyId, keys]),
       giftCards: await q(`select product, cents, status, at from wallet_giftcards where company_id = $1 and subject = any($2) order by at desc limit 200`, [companyId, keys]),
+      newsSources: await q(`select sources, at from news_source_prefs where company_id = $1 and subject = any($2)`, [companyId, keys]),
     };
   }
 
@@ -598,6 +602,10 @@ export class DataService {
   removeAssets?: (companyId: string, ids: string[]) => Promise<number>;
   /** Takes a person's address off their delivery boxes. Set by the app. */
   eraseAddresses?: (companyId: string, userIds: string[]) => Promise<number>;
+  /** Household data held about these people's delivery addresses (bought data about their house). Set by the app. */
+  houseData?: (companyId: string, userIds: string[]) => Promise<unknown[]>;
+  /** Deletes household data about these people's addresses, and keeps it from coming back in a later import. Set by the app. */
+  eraseHouses?: (companyId: string, userIds: string[]) => Promise<number>;
 
   /**
    * Erase a person's data: everything kept about them, everything they uploaded or saved, their address, their cards,
@@ -644,6 +652,8 @@ export class DataService {
       // The account's own phone key changes, so nothing still kept under the old one (a printed bottle, say) leads back to it.
       for (const id of users) await run('phone key', `update users set viewer_key = $3 where company_id = $1 and id = $2`, [companyId, id, `vk_${randomBytes(12).toString('base64url')}`]);
       if (this.eraseAddresses) counts['delivery boxes'] = await this.eraseAddresses(companyId, users);
+      // Before their address is cleared below: what we bought about their home goes, and stays out of later imports.
+      if (this.eraseHouses) counts['household data'] = await this.eraseHouses(companyId, users);
       await run('saved', `delete from saved_items where company_id = $1 and user_id = any($2)`, [companyId, users]);
       await run('designs', `delete from custom_designs where company_id = $1 and user_id = any($2)`, [companyId, users]);
       // A custom order's proof stays (it's what was paid for), without the names and pictures on it.
@@ -688,6 +698,7 @@ export class DataService {
     await run('choice screens', `delete from choice_sets where company_id = $1 and person = any($2)`, [companyId, keys]);
     await run('videos seen', `delete from video_seen where viewer_key = any($1) and campaign_id in (select id from campaigns where company_id = $2)`, [keys, companyId]);
     await run('ad preferences', `delete from ad_preferences where company_id = $1 and person = any($2)`, [companyId, keys]);
+    await run('news sources', `delete from news_source_prefs where company_id = $1 and subject = any($2)`, [companyId, keys]);
     // Points and credit stay in the books (and in their published seals) under a random wallet id; only the link from
     // this person to that id goes, so nothing in the journal changes.
     await run('wallet link', `delete from wallet_holders where company_id = $1 and subject = any($2)`, [companyId, keys]);
@@ -780,6 +791,10 @@ export class DataService {
       await this.db.query(`update activity set device = null where company_id = $1 and at < $2 and device is not null`, [c.id, before(short('device'))]);
       // Exact positions go after the shortest keep any law allows (the company's, or the EU's if shorter).
       await del(`delete from precise_locations where company_id = $1 and at < $2`, short('preciseLocation'));
+      // Readers' error reports on news stories (free text, no name): a year. Bought household data: 13 months after it
+      // was imported (a fresh import brings it up to date).
+      await del(`delete from news_error_reports where company_id = $1 and at < $2`, 365);
+      await del(`delete from household_attributes where company_id = $1 and origin = 'bought' and imported_at < $2`, BOUGHT_KEEP_DAYS);
     }
     // Network fingerprints on rewards are only needed for the day's limits: gone after two days.
     await this.db.query(`update wallet_tx set source = null where source is not null and at < $1`, [new Date(this.clock().getTime() - 2 * 86_400_000).toISOString()]).catch(() => {});

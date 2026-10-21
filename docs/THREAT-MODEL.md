@@ -286,7 +286,8 @@ whether the handler refuses service keys (`yes`), only for some changes, or not 
 route's own OpenAPI summary.
 
 **Areas switched off (`FW_FEATURES`).** A host can take whole areas out (`src/runtime/features.ts`; the pilot preset
-takes out 42 of these routes). Their routes are never registered, so they answer 404 to everyone and the walk below
+takes out 56 of these routes, 14 of them news; news is also off by default everywhere until a host sets
+`FW_FEATURES_ON=news`). Their routes are never registered, so they answer 404 to everyone and the walk below
 only covers what's left; `test/access-routes.test.ts` checks that with the pilot preset exactly the core rows are
 registered, the rest answer 404 even to the platform's admin key, their jobs aren't scheduled, and their launch steps
 can't be proposed.
@@ -316,7 +317,7 @@ scan token), `GET /v/:code`, `/V/:code` (coupon check redirect), `GET /go/:token
 the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/console`, `/developers`, `/books`,
 `/play`, `/preview/scan`), `/static/*`, `/models/builtin/*`, `/assets/*`.
 
-**Every route (358):**
+**Every route (393):**
 
 | # | Route | Scope | Person | Other check | Docs |
 |---|---|---|---|---|---|
@@ -704,6 +705,33 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 370 | `POST /v1/ads/campaigns/:id/stop` | [invoices, admin] | yes | owner or finance, signed in with the second step (an approval route); never an API or advertiser key | OK (one refund per ad, a DB rule; refused while bottles with it are printing) |
 | 371 | `GET /v1/ads/billing` | campaigns | no | the caller's own advertiser | OK (only its own orders) |
 | 372 | `POST /v1/ads/fees/charge` | invoices | no | the company's staff (no advertiser or machine key) | OK (charges only fees a person switched on, each advertiser's own card) |
+| 373 | `GET /v1/news/topics` | admin | no | team only; news area (FW_FEATURES_ON=news); company switch *FreeWater News* | OK (topics, whether each may print, the newest story) |
+| 374 | `POST /v1/news/topics` | admin | no | team only; news area | OK (a subject only: no numbers, claim words or sentence punctuation; prints only once a person approves) |
+| 375 | `POST /v1/news/topics/:id/approve` | admin | yes | team only; news area | OK (a person approves each topic before it can print; SWITCHES “News”) |
+| 376 | `POST /v1/news/topics/:id/retire` | admin | no | team only; news area | OK (turning off is immediate; bottles out keep opening the newest story) |
+| 377 | `POST /v1/news/topics/:id/reports` | admin | no | team only; news area | OK (a story needs two or more outlets; every story checked for copied wording, links and outlets’ names) |
+| 378 | `POST /v1/news/topics/:id/corrections` | admin | yes | team only; news area | OK (logged, append-only, a new version; a person corrects) |
+| 379 | `GET /v1/news/errors` | admin | no | team only; news area | OK (only what readers wrote, never who they are) |
+| 380 | `GET /v1/public/news/:companyId/topics/:topicId` | public | — | news area; 404 news_off until a person turns on *FreeWater News* for the company | OK (public by design: the newest story; `no-store`) |
+| 381 | `POST /v1/public/news/:companyId/topics/:topicId/errors` | public | — | news area; news.on | OK (stores the text only; no viewer key, IP or account) |
+| 382 | `GET /v1/public/news/:companyId/sources` | public | — | news area; *Readers choose their sources* | OK (the phone’s own stated choice, by its key; `no-store`) |
+| 383 | `POST /v1/public/news/:companyId/sources` | public | — | news area; *Readers choose their sources* | OK (the phone key is the proof, as for ad preferences; only listed sources) |
+| 384 | `GET /v1/me/news-sources` | me | yes | news area; *Readers choose their sources* | OK (stored under the account’s own phone key) |
+| 385 | `POST /v1/me/news-sources` | me | yes | news area; *Readers choose their sources* | OK |
+| 386 | `POST /v1/campaigns/:id/news-adjacency` | campaigns | no | an advertiser key only its own; never a machine; news area | OK (keeps the ad off bottles that carry news; copied to its offered filler) |
+| 387 | `GET /v1/fillers` | admin | no | team only; *Approved fillers* | OK |
+| 388 | `POST /v1/fillers` | admin | no | team only; *Approved fillers* | OK (the company’s own or a charity’s message; prints only once a person approves) |
+| 389 | `POST /v1/fillers/:id/approve` | admin | yes | team only; *Approved fillers* | OK (a person approves every filler) |
+| 390 | `POST /v1/fillers/:id/retire` | admin | no | team only; *Approved fillers* | OK (turning off is immediate) |
+| 391 | `POST /v1/campaigns/:id/filler-offer` | campaigns | no | an advertiser key only its own; never a machine; *Advertisers offer ads for unsold spots* | OK (a free copy for unsold spots, never billed; the company approves it first) |
+| 392 | `GET /v1/areas` | admin | no | team only; *Area statistics* (starts off) | OK (area statistics; no person in them; sample values say so) |
+| 393 | `POST /v1/areas` | admin | no | team only; *Area statistics* (starts off) | OK (each row needs its source and date; only known area attributes) |
+| 394 | `POST /v1/households/imports` | admin | yes | team only; *Bought household data* (starts off) | OK (buying data is a person’s decision; sensitive kinds and anything off the list refused; COMPLIANCE “Household data”) |
+| 395 | `GET /v1/households/imports` | admin | no | team only | OK |
+| 396 | `DELETE /v1/households/imports/:id` | admin | no | team only | OK (deleting is immediate) |
+| 397 | `DELETE /v1/households/sources/:source` | admin | no | team only | OK (deleting is immediate) |
+| 398 | `GET /v1/households/audience` | admin | no | team only; *Ads aimed at houses* (starts off) | OK (for checking; advertisers never see a house’s audience; `no-store`) |
+| 399 | `POST /v1/public/households/:companyId/opt-out` | public | — | — | OK (public by design: a house says no without an account; the same answer whether or not anything was held) |
 
 ---
 

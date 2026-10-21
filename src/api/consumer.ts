@@ -1,4 +1,5 @@
 import { placementShare } from '../modules/ads/layouts';
+import { houseAd } from '../modules/fillers/house';
 import { createHash } from 'node:crypto';
 import type { App } from '../app';
 import type { ApiKey } from '../db/store';
@@ -69,7 +70,7 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     const own = [...u.placements].filter((p) => !p.isHouse).sort((a, b) => placementShare(a) - placementShare(b))[0];
     const eligible = [...platform.campaigns.values()].filter((c) => isEligible(c, company, u.locationId)).sort((a, b) => a.id.localeCompare(b.id));
     const pick = own ? platform.campaigns.get(own.campaignId) : eligible[Math.floor(platform.random() * eligible.length)];
-    const c = pick ?? [...platform.campaigns.values()].find((x) => x.isHouse && x.companyId === company.id);
+    const c = pick ?? houseAd(platform.campaigns.values(), company.id);
     if (!c) return null;
     return { advertiser: c.advertiserName, campaignId: c.id, art: `<svg xmlns="http://www.w3.org/2000/svg" width="360" height="440" viewBox="0 0 360 440">${c.creative.svg(360, 440)}</svg>`, onThisBottle: !!own, url: own ? `/s/${u.id}/${own.slotIndex}` : null, target: own ? `s:${u.id}:${own.slotIndex}` : null };
   };

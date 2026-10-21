@@ -4,6 +4,7 @@ import type { AdEngine, FillRequest, FillResult, PrintAudience } from './contrac
 import { canAfford, floorPrice, priceFor } from './budget';
 import { flatPricing, prepaidModel } from './billing';
 import { AuctionStats, momentAt, nextRival, paced, piecePrice, rankBidders, rollDay, secondPrice, type AuctionMoment, type Bidder } from './auction';
+import { houseAd } from '../fillers/house';
 
 /**
  * FreeWater's default ad engine.
@@ -18,7 +19,7 @@ export const freewaterAdEngine: AdEngine = {
   fill(req: FillRequest): FillResult {
     const { company, product, location, random } = req;
     const factor = product.priceFactor ?? 1;
-    const house = req.campaigns.find((c) => c.isHouse && c.companyId === company.id);
+    const house = houseAd(req.campaigns, company.id);
     const moment = momentFor(req);
     const capped = (c: Campaign) => !!req.frequency && (req.frequency.counts.get(c.id) ?? 0) >= req.frequency.max;
     const tooOften = (c: Campaign) => c.buy.type === 'bid' && !!c.buy.frequencyCap && (req.audience?.campaignsToday?.get(c.id) ?? 0) >= c.buy.frequencyCap;
@@ -79,7 +80,7 @@ export const freewaterAdEngine: AdEngine = {
 export const houseOnlyAdEngine: AdEngine = {
   name: 'house-only',
   fill({ company, campaigns }) {
-    const house = campaigns.find((c) => c.isHouse && c.companyId === company.id);
+    const house = houseAd(campaigns, company.id);
     if (!house) throw new Error(`Company ${company.id} has no house ad.`);
     return { layout: [1], placements: [housePlacement(0, 1, FULL, house)] };
   },

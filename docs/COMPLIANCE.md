@@ -78,6 +78,43 @@ Keep days are the US preset; EU/UK/Brazil and unknown places get the shorter str
 | `subscriptions`, `route_runs`, `packs` | address, lat/lng, notes | Deliveries | With the subscription | Ops, drivers | Address erased |
 | `custom_designs`, `proofs`, `custom_order_proofs`, `saved_items`, `assets` | designs, names on labels, uploads | Custom bottles | With the account | The person; team for printing | Both (proofs kept without names/pictures) |
 
+### News, fillers and houses that haven't signed up (branch `p-news`; all off until a person turns them on)
+
+| Table | Personal data | Why | Kept | Who sees it | Download / erase |
+|---|---|---|---|---|---|
+| `news_topics`, `news_reports`, `news_stories`, `news_corrections` | Only staff names (`proposed_by`, `approved_by`, `by_person`) | FreeWater News: the topic, what outlets reported, each version of the story, corrections (append-only) | With the topic (stories and corrections are never edited) | Team; stories are public by design | Not consumer data |
+| `news_error_reports` | Free text a reader wrote; **no** phone key, account, IP or name column (tested) | "Report an error" | 365 d (`purge`) | Team (`GET /v1/news/errors`) | Can't be tied to a person, so not in a download |
+| `news_source_prefs` | Phone key or account's phone key, the outlets the person chose | Writing their stories in the style of their first pick (their stated choice, never inferred) | With the person | No one but the person | Both (tested) |
+| `fillers` (campaign rows with `filler`) | Staff names who proposed and approved | Approved pieces for unsold spots | With the piece | Team | Not consumer data |
+| `area_attributes` | None (neighbourhood or census-block statistics; Austin rows are SAMPLE, labelled) | Choosing ads for an area | Until replaced | Team | Not personal |
+| `household_imports` | Staff name who imported | Which data company, what date, how much was refused | Until deleted by source | Team | Not consumer data |
+| `household_attributes` | **Street address** of a house (often of people who never signed up) + attributes from a closed list (size, income band, owner/renter, dwelling, years, interests), each with source, date, bought/first-party | Choosing ads for that house only; **never sold or passed on**; never shown to advertisers per house | **395 d after import** (`purge`); deleted at once by source or import, by a house's opt-out, or by a resident's erase | Team (`GET /v1/households/audience`, no-store) | A resident's download lists what we hold about their delivery address; erase deletes it and opts the house out (tested) |
+| `household_optouts` | A per-company **unsalted SHA-256 of the normalised address** (a pseudonym: addresses are guessable, so this is still personal data) | Keeping a house that said no out of every later import | Kept (it is the record of the "no") | No one (no route shows it) | Not deletable by the house itself; see L-21 |
+
+#### Household data: the formats (for the data company the founder picks)
+
+`POST /v1/households/imports` (a person signed in; *Bought household data* on), body
+`{ source, sourceDate: "YYYY-MM-DD", origin?: "bought" | "first_party", format: "csv" | "json", data }`:
+
+- **CSV**: a header row; `address` (required), `block_id` (optional census block group GEOID), then one column per
+  attribute. **JSON**: `[{ "address": "...", "blockId"?: "...", "attributes": { "household_size": 3, ... } }]`.
+- Attributes (a closed list, `src/modules/households/vocabulary.ts`): `household_size` 1–12, `income_band`
+  (`under_35k`, `35k_75k`, `75k_150k`, `150k_plus`), `homeowner` (`owner`/`renter`), `dwelling_type`,
+  `years_at_address` 0–80, `interest_<cooking|coffee|fitness|…>` = `yes`. Anything else is refused and counted
+  (`sensitive`, `unknown_attribute`, `bad_value`, `house_said_no`); nothing sensitive is stored, even refused.
+- Every attribute is kept with the import's source, date and bought/first-party flag. Delete a whole source with
+  `DELETE /v1/households/sources/:source`, one import with `DELETE /v1/households/imports/:id`.
+
+Area statistics: `POST /v1/areas` with `{ areas: [{ areaId, kind: block_group|tract|zip|route|neighbourhood, name,
+attributes: { households, median_household_size, median_income_band, share_families_with_children, homeowner_share },
+source, asOf, sample?, lat?, lng? }] }`. Real data: the Census Bureau's ACS 5-year estimates by block group for
+Travis County (tables B11001, B25010, B19013, B11003, B25003), one row per GEOID with the release as `source`.
+
+The audience for one house, for the route-buying engine: `app.households.audienceForHouse(companyId, { address,
+routeId?, lat?, lng? })` returns `HouseAudience` (`src/modules/households/service.ts`): first-party (residents, as
+their choices allow) over bought over area, each value saying where it came from; `optedOut`, `childAtHome`; empty
+when the company's switches are off. For choosing ads only; never shown to advertisers or passed on.
+
 ## 2. Findings fixed in this review
 
 | # | Severity | Finding | Fix | Test |
@@ -112,6 +149,17 @@ Existing tests changed because they encoded the old behaviour: `test/console.tes
 `test/review-money.test.ts`, `test/review2-money.test.ts`, `test/review3-money.test.ts` (their owners and finance
 people now sign in with the second step before approving) and `test/lottery.test.ts` (the draw key names the phone
 by its fingerprint).
+
+### News, fillers and household data (October 2026, branch `p-news`)
+
+Built switched off. Each rule's test was shown failing with its code taken out (`docs/REVIEW-LOG.md`).
+
+| # | Severity | Finding | Fix | Test |
+|---|---|---|---|---|
+| N1 | HIGH | The Features page's News switches (`news_cards`, `news_sources`, `ai_news_writer`) started **on** under a News that was off: turning News on (one click) would print topics, use readers' sources and call the AI at once, and switching AI or Ads off and on again could not put them back (refused "turn on News first"). | They start off for every company; each is a person's own step. `news_cards` also needs *Approved fillers* (the engine only fills unsold spots when that's on, so the dependency is now said, not hidden). | `test/news.test.ts` ("still off", "with News on but … still off"), `test/features-registry.test.ts` |
+| N2 | MEDIUM | An advertiser's offered filler ad printed whenever *Approved fillers* was on: the *Advertisers offer ads for unsold spots* switch was registered but never checked. | `FillerService.mayPrint` checks `filler_offers` per company. | `test/fillers.test.ts` (shown failing without the check) |
+| N3 | LOW | Test gap: removing the *Ads aimed at houses* check left every test passing, though residents' shared interests would then reach a house's audience with the switch off. | Test added: with the switch off, a claimed house with consent gives `strongest: none`. | `test/household-data.test.ts` |
+| N4 | LOW | `features/service.ts` had an uncommitted change (an already-off switch no longer turned off what needs it) made only to paper over N1. | Reverted: the shared file is unchanged; N1 fixed at the source. | `test/features-registry.test.ts` |
 
 ## 3. The second sign-in step for approvers (R4): how it works
 
@@ -198,6 +246,20 @@ Status: **Code** = done and tested; **Partly** = done with a gap noted; **Lawyer
 | Personal data in logs | Code | Request logs path-only; activity bodies masked; phone keys fingerprinted. |
 | Breach notification process | Lawyer | Not in code. |
 
+### Texas (Austin): TDPSA, data brokers, doors (news, fillers and household data)
+
+| Item | Status | Notes |
+|---|---|---|
+| The law of where the house is | Code | Houses in Austin get Texas rules through `jurisdiction.ts` when a resident is known; a house with no account has no person to place. **Lawyer:** L-17. |
+| Targeted-ad opt-out without an account | Code | `POST /v1/public/households/:companyId/opt-out` (address only; same answer whether or not we held anything); a resident's do-not-sell or GPC keeps the whole house out. **Lawyer:** L-17 (is an address-only form enough; must it be on the bottle?). |
+| Sensitive data never in bought-data targeting | Code | Closed attribute list + `SENSITIVE` refuses health, religion, ethnicity, sexuality, immigration, children, politics, precise location by name and by value; a child at home leaves only area statistics. |
+| Bought data never sold onward | Code | No route returns it to anyone but the team; advertisers never see a house's audience (403, tested). **Lawyer:** L-18. |
+| Bought data deletable by source; dated | Code | `DELETE /v1/households/sources/:source`, per-import delete, 395-day purge. |
+| AI-written news | Partly | Two or more outlets, own words (checked for copied wording, links, outlets' names), cited and linked, corrections logged as new versions, a person approves each topic, the bottle prints only a topic. **Lawyer:** L-19. |
+| Household-level scan tracking notice | Lawyer | Scans of a bottle left at a door are counted per bottle and phone, not per household; area and bought data choose the ads. L-20. |
+| Children taking bottles | Partly | A known child at home stops bought and first-party data; nothing stops a child picking up a bottle left at a door. L-22. |
+| Leaving items at doors (Austin) | Lawyer | L-16. |
+
 ## 5. Open items for the lawyer (summary)
 
 - **L-1** Privacy policy page and the wording of every notice (collection, levels, financial incentive).
@@ -228,6 +290,28 @@ Status: **Code** = done and tested; **Partly** = done with a gap noted; **Lawyer
 - **L-15** Custom bottles: the sender's message and photos (often a name, sometimes a child's) open for anyone who
   holds the bottle. Is a notice to the sender enough?
 
+- **L-16** Austin rules on leaving items at doors: does a bottle with ads left at a house that didn't sign up count
+  as a handbill or unsolicited advertising under Austin city code (no-solicitation signs, litter, door-hanger
+  rules)? Must we honour "no soliciting" signs, and how would drivers know?
+- **L-17** Texas Data Privacy and Security Act: is choosing ads for a house from bought data "targeted advertising"
+  or "profiling" for the people living there; is our address-only opt-out (no account, no verification) a valid
+  method, and must the bottle itself carry it; do we qualify for the small-business exemption (and note that the
+  exemption still forbids selling sensitive data without consent); universal opt-out signals (GPC) for a house.
+- **L-18** Buying household data: the contract with the data company (its notice and consent basis, no sensitive
+  data, our no-resale promise, deletion on request); Texas data-broker registration (the seller's, and whether we
+  become one); whether the unsalted address hash in `household_optouts` should be keyed.
+- **L-19** AI-written news: accuracy and liability (defamation, copyright and "hot news" from summarising other
+  outlets' facts), the corrections policy, the "Based on reporting by" credit and links, and whether
+  "FreeWater News" needs any disclosure that AI wrote it.
+- **L-20** Household-level scan tracking: what notice a household that never signed up needs that its bottle's
+  ads were chosen using data about the house, and that scans are counted (the "why am I seeing this" page explains
+  per bottle).
+- **L-21** A house's opt-out is kept forever as a hash of its address so later imports skip it: is that the right
+  balance, and how long should it last when the house changes hands?
+- **L-22** Children taking bottles left at doors: whether ad categories must be limited on undirected bottles
+  (alcohol is already a concern, L-12), and whether area statistics such as "share of families with children" may
+  choose ads at all.
+
 ## 6. What this review could not check
 
 Core slice 3: real phones (AR on iPhone Quick Look and Android Scene Viewer, a phone without AR, a slow network, a
@@ -237,3 +321,8 @@ missing model file), real CDN caching behaviour, and Veo itself; see `docs/REVIE
 Real phones and browsers sending GPC, real geolocation, the law itself (every **Lawyer** line), printed labels, and
 whether advertisers ever receive anything beyond counts outside the code paths read here (PLAUSIBLE: proven by a
 review of every advertiser-scope route's response for phone keys).
+
+News, fillers and household data (`p-news`): the law itself (L-16 to L-22), a real data company's file (the import
+was tested with CSV and JSON stand-ins), real census files (the Austin areas are made up and labelled SAMPLE), a
+real Claude model writing stories (the tests use a stand-in writer and a mocked API call), and printed labels with a
+news topic.

@@ -123,6 +123,7 @@ export function dataRoutes(app: App, route: (r: RouteDef) => void) {
     const t = camp?.targeting ?? {};
     const reasons: string[] = [];
     if (unit.kind === 'custom') reasons.push('This is someone’s own custom bottle: they designed what’s on it.');
+    else if (camp?.filler && pl?.isHouse) reasons.push(camp.filler.kind === 'news' ? 'Nobody bought this spot, so the company put a news topic here. Its code always opens the newest story.' : camp.filler.kind === 'advertiser' ? `Nobody bought this spot. ${camp.advertiserName} offered this ad free for spots like it, and the company approved it; nothing about you chose it.` : camp.filler.kind === 'charity' ? 'Nobody bought this spot, so the company gave it to a charity’s message.' : 'This is the company’s own message: no advertiser bought this spot.');
     else if (!camp || pl?.isHouse) reasons.push('This is the company’s own message: no advertiser bought this spot.');
     else {
       reasons.push(`${camp.advertiserName} paid for this spot on the bottle, so the bottle could be free.`);

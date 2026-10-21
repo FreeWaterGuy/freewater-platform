@@ -4,8 +4,10 @@
  *
  *   FW_FEATURES=pilot                       the pilot preset: only the core loop (see PILOT below)
  *   FW_FEATURES_OFF=lottery,offers           switch these areas off (on top of the preset, if any)
+ *   FW_FEATURES_ON=news                      switch on an area that starts off (OPT_IN below), even in the pilot
  *
- * Unset, everything is on, so tests and demos are unchanged. An area that's off is gone, not refused: its routes are
+ * Unset, everything is on except the areas in OPT_IN (news), which are off until the host names them in
+ * FW_FEATURES_ON. FW_FEATURES_OFF always wins. An area that's off is gone, not refused: its routes are
  * never registered (they answer 404 like any address that doesn't exist and aren't in /v1/openapi.json), its
  * background jobs aren't scheduled, the irreversible steps that would switch it on can't be proposed or run, and the
  * screens hide its entry points (they read GET /v1/public/features).
@@ -14,7 +16,7 @@
  * It only ever takes things away; every money and blockchain switch inside an area that's on still starts off.
  */
 
-export const featureNames = ['token', 'token_conversion', 'withdrawals', 'gift_cards', 'partners', 'agents_fund', 'network', 'lottery', 'video_generation', 'offers', 'games'] as const;
+export const featureNames = ['token', 'token_conversion', 'withdrawals', 'gift_cards', 'partners', 'agents_fund', 'network', 'lottery', 'video_generation', 'offers', 'games', 'news'] as const;
 export type Feature = (typeof featureNames)[number];
 
 export interface FeatureInfo {
@@ -36,7 +38,14 @@ export const FEATURES: Record<Feature, FeatureInfo> = {
   video_generation: { what: 'Live-action and animated footage made by Veo for “Show me more”. Motion videos, made on the spot, stay.' },
   offers: { what: 'Brand offers (claims, receipts, payouts), barcode lookup for them, and value-back tests on offers.' },
   games: { what: 'The games for points (Play), their catalog, winners and photos.' },
+  news: { what: 'FreeWater News on unsold spots: news topics, the stories behind their codes, people’s news sources, error reports. Starts off everywhere; a company also turns it on for itself (news.on).' },
 };
+
+/**
+ * Areas that start off, even with no settings at all: a host switches them on by naming them in FW_FEATURES_ON. They
+ * are rolled out slowly, with testing (news: the founder's "start out toggled off").
+ */
+export const OPT_IN: readonly Feature[] = ['news'];
 
 /**
  * The pilot: bottles, ads and printing; scans, AR, attribution and coupons; the app (free bottle, points shown in the
@@ -48,7 +57,7 @@ export const FEATURES: Record<Feature, FeatureInfo> = {
  */
 export const PRESETS: Record<string, Feature[]> = {
   all: [],
-  pilot: ['token', 'token_conversion', 'withdrawals', 'gift_cards', 'partners', 'agents_fund', 'network', 'lottery', 'video_generation', 'offers'],
+  pilot: ['token', 'token_conversion', 'withdrawals', 'gift_cards', 'partners', 'agents_fund', 'network', 'lottery', 'video_generation', 'offers', 'news'],
 };
 
 /** Routes that belong to an area, as "METHOD /url" exactly as registered. A route not listed is core: always on. */
@@ -65,6 +74,9 @@ export const ROUTE_FEATURES: Record<Exclude<Feature, 'token_conversion' | 'video
     'GET /v1/environment/experiments', 'POST /v1/environment/experiments', 'POST /v1/environment/experiments/:id/decide'],
   games: ['GET /v1/public/games/:companyId/status', 'POST /v1/public/games/:companyId/join', 'POST /v1/public/games/:companyId/leave', 'POST /v1/public/games/:companyId/next', 'POST /v1/public/games/:companyId/answer', 'POST /v1/public/games/:companyId/feedback',
     'POST /v1/public/games/:companyId/feedback/video', 'POST /v1/public/games/:companyId/prompt', 'GET /v1/games/catalog', 'POST /v1/games/catalog/photos', 'POST /v1/games/catalog/:itemId/photo', 'GET /v1/games/winners', 'GET /v1/games/launches', 'POST /v1/games/come-true', 'GET /v1/games/report'],
+  news: ['GET /v1/news/topics', 'POST /v1/news/topics', 'POST /v1/news/topics/:id/approve', 'POST /v1/news/topics/:id/retire', 'POST /v1/news/topics/:id/reports', 'POST /v1/news/topics/:id/corrections', 'GET /v1/news/errors',
+    'GET /v1/public/news/:companyId/topics/:topicId', 'POST /v1/public/news/:companyId/topics/:topicId/errors', 'GET /v1/public/news/:companyId/sources', 'POST /v1/public/news/:companyId/sources', 'GET /v1/me/news-sources', 'POST /v1/me/news-sources',
+    'POST /v1/campaigns/:id/news-adjacency'],
 };
 
 /** Background jobs that belong to an area (by name, src/server/main.ts). A job not listed is core. */
@@ -87,8 +99,13 @@ export const featureOfRoute = (method: string, url: string): Feature | null => r
 
 export class Features {
   readonly off: ReadonlySet<Feature>;
-  constructor(off: Iterable<Feature> = [], readonly preset: string | null = null) {
+  /** `on`: the opt-in areas the host switched on (FW_FEATURES_ON). Any other opt-in area is off. */
+  constructor(off: Iterable<Feature> = [], readonly preset: string | null = null, on: Iterable<Feature> = []) {
     const s = new Set(off);
+    const optedIn = new Set(on);
+    for (const f of OPT_IN) if (!optedIn.has(f)) s.add(f);
+    // An opt-in area the host named comes on over the preset (that's how it is tried in the pilot); FW_FEATURES_OFF
+    // still wins, because it's passed in `off` by name and never cleared here.
     // An area is off when one it needs is off (no conversion or withdrawals without the token).
     for (const f of featureNames) if (FEATURES[f].needs?.some((n) => s.has(n))) s.add(f);
     this.off = s;
@@ -118,5 +135,11 @@ export function featuresFrom(env: NodeJS.ProcessEnv = process.env): { features: 
   const unknown = names.filter((n) => !(n in FEATURES));
   if (unknown.length) problems.push(`FW_FEATURES_OFF has names that aren't areas: ${unknown.join(', ')}. The areas are: ${featureNames.join(', ')}.`);
   off.push(...(names.filter((n) => n in FEATURES) as Feature[]));
-  return { features: new Features(off, presetName && presetName in PRESETS && presetName !== 'all' ? presetName : null), errors: production ? problems : [], warnings: production ? [] : problems };
+  const onNames = (env.FW_FEATURES_ON ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const notOptIn = onNames.filter((n) => !(OPT_IN as string[]).includes(n));
+  if (notOptIn.length) problems.push(`FW_FEATURES_ON only switches on areas that start off (${OPT_IN.join(', ')}); it has: ${notOptIn.join(', ')}.`);
+  const on = onNames.filter((n) => (OPT_IN as string[]).includes(n)) as Feature[];
+  // The preset takes an opt-in area away like any other; naming it in FW_FEATURES_ON brings it back, FW_FEATURES_OFF never.
+  const offFinal = off.filter((f) => !(on.includes(f) && !names.includes(f)));
+  return { features: new Features(offFinal, presetName && presetName in PRESETS && presetName !== 'all' ? presetName : null, on), errors: production ? problems : [], warnings: production ? [] : problems };
 }

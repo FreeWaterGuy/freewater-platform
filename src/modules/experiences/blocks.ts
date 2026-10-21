@@ -43,7 +43,12 @@ export type Block =
   /** Pass it on: share this bottle's page. Added by the platform. */
   | { type: 'share'; title: string }
   /** "Show me more": more only if the person asks. Added by the platform. */
-  | { type: 'more'; label: string };
+  | { type: 'more'; label: string }
+  /**
+   * A FreeWater News story (src/modules/news): only the company's own news pieces make one. The page adds "Report an
+   * error" and the reader's choice of sources.
+   */
+  | { type: 'news'; companyId: string; topicId: string; brand: string; topic: string; headline: string; paragraphs: string[]; byline: string; basedOn: { name: string; url: string }[]; corrections: { at: string; note: string }[]; version: number; style: string };
 
 export type ArMode = 'world' | 'bottle' | 'label';
 export type ArPlacement = 'top' | 'front' | 'orbit' | 'beside';
@@ -143,6 +148,12 @@ export function checkBlocks(blocks: unknown): string | null {
         if (b.cta !== undefined && (!str(b.cta?.label, 40) || !safeUrl(b.cta?.url))) return `${p}.cta needs a label and an https url`;
         break;
       }
+      case 'news':
+        if (!str(b.companyId, 60) || !str(b.topicId, 60) || !str(b.brand, 80) || !str(b.topic, 80) || !str(b.headline, 200) || !str(b.byline, 200)) return `${p} needs its brand, topic, headline and byline`;
+        if (!Array.isArray(b.paragraphs) || !b.paragraphs.length || b.paragraphs.length > 8 || !b.paragraphs.every((x: unknown) => str(x, 1000))) return `${p}.paragraphs must be 1 to 8 paragraphs`;
+        if (!Array.isArray(b.basedOn) || b.basedOn.length < 2 || b.basedOn.length > 8 || !b.basedOn.every((s: any) => str(s?.name, 120) && typeof s?.url === 'string' && /^https:\/\/[^\s"'<>]+$/.test(s.url))) return `${p}.basedOn must name and link 2 to 8 outlets`;
+        if (!Array.isArray(b.corrections) || b.corrections.length > 50 || !b.corrections.every((c: any) => str(c?.note, 500) && str(c?.at, 40))) return `${p}.corrections must be a list of notes`;
+        break;
       default: return `${p}.type "${String(b.type)}" is not a known block`;
     }
   }

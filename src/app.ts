@@ -93,6 +93,11 @@ import type { InstanceLease } from './runtime/lease';
 import { leaseCheckedClient } from './db/leaseChecked';
 import type { JobRunner } from './runtime/jobs';
 import { boxes, builtinCreatives, freewater, locations, peakSpring, products, sampleCampaigns } from './demo/seed';
+import { FillerService } from './modules/fillers/service';
+import { NewsService, newsPlugin } from './modules/news/service';
+import { builtinNewsWriter, ClaudeNewsWriter, type NewsWriter } from './modules/news/writer';
+import { HouseholdService } from './modules/households/service';
+import { sampleAustinAreas } from './modules/households/sampleAustin';
 
 /** What the running server adds around the app: alerts, and (in production) the lease and the job runner. */
 /** The last result of the checks people rely on, for GET /health/deep (since this server started). */
@@ -178,6 +183,8 @@ export interface AppOptions {
   allowPrivateWebhooks?: boolean; // let webhooks reach localhost and private networks (development only)
   publicUrl?: string; // where the console lives, for links in emails, e.g. https://console.freewater.io
   fleet?: { claimTimeoutMs?: number; finishTimeoutMs?: number; offlineAfterMs?: number; bufferHours?: number; offlineGraceHours?: number };
+  /** Writes FreeWater News stories (Claude with a key, else the stand-in that only points to the reporting). */
+  newsWriter?: NewsWriter;
 }
 
 /** Start the platform on a database: migrate, load everything, and keep writing every change back. */
@@ -214,6 +221,8 @@ export async function createApp(opts: AppOptions) {
       await db.query(`insert into charities (id, company_id, name, website, email, payout_label) values ($1,'freewater',$2,$3,$4,'Bank account (test)') on conflict do nothing`, [id, name, website, `giving@${id}.example.org`]);
     }
     await make('peak-spring-admin', 'peak-spring', ['orders', 'packs', 'campaigns', 'purchases', 'ledger', 'events', 'admin']);
+    // Area statistics for Austin's demo routes: SAMPLE values (made up), labelled as such everywhere they show.
+    for (const a of sampleAustinAreas) await db.query(`insert into area_attributes (company_id, area_id, kind, name, attributes, source, as_of, sample, lat, lng) values ('freewater',$1,$2,$3,$4,$5,$6,true,$7,$8) on conflict do nothing`, [a.areaId, a.kind, a.name, JSON.stringify(a.attributes), a.source, a.asOf, a.lat ?? null, a.lng ?? null]);
   }
 
   const now = opts.clock?.() ?? new Date();
@@ -458,6 +467,37 @@ export async function createApp(opts: AppOptions) {
   if (demoKeys) await houses.seedSample('freewater', 'route-3', pilotHouses);
   const ops = new OpsService(db, platform, delivery, host);
 
+  // Spots nobody bought: approved filler before the generic house ad; news among it only where news is on.
+  const fillers = new FillerService(platform, () => persistence.flush(), opts.clock);
+  platform.unsold = (req) => fillers.fillUnsold(req);
+  const news = new NewsService(db, platform, features, opts.newsWriter ?? (aiOn ? new ClaudeNewsWriter({ apiKey: anthropicKey, model: process.env.ANTHROPIC_MODEL }) : builtinNewsWriter), () => persistence.flush(), opts.clock);
+  await news.load();
+  fillers.news = news;
+  // Registered whatever the switches, so a bottle printed while news was on still opens (a plain card while news is off).
+  host.register(newsPlugin(news));
+  // Household and area data, for choosing ads for houses (the route-buying engine calls audienceForHouse).
+  const households = new HouseholdService(db, platform, opts.clock);
+  const claimed = async (companyId: string, houseKey: string) => (await db.query<any>(`select s.user_id, s.address, s.route_id, s.lat, s.lng, u.viewer_key, u.consents, u.interests from subscriptions s join users u on u.id = s.user_id where s.company_id = $1 and s.status <> 'cancelled' and s.address <> 'erased' and u.deleted_at is null`, [companyId])).rows
+    .filter((r) => households.houseKey(companyId, r.address) === houseKey);
+  const parse = <T>(v: unknown): T => (typeof v === 'string' ? JSON.parse(v) : v) as T;
+  households.claimants = async (companyId, houseKey) => Promise.all((await claimed(companyId, houseKey)).map(async (r) => {
+    const subjects = [r.viewer_key, `user:${r.user_id}`];
+    const child = (await data.ageOk(companyId, subjects)) === false;
+    // Their own choices decide: "do not sell or share" (or GPC) keeps the whole house out; only a yes to personalized
+    // offers lets what they shared be used, and never a child's.
+    const personalize = !!parse<any>(r.consents)?.personalizedOffers && !child;
+    const household = personalize ? (await db.query<any>(`select household from person_details where company_id = $1 and subject = any($2) and household is not null limit 1`, [companyId, subjects])).rows[0]?.household ?? null : null;
+    return { optedOut: await data.doesNotSell(companyId, subjects), child, personalize, interests: personalize ? parse<string[]>(r.interests) ?? [] : [], household: household === null ? null : Number(household) };
+  }));
+  households.placeOf = async (companyId, houseKey) => { const r = (await claimed(companyId, houseKey))[0]; return r ? { routeId: r.route_id, lat: Number(r.lat), lng: Number(r.lng) } : null; };
+  const addressesOf = async (companyId: string, userIds: string[]) => (await db.query<any>(`select address from subscriptions where company_id = $1 and user_id = any($2) and address <> 'erased'`, [companyId, userIds])).rows.map((r) => r.address as string);
+  data.houseData = async (companyId, userIds) => households.aboutAddresses(companyId, await addressesOf(companyId, userIds));
+  data.eraseHouses = async (companyId, userIds) => {
+    let n = 0;
+    for (const a of await addressesOf(companyId, userIds)) { n += (await households.aboutAddresses(companyId, [a])).length; await households.optOut(companyId, a, 'a resident erased their data'); }
+    return n;
+  };
+
   const handoff = new HandoffService(db, platform, packs);
   const books = new BooksService(db, platform, packs, messenger, opts.payouts ?? new TestPayoutProvider(), (c, at) => delivery.today(c, at), () => persistence.flush());
 
@@ -510,6 +550,9 @@ export async function createApp(opts: AppOptions) {
   host.pluginOn = (companyId, pluginId) => companyFeatures.pluginOn(companyId, pluginId);
   aiRouting.useOn = featureOn;
   videos.featureOn = featureOn;
+  news.featureOn = featureOn;
+  fillers.featureOn = featureOn;
+  households.featureOn = featureOn;
   attribution.featureOn = featureOn;
   webhooks.companyOn = (companyId) => companyFeatures.on(companyId, 'webhooks');
   chain.kindAllowed = (kind, companyId) => features.actionOn(kind) && companyFeatures.actionOn(companyId, kind);
@@ -622,7 +665,7 @@ export async function createApp(opts: AppOptions) {
   await attribution.repairUnrecorded();
   await persistence.flush();
 
-  return { ...made, features, companyFeatures, db, persistence, runtime, demoKeys, accounts, payments, credit, prepaid, messenger, experiences, assets, ads, designs, delivery, houses, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
+  return { ...made, fillers, news, households, features, companyFeatures, db, persistence, runtime, demoKeys, accounts, payments, credit, prepaid, messenger, experiences, assets, ads, designs, delivery, houses, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

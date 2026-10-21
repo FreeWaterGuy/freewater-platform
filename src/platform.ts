@@ -73,6 +73,8 @@ export class Platform {
   codes?: import('./modules/codes/service').CodeMinter;
   /** Each ad's results so far, so the auction can predict how it will do. */
   readonly auctionStats = new AuctionStats();
+  /** Fills spots nobody bought with approved filler (src/modules/fillers). Set at start-up; without it, the house ad stays. */
+  unsold?: (req: { company: CompanyConfig; product: Product; location: Location; audience: import('./modules/ads/contract').PrintAudience | null; placements: Placement[]; random: () => number }) => Placement[];
   /** Which slots on a bottle use AR that follows the bottle, so its label gets the tracking strip there. Set at start-up. */
   arTracking?: (unit: Unit) => number[];
   /**
@@ -236,9 +238,15 @@ export class Platform {
     const audience = this.audienceFor(opts.audience ?? null, on);
     const without = new Set<string>();
     const usable = () => [...this.campaigns.values()].filter((c) => !without.has(c.id) && (on('bidding') || c.buy.type !== 'bid'));
-    const fillNow = () => (opts.custom
-      ? { layout: [1 as const], placements: [] }
-      : engine.fill({ company, product: sizes.length === allSizes.length ? product : { ...product, sizes }, location, campaigns: usable(), random: this.random, frequency: opts.frequency, avoidSignatures: opts.avoidSignatures, audience: this.withToday(audience, company.timezone), moment: momentAt(this.bus.now(), company.timezone ?? 'UTC'), house: opts.house ?? null, stats: this.auctionStats }));
+    // Spots nobody bought (no paid ad, or a paid ad the database refused): approved filler (the company's own messages,
+    // charity, advertisers' offered ads, news) before the generic house ad. Fillers are house placements: never billed,
+    // never claimed from a prepaid ad, and only where the company has fillers on (they need ads on).
+    const fillNow = (): import('./modules/ads/contract').FillResult => {
+      if (opts.custom) return { layout: [1 as const], placements: [] };
+      const f = engine.fill({ company, product: sizes.length === allSizes.length ? product : { ...product, sizes }, location, campaigns: usable(), random: this.random, frequency: opts.frequency, avoidSignatures: opts.avoidSignatures, audience: this.withToday(audience, company.timezone), moment: momentAt(this.bus.now(), company.timezone ?? 'UTC'), house: opts.house ?? null, stats: this.auctionStats });
+      if (this.unsold && on('fillers')) f.placements = this.unsold({ company, product, location, audience, placements: f.placements, random: this.random });
+      return f;
+    };
     let fill = fillNow();
     reserve(fill.placements, this.campaigns);
     for (let tries = 0; this.claimPrepaid; tries++) {
