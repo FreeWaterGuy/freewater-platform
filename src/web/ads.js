@@ -222,6 +222,8 @@
   // ---------- statement: every bottle, what you bid and what the auction charged ----------
   async function statementPage() {
     const to = new Date(), from = new Date(to.getTime() - 30 * 86_400_000);
+    // Paid up front at flat prices (FreeWater's way): no bids and no auction, so the statement doesn't speak of them.
+    const prepaid = (await api('GET', '/v1/ads/billing').catch(() => null))?.model === 'prepaid';
     const iso = (d) => d.toISOString().slice(0, 10);
     const fromI = h('input', { class: 'input', type: 'date', value: iso(from) }), toI = h('input', { class: 'input', type: 'date', value: iso(to) });
     const out = h('div', { class: 'stack' });
@@ -229,10 +231,11 @@
       try {
         const s = await api('GET', `/v1/ads/statement?from=${fromI.value}&to=${toI.value}`);
         const t = s.totals;
+        const bids = !prepaid || s.lines.some((l) => l.bidCents != null);
         out.replaceChildren(
           h('div', { class: 'kpis', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' }, [['Bottles', String(t.bottles)], ['Printing', cents(t.paidCents)], ['Scans and AR', cents(t.engagementCents)], ['Sales commission', cents(t.commissionCents)]].map(([k, v]) => h('div', { class: 'kpi' }, h('span', { text: k }), h('b', { text: v })))),
-          h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['When', 'Where', 'Piece', 'Your bid', 'Auction price', 'You paid', 'Why', 'Scans', 'AR', 'Sales'].map((x) => h('th', { text: x })))),
-            h('tbody', {}, s.lines.slice(-300).reverse().map((l) => h('tr', {}, h('td', { text: new Date(l.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) }), h('td', { text: l.place }), h('td', { text: l.piece }), h('td', { text: l.bidCents == null ? 'set price' : cents(l.bidCents) }), h('td', { text: l.paidLabelCents == null ? '–' : cents(l.paidLabelCents) }), h('td', {}, h('b', { text: cents(l.paidCents) })), h('td', { style: 'font-size:13px', text: l.adjustments.join(', ') || '–' }), h('td', { text: String(l.scans) }), h('td', { text: String(l.arLaunches) }), h('td', { text: String(l.sales) })))))),
+          h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['When', 'Where', 'Piece', ...(bids ? ['Your bid', 'Auction price'] : []), 'You paid', 'Why', 'Scans', 'AR', 'Sales'].map((x) => h('th', { text: x })))),
+            h('tbody', {}, s.lines.slice(-300).reverse().map((l) => h('tr', {}, h('td', { text: new Date(l.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) }), h('td', { text: l.place }), h('td', { text: l.piece }), bids ? h('td', { text: l.bidCents == null ? 'set price' : cents(l.bidCents) }) : null, bids ? h('td', { text: l.paidLabelCents == null ? '–' : cents(l.paidLabelCents) }) : null, h('td', {}, h('b', { text: cents(l.paidCents) })), h('td', { style: 'font-size:13px', text: l.adjustments.join(', ') || '–' }), h('td', { text: String(l.scans) }), h('td', { text: String(l.arLaunches) }), h('td', { text: String(l.sales) })))))),
           s.fingerprints.length ? h('p', { style: 'margin:0;font-size:13px;color:var(--muted)', text: `Each day’s books fingerprint, to check against the public open books: ${s.fingerprints.map((f) => `${f.date} ${f.fingerprint.slice(0, 12)}…`).join(' · ')}` }) : null);
       } catch (x) { out.replaceChildren(h('div', { class: 'notice err', text: x.message })); }
     };
@@ -242,7 +245,7 @@
         const blob = await res.blob(); const a = h('a', { href: URL.createObjectURL(blob), download: `statement-${fromI.value}-to-${toI.value}.csv` }); document.body.append(a); a.click(); a.remove();
       } catch (x) { toast(x.message); }
     };
-    shell('statement', h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Statement' }), h('p', { text: 'Every bottle you paid for: your bid, what the auction charged and why, and what each one earned you. You pay just enough to beat the next other advertiser’s ad, never more than your bid.' })), h('button', { class: 'btn secondary', type: 'button', onclick: csv }, 'Download spreadsheet')),
+    shell('statement', h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Statement' }), h('p', { text: prepaid ? 'Every bottle that carried your ad: what it took from what you paid up front, and what each one earned you (scans, AR and sales).' : 'Every bottle you paid for: your bid, what the auction charged and why, and what each one earned you. You pay just enough to beat the next other advertiser’s ad, never more than your bid.' })), h('button', { class: 'btn secondary', type: 'button', onclick: csv }, 'Download spreadsheet')),
       h('div', { class: 'form', style: 'max-width:520px;margin-bottom:16px' }, h('div', { class: 'field' }, h('label', { text: 'From' }), fromI), h('div', { class: 'field' }, h('label', { text: 'To' }), toI)),
       h('div', {}, h('button', { class: 'btn', type: 'button', onclick: load }, 'Show')), out);
     load();

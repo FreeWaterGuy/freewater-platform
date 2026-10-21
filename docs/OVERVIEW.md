@@ -80,8 +80,11 @@ platform is the software that runs all of it. Other companies can also run it un
 - Changing a running ad costs a fee ($100 by default), paid up front; the new ad is reviewed before it prints.
 - If FreeWater stops an ad, a person on the team pays back the bottles not printed, to the card.
 - If review has a concern about a paid ad, an AI or automated check can only flag it. The team talks it over with
-  the advertiser in notes both see; the advertiser can fix it for free meanwhile; only a person rejects it, with a
-  written reason, and only then is a refund offered. The money stays held and nothing prints until it's settled.
+  the advertiser (and can ask the AI why) in notes both see; the advertiser can fix it for free meanwhile; only a
+  person rejects it, with a written reason, and only then is a refund offered. The money stays held and nothing prints
+  until it's settled. Once the AI reviewer has earned it with its record, an owner may let it make the final call on
+  rejections (off to start, for every company); the advertiser can still appeal to a person, and every refund is
+  still approved by a person.
 - Fees on top (per scan, per AR launch, per box side, commission on sales) each have their own switch and are off.
   Turned on, they're charged to the card each day, and a declined card pauses the ads at once.
 - Brands can fund **offers** for people.
@@ -94,7 +97,7 @@ platform is the software that runs all of it. Other companies can also run it un
 
 **8. Points, credit and the token**
 - Points come from scans, games and feedback. Dollar credit is paid only from money a brand has really sent.
-- Gift cards are available through Tremendous.
+- Gift cards through Tremendous, once people approve turning them on (they start off).
 - Later, the FreeWater token on **Solana**. On the real network it can only be created by people signing together
   in a Squads vault, never by the server alone.
 - Everything goes through three stages, in order: **testing** (with bots and a full reset), **live with points**,

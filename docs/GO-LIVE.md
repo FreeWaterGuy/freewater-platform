@@ -63,6 +63,11 @@ network, the prize game, Veo footage and brand offers out of the server entirely
 for the pilot you don't need items 10e (gift cards) or 10f (Solana), Veo in item 10, or approvers for token steps;
 steps 4's offers and gift cards and step 5 below wait until those areas are switched back on with a restart.
 
+The Austin pilot is door-to-door delivery first; machines come later (the order-ahead flow in `docs/REQUIREMENTS.md`
+isn't built). On the Features page, *Delivery + printed ads* is the pilot's setup (it turns machines off; for a new
+company it lists *Advertisers pay up front* and *Buying on delivery routes* for a person to turn on). FreeWater's own
+switches already match the pilot's prices and payment: flat prices, paid up front, every fee off, bidding off, news off.
+
 The full guide to every switch is `docs/SWITCHES.md`. In short:
 
 1. **Invite approvers.** Under *Team*, add at least 2 other owners or finance people. Only people already on the team

@@ -440,6 +440,7 @@ prices*).
 | **The host's settings stay the outer limit.** | A company can't turn on what `FW_FEATURES` has off (section 6); the page says "switched off on this server". |
 | **Turning a switch off turns off everything that needs it.** | The page shows the list before saving. Turning the parent back on doesn't turn those back on by itself: each is chosen again. |
 | **Turning off is quick.** | Any owner signed in. Never a key (a key never changes a switch). |
+| **Paid bottles always go out.** | Turning off *Printing bottles*, *Ads on bottles* or an ad size holds back the paid bottles that need it; the preview says how many first. They print again once it's back on, or an owner or finance person stops each ad and pays back what wasn't printed (*Settling money already in flight*). |
 | **Turning on follows the usual rules.** | Any owner signed in; money, chain and one-way switches need the second sign-in step; gift cards, withdrawals and the chain are turned on only by their approved steps under *Launch* and *Blockchain* (the page links there). |
 | **An AI deciding on its own is earned, never switched on here.** | *Autonomy* switches (*AI makes the final call on paid ads*) are turned on only on their own page, by an owner with the second step, on the AI's record (the page says where); turning them off works here too, and anyone on the team can turn them off on their page. |
 | **One-way stays one-way.** | The AI agents' fund and the giving promise, once on, show "On for good". |
@@ -456,7 +457,11 @@ its own choice.
 
 **Starting points** (preview first, then apply): *Full FreeWater*, *Design studio only* (the studio exports print-ready
 files: `POST /v1/studio/export`, an SVG at real size in inches), *Delivery + printed ads*, *Machines + printed ads*. A
-starting point never turns on a money, chain or one-way switch; those are listed for a person to turn on.
+starting point never turns on a money, chain or one-way switch; those are listed for a person to turn on, with
+what sits under them (for *Delivery + printed ads*: *Money and payments*, *Advertiser invoices and cards*, *Advertisers
+pay up front*, then *Buying on delivery routes*; and *Giving*, set on its own page). With those on, a new company has
+the Austin pilot's setup: house-after-house delivery with photo proof, printed ads at every size on bottles and boxes,
+route buying, fillers, AR and scans; no machines, fees, bidding or news (`test/spec-pilot-setup.test.ts`).
 
 **The page:** the main switches as cards, the starting points, *Every switch* (categories → groups → switches) with a
 search box and filters (on, off, different from FreeWater, locked, new); each switch shows what it does, what it

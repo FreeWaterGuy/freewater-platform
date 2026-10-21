@@ -51,6 +51,52 @@ paid to take them), paid for by advertisers, with part of every bottle going to 
 - **AR and features are always unlocked**, and the free bottle is never gated behind anything.
 - The page belongs to the advertiser; "Show me more" leads deeper.
 
+## Advertisers pay up front
+
+- **Nothing is made unless it's paid for.** An advertiser pays by card for a number of bottles at one size before the
+  ad is reviewed; only paid bottles print, and exactly that many go out. No end date, no cancelling; pausing only
+  delays. Turning a switch off that holds paid bottles back says so first (`docs/SWITCHES.md`, section 8).
+- **Pilot prices are the size prices, all-inclusive:** whole label $1, 1/2 65¢, 1/3 51¢, 1/4 42¢, 1/6 33¢, 1/8 24¢,
+  1/10 20¢ a bottle (times the product's factor). AR, video and scans are included, and every size gets the same tech.
+  Flat prices; bidding is off (it needs billing afterwards).
+- **Fees on top** (per scan, per AR launch, per box side, commission on sales, 3% suggested) are each a switch, off.
+  Turned on, they're charged to the card each day; a declined card pauses the advertiser's ads.
+- **Costly extras** (AI video clips) cost what they cost us plus a markup, shown in the quote before paying.
+- **Changing a running ad** costs a fee the company sets ($100 to start), paid up front; the new ad is reviewed.
+- **If the company stops an ad**, a person (owner or finance, second step) pays back what wasn't printed.
+- **Route buying:** from a tenth of one bottle at one house up to every house on the route or whole boxes, aimed like
+  direct mail (area, street, a shape on the map, chosen houses, optionally household data). First paid wins; nothing
+  is sold twice. Buys aimed at fewer than 50 houses need a verified business, a person's approval and no personal
+  details in the ad.
+
+## Reviewing paid ads
+
+- An AI or automated check can only **flag** a paid ad. The team talks it over with the advertiser (and can ask the AI
+  why); the money stays held and nothing prints. **Only a person finally rejects it**, with a written reason.
+- The AI may make the final call on rejections only after an owner (second step) turns on *AI makes the final call on
+  paid ads*, once its record meets the company's bar; it starts off for every company, the advertiser can always
+  appeal to a person, a sample is audited, and the governor turns it off if its agreement drops.
+- **Refunds always need a person.**
+
+## Home delivery (the Austin pilot)
+
+- **House after house:** the company chooses streets on the map (about 1,000 homes to start); every house gets packs in
+  street order, with no sign-up. A 24-pack a week by default, set per area; bigger households get more once they tell
+  us their size in the app.
+- **Stopping is in the app only.** Signs on the door ("no soliciting") and what someone says at the door are not
+  reasons to skip. A driver skips a house only for a real access or safety problem, or because it isn't a home; a
+  person reviews it, and the van goes on to the next house.
+- **A photo of the box at the door means delivered.** What happens on the porch afterwards isn't a failed delivery.
+- **A bottle with a bad label is reprinted with the same ads** and never counts against the advertiser.
+
+## Every feature is a switch
+
+- Each feature is a per-company switch on the Features page, in categories, with starting points (*Full FreeWater*,
+  *Design studio only*, *Delivery + printed ads*, *Machines + printed ads*). Every route, job and screen belongs to a
+  switch (`test/features-registry.test.ts`).
+- FreeWater's choices are the defaults for a new company, except money, the chain, anything one-way and an AI deciding
+  on its own, which start off.
+
 ## Points, credit and the wallet
 
 - Points first: a placeholder reward that can later become the FreeWater token.
