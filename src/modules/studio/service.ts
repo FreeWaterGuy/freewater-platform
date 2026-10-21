@@ -8,6 +8,7 @@ import { MAX_PIXELS, preparePhoto, readImage, type PhotoInfo } from './photos';
 import { fixColors, paletteFromPhoto, type BrandKit, type Brief, type StudioDesigner } from './designer';
 import { ProviderError, type ImageMaker, type ModelMaker, type PhotoLibrary } from './providers';
 import { contrast } from '../creative/poster';
+import { checkSvg, checkSvgPictures } from '../print/svgCreative';
 import { withCompany } from '../ai/routing';
 
 /**
@@ -76,12 +77,26 @@ export class StudioService {
     return this.kit(companyId, advertiserId);
   }
 
-  /** The logo: kept as a PNG (with its transparency), at most 800 pixels wide. */
-  async setLogo(companyId: string, advertiserId: string, bytes: Uint8Array) {
+  /** The logo: kept as a PNG (with its transparency), at most 800 pixels wide. An SVG is checked, then drawn at that size. */
+  async setLogo(companyId: string, advertiserId: string, bytes: Uint8Array, isSvg = false) {
     await this.advertiser(companyId, advertiserId);
     let out;
-    try { const m = await sharp(bytes).metadata(); if (!m.width || !m.height || m.width * m.height > MAX_PIXELS) throw new Error('size'); out = await readImage(bytes).rotate().resize(800, 400, { fit: 'inside', withoutEnlargement: true }).png().toBuffer({ resolveWithObject: true }); }
-    catch { throw new StudioError(422, 'not_a_picture', 'That file isn’t a picture we can read. Use a PNG, JPEG or WebP.'); }
+    if (isSvg) {
+      const text = Buffer.from(bytes).toString('utf8');
+      const problem = checkSvg(text) ?? (await checkSvgPictures(text));
+      if (problem) throw new StudioError(422, 'logo_refused', `That SVG can't be used: ${problem}. Or upload the logo as a PNG.`);
+      // Drawn sharp enough for print, at whatever size the file says it is (a tiny or huge one is scaled to fit).
+      try {
+        const m = await sharp(bytes, { limitInputPixels: false }).metadata();
+        if (!m.width || !m.height) throw new Error('size');
+        const density = Math.max(1, Math.min(2400, 72 * Math.min(800 / m.width, 400 / m.height)));
+        out = await sharp(bytes, { density, limitInputPixels: MAX_PIXELS, failOn: 'error' }).resize(800, 400, { fit: 'inside' }).png().toBuffer({ resolveWithObject: true });
+      }
+      catch { throw new StudioError(422, 'not_a_picture', 'That SVG couldn’t be drawn. Save it again from your design app, or upload the logo as a PNG.'); }
+    } else {
+      try { const m = await sharp(bytes, { limitInputPixels: false }).metadata(); if (!m.width || !m.height || m.width * m.height > MAX_PIXELS) throw new Error('size'); out = await readImage(bytes).rotate().resize(800, 400, { fit: 'inside', withoutEnlargement: true }).png().toBuffer({ resolveWithObject: true }); }
+      catch { throw new StudioError(422, 'not_a_picture', 'That file isn’t a picture we can read, or it’s over 40 megapixels. Use a PNG, JPEG, WebP or SVG.'); }
+    }
     const a = await this.assets.put({ companyId, advertiserId, contentType: 'image/png', bytes: new Uint8Array(out.data), name: 'logo' });
     const r = (await this.db.query<any>(`select kit from brand_kits where company_id = $1 and advertiser_id = $2`, [companyId, advertiserId])).rows[0];
     const k = r ? (typeof r.kit === 'string' ? JSON.parse(r.kit) : r.kit) : {};

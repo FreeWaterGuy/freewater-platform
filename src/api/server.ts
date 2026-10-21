@@ -45,7 +45,7 @@ import { findApiKey, type ApiKey, type Scope , PersistencePaused } from '../db/s
 import { LeaseLostError } from '../db/leaseChecked';
 import { OrderConflictError } from '../platform';
 import type { Campaign, Share } from '../core/types';
-import { svgCreative } from '../modules/print/svgCreative';
+import { checkSvgPictures, svgCreative } from '../modules/print/svgCreative';
 import { newId } from '../core/ids';
 import { AccountsError, roleScopes, type Role } from '../modules/accounts/service';
 import { approvalRoutes, approverStepProblem } from '../modules/accounts/secondStep';
@@ -69,6 +69,35 @@ const PLATFORM_COMPANY = process.env.PLATFORM_COMPANY ?? 'freewater';
 /** A machine prints a bottle in several seconds: more than this through the API is a leaked key, not a busy machine. */
 export { DEFAULT_PRINTS_PER_MINUTE, DEFAULT_PRINTS_PER_DAY } from '../modules/fleet/printCap';
 
+/**
+ * A request that doesn't fit a route's schema, said in plain words ("The headline can be at most 60 characters."),
+ * with the field it's about for programs. The schema's own wording ("body/spec/headline must NOT have more than 60
+ * characters") is what people saw before.
+ */
+export function plainValidation(errors: { instancePath?: string; keyword?: string; params?: any }[], context: string | undefined, fallback: string) {
+  const e = errors[0];
+  if (!e) return { message: fallback };
+  const path = (e.instancePath ?? '').split('/').filter(Boolean);
+  const name = (e.keyword === 'required' ? e.params?.missingProperty : [...path].reverse().find((x) => !/^\d+$/.test(x))) ?? '';
+  const field = [context ?? 'body', ...path, ...(e.keyword === 'required' ? [name] : [])].join('/');
+  const what = name ? `The ${String(name).replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()}` : context === 'querystring' ? 'The address' : 'What was sent';
+  const p = e.params ?? {};
+  const pattern = String(p.pattern ?? '');
+  const message =
+    e.keyword === 'maxLength' ? `${what} can be at most ${p.limit} characters.` :
+    e.keyword === 'minLength' ? (p.limit <= 1 ? `${what} can’t be empty.` : `${what} needs at least ${p.limit} characters.`) :
+    e.keyword === 'required' ? `${what} is missing.` :
+    e.keyword === 'pattern' ? (pattern.includes('[0-9a-fA-F]{6}') ? `${what} must be a color like #D7262E.` : pattern.startsWith('^https://') ? `${what} must start with https:// (a secure address).` : `${what} isn’t in a form we can read.`) :
+    e.keyword === 'enum' ? `${what} must be one of: ${(p.allowedValues ?? []).join(', ')}.` :
+    e.keyword === 'type' ? `${what} must be ${p.type === 'string' ? 'text' : p.type === 'integer' ? 'a whole number' : `a ${p.type}`}.` :
+    e.keyword === 'maximum' ? `${what} can be at most ${p.limit}.` :
+    e.keyword === 'minimum' ? `${what} must be at least ${p.limit}.` :
+    e.keyword === 'maxItems' ? `${what} can have at most ${p.limit}.` :
+    e.keyword === 'const' ? `${what} must be ${JSON.stringify(p.allowedValue)}.` :
+    fallback;
+  return { message, field };
+}
+
 export async function buildServer(app: App, opts: { logger?: boolean } = {}): Promise<FastifyInstance> {
   // Behind a load balancer, TRUST_PROXY says how many hops (or which addresses) to believe, never every hop: the
   // visitor writes X-Forwarded-For too (docs/RUNNING.md). Unsafe values stop a production start (checkConfig).
@@ -82,7 +111,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   const ajv = { customOptions: { coerceTypes: false } } as const;
   const server = Fastify({ logger: opts.logger ? loggerOptions : false, bodyLimit: 3 * 1024 * 1024, routerOptions: { maxParamLength: 1000 }, trustProxy, ajv });
   const { platform, packs, persistence, db, experiences } = app;
-  for (const type of Object.keys(allowedTypes)) server.addContentTypeParser(type, { parseAs: 'buffer', bodyLimit: 64 * 1024 * 1024 }, (_req, body, done) => done(null, body));
+  // Files arrive as themselves. An SVG is taken too (a logo is often one); only the studio's logo route accepts it.
+  for (const type of [...Object.keys(allowedTypes), 'image/svg+xml']) server.addContentTypeParser(type, { parseAs: 'buffer', bodyLimit: 64 * 1024 * 1024 }, (_req, body, done) => done(null, body));
   // Postgres can't store the NUL character in text: refuse it anywhere in the path, query or JSON body, before any
   // code (and the database) sees it, rather than fail the save with a 500.
   server.addHook('preValidation', async (req, reply) => {
@@ -325,6 +355,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       // for goes through POST /v1/me/custom-orders, where the money is held first and taken once it prints. A price
       // sent here is ignored.
       try { custom = { customerId: b.custom.customerId, art: svgCreative(b.custom.svg), priceCents: 0 }; } catch (e: any) { throw new ApiError(422, 'artwork_refused', e.message); }
+      const big = await checkSvgPictures(b.custom.svg);
+      if (big) throw new ApiError(422, 'artwork_refused', `Artwork refused: ${big}.`);
     }
     if (key!.locationId && key!.locationId !== b.locationId) throw new ApiError(403, 'wrong_machine', `This key belongs to ${key!.locationId} and can only print there.`);
     const capped = key!.locationId ? printCap(key!.companyId, key!.locationId, b.orderId, req) : null;
@@ -414,11 +446,14 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     if (!advertiserId) throw new ApiError(422, 'advertiser_required', 'Send advertiserId (company keys) or use an advertiser key.');
     let creative;
     try { creative = svgCreative(b.svg); } catch (e: any) { throw new ApiError(422, 'artwork_refused', e.message); }
+    const big = await checkSvgPictures(b.svg);
+    if (big) throw new ApiError(422, 'artwork_refused', `Artwork refused: ${big}.`);
     const company = platform.companies.get(key!.companyId)!;
     if (company.adRules.blockedCategories.includes(b.category)) throw new ApiError(422, 'category_blocked', `${company.name} doesn't print ${b.category} ads.`);
     checkExperience(b.experienceId, b.experienceConfig ?? {}, b.theme);
     const c: Campaign = {
-      id: newId('cmp'), companyId: key!.companyId, advertiserId, advertiserName: b.advertiserName, category: b.category, competitorGroup: b.competitorGroup,
+      // An advertiser's own key prints under the name the business signed up with, never a name it sends.
+      id: newId('cmp'), companyId: key!.companyId, advertiserId, advertiserName: key!.advertiserId ? (await app.ads.advertiser(key!.companyId, key!.advertiserId).catch(() => null))?.name ?? b.advertiserName : b.advertiserName, category: b.category, competitorGroup: b.competitorGroup,
       sizes: b.sizes as Share[], formats: b.formats, experienceId: b.experienceId, experienceConfig: b.experienceConfig ?? {}, theme: b.theme, targeting: b.targeting ?? {},
       buy: b.buy.type === 'bid' ? { ...b.buy, spentTodayCents: 0 } : b.buy,
       creative, creativeRef: { kind: 'svg', markup: b.svg }, active: false, createdAt: platform.bus.now().toISOString(),
@@ -1008,7 +1043,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     if (err instanceof AccountsError || err instanceof PaymentError || err instanceof ExperienceError || err instanceof AssetError || err instanceof AdsError || err instanceof DesignError || err instanceof DeliveryError || err instanceof BooksError || err instanceof WebhookError || err instanceof ConsoleError || err instanceof FleetError || err instanceof AttributionError || err instanceof LotteryError || err instanceof VideoError || err instanceof DataError || err instanceof NumberLineError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
     if (err.code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE') return reply.code(415).send({ error: { code: 'unsupported_type', message: 'Send JSON, or for uploads a .glb, PNG, JPEG, WebP or MP4 file.' } });
     if (err.code === 'FST_ERR_CTP_BODY_TOO_LARGE') return reply.code(413).send({ error: { code: 'too_large', message: 'That is too big to upload.' } });
-    if (err.validation) return reply.code(400).send({ error: { code: 'invalid_request', message: err.message } });
+    if (err.validation) return reply.code(400).send({ error: { code: 'invalid_request', ...plainValidation(err.validation, err.validationContext, err.message) } });
     // Fastify's own refusals of a malformed request (bad JSON, empty body with a JSON type, a body method with no
     // type, a bad URL): the caller's mistake, so its 4xx and a plain message, never a 500 and an alert.
     if (typeof err.code === 'string' && err.code.startsWith('FST_') && err.statusCode >= 400 && err.statusCode < 500) {

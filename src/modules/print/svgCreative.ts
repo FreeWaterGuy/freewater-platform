@@ -1,3 +1,4 @@
+import { overPixelLimit, pixelsText } from '../studio/photos';
 import type { Creative } from '../../core/types';
 
 /**
@@ -64,3 +65,21 @@ function decodeEntities(s: string): string {
   return s;
 }
 function safeChar(n: number) { try { return n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : ''; } catch { return ''; } }
+
+/**
+ * Pictures inside the artwork (data: URLs), checked by their size in pixels: a small file can claim to be 20,000 by
+ * 20,000 pixels, and the printer (or a phone showing the preview) would need gigabytes to draw it. Same 40 megapixel
+ * limit as uploads and the ad studio.
+ */
+export async function checkSvgPictures(markup: string): Promise<string | null> {
+  for (const m of markup.matchAll(/data:image\/(?:png|jpe?g|webp|gif);base64,([A-Za-z0-9+/=\s]{16,})/gi)) {
+    const problem = await picturePixelsProblem(Buffer.from(m[1]!.replace(/\s+/g, ''), 'base64'));
+    if (problem) return problem;
+  }
+  return null;
+}
+
+async function picturePixelsProblem(bytes: Uint8Array): Promise<string | null> {
+  const over = await overPixelLimit(bytes);
+  return over ? `a picture in it is ${pixelsText(over)}; the most is 40 megapixels (like 8,000 × 5,000), so make it smaller` : null;
+}

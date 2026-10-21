@@ -5,7 +5,7 @@ import type { ApiKey } from '../db/store';
 import type { Unit } from '../core/types';
 import { newId } from '../core/ids';
 import { isEligible } from '../modules/ads/engine';
-import { svgCreative } from '../modules/print/svgCreative';
+import { checkSvgPictures, svgCreative } from '../modules/print/svgCreative';
 import { givingLine, PX_PER_IN } from '../modules/print/renderer';
 import { MachinePresence } from '../modules/machines/presence';
 import { DesignService } from '../modules/custom/service';
@@ -238,6 +238,8 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     if (!product) throw new ApiError(422, 'unknown_product', `Product ${b.productId} doesn't exist.`);
     let art;
     try { art = svgCreative(b.svg); } catch (e: any) { throw new ApiError(422, 'artwork_refused', e.message); }
+    const big = await checkSvgPictures(b.svg);
+    if (big) throw new ApiError(422, 'artwork_refused', `Artwork refused: ${big}.`);
     if (b.experience) h.checkExperience('custom-experience', b.experience, undefined);
     const company = platform.companies.get(key!.companyId)!;
     const id = newId('pf');
