@@ -7,6 +7,7 @@ import { TestOutbox } from '../adapters/messaging/contract';
 import { TestWebhookSender } from '../adapters/webhooks/contract';
 import { createApiKey } from '../db/store';
 import { simulateHistory } from './history';
+import { serverOnly } from './serverOnly';
 
 // Builds out/console-preview/index.html: the real console and developer portal running on answers recorded from
 // a real server (three days of settings changes, a team, keys, a healthy webhook and a failing one), with the
@@ -124,12 +125,6 @@ const rec = {
 };
 await server.close();
 
-// The settings rules reach code that only runs on the server (ids from node:crypto, photos through sharp); the page
-// never calls it, so in the browser bundle those modules are a harmless stand-in (randomUUID uses the browser's own).
-const serverOnly = { name: 'server-only', setup(b: any) {
-  b.onResolve({ filter: /^(node:.*|sharp|detect-libc)$/ }, (a: any) => ({ path: a.path, namespace: 'server-only' }));
-  b.onLoad({ filter: /.*/, namespace: 'server-only' }, () => ({ loader: 'js', contents: 'const f = function () { return p; }; const p = new Proxy(f, { get: (_t, k) => (k === "__esModule" ? false : k === "randomUUID" ? () => globalThis.crypto.randomUUID() : p), apply: () => p }); module.exports = p;' }));
-} };
 const bundle = await build({ entryPoints: ['src/demo/consolePreviewEntry.ts'], bundle: true, format: 'iife', globalName: 'FWLocal', platform: 'browser', minify: true, write: false, define: { 'process.env.NODE_ENV': '"production"' }, plugins: [serverOnly] });
 const safe = (s: string) => s.replace(/<\/script/gi, '<\\/script').replace(/<!--/g, '<\\!--');
 const out = 'out/console-preview';
