@@ -62,7 +62,7 @@ const run = (label, key) => new Promise((resolve) => {
   p.on('exit', (code) => resolve(code ?? 1));
 });
 
-if (!(await ready())) { console.error(`The server didn't start:\n${log.slice(-3000)}`); await finish(1); }
+if (!(await ready())) { console.error(`The server didn't start:\n${log.slice(-3000)}`); if (process.env.GITHUB_ACTIONS) console.log(`::error title=Fuzz server didn't start::${log.slice(-1500).replace(/[\r\n%]+/g, ' ')}`); await finish(1); }
 const admin = /freewater-admin\s+(fwk_\S+)/.exec(log)?.[1];
 if (!admin) { console.error(`No sample admin key in the server's output:\n${log.slice(-3000)}`); await finish(1); }
 
@@ -73,5 +73,11 @@ console.log('\n=== Fuzz summary ===');
 for (const [label, code] of results) console.log(`${label}: ${code === 0 ? 'no server errors' : `failed (schemathesis exit ${code})`}`);
 if (errors.length) console.log(`Server errors the server logged:\n  ${[...new Set(errors)].join('\n  ')}`);
 if (!alive) console.log(`The server stopped during the run:\n${log.slice(-2000)}`);
+if (process.env.GITHUB_ACTIONS) {
+  const one = (t) => t.replace(/[\r\n%]+/g, ' ').slice(-1500);
+  for (const [label, code] of results) if (code !== 0) console.log(`::error title=Fuzz (${label})::schemathesis exit ${code}`);
+  for (const e of new Set(errors)) console.log(`::error title=Fuzz server error::${one(e)}`);
+  if (!alive) console.log(`::error title=Fuzz server stopped::${one(log.slice(-1500))}`);
+}
 // A server error the server logged fails the run too, even if Schemathesis didn't see it as one.
 await finish(results.every(([, c]) => c === 0) && alive && !errors.length ? 0 : 1);
