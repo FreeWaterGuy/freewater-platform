@@ -742,24 +742,27 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   route({ method: 'GET', url: '/v1/me/cards', scope: 'me', summary: 'Your saved cards (brand and last 4 digits only).', handler: async (_req, key) => ({ body: await app.payments.methods(key!.companyId, 'user', me(key)) }) });
   route({ method: 'POST', url: '/v1/me/cards', scope: 'me', summary: "Save a card using the token from the payment provider's form. Card numbers never reach FreeWater.", body: obj({ token: S.str }, ['token']), handler: async (req, key) => ({ status: 201, body: await app.payments.addMethod(key!.companyId, 'user', me(key), (req.body as any).token) }) });
 
-  const advertiserScope = (key: ApiKey, advertiserId: string) => {
+  // The advertiser must be the caller's own (an advertiser key) and belong to the caller's company (P5).
+  const advertiserScope = async (key: ApiKey, advertiserId: string) => {
     if (key.advertiserId && key.advertiserId !== advertiserId) throw notFound('Advertiser');
+    const known = (await db.query(`select 1 from advertisers where id = $1 and company_id = $2`, [advertiserId, key.companyId])).rows.length;
+    if (!known) throw notFound('Advertiser');
   };
   route({ method: 'GET', url: '/v1/advertisers/:advertiserId/cards', scope: 'invoices', summary: "An advertiser's saved cards (brand and last 4 digits only).", handler: async (req, key) => {
     const id = (req.params as any).advertiserId;
-    advertiserScope(key!, id);
+    await advertiserScope(key!, id);
     return { body: await app.payments.methods(key!.companyId, 'advertiser', id) };
   } });
   route({ method: 'POST', url: '/v1/advertisers/:advertiserId/cards', scope: 'invoices', summary: "Save an advertiser's card for paying invoices.", body: obj({ token: S.str }, ['token']), handler: async (req, key) => {
     const id = (req.params as any).advertiserId;
-    advertiserScope(key!, id);
+    await advertiserScope(key!, id);
     return { status: 201, body: await app.payments.addMethod(key!.companyId, 'advertiser', id, (req.body as any).token) };
   } });
 
   // Credit for advertisers (docs/SWITCHES.md, "Credit for advertisers").
   route({ method: 'GET', url: '/v1/advertisers/:advertiserId/credit', scope: 'invoices', summary: 'Whether an advertiser’s ads may run: its card, its credit limit (if a person set one) and what it owes now (unpaid invoices and charges not invoiced yet).', handler: async (req, key) => {
     const id = (req.params as any).advertiserId;
-    advertiserScope(key!, id);
+    await advertiserScope(key!, id);
     return { body: { ...(await app.credit.standing(key!.companyId, id)), limit: await app.credit.limit(key!.companyId, id) } };
   } });
   route({ method: 'POST', url: '/v1/advertisers/:advertiserId/credit-limit', scope: 'invoices', summary: 'Set how much an advertiser may owe before its ads pause (0 for none: then it needs a working card). An owner or finance person, signed in with the second step, with a reason. Each change is kept.', body: obj({ limitCents: { type: 'integer', minimum: 0, maximum: 100_000_000 }, reason: { type: 'string', minLength: 5, maxLength: 300 } }, ['limitCents', 'reason']), handler: async (req, key) => {
@@ -767,6 +770,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const u = await app.accounts.get(key!.userId);
     if (!u || u.companyId !== key!.companyId || !['owner', 'finance'].includes(u.role)) throw new ApiError(403, 'owner_or_finance', 'Only an owner or a finance person sets credit limits.');
     const b = req.body as any;
+    await advertiserScope(key!, (req.params as any).advertiserId);
     return { status: 201, body: await app.credit.grant(key!.companyId, (req.params as any).advertiserId, b.limitCents, `user:${u.id}`, b.reason) };
   } });
 
