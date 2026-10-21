@@ -38,6 +38,12 @@ jobs:
       - run: npx vitest run --reporter=default --reporter=github-actions # failures show as annotations
       - name: Known security holes in what runs in production (moderate and above; allowed ones are listed with reasons)
         run: node scripts/audit.mjs
+      - name: Fuzz the running API (Schemathesis, pinned; no key and the sample admin key) - any server error fails
+        timeout-minutes: 8
+        run: |
+          python3 -m venv /tmp/schemathesis
+          /tmp/schemathesis/bin/pip install --quiet schemathesis==4.32.2
+          SCHEMATHESIS=/tmp/schemathesis/bin/schemathesis npm run fuzz:api
 
   browser:
     # The main journeys in a real browser (test/browser/journeys.ts). Playwright isn't a dependency of the app, so

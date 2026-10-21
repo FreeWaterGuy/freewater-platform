@@ -1,7 +1,7 @@
 import type { App } from '../app';
 import type { ApiKey } from '../db/store';
 import type { Target } from '../modules/experiences/service';
-import { ApiError, obj, S, type RouteDef } from './http';
+import { ApiError, obj, S, type RouteDef, Q } from './http';
 
 /** The prize game: chances from real engagement, the ball tap, the results, the public proof it's fair, and prize codes. */
 export function lotteryRoutes(app: App, route: (r: RouteDef) => void, parseTarget: (t: string) => Target) {
@@ -29,7 +29,7 @@ export function lotteryRoutes(app: App, route: (r: RouteDef) => void, parseTarge
     const viewer = String((req.query as any).viewer ?? '');
     return { body: await lottery.result((req.params as any).id, viewer) };
   } });
-  route({ method: 'GET', url: '/v1/public/lottery/:companyId/fairness', scope: 'public', summary: 'Proof the game is fair: today’s and tomorrow’s seed fingerprints, and, for a day that’s over (?day=YYYY-MM-DD), its seed and every draw, so anyone can check them.', handler: async (req) => {
+  route({ method: 'GET', url: '/v1/public/lottery/:companyId/fairness', query: { day: Q.day }, scope: 'public', summary: 'Proof the game is fair: today’s and tomorrow’s seed fingerprints, and, for a day that’s over (?day=YYYY-MM-DD), its seed and every draw, so anyone can check them.', handler: async (req) => {
     const day = (req.query as any).day;
     if (day !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(String(day))) throw new ApiError(400, 'bad_day', 'Send the day as YYYY-MM-DD.');
     return { body: await lottery.fairness((req.params as any).companyId, day) };

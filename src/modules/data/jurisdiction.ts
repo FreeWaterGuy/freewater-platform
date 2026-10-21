@@ -90,6 +90,6 @@ export function placeFromHeaders(headers: Record<string, unknown>): Place | null
   const country = h('cf-ipcountry') ?? h('x-vercel-ip-country') ?? h('x-country-code') ?? h('fastly-geo-country') ?? h('x-appengine-country');
   if (!country || country === 'XX' || country === 'T1' || !/^[A-Z]{2}$/.test(country)) return null; // XX: unknown; T1: Tor
   const state = h('x-vercel-ip-country-region') ?? h('cf-region-code') ?? h('x-appengine-region');
-  const city = typeof headers['x-vercel-ip-city'] === 'string' ? decodeURIComponent(headers['x-vercel-ip-city'] as string) : undefined;
+  const city = typeof headers['x-vercel-ip-city'] === 'string' ? (() => { try { return decodeURIComponent(headers['x-vercel-ip-city'] as string); } catch { return undefined; } })() : undefined; // a malformed one is no city, not a 500
   return { country, ...(state && country === 'US' ? { state } : {}), ...(city ? { city } : {}), source: 'header' };
 }

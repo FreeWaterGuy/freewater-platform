@@ -3,7 +3,7 @@ import type { App } from '../app';
 import type { ApiKey } from '../db/store';
 import { transparencyOf } from '../modules/transparency/service';
 import { statement, statementCsv } from '../modules/transparency/statements';
-import { ApiError, notFound, type RouteDef } from './http';
+import { ApiError, notFound, type RouteDef, Q } from './http';
 
 /** The world's live view of the books, as open as each company chooses, and advertisers' statements. */
 export function transparencyRoutes(app: App, server: FastifyInstance, route: (r: RouteDef) => void) {
@@ -19,7 +19,7 @@ export function transparencyRoutes(app: App, server: FastifyInstance, route: (r:
     const id = (req.params as any).companyId; need(id, 'counters');
     return { body: transparency.counters(id) };
   } });
-  route({ method: 'GET', url: '/v1/public/companies/:companyId/feed', scope: 'public', summary: 'What just happened: bottles printed and what they gave, scans, sales, transfers, prizes. Never a person. Only for companies that share it.', handler: async (req) => {
+  route({ method: 'GET', url: '/v1/public/companies/:companyId/feed', query: { limit: Q.count }, scope: 'public', summary: 'What just happened: bottles printed and what they gave, scans, sales, transfers, prizes. Never a person. Only for companies that share it.', handler: async (req) => {
     const id = (req.params as any).companyId; const c = need(id, 'liveFeed');
     return { body: { company: c.name, detail: transparencyOf(c).feedDetail, items: transparency.feed(id, Number((req.query as any).limit ?? 50)) } };
   } });
@@ -42,7 +42,7 @@ export function transparencyRoutes(app: App, server: FastifyInstance, route: (r:
   } });
   route({ method: 'POST', url: '/v1/books/fingerprints/publish', scope: 'admin', summary: 'Publish every finished day’s fingerprint now (it also runs daily).', handler: async (_req, key) => { if (key!.advertiserId || key!.locationId) throw new ApiError(403, 'missing_scope', 'Only the company’s own team can do this.'); return { body: await anchors.run() }; } });
 
-  route({ method: 'GET', url: '/v1/ads/statement', scope: 'campaigns', summary: 'Your statement: every bottle you paid for, your bid, what the auction charged and why, scans, AR, sales and commission, with each day’s books fingerprint. ?from=YYYY-MM-DD&to=YYYY-MM-DD, ?format=csv for a spreadsheet.', handler: async (req, key) => {
+  route({ method: 'GET', url: '/v1/ads/statement', query: { advertiser: Q.text, from: Q.dayOrEmpty, to: Q.dayOrEmpty, format: Q.text }, scope: 'campaigns', summary: 'Your statement: every bottle you paid for, your bid, what the auction charged and why, scans, AR, sales and commission, with each day’s books fingerprint. ?from=YYYY-MM-DD&to=YYYY-MM-DD, ?format=csv for a spreadsheet.', handler: async (req, key) => {
     const k = key as ApiKey;
     const c = platform.companies.get(k.companyId)!;
     if (!transparencyOf(c).advertiserStatements) throw new ApiError(403, 'not_shared', `${c.name} doesn’t offer statements.`);

@@ -17,6 +17,10 @@ export interface RouteDef {
   scope: Scope | Scope[] | 'public';
   summary: string;
   body?: Record<string, unknown>; // JSON schema
+  /** Query parameters: name → schema (strings, since nothing is coerced; see `Q`). Others are ignored, not refused. */
+  query?: Record<string, unknown>;
+  /** Path parameters that are more than any string: name → schema. */
+  params?: Record<string, unknown>;
   /** For file uploads: the body is the file itself, up to this many bytes. */
   rawBodyLimit?: number;
   /** Answer without waiting for changes to be saved: for status pages, which must answer while the database refuses changes. Read-only routes only. */
@@ -24,11 +28,28 @@ export interface RouteDef {
   handler: Handler;
 }
 
+/** A real calendar day, YYYY-MM-DD (the pattern keeps the year plausible; the format refuses 2026-02-31). */
+const day = { type: 'string', pattern: '^(19|20|21)\\d{2}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$', format: 'date' };
 export const S = {
   str: { type: 'string', minLength: 1, maxLength: 200 },
-  int: { type: 'integer', minimum: 0 },
+  day,
+  /** A whole number that fits every integer column (Postgres `int` stops at 2,147,483,647): bigger is refused, not a 500. */
+  int: { type: 'integer', minimum: 0, maximum: 2_147_483_647 },
   bool: { type: 'boolean' },
 };
+/** Query and path values arrive as text and aren't coerced, so they're checked as text. One value each: a repeated
+ * parameter (?limit=1&limit=2) arrives as a list and is refused. */
+export const Q = {
+  /** A count, page size, version or index: up to 9 digits, so it fits an `int` column. */
+  count: { type: 'string', pattern: '^[0-9]{1,9}$' },
+  /** A position in a `bigint` sequence (?after=): up to 15 digits, exact as a JavaScript number. */
+  seq: { type: 'string', pattern: '^[0-9]{1,15}$' },
+  day,
+  /** A day, or nothing: a date box the person cleared sends `?from=`, which means the default. */
+  dayOrEmpty: { anyOf: [{ type: 'string', maxLength: 0 }, day] },
+  text: { type: 'string', maxLength: 200 },
+};
+
 export const obj = (props: Record<string, unknown>, required: string[] = []) => ({ type: 'object', additionalProperties: false, properties: props, required });
 
 

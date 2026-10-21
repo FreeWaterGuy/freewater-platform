@@ -1,6 +1,6 @@
 import type { App } from '../app';
 import type { ApiKey } from '../db/store';
-import { ApiError, obj, S, type RouteDef } from './http';
+import { ApiError, obj, S, type RouteDef, Q } from './http';
 
 /** The advertiser portal's API: sign up, make an ad by chatting, preview, submit, results. Plus the company's review queue. */
 export function adsRoutes(app: App, route: (r: RouteDef) => void, h: { me: (key: ApiKey | null) => string }) {
@@ -21,7 +21,7 @@ export function adsRoutes(app: App, route: (r: RouteDef) => void, h: { me: (key:
 
   route({ method: 'GET', url: '/v1/ads/advertiser', scope: 'campaigns', summary: 'Your business, as FreeWater has it.', handler: async (_req, key) => ({ body: await ads.advertiser(key!.companyId, advertiserOf(key)) }) });
 
-  route({ method: 'GET', url: '/v1/ads/overview', scope: 'campaigns', summary: 'Your results: spend, prints, scans, AR launches, sales, day by day and per ad.', handler: async (req, key) => {
+  route({ method: 'GET', url: '/v1/ads/overview', query: { days: Q.count }, scope: 'campaigns', summary: 'Your results: spend, prints, scans, AR launches, sales, day by day and per ad.', handler: async (req, key) => {
     const days = Math.min(90, Math.max(1, Number((req.query as any).days ?? 14)));
     return { body: await ads.overview({ companyId: key!.companyId, advertiserId: advertiserOf(key), days }) };
   } });

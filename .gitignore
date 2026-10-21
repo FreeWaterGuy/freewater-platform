@@ -8,3 +8,5 @@ node_modules
 *.key
 *.p12
 machine-data
+# Schemathesis run cache (npm run fuzz:api)
+.schemathesis

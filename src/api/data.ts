@@ -4,7 +4,7 @@ import { categoryInfo, dataCategories, dataUse, preset, regionInfo } from '../mo
 import { DataService } from '../modules/data/service';
 import { tierNames } from '../modules/numberline/tiers';
 import type { Placement } from '../modules/numberline/placement';
-import { ApiError, obj, S, type RouteDef } from './http';
+import { ApiError, obj, S, type RouteDef, Q } from './http';
 
 
 /** The data switchboard, people's own data choices and rights, one person across roles, and the number line. */
@@ -76,7 +76,7 @@ export function dataRoutes(app: App, route: (r: RouteDef) => void) {
 
   const company = (req: { params: unknown }) => { const id = (req.params as any).companyId as string; if (!platform.companies.has(id)) throw new ApiError(404, 'not_found', 'Company not found.'); return id; };
   const placeProp = obj({ country: { type: 'string', pattern: '^[A-Za-z]{2}$' }, state: { type: 'string', pattern: '^[A-Za-z]{2,3}$' } }, ['country']);
-  const ageProp = { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' };
+  const ageProp = S.day;
   const detailsProp = obj({ zip: { type: ['string', 'null'], maxLength: 12 }, household: { type: ['integer', 'null'], minimum: 1, maximum: 20 }, language: { type: ['string', 'null'], maxLength: 35 } });
   const declared = (b: any) => ({ country: String(b.country).toUpperCase(), ...(b.state ? { state: String(b.state).toUpperCase() } : {}), source: 'declared' as const });
 
@@ -167,7 +167,7 @@ export function dataRoutes(app: App, route: (r: RouteDef) => void) {
   // ---------- the company's side ----------
 
   route({ method: 'GET', url: '/v1/data/policy', scope: ['admin', 'ledger'], summary: 'Your data switchboard, and the presets for each country.', handler: async (_req, key) => ({ body: { policy: data.policy(staff(key).companyId), presets: Object.fromEntries((Object.keys(regionInfo) as (keyof typeof regionInfo)[]).map((r) => [r, { about: regionInfo[r], policy: preset(r) }])), kinds: categoryInfo } }) });
-  route({ method: 'GET', url: '/v1/data/people', scope: ['admin', 'ledger'], summary: 'Find one person, by email, phone, account or phone id, with everything from every direction: consumer and advertiser, merged.', handler: async (req, key) => {
+  route({ method: 'GET', url: '/v1/data/people', query: { email: Q.text, phone: Q.text, user: Q.text, viewer: Q.text, person: Q.text }, scope: ['admin', 'ledger'], summary: 'Find one person, by email, phone, account or phone id, with everything from every direction: consumer and advertiser, merged.', handler: async (req, key) => {
     const k = staff(key).companyId;
     const q = req.query as any;
     const subject = q.email ? DataService.emailKey(q.email) : q.phone ? DataService.phoneKey(q.phone) : q.user ? `user:${q.user}` : q.viewer ? String(q.viewer) : q.person ? String(q.person) : '';
@@ -175,7 +175,7 @@ export function dataRoutes(app: App, route: (r: RouteDef) => void) {
     // A phone's key opens its wallet: the team sees a fingerprint of it, never the key (R15).
     return { body: data.forTeam(await data.profile(k, subject), q.viewer ? [String(q.viewer)] : []) };
   } });
-  route({ method: 'GET', url: '/v1/data/machines', scope: ['admin', 'ledger'], summary: 'What works at each machine, from counts only (no one’s personal data): scans and AR by kind of ad and time of day, last ?days= (default 30).', handler: async (req, key) => ({ body: await data.machineLearning(staff(key).companyId, Math.min(365, Math.max(1, Number((req.query as any).days ?? 30) || 30))) }) });
+  route({ method: 'GET', url: '/v1/data/machines', query: { days: Q.count }, scope: ['admin', 'ledger'], summary: 'What works at each machine, from counts only (no one’s personal data): scans and AR by kind of ad and time of day, last ?days= (default 30).', handler: async (req, key) => ({ body: await data.machineLearning(staff(key).companyId, Math.min(365, Math.max(1, Number((req.query as any).days ?? 30) || 30))) }) });
   route({ method: 'POST', url: '/v1/data/purge', scope: 'admin', summary: 'Delete everything older than your settings keep (it also runs daily).', handler: async (_req, key) => { staff(key); return { body: { deleted: await data.purge() } }; } });
 
   // ---------- the number line ----------
@@ -190,8 +190,22 @@ export function dataRoutes(app: App, route: (r: RouteDef) => void) {
     if (key!.advertiserId && !(s.startsWith('offering:') && platform.campaigns.get(s.slice(9))?.advertiserId === key!.advertiserId)) throw new ApiError(403, 'missing_scope', 'Advertisers can place only their own offerings.');
     return { body: await wrap(async () => { const p = await numberline.place(key!.companyId, s); return { subject: s, id: p.id, by: p.by, status: p.status, placement: p.placement }; }) };
   } });
-  route({ method: 'GET', url: '/v1/numberline/history', scope: ['admin', 'ledger'], summary: 'Every version of one placement, who made it and why.', handler: async (req, key) => ({ body: await numberline.history(staff(key).companyId, String((req.query as any).subject ?? '')) }) });
-  route({ method: 'POST', url: '/v1/numberline/override', scope: 'admin', summary: 'Correct a placement. Kept as a new version with who made it.', body: obj({ subject: { type: 'string', maxLength: 120 }, placement: { type: 'object' } }, ['subject', 'placement']), handler: async (req, key) => {
+  route({ method: 'GET', url: '/v1/numberline/history', query: { subject: Q.text }, scope: ['admin', 'ledger'], summary: 'Every version of one placement, who made it and why.', handler: async (req, key) => ({ body: await numberline.history(staff(key).companyId, String((req.query as any).subject ?? '')) }) });
+  // A correction is a whole placement, as /v1/numberline/history shows it: anything less is refused before it is kept
+  // (an empty one used to crash the save, and a partial one would break every page that reads it back).
+  const system = { type: 'string', enum: ['market', 'sharing', 'free_outside', 'free_ad', 'giving', 'public'] };
+  const cents = { type: 'number', minimum: -100_000_000, maximum: 100_000_000 };
+  const placement = obj({
+    netCents: cents, position: { type: 'string', enum: ['for_sale', 'free', 'negatively_priced'] }, freeKind: { type: 'string', enum: ['outside_funded', 'ad_funded'] },
+    systems: { type: 'array', minItems: 1, maxItems: 6, items: obj({ system, share: { type: 'number', minimum: 0, maximum: 1 } }, ['system', 'share']) },
+    primary: system,
+    funding: { type: 'array', maxItems: 7, items: { type: 'string', enum: ['user_payment', 'lower_floor', 'native_output', 'adjacent_capture', 'participant_value', 'outside_grant', 'peer_payment'] } },
+    valueBack: obj({ donationCents: cents, paymentCents: cents, cause: { type: 'string', maxLength: 200 }, directedBy: { type: 'string', enum: ['operator', 'person', 'none'] } }, ['donationCents', 'paymentCents', 'directedBy']),
+    conditions: { type: 'array', maxItems: 20, items: { type: 'string', maxLength: 300 } },
+    reasons: { type: 'array', maxItems: 20, items: { type: 'string', maxLength: 300 } },
+    confidence: { type: 'number', minimum: 0, maximum: 1 },
+  }, ['netCents', 'position', 'systems', 'primary', 'funding', 'valueBack', 'conditions', 'reasons', 'confidence']);
+  route({ method: 'POST', url: '/v1/numberline/override', scope: 'admin', summary: 'Correct a placement. Kept as a new version with who made it.', body: obj({ subject: { type: 'string', maxLength: 120 }, placement }, ['subject', 'placement']), handler: async (req, key) => {
     const b = req.body as { subject: string; placement: Placement };
     return { body: await wrap(() => numberline.override(staff(key).companyId, b.subject, b.placement, `person:${key!.userId ?? key!.id}`)) };
   } });
@@ -199,7 +213,7 @@ export function dataRoutes(app: App, route: (r: RouteDef) => void) {
     await numberline.idle();
     return { body: { tiers: tierNames, ...(await numberline.summary(staff(key).companyId)) } };
   } });
-  route({ method: 'GET', url: '/v1/honest-data/choices', scope: ['admin', 'ledger'], summary: 'The choices themselves, filtered by ?tier=, ?system= or ?person=.', handler: async (req, key) => {
+  route({ method: 'GET', url: '/v1/honest-data/choices', query: { tier: Q.text, system: Q.text, person: Q.text, limit: Q.count }, scope: ['admin', 'ledger'], summary: 'The choices themselves, filtered by ?tier=, ?system= or ?person=.', handler: async (req, key) => {
     await numberline.idle();
     const q = req.query as any;
     return { body: await numberline.choices(staff(key).companyId, { tier: q.tier, system: q.system, person: q.person, limit: q.limit ? Number(q.limit) : undefined }) };

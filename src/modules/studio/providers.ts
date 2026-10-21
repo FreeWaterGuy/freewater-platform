@@ -181,7 +181,7 @@ export class StandInImageMaker implements ImageMaker {
     let seed = 0; for (const c of prompt) seed = (seed * 31 + c.charCodeAt(0)) >>> 0;
     const hue = seed % 360, hue2 = (hue + 40) % 360;
     const words = prompt.length > 90 ? `${prompt.slice(0, 88)}…` : prompt;
-    const esc = (s: string) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]!);
+    const esc = (s: string) => s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]!);
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><defs><radialGradient id="g" cx=".35" cy=".35" r=".9"><stop offset="0" stop-color="hsl(${hue},70%,78%)"/><stop offset="1" stop-color="hsl(${hue2},55%,32%)"/></radialGradient></defs><rect width="${w}" height="${h}" fill="url(#g)"/><circle cx="${w * 0.62}" cy="${h * 0.46}" r="${Math.min(w, h) * 0.22}" fill="hsl(${hue2},60%,88%)" opacity=".7"/><text x="40" y="${h - 70}" font-family="Arial, sans-serif" font-size="30" fill="#fff" opacity=".9">Stand-in for an AI picture:</text><text x="40" y="${h - 30}" font-family="Arial, sans-serif" font-size="26" fill="#fff" opacity=".9">${esc(words)}</text></svg>`;
     return new Uint8Array(await sharp(Buffer.from(svg)).blur(0.6).jpeg({ quality: 88 }).toBuffer());
   }

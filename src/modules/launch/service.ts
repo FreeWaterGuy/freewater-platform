@@ -80,9 +80,14 @@ export class LaunchService {
    * Bots play like people would, each with its own tastes: most like free and negatively priced things, some are
    * loyal to a few brands, a few are careless. They take a few seconds per screen, pass most quick checks, scan
    * bottles and sometimes write feedback. Everything they do is marked as theirs and wiped by a reset.
+   *
+   * They play for at most `budgetMs` of real time (default 10 s), then stop and say how many played: 200 bots × 60
+   * screens would otherwise hold one request, and the database, for many minutes.
    */
-  async runBots(companyId: string, o: { bots: number; rounds: number }) {
+  async runBots(companyId: string, o: { bots: number; rounds: number; budgetMs?: number }) {
     this.testOnly(companyId);
+    const until = performance.now() + (o.budgetMs ?? 10_000);
+    let played = 0, stoppedEarly = false;
     const bots = Math.max(1, Math.min(200, Math.floor(o.bots)));
     const rounds = Math.max(1, Math.min(60, Math.floor(o.rounds)));
     const r = this.random;
@@ -90,12 +95,15 @@ export class LaunchService {
     const units = [...this.platform.units.values()].filter((u) => u.companyId === companyId && u.kind !== 'custom').slice(-500);
     for (let b = 0; b < bots; b++) {
       if (this.chain.stage(companyId) !== 'test') break; // going live stops the bots at once
+      if (b > 0 && performance.now() > until) { stoppedEarly = true; break; }
+      played++;
       const key = `bot_${randomBytes(9).toString('base64url')}`;
       const taste = { free: 0.5 + r() * 0.4, brands: new Set<string>(), careless: r() < 0.08 };
       await this.data.notePlace(companyId, key, { country: 'US', state: ['TX', 'CA', 'NY', 'FL', 'IL'][Math.floor(r() * 5)]!, source: 'ip' });
       await this.data.ageCheck(companyId, key, `${1960 + Math.floor(r() * 45)}-0${1 + Math.floor(r() * 9)}-1${Math.floor(r() * 9)}`);
       await this.games.join(companyId, key);
       for (let i = 0; i < rounds; i++) {
+        if (performance.now() > until) { stoppedEarly = true; break; }
         const screen: any = await this.games.next(companyId, key).catch(() => null);
         if (!screen) break;
         // A few seconds to look at it (a careless bot rushes).
@@ -122,7 +130,7 @@ export class LaunchService {
       }
       if (r() < 0.2) { const f = await this.games.feedback(companyId, key, { text: 'Bot feedback: I would love more free snacks at the gym machine.' }).catch(() => null); if (f) { notes++; points += f.points; } }
     }
-    return { bots, answered, scans, feedback: notes, points };
+    return { bots: played, asked: bots, stoppedEarly, answered, scans, feedback: notes, points };
   }
 
   async status(companyId: string) {
