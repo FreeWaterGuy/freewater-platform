@@ -1,4 +1,5 @@
 import type { BoxProduct, Campaign, Share, Unit } from '../../core/types';
+import { houseAd } from '../fillers/house';
 import { layoutsFor, shareLabel } from './layouts';
 import { bidFloor } from './budget';
 import { newId } from '../../core/ids';
@@ -147,7 +148,7 @@ export class AdsService {
         business: { name: adv.name, category: adv.category },
         company: { name: company.name, blockedCategories: company.adRules.blockedCategories, giving: givingLine(company, locations[0]?.id ?? '') },
         machines: locations.map((l) => ({ id: l.id, name: l.name, kind: l.kind })),
-        plugins: this.host.list().filter((p) => p.id !== 'custom-experience' && p.id !== 'house-promo').map(({ id, name, description, example, configSchema }) => ({ id, name, description, example, configSchema })),
+        plugins: this.host.list().filter((p) => p.id !== 'custom-experience' && p.id !== 'house-promo' && p.id !== 'news').map(({ id, name, description, example, configSchema }) => ({ id, name, description, example, configSchema })),
         icons: posterIcons, fonts: Object.keys(posterFonts), sizes: allowedSizes,
         prices: { perPrintByShare: company.prices.perPrintByShare as any, bidStartsAt: bidFloor(company), perScan: company.prices.perScan, perArLaunch: company.prices.perArLaunch, commissionPercent: company.prices.commissionPercent },
         missing: missing(r.draft, this.host),
@@ -259,7 +260,7 @@ export class AdsService {
 
     // A sample label: this ad at its biggest size, the rest filled with the company's own ad.
     const biggest = Math.min(...o.sizes) as Share;
-    const house = [...this.platform.campaigns.values()].find((c) => c.isHouse && c.companyId === o.companyId);
+    const house = houseAd(this.platform.campaigns.values(), o.companyId);
     const temp: Campaign = { id: 'preview', companyId: o.companyId, advertiserId: o.advertiserId, advertiserName: o.advertiserName, category: o.category, sizes: [biggest], creative: { svg: o.draw }, experienceId: 'offer', targeting: {}, buy: { type: 'guaranteed', remainingPrints: 1 }, active: false };
     const campaigns = new Map(this.platform.campaigns);
     campaigns.set('preview', temp);

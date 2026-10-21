@@ -1,5 +1,6 @@
 import type { BoxFacePlacement, BoxProduct, Campaign, CompanyConfig } from '../../core/types';
 import { isEligible } from '../ads/engine';
+import { houseAd } from '../fillers/house';
 
 /**
  * Choose who gets each ad face of a pack box: one advertiser per face, never two competitors,
@@ -13,7 +14,7 @@ export function fillBoxFaces(input: {
   random: () => number;
 }): BoxFacePlacement[] {
   const { company, box, routeId, random } = input;
-  const house = input.campaigns.find((c) => c.isHouse && c.companyId === company.id);
+  const house = houseAd(input.campaigns, company.id);
   const eligible = input.campaigns
     .filter((c) => (c.formats ?? ['label']).includes('box-face') && isEligible(c, company, routeId))
     .map((c) => ({ c, r: random() }))

@@ -176,6 +176,7 @@ export const agentRegistry = {
   value: { name: 'Value agent', role: 'Finds where the system can lower costs, capture more value and give more, and proposes the changes: how far each part still is from the deepest price it could fund.', essential: false },
   'prompt-helper': { name: 'Prompt helper', role: 'Answers what people ask in the games’ prompt box, about anything, briefly and kindly.', essential: false },
   code: { name: 'Code agent', role: 'Improves the platform’s code as a whole: lower running costs, faster, fewer failures. Its changes go through review.', essential: false },
+  'news-writer': { name: 'News writer', role: 'Writes FreeWater News stories from what several outlets reported, in its own words, citing them; only while news is switched on.', essential: false },
 } as const;
 export type AgentId = keyof typeof agentRegistry;
 export const agentIds = Object.keys(agentRegistry) as AgentId[];

@@ -18,11 +18,19 @@ platform is the software that runs all of it. Other companies can also run it un
 - The label is cut into near-square pieces, from the whole label down to a tenth. No two competitors share a
   bottle.
 - It works for any drink and any size. There are samples for a 16 oz bottle, a 25 oz bottle and a 12 oz can.
+- Spots nobody buys carry approved filler (our own messages, Well Aware, advertisers' offered ads) before the house ad.
+  **FreeWater News** (a topic on the bottle, the newest story behind its code) is built but switched off until it's
+  rolled out.
+- Ads for houses that haven't signed up can use area statistics and household data from a data company (never
+  sensitive kinds, never sold), with what residents chose to share preferred.
 
 **2. The machines (Model 6)**
 - The software that runs inside the vending machine: its screen, printing, faults and keeping going when the
   internet drops.
 - You have to be standing at the machine to get a bottle, and there's a daily limit per person.
+- *Planned, not built:* app users order 1 to 10 minutes ahead, the bottle is printed just for them, and scanning the
+  machine releases theirs; bottles not picked up go to a side tray anyone can take from, counted as untargeted
+  (`docs/REQUIREMENTS.md`, "Machines").
 
 **3. Home delivery**
 - Free 6, 12 and 24 packs on a schedule. Every bottle in a pack is different, and the box itself carries ads.

@@ -1636,6 +1636,144 @@ end $$;
 create trigger advertiser_credit_limits_guard before update or delete on advertiser_credit_limits for each row execute function advertiser_credit_limits_guard();
 `,
   },
+  {
+    id: '062_news_fillers_households',
+    sql: `
+-- FreeWater News (off unless the host and the company switch it on). A topic prints only once a person approved it;
+-- its code always opens the newest story. Stories and corrections are only ever added to (a correction is a new
+-- version and a note, never an edit).
+create table news_topics (
+  id text primary key,
+  company_id text not null,
+  subject text not null check (length(subject) between 2 and 30),
+  photo text,
+  status text not null check (status in ('pending', 'approved', 'retired')),
+  proposed_by text not null,
+  proposed_at timestamptz not null,
+  approved_by text,
+  approved_at timestamptz,
+  retired_at timestamptz
+);
+create index news_topics_company on news_topics(company_id, status);
+-- What outlets reported: the facts a story is written from, with where they came from.
+create table news_reports (
+  id text primary key,
+  company_id text not null,
+  topic_id text not null references news_topics(id),
+  outlet text not null,
+  url text not null,
+  title text not null,
+  facts text not null,
+  added_by text not null,
+  at timestamptz not null
+);
+create index news_reports_topic on news_reports(topic_id, at desc);
+create table news_stories (
+  id text primary key,
+  company_id text not null,
+  topic_id text not null references news_topics(id),
+  version integer not null check (version >= 1),
+  style text not null,
+  headline text not null,
+  paragraphs jsonb not null,
+  sources jsonb not null,
+  written_by text not null,
+  at timestamptz not null,
+  unique (topic_id, version, style)
+);
+create table news_corrections (
+  id text primary key,
+  company_id text not null,
+  topic_id text not null references news_topics(id),
+  version integer not null,
+  note text not null check (length(note) between 5 and 500),
+  by_person text not null,
+  at timestamptz not null
+);
+create index news_corrections_topic on news_corrections(topic_id, at);
+create function news_append_only() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' and fw_test_reset(old.company_id) then return old; end if;
+  perform fw_refuse(tg_table_name, 'is append-only: write a new version or a correction instead.');
+  return null;
+end $$;
+create trigger news_stories_append_only before update or delete on news_stories for each row execute function news_append_only();
+create trigger news_corrections_append_only before update or delete on news_corrections for each row execute function news_append_only();
+-- "Report an error" from a story's page: only what the reader wrote, never who they are. Kept a year.
+create table news_error_reports (
+  id text primary key,
+  company_id text not null,
+  topic_id text not null references news_topics(id),
+  version integer not null,
+  style text not null,
+  text text not null check (length(text) between 3 and 1000),
+  status text not null default 'new' check (status in ('new', 'corrected', 'dismissed')),
+  at timestamptz not null
+);
+create index news_error_reports_company on news_error_reports(company_id, at desc);
+-- The news sources a person chose (their own stated choice; never worked out from what they do).
+create table news_source_prefs (
+  company_id text not null,
+  subject text not null,
+  sources jsonb not null,
+  at timestamptz not null,
+  primary key (company_id, subject)
+);
+
+-- Area data: neighbourhood or census-block statistics (no person in them), attached to delivery areas or houses.
+create table area_attributes (
+  company_id text not null,
+  area_id text not null,
+  kind text not null check (kind in ('block_group', 'tract', 'zip', 'route', 'neighbourhood')),
+  name text not null,
+  attributes jsonb not null,
+  source text not null,
+  as_of date not null,
+  sample boolean not null default false,
+  lat double precision,
+  lng double precision,
+  primary key (company_id, area_id)
+);
+-- Household data bought from a data company (or first-party), one attribute per row with its source and date, so a
+-- source can be deleted whole. Used only to choose ads for houses; never sold or passed on.
+create table household_imports (
+  id text primary key,
+  company_id text not null,
+  source text not null check (length(source) between 2 and 60),
+  source_date date not null,
+  origin text not null check (origin in ('bought', 'first_party')),
+  rows integer not null,
+  refused integer not null,
+  imported_by text not null,
+  imported_at timestamptz not null
+);
+create table household_attributes (
+  id text primary key,
+  company_id text not null,
+  house_key text not null,
+  address text not null,
+  block_id text,
+  attribute text not null,
+  value text not null,
+  source text not null,
+  source_date date not null,
+  origin text not null check (origin in ('bought', 'first_party')),
+  import_id text not null references household_imports(id) on delete cascade,
+  imported_at timestamptz not null,
+  unique (company_id, house_key, attribute, source)
+);
+create index household_attributes_house on household_attributes(company_id, house_key);
+create index household_attributes_source on household_attributes(company_id, source);
+-- Houses that said no to ads chosen for them (no account needed): bought data about them is deleted and never used.
+create table household_optouts (
+  company_id text not null,
+  house_key text not null,
+  how text not null,
+  at timestamptz not null,
+  primary key (company_id, house_key)
+);
+`,
+  },
 ];
 
 /** Runs every migration not yet run (or, for tests that start from an older schema, those in `list`). */

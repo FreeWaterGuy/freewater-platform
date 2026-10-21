@@ -68,6 +68,8 @@ export class Platform {
   codes?: import('./modules/codes/service').CodeMinter;
   /** Each ad's results so far, so the auction can predict how it will do. */
   readonly auctionStats = new AuctionStats();
+  /** Fills spots nobody bought with approved filler (src/modules/fillers). Set at start-up; without it, the house ad stays. */
+  unsold?: (req: { company: CompanyConfig; product: Product; location: Location; audience: import('./modules/ads/contract').PrintAudience | null; placements: Placement[]; random: () => number }) => Placement[];
   /** Which slots on a bottle use AR that follows the bottle, so its label gets the tracking strip there. Set at start-up. */
   arTracking?: (unit: Unit) => number[];
 
@@ -204,9 +206,12 @@ export class Platform {
     this.bus.publish('order.created', company.id, { orderId: opts.orderId, locationId: location.id, productId: product.id, kind, customerId: opts.custom?.customerId, packId: opts.packId }, opts.orderId);
 
     // 1. Fill slots (custom units have no ads).
-    const fill = opts.custom
+    const fill: import('./modules/ads/contract').FillResult = opts.custom
       ? { layout: [1 as const], placements: [] }
       : this.registry.adsFor(company).fill({ company, product, location, campaigns: [...this.campaigns.values()], random: this.random, frequency: opts.frequency, avoidSignatures: opts.avoidSignatures, audience: this.withToday(opts.audience ?? null, company.timezone), moment: momentAt(this.bus.now(), company.timezone ?? 'UTC'), stats: this.auctionStats });
+    // Spots nobody bought: approved filler (the company's own messages, charity, advertisers' offered ads, news) before
+    // the generic house ad. Never billed.
+    if (!opts.custom && this.unsold) fill.placements = this.unsold({ company, product, location, audience: opts.audience ?? null, placements: fill.placements, random: this.random });
     reserve(fill.placements, this.campaigns);
     this.persistCampaigns(fill.placements);
 

@@ -231,9 +231,49 @@
         } }, icon(ICON.share), 'Pass it on');
       }
       case 'more': return moreBlock(b, ctx);
+      case 'news': return newsBlock(b);
       case 'ar': return arBlock(b, ctx);
       default: return null;
     }
+  }
+
+  // A FreeWater News story: ours, in our own words, with the outlets it's based on linked (no tracking added to their
+  // links), its corrections, a way to report an error, and the reader's own choice of sources.
+  function newsBlock(b) {
+    const base = `/v1/public/news/${encodeURIComponent(b.companyId)}`;
+    const report = h('form', { class: 'news-report', hidden: true, onsubmit: async (e) => {
+      e.preventDefault();
+      const text = report.querySelector('textarea').value.trim();
+      if (text.length < 3) { toast('Tell us what’s wrong.'); return; }
+      try { await api('POST', `${base}/topics/${encodeURIComponent(b.topicId)}/errors`, { text }); report.hidden = true; toast('Thank you. A person on our team reads every report.'); }
+      catch (err) { toast(err.message); }
+    } }, h('label', { text: 'What’s wrong? (We keep only what you write, not who you are.)' }), h('textarea', { rows: '3', maxlength: '1000' }), h('button', { type: 'submit', class: 'btn secondary', text: 'Send' }));
+    const picker = h('div', { class: 'news-sources', hidden: true });
+    const openPicker = async () => {
+      if (!picker.hidden) { picker.hidden = true; return; }
+      try {
+        const s = await api('GET', `${base}/sources?viewer=${encodeURIComponent(viewerKey)}`);
+        const boxes = s.choices.map((c) => h('label', {}, h('input', { type: 'checkbox', value: c.id, checked: s.chosen.includes(c.id) }), ` ${c.name}`));
+        picker.replaceChildren(h('p', { class: 'text', text: s.note }), ...boxes, h('button', { type: 'button', class: 'btn secondary', text: 'Save my sources', onclick: async () => {
+          const chosen = [...picker.querySelectorAll('input:checked')].map((i) => i.value);
+          try { await api('POST', `${base}/sources`, { viewerKey, sources: chosen }); toast(chosen.length ? 'Saved. Stories will follow your first pick.' : 'Saved. You’ll get our neutral version.'); picker.hidden = true; }
+          catch (err) { toast(err.message); }
+        } }));
+        picker.hidden = false;
+      } catch (err) { toast(err.message); }
+    };
+    const sources = b.basedOn.map((s, i) => [i ? (i === b.basedOn.length - 1 ? ' and ' : ', ') : '', h('a', { href: s.url, rel: 'noopener noreferrer', target: '_blank', text: s.name })]);
+    return h('article', { class: 'article news' },
+      h('p', { class: 'byline', text: b.topic }),
+      h('h2', { text: b.headline }),
+      h('p', { class: 'byline', text: b.byline }),
+      b.paragraphs.map((p) => h('p', { text: p })),
+      h('p', { class: 'text news-based' }, 'Based on reporting by ', sources, '.'),
+      h('div', { class: 'news-corrections' }, h('b', { text: 'Corrections: ' }), b.corrections.length ? b.corrections.map((c) => h('span', { text: `${new Date(c.at).toLocaleDateString()}: ${c.note} ` })) : 'none so far.'),
+      h('div', { class: 'pills' },
+        h('button', { type: 'button', class: 'btn secondary', text: 'Report an error', onclick: () => { report.hidden = !report.hidden; } }),
+        h('button', { type: 'button', class: 'btn secondary', text: 'Choose my news sources', onclick: openPicker })),
+      report, picker);
   }
 
   // In AR, a buy button sits over the 3D model. On iPhone it's Apple's own AR banner, on Android Google's; both go

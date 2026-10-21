@@ -25,6 +25,9 @@ import { UploadQuota, uploadLimitsFrom } from '../runtime/uploads';
 import { printLimits } from '../modules/fleet/printCap';
 import { BadKeyGuard, classify, limits, RateLimiter, securityHeaders, SecurityLog, shortIp } from './security';
 import { teamRoutes } from './team';
+import { newsRoutes } from './news';
+import { fillerRoutes } from './fillers';
+import { householdRoutes } from './households';
 import { loggerOptions, pathOnly } from './logging';
 import { operationsRoutes } from './operations';
 import { VideoError } from '../modules/video/service';
@@ -817,6 +820,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   chainRoutes(app, route);
   studioRoutes(app, route);
   teamRoutes(app, route);
+  newsRoutes(app, route);
+  fillerRoutes(app, route);
+  householdRoutes(app, route);
 
   // ---------- wiring ----------
 

@@ -170,7 +170,8 @@ Every settings change is saved as a version. *History* shows who changed what, a
 
 Separate from every switch above: the host's settings can take whole areas out of the server, so a small launch
 exposes only what it uses. `FW_FEATURES=pilot` is the preset for the first pilot; `FW_FEATURES_OFF=lottery,offers`
-(a comma list) switches off more. Unset, everything is on.
+(a comma list) switches off more. Unset, everything is on except **news**, which starts off everywhere until the host
+sets `FW_FEATURES_ON=news` (below).
 
 | Rule | How |
 |---|---|
@@ -186,6 +187,33 @@ giving, the open books, accounts, data rights, transparency, machines, the games
 It switches off the token, conversion, withdrawals, gift cards, money partners, the AI agents' fund, the operator
 network, the prize game, Veo footage and brand offers. The full table, with the reason for each, is in
 `docs/RUNNING.md` (*The pilot*); the areas and their routes are in `src/runtime/features.ts`.
+
+### News (built, off until it's rolled out)
+
+FreeWater News on unsold spots (`src/modules/news`) is the one area that starts **off** with no settings at all: the
+founder wants it "toggled off… rolled out over time with proper testing". It takes two switches, both off:
+
+| Switch | Who | What it does |
+|---|---|---|
+| `FW_FEATURES_ON=news` | The host's settings, with a restart | Without it the news routes don't exist (404), no news prints, nothing runs. It's also off in the pilot preset; naming it here brings it back there on purpose. `FW_FEATURES_OFF=news` always wins. |
+| `news.on` (console settings) | A person signed in (never a key) | Without it, on a server that has news: topics can be prepared and approved, but nothing prints and the public pages answer `news_off`. Turning it off is immediate: bottles already out show "paused". |
+
+When both are on: an unsold spot can carry a news **topic** and its photo ("Austin City Council: the latest"; never a
+claim that goes stale). A person on the team approves each topic before it can print. The code is permanent and opens
+the newest version of the story, months later too. Stories are written by our AI (the *News writer*, `docs/AI.md`)
+from at least two outlets, in its own words, cited and linked, under the company's own name; a stand-in points to the
+reporting when there's no AI. Readers choose favourite sources (the first sets the style; none gets the neutral
+version; never guessed). Every story has *Report an error* and its corrections; corrections are logged and make a new
+version. Advertisers can keep an ad off bottles with news (`POST /v1/campaigns/:id/news-adjacency`).
+
+### Filler for unsold spots (on everywhere; each piece approved by a person)
+
+Spots nobody bought get an approved filler before the generic house ad: the company's own messages, charity
+messages (Well Aware), advertisers' ads offered free for unsold spots (`POST /v1/campaigns/:id/filler-offer`), and,
+only while news is on, news topics. Every piece is pending until a person approves it (`POST /v1/fillers/:id/approve`,
+signed in); retiring is immediate. Never billed. Never on a bottle in the no-ads control; an advertiser's filler
+follows its own ad's rules (categories, competitors, the person's "never show me") and stops when its ad stops. A
+label nobody bought at all is one full-wrap piece, which only the company's own, charity and news pieces fit.
 
 ---
 

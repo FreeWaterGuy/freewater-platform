@@ -31,7 +31,8 @@ with a plain explanation.
 |---|---|
 | `NODE_ENV=production` | Turns on the strict checks and caching. |
 | `FW_FEATURES` | `pilot` switches off everything outside the core loop (see *The pilot* below). Unset (or `all`): everything on. |
-| `FW_FEATURES_OFF` | Comma list of further areas to switch off, e.g. `lottery,offers` (added to the preset). The areas: `token`, `token_conversion`, `withdrawals`, `gift_cards`, `partners`, `agents_fund`, `network`, `lottery`, `video_generation`, `offers`, `games`. An unknown name stops a production start. |
+| `FW_FEATURES_OFF` | Comma list of further areas to switch off, e.g. `lottery,offers` (added to the preset). The areas: `token`, `token_conversion`, `withdrawals`, `gift_cards`, `partners`, `agents_fund`, `network`, `lottery`, `video_generation`, `offers`, `games`, `news`. An unknown name stops a production start. |
+| `FW_FEATURES_ON` | Areas that start **off** everywhere until named here: today only `news` (FreeWater News on unsold spots; docs/SWITCHES.md “News”). Naming it brings it back even over the pilot preset, so it can be tried in the pilot on purpose; `FW_FEATURES_OFF` still wins. Each company must also turn `news.on` on itself (a person, in the console). |
 | `ALLOW_STANDINS=1` | Required in production for now: real payment, payout and email/text providers aren't wired yet, so the server runs on stand-ins (no real money moves, no message is sent) and refuses to start in production unless this says it's a staging rehearsal. It logs and alerts which stand-ins are active. Remove it once the real providers are in. |
 | `DATABASE_URL` | Postgres 13–17, e.g. `postgres://user:pass@host:5432/freewater?sslmode=require`. Use a managed one with automatic backups and point-in-time recovery. |
 | `PUBLIC_URL` | The https address of the site. It goes on every printed QR code and in every email. |

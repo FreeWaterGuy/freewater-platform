@@ -597,7 +597,15 @@
       screen({ nav: 'me' }, h('h1', { class: 'display', style: 'font-size:26px', text: 'Me' }), h('p', { class: 'muted', text: 'Sign in to keep your bottles, saved offers and your own designs in one place.' }), h('button', { class: 'btn', type: 'button', onclick: async () => { if (await signIn()) render(); } }, 'Sign in'));
       return;
     }
-    const [cards, lvl] = await Promise.all([api('GET', '/v1/me/cards').catch(() => []), levelInfo(me).catch(() => null)]);
+    const [cards, lvl, newsSrc] = await Promise.all([api('GET', '/v1/me/cards').catch(() => []), levelInfo(me).catch(() => null), on('news') ? api('GET', '/v1/me/news-sources').catch(() => null) : null]);
+    // Your news sources (only where news is on): your own choice, in the order you tap them; the first sets the style.
+    const newsPicked = newsSrc ? [...newsSrc.chosen] : [];
+    const newsSection = newsSrc && h('div', {}, h('h2', { class: 'section' }, 'Your news sources'), h('p', { class: 'small muted', style: 'margin:0', text: newsSrc.note }),
+      h('div', { class: 'chips' }, newsSrc.choices.map((c) => h('button', { type: 'button', class: 'chip-btn', 'aria-pressed': String(newsPicked.includes(c.id)), onclick: async (e) => {
+        const i = newsPicked.indexOf(c.id); if (i >= 0) newsPicked.splice(i, 1); else newsPicked.push(c.id);
+        e.currentTarget.setAttribute('aria-pressed', String(newsPicked.includes(c.id)));
+        try { await api('POST', '/v1/me/news-sources', { sources: newsPicked }); toast(newsPicked.length ? 'Saved' : 'Saved: our neutral version'); } catch (x) { toast(x.message); }
+      } }, c.name))));
     const name = h('input', { class: 'input', id: 'me-name', value: me.displayName || '', placeholder: 'What should we call you?', autocomplete: 'name' });
     const consent = (key, title, text) => {
       const input = h('input', { type: 'checkbox', id: `c-${key}`, role: 'switch', onchange: async () => {
@@ -628,6 +636,7 @@
         mine.has(i) ? mine.delete(i) : mine.add(i); e.currentTarget.setAttribute('aria-pressed', String(mine.has(i)));
         state.me = await api('PATCH', '/v1/me', { interests: [...mine] });
       } }, i)))),
+      newsSection,
       h('h2', { class: 'section' }, 'What you really get'),
       h('p', { class: 'small muted', style: 'margin:0', text: 'Optional. Tells us honestly whether a free bottle is better than free for you, so we count what you really get.' }),
       (() => {

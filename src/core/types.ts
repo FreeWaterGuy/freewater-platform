@@ -223,6 +223,12 @@ export interface CompanyConfig {
     customUnit: Cents;
     perBoxFace: Cents;
   };
+  /**
+   * FreeWater News on unsold spots (docs/SWITCHES.md "News"). Off unless a person signed in turns it on, and only on a
+   * server whose host settings switch the news area on (FW_FEATURES_ON=news). `sources` replaces the sample list of
+   * outlets people can pick from.
+   */
+  news?: { on: boolean; sources?: { id: string; name: string; url: string }[] };
   /** Which registered implementation each module slot uses. Swapping one never touches the others. */
   modules: {
     ads: string;
@@ -319,6 +325,14 @@ export interface Campaign {
   afterEnd?: 'current' | 'keep';
   buy: Buy;
   isHouse?: boolean; // the company's own filler, used when nothing else fits; never billed
+  /**
+   * A piece approved for unsold spots (src/modules/fillers): the company's own messages, charity messages, an
+   * advertiser's ad it offered free for unsold spots, or a news topic. Always `isHouse` too (never billed), and never
+   * the company's generic house ad (`houseAd`).
+   */
+  filler?: FillerInfo;
+  /** The advertiser asked never to be printed next to news (honoured while news is on). */
+  avoidNews?: boolean;
   active: boolean;
   /** Content review. A campaign only runs once the company has approved it. */
   review?: { status: 'submitted' | 'approved' | 'rejected'; note?: string; at: string };
@@ -327,6 +341,22 @@ export interface Campaign {
   /** A short name the advertiser knows it by. */
   name?: string;
   createdAt?: string;
+}
+
+export interface FillerInfo {
+  kind: 'own' | 'charity' | 'advertiser' | 'news';
+  /** pending until a person on the company's team approves it; retired ones never print again (old bottles still open). */
+  status: 'pending' | 'approved' | 'retired';
+  proposedBy: string;
+  proposedAt: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  /** For an advertiser's filler: the ad it shows (its own page, unbilled). */
+  sourceCampaignId?: string;
+  /** For news: the topic whose latest story the code opens, forever. */
+  topicId?: string;
+  /** How often it comes up against the other fillers (1 to 10). */
+  weight: number;
 }
 
 /** Who an ad is for. Interests only count for people who turned on personalized offers. */

@@ -35,7 +35,8 @@ const call = async (method: string, url: string, key?: string, payload?: unknown
 
 beforeAll(async () => {
   db = await createPgliteClient();
-  app = await createApp({ db, seedDemo: true, seed: 11, clock: () => new Date('2026-11-02T16:00:00Z') });
+  // Every area on, news too (it starts off unless the host names it), so the walk covers every route in the table.
+  app = await createApp({ db, seedDemo: true, seed: 11, clock: () => new Date('2026-11-02T16:00:00Z'), features: featuresFrom({ FW_FEATURES_ON: 'news' }).features });
   keys = app.demoKeys!;
   server = await buildServer(app);
   for (const s of ['orders', 'packs', 'campaigns', 'purchases', 'ledger', 'events', 'invoices', 'webhooks', 'me'] as Scope[]) {
@@ -236,12 +237,13 @@ describe('the pilot preset switches whole areas off', () => {
 });
 
 describe('reading FW_FEATURES and FW_FEATURES_OFF', () => {
-  it('is everything on by default', () => {
-    expect(featuresFrom({}).features.off.size).toBe(0);
+  it('is everything on by default, except the areas that start off (news) until the host names them', () => {
+    expect([...featuresFrom({}).features.off]).toEqual(['news']);
+    expect(featuresFrom({ FW_FEATURES_ON: 'news' }).features.off.size).toBe(0);
   });
   it('adds FW_FEATURES_OFF to the preset, and an area is off when one it needs is', () => {
     const f = featuresFrom({ FW_FEATURES_OFF: 'token, Lottery' }).features;
-    expect([...f.off].sort()).toEqual(['lottery', 'token', 'token_conversion', 'withdrawals']);
+    expect([...f.off].sort()).toEqual(['lottery', 'news', 'token', 'token_conversion', 'withdrawals']);
     expect(featuresFrom({ FW_FEATURES: 'pilot', FW_FEATURES_OFF: 'games' }).features.on('games')).toBe(false);
   });
   it('stops a production start on an unknown name; elsewhere it warns and ignores it', () => {
@@ -251,7 +253,7 @@ describe('reading FW_FEATURES and FW_FEATURES_OFF', () => {
     const dev = featuresFrom({ FW_FEATURES_OFF: 'lotery' });
     expect(dev.errors).toEqual([]);
     expect(dev.warnings).toHaveLength(1);
-    expect(dev.features.off.size).toBe(0);
+    expect([...dev.features.off]).toEqual(['news']);
     expect(checkConfig({ NODE_ENV: 'production', FW_FEATURES_OFF: 'lotery' }).errors.join(' ')).toMatch(/FW_FEATURES_OFF[^]*lotery/);
   });
   it('doesn’t count the gift-card stand-in when gift cards are off', () => {
