@@ -53,8 +53,18 @@ export class NewsService {
     return { id: r.id, companyId: r.company_id, subject: r.subject, photo: r.photo ?? null, status: r.status, proposedBy: r.proposed_by, proposedAt: iso(r.proposed_at)!, approvedBy: r.approved_by ?? null, approvedAt: iso(r.approved_at) };
   }
 
-  /** News may print and be read for this company: the area is on here, and the company turned it on. */
-  allowed(company: CompanyConfig | undefined): boolean { return !!company && this.features.on('news') && company.news?.on === true; }
+  /**
+   * The company's switches (its Features page: src/runtime/registry.ts, News). Set by the app; the host area and the
+   * company's own news.on are checked here as well, so news stays off if either is off, whatever is wired.
+   */
+  featureOn: (companyId: string, id: string) => boolean = () => true;
+
+  /** News may be read for this company: the area is on here, and the company turned it on (a person, signed in). */
+  allowed(company: CompanyConfig | undefined): boolean { return !!company && this.features.on('news') && company.news?.on === true && this.featureOn(company.id, 'news'); }
+  /** News topics may print on this company's unsold spots (News, and "News topics on unsold spots"). */
+  printsOn(company: CompanyConfig | undefined): boolean { return this.allowed(company) && this.featureOn(company!.id, 'news_cards'); }
+  /** Readers' chosen sources are used (off: everyone reads the neutral version). */
+  private sourcesOn(companyId: string) { return this.allowed(this.platform.companies.get(companyId)) && this.featureOn(companyId, 'news_sources'); }
   /** This topic may print: approved, and its code has a story to open. */
   ready(topicId: string): boolean { const t = this.topics.get(topicId); return !!t && t.status === 'approved' && this.written.has(topicId); }
 
@@ -182,7 +192,7 @@ export class NewsService {
     const input = { brand: this.brand(companyId), subject: t.subject, reports, style: src ? { id: src.id, name: src.name } : null, corrections };
     const outlets = [...new Set([...reports.map((r) => r.outlet), ...this.sources(companyId).map((s) => s.name)])];
     let draft: StoryDraft; let by = this.writer.name;
-    try { draft = await withCompany(companyId, () => this.writer.write(input, companyId)); } catch { draft = await builtinNewsWriter.write(input); by = builtinNewsWriter.name; }
+    try { draft = await withCompany(companyId, () => this.writer.write(input, companyId), 'ai_news_writer'); } catch { draft = await builtinNewsWriter.write(input); by = builtinNewsWriter.name; }
     let problem = checkStory(draft, reports, outlets);
     if (problem && this.writer !== builtinNewsWriter) {
       // The writer's story didn't pass (copied wording, a link, an outlet's name as ours): the stand-in's goes out instead.
@@ -222,6 +232,7 @@ export class NewsService {
 
   /** The style for this reader: their first chosen source (that we offer), or neutral. */
   async styleFor(companyId: string, subjects: string[]) {
+    if (!this.sourcesOn(companyId)) return 'neutral';
     const ids = await this.chosen(companyId, subjects);
     const offered = this.sources(companyId);
     return ids.find((id) => offered.some((s) => s.id === id)) ?? 'neutral';

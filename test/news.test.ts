@@ -51,6 +51,8 @@ let seq = 0;
 const order = async (m: Made) => (await m.app.platform.order({ companyId: 'freewater', orderId: `news-${seq++}`, locationId: 'ATX-022', productId: 'bottle-16oz' })).unit;
 /** Only the house ad (or what replaces it) on bottles: every spot unsold. */
 const sellNothing = (m: Made) => { for (const c of m.app.platform.campaigns.values()) if (!c.isHouse) c.active = false; };
+/** A person on the team (never a key), as the Features page passes one. */
+const person = { userId: 'usr_news_owner', name: 'News owner', approverProblem: async () => null };
 const newsOn = (ps: Placement[], m: Made) => ps.filter((p) => m.app.platform.campaigns.get(p.campaignId)?.filler?.kind === 'news');
 
 describe('news is off unless switched on', () => {
@@ -113,9 +115,15 @@ describe('news switched on', () => {
   beforeAll(async () => { m = await make({ FW_FEATURES_ON: 'news' }); owner = await m.owner(); }, 60_000);
   afterAll(async () => { await m.server.close(); await m.db.close(); });
 
-  it('still waits for the company: news.on starts off, and only a person signed in turns it on', async () => {
+  it('still waits for the company: news and every switch under it start off, and only a person signed in turns them on', async () => {
     expect(m.app.platform.companies.get('freewater')!.news?.on ?? false).toBe(false);
-    expect((await m.call('GET', '/v1/public/news/freewater/sources')).code).toBe('news_off');
+    for (const id of ['news', 'news_cards', 'news_sources', 'ai_news_writer']) expect(m.app.companyFeatures.on('freewater', id), id).toBe(false);
+    expect((await m.call('GET', '/v1/public/news/freewater/sources')).code).toBe('feature_off');
+    expect((await m.call('POST', '/v1/console/features', m.keys['freewater-admin'], { changes: { news: true } })).code).toBe('person_needed');
+    // A new company starts with news off too.
+    const lake = await m.app.console.createCompany({ id: 'lake-news', name: 'Lake News Water', ownerEmail: 'ana@lakenews.example' }, 'Josh');
+    expect(lake.company.id).toBe('lake-news');
+    for (const id of ['news', 'news_cards', 'news_sources']) expect(m.app.companyFeatures.on('lake-news', id), id).toBe(false);
     const byKey = await m.call('PATCH', '/v1/console/settings', m.keys['freewater-admin'], { changes: { news: { on: true } } });
     expect(byKey.status).toBe(403);
     expect(byKey.code).toBe('person_needed');
@@ -146,8 +154,20 @@ describe('news switched on', () => {
     expect(checkStory({ headline: 'Transit vote', paragraphs: ['See https://apnews.com for more.'] }, [ap, kut], [])).toMatch(/no links/);
   });
 
+  it('prints nothing with News on but “News topics on unsold spots” still off', async () => {
+    await m.app.companyFeatures.change('freewater', { news: true }, person);
+    expect(m.app.platform.companies.get('freewater')!.news?.on).toBe(true); // one switch: the Features page and the settings
+    const t = (await m.call('POST', '/v1/news/topics', m.keys['freewater-admin'], { subject: 'Lake levels' })).body;
+    await m.call('POST', `/v1/news/topics/${t.id}/reports`, m.keys['freewater-admin'], ap);
+    await m.call('POST', `/v1/news/topics/${t.id}/reports`, m.keys['freewater-admin'], kut);
+    await m.call('POST', `/v1/news/topics/${t.id}/approve`, owner);
+    sellNothing(m);
+    for (let i = 0; i < 10; i++) expect(newsOn((await order(m)).placements, m)).toEqual([]);
+    await m.call('POST', `/v1/news/topics/${t.id}/retire`, m.keys['freewater-admin']);
+    await m.app.companyFeatures.change('freewater', { news_cards: true, news_sources: true }, person);
+  });
+
   it('never prints a topic a person hasn’t approved, and a service key can’t approve one', async () => {
-    await m.app.console.save('freewater', { news: { on: true } }, 'user:owner', undefined, { person: true });
     sellNothing(m);
     for (let i = 0; i < 15; i++) expect(newsOn((await order(m)).placements, m)).toEqual([]);
     const byKey = await m.call('POST', `/v1/news/topics/${topicId}/approve`, m.keys['freewater-admin']);
@@ -213,10 +233,22 @@ describe('news switched on', () => {
     expect(mine.style).toBe('fox');
     expect(mine.paragraphs).toContain('Style: fox.');
     expect((await story('reader-three-03')).style).toBe('neutral');
+    // Even once a story exists in every style someone chose, a reader who chose nothing still gets the neutral one.
+    await m.call('POST', '/v1/public/news/freewater/sources', undefined, { viewerKey: 'reader-five-005', sources: [m.app.news.sources('freewater')[0]!.id] });
+    expect((await story('reader-five-005')).style).toBe(m.app.news.sources('freewater')[0]!.id);
+    expect((await story('reader-three-03')).style).toBe('neutral');
+    expect((await story()).style).toBe('neutral');
     // An unknown source is refused; choosing none goes back to neutral.
     expect((await m.call('POST', '/v1/public/news/freewater/sources', undefined, { viewerKey: 'reader-two-0002', sources: ['my-blog'] })).status).toBe(422);
     await m.call('POST', '/v1/public/news/freewater/sources', undefined, { viewerKey: 'reader-two-0002', sources: [] });
     expect((await story('reader-two-0002')).style).toBe('neutral');
+    // With “Readers choose their sources” off, everyone reads the neutral version, whatever they chose.
+    await m.call('POST', '/v1/public/news/freewater/sources', undefined, { viewerKey: 'reader-two-0002', sources: ['fox'] });
+    await m.app.companyFeatures.change('freewater', { news_sources: false }, person);
+    expect((await story('reader-two-0002')).style).toBe('neutral');
+    expect((await m.call('POST', '/v1/public/news/freewater/sources', undefined, { viewerKey: 'reader-two-0002', sources: ['fox'] })).code).toBe('feature_off');
+    await m.app.companyFeatures.change('freewater', { news_sources: true }, person);
+    await m.call('POST', '/v1/public/news/freewater/sources', undefined, { viewerKey: 'reader-two-0002', sources: [] });
     // The app: the person's own choice, under their account's phone key, so their scans read the same way.
     await m.call('POST', '/v1/auth/start', undefined, { companyId: 'freewater', channel: 'email', to: 'reader@example.com' });
     const code = /(\d{6})/.exec(outbox.lastTo('reader@example.com')!.text)![1];
@@ -276,10 +308,18 @@ describe('news switched on', () => {
   });
 
   it('turning the company’s switch off stops printing and reading at once', async () => {
-    await m.app.console.save('freewater', { news: { on: false } }, 'user:owner', undefined, { person: true });
+    const plan = m.app.companyFeatures.plan('freewater', { news: false });
+    expect(plan.changes.map((c) => c.id)).toEqual(expect.arrayContaining(['news', 'news_cards', 'news_sources'])); // what needs it goes too, with a warning first
+    await m.app.companyFeatures.change('freewater', { news: false }, person);
+    expect(m.app.platform.companies.get('freewater')!.news?.on).toBe(false);
     sellNothing(m);
     for (let i = 0; i < 10; i++) expect(newsOn((await order(m)).placements, m)).toEqual([]);
-    expect((await m.call('GET', `/v1/public/experience/${unitId}/${slot}?viewer=reader-one-0001`)).body.doc.blocks[0].title).toMatch(/paused/);
+    // Its bottles still open, to a plain card: no story, nothing of news.
+    const doc = (await m.call('GET', `/v1/public/experience/${unitId}/${slot}?viewer=reader-one-0001`)).body.doc;
+    expect(doc.blocks.some((b: any) => b.type === 'news')).toBe(false);
+    expect(JSON.stringify(doc)).not.toContain('where things stand');
+    expect((await m.call('GET', `/v1/public/news/freewater/topics/${(await m.app.news.listTopics('freewater')).topics[0]!.id}`)).code).toBe('news_off');
+    await expect(m.app.news.story('freewater', (await m.app.news.listTopics('freewater')).topics[0]!.id)).rejects.toMatchObject({ code: 'news_off' });
   });
 });
 

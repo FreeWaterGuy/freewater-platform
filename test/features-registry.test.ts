@@ -128,7 +128,7 @@ describe('the registry is the whole platform', () => {
   it('tags every use of AI with its switch, so each falls back to rules when it’s off', () => {
     for (const use of AI_USES) {
       expect(byId.has(use), use).toBe(true);
-      const tagged = new RegExp(`'${use}'`).test(['src/modules/experiences/service.ts', 'src/modules/custom/service.ts', 'src/modules/ads/service.ts', 'src/modules/team/service.ts', 'src/modules/numberline/service.ts', 'src/modules/video/service.ts', 'src/modules/studio/service.ts', 'src/modules/games/prompter.ts'].map(src).join('\n'));
+      const tagged = new RegExp(`'${use}'`).test(['src/modules/experiences/service.ts', 'src/modules/custom/service.ts', 'src/modules/ads/service.ts', 'src/modules/team/service.ts', 'src/modules/numberline/service.ts', 'src/modules/video/service.ts', 'src/modules/studio/service.ts', 'src/modules/games/prompter.ts', 'src/modules/news/service.ts'].map(src).join('\n'));
       expect(tagged, use).toBe(true);
     }
     expect(src('src/modules/ai/routing.ts')).toMatch(/useOn\(companyId, use\)/);
@@ -202,14 +202,15 @@ describe('starting choices and new companies (P13)', () => {
     expect(v.own('freewater', byId.get('feature_list')!)).toBe(true);
   });
   it('a new company copies FreeWater’s choices, except money, chain and one-way switches, which start off', async () => {
-    await app.companyFeatures.change('freewater', { news: false }, actor());
+    await app.companyFeatures.change('freewater', { booking: false }, actor());
     const made = await app.console.createCompany({ id: 'lake-water', name: 'Lake Water', ownerEmail: 'ana@lakewater.example' }, 'Josh');
     expect(made.company.id).toBe('lake-water');
     const f = app.companyFeatures;
     for (const s of SWITCHES.filter((x) => x.kind === 'feature' && !x.locked)) {
       expect(f.own('lake-water', s), s.id).toBe(startsOffForNew(s) ? false : f.own('freewater', s));
     }
-    expect(f.own('lake-water', byId.get('news')!)).toBe(false); // FreeWater's choice today, copied
+    expect(f.own('lake-water', byId.get('booking')!)).toBe(false); // FreeWater's choice today, copied
+    expect(f.on('lake-water', 'news')).toBe(false); // News starts off everywhere (and is kept in the settings)
     expect(f.on('lake-water', 'money')).toBe(false);
     expect(f.on('lake-water', 'advertiser_billing')).toBe(false);
     expect(f.on('lake-water', 'token')).toBe(false);
@@ -218,7 +219,7 @@ describe('starting choices and new companies (P13)', () => {
     const log = (await db.query<any>(`select feature_id, via, reason from company_feature_log where company_id = 'lake-water'`)).rows;
     expect(log.length).toBeGreaterThan(80);
     expect(log.find((r) => r.feature_id === 'money')).toMatchObject({ via: 'new company', reason: expect.stringMatching(/start off/) });
-    await app.companyFeatures.change('freewater', { news: true, news_cards: true }, actor());
+    await app.companyFeatures.change('freewater', { booking: true }, actor());
   });
   it('a later change to FreeWater’s choices doesn’t change companies that already exist', async () => {
     const theirs = app.companyFeatures.own('lake-water', byId.get('booking')!);
@@ -227,17 +228,17 @@ describe('starting choices and new companies (P13)', () => {
     await app.companyFeatures.change('freewater', { booking: true }, actor());
   });
   it('a switch added after a company’s starting choices is “new” for it: off until it decides; FreeWater gets its own choice', async () => {
-    // As if "news_cards" were registered after peak-spring's choices were written.
-    await db.query(`delete from company_features where company_id = 'peak-spring' and feature_id = 'news_cards'`);
+    // As if "ad_stories" were registered after peak-spring's choices were written.
+    await db.query(`delete from company_features where company_id = 'peak-spring' and feature_id = 'ad_stories'`);
     await db.query(`update company_feature_baselines set catalogue = 0 where company_id = 'peak-spring'`);
     await app.companyFeatures.load();
-    const s = byId.get('news_cards')!;
+    const s = byId.get('ad_stories')!;
     expect(app.companyFeatures.isNew('peak-spring', s)).toBe(true);
-    expect(app.companyFeatures.on('peak-spring', 'news_cards')).toBe(false);
-    expect(app.companyFeatures.on('freewater', 'news_cards')).toBe(true);
+    expect(app.companyFeatures.on('peak-spring', 'ad_stories')).toBe(false);
+    expect(app.companyFeatures.on('freewater', 'ad_stories')).toBe(true);
     const page = (await call('GET', '/v1/console/features', peak)).body;
-    expect(page.switches.find((x: any) => x.id === 'news_cards')).toMatchObject({ isNew: true, own: false, freewater: true });
-    await app.companyFeatures.change('peak-spring', { news_cards: true }, actor());
+    expect(page.switches.find((x: any) => x.id === 'ad_stories')).toMatchObject({ isNew: true, own: false, freewater: true });
+    await app.companyFeatures.change('peak-spring', { ad_stories: true }, actor());
     expect(app.companyFeatures.isNew('peak-spring', s)).toBe(false);
     await db.query(`update company_feature_baselines set catalogue = 1 where company_id = 'peak-spring'`);
     await app.companyFeatures.load();
@@ -355,9 +356,9 @@ describe('turning off takes what needs it along, with a warning first', () => {
 
 describe('who may change a switch', () => {
   it('never a key, however powerful (P4)', async () => {
-    const r = await call('POST', '/v1/console/features', keys['freewater-admin'], { changes: { news: false } });
+    const r = await call('POST', '/v1/console/features', keys['freewater-admin'], { changes: { booking: false } });
     expect(r).toMatchObject({ status: 403, code: 'person_needed' });
-    expect(app.companyFeatures.own('freewater', byId.get('news')!)).toBe(true);
+    expect(app.companyFeatures.own('freewater', byId.get('booking')!)).toBe(true);
   });
   it('turning off is quick: any owner signed in, without the second step, even for money', async () => {
     const r = await call('POST', '/v1/console/features', fwNoStep, { changes: { money_partners: false } });
@@ -368,8 +369,8 @@ describe('who may change a switch', () => {
     const r = await call('POST', '/v1/console/features', fwNoStep, { changes: { money_partners: true } });
     expect(r).toMatchObject({ status: 403, code: 'second_step_required' });
     expect((await call('POST', '/v1/console/features', fw, { changes: { money_partners: true } })).status).toBe(200);
-    expect((await call('POST', '/v1/console/features', fwNoStep, { changes: { news: false } })).status).toBe(200); // not money: any owner
-    await app.companyFeatures.change('freewater', { news: true, news_cards: true }, actor());
+    expect((await call('POST', '/v1/console/features', fwNoStep, { changes: { booking: false } })).status).toBe(200); // not money: any owner
+    await app.companyFeatures.change('freewater', { booking: true }, actor());
   });
   it('switches only an approved step turns on (gift cards, withdrawals, the chain) are refused here, with where to go', async () => {
     const r = await call('POST', '/v1/console/features', fw, { changes: { chain_on: true } });

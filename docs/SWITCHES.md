@@ -192,12 +192,16 @@ network, the prize game, Veo footage and brand offers. The full table, with the 
 ### News (built, off until it's rolled out)
 
 FreeWater News on unsold spots (`src/modules/news`) is the one area that starts **off** with no settings at all: the
-founder wants it "toggled off… rolled out over time with proper testing". It takes two switches, both off:
+founder wants it "toggled off… rolled out over time with proper testing". It takes the host's area and the company's
+own switches on its Features page (§8, category News), all off, for every company, FreeWater included:
 
 | Switch | Who | What it does |
 |---|---|---|
 | `FW_FEATURES_ON=news` | The host's settings, with a restart | Without it the news routes don't exist (404), no news prints, nothing runs. It's also off in the pilot preset; naming it here brings it back there on purpose. `FW_FEATURES_OFF=news` always wins. |
-| `news.on` (console settings) | A person signed in (never a key) | Without it, on a server that has news: topics can be prepared and approved, but nothing prints and the public pages answer `news_off`. Turning it off is immediate: bottles already out show "paused". |
+| **FreeWater News** (`news`, kept in the settings as `news.on`) | An owner signed in (never a key) | Without it, on a server that has news: topics can be prepared and approved, but nothing prints and the public pages answer `news_off`. Turning it off is immediate and takes the switches below with it: bottles already out open a plain card, no story. |
+| **News topics on unsold spots** (`news_cards`; needs News and *Approved fillers*) | An owner signed in | Off: approved topics stay ready, nothing prints. |
+| **Readers choose their sources** (`news_sources`) | An owner signed in | Off: everyone reads the neutral version and the source pages answer `feature_off`. |
+| **News writer** (`ai_news_writer`, category AI; needs News) | An owner signed in | Off: the stand-in that only names and links the reporting. |
 
 When both are on: an unsold spot can carry a news **topic** and its photo ("Austin City Council: the latest"; never a
 claim that goes stale). A person on the team approves each topic before it can print. The code is permanent and opens
@@ -207,7 +211,11 @@ reporting when there's no AI. Readers choose favourite sources (the first sets t
 version; never guessed). Every story has *Report an error* and its corrections; corrections are logged and make a new
 version. Advertisers can keep an ad off bottles with news (`POST /v1/campaigns/:id/news-adjacency`).
 
-### Filler for unsold spots (on everywhere; each piece approved by a person)
+### Filler for unsold spots (each piece approved by a person)
+
+Two switches on the Features page (category Ads, *Unsold spots*): **Approved fillers for unsold spots** (`fillers`,
+on for FreeWater; "new", so off until it decides, for a company that existed before it) and under it **Advertisers
+offer ads for unsold spots** (`filler_offers`). Off: the plain house ad. Works with news off.
 
 Spots nobody bought get an approved filler before the generic house ad: the company's own messages, charity
 messages (Well Aware), advertisers' ads offered free for unsold spots (`POST /v1/campaigns/:id/filler-offer`), and,
@@ -215,6 +223,14 @@ only while news is on, news topics. Every piece is pending until a person approv
 signed in); retiring is immediate. Never billed. Never on a bottle in the no-ads control; an advertiser's filler
 follows its own ad's rules (categories, competitors, the person's "never show me") and stops when its ad stops. A
 label nobody bought at all is one full-wrap piece, which only the company's own, charity and news pieces fit.
+
+### Houses that haven't signed up (all off until a person turns them on)
+
+Features page, category Data & targeting: **Ads aimed at houses** (`house_targeting`), and under it **Area
+statistics** (`area_data`) and **Bought household data** (`household_data`). All three start off for every company.
+Off, `HouseholdService.audienceForHouse` returns nothing about the house (the engine prints untargeted), nothing is
+imported, and the area and import routes answer `feature_off`. Deleting by source or import, a house's opt-out and
+residents' download and erase always work (they sit under *Privacy rules by place* and *People's rights*, locked on).
 
 ---
 

@@ -100,6 +100,19 @@ describe('approved filler fills unsold spots', () => {
     expect(JSON.stringify(why.body)).toMatch(/Nobody bought this spot|company’s own message/);
   });
 
+  it('switched off for the company (its Features page): only the house ad, and its routes are gone; back on, filler again', async () => {
+    const person = { userId: 'usr_ops', name: 'Ops', approverProblem: async () => null };
+    const peakWas = app.companyFeatures.on('peak-spring', 'fillers');
+    await app.companyFeatures.change('freewater', { fillers: false }, person);
+    sellNothing();
+    for (let i = 0; i < 6; i++) expect((await order()).placements.every((p) => p.campaignId === 'cmp-house')).toBe(true);
+    expect((await call('GET', '/v1/fillers', keys['freewater-admin'])).code).toBe('feature_off');
+    expect(app.companyFeatures.on('peak-spring', 'fillers')).toBe(peakWas); // one company's switch is its own
+    await app.companyFeatures.change('freewater', { fillers: true, filler_offers: true }, person);
+    expect(app.companyFeatures.on('freewater', 'fillers')).toBe(true);
+    expect((await order()).placements.some((p) => kindOf(p) === 'own' || kindOf(p) === 'charity')).toBe(true);
+  });
+
   it('a retired filler stops at once, and the house ad is the last resort again', async () => {
     for (const f of (await call('GET', '/v1/fillers', keys['freewater-admin'])).body.fillers) await call('POST', `/v1/fillers/${f.id}/retire`, keys['freewater-admin']);
     for (let i = 0; i < 6; i++) expect((await order()).placements.every((p) => p.campaignId === 'cmp-house')).toBe(true);
@@ -143,6 +156,11 @@ describe('advertisers offer their ads for unsold spots', () => {
     expect(printed).toBeGreaterThan(0);
     await app.persistence.flush();
     expect((await db.query<any>(`select count(*)::int as n from ledger_entries where campaign_id = $1`, [offered.body.id])).rows[0].n).toBe(0);
+    // “Advertisers offer ads for unsold spots” off: their offered ads stop at once (the company's own would still fill).
+    const person = { userId: 'usr_ops', name: 'Ops', approverProblem: async () => null };
+    await app.companyFeatures.change('freewater', { filler_offers: false }, person);
+    for (let i = 0; i < 6; i++) expect((await order()).placements.some((p) => kindOf(p) === 'advertiser')).toBe(false);
+    await app.companyFeatures.change('freewater', { filler_offers: true }, person);
     // The ad itself stops (paused, ended): its filler stops too.
     joes.active = false;
     for (let i = 0; i < 6; i++) expect((await order()).placements.some((p) => kindOf(p) === 'advertiser')).toBe(false);

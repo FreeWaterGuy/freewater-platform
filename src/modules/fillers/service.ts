@@ -18,8 +18,8 @@ import { houseAd } from './house';
 export class FillerError extends Error { constructor(public code: string, message: string, public status = 422) { super(message); } }
 
 export interface NewsGate {
-  /** News may print for this company now: the area is on (FW_FEATURES_ON) and the company turned news.on. */
-  allowed(company: CompanyConfig): boolean;
+  /** News topics may print for this company now: the area is on (FW_FEATURES_ON) and the company turned news on. */
+  printsOn(company: CompanyConfig): boolean;
   /** The topic is approved and has a story to open. */
   ready(topicId: string): boolean;
 }
@@ -42,6 +42,8 @@ const HTTPS = /^https:\/\/[^\s"'<>]{3,300}$/;
 export class FillerService {
   /** Set by the app when the news area exists. Without it, news never fills a spot. */
   news?: NewsGate;
+  /** The company's switches (its Features page). Set by the app; "Advertisers offer ads for unsold spots" is checked here. */
+  featureOn: (companyId: string, id: string) => boolean = () => true;
 
   constructor(private platform: Platform, private flush: () => Promise<void>, private clock: () => Date = () => new Date()) {}
 
@@ -167,7 +169,7 @@ export class FillerService {
     if (!open.length) return req.placements;
     const camp = (id: string) => this.platform.campaigns.get(id);
     const onBottle: Campaign[] = req.placements.filter((p) => !p.isHouse).map((p) => camp(p.campaignId)).filter((c): c is Campaign => !!c);
-    const newsOk = !!this.news?.allowed(company);
+    const newsOk = !!this.news?.printsOn(company);
     const pool = this.fillers(company.id).filter((c) => c.filler!.status === 'approved' && this.mayPrint(c, company, product, location, audience ?? null, newsOk));
     if (!pool.length) return req.placements;
     const used = new Set<string>();
@@ -187,6 +189,7 @@ export class FillerService {
     const f = c.filler!;
     if (f.kind === 'news') return newsOk && !!f.topicId && !!this.news?.ready(f.topicId) && !product.blockedAdCategories?.includes('news') && !company.adRules.blockedCategories.includes('news') && !audience?.avoid?.includes('news');
     if (f.kind !== 'advertiser') return true;
+    if (!this.featureOn(company.id, 'filler_offers')) return false;
     const src = f.sourceCampaignId ? this.platform.campaigns.get(f.sourceCampaignId) : undefined;
     // The advertiser's own ad must still be running as approved: a paused, ended or held ad stops its filler too.
     if (!src || !src.active || (src.review?.status ?? 'approved') !== 'approved' || src.creditHold) return false;

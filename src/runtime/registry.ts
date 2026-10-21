@@ -20,7 +20,7 @@ import type { Feature } from './features';
 import { defaultWallet } from '../modules/wallet/assets';
 
 /** Raise this when adding switches (and give them `since: CATALOGUE`). */
-export const CATALOGUE = 1;
+export const CATALOGUE = 2;
 
 export const categoryIds = ['printing', 'ads', 'ar_video', 'studio', 'delivery', 'machines', 'rewards', 'games', 'news', 'data', 'ai', 'money', 'transparency', 'giving', 'partners', 'blockchain', 'safety', 'core'] as const;
 export type CategoryId = (typeof categoryIds)[number];
@@ -36,7 +36,7 @@ export const CATEGORIES: Category[] = [
   { id: 'machines', label: 'Machines', main: 'machines', description: 'Vending machines: their screens, the free bottle in the app, offline labels, the fleet.' },
   { id: 'rewards', label: 'Points & rewards', main: 'rewards', description: 'Points, dollar credit and brand offers.' },
   { id: 'games', label: 'Games', main: 'games', description: 'The games for points, picks that come true, and the prize game.' },
-  { id: 'news', label: 'News', main: 'news', description: 'News stories that a bottle’s code can open.' },
+  { id: 'news', label: 'News', main: 'news', description: 'FreeWater News on spots nobody bought: a topic on the bottle, the newest story behind its code. Built, and off until you turn it on.' },
   { id: 'data', label: 'Data & targeting', main: 'data', description: 'What is collected beyond the minimum, how much each person shares, and targeting people.' },
   { id: 'ai', label: 'AI', main: 'ai', description: 'Every use of AI. Each falls back to built-in rules when it’s off; nothing breaks.' },
   { id: 'money', label: 'Money & payments', main: 'money', description: 'Billing advertisers, taking payments, and every way money or credit leaves the platform.' },
@@ -155,6 +155,11 @@ export const SWITCHES: Switch[] = [
     routes: ['GET /v1/campaigns/:id/codes', 'PATCH /v1/campaigns/:id/codes', 'POST /v1/campaigns/:id/preview-moment'] }),
   sw({ id: 'booking', category: 'ads', group: 'What the code shows', label: 'Book a time', description: 'A code can open a booking page.', plugins: ['booking'] }),
   sw({ id: 'ad_videos', category: 'ads', group: 'What the code shows', label: 'The advertiser’s own video', description: 'A code can open the advertiser’s uploaded video first.', plugins: ['video'] }),
+  sw({ id: 'ad_stories', category: 'ads', group: 'What the code shows', label: 'An advertiser’s story', description: 'A code can open an advertiser’s own short story with a link to the rest (a paper’s or a blog’s). Not FreeWater News.', plugins: ['news-card'] }),
+  sw({ id: 'fillers', category: 'ads', group: 'Unsold spots', label: 'Approved fillers for unsold spots', description: 'Spots nobody bought get a piece your team approved (your own messages, a charity’s) before the plain house ad. Never billed. Off: the house ad.',
+    routes: ['GET /v1/fillers', 'POST /v1/fillers', 'POST /v1/fillers/:id/approve', 'POST /v1/fillers/:id/retire'], since: 2 }),
+  sw({ id: 'filler_offers', category: 'ads', group: 'Unsold spots', parent: 'fillers', label: 'Advertisers offer ads for unsold spots', description: 'An advertiser may offer one of its approved ads, free, for spots nobody bought; your team approves each one first.',
+    routes: ['POST /v1/campaigns/:id/filler-offer'], since: 2 }),
   ...([[1, 'whole', 'The whole label'], [2, 'half', 'Half'], [3, 'third', 'A third'], [4, 'quarter', 'A quarter'], [6, 'sixth', 'A sixth'], [8, 'eighth', 'An eighth'], [10, 'tenth', 'A tenth']] as const).map(([n, name, label]) =>
     sw({ id: `size_${name}`, category: 'ads', group: 'Ad sizes', label: `${label} of the label`, description: n === 1 ? 'One ad across the whole label.' : `Ads that take ${label.toLowerCase()} of the label (cut as square as the bottle allows).` })),
 
@@ -236,8 +241,17 @@ export const SWITCHES: Switch[] = [
     link: flag('lottery.enabled', { via: { on: 'Set the prizes and odds under Prize game, then turn it on there.', page: 'game' } }) }),
 
   // ======================= News =======================
-  sw({ id: 'news', category: 'news', parent: null, label: 'News', description: 'News stories on scan pages.' }),
-  sw({ id: 'news_cards', category: 'news', group: 'Stories', label: 'News stories', description: 'A code can open a news story (a headline, a picture and the story).', plugins: ['news-card'] }),
+  // Built, and off (the founder: "start out toggled off … roll out over time with proper testing"): off for every company,
+  // FreeWater too, and off in the pilot (the host's news area is opt-in, FW_FEATURES_ON=news). Kept in the company's
+  // settings (news.on), so the Features page and the settings page are one switch; a person signed in turns it on.
+  sw({ id: 'news', category: 'news', parent: null, kind: 'linked', host: 'news', default: false, startsOff: 'News is rolled out slowly, with testing: off until your own people turn it on.', label: 'FreeWater News',
+    description: 'Spots nobody bought can carry a news topic (“Austin City Council: the latest”); its code always opens the newest story, written by our AI from several outlets, citing them. A person approves every topic. Off: no news anywhere.',
+    routes: ['GET /v1/news/topics', 'POST /v1/news/topics', 'POST /v1/news/topics/:id/approve', 'POST /v1/news/topics/:id/retire', 'POST /v1/news/topics/:id/reports', 'POST /v1/news/topics/:id/corrections', 'GET /v1/news/errors',
+      'GET /v1/public/news/:companyId/topics/:topicId', 'POST /v1/public/news/:companyId/topics/:topicId/errors', 'POST /v1/campaigns/:id/news-adjacency'],
+    link: flag('news.on', { base: () => ({ on: false }) }) }),
+  sw({ id: 'news_cards', category: 'news', group: 'On bottles', default: false, dependsOn: ['fillers'], label: 'News topics on unsold spots', description: 'Approved topics fill spots nobody bought, among your other fillers (only the topic and a photo print, never a claim). Off: topics stay ready but nothing prints.', plugins: ['news'], since: 1 }),
+  sw({ id: 'news_sources', category: 'news', group: 'Readers', default: false, label: 'Readers choose their sources', description: 'Readers pick their favourite outlets in the app or on the story page, and read our story in that style. Off, or with no choice: the neutral version. Never guessed.',
+    routes: ['GET /v1/public/news/:companyId/sources', 'POST /v1/public/news/:companyId/sources', 'GET /v1/me/news-sources', 'POST /v1/me/news-sources'], since: 2 }),
 
   // ======================= Data & targeting =======================
   sw({ id: 'data', category: 'data', parent: null, label: 'Data beyond the minimum', description: 'Collecting what the law allows, as each company’s data settings say. People’s rights and the law where they are always apply on top.',
@@ -254,6 +268,13 @@ export const SWITCHES: Switch[] = [
     routes: ['POST /v1/public/companies/:companyId/panel', 'GET /v1/environment/report'] }),
   sw({ id: 'ad_preferences', category: 'data', group: 'Targeting', dependsOn: ['ads'], label: 'Kinds of ads people never want', description: 'People choose kinds of ads they never want; bottles printed for them leave those out.',
     routes: ['GET /v1/public/companies/:companyId/ad-preferences', 'POST /v1/public/companies/:companyId/ad-preferences'] }),
+  sw({ id: 'house_targeting', category: 'data', group: 'Houses that haven’t signed up', dependsOn: ['ads'], default: false, startsOff: 'Aiming ads at houses is your own decision.', label: 'Ads aimed at houses',
+    description: 'Choose ads for a house from its area, data you bought and what its residents chose to share (theirs first). Never sold; never health, religion, ethnicity, sexuality, immigration, children or where anyone goes. Houses can say no without an account.',
+    routes: ['GET /v1/households/audience'], since: 2 }),
+  sw({ id: 'area_data', category: 'data', group: 'Houses that haven’t signed up', parent: 'house_targeting', default: false, label: 'Area statistics', description: 'Neighbourhood and census-block figures (household size, income band, families with children, homeowners) for your delivery areas. No person in them.',
+    routes: ['GET /v1/areas', 'POST /v1/areas'], since: 2 }),
+  sw({ id: 'household_data', category: 'data', group: 'Houses that haven’t signed up', parent: 'house_targeting', default: false, label: 'Bought household data', description: 'Import per-address data from a data company you choose, each fact with its source and date, from a closed list. Deleting by source or import always works, even off.',
+    routes: ['POST /v1/households/imports'], since: 2 }),
   sw({ id: 'targeting_people', category: 'data', group: 'Targeting', dependsOn: ['ads'], label: 'Ads aimed at people', description: 'Ads aimed at interests or new and returning customers print only for a known person who fits, and each bottle’s trail is followed.',
     routes: ['GET /v1/ads/reach', 'GET /v1/ops/reach', 'GET /v1/ops/units/:id/handoff'] }),
 
@@ -267,6 +288,7 @@ export const SWITCHES: Switch[] = [
   sw({ id: 'ai_video_writer', category: 'ai', group: 'For people who scan', dependsOn: ['motion_videos'], label: 'Video writer', description: 'Claude cuts the motion video from the advertiser’s own words. Off: the built-in writer.' }),
   sw({ id: 'ai_bottle_designer', category: 'ai', group: 'For people', dependsOn: ['bottle_designer'], label: 'Bottle designer', description: 'Claude designs people’s own bottles from what they say and their photos. Off: the built-in helper.' }),
   sw({ id: 'ai_prompt_helper', category: 'ai', group: 'For people', dependsOn: ['game_prompt_box'], label: 'Prompt helper', description: 'Answers what players type into the game’s box, briefly and kindly. Off: a polite note that answers aren’t on.' }),
+  sw({ id: 'ai_news_writer', category: 'ai', group: 'For people who scan', dependsOn: ['news'], default: false, label: 'News writer', description: 'Claude writes FreeWater News stories from several outlets’ reporting, in its own words, citing them. Off: the stand-in that only names and links the reporting.', since: 2 }),
   sw({ id: 'ai_team_assistant', category: 'ai', group: 'For your team', dependsOn: ['giveaways'], label: 'Team assistant', description: 'Drafts the books entries from “we gave 500 bottles at SXSW today” and receipts. Nothing is recorded until a person confirms.', routes: ['POST /v1/team/intake'] }),
   sw({ id: 'ai_agents', category: 'ai', group: 'Agents', parent: null, label: 'Value and code agents', description: 'Agents (on rules today) that read last week’s books and propose where to lower costs or give more; every change is measured afterwards.',
     routes: ['POST /v1/agents/scan', 'GET /v1/agents/quality', 'POST /v1/agents/quality'] }),
@@ -350,10 +372,10 @@ export const SWITCHES: Switch[] = [
   sw({ id: 'launch_stages', category: 'safety', parent: null, locked: 'The stages only move forward, through approved steps; testing can be wiped, live can’t.', label: 'Testing, then going live', description: 'Testing (bots and a full reset), live with points, live with the token, in order, never back.', routes: ['GET /v1/launch', 'POST /v1/launch/reset', 'POST /v1/launch/bots'], pages: ['launch'] }),
   sw({ id: 'minimum_age', category: 'safety', parent: null, locked: 'A legal minimum: 13, higher where the law says; it can only go up.', label: 'Minimum age', description: 'The youngest age that may take part in the games and earn rewards.', routes: ['POST /v1/me/age', 'POST /v1/public/data/:companyId/age'] }),
   sw({ id: 'privacy_rules', category: 'safety', parent: null, locked: 'The law follows the person: the rules of where they are, the strictest when unknown. A company may be stricter, never looser.', label: 'Privacy rules by place', description: 'Each visitor gets the rules of where they are; sanctioned countries are refused.',
-    routes: ['POST /v1/me/place', 'POST /v1/public/data/:companyId/place', 'GET /v1/data/policy', 'POST /v1/data/purge'], jobs: ['data-purge'], pages: ['data'] }),
+    routes: ['POST /v1/me/place', 'POST /v1/public/data/:companyId/place', 'GET /v1/data/policy', 'POST /v1/data/purge', 'GET /v1/households/imports', 'DELETE /v1/households/imports/:id', 'DELETE /v1/households/sources/:source'], jobs: ['data-purge'], pages: ['data'] }),
   sw({ id: 'data_rights', category: 'safety', parent: null, locked: 'People’s rights to see, choose and erase their data are never switched off.', label: 'People’s rights to their data', description: 'Download everything kept, erase it, say yes or no to each kind of data, “do not sell”, and “why am I seeing this?”.',
     routes: ['GET /v1/me/export', 'DELETE /v1/me', 'GET /v1/me/data', 'DELETE /v1/me/data', 'GET /v1/me/data/choices', 'POST /v1/me/data/choices', 'GET /v1/public/data/:companyId', 'POST /v1/public/data/:companyId/consent', 'POST /v1/public/data/:companyId/download', 'POST /v1/public/data/:companyId/forget',
-      'POST /v1/public/data/:companyId/do-not-sell', 'POST /v1/me/do-not-sell', 'GET /v1/public/why/:unitId/:slot'] }),
+      'POST /v1/public/data/:companyId/do-not-sell', 'POST /v1/me/do-not-sell', 'GET /v1/public/why/:unitId/:slot', 'POST /v1/public/households/:companyId/opt-out'] }),
   sw({ id: 'books_audit', category: 'safety', parent: null, locked: 'The books’ audit trail and append-only journals: mistakes are fixed with correcting entries, never edits.', label: 'The books’ audit trail', description: 'Double-entry books, the event log, hourly seals and daily fingerprints are always kept; month closes, costs and the daily reconciliation run for everyone.',
     routes: ['GET /v1/ledger', 'GET /v1/events', 'GET /v1/wallet/check', 'POST /v1/wallet/correct', 'GET /v1/chain/seals/check', 'GET /v1/books/reconciliation', 'POST /v1/books/expenses', 'POST /v1/books/reinvestments', 'POST /v1/books/owner-payouts', 'GET /v1/books/surplus',
       'GET /v1/profit', 'POST /v1/profit/close', 'POST /v1/milestones/factories', 'GET /v1/public/companies/:companyId/profit-sharing'],
@@ -387,7 +409,7 @@ export const SIZE_SWITCHES: Record<number, string> = { 1: 'size_whole', 2: 'size
 /** Box sides and their switches (the left side is always the company's own panel). */
 export const FACE_SWITCHES: Record<string, string> = { top: 'box_top', front: 'box_front', back: 'box_back', right: 'box_right' };
 /** The AI uses, by the id the engine passes to withCompany(). */
-export const AI_USES = ['ai_ad_assistant', 'ai_studio_designer', 'ai_personalizer', 'ai_video_writer', 'ai_bottle_designer', 'ai_prompt_helper', 'ai_team_assistant', 'numberline'] as const;
+export const AI_USES = ['ai_ad_assistant', 'ai_studio_designer', 'ai_personalizer', 'ai_video_writer', 'ai_bottle_designer', 'ai_prompt_helper', 'ai_team_assistant', 'ai_news_writer', 'numberline'] as const;
 /** Irreversible steps (chain actions) and the switch each one turns on. Going live with points, pause and unpause always stay. */
 export const ACTION_SWITCHES: Record<string, string> = { mint: 'token', switch_on: 'chain_on', go_live_token: 'token', convert: 'token_conversion', withdrawals_on: 'withdrawals', exchanges_on: 'gift_cards' };
 

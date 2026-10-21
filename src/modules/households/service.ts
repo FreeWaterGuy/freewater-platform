@@ -52,6 +52,12 @@ export class HouseholdService {
   /** Set by the app: where a house is, from a claimant's delivery (its route, and its position for the nearest area). */
   placeOf: (companyId: string, houseKey: string) => Promise<{ routeId?: string; lat?: number; lng?: number } | null> = async () => null;
 
+  /**
+   * The company's switches (its Features page, Data & targeting): "Ads aimed at houses" and under it "Area statistics"
+   * and "Bought household data". Off, that layer is never used or taken in. Set by the app.
+   */
+  featureOn: (companyId: string, id: string) => boolean = () => true;
+
   constructor(private db: SqlClient, private platform: Platform, private clock: () => Date = () => new Date()) {}
 
   /** A house's key: the same for every way of writing its address, and different for every company. */
@@ -61,8 +67,13 @@ export class HouseholdService {
   // ---------- area data ----------
 
   /** Add or replace areas' statistics. Sample values must say so (`sample: true`), and every row names its source and date. */
+  private need(companyId: string, id: 'area_data' | 'household_data') {
+    if (!this.featureOn(companyId, id)) throw new HouseholdError('feature_off', id === 'area_data' ? 'Area statistics are switched off for this company (its Features page).' : 'Bought household data is switched off for this company (its Features page).', 404);
+  }
+
   async importAreas(companyId: string, rows: { areaId: string; kind: string; name: string; attributes: Record<string, unknown>; source: string; asOf: string; sample?: boolean; lat?: number; lng?: number }[]) {
     this.company(companyId);
+    this.need(companyId, 'area_data');
     if (!Array.isArray(rows) || !rows.length || rows.length > 5000) throw new HouseholdError('rows', 'Send 1 to 5,000 areas.');
     for (const [i, r] of rows.entries()) {
       if (!BLOCK.test(r.areaId ?? '')) throw new HouseholdError('area', `Area ${i + 1}: its id is 2 to 20 letters, numbers or dashes (a census GEOID, a zip or a route id).`);
@@ -93,6 +104,7 @@ export class HouseholdService {
    */
   async importHouseholds(companyId: string, input: { source: string; sourceDate: string; origin?: 'bought' | 'first_party'; format: 'csv' | 'json'; data: string | unknown[] }, by: string) {
     this.company(companyId);
+    this.need(companyId, 'household_data');
     const source = (input.source ?? '').trim();
     if (source.length < 2 || source.length > 60) throw new HouseholdError('source', 'Name the data company (the source), 2 to 60 characters.');
     if (!DAY.test(input.sourceDate ?? '') || Number.isNaN(Date.parse(input.sourceDate))) throw new HouseholdError('source_date', 'Give the date of the data (YYYY-MM-DD), as the data company states it.');
@@ -173,15 +185,19 @@ export class HouseholdService {
   async audienceForHouse(companyId: string, house: { address: string; routeId?: string; lat?: number; lng?: number }): Promise<HouseAudience> {
     const houseKey = this.houseKey(companyId, house.address);
     const empty: HouseAudience = { houseKey, optedOut: false, childAtHome: false, area: null, bought: [], firstParty: { claimed: false, people: 0, householdSize: null, interests: [] }, combined: { householdSize: null, incomeBand: null, homeowner: null, interests: [], familiesWithChildrenShare: null }, strongest: 'none', use: 'choosing ads for this house; never sold or passed on' };
+    // Switched off for this company: nothing about the house is used (the engine prints untargeted).
+    if (!this.featureOn(companyId, 'house_targeting')) return empty;
+    const useArea = this.featureOn(companyId, 'area_data');
+    const useBought = this.featureOn(companyId, 'household_data');
     const people = await this.claimants(companyId, houseKey);
     const saidNo = (await this.db.query(`select 1 from household_optouts where company_id = $1 and house_key = $2`, [companyId, houseKey])).rows.length > 0;
     if (saidNo || people.some((p) => p.optedOut)) return { ...empty, optedOut: true };
     const child = people.some((p) => p.child);
-    const rows = child ? [] : (await this.db.query<any>(`select attribute, value, source, source_date, block_id from household_attributes where company_id = $1 and house_key = $2 order by imported_at desc`, [companyId, houseKey])).rows;
+    const rows = child || !useBought ? [] : (await this.db.query<any>(`select attribute, value, source, source_date, block_id from household_attributes where company_id = $1 and house_key = $2 order by imported_at desc`, [companyId, houseKey])).rows;
     const bought = rows.map((r) => ({ attribute: r.attribute as string, value: r.value as string, source: r.source as string, sourceDate: new Date(r.source_date).toISOString().slice(0, 10) }))
       .filter((b) => householdAttributes[b.attribute]); // a rule tightened since import still holds
     const place = (await this.placeOf(companyId, houseKey)) ?? {};
-    const area = await this.areaFor(companyId, rows.find((r) => r.block_id)?.block_id ?? null, house.routeId ?? place.routeId, house.lat ?? place.lat, house.lng ?? place.lng);
+    const area = !useArea ? null : await this.areaFor(companyId, rows.find((r) => r.block_id)?.block_id ?? null, house.routeId ?? place.routeId, house.lat ?? place.lat, house.lng ?? place.lng);
     const allowed = child ? [] : people.filter((p) => p.personalize);
     const fpInterests = [...new Set(allowed.flatMap((p) => p.interests.map((i) => i.toLowerCase())))];
     const fpSize = allowed.map((p) => p.household).find((h): h is number => typeof h === 'number') ?? null;

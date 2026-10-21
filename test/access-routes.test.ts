@@ -39,6 +39,9 @@ beforeAll(async () => {
   app = await createApp({ db, seedDemo: true, seed: 11, clock: () => new Date('2026-11-02T16:00:00Z'), features: featuresFrom({ FW_FEATURES_ON: 'news' }).features });
   keys = app.demoKeys!;
   server = await buildServer(app);
+  // Switches that start off for every company (news, houses that haven't signed up): on for FreeWater, by a person, so
+  // the walk reaches each route's own checks instead of stopping at "switched off".
+  await app.companyFeatures.change('freewater', { news: true, news_cards: true, news_sources: true, house_targeting: true, area_data: true, household_data: true }, { userId: 'usr_access', name: 'Access test', approverProblem: async () => null });
   for (const s of ['orders', 'packs', 'campaigns', 'purchases', 'ledger', 'events', 'invoices', 'webhooks', 'me'] as Scope[]) {
     only[s] = (await createApiKey(db, { companyId: 'freewater', name: `only-${s}`, scopes: [s] })).key;
   }

@@ -51,6 +51,23 @@ beforeAll(async () => {
   owner = await app.accounts.createSession(u.id, { secondStep: true });
 }, 60_000);
 afterAll(async () => { await server.close(); await db.close(); });
+const person = { userId: 'usr_data_lead', name: 'Data lead', approverProblem: async () => null };
+
+describe('switched off until a person turns it on', () => {
+  it('starts off: no area or household routes, no audience, nothing taken in', async () => {
+    for (const id of ['house_targeting', 'area_data', 'household_data']) expect(app.companyFeatures.on('freewater', id), id).toBe(false);
+    expect((await call('GET', '/v1/areas', keys['freewater-admin'])).code).toBe('feature_off');
+    expect((await call('POST', '/v1/households/imports', owner, { source: 'Acme Data Co', sourceDate: '2026-09-30', format: 'csv', data: csv })).code).toBe('feature_off');
+    expect((await call('GET', '/v1/households/audience?address=1%20Main%20St', keys['freewater-admin'])).code).toBe('feature_off');
+    // Even called directly (the route-buying engine), nothing about a house is used and nothing is taken in.
+    const a = await app.households.audienceForHouse('freewater', { address: '1 Main St Austin TX', routeId: 'route-3' });
+    expect(a).toMatchObject({ strongest: 'none', area: null, bought: [] });
+    await expect(app.households.importHouseholds('freewater', { source: 'Acme Data Co', sourceDate: '2026-09-30', format: 'csv', data: csv }, 'user:x')).rejects.toMatchObject({ code: 'feature_off' });
+    // A key never turns it on.
+    expect((await call('POST', '/v1/console/features', keys['freewater-admin'], { changes: { house_targeting: true } })).code).toBe('person_needed');
+    await app.companyFeatures.change('freewater', { house_targeting: true, area_data: true, household_data: true }, person);
+  });
+});
 
 describe('area data', () => {
   it('comes with SAMPLE values for Austin, labelled as such, attached to the delivery routes and named blocks', async () => {
@@ -177,6 +194,27 @@ describe('one house’s audience', () => {
     const key = app.households.houseKey('freewater', '5 Birch Lane Austin TX');
     expect((await db.query(`select 1 from household_attributes where house_key = $1`, [key])).rows).toHaveLength(0);
     expect((await db.query(`select 1 from household_optouts where house_key = $1`, [key])).rows).toHaveLength(1);
+  });
+  it('turning off “Bought household data” stops its use at once; deleting by source still works', async () => {
+    const withIt = await app.households.audienceForHouse('freewater', { address: '22 Oak Street Apt 4 Austin TX 78704', routeId: 'route-3' });
+    void withIt;
+    await app.households.importHouseholds('freewater', { source: 'Third Data LLC', sourceDate: '2026-10-02', format: 'json', data: [{ address: '8 Cedar Ct Austin TX', attributes: { household_size: 5 } }] }, 'user:x');
+    expect((await app.households.audienceForHouse('freewater', { address: '8 Cedar Ct Austin TX' })).bought.length).toBe(1);
+    await app.companyFeatures.change('freewater', { household_data: false }, person);
+    expect((await app.households.audienceForHouse('freewater', { address: '8 Cedar Ct Austin TX' })).bought).toEqual([]);
+    expect((await call('DELETE', `/v1/households/sources/${encodeURIComponent('Third Data LLC')}`, keys['freewater-admin'])).body.deleted).toBe(1);
+    await app.companyFeatures.change('freewater', { household_data: true }, person);
+    // “Ads aimed at houses” off: not even what residents shared is used for their house.
+    const dee = await consumer('dee@example.com');
+    await livesAt(dee.user.id, '31 Maple Row Austin TX');
+    await call('PATCH', '/v1/me', dee.token, { consents: { personalizedOffers: true }, interests: ['Running'] });
+    expect((await app.households.audienceForHouse('freewater', { address: '31 Maple Row Austin TX' })).strongest).toBe('first_party');
+    await app.companyFeatures.change('freewater', { house_targeting: false }, person);
+    expect(await app.households.audienceForHouse('freewater', { address: '31 Maple Row Austin TX' })).toMatchObject({ strongest: 'none', firstParty: { claimed: false, interests: [] } });
+    await app.companyFeatures.change('freewater', { house_targeting: true, area_data: true, household_data: true }, person);
+    // And another company never sees FreeWater's switches or data.
+    expect(app.companyFeatures.on('peak-spring', 'house_targeting')).toBe(false);
+    expect((await app.households.audienceForHouse('peak-spring', { address: '1402 Alameda Dr Austin TX 78704' })).bought).toEqual([]);
   });
   it('bought data is deleted 13 months after it was imported', async () => {
     const before = Number((await db.query<any>(`select count(*)::int as n from household_attributes where origin = 'bought'`)).rows[0].n);

@@ -425,10 +425,10 @@ export async function createApp(opts: AppOptions) {
   // Spots nobody bought: approved filler before the generic house ad; news among it only where news is on.
   const fillers = new FillerService(platform, () => persistence.flush(), opts.clock);
   platform.unsold = (req) => fillers.fillUnsold(req);
-  const news = new NewsService(db, platform, features, opts.newsWriter ?? (aiOn ? new ClaudeNewsWriter({ apiKey: anthropicKey, model: process.env.ANTHROPIC_MODEL, fallback: builtinNewsWriter }) : builtinNewsWriter), () => persistence.flush(), opts.clock);
+  const news = new NewsService(db, platform, features, opts.newsWriter ?? (aiOn ? new ClaudeNewsWriter({ apiKey: anthropicKey, model: process.env.ANTHROPIC_MODEL }) : builtinNewsWriter), () => persistence.flush(), opts.clock);
   await news.load();
   fillers.news = news;
-  // Registered whatever the switches, so a bottle printed while news was on still opens (it says news is paused).
+  // Registered whatever the switches, so a bottle printed while news was on still opens (a plain card while news is off).
   host.register(newsPlugin(news));
   // Household and area data, for choosing ads for houses (the route-buying engine calls audienceForHouse).
   const households = new HouseholdService(db, platform, opts.clock);
@@ -502,6 +502,9 @@ export async function createApp(opts: AppOptions) {
   host.pluginOn = (companyId, pluginId) => companyFeatures.pluginOn(companyId, pluginId);
   aiRouting.useOn = featureOn;
   videos.featureOn = featureOn;
+  news.featureOn = featureOn;
+  fillers.featureOn = featureOn;
+  households.featureOn = featureOn;
   attribution.featureOn = featureOn;
   webhooks.companyOn = (companyId) => companyFeatures.on(companyId, 'webhooks');
   chain.kindAllowed = (kind, companyId) => features.actionOn(kind) && companyFeatures.actionOn(companyId, kind);
