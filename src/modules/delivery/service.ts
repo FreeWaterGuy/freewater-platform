@@ -60,6 +60,9 @@ export class DeliveryService {
   alert?: (key: string, title: string, detail: string) => void;
   /** Delivery areas and their houses. Set by the app. */
   houses?: HouseService;
+  /** Whether a switch on the company's Features page is on (src/runtime/registry.ts). Set by the app; unset: all on. */
+  featureOn?: (companyId: string, id: string) => boolean;
+  private on(companyId: string, id: string) { return !this.featureOn || this.featureOn(companyId, id); }
 
   /**
    * One change at a time per key (a company's night plan, one run). A run is read, changed and written back whole, so
@@ -200,6 +203,8 @@ export class DeliveryService {
     return this.serial(`plan:${companyId}`, () => this.planNightNow(companyId, date, by ?? null));
   }
   private async planNightNow(companyId: string, date: string, by: string | null) {
+    // Home delivery switched off for this company (its Features page): nothing is planned or printed, by anyone.
+    if (!this.on(companyId, 'delivery')) throw new DeliveryError(404, 'feature_off', 'Home delivery is switched off for this company.');
     // Everyone due tonight, and anyone whose delivery day went by without being planned (a night nobody planned, or
     // a sign-up after that route's night was already planned): they come on the next night their route runs. A
     // subscription already on a run from its due date on is never planned again until that run moves it forward.
@@ -230,7 +235,7 @@ export class DeliveryService {
       await this.printRun(run);
       out.push(run);
     }
-    if (this.houses) {
+    if (this.houses && this.on(companyId, 'delivery_areas')) {
       for (const { area, houses } of await this.houses.due(companyId, date, today, (r, d) => this.runsOn(r, d))) {
         if (out.some((r) => r.areaId === area.id)) continue; // planned already: houses due since wait for the next night
         const made = await this.planArea(companyId, date, area, houses, lastStop(area.routeId), by);
@@ -266,7 +271,7 @@ export class DeliveryService {
       for (const id of order.order) {
         if (!taken.has(id)) continue;
         const h = byId.get(id)!;
-        const count = packsFor(area, h.householdSize);
+        const count = packsFor(area, this.on(companyId, 'household_packs') ? h.householdSize : null);
         if (stops.length && packs + count > area.vanPacks) close();
         for (let i = 1; i <= count; i++) stops.push({ stop: ++n, userId: '', houseId: h.id, areaId: area.id, ...(count > 1 ? { pack: { n: i, of: count } } : {}), packId: null, address: h.address, point: h.point, packSize: area.packSize, notes: null, status: 'planned' });
         packs += count;
@@ -370,7 +375,7 @@ export class DeliveryService {
    * again (docs/RUNBOOKS.md, "Houses in delivery areas are overdue").
    */
   private async housesOverdue(companyId: string, today: string) {
-    if (!this.houses) return;
+    if (!this.houses || !this.on(companyId, 'delivery_areas')) return;
     const late = await this.houses.overdue(companyId, today, (r, d) => this.runsOn(r, d));
     const stuck = (await this.db.query<any>(`select id from route_runs where company_id = $1 and area_id is not null and status = 'printing' and run_date < $2 order by run_date`, [companyId, today])).rows.map((r) => r.id as string);
     if (!late.length && !stuck.length) return;
@@ -561,6 +566,7 @@ export class DeliveryService {
     if (run.status !== 'out' || run.driverId !== input.driverId) throw new DeliveryError(409, 'not_your_route', 'Start this route first.');
     const s = run.stops.find((x) => x.stop === input.stop);
     if (!s) throw new DeliveryError(404, 'not_found', 'No such stop.');
+    if (!this.on(input.companyId, 'driver_house_skip')) throw new DeliveryError(404, 'feature_off', 'Skipping a house is switched off for this company: use “Problem at this stop”.');
     if (!s.houseId || !this.houses) throw new DeliveryError(422, 'not_a_house', 'This stop is a subscriber’s. Use “Problem at this stop” instead.');
     const mine = run.stops.filter((x) => x.houseId === s.houseId && x.status === 'planned');
     if (!mine.length) throw new DeliveryError(409, 'already_done', 'That house is already done.');

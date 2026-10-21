@@ -171,6 +171,17 @@ size⌉, never more than *most packs per house* (`packsFor` in `src/modules/deli
 A house stops getting packs only if someone there stops it in the app (at once, and they can start again), or a
 driver marks it to skip and a person agrees (*Areas → driver skips to review*). Houses are addresses, never people.
 
+The company's switches for delivery areas (*Console → Features → Delivery*, section 8; `src/runtime/registry.ts`):
+
+| Switch | FreeWater's choice | Needs | Who may change it | Off means |
+|---|---|---|---|---|
+| **Delivery areas (house after house)** | On | Home delivery | Any owner signed in | No area is planned, printed or alerted; the *Areas* page, its routes and the app's *Your house* are gone. Houses keep their place. |
+| **More packs for bigger households** | On | Delivery areas | Any owner signed in | Every house gets the area's packs per house; the app doesn't ask how many live there. |
+| **Ads know the house's street and area** | On | Delivery areas, Ads | Any owner signed in | The ad engine gets no house context; ads are chosen as for any pack on that route. |
+| **Drivers skip a house, with a reason** | On | The driver app, Delivery areas | Any owner signed in | No *Skip this house* button; the driver uses *Problem at this stop* and the house stays on the next plan. |
+
+Companies that existed before these switches see them as **New** and off until their own people decide.
+
 Every settings change is saved as a version. *History* shows who changed what, and can put an earlier version back
 (a version that changes money or blockchain settings must be put back by a person, and passes the same checks).
 

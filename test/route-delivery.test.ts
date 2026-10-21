@@ -9,6 +9,7 @@ import type { TestOutbox } from '../src/adapters/messaging/contract';
 import { insidePolygon, streetOrder } from '../src/modules/delivery/planner';
 import { packsFor, parseCsv, splitAddress } from '../src/modules/delivery/houses';
 import { boxNumber } from '../src/modules/packs/boxRenderer';
+import { SWITCHES } from '../src/runtime/registry';
 
 // Residential consecutive delivery (the Austin pilot): FreeWater picks the streets, every house on them gets packs in
 // street order with no sign-up, and the only ways a house stops are someone there saying so in the app, or a driver's
@@ -497,5 +498,34 @@ describe('subscribers and an area on the same route the same night', () => {
     expect((await call('GET', '/v1/me/delivery', sam)).json().today).toMatchObject({ stop: 7, stopCode: 'R3 · 7', status: 'planned' });
     // Their data download has their deliveries.
     expect((await call('GET', '/v1/me/export', sam)).json().deliveries).toEqual([expect.objectContaining({ address: addr, pack_size: 6, frequency: 'weekly' })]);
+  });
+});
+
+describe('a company that switches delivery areas or delivery off (its Features page)', () => {
+  const owner = { userId: 'usr_route_owner', name: 'Route test owner', approverProblem: async () => null };
+  it('is never planned, its screens and routes are gone for that company only, and it comes back as it was', async () => {
+    at('2027-02-01T16:00:00Z'); // Monday; the Concurrency Close houses are due on Tuesday the 2nd
+    ops = await signIn('ops@freewater.io');
+    const area2 = (await call('GET', '/v1/ops/areas', admin())).json().find((a: any) => a.name === 'Concurrency Close');
+    const mine = (runs: any[]) => runs.filter((r) => r.areaId === area2.id);
+    const wasOn = SWITCHES.filter((s) => s.category === 'delivery' && s.kind === 'feature' && app.companyFeatures.on('freewater', s.id)).map((s) => s.id);
+    expect(wasOn).toEqual(expect.arrayContaining(['delivery', 'delivery_areas', 'household_packs', 'driver_house_skip']));
+    const peakOff = () => call('GET', '/v1/public/features?company=peak-spring').then((r) => r.json().companyOff);
+    const peakBefore = await peakOff();
+    await app.companyFeatures.change('freewater', { delivery_areas: false }, owner);
+    // Not planned, even by a service call that skips the routes; not overdue either.
+    expect(mine(await app.delivery.planNight('freewater', '2027-02-02'))).toEqual([]);
+    expect((await app.houses.due('freewater', '2027-02-02', '2027-02-01', () => true))).toEqual([]);
+    // Its routes refuse, its screens hide it, and only for this company.
+    expect((await call('GET', '/v1/ops/areas', admin())).json().error.code).toBe('feature_off');
+    expect((await call('GET', '/v1/public/features?company=freewater')).json().companyOff).toEqual(expect.arrayContaining(['delivery_areas', 'household_packs', 'driver_house_skip']));
+    expect(await peakOff()).toEqual(peakBefore); // another company's switches don't move
+    // Home delivery off altogether: nothing is planned or printed for the company, by anyone.
+    await app.companyFeatures.change('freewater', { delivery: false }, owner);
+    await expect(app.delivery.planNight('freewater', '2027-02-02')).rejects.toMatchObject({ code: 'feature_off' });
+    expect((await call('POST', '/v1/ops/runs/plan', ops, { date: '2027-02-02' })).statusCode).toBe(404);
+    // Back on: the houses kept their place and are planned on their night.
+    await app.companyFeatures.change('freewater', Object.fromEntries(wasOn.map((id) => [id, true])), owner);
+    expect(mine(await app.delivery.planNight('freewater', '2027-02-02')).flatMap((r) => r.stops)).toHaveLength(6);
   });
 });

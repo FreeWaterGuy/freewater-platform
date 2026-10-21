@@ -81,6 +81,10 @@ export function packsFor(area: Pick<Area, 'packsPerHouse' | 'bottlesPerPersonWee
 export class HouseService {
   constructor(private db: SqlClient, private platform: Platform, private accounts: AccountsService, private packs: PackService) {}
 
+  /** Whether a switch on the company's Features page is on (src/runtime/registry.ts). Set by the app; unset: all on. */
+  featureOn?: (companyId: string, id: string) => boolean;
+  private on(companyId: string, id: string) { return !this.featureOn || this.featureOn(companyId, id); }
+
   /** Turns a scanned code into the pack it's printed on: a smart code (…/Q/CODE), …/p/<pack>, …/b/<pack>/<face>, or a pack id. */
   packFromCode?: (code: string) => Promise<string | null>;
 
@@ -102,7 +106,7 @@ export class HouseService {
     return this.area(r);
   }
   async activeAreas(companyId: string): Promise<Area[]> {
-    return (await this.db.query<any>(`select * from delivery_areas where company_id = $1 order by id`, [companyId])).rows.map((r) => this.area(r));
+    return (await this.db.query<any>(`select * from delivery_areas where company_id = $1 and active order by id`, [companyId])).rows.map((r) => this.area(r));
   }
 
   /** Every area with how many houses are in each state. */
@@ -135,9 +139,12 @@ export class HouseService {
 
   /** What the ad engine gets for a pack going to this house (FillRequest.house). */
   async contextFor(houseId: string, companyId: string): Promise<RouteHouseContext | null> {
+    // Off for this company: the ads are chosen as for any pack on the route. The household size is something a person
+    // told us; it reaches the ads only where the company aims ads at people at all.
+    if (!this.on(companyId, 'house_ad_context')) return null;
     const r = (await this.db.query<any>(`select h.*, a.route_id, exists (select 1 from house_claims c where c.house_id = h.id) as claimed from houses h join delivery_areas a on a.id = h.area_id where h.id = $1 and h.company_id = $2`, [houseId, companyId])).rows[0];
     if (!r) return null;
-    return { houseId: r.id, areaId: r.area_id, routeId: r.route_id, street: String(r.address).split(',')[0]!.replace(/^\s*\d+[A-Za-z]?\s+/, '').trim(), householdSize: r.household_size === null ? null : Number(r.household_size), claimed: !!r.claimed };
+    return { houseId: r.id, areaId: r.area_id, routeId: r.route_id, street: String(r.address).split(',')[0]!.replace(/^\s*\d+[A-Za-z]?\s+/, '').trim(), householdSize: r.household_size === null || !this.on(companyId, 'targeting_people') ? null : Number(r.household_size), claimed: !!r.claimed };
   }
   /** The person who most recently said this is their house, if anyone: their bottles, with their audience. */
   async claimantOf(houseId: string): Promise<string | null> {
@@ -287,6 +294,7 @@ export class HouseService {
    */
   async due(companyId: string, date: string, today: string, runsOn: (routeId: string, date: string) => boolean) {
     const out: { area: Area; houses: House[] }[] = [];
+    if (!this.on(companyId, 'delivery_areas')) return out;
     for (const area of await this.activeAreas(companyId)) {
       if (!runsOn(area.routeId, date)) continue;
       const rows = (await this.db.query<any>(`select * from houses where area_id = $1 and status = 'active' and (next_date is null or next_date <= $2) and (last_planned is null or last_planned < $2)`, [area.id, date])).rows.map((r) => this.house(r));
@@ -389,6 +397,7 @@ export class HouseService {
       await this.db.query(`update houses set status = 'active', skip_reason = null, next_date = case when next_date < $2 then $2::date else next_date end, updated_at = now() where id = $1`, [id, today]);
       await this.event(companyId, id, 'restarted', userId, r.status === 'active' ? null : `was ${r.status}`);
     } else {
+      if (!this.on(companyId, 'household_packs')) throw new DeliveryError(404, 'feature_off', 'Household size isn’t used here: every house gets the same packs.');
       const n = input.householdSize;
       if (!Number.isInteger(n) || n! < 1 || n! > 20) throw new DeliveryError(422, 'bad_size', 'How many people live here: 1 to 20.');
       await this.db.query(`update houses set household_size = $2, updated_at = now() where id = $1`, [id, n]);

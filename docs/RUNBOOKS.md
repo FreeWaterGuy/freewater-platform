@@ -281,6 +281,10 @@ Only a signed-in ops person or owner can plan (never an API key or a driver); th
    *Boxes per van* to what one van really carries, then *Turn on*.
 5. Each van's run then goes as usual: packing check, the driver loads it, scans each box at each house. A house that
    stopped deliveries after the plan shows "Don't leave a box here" to the driver; its box comes back.
+6. **No area was planned at all** (the press returns only subscribers' runs, or `feature_off`): check *Console →
+   Features → Delivery* for the company. With *Delivery areas* off nothing in any area is planned, printed or alerted
+   as overdue (the houses keep their place); with *Home delivery* off nothing is planned at all. Turn it back on (an
+   owner signed in) and press *Plan and print this night* again: the houses due come on that night.
 
 ## "Houses in delivery areas are overdue"
 

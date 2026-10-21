@@ -50,6 +50,8 @@
   const dock = (...btns) => h('div', { class: 'dock' }, h('div', { class: 'dock-inner' }, ...btns));
   const grabCard = (s, label = 'Box to grab') => h('div', { class: 'grab' }, h('div', { class: 'code' }, h('small', { text: 'Stop' }), h('b', { text: String(s.stop) })),
     h('div', { class: 'what' }, h('small', { text: s.pack ? `${label} · box ${s.pack.n} of ${s.pack.of} for this house` : label }), h('b', { text: `#${s.boxNumber} · ${s.packSize}-pack` }), h('span', { text: `Stop code ${s.stopCode} is printed small on the box corner` })));
+  /** Is this switch on for the company (its Features page, or the host's FW_FEATURES)? */
+  const on = (feature) => !(S.features?.off ?? []).includes(feature);
   /** A delivery area's run is named for the area and the van; a subscribers' run for its route. */
   const runName = (r) => (r.areaName ? `${r.areaName} · van ${r.van}` : `${r.routeName} · ${r.routeId.replace(/^route-/, 'Route ')}`);
 
@@ -64,6 +66,8 @@
   // ---------- sign in ----------
   async function boot() {
     if (!S.config) S.config = await api('GET', '/v1/public/app-config');
+    // What this company switched off (its Features page): the screens don't offer it.
+    if (!S.features) S.features = await api('GET', `/v1/public/features?company=${encodeURIComponent(S.config.companyId)}`).catch(() => ({ off: [] }));
     if (S.token && !S.me) { try { S.me = await api('GET', '/v1/me'); } catch { S.me = null; } }
     if (!S.me) return signIn();
     if (!S.me.scopes?.includes('packs') && !S.me.scopes?.includes('admin')) return screen(h('h1', { class: 'dtitle', text: 'This app is for drivers' }), h('p', { class: 'dsub', text: 'Ask your manager to add you as a driver, then sign in again.' }), signOutBtn());
@@ -188,14 +192,19 @@
       keep ? h('div', { class: 'verdict bad' }, h('div', { class: 'mark', text: '!' }), h('h2', { text: 'Don’t leave a box here' }), h('p', { text: s.houseStatus === 'opted_out' ? 'This house stopped deliveries in the app after tonight’s plan. Keep the box; it goes back to the micro-factory.' : 'This house is marked to skip. Keep the box.' })) : null,
       grabCard(s),
       after.length ? h('div', {}, h('div', { class: 'small muted', style: 'font-family:ui-monospace,Menlo,monospace;letter-spacing:.08em;margin-bottom:4px', text: 'THEN' }), h('div', { class: 'rows' }, after.map((a) => h('div', { class: 'row' }, h('span', { style: 'width:28px;color:var(--muted)', text: String(a.stop) }), h('span', { class: 'grow', text: a.address.split(',')[0] }))))) : null,
-      keep ? dock(h('button', { class: 'btn', type: 'button', onclick: () => skipHouse(s, 'asked_not_to') }, 'Keep the box · next house'))
+      keep ? dock(h('button', { class: 'btn', type: 'button', onclick: () => keepBox(s) }, 'Keep the box · next house'))
         : dock(h('a', { class: 'btn secondary', href: `https://www.google.com/maps/dir/?api=1&destination=${s.point.lat},${s.point.lng}`, target: '_blank', rel: 'noopener' }, 'Directions'),
           h('button', { class: 'btn', type: 'button', onclick: () => atDoor(s) }, 'I’m at the door · scan box'),
-          s.houseId ? h('button', { class: 'link-btn', type: 'button', onclick: () => skipSheet(s) }, 'Skip this house') : null));
+          s.houseId && on('driver_house_skip') ? h('button', { class: 'link-btn', type: 'button', onclick: () => skipSheet(s) }, 'Skip this house') : null));
+  }
+  /** A house that already stopped (or is marked to skip): the box comes back, nothing to review. Works with skipping switched off too. */
+  async function keepBox(s) {
+    try { S.run = await api('POST', `/v1/driver/runs/${encodeURIComponent(S.run.id)}/stops/${s.stop}/fail`, { reason: s.houseStatus === 'opted_out' ? 'They stopped deliveries in the app' : 'House marked to skip' }); toast('Box kept. Next house.'); nextStop(); }
+    catch (x) { toast(x.message); }
   }
   /** Pass a house in a delivery area by. Its boxes come back; a person reviews the skip before the house is left out for good. */
   async function skipHouse(s, reason, note) {
-    try { S.run = await api('POST', `/v1/driver/runs/${encodeURIComponent(S.run.id)}/stops/${s.stop}/skip-house`, { reason, ...(note ? { note } : {}) }); toast(reason === 'asked_not_to' && s.houseStatus === 'opted_out' ? 'Box kept. Next house.' : 'Skipped. The office will review it.'); nextStop(); }
+    try { S.run = await api('POST', `/v1/driver/runs/${encodeURIComponent(S.run.id)}/stops/${s.stop}/skip-house`, { reason, ...(note ? { note } : {}) }); toast('Skipped. The office will review it.'); nextStop(); }
     catch (x) { toast(x.message); }
   }
   function skipSheet(s) {
@@ -264,7 +273,7 @@
     const go = async (reason) => { try { S.run = await api('POST', `/v1/driver/runs/${encodeURIComponent(S.run.id)}/stops/${s.stop}/fail`, { reason }); toast(s.houseId ? 'Noted. The box comes back.' : 'Noted. The customer will be told.'); nextStop(); } catch (x) { toast(x.message); } };
     screen(h('div', { class: 'dhead' }, h('div', { text: `Stop ${s.stop} · ${s.address.split(',')[0]}` })), h('h1', { class: 'dtitle', text: 'What happened?' }), h('p', { class: 'dsub', text: 'The box goes back to the micro-factory and the customer gets a message.' }),
       h('div', { class: 'reasons' }, ['No safe place to leave it', 'Gate or door locked', 'Box missing from the van', 'Box damaged', 'Can’t find the address'].map((r) => h('button', { type: 'button', onclick: () => go(r) }, r))),
-      s.houseId ? h('button', { class: 'link-btn', type: 'button', onclick: () => skipSheet(s) }, 'No soliciting sign, or they don’t want it? Skip this house') : null,
+      s.houseId && on('driver_house_skip') ? h('button', { class: 'link-btn', type: 'button', onclick: () => skipSheet(s) }, 'No soliciting sign, or they don’t want it? Skip this house') : null,
       dock(h('button', { class: 'btn secondary', type: 'button', onclick: nextStop }, 'Back to this stop')));
   }
   function finished() {
