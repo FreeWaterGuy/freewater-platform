@@ -128,8 +128,9 @@ describe('bought household data', () => {
 describe('one house’s audience', () => {
   const house = '1402 Alameda Dr Austin TX 78704';
   it('combines area, bought and first-party data, and prefers what residents chose to share', async () => {
-    // Nobody claimed it yet: bought data, then the area (from its block), never anything sensitive.
-    const a = (await call('GET', `/v1/households/audience?address=${encodeURIComponent(house)}`, keys['freewater-admin'])).body;
+    // Nobody claimed it yet: bought data, then the area (from its block), never anything sensitive. (Its route says
+    // where it is: a house nobody can place gets the strictest rules, test/privacy-houses.test.ts.)
+    const a = (await call('GET', `/v1/households/audience?address=${encodeURIComponent(house)}&routeId=route-3`, keys['freewater-admin'])).body;
     expect(a.optedOut).toBe(false);
     expect(a.strongest).toBe('bought');
     expect(a.combined.householdSize).toEqual({ value: 3, from: 'bought' });
@@ -199,9 +200,9 @@ describe('one house’s audience', () => {
     const withIt = await app.households.audienceForHouse('freewater', { address: '22 Oak Street Apt 4 Austin TX 78704', routeId: 'route-3' });
     void withIt;
     await app.households.importHouseholds('freewater', { source: 'Third Data LLC', sourceDate: '2026-10-02', format: 'json', data: [{ address: '8 Cedar Ct Austin TX', attributes: { household_size: 5 } }] }, 'user:x');
-    expect((await app.households.audienceForHouse('freewater', { address: '8 Cedar Ct Austin TX' })).bought.length).toBe(1);
+    expect((await app.households.audienceForHouse('freewater', { address: '8 Cedar Ct Austin TX', routeId: 'route-3' })).bought.length).toBe(1);
     await app.companyFeatures.change('freewater', { household_data: false }, person);
-    expect((await app.households.audienceForHouse('freewater', { address: '8 Cedar Ct Austin TX' })).bought).toEqual([]);
+    expect((await app.households.audienceForHouse('freewater', { address: '8 Cedar Ct Austin TX', routeId: 'route-3' })).bought).toEqual([]);
     expect((await call('DELETE', `/v1/households/sources/${encodeURIComponent('Third Data LLC')}`, keys['freewater-admin'])).body.deleted).toBe(1);
     await app.companyFeatures.change('freewater', { household_data: true }, person);
     // “Ads aimed at houses” off: not even what residents shared is used for their house.

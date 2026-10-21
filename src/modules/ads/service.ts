@@ -507,6 +507,9 @@ export class AdsService {
       for (const t of ts) { t.sales += open; t.salesCents += cents; }
     }
     for (const e of engaged) {
+      // An ad aimed at a few houses: the advertiser knows the houses, so whether someone there saved it or tapped
+      // through stays theirs (as the route report keeps its scans).
+      if (this.platform.campaigns.get(e.campaign_id)?.routeBuy?.small) continue;
       const t = byCampaign.get(e.campaign_id) ?? blank();
       byCampaign.set(e.campaign_id, t);
       if (e.action === 'save') { t.saves += Number(e.n); total.saves += Number(e.n); }

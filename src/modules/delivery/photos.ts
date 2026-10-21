@@ -119,6 +119,25 @@ export class DropPhotoService {
       `select 1 from drop_photos p where p.id = $3 and p.company_id = $1 and (p.customer_id = $2 or exists (select 1 from house_claims c where c.house_id = p.house_id and c.user_id = $2 and c.company_id = $1 and p.taken_at >= c.claimed_at - interval '14 days'))`, [companyId, userId, id])).rows.length;
   }
 
+  /** Deletes one picture (its file first); 0 when its file can't be removed now (the next run tries again). */
+  private async deletePicture(r: { id: string; blob_key: string | null }) {
+    if (r.blob_key && this.blobs) { try { await this.blobs.delete(r.blob_key); } catch { return 0; } }
+    const done = await this.db.query(`update drop_photos set bytes = null, blob_key = null, deleted_at = $2 where id = $1 and deleted_at is null`, [r.id, this.clock().toISOString()]);
+    return Number((done as any).rowCount ?? 1);
+  }
+
+  /**
+   * A subscriber erasing their data: the pictures of their own deliveries (their front door, tied to their account) go
+   * at once, not at the end of the keep. Photos at a house in a delivery area are the company's record of a drop at an
+   * address, seen by whoever lives there now; they stay until the keep ends.
+   */
+  async eraseFor(companyId: string, userIds: string[]) {
+    if (!userIds.length) return 0;
+    let n = 0;
+    for (const r of (await this.db.query<any>(`select id, blob_key from drop_photos where company_id = $1 and customer_id = any($2) and deleted_at is null`, [companyId, userIds])).rows) n += await this.deletePicture(r);
+    return n;
+  }
+
   /**
    * Delete the pictures kept longer than each company's keep. Safe to run again (a deleted picture is skipped); a
    * picture whose file can't be removed now is left for the next run.
@@ -128,11 +147,7 @@ export class DropPhotoService {
     for (const c of this.platform.companies.values()) {
       const before = new Date(this.clock().getTime() - this.keepDays(c.id) * 86_400_000).toISOString();
       const rows = (await this.db.query<any>(`select id, blob_key from drop_photos where company_id = $1 and deleted_at is null and taken_at < $2 limit 5000`, [c.id, before])).rows;
-      for (const r of rows) {
-        if (r.blob_key && this.blobs) { try { await this.blobs.delete(r.blob_key); } catch { continue; } }
-        const done = await this.db.query(`update drop_photos set bytes = null, blob_key = null, deleted_at = $2 where id = $1 and deleted_at is null`, [r.id, this.clock().toISOString()]);
-        n += Number((done as any).rowCount ?? 1);
-      }
+      for (const r of rows) n += await this.deletePicture(r);
       // Photos taken before 065 were kept with the uploads (assets): the same keep applies to them.
       const old = (await this.db.query<any>(`delete from assets where company_id = $1 and name = 'delivery-photo' and created_at < $2 returning blob_key`, [c.id, before])).rows;
       for (const r of old) if (r.blob_key && this.blobs) await this.blobs.delete(r.blob_key).catch(() => {});

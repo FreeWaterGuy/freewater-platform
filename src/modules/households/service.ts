@@ -1,7 +1,8 @@
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import type { SqlClient } from '../../db/client';
 import { newId } from '../../core/ids';
 import type { Platform } from '../../platform';
+import { regionOf } from '../data/jurisdiction';
 import { areaProblem, householdAttributes, householdProblem, HOUSEHOLD_INTERESTS, normalizeAddress } from './vocabulary';
 
 /**
@@ -27,6 +28,8 @@ export interface ClaimantFacts { optedOut: boolean; child: boolean; personalize:
 
 export interface HouseAudience {
   houseKey: string;
+  /** Not known to be in the US (its route names no country, or another one): the strictest rules, so nothing is used. */
+  strictest: boolean;
   /** Said no to targeted ads (here, or a resident's "do not sell or share"): nothing about the house is used. */
   optedOut: boolean;
   /** A resident is known to be under the minimum age: only the area's statistics are used. */
@@ -60,8 +63,49 @@ export class HouseholdService {
 
   constructor(private db: SqlClient, private platform: Platform, private clock: () => Date = () => new Date()) {}
 
-  /** A house's key: the same for every way of writing its address, and different for every company. */
-  houseKey(companyId: string, address: string) { return createHash('sha256').update(`${companyId}|${normalizeAddress(address)}`).digest('base64url').slice(0, 32); }
+  /**
+   * The secret that keys house keys (the platform's pseudonym key, FW_SECRET_VIEWER_TAGS). Set by the app. Addresses
+   * are few and guessable, so a plain hash of one is the address in other clothes: keyed, the "no" a house left
+   * (household_optouts) can't be turned back into its address by anyone holding the database without the key.
+   */
+  pseudonymKey?: Buffer;
+  /** A house's key: the same for every way of writing its address, different for every company, keyed (above). */
+  houseKey(companyId: string, address: string) {
+    const s = `${companyId}|${normalizeAddress(address)}`;
+    return this.pseudonymKey ? createHmac('sha256', this.pseudonymKey).update(`house|${s}`).digest('base64url').slice(0, 32) : legacyHouseKey(s);
+  }
+  /** Both keys of a house: the keyed one, and the plain hash rows written before keying used (still honoured). */
+  houseKeys(companyId: string, address: string) { return [...new Set([this.houseKey(companyId, address), legacyHouseKey(`${companyId}|${normalizeAddress(address)}`)])]; }
+
+  /**
+   * Moves rows written under the plain hash to the keyed one: bought data by its own address, a house's "no" by the
+   * addresses of the company's delivery houses and subscriptions. A "no" whose address we don't hold stays as it was,
+   * and still counts (every lookup tries both keys). Run at start; safe to run again.
+   */
+  async rekey() {
+    if (!this.pseudonymKey) return 0;
+    let n = 0;
+    const attrs = (await this.db.query<any>(`select distinct company_id, house_key, address from household_attributes`)).rows;
+    for (const r of attrs) {
+      const key = this.houseKey(r.company_id, r.address);
+      if (key === r.house_key) continue;
+      await this.db.query(`update household_attributes a set house_key = $3 where company_id = $1 and house_key = $2 and not exists (select 1 from household_attributes b where b.company_id = a.company_id and b.house_key = $3 and b.attribute = a.attribute and b.source = a.source)`, [r.company_id, r.house_key, key]);
+      await this.db.query(`delete from household_attributes where company_id = $1 and house_key = $2`, [r.company_id, r.house_key]);
+      n++;
+    }
+    const optouts = (await this.db.query<any>(`select company_id, house_key, how, at from household_optouts`)).rows;
+    if (!optouts.length) return n;
+    const legacy = new Map(optouts.map((o) => [`${o.company_id}|${o.house_key}`, o]));
+    const addresses = (await this.db.query<any>(`select company_id, address from houses union select company_id, address from subscriptions where address <> 'erased'`)).rows;
+    for (const a of addresses) {
+      const o = legacy.get(`${a.company_id}|${legacyHouseKey(`${a.company_id}|${normalizeAddress(a.address)}`)}`);
+      if (!o) continue;
+      await this.db.query(`insert into household_optouts (company_id, house_key, how, at) values ($1,$2,$3,$4) on conflict do nothing`, [a.company_id, this.houseKey(a.company_id, a.address), o.how, o.at]);
+      await this.db.query(`delete from household_optouts where company_id = $1 and house_key = $2`, [o.company_id, o.house_key]);
+      n++;
+    }
+    return n;
+  }
   private company(id: string) { if (!this.platform.companies.has(id)) throw new HouseholdError('not_found', 'No such company.', 404); return id; }
 
   // ---------- area data ----------
@@ -122,7 +166,7 @@ export class HouseholdService {
       const address = typeof r.address === 'string' ? r.address.trim() : '';
       if (address.length < 5 || address.length > 200) { no('no_address'); continue; }
       const key = this.houseKey(companyId, address);
-      if (optedOut.has(key)) { no('house_said_no'); continue; }
+      if (this.houseKeys(companyId, address).some((k) => optedOut.has(k))) { no('house_said_no'); continue; }
       const block = typeof r.blockId === 'string' && BLOCK.test(r.blockId) ? r.blockId : null;
       for (const [k, v] of Object.entries(r)) {
         if (k === 'address' || k === 'blockId' || k === 'block_id' || v === undefined || v === null || v === '') continue;
@@ -171,7 +215,7 @@ export class HouseholdService {
     if (typeof address !== 'string' || address.trim().length < 5 || address.length > 200) throw new HouseholdError('address', 'Give the house’s street address.');
     const key = this.houseKey(companyId, address);
     await this.db.query(`insert into household_optouts (company_id, house_key, how, at) values ($1,$2,$3,$4) on conflict do nothing`, [companyId, key, how, this.clock().toISOString()]);
-    await this.db.query(`delete from household_attributes where company_id = $1 and house_key = $2`, [companyId, key]);
+    await this.db.query(`delete from household_attributes where company_id = $1 and house_key = any($2)`, [companyId, this.houseKeys(companyId, address)]);
     return { received: true, note: 'Done. Ads on bottles left at this address won’t be chosen using information about the household, and anything we bought about it is deleted.' };
   }
 
@@ -184,19 +228,23 @@ export class HouseholdService {
    */
   async audienceForHouse(companyId: string, house: { address: string; routeId?: string; lat?: number; lng?: number }): Promise<HouseAudience> {
     const houseKey = this.houseKey(companyId, house.address);
-    const empty: HouseAudience = { houseKey, optedOut: false, childAtHome: false, area: null, bought: [], firstParty: { claimed: false, people: 0, householdSize: null, interests: [] }, combined: { householdSize: null, incomeBand: null, homeowner: null, interests: [], familiesWithChildrenShare: null }, strongest: 'none', use: 'choosing ads for this house; never sold or passed on' };
+    const empty: HouseAudience = { houseKey, strictest: false, optedOut: false, childAtHome: false, area: null, bought: [], firstParty: { claimed: false, people: 0, householdSize: null, interests: [] }, combined: { householdSize: null, incomeBand: null, homeowner: null, interests: [], familiesWithChildrenShare: null }, strongest: 'none', use: 'choosing ads for this house; never sold or passed on' };
     // Switched off for this company: nothing about the house is used (the engine prints untargeted).
     if (!this.featureOn(companyId, 'house_targeting')) return empty;
     const useArea = this.featureOn(companyId, 'area_data');
     const useBought = this.featureOn(companyId, 'household_data');
     const people = await this.claimants(companyId, houseKey);
-    const saidNo = (await this.db.query(`select 1 from household_optouts where company_id = $1 and house_key = $2`, [companyId, houseKey])).rows.length > 0;
+    const saidNo = (await this.db.query(`select 1 from household_optouts where company_id = $1 and house_key = any($2)`, [companyId, this.houseKeys(companyId, house.address)])).rows.length > 0;
     if (saidNo || people.some((p) => p.optedOut)) return { ...empty, optedOut: true };
+    // The law of where the house is: its delivery route's country and state. Unknown, or outside the US (where bought
+    // data and aiming ads at a house need consent we don't have), the strictest: nothing about the house is used.
+    const place = (await this.placeOf(companyId, houseKey)) ?? {};
+    const routeId = house.routeId ?? place.routeId ?? (await this.db.query<any>(`select a.route_id from houses h join delivery_areas a on a.id = h.area_id where h.company_id = $1 and h.address_key = $2`, [companyId, normalizeAddress(house.address).toLowerCase()])).rows[0]?.route_id;
+    if (!this.inUS(routeId)) return { ...empty, strictest: true };
     const child = people.some((p) => p.child);
-    const rows = child || !useBought ? [] : (await this.db.query<any>(`select attribute, value, source, source_date, block_id from household_attributes where company_id = $1 and house_key = $2 order by imported_at desc`, [companyId, houseKey])).rows;
+    const rows = child || !useBought ? [] : (await this.db.query<any>(`select attribute, value, source, source_date, block_id from household_attributes where company_id = $1 and house_key = any($2) order by imported_at desc`, [companyId, this.houseKeys(companyId, house.address)])).rows;
     const bought = rows.map((r) => ({ attribute: r.attribute as string, value: r.value as string, source: r.source as string, sourceDate: new Date(r.source_date).toISOString().slice(0, 10) }))
       .filter((b) => householdAttributes[b.attribute]); // a rule tightened since import still holds
-    const place = (await this.placeOf(companyId, houseKey)) ?? {};
     const area = !useArea ? null : await this.areaFor(companyId, rows.find((r) => r.block_id)?.block_id ?? null, house.routeId ?? place.routeId, house.lat ?? place.lat, house.lng ?? place.lng);
     const allowed = child ? [] : people.filter((p) => p.personalize);
     const fpInterests = [...new Set(allowed.flatMap((p) => p.interests.map((i) => i.toLowerCase())))];
@@ -214,7 +262,7 @@ export class HouseholdService {
     };
     const fpUsed = allowed.length > 0 && (fpInterests.length > 0 || fpSize !== null);
     return {
-      houseKey, optedOut: false, childAtHome: child, area, bought, firstParty: { claimed: people.length > 0, people: people.length, householdSize: fpSize, interests: fpInterests }, combined,
+      houseKey, strictest: false, optedOut: false, childAtHome: child, area, bought, firstParty: { claimed: people.length > 0, people: people.length, householdSize: fpSize, interests: fpInterests }, combined,
       strongest: fpUsed ? 'first_party' : bought.length ? 'bought' : area ? 'area' : 'none', use: empty.use,
     };
   }
@@ -229,6 +277,13 @@ export class HouseholdService {
     const h = (await this.db.query<any>(`select h.address, h.lat, h.lng, a.route_id from houses h join delivery_areas a on a.id = h.area_id where h.id = $1 and h.company_id = $2`, [houseId, companyId])).rows[0];
     if (!h) return null;
     return this.audienceForHouse(companyId, { address: h.address, routeId: h.route_id, lat: Number(h.lat), lng: Number(h.lng) });
+  }
+
+  /** Whether a house on this route is known to be in the US (any state): only there may anything about it aim an ad. */
+  inUS(routeId?: string | null) {
+    const l = routeId ? this.platform.locations.get(routeId) : undefined;
+    const region = regionOf(l?.country ? { country: l.country, ...(l.state ? { state: l.state } : {}), source: 'declared' } : null);
+    return region === 'us' || region === 'us_ca';
   }
 
   private async areaFor(companyId: string, blockId: string | null, routeId?: string, lat?: number, lng?: number): Promise<HouseAudience['area']> {
@@ -248,19 +303,22 @@ export class HouseholdService {
 
   /** What's held about the houses of these addresses (for a resident's download). */
   async aboutAddresses(companyId: string, addresses: string[]) {
-    const keys = [...new Set(addresses.filter(Boolean).map((a) => this.houseKey(companyId, a)))];
+    const keys = [...new Set(addresses.filter(Boolean).flatMap((a) => this.houseKeys(companyId, a)))];
     if (!keys.length) return [];
     return (await this.db.query<any>(`select attribute, value, source, source_date, origin, imported_at from household_attributes where company_id = $1 and house_key = any($2) order by imported_at desc`, [companyId, keys])).rows
       .map((r) => ({ attribute: r.attribute, value: r.value, source: r.source, sourceDate: new Date(r.source_date).toISOString().slice(0, 10), origin: r.origin, importedAt: new Date(r.imported_at).toISOString() }));
   }
   /** Erase what's held about the houses of these addresses (a resident erasing their data). */
   async eraseAddresses(companyId: string, addresses: string[]) {
-    const keys = [...new Set(addresses.filter(Boolean).map((a) => this.houseKey(companyId, a)))];
+    const keys = [...new Set(addresses.filter(Boolean).flatMap((a) => this.houseKeys(companyId, a)))];
     if (!keys.length) return 0;
     const r: any = await this.db.query(`delete from household_attributes where company_id = $1 and house_key = any($2)`, [companyId, keys]);
     return Number(r.rowCount ?? 0);
   }
 }
+
+/** The plain hash of `company|address` that house keys were before they were keyed (rows from then still count). */
+function legacyHouseKey(s: string) { return createHash('sha256').update(s).digest('base64url').slice(0, 32); }
 
 /** CSV with a header row; quoted fields may hold commas and doubled quotes. */
 export function parseCsv(text: string): Record<string, string>[] {

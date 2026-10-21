@@ -490,6 +490,9 @@ export async function createApp(opts: AppOptions) {
   host.register(newsPlugin(news));
   // Household and area data, for choosing ads for houses (the route-buying engine calls audienceForHouse).
   const households = new HouseholdService(db, platform, opts.clock);
+  // A house's key is keyed with the platform's pseudonym secret, as phone keys are in the logs (docs/COMPLIANCE.md).
+  households.pseudonymKey = data.tagKey;
+  await households.rekey();
   // A house's residents: people with a delivery there, and people who claimed it in a delivery area (house_claims), so
   // a resident's "do not sell" or a child at home counts whichever way they came (one row per person).
   const claimed = async (companyId: string, houseKey: string) => {
@@ -512,6 +515,8 @@ export async function createApp(opts: AppOptions) {
   const addressesOf = async (companyId: string, userIds: string[]) => (await db.query<any>(`select address from subscriptions where company_id = $1 and user_id = any($2) and address <> 'erased'
     union select h.address from house_claims c join houses h on h.id = c.house_id where c.company_id = $1 and c.user_id = any($2)`, [companyId, userIds])).rows.map((r) => r.address as string);
   data.houseData = async (companyId, userIds) => households.aboutAddresses(companyId, await addressesOf(companyId, userIds));
+  data.dropPhotos = async (companyId, userIds) => (await Promise.all(userIds.map((u) => dropPhotos.forResident(companyId, u)))).flat();
+  data.eraseDropPhotos = (companyId, userIds) => dropPhotos.eraseFor(companyId, userIds);
   data.eraseHouses = async (companyId, userIds) => {
     let n = 0;
     for (const a of await addressesOf(companyId, userIds)) { n += (await households.aboutAddresses(companyId, [a])).length; await households.optOut(companyId, a, 'a resident erased their data'); }

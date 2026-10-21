@@ -597,7 +597,30 @@
     });
     const near = nearbyBlock(opened);
     const playLink = h('p', { class: 'your-data' }, h('a', { href: `/play?c=${encodeURIComponent(opened.companyId)}`, text: 'Play for points' }), ' · ', h('a', { href: '/app/wallet', text: 'Your wallet' }));
-    return h('div', { class: 'your-data-all' }, playLink, whyBlock(opened), ...(near ? [near] : []), eraseData(opened), h('p', { class: 'your-data' }, dns));
+    return h('div', { class: 'your-data-all' }, playLink, whyBlock(opened), ...(near ? [near] : []), eraseData(opened), h('p', { class: 'your-data' }, dns), homeOptOut(opened));
+  }
+
+  /**
+   * "Don't use information about my home to choose ads" (Texas TDPSA and other state laws: the targeted-ad opt-out,
+   * no account needed). Only the street address is sent; we keep a keyed fingerprint of it, never the address.
+   * Stopping deliveries is a different thing, done in the app.
+   */
+  function homeOptOut(opened) {
+    const box = h('details', { class: 'why home-opt-out' }, h('summary', {}, 'Don’t use information about my home to choose ads'));
+    const input = h('input', { type: 'text', autocomplete: 'street-address', maxlength: '200', placeholder: 'Street address, city', 'aria-label': 'Your street address' });
+    const btn = h('button', { type: 'button', class: 'linkish' }, 'Say no for this address');
+    const said = h('p', { class: 'muted', role: 'status' });
+    btn.addEventListener('click', () => {
+      const address = input.value.trim();
+      if (address.length < 5) { said.textContent = 'Type the street address of the house.'; return; }
+      btn.disabled = true;
+      api('POST', `/v1/public/households/${encodeURIComponent(opened.companyId)}/opt-out`, { address })
+        .then((r) => { said.textContent = r.note; input.value = ''; })
+        .catch(() => { said.textContent = 'Couldn’t send that just now. Try again.'; })
+        .finally(() => { btn.disabled = false; });
+    });
+    box.append(h('p', { class: 'muted' }, 'No account needed. Ads on bottles left at this address won’t be chosen using information about the household, and anything we bought about it is deleted. To stop deliveries, use the app.'), input, btn, said);
+    return box;
   }
 
   function eraseData(opened) {
