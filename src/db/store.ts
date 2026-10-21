@@ -407,7 +407,7 @@ export class SqlPersistence implements Persistence {
     const mine = `campaign_id in (select campaign_id from ad_prepaid where campaign_id = any($1::text[]) and company_id = $2 order by campaign_id for update)`;
     this.enqueue('prepaid', move === 'printed'
       ? `update ad_prepaid set held = greatest(held - 1, 0), printed = printed + 1 where ${mine} and printed + 1 + greatest(held - 1, 0) + refunded <= paid`
-      : `update ad_prepaid set held = held - 1 where ${mine} and held > 0`, [[...new Set(campaignIds)], companyId]);
+      : `update ad_prepaid set held = held - 1 where ${mine} and held > 0`, [[...new Set(campaignIds)].sort(), companyId]);
   }
 
   routeSpots(companyId: string, spotIds: string[], move: 'printed' | 'released', unitId: string, packId?: string) {

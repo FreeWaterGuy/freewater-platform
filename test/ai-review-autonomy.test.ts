@@ -160,7 +160,7 @@ describe('1. talking with the AI about a flagged ad', () => {
     expect((await call('GET', `/v1/review/campaigns/${c.id}/ai`, key)).status).toBe(403);
     expect((await call('POST', `/v1/review/campaigns/${c.id}/ai`, key, { text: 'Let me in' })).status).toBe(403);
     // Only added to: the database refuses editing the talk.
-    await expect(db.query(`update ad_ai_conversation set text = 'edited' where campaign_id = $1`, [c.id])).rejects.toThrow();
+    await expect(db.query(`update ad_ai_conversation set text = 'edited' where campaign_id = $1`, [c.id])).rejects.toThrow(/append-only/);
   });
 
   it('when the AI can’t answer (or its use is off), the stand-in says so plainly and never changes a view', async () => {
@@ -261,9 +261,9 @@ describe('2. its record: every final decision a person makes', () => {
 
   it('the record can’t be rewritten: what the AI said and a person’s decision are written once', async () => {
     const row = (await db.query<any>(`select id from ad_ai_verdicts where human_decision = 'rejected' and missed = false limit 1`)).rows[0];
-    await expect(db.query(`update ad_ai_verdicts set agreed = false where id = $1`, [row.id])).rejects.toThrow();
-    await expect(db.query(`update ad_ai_verdicts set verdict = 'pass' where id = $1`, [row.id])).rejects.toThrow();
-    await expect(db.query(`delete from ad_ai_verdicts where id = $1`, [row.id])).rejects.toThrow();
+    await expect(db.query(`update ad_ai_verdicts set agreed = false where id = $1`, [row.id])).rejects.toThrow(/decision is recorded once/);
+    await expect(db.query(`update ad_ai_verdicts set verdict = 'pass' where id = $1`, [row.id])).rejects.toThrow(/what the AI said never changes/);
+    await expect(db.query(`delete from ad_ai_verdicts where id = $1`, [row.id])).rejects.toThrow(/the record is the record/);
   });
 });
 
@@ -308,7 +308,7 @@ describe('3. turning on “AI makes the final call”', () => {
     expect((await call('POST', '/v1/review/ai/settings', owner, { samplePct: 10, reason: 'Back to the usual sample' })).body.bar.samplePct).toBe(10);
     expect((await call('POST', '/v1/review/ai/settings', owner, { samplePct: 4, reason: 'Below the floor' })).status).toBe(400);
     await expect(app.aiReview.changeBar('freewater', { minAgreePct: 80 }, { userId: ownerId, role: 'owner', name: 'o', approverProblem: async () => null }, 'Too loose')).rejects.toMatchObject({ code: 'out_of_range' });
-    await expect(db.query(`update ad_ai_review_settings set sample_pct = 4 where company_id = 'freewater'`)).rejects.toThrow(); // the database holds the floor too
+    await expect(db.query(`update ad_ai_review_settings set sample_pct = 4 where company_id = 'freewater'`)).rejects.toThrow(/check constraint/); // the database holds the floor too
     const hist = (await record()).history;
     expect(hist.slice(0, 2).map((x: any) => [x.what, x.from, x.to])).toEqual([['samplePct', 20, 10], ['samplePct', 10, 20]]);
   });
@@ -374,6 +374,16 @@ describe('4. with it on', () => {
     expect((await decide(c, reviewer, 'reject', 'The award doesn’t say best in Texas; we checked it')).status).toBe(200);
     const after = (await record()).sinceItBegan;
     expect([after.decisions - before.decisions, after.agreed - before.agreed]).toEqual([1, 1]);
+    // A person decided it: there's nothing left to appeal (only the AI's own rejection goes to a person).
+    expect((await call('POST', `/v1/ads/campaigns/${c.id}/appeal`, key, { text: 'Appealing the person now' })).code).toBe('not_appealable');
+  });
+
+  it('an ad a person rejected (no AI final call) can’t be appealed as if the AI had', async () => {
+    const c = await paidAd(PASS);
+    const key = await advKey(c);
+    expect((await decide(c, reviewer, 'reject', 'The photo isn’t theirs; we asked for the license')).status).toBe(200);
+    expect(app.platform.campaigns.get(c.id)!.review).toMatchObject({ status: 'rejected' });
+    expect((await call('POST', `/v1/ads/campaigns/${c.id}/appeal`, key, { text: 'We have the license now' })).code).toBe('not_appealable');
   });
 
   it('a random sample of its rejections (10% unless set, never under 5%) goes to people to audit; overturning goes live, and counts against it', async () => {

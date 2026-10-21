@@ -37,12 +37,14 @@ let ops: string, driver: string, owner: string, ownerId = '', admin = '', opsId 
 let n = 0;
 
 /** A new business with a card (verified, unless said otherwise) and an ad at one size, not yet paid for. */
-async function newAd(share: Share, opts: { verified?: boolean; token?: string; group?: string; words?: string } = {}) {
+async function newAd(share: Share, opts: { verified?: boolean; token?: string; group?: string; words?: string; advertiser?: string } = {}) {
   const i = ++n;
-  const adv = `adv-rb-${i}`;
-  await db.query(`insert into advertisers (id, company_id, name, category) values ($1,'freewater',$2,'retail')`, [adv, `Route Shop ${i}`]);
-  if (opts.verified !== false) await app.routeBuys.verify('freewater', adv, true, 'test');
-  await app.payments.addMethod('freewater', 'advertiser', adv, opts.token ?? 'tok_visa');
+  const adv = opts.advertiser ?? `adv-rb-${i}`;
+  if (!opts.advertiser) {
+    await db.query(`insert into advertisers (id, company_id, name, category) values ($1,'freewater',$2,'retail')`, [adv, `Route Shop ${i}`]);
+    if (opts.verified !== false) await app.routeBuys.verify('freewater', adv, true, 'test');
+    await app.payments.addMethod('freewater', 'advertiser', adv, opts.token ?? 'tok_visa');
+  }
   const spec = { brand: `Shop ${i}`, headline: opts.words ?? `Deal ${i}`, colors: { bg: '#FFFFFF', fg: '#0B0B0B', accent: '#1E7DB8' } };
   const c: Campaign = { id: `cmp-rb-${i}`, companyId: 'freewater', advertiserId: adv, advertiserName: `Route Shop ${i}`, category: 'retail', sizes: [share], creative: posterCreative(spec), creativeRef: { kind: 'poster', spec }, experienceId: 'offer', experienceConfig: { headline: `Deal ${i}` }, targeting: {}, buy: { type: 'guaranteed', remainingPrints: 0 }, active: false, review: { status: 'submitted', at: new Date(now).toISOString() }, ...(opts.group ? { competitorGroup: opts.group } : {}) };
   app.platform.campaigns.set(c.id, c);
@@ -235,13 +237,17 @@ describe('each kind: pay, plan, exactly the paid bottles at the right houses', (
 
   it('a label with a small paid piece is filled sensibly: fewer, bigger pieces around it, fillers and the house ad never billed', async () => {
     const withBlanket = houses.flatMap((h) => pieces(blanket, h.id, NIGHT)).filter((b) => b.unit.placements.length > 1);
+    expect(withBlanket.length).toBeGreaterThan(0);
     for (const b of withBlanket) {
-      const paid = b.unit.placements.filter((p) => !p.isHouse);
-      expect(paid.every((p) => p.routeSpotId)).toBe(true);
-      // A 1/8 piece alone: the label is 1/8 plus a few larger pieces, not seven more eighths.
-      if (paid.length === 1) expect(b.unit.placements.length).toBeLessThanOrEqual(5);
+      expect(b.unit.placements.filter((p) => !p.isHouse).every((p) => p.routeSpotId)).toBe(true);
       expect(b.unit.placements.filter((p) => p.isHouse).every((p) => p.priceCents === 0)).toBe(true);
     }
+    // A small piece alone on its bottle: the label is that piece plus a few larger ones, not a row of more small ones.
+    // (The blanket's eighths all share bottles with other paid pieces here, so every bottle of the night with one
+    // paid piece is checked, and there must be some: the check can't pass by finding nothing.)
+    const alone = houses.flatMap((h) => bottlesAt(h.id, NIGHT)).filter((b) => b.unit.placements.filter((p) => !p.isHouse).length === 1);
+    expect(alone.length).toBeGreaterThan(0);
+    for (const b of alone) expect(b.unit.placements.length, JSON.stringify(b.unit.placements.map((p) => [p.share, p.isHouse]))).toBeLessThanOrEqual(5);
     const houseLines = app.platform.ledger.entries.filter((l) => l.kind === 'print' && l.campaignId && app.platform.campaigns.get(l.campaignId)?.isHouse);
     expect(houseLines).toHaveLength(0);
   });
@@ -547,6 +553,83 @@ describe('a house that stops or blocks: nobody pays for it', () => {
   });
 });
 
+describe('give-backs: only what is due, only once', () => {
+  it('the daily give-back leaves this week’s pieces alone: they still print this week', async () => {
+    const was = now;
+    try {
+      const c = await newAd(6);
+      await buy(c, { kind: 'blanket', share: 6, weeks: 1, startWeek: '2027-03-08', where: { areaIds: [areaId] } });
+      at('2027-03-08T14:00:00Z'); // the Monday morning of its week, before any night is printed
+      await app.routeBuys.settle('freewater');
+      expect((await db.query<any>(`select count(*)::int as n from route_settlements where campaign_id = $1`, [c.id])).rows[0].n).toBe(0);
+      expect((await db.query<any>(`select count(*)::int as n from route_spots where campaign_id = $1 and status = 'open'`, [c.id])).rows[0].n).toBe(c.prepaid!.paid);
+    } finally { at(new Date(was).toISOString()); }
+  });
+
+  it('two give-backs at once (the daily job, and a house that just stopped) give each piece back once', async () => {
+    const was = now;
+    try {
+      const c = await newAd(6);
+      await buy(c, { kind: 'spread', share: 6, bottles: 3, startWeek: '2027-03-29', where: { areaIds: [areaId] } }, { approve: false });
+      at('2027-04-06T15:00:00Z'); // its week went by unprinted (never approved)
+      await Promise.all([app.routeBuys.settle('freewater'), app.routeBuys.settle('freewater')]);
+      const s = (await db.query<any>(`select coalesce(sum(bottles),0)::int as b, count(*)::int as n from route_settlements where campaign_id = $1`, [c.id])).rows[0];
+      expect(s).toEqual({ b: 3, n: 1 });
+      expect(app.platform.campaigns.get(c.id)!.prepaid!.refunded).toBe(3);
+    } finally { at(new Date(was).toISOString()); }
+  });
+
+  it('credit given back can’t also be approved as a refund to the card', async () => {
+    const credit = (await db.query<any>(`select id from route_settlements where company_id = 'freewater' and kind = 'credit' limit 1`)).rows[0];
+    expect(credit).toBeTruthy();
+    await expect(app.routeBuys.approveRefund('freewater', credit.id, ownerId)).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('credit is only used on buys for more than one house', async () => {
+    let rich = '';
+    for (const r of (await db.query<any>(`select distinct advertiser_id from route_settlements where company_id = 'freewater' and kind = 'credit'`)).rows) if (await app.routeBuys.creditBalance('freewater', r.advertiser_id) > 0) rich = r.advertiser_id;
+    expect(rich).not.toBe('');
+    const c = await newAd(4, { advertiser: rich });
+    const input: RouteQuoteInput = { kind: 'houses', share: 4, startWeek: '2027-03-15', where: { addresses: [(await housesOf()).at(-1).address] } };
+    const q = await app.routeBuys.quote('freewater', rich, input, c.sizes, { campaignId: c.id });
+    expect(q.creditCents).toBe(0);
+    await expect(app.routeBuys.pay({ companyId: 'freewater', advertiserId: rich, campaignId: c.id, input, expectedTotalCents: q.totalCents, expectedCreditCents: 1, sizes: c.sizes, words: words(c) })).rejects.toMatchObject({ code: 'credit_not_here' });
+  });
+});
+
+describe('paying: against what is committed, by the advertiser who ordered', () => {
+  it('space taken by another payment between the price check and the lock: the total is checked again under the lock', async () => {
+    const W = '2027-03-22';
+    const a = await newAd(1), b = await newAd(1);
+    const input: RouteQuoteInput = { kind: 'blanket', share: 1, startWeek: W, where: { areaIds: [areaId] } };
+    const q = await app.routeBuys.quote('freewater', a.advertiserId, input, a.sizes, { campaignId: a.id });
+    // Right after A's price is checked (before its lock), B pays for a whole box at one of those houses.
+    const svc = app.routeBuys as any;
+    const priced = svc.priced;
+    let first = true;
+    svc.priced = async function (this: unknown, ...args: unknown[]) {
+      const out = await priced.apply(svc, args);
+      if (first) { first = false; await buy(b, { kind: 'box', startWeek: W, where: { addresses: [(await housesOf())[1].address] } }); }
+      return out;
+    };
+    try {
+      await expect(app.routeBuys.pay({ companyId: 'freewater', advertiserId: a.advertiserId, campaignId: a.id, input, expectedTotalCents: q.totalCents, sizes: a.sizes, words: words(a) })).rejects.toMatchObject({ code: 'price_changed' });
+    } finally { svc.priced = priced; }
+    expect(first).toBe(false);
+    // Nothing charged, nothing held for A; B's box is B's.
+    expect((await db.query<any>(`select count(*)::int as n from route_spots where campaign_id = $1 and status in ('open','held','placed')`, [a.id])).rows[0].n).toBe(0);
+    expect((await db.query<any>(`select count(*)::int as n from payments p join ad_orders o on o.payment_id = p.id where o.campaign_id = $1 and p.status = 'captured'`, [a.id])).rows[0].n).toBe(0);
+  });
+
+  it('an order for another advertiser’s ad is not found, never shown or paid', async () => {
+    const mine = await newAd(6);
+    const input: RouteQuoteInput = { kind: 'spread', share: 6, bottles: 2, startWeek: '2027-03-22', where: { areaIds: [areaId] } };
+    const { q } = await buy(mine, input, { approve: false });
+    const other = await newAd(6);
+    await expect(app.routeBuys.pay({ companyId: 'freewater', advertiserId: other.advertiserId, campaignId: mine.id, input, expectedTotalCents: q.totalCents, sizes: mine.sizes, words: words(mine) })).rejects.toMatchObject({ code: 'not_found' });
+  });
+});
+
 describe('the advertiser portal', () => {
   it('makes an ad in the chat, picks streets, sees the exact price, pays and submits it in one step', async () => {
     const c = await newAd(4); // a business with a card and a key
@@ -585,6 +668,23 @@ describe('stopping, and a restart', () => {
     expect(live).toBe(0);
     const checks = await recon();
     for (const id of ['prepaid_balances', 'route_buys_add_up']) expect(checks[id]?.status, `${id}: ${JSON.stringify(checks[id])}`).toBe('ok');
+  });
+
+  it('stopping an ad after part of it came back as credit pays back only the rest: the credited pieces never twice', async () => {
+    const was = now;
+    try {
+      const c = await newAd(6);
+      await buy(c, { kind: 'blanket', share: 6, weeks: 2, startWeek: '2027-02-15', where: { areaIds: [areaId] } });
+      const paid = c.prepaid!.paid;
+      at('2027-02-23T15:00:00Z'); // its first week went by without a night printed: that week comes back as credit
+      await app.routeBuys.settle('freewater');
+      const credited = Number((await db.query<any>(`select coalesce(sum(bottles),0)::int as b from route_settlements where campaign_id = $1 and kind = 'credit'`, [c.id])).rows[0].b);
+      expect(credited).toBe(paid / 2);
+      const r = await app.prepaid.stop({ companyId: 'freewater', campaignId: c.id, by: `user:${ownerId}`, reason: 'Advertiser asked, company agreed' });
+      expect(r).toMatchObject({ status: 'refunded', bottles: paid - credited });
+      const checks = await recon();
+      for (const id of ['prepaid_balances', 'route_buys_add_up']) expect(checks[id]?.status, `${id}: ${JSON.stringify(checks[id])}`).toBe('ok');
+    } finally { at(new Date(was).toISOString()); }
   });
 
   it('after a restart every route ad is still only where it was bought (read from the database)', async () => {

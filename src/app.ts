@@ -347,7 +347,7 @@ export async function createApp(opts: AppOptions) {
 
   // The data environment: choices made in a clean setting, exposure recorded, people directing gifts and choosing ads.
   numberline.keepsChoicesOf = (companyId, person) => data.allowed(companyId, 'choices', [person]);
-  const environment = new EnvironmentService(db, platform, numberline, opts.clock);
+  const environment = new EnvironmentService(db, platform, numberline, opts.clock, opts.seed !== undefined ? ((r) => (n: number) => Math.floor(r() * n))(seededRandom(opts.seed + 303)) : undefined);
   environment.flush = () => persistence.flush();
   const wallet = new WalletService(db, platform, opts.clock);
   wallet.mayEarn = async (companyId, subject) => (await data.rewardsAllowed(companyId, [subject, ...(await data.linkedSubjects(companyId, subject))])) && (await data.ageOk(companyId, [subject])) !== false;
