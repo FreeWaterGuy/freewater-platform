@@ -35,7 +35,7 @@ npm test             # checks every business rule
 One order goes through the print pipeline:
 
 1. **Order**: `order.created`
-2. **Fill slots** (ad engine): picks 1 to 6 different ads, skips blocked categories, never puts two competitors on one bottle, respects location targeting and budgets, and fills any gap with the house ad.
+2. **Fill slots** (ad engine): picks 1 to as many different ads as the company allows (10 for FreeWater), skips blocked categories, never puts two competitors on one bottle, respects location targeting and budgets, and fills any gap with the house ad.
 3. **Render** (label renderer): seam, ad slots, and the locked company panel. Each slot gets its own QR (`/s/<unit>/<slot>`), owned by the advertiser. The panel QR opens the bottle's receipt (`/r/<unit>`).
 4. **Print** (printer adapter): retries a jam once. A sale is confirmed only when the printer confirms.
 5. **Dispense**, then scans, AR launches and purchases come in as events.
@@ -46,6 +46,8 @@ The **ledger** listens to events and bills:
 - each scan and AR launch that loads (repeats by one viewer inside the repeat window are free)
 - commission on completed sales, given back on refunds
 - the donation for each bottle, when the company has giving turned on
+
+Advertisers are billed for nothing else. In particular there is no charge per click: a tap on a link out of an ad, a save or a call is counted for the advertiser, never billed. What they pay is prints (bottles and box sides), scans and AR launches that loaded, and commission on confirmed sales.
 
 Failed prints, failed AR and duplicate orders are never billed. Ledger lines are only ever added, and debits always equal credits.
 
@@ -178,7 +180,7 @@ npm run demo:ops-preview   # builds out/ops-preview/ and out/driver-preview/, cl
 - **Click ids:** every link out of an ad goes through `/go/…` (signed, so it can't be used to send people elsewhere). We record the click and send the person on with `fwclid=FWC…`.
 - **Our tag** (`/t.js`): advertisers put it on their site. It remembers the fwclid for 30 days and reports `freewater('purchase', { orderId, value, coupon })`. It's only accepted from the advertiser's own listed websites. The tag runs in the shopper's browser and anyone can forge its Origin, so a sale it reports proves a click led to the site but is **unverified**: shown to the advertiser and the company, never billed on its own.
 - **Server to server:** `POST /v1/conversions` with the advertiser's key and the fwclid or coupon code. This is what bills commission, and it confirms a sale the tag reported (same order number; the tag's click is used if none is sent). A coupon redeemed at the counter confirms it too. Confirming with the order number alone vouches for the click the tag saw, so a server that has the fwclid (the tag keeps it in the site's own `_fwclid` cookie) should send it: its own click id always wins.
-- **What counts:** only sales matched to one of our clicks or coupons. The same order counts once, at most 5 sales per click, within 30 days of the click; a sale the tag saw inside the 30 days still counts when the server confirms it later. Click ids, coupons and order numbers are matched without regard to spaces around them or letter case (order numbers keep their case).
+- **What counts:** only sales matched to one of our clicks, coupons or a static code's bottle reference. The same order counts once, at most 5 sales per click (or per bottle reference), within 30 days of the click (or of the bottle's printing, for a static code); a sale the tag saw inside the 30 days still counts when the server confirms it later. A coupon has no time limit and counts once. A sale is at most $5,000. The one exception: `POST /v1/purchases`, by which an advertiser's or the company's own key reports a sale from a bottle slot, bills commission on that report without our match. Click ids, coupons and order numbers are matched without regard to spaces around them or letter case (order numbers keep their case).
 - **Refunds:** `POST /v1/conversions/{orderId}/refund` with no body refunds the whole sale; with `amountCents` (less than what's left) and a `refundId`, that part. The commission comes back in proportion, never more than the sale's, and a part counts once whether it comes this way or through `POST /v1/refunds`. Sales tracking shows each sale net of its refunds, the same as the books.
 - **Checks:** the daily reconciliation (`GET /v1/books/reconciliation`, "sales match conversions") fails when a billed sale isn't in the books for its amount and refunds, and asks a person to look at sales the tag saw that the advertiser's server never confirmed within a week, or confirmed for less than the tag saw (both show in Sales tracking too). A sale whose books entry was lost in a crash is booked when it's reported again, and at start-up.
 - **One-time coupons:** every person gets their own code (e.g. `BOTTLE2X-7F3A9Q`) with its own QR.

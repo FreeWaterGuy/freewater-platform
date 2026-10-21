@@ -15,7 +15,7 @@ import { qrSvg } from '../print/qr';
 import { companyQrStyle } from '../codes/style';
 import { boxFaceQr, boxFaceSizes } from '../packs/boxRenderer';
 import type { AdAssistant, ChatMessage } from '../ai/contract';
-import { allowedSizes, applyPatch, estimate, missing, missingLabels, themeFromPoster, type AdDraft } from './draft';
+import { allowedSizes, applyPatch, draftTargeting, estimate, missing, missingLabels, themeFromPoster, type AdDraft } from './draft';
 import { withCompany } from '../ai/routing';
 
 export class AdsError extends Error {
@@ -89,7 +89,7 @@ export class AdsService {
       id: r.id, status: r.status, campaignId: r.campaignId, updatedAt: r.updatedAt,
       draft: { ...rest, poster: poster ? { ...poster, image: poster.image ? { role: poster.image.role, attached: true } : undefined } : undefined },
       messages: r.messages, missing: left.map((m) => ({ id: m, label: missingLabels[m] })), ready: left.length === 0,
-      estimate: estimate(r.draft, company, this.maxFactor(company.id)), assistant: this.assistant.name,
+      estimate: estimate(r.draft, company, this.maxFactor(company.id), r.campaignId ? this.platform.campaigns.get(r.campaignId) : undefined), assistant: this.assistant.name,
     };
   }
 
@@ -328,7 +328,7 @@ export class AdsService {
       name: d.name ?? (d.studio?.headline ?? spec.headline), category: d.category, sizes: d.sizes, formats: d.formats ?? ['label'],
       ...art,
       experienceId: d.experienceId, experienceConfig: d.experienceConfig ?? {}, theme: themeFromPoster(d),
-      targeting: d.locations === 'all' ? {} : { locations: d.locations as string[] }, buy,
+      targeting: draftTargeting(d, existing), buy,
       active: false, review: { status: 'submitted', at: now }, createdAt: existing?.createdAt ?? now,
     };
     this.platform.campaigns.set(c.id, c);

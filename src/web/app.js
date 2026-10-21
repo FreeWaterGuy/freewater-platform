@@ -621,7 +621,7 @@
       h('p', { class: 'small muted', style: 'margin:0', text: 'Everything starts off. Turn on only what you want.' }),
       h('div', {},
         consent('personalizedOffers', 'Offers picked for me', 'Use the interests below to choose which offers you see when you scan.'),
-        consent('shareInterestsWithAdvertisers', 'Share my interests with advertisers', 'Advertisers see your interests, never your name or contact details.'),
+        consent('shareInterestsWithAdvertisers', 'Share my interests with advertisers', 'Not used yet: today no advertiser sees anyone’s interests. If that changes, it will be only with this on, and never your name or contact details.'),
         consent('location', 'Use my location', 'Show the nearest machines first.'),
         consent('marketing', 'News from FreeWater', 'Now and then, by email or text.')),
       me.consents.personalizedOffers && h('div', { class: 'field' }, h('label', { text: 'Your interests' }), h('div', { class: 'chips' }, allInterests.map((i) => h('button', { type: 'button', class: 'chip-btn', 'aria-pressed': String(mine.has(i)), onclick: async (e) => {

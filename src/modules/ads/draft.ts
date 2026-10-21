@@ -1,5 +1,6 @@
-import { SHARES, type CompanyConfig, type Location, type Share } from '../../core/types';
+import { SHARES, type Campaign, type CompanyConfig, type Location, type Share } from '../../core/types';
 import { bidFloor } from './budget';
+import { engagementPrice } from './targeting';
 import { checkStudioSpec, type StudioSpec } from '../studio/layout';
 import { checkPosterSpec, posterIcons, posterFonts, readableOn, contrast, type PosterSpec } from '../creative/poster';
 import type { Theme } from '../experiences/blocks';
@@ -189,15 +190,28 @@ export function themeFromPoster(d: AdDraft): Partial<Theme> {
 
 
 
-/** What it will cost, in plain numbers. */
-export function estimate(d: AdDraft, company: CompanyConfig, maxFactor = 1) {
+/**
+ * The targeting an ad will have once this draft is submitted. The chat only chooses machines or routes; the people and
+ * products an ad is for are set on its code page, and changing the ad in the chat keeps them.
+ */
+export function draftTargeting(d: Pick<AdDraft, 'locations'>, existing?: Pick<Campaign, 'targeting'>): Campaign['targeting'] {
+  const { locations: _was, ...kept } = existing?.targeting ?? {};
+  return d.locations && d.locations !== 'all' ? { ...kept, locations: d.locations } : kept;
+}
+
+/**
+ * What it will cost, in plain numbers. Each scan and AR launch is priced as it will be billed: the base price plus the
+ * targeting premium of the ad this draft becomes (`existing` is the live ad a change is for).
+ */
+export function estimate(d: AdDraft, company: CompanyConfig, maxFactor = 1, existing?: Pick<Campaign, 'targeting'>) {
   const pr = company.prices;
+  const targeted = { targeting: draftTargeting(d, existing) };
   const sizes = d.sizes?.length ? d.sizes : allowedSizes;
   const perPrint = Object.fromEntries(sizes.map((s) => [s, pr.perPrintByShare[s]]));
   const biggest = Math.min(...sizes) as Share; // 1 is the whole label
   const smallest = Math.max(...sizes) as Share;
   const out: { perPrintCents: Record<string, number>; bidStartsAtCents: number; perScanCents: number; perArLaunchCents: number; commissionPercent: number; perBoxFaceCents: number; printsCostCents?: [number, number]; bottlesPerDay?: [number, number] } = {
-    perPrintCents: perPrint, bidStartsAtCents: pr.perPrintByShare[1], perScanCents: pr.perScan, perArLaunchCents: pr.perArLaunch, commissionPercent: pr.commissionPercent, perBoxFaceCents: pr.perBoxFace,
+    perPrintCents: perPrint, bidStartsAtCents: pr.perPrintByShare[1], perScanCents: engagementPrice(pr.perScan, targeted, company), perArLaunchCents: engagementPrice(pr.perArLaunch, targeted, company), commissionPercent: pr.commissionPercent, perBoxFaceCents: pr.perBoxFace,
   };
   // Bigger products (a price factor above 1) cost more per print: the top of each range allows for the dearest one.
   const top = (s: Share) => Math.round(pr.perPrintByShare[s] * Math.max(1, maxFactor));

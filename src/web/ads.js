@@ -242,7 +242,7 @@
         const blob = await res.blob(); const a = h('a', { href: URL.createObjectURL(blob), download: `statement-${fromI.value}-to-${toI.value}.csv` }); document.body.append(a); a.click(); a.remove();
       } catch (x) { toast(x.message); }
     };
-    shell('statement', h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Statement' }), h('p', { text: 'Every bottle you paid for: your bid, what the auction charged and why, and what each one earned you. You pay just enough to beat the next ad, never your whole bid.' })), h('button', { class: 'btn secondary', type: 'button', onclick: csv }, 'Download spreadsheet')),
+    shell('statement', h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Statement' }), h('p', { text: 'Every bottle you paid for: your bid, what the auction charged and why, and what each one earned you. You pay just enough to beat the next other advertiser’s ad, never more than your bid.' })), h('button', { class: 'btn secondary', type: 'button', onclick: csv }, 'Download spreadsheet')),
       h('div', { class: 'form', style: 'max-width:520px;margin-bottom:16px' }, h('div', { class: 'field' }, h('label', { text: 'From' }), fromI), h('div', { class: 'field' }, h('label', { text: 'To' }), toI)),
       h('div', {}, h('button', { class: 'btn', type: 'button', onclick: load }, 'Show')), out);
     load();
@@ -367,10 +367,11 @@
     shell('tracking',
       h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Sales tracking' }), h('p', { text: `Every sale that came from your ads, matched to the exact bottle. Last 30 days.` }))),
       h('div', { class: 'kpis' },
-        kpi('Taps on your links', num(s.clicks), 'each gets its own click id', true),
+        kpi('Taps on your links', num(s.clicks), 'each gets its own click id; taps are never billed', true),
         kpi('Sales from bottles', num(s.sales.count), `${s.sales.bySource.tag} website · ${s.sales.bySource.server} your server · ${s.sales.bySource.coupon} at the counter`),
         kpi('Those sales', dollars(s.sales.valueCents), 'what customers spent'),
-        kpi('Commission', dollars(s.sales.commissionCents), 'on your invoice'),
+        kpi('Commission', dollars(s.sales.commissionCents), 'on confirmed sales only; on your invoice'),
+        kpi('Sales from AR', num(s.sales.fromAr?.count ?? 0), `${dollars(s.sales.fromAr?.valueCents ?? 0)} bought from the buy button inside AR`),
         kpi('Coupons used', `${num(s.coupons.redeemed)}/${num(s.coupons.issued)}`, 'used / given out'),
         s.unverified && s.unverified.count ? kpi('Waiting for your server', num(s.unverified.count), `${dollars(s.unverified.valueCents)} reported by your website, not billed until your server confirms`) : null),
       h('div', { class: 'review', style: 'max-width:900px' },
@@ -586,7 +587,7 @@
         return { maxCentsPerLabel: Math.round(Number(f.bid.value) * 100), dailyCapCents: Math.round(Number(f.cap.value) * 100), pacing: f.pacing.value, frequencyCap: num(f.freq) ?? null, adjustments: Object.keys(adjustments).length ? adjustments : null };
       };
       return h('section', { class: 'panel', style: 'gap:12px' }, h('h2', { class: 'section', text: 'Your bid' }),
-        h('p', { style: 'margin:0', text: `You bid for the whole label; smaller pieces pay the same share. Bidding starts at ${cents(c.engagement?.floorCents ?? 100)}. You pay only enough to beat the next ad in line, never more than your bid. Ads people engage with more can win with lower bids.` }),
+        h('p', { style: 'margin:0', text: `You bid for the whole label; smaller pieces pay the same share. Bidding starts at ${cents(c.engagement?.floorCents ?? 100)}. You pay only enough to beat the next other advertiser’s ad (your own ads never raise each other’s price), never more than your bid. Ads people engage with more can win with lower bids.` }),
         h('div', { class: 'form' }, field('Most you’ll pay for the whole label ($)', f.bid), field('Daily budget ($)', f.cap), field('Budget pacing', f.pacing), field('Most bottles one person gets a day', f.freq)),
         h('div', { class: 'field' }, h('label', { text: 'Bid more or less (%) by time of day' }), h('div', { class: 'chips' }, f.parts.map(([, l, i]) => h('label', { class: 'chip-check' }, `${l} `, i)))),
         h('div', { class: 'form' }, field('New customers (%)', f.newC), field('Returning customers (%)', f.retC), field('By interest', f.ints, 'Only for people who shared their interests.'), field('By machine or route', f.locs)));
