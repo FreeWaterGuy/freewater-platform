@@ -34,6 +34,7 @@ const PALETTES: Record<string, { bg: string; fg: string; accent: string }> = {
   pets: { bg: '#2B1A3F', fg: '#FFFFFF', accent: '#F7A6C9' }, events: { bg: '#1F2A44', fg: '#FFFFFF', accent: '#F2C14E' },
   auto: { bg: '#0B0B0B', fg: '#FFFFFF', accent: '#F2C14E' }, retail: { bg: '#FBF3E3', fg: '#1B1B1B', accent: '#D7262E' },
 };
+// eslint-disable-next-line security/detect-unsafe-regex -- every repeat is bounded ({2,30}); chat text is capped at 2,000 characters
 const OFFER = /\b(free [a-z0-9' ]{2,30}|buy one,? get one(?: free)?|bogo|\d{1,2}% off(?: [a-z ]{2,24})?|\$\d+(?:\.\d\d)? off(?: [a-z ]{2,24})?|(?:two|2|three|3) [a-z]+ for \$\d+|\$\d+(?:\.\d\d)? [a-z][a-z ]{2,20}|first [a-z]+ (?:is )?free|half off(?: [a-z ]{2,24})?)/i;
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const trimEnd = (s: string) => s.replace(/\s+(on|at|for|in|with|and|every|this|to)$/i, '').replace(/[.,!;:]+$/, '').trim();

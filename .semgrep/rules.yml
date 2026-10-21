@@ -1,0 +1,260 @@
+# Local Semgrep rules (the registry isn't always reachable from CI or a dev box). Each rule is a mistake that has
+# real consequences here: injection from what a request sends, unsafe HTML in the browser pages, weak or guessable
+# secrets, secrets compared in variable time, and money writes nobody waits for.
+# Run: npm run lint:semgrep (and node scripts/semgrep-selftest.mjs: every rule still fires on .semgrep/rules.ts)
+# A false positive is suppressed on its line with `// nosemgrep: <rule-id> -- why`, never by deleting the rule.
+rules:
+  # ---------- what a request sends, reaching something dangerous ----------
+  - id: fw-sql-from-request
+    languages: [typescript, javascript]
+    paths:
+      exclude: [/src/web/]
+    severity: ERROR
+    message: SQL text built from request data. Pass the value as a $n parameter instead.
+    mode: taint
+    pattern-sources: &request
+      - patterns:
+          - pattern-either:
+              - pattern: $REQ.body
+              - pattern: $REQ.query
+              - pattern: $REQ.params
+              - pattern: $REQ.headers
+              - pattern: $REQ.url
+              - pattern: $REQ.raw
+          - metavariable-regex:
+              metavariable: $REQ
+              regex: ^(req|request)$
+    pattern-sanitizers:
+      - pattern: Number(...)
+      - pattern: parseInt(...)
+      - pattern: Math.floor(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $DB.query($SQL, ...)
+              - pattern: $DB.exec($SQL, ...)
+          - metavariable-regex:
+              metavariable: $DB
+              regex: ^(this\.)?(\w+\.)?(db|tx|client|pool|sql|pg)$
+          - focus-metavariable: $SQL
+
+  - id: fw-sql-concat
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: SQL text joined with `+`. Use a template with $n parameters for values.
+    patterns:
+      - pattern-either:
+          - pattern: $DB.query("$S" + $X, ...)
+          - pattern: $DB.query($X + "$S", ...)
+      - metavariable-regex:
+          metavariable: $S
+          regex: (?i)\b(select|insert|update|delete|where|values)\b
+
+  - id: fw-child-process-from-request
+    languages: [typescript, javascript]
+    paths:
+      exclude: [/src/web/]
+    severity: ERROR
+    message: A command run with request data in it.
+    mode: taint
+    pattern-sources: *request
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $FN(...)
+              - patterns:
+                  - pattern: $CP.$FN(...)
+                  - metavariable-regex:
+                      metavariable: $CP
+                      regex: ^(cp|child_process|childProcess)$
+          - metavariable-regex:
+              metavariable: $FN
+              regex: ^(exec|execSync|execFile|execFileSync|spawn|spawnSync|fork)$
+
+  - id: fw-path-from-request
+    languages: [typescript, javascript]
+    paths:
+      exclude: [/src/web/]
+    severity: ERROR
+    message: A file path built from request data (path traversal). Look the file up in an allow-list or check the resolved path stays in its folder.
+    mode: taint
+    pattern-sources: *request
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $FN($P, ...)
+              - patterns:
+                  - pattern: $FS.$FN($P, ...)
+                  - metavariable-regex:
+                      metavariable: $FS
+                      regex: ^(fs|fsp|fsPromises|promises|fs\.promises|reply|res)$
+          - metavariable-regex:
+              metavariable: $FN
+              regex: ^(readFile|readFileSync|writeFile|writeFileSync|appendFile|appendFileSync|createReadStream|createWriteStream|open|openSync|unlink|unlinkSync|rm|rmSync|readdir|readdirSync|stat|statSync|existsSync|copyFile|copyFileSync|rename|renameSync|mkdir|mkdirSync|sendFile)$
+          - focus-metavariable: $P
+
+  - id: fw-open-redirect
+    languages: [typescript, javascript]
+    paths:
+      exclude: [/src/web/]
+    severity: ERROR
+    message: A redirect to an address taken from the request. Only redirect to this site's own paths or an allow-list.
+    mode: taint
+    pattern-sources: *request
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $REPLY.redirect($U, ...)
+              - pattern: $REPLY.redirect($CODE, $U)
+              - pattern: $REPLY.header("location", $U)
+              - pattern: $REPLY.header("Location", $U)
+          - focus-metavariable: $U
+
+  - id: fw-json-parse-request-without-try
+    languages: [typescript, javascript]
+    paths:
+      exclude: [/src/web/]
+    severity: WARNING
+    message: JSON.parse of request data outside a try; bad input becomes a 500 (or crashes a raw handler).
+    mode: taint
+    pattern-sources: *request
+    pattern-sinks:
+      - patterns:
+          - pattern: JSON.parse($X, ...)
+          - pattern-not-inside: |
+              try { ... } catch ($E) { ... }
+          - pattern-not-inside: |
+              try { ... } catch { ... }
+          - focus-metavariable: $X
+
+  # ---------- the browser pages ----------
+  - id: fw-web-unsafe-html
+    languages: [javascript]
+    severity: ERROR
+    message: HTML written into the page from a value. Build nodes (h(...), textContent) instead.
+    paths:
+      include: [/src/web/]
+    patterns:
+      - pattern-either:
+          - pattern: $E.innerHTML = $V
+          - pattern: $E.outerHTML = $V
+          - pattern: $E.insertAdjacentHTML($P, $V)
+          - pattern: document.write(...)
+          - pattern: document.writeln(...)
+      - pattern-not: $E.innerHTML = "..."
+      - pattern-not: $E.outerHTML = "..."
+      - pattern-not: $E.insertAdjacentHTML($P, "...")
+
+  # ---------- code from text ----------
+  - id: fw-eval
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: Code built from text (eval, new Function, setTimeout with a string).
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: new Function(...)
+      - pattern: Function(...)
+      - pattern: setTimeout("...", ...)
+      - pattern: setInterval("...", ...)
+
+  # ---------- secrets ----------
+  - id: fw-weak-hash
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: MD5 or SHA-1. Use SHA-256 (or better) for anything about security.
+    pattern-either:
+      - pattern: $C.createHash("md5")
+      - pattern: $C.createHash("sha1")
+      - pattern: createHash("md5")
+      - pattern: createHash("sha1")
+      - pattern: $C.createHmac("md5", ...)
+      - pattern: $C.createHmac("sha1", ...)
+      - pattern: createHmac("md5", ...)
+      - pattern: createHmac("sha1", ...)
+
+  - id: fw-math-random-secret
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: Math.random is guessable. Secrets, tokens and codes come from crypto.randomBytes / randomInt.
+    patterns:
+      - pattern-either:
+          - pattern: $V = <... Math.random() ...>
+          - pattern: "{..., $V: <... Math.random() ...>, ...}"
+          - pattern: |
+              function $V(...) { ... return <... Math.random() ...>; }
+      - metavariable-regex:
+          metavariable: $V
+          regex: (?i)(secret|token|password|passcode|nonce|salt|otp|apikey|api_key|session|^code$|claim)
+
+  - id: fw-timing-unsafe-compare
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: A secret compared with === / !==, which leaks how much matched through timing. Use crypto.timingSafeEqual on equal-length buffers.
+    patterns:
+      - pattern-either:
+          - pattern: $A === $B
+          - pattern: $A !== $B
+          - pattern: $A == $B
+          - pattern: $A != $B
+      - pattern-either:
+          - patterns:
+              - pattern-either: [{pattern: $A === $B}, {pattern: $A !== $B}, {pattern: $A == $B}, {pattern: $A != $B}]
+              - metavariable-regex:
+                  metavariable: $A
+                  regex: (?i).*(secret|signature|hmac|password|passcode|apikey|api_key|token|otp)
+          - patterns:
+              - pattern-either: [{pattern: $A === $B}, {pattern: $A !== $B}, {pattern: $A == $B}, {pattern: $A != $B}]
+              - metavariable-regex:
+                  metavariable: $B
+                  regex: (?i).*(secret|signature|hmac|password|passcode|apikey|api_key|token|otp)
+      # Comparing to a literal, null, a type name or a length isn't comparing a secret.
+      - pattern-not: $A === "..."
+      - pattern-not: $A !== "..."
+      - pattern-not: $A === null
+      - pattern-not: $A === false
+      - pattern-not: $A === true
+      - pattern-not: $A !== false
+      - pattern-not: $A !== true
+      - pattern-not: $A !== null
+      - pattern-not: $A === undefined
+      - pattern-not: $A !== undefined
+      - pattern-not: typeof $A === $B
+      - pattern-not: typeof $A !== $B
+      - pattern-not: $A.length === $B
+      - pattern-not: $A.length !== $B
+      - pattern-not: $A === $B.length
+      - pattern-not: $A !== $B.length
+
+  # ---------- money ----------
+  - id: fw-money-write-not-awaited
+    languages: [typescript]
+    severity: ERROR
+    message: A database write in money code that nobody waits for; its error is lost and the next step runs before it lands.
+    paths:
+      include:
+        - /src/modules/payments/
+        - /src/modules/wallet/
+        - /src/modules/ledger/
+        - /src/modules/books/
+        - /src/modules/profit/
+        - /src/modules/distributions/
+        - /src/modules/offers/
+        - /src/modules/lottery/
+        - /src/modules/agents/
+        - /src/modules/chain/
+        - /src/adapters/payments/
+        - /src/adapters/payouts/
+        - /src/api/wallet.ts
+        - /src/api/books.ts
+    patterns:
+      - pattern-either:
+          - pattern: $DB.query(...);
+          - pattern: $DB.exec(...);
+          - pattern: $DB.transaction(...);
+          - pattern: $X.settle(...);
+          - pattern: $X.capture(...);
+          - pattern: $X.refund(...);
+          - pattern: $X.payout(...);
+      - pattern-not: await $E;
+      - pattern-not: void $E;
+      - pattern-not-inside: return ...;

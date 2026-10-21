@@ -111,7 +111,7 @@ export class SolanaChain implements TokenChain {
     // Exactly this amount, of our token, into FreeWater's custody, by the custody vault: nothing minted anywhere else.
     const custodyAccount = tokenAccount(this.custodyKey, this.mintKey, this.program).toBase58();
     const mints = ixs.filter((i) => (i.parsed?.type === 'mintTo' || i.parsed?.type === 'mintToChecked') && i.parsed.info?.mint === this.mintKey.toBase58());
-    const ok = mints.length === 1 && mints[0].parsed.info.account === custodyAccount && (mints[0].parsed.info.mintAuthority ?? mints[0].parsed.info.multisigMintAuthority) === this.custodyKey.toBase58() && String(mints[0].parsed.info.amount ?? mints[0].parsed.info.tokenAmount?.amount) === String(amount);
+    const ok = mints.length === 1 && mints[0].parsed.info.account === custodyAccount && (mints[0].parsed.info.mintAuthority ?? mints[0].parsed.info.multisigMintAuthority) === this.custodyKey.toBase58() && String(mints[0].parsed.info.amount ?? mints[0].parsed.info.tokenAmount?.amount) === String(amount); // nosemgrep: fw-timing-unsafe-compare -- public keys read from the chain, not secrets
     return memo && ok;
   }
 

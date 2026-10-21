@@ -713,7 +713,8 @@
         h('span', { class: 'small muted', text: d.design.names?.length ? `A name on each: ${d.design.names.slice(0, 4).join(', ')}${d.design.names.length > 4 ? '…' : ''}` : 'No ads. All yours.' }),
         h('span', { class: 'small', text: `${money(d.totalCents)}${d.design.quantity > 1 ? ` (${money(d.priceCents)} each)` : ''}` }));
       bottle.querySelector('.wrap').style.backgroundImage = `url("${svgData(d.designSvg)}")`;
-      flat.innerHTML = d.designSvg;
+      // eslint-disable-next-line no-unsanitized/property -- designSvg is drawn by our server (renderKeepsake escapes text; checkKeepsake validates colours and photo); CSP blocks inline script
+      flat.innerHTML = d.designSvg; // nosemgrep: fw-web-unsafe-html -- our own server-drawn SVG; see the ESLint note above
       msgs.replaceChildren(...d.messages.map((m) => h('div', { style: m.role === 'user' ? 'align-self:flex-end;max-width:85%;background:#000;color:#fff;padding:10px 14px;border-radius:18px 18px 4px 18px;white-space:pre-wrap' : 'max-width:92%;white-space:pre-wrap' }, m.text,
         m.attachments?.length ? h('div', { class: 'small', style: 'opacity:.75;margin-top:4px', text: m.attachments.map((a) => `${a.kind === 'video' ? '🎬' : '🖼'} ${a.name || a.kind}`).join('  ') }) : null)));
       if (busy) msgs.append(h('div', { class: 'muted', text: 'Designing…' }));

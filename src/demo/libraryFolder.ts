@@ -12,6 +12,7 @@ const files: string[] = [];
 library.forEach((u, i) => {
   const name = `${String(i + 1).padStart(2, '0')}-${u.id}.md`;
   files.push(`- [${u.title}](${name}): ${status[u.status]}`);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- demo script: a fixed output folder
   writeFileSync(`${dir}/${name}`, [
     `# ${u.title}`, '', `**Status:** ${status[u.status]}  `, `**Proposed by:** ${u.from}`, '',
     u.summary, '', '## Why', '', u.why, '',

@@ -68,13 +68,13 @@ export function attributionRoutes(app: App, server: FastifyInstance, route: (r: 
     // Rationed per network (a fingerprint of it, never the address): reloading a code in a loop opens the page, unbilled.
     const source = app.wallet.sourceOf(req.ip);
     const t = row.kind === 'slot' ? app.scanTokens.issue(`s:${row.unitId}:${row.slot}`, source) : row.kind === 'box' ? app.scanTokens.issue(`b:${row.packId}:${row.face}`, source) : null;
-    return reply.header('cache-control', 'no-store').redirect(`${to}?c=${row.code}${t ? `&t=${t}` : ''}`, 302);
+    return reply.header('cache-control', 'no-store').redirect(`${to}?c=${row.code}${t ? `&t=${t}` : ''}`, 302); // nosemgrep: fw-open-redirect -- `to` is our own path built from the code's row
   };
   server.get('/q/:code', openCode);
   server.get('/Q/:code', openCode);
 
   // A coupon's code, scanned by the cashier: opens the advertiser portal's check-and-redeem screen.
-  const openCoupon = async (req: FastifyRequest, reply: FastifyReply) => reply.header('cache-control', 'no-store').redirect(`/ads/redeem/${encodeURIComponent(String((req.params as any).code).toUpperCase())}`, 302);
+  const openCoupon = async (req: FastifyRequest, reply: FastifyReply) => reply.header('cache-control', 'no-store').redirect(`/ads/redeem/${encodeURIComponent(String((req.params as any).code).toUpperCase())}`, 302); // nosemgrep: fw-open-redirect -- a fixed path of ours; the code is URL-encoded
   server.get('/v/:code', openCoupon);
   server.get('/V/:code', openCoupon);
 
@@ -87,7 +87,7 @@ export function attributionRoutes(app: App, server: FastifyInstance, route: (r: 
       const out = new URL(url);
       for (const [k, v] of Object.entries(q)) if (k !== 'v' && k !== 'from' && k !== 'fwclid' && typeof v === 'string') out.searchParams.set(k, v);
       await app.persistence.flushUnlessPaused();
-      return reply.header('cache-control', 'no-store').header('referrer-policy', 'no-referrer').redirect(out.toString(), 302);
+      return reply.header('cache-control', 'no-store').header('referrer-policy', 'no-referrer').redirect(out.toString(), 302); // nosemgrep: fw-open-redirect -- the address comes from the signed link's ad (reviewed), not the request; the query only adds parameters
     } catch (e) { return fail(reply, e); }
   });
 

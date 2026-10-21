@@ -3,6 +3,7 @@
 //   DATABASE_URL=postgres://… npm start  uses a real Postgres server instead
 //   SEED_DEMO=1 npm start              on an empty database, loads the sample catalog and prints demo API keys
 // Production settings are explained in docs/RUNNING.md; the server checks them before it starts.
+/* eslint-disable security/detect-non-literal-fs-filename -- the data folder from the host's settings */
 import { getHeapStatistics } from 'node:v8';
 import { createApp, type RuntimeChecks } from '../app';
 import { buildServer } from '../api/server';

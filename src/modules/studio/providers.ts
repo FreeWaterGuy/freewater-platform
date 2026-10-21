@@ -1,3 +1,4 @@
+/* eslint-disable security/detect-non-literal-fs-filename -- the stand-in photo folder from settings, and only the files listed in it */
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import sharp from 'sharp';

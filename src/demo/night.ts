@@ -64,6 +64,7 @@ deliveries.push({ stop: 16, scanned: p16.id, result: packs.deliver({ routeId: 'r
 
 await mkdir(OUT, { recursive: true });
 await writeFile(join(OUT, 'packs.html'), packsHtml({ platform, packs, loadOrder, deliveries, mismatch: { packId: p15.id, stray, missing, replaced } }), 'utf8');
+// eslint-disable-next-line security/detect-non-literal-fs-filename -- demo script: a fixed output folder
 for (const p of made) await writeFile(join(OUT, `box-${p.stop}.svg`), p.rendered!.svg, 'utf8');
 
 const bottles = made.reduce((s, p) => s + p.unitIds.length, 0);

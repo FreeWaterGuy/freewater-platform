@@ -33,6 +33,7 @@ const DML = /\b(insert|update|delete|merge)\b/i;
 /** Does this statement change anything? Unsure counts as a write (checking a read costs a little; missing a write doesn't). */
 export function isWriteSql(sql: string): boolean {
   // Leading comments and brackets don't decide anything.
+  // eslint-disable-next-line security/detect-unsafe-regex -- each alternative starts with a different character, so it is linear; the input is our own SQL
   const s = sql.replace(/^(\s|--[^\n]*\n|\/\*[\s\S]*?\*\/|\()*/, '');
   const first = /^[a-z_]+/i.exec(s)?.[0]?.toLowerCase() ?? '';
   if (first === 'with') return DML.test(s); // a CTE may hide a write

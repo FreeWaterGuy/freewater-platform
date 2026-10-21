@@ -1,3 +1,4 @@
+/* eslint-disable security/detect-non-literal-fs-filename -- backup files named by the operator (BACKUP_DIR, the command line), never a request */
 import { spawn } from 'node:child_process';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';

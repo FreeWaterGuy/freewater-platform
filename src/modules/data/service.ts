@@ -18,6 +18,7 @@ import { defaultSanctioned, effectivePolicy, minimumAgeAll, placeFromHeaders, re
 export class DataError extends Error { constructor(public code: string, message: string, public status = 400) { super(message); } }
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 /** Never kept in the activity log, whatever the setting: codes, tokens, card details, passwords, secrets. */
+// eslint-disable-next-line security/detect-unsafe-regex -- plain alternation, no nested repeats
 const SECRET = /code|token|password|secret|card|cvc|cvv|iban|account_?number|authorization|signature|^viewer(_?key)?$/i;
 
 export interface Actor { type: 'viewer' | 'consumer' | 'advertiser' | 'staff' | 'machine' | 'driver' | 'platform' | 'public'; id?: string; userId?: string; viewerKey?: string }

@@ -791,6 +791,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     limit(req, reply, req.ip, 'everything');
   });
   server.addHook('onSend', async (req, reply, payload) => {
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- `set` returns the reply (a thenable), not work left pending; the header is set synchronously
     securityHeaders({ get: (k) => reply.getHeader(k), set: (k, v) => reply.header(k, v) }, req.protocol === 'https' || process.env.HSTS === '1');
     return payload;
   });
@@ -907,6 +908,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     'jsqr.js': { type: 'text/javascript', path: createRequire(import.meta.url).resolve('jsqr/dist/jsQR.js') },
   };
   const cache = new Map<string, Buffer>();
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- only paths from the fixed static-file table above
   const file = (p: string) => { let b = cache.get(p); if (!b || process.env.NODE_ENV !== 'production') cache.set(p, (b = readFileSync(p))); return b; };
   const page = async (_req: FastifyRequest, reply: FastifyReply) => reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', "default-src 'self'; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' blob: data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; frame-ancestors 'none'").send(file(join(webDir, 'scan.html')));
   for (const u of ['/s/:unitId/:slot', '/p/:packId', '/b/:packId/:face']) server.get(u, page);
