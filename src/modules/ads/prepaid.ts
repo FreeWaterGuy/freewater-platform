@@ -327,10 +327,17 @@ export class PrepaidService {
       const ex = typeof p.extras === 'string' ? JSON.parse(p.extras) : p.extras ?? {};
       const extrasCents = Object.entries(ex).reduce((a, [id, x]: [string, any]) => a + Math.max(0, n(x.paid) - (used.get(id) ?? 0)) * n(x.priceCents), 0);
       const total = bottles * n(p.price_cents) + extrasCents;
-      const pay = (await tx.query<any>(`select payment_id from ad_orders where campaign_id = $1 and kind = 'bottles' and status = 'paid'`, [c.id])).rows[0];
+      const pay = (await tx.query<any>(`select payment_id, total_cents, credit_cents from ad_orders where campaign_id = $1 and kind = 'bottles' and status = 'paid'`, [c.id])).rows[0];
+      // Paid partly or wholly with route credit: the card gets back at most what the card paid, and the rest comes back
+      // as credit (a credit line, as when a house stops). Credit is never cashed out.
+      const usedCredit = n(pay?.credit_cents);
+      const card = usedCredit > 0 ? Math.min(total, Math.max(0, n(pay.total_cents) - usedCredit)) : total;
+      const asCredit = total - card;
       const id = newId('adr');
       const r = (await tx.query<any>(`insert into ad_refunds (id, company_id, campaign_id, advertiser_id, bottles, bottles_cents, extras_cents, total_cents, payment_id, status, reason, stopped_by) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) returning *`,
-        [id, o.companyId, c.id, c.advertiserId, bottles, bottles * n(p.price_cents), extrasCents, total, pay?.payment_id ?? null, total > 0 ? 'refunding' : 'refunded', o.reason.trim(), o.by])).rows[0];
+        [id, o.companyId, c.id, c.advertiserId, bottles, bottles * n(p.price_cents), extrasCents, card, pay?.payment_id ?? null, card > 0 ? 'refunding' : 'refunded', o.reason.trim(), o.by])).rows[0];
+      if (asCredit > 0) await tx.query(`insert into route_settlements (id, company_id, advertiser_id, campaign_id, kind, reason, unprinted_cents, total_cents, status) values ($1,$2,$3,$4,'credit',$5,$6,$6,'done')`,
+        [`rst_${id}`, o.companyId, c.advertiserId, c.id, `Stopped by the company: the part paid with credit comes back as credit (${o.reason.trim()})`.slice(0, 300), asCredit]);
       await tx.query(`update ad_prepaid set stopped_at = now(), refunded = refunded + $2 where campaign_id = $1`, [c.id, bottles]);
       // Its route spots not printed yet are let go: they're in this refund, and the space is free for others.
       await tx.query(`update route_spots set status = 'cancelled' where campaign_id = $1 and status = 'open'`, [c.id]);
@@ -370,7 +377,8 @@ export class PrepaidService {
   }
 
   private refundView(r: any) {
-    return { refundId: r.id as string, campaignId: r.campaign_id as string, bottles: n(r.bottles), bottlesCents: n(r.bottles_cents), extrasCents: n(r.extras_cents), totalCents: n(r.total_cents), status: r.status as string, failure: r.failure ?? null };
+    // totalCents goes back to the card; creditCents (paid with route credit) came back as credit.
+    return { refundId: r.id as string, campaignId: r.campaign_id as string, bottles: n(r.bottles), bottlesCents: n(r.bottles_cents), extrasCents: n(r.extras_cents), totalCents: n(r.total_cents), creditCents: n(r.bottles_cents) + n(r.extras_cents) - n(r.total_cents), status: r.status as string, failure: r.failure ?? null };
   }
 
   // ---------- fees charged after the fact ----------
@@ -618,11 +626,14 @@ export class PrepaidService {
     const orphans = (await this.db.query<any>(`select id, campaign_id from ad_orders where company_id = $1 and kind = 'bottles' and status = 'paid'`, [companyId])).rows.filter((o) => !this.platform.campaigns.has(o.campaign_id));
     const costly = (await this.db.query<any>(`select campaign_id, sum(cost_cents)::bigint as cost, sum(charged_cents)::bigint as charged from ad_extra_uses where company_id = $1 and status = 'used' group by 1 having sum(cost_cents) > sum(charged_cents)`, [companyId])).rows
       .filter((r) => this.platform.campaigns.get(r.campaign_id)?.prepaid);
-    const look = paying.length + refunds.length + orphans.length + costly.length;
-    out.push({ id: 'prepaid_open', what: 'Nothing about advertisers’ payments is left half done: orders charged and finished, refunds sent, every paid ad made, extras within what was charged',
+    // A paid ad finally rejected holds the advertiser's money until a person stops it and approves the refund.
+    const known = new Set(rows.filter((r) => !r.stopped_at).map((r) => r.campaign_id as string));
+    const rejected = [...this.platform.campaigns.values()].filter((c) => c.companyId === companyId && known.has(c.id) && c.review?.status === 'rejected' && c.review.refundOffered && !c.review.auditPending).map((c) => c.id);
+    const look = paying.length + refunds.length + orphans.length + costly.length + rejected.length;
+    out.push({ id: 'prepaid_open', what: 'Nothing about advertisers’ payments is left half done: orders charged and finished, refunds sent, every paid ad made, rejected paid ads paid back, extras within what was charged',
       status: look ? 'attention' : 'ok',
-      detail: look ? `${paying.length} order(s) still being paid; ${refunds.length} refund(s) not sent; ${orphans.length} paid order(s) whose ad wasn’t made yet (the advertiser submits again, or a person looks); ${costly.length} ad(s) whose extras cost more than charged` : 'Nothing open',
-      figures: { paying: paying.map((r) => r.id), refunds, orphans, extrasOverCost: costly } });
+      detail: look ? `${paying.length} order(s) still being paid; ${refunds.length} refund(s) not sent; ${orphans.length} paid order(s) whose ad wasn’t made yet (the advertiser submits again, or a person looks); ${rejected.length} rejected paid ad(s) whose refund waits for a person (stop it to pay it back); ${costly.length} ad(s) whose extras cost more than charged` : 'Nothing open',
+      figures: { paying: paying.map((r) => r.id), refunds, orphans, rejectedNotRefunded: rejected, extrasOverCost: costly } });
     return out;
   }
 }

@@ -149,7 +149,10 @@ printed than paid.
 **Stopping an ad (FreeWater, not the advertiser).** *Ads → the ad → Stop and pay back*
 (`POST /v1/ads/campaigns/<id>/stop` with a reason). Only an owner or finance person, signed in with the second step,
 never an API key. Nothing more prints; the bottles not printed (at the price paid) and extras not used go back to
-the card, once, and the books record it. While bottles with the ad are printing it waits: pause the ad first.
+the card, once, and the books record it. A route buy paid partly with credit gets back to the card at most what the
+card paid; the rest comes back as credit (credit is never cashed out). While bottles with the ad are printing it
+waits: pause the ad first. An ad with every paid bottle out can't be changed (the change fee is never taken for a
+change that could never print).
 
 **Changing these settings** is a money switch: a person signed in, with the second step. Paying up front needs flat
 pricing; turning it off brings back billing after the fact, with credit (below).

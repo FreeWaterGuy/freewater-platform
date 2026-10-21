@@ -1,7 +1,7 @@
 import type { BoxProduct, Campaign, Share, Unit } from '../../core/types';
 import { houseAd } from '../fillers/house';
 import { layoutsFor, shareLabel } from './layouts';
-import { bidFloor } from './budget';
+import { bidFloor, prepaidLeft } from './budget';
 import { newId } from '../../core/ids';
 import type { SqlClient } from '../../db/client';
 import type { Platform } from '../../platform';
@@ -144,6 +144,7 @@ export class AdsService {
       };
       const company = this.platform.companies.get(input.companyId)!;
       if (c.prepaid?.stoppedAt) throw new AdsError(409, 'stopped', 'This ad was stopped and its unprinted bottles paid back. Make a new ad instead.');
+      if (c.prepaid && prepaidLeft(c) <= 0) throw new AdsError(409, 'all_printed', 'Every paid bottle of this ad is out, so a change would never print. Make a new ad instead.');
       const fee = adBilling(company).changeFeeCents;
       greeting = c.prepaid && c.review?.status === 'flagged'
         ? `What would you like to change? ${company.name}’s team raised a question about this ad (see the notes on it). Changing it while it’s being discussed is free; your money stays held and nothing prints until it’s approved.`
@@ -386,6 +387,8 @@ export class AdsService {
     if (prepaidModel(company) && this.prepaid) {
       if (existing?.prepaid) {
         if (existing.prepaid.stoppedAt) throw new AdsError(409, 'stopped', 'This ad was stopped and its unprinted bottles paid back. Make a new ad instead.');
+        // Nothing left to print: the change would never print, so its fee isn't taken (a draft begun before it ran out).
+        if (prepaidLeft(existing) <= 0) throw new AdsError(409, 'all_printed', 'Every paid bottle of this ad is out, so a change would never print. Nothing was charged. Make a new ad instead.');
         // Flagged in review: fixed and sent again at no fee while it's being discussed.
         if (existing.review?.status !== 'flagged') feeCents = (await this.prepaid.payChangeFee({ companyId: r.companyId, advertiserId: r.advertiserId, campaignId: existing.id, draftId: r.id, expectedFeeCents: input.pay?.expectedFeeCents }))?.feeCents ?? 0;
       } else if (!existing && route) {

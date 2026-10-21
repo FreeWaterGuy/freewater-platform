@@ -26,7 +26,8 @@ async function world(engine: string) {
   let now = new Date('2026-11-02T15:00:00Z').getTime();
   const clock = () => new Date(now);
   const db: SqlClient = await freshDb(engine);
-  const app: App = await createApp({ db, seedDemo: true, seed: 7, clock, payments: new TestPaymentProvider(), productLookup: null, anchorPublishers: [] } as any);
+  const provider = new TestPaymentProvider();
+  const app: App = await createApp({ db, seedDemo: true, seed: 7, clock, payments: provider, productLookup: null, anchorPublishers: [] } as any);
   const server: FastifyInstance = await buildServer(app);
   const call = (method: string, url: string, token?: string, payload?: unknown) => server.inject({ method: method as any, url, payload: payload as any, headers: token ? { authorization: `Bearer ${token}` } : {} });
   const signIn = async (to: string) => {
@@ -44,7 +45,7 @@ async function world(engine: string) {
   expect((await call('PATCH', `/v1/ops/areas/${area.id}`, ops, { active: true, packSize: 12 })).statusCode).toBe(200);
   const houses = (await db.query<any>(`select id, address from houses where area_id = $1 order by number`, [area.id])).rows as { id: string; address: string }[];
   // Sign-ins expire as the clock moves on: a fresh one each time.
-  return { db, app, server, call, signIn, get ops() { return app.accounts.createSession(opsUser.id); }, get driver() { return app.accounts.createSession(driverUser.id); }, driverId: driverUser.id, ownerId: owner.id, area, houses, at: (iso: string) => { now = new Date(iso).getTime(); } };
+  return { db, app, provider, server, call, signIn, get ops() { return app.accounts.createSession(opsUser.id); }, get driver() { return app.accounts.createSession(driverUser.id); }, driverId: driverUser.id, ownerId: owner.id, area, houses, at: (iso: string) => { now = new Date(iso).getTime(); } };
 }
 type World = Awaited<ReturnType<typeof world>>;
 
@@ -87,7 +88,8 @@ async function invariants(w: World, label: string) {
   //    order holds nothing.
   const orders = (await db.query<any>(`select o.id, o.status, o.bottles, o.total_cents, o.credit_cents, p.amount_cents, p.status as pay from ad_orders o join route_buys r on r.order_id = o.id left join payments p on p.id = o.payment_id`)).rows;
   for (const o of orders) {
-    const live = n((await db.query<any>(`select count(*)::int as c from route_spots where order_id = $1 and bottle is not null and status <> 'cancelled'`, [o.id])).rows[0].c);
+    // (A stopped ad's pieces not printed are let go, cancelled: they're in its refund.)
+    const live = n((await db.query<any>(`select count(*)::int as c from route_spots s where order_id = $1 and bottle is not null and (status <> 'cancelled' or exists (select 1 from ad_prepaid p where p.campaign_id = s.campaign_id and p.stopped_at is not null))`, [o.id])).rows[0].c);
     if (o.status === 'paid') { expect(live, `${label}: paid order ${o.id} pieces`).toBe(n(o.bottles)); if (o.pay) expect(n(o.amount_cents), `${label}: card charge`).toBe(n(o.total_cents) - n(o.credit_cents)); }
     if (o.status === 'declined') expect(n((await db.query<any>(`select count(*)::int as c from route_spots where order_id = $1 and status in ('open','held','placed')`, [o.id])).rows[0].c), `${label}: a declined order holds space`).toBe(0);
     if (o.pay === 'captured') expect(o.status, `${label}: charged but not paid`).toBe('paid');
@@ -101,6 +103,9 @@ async function invariants(w: World, label: string) {
     const pack = app.packs.packs.get(app.platform.units.get(unitId!)!.packId ?? '');
     expect(pack?.houseId, `${label}: piece ${spot} printed for another house`).toBe(spotHouse.get(spot));
   }
+  // 3b. Nothing goes back to a card beyond what that card paid (credit is never cashed out), and no refund is stuck failed.
+  for (const p of (await db.query<any>(`select provider_ref, amount_cents from payments where purpose = 'ad_order' and status = 'captured'`)).rows) expect(w.provider.refundedOn(p.provider_ref), `${label}: refunded past the card charge`).toBeLessThanOrEqual(n(p.amount_cents));
+  expect((await db.query<any>(`select id, failure from ad_refunds where status = 'failed'`)).rows, `${label}: a stop's refund failed`).toEqual([]);
   // 4. Credit never below nothing.
   for (const r of (await db.query<any>(`select distinct advertiser_id from route_settlements`)).rows) expect(await app.routeBuys.creditBalance('freewater', r.advertiser_id), `${label}: credit`).toBeGreaterThanOrEqual(0);
   // 5. The books balance, and the daily reconciliation passes (prepaid and route checks).
@@ -163,6 +168,14 @@ for (const engine of engines) {
             else await w.call('POST', '/v1/me/house/ad-blocks', anna, { aimedAtHouse: true });
             label += ' a house stopped or blocked';
           }
+        } else if (roll < 0.72) {
+          // The company stops a paid route ad (an owner, second step): the card gets back at most what it paid.
+          const paid = (await w.db.query<any>(`select r.campaign_id from route_buys r join ad_orders o on o.id = r.order_id join ad_prepaid p on p.campaign_id = r.campaign_id where o.status = 'paid' and p.stopped_at is null and p.held = 0`)).rows;
+          if (paid.length) {
+            const id = pick(paid).campaign_id as string;
+            await w.app.prepaid.stop({ companyId: 'freewater', campaignId: id, by: `user:${w.ownerId}`, reason: 'Stopped in the controls run' });
+            label += ` stopped ${id}`;
+          }
         } else if (roll < 0.85) {
           // Plan the next night that week's houses are due, print, and deliver (some boxes come back).
           const night = (await w.db.query<any>(`select min(next_date)::text as d from houses where area_id = $1 and status = 'active'`, [w.area.id])).rows[0]?.d ?? '2026-11-24';
@@ -198,5 +211,44 @@ for (const engine of engines) {
       await invariants(w, 'end');
       expect(n((await w.db.query<any>(`select count(*)::int as c from route_spots where status = 'open' and week < '2027-03-01'`)).rows[0].c)).toBe(0);
     }, 600_000);
+  });
+}
+
+for (const engine of engines) {
+  describe(`credit is never cashed out (${engine})`, () => {
+    let w: World;
+    afterAll(async () => { await w?.server.close(); await w?.db.close(); });
+
+    it('stopping an ad paid partly or wholly with credit: the card gets back at most what it paid, the rest is credit again', async () => {
+      w = await world(engine);
+      const first = await newAd(w, 4);
+      // A blanket on every house for a week that then goes by unprinted: all of it comes back as credit.
+      expect(await tryBuy(w, first, { kind: 'blanket', share: 4, startWeek: '2026-11-09', where: { areaIds: [w.area.id] } })).toBe('paid');
+      w.at('2026-11-17T15:00:00Z');
+      await w.app.routeBuys.settle('freewater');
+      const credit = await w.app.routeBuys.creditBalance('freewater', first.advertiserId);
+      expect(credit).toBeGreaterThan(0);
+      const sameAdvertiser = async (share: Share) => { const c = await newAd(w, share); const again = { ...c, advertiserId: first.advertiserId, advertiserName: first.advertiserName }; w.app.platform.campaigns.set(again.id, again); return again; };
+      // Partly with credit: a bigger buy, the rest on the card.
+      const big = await sameAdvertiser(2);
+      expect(await tryBuy(w, big, { kind: 'spread', share: 2, bottles: 12, startWeek: '2026-11-23', where: { areaIds: [w.area.id] } })).toBe('paid');
+      const order = (await w.db.query<any>(`select total_cents, credit_cents from ad_orders where campaign_id = $1`, [big.id])).rows[0];
+      expect(n(order.credit_cents)).toBe(credit);
+      expect(n(order.total_cents)).toBeGreaterThan(credit);
+      expect(await w.app.routeBuys.creditBalance('freewater', first.advertiserId)).toBe(0);
+      const r = await w.app.prepaid.stop({ companyId: 'freewater', campaignId: big.id, by: `user:${w.ownerId}`, reason: 'Advertiser asked' });
+      expect(r).toMatchObject({ status: 'refunded', totalCents: n(order.total_cents) - credit });
+      expect(await w.app.routeBuys.creditBalance('freewater', first.advertiserId)).toBe(credit);
+      await invariants(w, 'partly with credit');
+      // Wholly with credit: nothing goes on the card, nothing comes back to it; all of it is credit again.
+      const small = await sameAdvertiser(4);
+      expect(await tryBuy(w, small, { kind: 'spread', share: 4, bottles: 2, startWeek: '2026-11-23', where: { areaIds: [w.area.id] } })).toBe('paid');
+      const o2 = (await w.db.query<any>(`select total_cents, credit_cents, payment_id from ad_orders where campaign_id = $1`, [small.id])).rows[0];
+      expect([n(o2.credit_cents), o2.payment_id]).toEqual([n(o2.total_cents), null]);
+      const r2 = await w.app.prepaid.stop({ companyId: 'freewater', campaignId: small.id, by: `user:${w.ownerId}`, reason: 'Advertiser asked' });
+      expect(r2).toMatchObject({ status: 'refunded', totalCents: 0 });
+      expect(await w.app.routeBuys.creditBalance('freewater', first.advertiserId)).toBe(credit);
+      await invariants(w, 'wholly with credit');
+    }, 300_000);
   });
 }
