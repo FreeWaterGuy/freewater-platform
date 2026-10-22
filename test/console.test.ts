@@ -193,7 +193,12 @@ describe('the white-label console', () => {
     expect(o.you.platform).toBe(true);
     expect(o.checklist.map((c: any) => c.id)).toContain('machine');
 
-    const saved = await call('PATCH', '/v1/console/settings', owner, { version: 1, changes: { brand: { accentColor: '#F2C14E', tagline: 'Water for everyone' }, adRules: { maxAdsPerUnit: 4 } } });
+    // Fewer ads a bottle leaves the demo's paid sixths, eighths and tenths without a layout: counted first, saved once confirmed.
+    const change = { brand: { accentColor: '#F2C14E', tagline: 'Water for everyone' }, adRules: { maxAdsPerUnit: 4 } };
+    const stranded = (await call('POST', '/v1/console/preview-label', owner, { changes: change })).body.stranded;
+    expect(stranded.count).toBeGreaterThan(0);
+    expect((await call('PATCH', '/v1/console/settings', owner, { version: 1, changes: change })).body.error.code).toBe('paid_pieces_stranded');
+    const saved = await call('PATCH', '/v1/console/settings', owner, { version: 1, changes: change, confirmStranded: stranded.count });
     expect(saved.status).toBe(200);
     expect(saved.body.version).toBe(2);
     expect(saved.body.changes).toEqual(expect.arrayContaining(['Accent color: #7FC6EA → #F2C14E', "Tagline: Put your brand in everyone's… → Water for everyone", 'Most ads per bottle: 10 → 4']));

@@ -19,6 +19,10 @@
 import type { Feature } from './features';
 import { defaultWallet } from '../modules/wallet/assets';
 import { adBilling } from '../modules/ads/billing';
+import { TEMPLATES, templateShares } from '../modules/ads/layouts';
+
+/** Ad sizes (shares of the label) and their switches. */
+export const SIZE_SWITCHES: Record<number, string> = { 1: 'size_whole', 2: 'size_half', 3: 'size_third', 4: 'size_quarter', 6: 'size_sixth', 8: 'size_eighth', 10: 'size_tenth' };
 
 /** Raise this when adding switches (and give them `since: CATALOGUE`). */
 export const CATALOGUE = 5;
@@ -191,6 +195,22 @@ export const SWITCHES: Switch[] = [
     description: 'The AI reviewer’s rejection of a paid ad is final without a person, with its written reason kept. The advertiser can always appeal to a person; a random sample of its rejections (10% unless set, never under 5%) still goes to your team to audit; an AI pass still waits for a person before it prints; the refund after any rejection is still approved by a person. Turned on only when its record meets your bar (100 decisions and 95% agreeing with your team unless set); anyone on your team turns it off at once, and the governor turns it off by itself if its agreement drops below the bar.' }),
   ...([[1, 'whole', 'The whole label'], [2, 'half', 'Half'], [3, 'third', 'A third'], [4, 'quarter', 'A quarter'], [6, 'sixth', 'A sixth'], [8, 'eighth', 'An eighth'], [10, 'tenth', 'A tenth']] as const).map(([n, name, label]) =>
     sw({ id: `size_${name}`, category: 'ads', group: 'Ad sizes', label: `${label} of the label`, description: n === 1 ? 'One ad across the whole label.' : `Ads that take ${label.toLowerCase()} of the label (cut as square as the bottle allows).` })),
+  // Label layouts (src/modules/ads/layoutChoice.ts; docs/SWITCHES.md, "Label layouts"): one switch per tidy template,
+  // each needing every size it uses. They narrow what every company already printed, so they count as part of the first
+  // catalogue (`since: 1`): an existing company keeps every template, as before, until it turns some off. At least one
+  // stays usable on the standard product while ads are on (the Features page refuses turning off the last one).
+  ...TEMPLATES.map((t) => {
+    const shares = templateShares(t);
+    const sizes = [...new Set(shares)];
+    return sw({ id: `layout_${t.id}`, category: 'ads', group: 'Label layouts', dependsOn: sizes.map((s) => SIZE_SWITCHES[s]!),
+      label: t.name[0]!.toUpperCase() + t.name.slice(1),
+      description: shares.length === 1 ? 'One ad across the whole label.' : `The label cut into ${t.name}: ${shares.length} pieces${sizes.length > 1 ? ', the bigger ones first' : ', all the same size'}. Each piece is turned the squarest way the product allows.` });
+  }),
+  sw({ id: 'max_ads_per_bottle', category: 'ads', group: 'Label layouts', kind: 'setting', page: 'features', label: 'Most ads on one bottle',
+    description: '1 to 10 (FreeWater: 10). Layouts with more pieces than this aren’t used. Set it in the Label layouts section of this page.' }),
+  sw({ id: 'placement_revenue', category: 'ads', group: 'Selling space', kind: 'linked', default: false, label: 'Most revenue per bottle',
+    description: 'Off (FreeWater): every paid ad gets its turn, and the label is cut the best-earning way that carries the ad whose turn it is. On: each label is cut the way that earns the most among the paid ads that fit, and an ad left off the bottles it fits for a number of bottles in a row (20 unless set) gets its turn on the next one, so no paid ad waits forever.',
+    link: { get: (c) => c.adRules?.placement === 'revenue', set: (c, on) => ({ adRules: { ...c.adRules, placement: on ? 'revenue' : 'turns' } }) } }),
 
   // ======================= AR & video =======================
   sw({ id: 'ar_video', category: 'ar_video', parent: null, label: 'AR and video', description: 'AR on scan pages and videos behind “Show me more”. AR launches that load are billed to the advertiser.',
@@ -463,8 +483,6 @@ for (const c of CATEGORIES) { const m = SWITCHES.find((s) => s.id === c.main); i
 export const byId = new Map(SWITCHES.map((s) => [s.id, s]));
 export const switchOf = (id: string) => byId.get(id);
 
-/** Ad sizes (shares of the label) and their switches. */
-export const SIZE_SWITCHES: Record<number, string> = { 1: 'size_whole', 2: 'size_half', 3: 'size_third', 4: 'size_quarter', 6: 'size_sixth', 8: 'size_eighth', 10: 'size_tenth' };
 /** Box sides and their switches (the left side is always the company's own panel). */
 export const FACE_SWITCHES: Record<string, string> = { top: 'box_top', front: 'box_front', back: 'box_back', right: 'box_right' };
 /** The AI uses, by the id the engine passes to withCompany(). */

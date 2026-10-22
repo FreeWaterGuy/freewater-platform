@@ -63,6 +63,12 @@ export interface Product {
    * QR code. The platform divides the label into pieces as close to square as it can (see modules/ads/layouts).
    */
   sizes?: Share[];
+  /**
+   * The label layouts (template ids, modules/ads/layouts) this product may be cut into. Never stored on a product: it is
+   * set when a bottle is filled from the company's own choices (its Label layouts switches and its choice for this
+   * product), so one company's choice never reaches another's labels. Missing means every template that fits.
+   */
+  layouts?: string[];
   /** Ad prices on this product compared with the standard bottle (a bigger label can cost more). 1 by default. */
   priceFactor?: number;
   /** Ad categories never printed on this product (no energy drinks on a kids' juice box, say). */
@@ -218,6 +224,19 @@ export interface CompanyConfig {
      * verified business, no names, addresses or personal messages). Unset: 50; never below 50.
      */
     smallAudienceHouses?: number;
+    /**
+     * How the engine chooses among the allowed templates (Features → Ads → Selling space): 'turns' (the default:
+     * every paid ad gets its turn) or 'revenue' (the best-earning label among the paid ads that fit, with a fair turn
+     * for any ad left off `fairTurnBottles` bottles in a row where it fits). See modules/ads/layoutChoice.
+     */
+    placement?: 'turns' | 'revenue';
+    /** With 'revenue': the most bottles in a row a paid ad that fits may be left off before it gets its turn (2 to 1,000; 20 unless set). */
+    fairTurnBottles?: number;
+    /**
+     * Per product (by id): the label layouts (template ids) this company uses on it, a narrower list than its Label
+     * layouts switches. A product not listed uses every allowed layout, so a new product inherits the company's choice.
+     */
+    productLayouts?: Record<string, string[]>;
   };
   prices: {
     /** The starting price of one print, by size. Bids start here and go up. */

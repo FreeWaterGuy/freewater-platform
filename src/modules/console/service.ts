@@ -18,7 +18,8 @@ import { adBilling, defaultAdBilling } from '../ads/billing';
 
 /** Where a settings change came from, and why (for the switches' history on the Features page). */
 export interface SaveNote { via: string; reason?: string }
-export interface SaveOpts { chainApproved?: boolean; person?: boolean; note?: SaveNote; inTx?: (tx: SqlClient) => Promise<void> }
+/** `confirmStranded`: the count of paid pieces a label-layout change would strand, as the preview showed it (it must match). */
+export interface SaveOpts { chainApproved?: boolean; person?: boolean; note?: SaveNote; inTx?: (tx: SqlClient) => Promise<void>; confirmStranded?: number }
 
 export class ConsoleError extends Error {
   constructor(public code: string, message: string, public status = 400) {
@@ -60,6 +61,18 @@ export class ConsoleService {
   onCreate?: (tx: SqlClient, companyId: string, by: string) => Promise<void>;
   /** Set by the app: the switches kept in the settings that this change turns on or off (a key never changes a switch). */
   switchesChanged?: (before: CompanyConfig, after: CompanyConfig) => string[];
+  /**
+   * Set by the app (src/modules/ads/layoutGuard.ts): a change to the label layouts' settings (most ads on a bottle,
+   * fewest, each product's layouts) that leaves no layout while ads are on is refused; one that would strand paid
+   * pieces says how many first, and is saved only when the count is confirmed.
+   */
+  layoutCheck?: (companyId: string, cur: CompanyConfig, next: CompanyConfig) => Promise<{ problem: string | null; stranded: { count: number; words: string[] } }>;
+  private async layoutsAllow(companyId: string, cur: CompanyConfig, next: CompanyConfig, confirmed: number | undefined, how: string) {
+    const lc = await this.layoutCheck?.(companyId, cur, next);
+    if (!lc) return;
+    if (lc.problem) throw new ConsoleError('no_layout_left', lc.problem, 422);
+    if (lc.stranded.count && confirmed !== lc.stranded.count) throw new ConsoleError('paid_pieces_stranded', `${lc.stranded.words.join(' ')} ${how}`, 409);
+  }
 
   /**
    * Saves and restores for one company run one at a time (the platform runs as a single owner, so an in-process lock
@@ -156,6 +169,7 @@ export class ConsoleService {
     if (opts.person === false) { const flips = this.switchesChanged?.(cur, next) ?? []; if (flips.length) throw new ConsoleError('person_needed', `This turns a switch on or off (${flips.join(', ')}): a person signed in does that, never a service key.`, 403); }
     const problem = checkSettings(next, this.registry.names()) ?? ratchetProblem(cur, next) ?? chainProblem(cur, next, opts.chainApproved) ?? walletProblem(cur, next, opts.chainApproved);
     if (problem) throw new ConsoleError('invalid_settings', problem, 422);
+    await this.layoutsAllow(companyId, cur, next, opts.confirmStranded, 'Check it first (Features → Label layouts shows the count), then save again confirming it.');
     const changes = describeChange(cur, next);
     if (!changes.length) return { config: cur, version, changes };
     return this.commit(companyId, next, by, changes, version, opts);
@@ -208,6 +222,7 @@ export class ConsoleService {
     }
     const problem = checkSettings(next, this.registry.names()) ?? ratchetProblem(cur, next) ?? chainProblem(cur, next) ?? walletProblem(cur, next);
     if (problem) throw new ConsoleError('invalid_settings', `Version ${v} can’t be put back as it is: ${problem}`, 422);
+    await this.layoutsAllow(companyId, cur, next, undefined, `Version ${v} isn’t put back by itself: change the label layouts on the Features page, where you can confirm.`);
     const changes = describeChange(cur, next);
     if (!changes.length) return { config: cur, version: latest, changes };
     return this.commit(companyId, next, by, [`Put back version ${v}`, ...changes], latest, { note: { via: `settings history (put back version ${v})` } });
@@ -226,7 +241,9 @@ export class ConsoleService {
     const unit = this.sampleUnit(companyId);
     const location = unit.locationId;
     const label = await this.registry.rendererFor(shown).render({ unit: { ...unit, locationId: location }, product, company: shown, campaigns: this.platform.campaigns });
-    return { svg: await this.platform.forView(label.svg), problem };
+    // A change to the label layouts' settings: refused if no layout would be left, and what it would strand, counted.
+    const layouts = problem ? null : (await this.layoutCheck?.(companyId, cur, draft)) ?? null;
+    return { svg: await this.platform.forView(label.svg), problem: problem ?? layouts?.problem ?? null, ...(layouts ? { stranded: layouts.stranded } : {}) };
   }
 
   /** The company's most recent bottle, or else its house ad across the whole label. */
@@ -315,6 +332,10 @@ export class ConsoleService {
       // Advertisers pay up front at flat prices with no fees on top, whatever the template charges (P13).
       adBilling: defaultAdBilling(),
     };
+    // Its label layouts start as FreeWater's (non-money settings copy): the most ads on a bottle, the placement rule, and
+    // the choice for each shared product (FreeWater's own products aren't the new company's).
+    const shared = Object.entries(config.adRules.productLayouts ?? {}).filter(([pid]) => { const p = this.platform.products.get(pid); return p && !p.companyId; });
+    if (shared.length) config.adRules.productLayouts = Object.fromEntries(shared); else delete config.adRules.productLayouts;
     delete config.lottery;
     delete config.agents;
     delete config.ratchet;

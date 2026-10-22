@@ -477,7 +477,7 @@ prices*).
 | **The host's settings stay the outer limit.** | A company can't turn on what `FW_FEATURES` has off (section 6); the page says "switched off on this server". |
 | **Turning a switch off turns off everything that needs it.** | The page shows the list before saving. Turning the parent back on doesn't turn those back on by itself: each is chosen again. |
 | **Turning off is quick.** | Any owner signed in. Never a key (a key never changes a switch). |
-| **Paid bottles always go out.** | Turning off *Printing bottles*, *Ads on bottles* or an ad size holds back the paid bottles that need it; the preview says how many first. They print again once it's back on, or an owner or finance person stops each ad and pays back what wasn't printed (*Settling money already in flight*). |
+| **Paid bottles always go out.** | Turning off *Printing bottles*, *Ads on bottles*, an ad size or the label layouts a size needs holds back the paid bottles that need it; the preview says how many first. They print again once it's back on, or an owner or finance person stops each ad and pays back what wasn't printed (*Settling money already in flight*). |
 | **Turning on follows the usual rules.** | Any owner signed in; money, chain and one-way switches need the second sign-in step; gift cards, withdrawals and the chain are turned on only by their approved steps under *Launch* and *Blockchain* (the page links there). |
 | **An AI deciding on its own is earned, never switched on here.** | *Autonomy* switches (*AI makes the final call on paid ads*) are turned on only on their own page, by an owner with the second step, on the AI's record (the page says where); turning them off works here too, and anyone on the team can turn them off on their page. |
 | **One-way stays one-way.** | The AI agents' fund and the giving promise, once on, show "On for good". |
@@ -503,6 +503,30 @@ route buying, fillers, AR and scans; no machines, fees, bidding or news (`test/s
 **The page:** the main switches as cards, the starting points, *Every switch* (categories → groups → switches) with a
 search box and filters (on, off, different from FreeWater, locked, new); each switch shows what it does, what it
 needs, what turning it off also turns off, FreeWater's choice and who may change it. It works on a phone.
+
+### Label layouts (Ads → Label layouts, on the Features page)
+
+Every label is one of 16 tidy templates (`src/modules/ads/layouts.ts`). Each is a switch, shown with a small picture
+(the standard product's label, cut that way). The section also holds the most ads on one bottle and each product's
+own choice.
+
+| Rule | How |
+|---|---|
+| **A layout needs its sizes.** | Each layout switch depends on the size switches it uses: turning a size off turns its layouts off (listed in the preview); turning the size back on doesn't turn them back on by itself. |
+| **At least one stays on while ads are on.** | A switch change, a lower *most ads on one bottle* or a product's choice that would leave the standard product (or that product) with no usable layout is refused, in plain words. With *Ads on bottles* off, nothing is cut and nothing is refused. |
+| **Most ads on one bottle** | 1 to 10 (FreeWater 10). Templates with more pieces are greyed, with the reason. Saved in the settings (`adRules.maxAdsPerUnit`); the Ads and prices page links here. |
+| **Per product** | *On each product* narrows the layouts one product uses (`adRules.productLayouts`, by product id, the company's own or shared ones only). A product without a choice, and every new product, uses all the company's layouts. Templates too thin or too small for a product's label are off there anyway, greyed with the reason. |
+| **Paid pieces are never stranded silently.** | A change that leaves paid bottles without a layout for their size says how many first (Features preview); a settings save that would do it is refused (409 `paid_pieces_stranded`) until the count is sent back as `confirmStranded`, and putting back an old settings version that would do it is refused (make the change here). Paid bottles wait and print once a layout holds them, or a person stops the ad and pays it back; route pieces that can no longer share a label come back as credit when their bottles print. |
+| **Everything reads the same rule** | The engine, previews, the sizes an advertiser can choose, bottle and route quotes and route capacity, the studio and sample labels (`Platform.layoutsOf`). Box sides are unaffected. |
+| **History** | Layout switches and *Most revenue per bottle* like any switch; the most ads on one bottle (from → to) and each product's choice (on each layout, "only on <product>") are logged in the switches' history too. |
+| **Defaults** | FreeWater: every layout on, 10 ads, every paid ad gets its turn. A new company copies FreeWater's layout choices and its choice for shared products (none of these is money). Companies that existed before keep every layout (`since: 1`: these narrow what they already printed, so they aren't "new, off until decided"). |
+
+**How each label is filled** (*Ads → Selling space → Most revenue per bottle*, a switch kept in the settings as
+`adRules.placement`; a person changes it, never a key). Off: *every paid ad gets its turn* (the ad first in line goes
+on, then the best-earning layout around it). On: *most revenue per bottle*, the best-earning layout among the paid ads
+that fit, with a fair-turn bound: a paid ad left off `adRules.fairTurnBottles` bottles in a row where it fits (20
+unless set, 2 to 1,000) goes on the next bottle first, the longest-waiting first. The waiting counts live in memory:
+after a restart they start again, so a turn comes at most one bound late.
 
 ### How to add a feature
 

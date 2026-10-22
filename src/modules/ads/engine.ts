@@ -1,5 +1,6 @@
 import type { Campaign, CompanyConfig, Placement, Product, Share, SlotRect } from '../../core/types';
 import { layoutsFor, type Layout } from './layouts';
+import { fairTurnBottles, placementRule } from './layoutChoice';
 import type { AdEngine, FillRequest, FillResult, PrintAudience } from './contract';
 import { canAfford, floorPrice, priceFor } from './budget';
 import { flatPricing, prepaidModel } from './billing';
@@ -11,8 +12,12 @@ import { houseAd } from '../fillers/house';
  * 1. Keep only campaigns this company allows here (category rules, targeting, budget left, pacing, frequency caps).
  * 2. Run the auction (modules/ads/auction): adjusted bids plus expected engagement, guaranteed buys first.
  * 3. Pick up to the most ads a bottle may carry, never two from the same competitor group.
- * 4. Each winner pays the second price. Try every tidy template (layouts.ts) and keep the one that earns the most
- *    among those carrying the ad first in line; leftover pieces get fillers or the house ad, in their own cells.
+ * 4. Each winner pays the second price. Try every tidy template the company allows on this product (layouts.ts,
+ *    layoutChoice.ts: the caller passes the product already narrowed to them) and keep, by the company's placement rule:
+ *      "Every paid ad gets its turn" (the default): the best-earning label among those carrying the ad first in line;
+ *      "Most revenue per bottle": the best-earning label, except that a paid ad left off `fairTurnBottles` bottles in a
+ *      row where it fits (req.waits) goes first, the longest-waiting first, so no paid ad waits forever.
+ *    Leftover pieces get fillers or the house ad, in their own cells.
  */
 export const freewaterAdEngine: AdEngine = {
   name: 'freewater-ads',
@@ -35,7 +40,15 @@ export const freewaterAdEngine: AdEngine = {
     // Otherwise shuffle first so equal offers rotate fairly, then rank by the auction.
     const flat = flatPricing(company);
     const bidders = flat ? [] : rankBidders(shuffle(eligible, random), company, moment, req.stats ?? new AuctionStats());
-    const ranked = flat ? shuffle(eligible, random) : bidders.map((b) => b.campaign);
+    const layouts = layoutsFor(product, { maxAds: company.adRules.maxAdsPerUnit, minAds: company.adRules.minAdsPerUnit });
+    const printable = new Set(layouts.flatMap((l) => l.shares));
+    const fitsHere = (c: Campaign) => c.sizes.some((s) => printable.has(s));
+    // "Most revenue per bottle": ads at the fair-turn bound go first, the longest-waiting first (its turn is guaranteed).
+    const revenueRule = placementRule(company) === 'revenue';
+    const waited = (c: Campaign) => req.waits?.get(c.id) ?? 0;
+    const overdue = revenueRule ? eligible.filter((c) => fitsHere(c) && waited(c) >= fairTurnBottles(company)).sort((a, b) => waited(b) - waited(a)) : [];
+    const inLine = flat ? shuffle(eligible, random) : bidders.map((b) => b.campaign);
+    const ranked = overdue.length ? [...overdue, ...inLine.filter((c) => !overdue.includes(c))] : inLine;
     // What each one pays for the whole label: the second price.
     const labelPrice = new Map<string, { paid: number; bidder: Bidder }>(bidders.map((b, i) => [b.campaign.id, { paid: secondPrice(b, nextRival(bidders, i), company, product), bidder: b }]));
     const priceOf = (c: Campaign, share: Share) => {
@@ -65,8 +78,9 @@ export const freewaterAdEngine: AdEngine = {
     // The ad first in line (whose turn it is at flat prices, or the auction's winner) goes on the label whenever a
     // template can hold it: labels are cut only into tidy templates (layouts.ts), and without this an ad whose size
     // mixes into fewer of them (a quarter beside a third's sixths) could lose every label to the same better-earning mix.
+    // With "Most revenue per bottle", only an ad at its fair-turn bound is first in line; otherwise earnings alone decide.
     const better = (o: Option, than: Option | null) => !than || (o.lead !== than.lead ? o.lead : o.revenue > than.revenue || (fixed.length > 0 && o.revenue === than.revenue && (o.pieces < than.pieces || (o.pieces === than.pieces && o.aspect < than.aspect))));
-    const layouts = layoutsFor(product, { maxAds: company.adRules.maxAdsPerUnit, minAds: company.adRules.minAdsPerUnit });
+    const owed = overdue.find((c) => chosen.includes(c));
     const lineups = req.avoidSignatures ? [chosen, ...Array.from({ length: 30 }, () => shuffle(chosen, random))] : [chosen];
     for (const [k, pool] of lineups.entries()) {
       for (const layout of shuffle(layouts, random)) {
@@ -74,7 +88,8 @@ export const freewaterAdEngine: AdEngine = {
         if (!pinned) continue;
         const placements = assign(layout, pool, house, company, factor, why, priceOf, labelPrice, pinned, k > 0 ? random : undefined);
         if (!placements) continue;
-        const lead = !pool[0] || placements.some((p) => p.campaignId === pool[0]!.id);
+        const first = revenueRule ? owed : pool[0];
+        const lead = !first || placements.some((p) => p.campaignId === first.id);
         const option = { layout: layout.shares, placements, revenue: placements.reduce((s, p) => s + p.priceCents, 0), pieces: layout.shares.length, aspect: layout.worstAspect, lead };
         if (better(option, best)) best = option;
         if (req.avoidSignatures && !req.avoidSignatures.has(labelSignature(placements)) && better(option, bestNew)) bestNew = option;
@@ -82,11 +97,14 @@ export const freewaterAdEngine: AdEngine = {
     }
     if (bestNew) best = bestNew;
 
+    // The paid ads that could have gone on this bottle and didn't: the caller counts their wait (the fair-turn bound).
+    const left = (placed: Placement[]) => eligible.filter((c) => fitsHere(c) && !placed.some((p) => p.campaignId === c.id)).map((c) => c.id);
     if (!best) {
       if (!house) throw new Error(`Company ${company.id} has no house ad to fill an empty label.`);
-      return { layout: [1], placements: [housePlacement(0, 1, FULL, house)] };
+      const placements = [housePlacement(0, 1, FULL, house)];
+      return { layout: [1], placements, waited: left(placements) };
     }
-    return { layout: best.layout, placements: best.placements };
+    return { layout: best.layout, placements: best.placements, waited: left(best.placements) };
   },
 };
 

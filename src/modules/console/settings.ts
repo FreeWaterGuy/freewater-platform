@@ -9,6 +9,7 @@ import { extraAboveCents } from '../ledger/ledger';
 import { adBilling, adLimits, checkAdBilling } from '../ads/billing';
 import { checkDelivery } from '../delivery/settings';
 import { checkNewsSettings } from '../news/sources';
+import { templateById } from '../ads/layouts';
 
 // What a company may change about itself, the checks each change must pass, and plain words for what changed.
 
@@ -118,6 +119,16 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
   if (!isInt(a.repeatScanWindowSec, 0, 7 * 86400)) return 'The repeat-scan window must be 0 seconds to 7 days.';
   if (!isNum(a.maxPackShare, 0.05, 1)) return 'One advertiser’s share of a pack must be 5% to 100%.';
   // Only ever stricter than the agreed 50: the guardrails on tiny audiences can't be loosened from settings.
+  if (a.placement !== undefined && a.placement !== 'turns' && a.placement !== 'revenue') return 'The placement rule is “every paid ad gets its turn” (turns) or “most revenue per bottle” (revenue).';
+  if (a.fairTurnBottles !== undefined && !isInt(a.fairTurnBottles, 2, 1000)) return 'A paid ad’s fair turn comes after 2 to 1,000 bottles in a row without it.';
+  if (a.productLayouts !== undefined) {
+    const pl = a.productLayouts;
+    if (!pl || typeof pl !== 'object' || Array.isArray(pl) || Object.keys(pl).length > 200) return 'Layouts for each product are a list per product (at most 200 products).';
+    for (const [id, list] of Object.entries(pl)) {
+      if (!/^[a-z0-9][a-z0-9-]{1,40}$/.test(id)) return 'Layouts for each product are listed by product id, like bottle-16oz.';
+      if (!Array.isArray(list) || !list.length || new Set(list).size !== list.length || !list.every((t) => typeof t === 'string' && templateById.has(t))) return `Choose at least one layout for ${id}, each once, from the catalogue (or use the company’s layouts).`;
+    }
+  }
   if (a.smallAudienceHouses !== undefined && !isInt(a.smallAudienceHouses, 50, 1000)) return 'A small-audience route buy is one aimed at fewer than 50 to 1,000 houses (never fewer than 50).';
 
   const p = c.prices;
@@ -264,7 +275,7 @@ const labels: Record<string, string> = {
   'giving.charityByLocation': 'Charity by machine or route', 'giving.minimumTransferCents': 'Smallest transfer', openBooks: 'Open books',
   unitCosts: 'Standard costs', consumerPricing: 'Bottle price', timezone: 'Time zone', 'consumer.freeBottlesPerDay': 'Free bottles per person a day', 'consumer.retailValueCents': 'Store price of a bottle',
   'adRules.minAdsPerUnit': 'Fewest ads per bottle', 'adRules.maxAdsPerUnit': 'Most ads per bottle', 'adRules.blockedCategories': 'Blocked categories', 'adRules.competitorSeparation': 'Keep competitors apart',
-  'adRules.repeatScanWindowSec': 'Repeat-scan window', 'adRules.maxPackShare': 'One advertiser’s share of a pack', 'adRules.smallAudienceHouses': 'Route buys count as small below this many houses', 'prices.perPrintByShare': 'Starting print prices', 'prices.targetingPremium': 'Targeting premium', 'prices.perScan': 'Price per scan',
+  'adRules.repeatScanWindowSec': 'Repeat-scan window', 'adRules.maxPackShare': 'One advertiser’s share of a pack', 'adRules.smallAudienceHouses': 'Route buys count as small below this many houses', 'adRules.placement': 'Placement rule', 'adRules.fairTurnBottles': 'A paid ad’s fair turn after (bottles)', 'adRules.productLayouts': 'Label layouts on each product', 'prices.perPrintByShare': 'Starting print prices', 'prices.targetingPremium': 'Targeting premium', 'prices.perScan': 'Price per scan',
   'prices.perArLaunch': 'Price per AR launch', 'prices.commissionPercent': 'Commission on sales', 'prices.customUnit': 'Custom bottle price', 'prices.perBoxFace': 'Box side price',
   scanBaseUrl: 'Short QR address', standardProductId: 'Standard product', 'qr.logo': 'Logo in your codes', 'qr.logoSvg': 'Your code logo', 'qr.color': 'Code color',
   'qr.advertiserLogos': 'Advertisers’ logos in their codes', 'qr.allowStatic': 'Static codes allowed', 'ar.trackingCodes': 'AR tracking strip', 'ar.stripEverywhere': 'Tracking strip along every ad',

@@ -61,7 +61,7 @@
     const res = await fetch(url, { method, headers: { ...(body ? { 'content-type': 'application/json' } : {}), ...(S.token ? { authorization: `Bearer ${S.token}` } : {}) }, body: body ? JSON.stringify(body) : undefined });
     if (res.status === 401) { S.token = null; S.me = null; store.set('fw_console_token', null); }
     const data = res.status === 204 ? null : await res.json().catch(() => null);
-    if (!res.ok) { const e = new Error(data?.error?.message || 'Something went wrong.'); e.status = res.status; throw e; }
+    if (!res.ok) { const e = new Error(data?.error?.message || 'Something went wrong.'); e.status = res.status; e.code = data?.error?.code; throw e; }
     return data;
   }
 
@@ -435,8 +435,9 @@
       const chips = h('div', { class: 'chips', role: 'group', 'aria-label': 'Blocked categories' }, cats.map((c) => h('button', { type: 'button', 'aria-pressed': String(blocked.has(c)), onclick: (e) => { blocked.has(c) ? blocked.delete(c) : blocked.add(c); e.currentTarget.setAttribute('aria-pressed', String(blocked.has(c))); ctx.draft.adRules.blockedCategories = cats.filter((x) => blocked.has(x)); ctx.changed(); } }, c.replace(/-/g, ' '))));
       return [h('div', { class: 'stack' },
         section('Ads on each bottle', null, h('div', { class: 'form' },
-          num(ctx, 'adRules.minAdsPerUnit', 'Fewest ads on a bottle', { min: 0, max: 6, hint: 'Empty space is filled with your house ad.' }),
-          num(ctx, 'adRules.maxAdsPerUnit', 'Most ads on a bottle', { min: 1, max: 6 }),
+          num(ctx, 'adRules.minAdsPerUnit', 'Fewest ads on a bottle', { min: 0, max: 10, hint: 'Empty space is filled with your house ad.' }),
+          // The most ads on one bottle is set with the label layouts it limits, where paid bottles it would strand are counted first.
+          h('div', { class: 'field' }, h('label', { text: 'Most ads on one bottle' }), h('div', { class: 'row' }, h('b', { text: String(ctx.draft.adRules.maxAdsPerUnit) }), link('/console/features#layouts', { class: 'btn secondary small' }, 'Change it with the label layouts')), h('div', { class: 'hint', text: '1 to 10. Set on the Features page, beside the layouts it allows.' })),
           num(ctx, 'adRules.maxPackShare', 'Most of a pack one advertiser can have', { min: 5, max: 100, scale: 100, suffix: '%', int: false, hint: 'In 6, 12 and 24 packs, so every pack has variety.' }),
           select(ctx, 'adRules.repeatScanWindowSec', 'Don’t bill the same person’s repeat scans within', [[0, 'Bill every scan'], [300, '5 minutes'], [600, '10 minutes'], [3600, '1 hour'], [86400, '1 day']]),
           toggle(ctx, 'adRules.competitorSeparation', 'Keep competitors apart', 'Two ads from the same competitor group never share a bottle.', { full: true }))),
@@ -568,11 +569,12 @@
       h('div', { class: 'field full' }, h('label', { text: 'Ad sizes offered (shares of the label)' }), h('div', { class: 'chips' }, picks.map(([, b, l]) => h('label', { class: 'chip-check' }, b, ` ${l}`))), h('div', { class: 'hint', text: 'Each size is cut as close to square as this label allows. Sizes too small for a readable QR code are left out automatically.' })),
       h('div', { class: 'field full toolbar' }, h('button', { class: 'btn secondary', type: 'button', onclick: check }, 'Check and preview'), h('button', { class: 'btn', type: 'submit' }, 'Save product')));
     const row = (p) => h('tr', {}, h('td', {}, h('b', { class: 'mono', text: p.id }), p.shared ? h('div', { class: 'muted', style: 'font-size:12px', text: 'shared' }) : null), h('td', { text: p.name }), h('td', { text: p.category ?? '—' }),
-      h('td', { text: `${p.label.widthIn}" × ${p.label.heightIn}"${p.container?.diameterIn ? ` · ⌀ ${p.container.diameterIn}"` : ''}` }), h('td', { text: p.check.slots.map((x) => (x.share === 1 ? 'whole' : `1/${x.share}`)).join(' · ') }), h('td', { text: p.priceFactor ? `× ${p.priceFactor}` : '× 1' }),
+      h('td', { text: `${p.label.widthIn}" × ${p.label.heightIn}"${p.container?.diameterIn ? ` · ⌀ ${p.container.diameterIn}"` : ''}` }), h('td', { text: p.check.slots.map((x) => (x.share === 1 ? 'whole' : `1/${x.share}`)).join(' · ') }),
+      h('td', {}, link('/console/features#layouts', {}, p.layouts ? `${p.layouts.length} chosen` : 'All of yours')), h('td', { text: p.priceFactor ? `× ${p.priceFactor}` : '× 1' }),
       h('td', { text: p.check.problems.length ? p.check.problems[0] : p.check.ar.followsBottle ? 'AR on the bottle: yes' : 'AR in the room only' }));
     shell('products', head('Products', 'Any drink, any size: bottles, cans, cups and jars. Each product is its label size, its shape and the ad layouts it allows.'),
       h('div', { class: 'stack' },
-        h('section', { class: 'section' }, h('h2', { text: `${plural(list.length, 'product', 'products')}` }), h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Id', 'Name', 'Inside', 'Label', 'Ad sizes', 'Ad prices', 'Check'].map((x) => h('th', { text: x })))), h('tbody', {}, list.map(row))))),
+        h('section', { class: 'section' }, h('h2', { text: `${plural(list.length, 'product', 'products')}` }), h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Id', 'Name', 'Inside', 'Label', 'Ad sizes', 'Layouts', 'Ad prices', 'Check'].map((x) => h('th', { text: x })))), h('tbody', {}, list.map(row))))),
         h('section', { class: 'section' }, h('h2', { text: 'Add a product' }), h('p', { class: 'lead', text: 'Every product is checked before it’s saved: the wrap has to close, and every ad has to fit a readable QR code.' }), form, result)));
   }
 
@@ -1290,6 +1292,100 @@
           s.startsOffForNew ? [h('dt', { text: 'New companies' }), h('dd', { text: 'Start with it off' })] : null)) : null),
       toggle(s));
 
+    // ---------- Label layouts: each template with a small picture, the most ads on one bottle, the placement rule,
+    // and each product's own choice (src/modules/ads/layoutChoice.ts). Greyed with the reason when it can't be used.
+    const SIZE_INK = { 1: '#1E7DB8', 2: '#3E98CF', 3: '#5FAADA', 4: '#7FBDE4', 6: '#9FCFEC', 8: '#BEDFF2', 10: '#DCEEF8' };
+    const thumb = (rects, shares, aspect, small) => {
+      const W = small ? 72 : 132, H = Math.max(24, Math.round(W / (aspect || 1.9)));
+      const svg = document.createElementNS(NS, 'svg');
+      for (const [k, v] of Object.entries({ viewBox: `0 0 ${W} ${H}`, width: W, height: H, class: 'lay-thumb', role: 'img', 'aria-label': `${rects.length} piece${rects.length === 1 ? '' : 's'}` })) svg.setAttribute(k, v);
+      rects.forEach((r, i) => {
+        const e = document.createElementNS(NS, 'rect');
+        for (const [k, v] of Object.entries({ x: r.x * W + 1, y: r.y * H + 1, width: Math.max(1, r.w * W - 2), height: Math.max(1, r.h * H - 2), rx: 2, fill: SIZE_INK[shares[i]] ?? '#DDD' })) e.setAttribute(k, v);
+        svg.append(e);
+        if (!small && r.w * W > 27 && r.h * H > 14) {
+          const t = document.createElementNS(NS, 'text');
+          for (const [k, v] of Object.entries({ x: (r.x + r.w / 2) * W, y: (r.y + r.h / 2) * H + 4, 'text-anchor': 'middle', 'font-size': 11, 'font-weight': 700, fill: shares[i] <= 3 ? '#fff' : '#0B3550' })) t.setAttribute(k, v);
+          t.textContent = shares[i] === 1 ? 'whole' : `1/${shares[i]}`;
+          svg.append(t);
+        }
+      });
+      return svg;
+    };
+    const cap = (x) => x.charAt(0).toUpperCase() + x.slice(1);
+    // Settings (not switches) go through the settings: checked first, and a change that would strand paid pieces says
+    // how many and is saved only once that's confirmed.
+    const saveRules = async (adRules, title) => {
+      let ov, pv;
+      const changes = { adRules };
+      try { ov = await api('GET', '/v1/console'); pv = await api('POST', '/v1/console/preview-label', { changes }); } catch (x) { toast(x.message); return; }
+      const close = h('button', { class: 'btn secondary', type: 'button', onclick: () => { confirmBox.hidden = true; } }, 'Cancel');
+      const save = async (confirmStranded) => {
+        try { await api('PATCH', '/v1/console/settings', { version: ov.version, changes, ...(confirmStranded ? { confirmStranded } : {}) }); confirmBox.hidden = true; toast('Saved.'); S.features = null; render(); }
+        catch (x) { toast(x.message); }
+      };
+      if (!pv.problem && !pv.stranded?.count) return save();
+      confirmBox.replaceChildren(...[h('h2', { text: title }),
+        pv.problem ? h('div', { class: 'notice err' }, h('b', { text: 'Can’t save: ' }), h('span', { text: pv.problem })) : null,
+        ...(pv.problem ? [] : (pv.stranded.words ?? []).map((w) => h('div', { class: 'notice err', text: w }))),
+        h('div', { class: 'toolbar' }, pv.problem ? null : h('button', { class: 'btn', type: 'button', onclick: () => save(pv.stranded.count) }, 'Save anyway'), close)].filter(Boolean));
+      confirmBox.hidden = false;
+      confirmBox.scrollIntoView?.({ block: 'nearest' });
+    };
+    function layoutsPanel() {
+      const L = F.layouts;
+      const card = (t) => {
+        const s = byId.get(t.switchId);
+        return h('article', { class: `lay-card${t.usable ? '' : ' off'}`, id: `f-${t.switchId}` },
+          thumb(t.rects, t.shares, L.standardProduct.aspect),
+          h('div', { class: 'feat-title' }, h('b', { text: cap(t.name) }), s ? toggle(s) : null),
+          h('span', { class: 'muted', text: `${plural(t.pieces, 'piece', 'pieces')}${t.sizes.length > 1 ? ', bigger first' : ''}` }),
+          t.why ? h('p', { class: 'why', text: t.why }) : null);
+      };
+      const maxIn = h('input', { class: 'input', type: 'number', min: 1, max: 10, step: 1, value: L.maxAds, 'aria-label': 'Most ads on one bottle' });
+      const fairIn = h('input', { class: 'input', type: 'number', min: 2, max: 1000, step: 1, value: L.fairTurnBottles, 'aria-label': 'Bottles a paid ad can wait' });
+      const rule = (id, title, text) => h('label', {}, h('input', { type: 'radio', name: 'placement', value: id, checked: L.placement === id || null, onchange: () => ask({ changes: { placement_revenue: id === 'revenue' } }, `Fill labels by “${title}”?`) }), h('b', { text: title }), h('span', { text }));
+      const controls = h('div', { class: 'form' },
+        h('div', { class: 'field' }, h('label', { text: 'Most ads on one bottle' }), h('div', { class: 'row' }, maxIn, h('button', { class: 'btn secondary', type: 'button', onclick: () => { const n = Number(maxIn.value); if (!Number.isInteger(n) || n < 1 || n > 10) return toast('Choose 1 to 10.'); saveRules({ maxAdsPerUnit: n, ...(L.minAds > n ? { minAdsPerUnit: n } : {}) }, `Most ads on one bottle: ${n}?`); } }, 'Save')),
+          h('div', { class: 'hint', text: `1 to 10 (FreeWater: 10). Layouts with more pieces than this are greyed out below.` })),
+        h('div', { class: 'field' }, h('label', { text: 'How each label is filled' }), h('div', { class: 'radio-cards lay-rules', role: 'radiogroup', 'aria-label': 'Placement rule' },
+          rule('turns', 'Every paid ad gets its turn', 'FreeWater’s choice. The ad whose turn it is goes on, then the best-earning layout around it.'),
+          rule('revenue', 'Most revenue per bottle', 'The best-earning layout among the paid ads that fit. An ad left off too long gets its turn next.'))),
+        L.placement === 'revenue' ? h('div', { class: 'field full' }, h('label', { text: 'A paid ad left off this many bottles in a row (where it fits) gets its turn on the next' }), h('div', { class: 'row' }, fairIn, h('button', { class: 'btn secondary', type: 'button', onclick: () => { const n = Number(fairIn.value); if (!Number.isInteger(n) || n < 2 || n > 1000) return toast('Choose 2 to 1,000 bottles.'); saveRules({ fairTurnBottles: n }, `A fair turn after ${plural(n, 'bottle', 'bottles')}?`); } }, 'Save')),
+          h('div', { class: 'hint', text: `So no paid ad waits forever (${L.fairTurnDefault} unless you set it).` })) : null);
+      // Each product's own choice.
+      const pick = h('select', { class: 'input', 'aria-label': 'Product' }, L.products.map((p) => h('option', { value: p.id, text: `${p.name}${p.standard ? ' (standard)' : ''}` })));
+      const perProduct = h('div', { class: 'stack' });
+      const drawProduct = () => {
+        const p = L.products.find((x) => x.id === pick.value) ?? L.products[0];
+        if (!p) return;
+        const all = h('input', { type: 'checkbox', checked: p.chosen === null || null });
+        const boxes = p.templates.map((t) => {
+          const b = h('input', { type: 'checkbox', value: t.id, disabled: !!t.why || null, checked: (!t.why && (p.chosen === null || p.chosen.includes(t.id))) || null, 'aria-label': cap(L.templates.find((x) => x.id === t.id).name) });
+          return { t, b, el: h('label', { class: `lay-pick${t.why ? ' off' : ''}`, title: t.why ?? '' }, b, thumb(t.rects, t.shares, p.aspect, true), h('span', {}, h('b', { text: cap(L.templates.find((x) => x.id === t.id).name) }), t.why ? h('small', { class: 'why', text: t.why }) : null)) };
+        });
+        const sync = () => { for (const x of boxes) if (!x.t.why) x.b.disabled = all.checked || null; };
+        all.onchange = sync; sync();
+        const saveP = h('button', { class: 'btn', type: 'button', onclick: () => {
+          const map = { ...(F.layouts.products.reduce((m, q) => (q.chosen ? { ...m, [q.id]: q.chosen } : m), {})) };
+          if (all.checked) delete map[p.id];
+          else { const ids = boxes.filter((x) => x.b.checked && !x.t.why).map((x) => x.t.id); if (!ids.length) return toast('Choose at least one layout, or use all of your company’s layouts.'); map[p.id] = ids; }
+          saveRules({ productLayouts: map }, `Layouts on the ${p.name}?`);
+        } }, 'Save for this product');
+        perProduct.replaceChildren(
+          h('label', { class: 'chip-check' }, all, ' Use all of your company’s layouts (every new product starts this way)'),
+          h('div', { class: 'lay-picks' }, boxes.map((x) => x.el)), h('div', { class: 'toolbar' }, saveP));
+      };
+      pick.onchange = drawProduct; drawProduct();
+      return h('section', { class: 'section', id: 'layouts' }, h('h2', { text: 'Label layouts' }),
+        h('p', { class: 'lead', text: `Every label is cut into one of these tidy layouts, so it always looks neat. Switch off the ones you don’t want. A layout is used only when every size it needs is on (Ad sizes), it has no more pieces than your most ads on one bottle, and its pieces aren’t too thin for the bottle. At least one stays on while ads are on. Pictures show the ${L.standardProduct.name}.` }),
+        controls,
+        h('div', { class: 'lay-cards' }, L.templates.map(card)),
+        h('h3', { class: 'lay-sub', text: 'On each product' }),
+        h('p', { class: 'muted', style: 'margin:0', text: 'Narrow the layouts one product uses. Layouts its shape can’t carry, or that your switches above leave out, are greyed with the reason.' }),
+        h('div', { class: 'field' }, pick), perProduct);
+    }
+
     const counts = (catId) => { const xs = F.switches.filter((s) => s.category === catId && s.kind !== 'setting'); return `${xs.filter((s) => s.on).length} of ${xs.length} on`; };
     const startCards = h('section', { class: 'panel-box' }, h('h2', { text: 'Start from' }),
       h('p', { class: 'muted', style: 'margin:0', text: 'Ready-made starting points. See exactly what changes before anything is saved. Money, blockchain and one-way switches are never turned on for you.' }),
@@ -1315,7 +1411,7 @@
       results.replaceChildren(...(shown.length ? shown.map(({ c, xs }) => {
         const groups = [...new Set(xs.map((s) => s.group))];
         return h('section', { class: 'section', id: `cat-${c.id}` }, h('h2', {}, c.label, ' ', h('span', { class: 'pill', text: counts(c.id) })), h('p', { class: 'lead', text: c.description }),
-          groups.map((g) => h('div', { class: 'feat-group' }, g ? h('h3', { text: g }) : null, xs.filter((s) => s.group === g).map(row))));
+          groups.map((g) => h('div', { class: 'feat-group' }, g ? h('h3', { text: g }) : null, g === 'Label layouts' ? h('p', { class: 'muted', style: 'margin:0' }, 'With a picture of each, the most ads on one bottle and each product’s own choice: ', link('/console/features#layouts', {}, 'Label layouts →')) : null, xs.filter((s) => s.group === g).map(row))));
       }) : [h('div', { class: 'notice', text: 'No switch matches. Try another word or filter.' })]));
     };
     const search = h('input', { class: 'input', type: 'search', placeholder: 'Search every switch (AR, gift cards, coupons…)', 'aria-label': 'Search switches', value: ui.q, oninput: (e) => { ui.q = e.target.value; drawAll(); } });
@@ -1323,13 +1419,13 @@
       h('button', { type: 'button', role: 'tab', 'aria-selected': String(ui.filter === id), onclick: (e) => { ui.filter = id; for (const b of filters.children) b.setAttribute('aria-selected', String(b === e.currentTarget)); drawAll(); } }, label)));
     const history = await api('GET', '/v1/console/features/history').catch(() => []);
     const recent = h('section', { class: 'panel-box' }, h('h2', { text: 'Recent changes' }),
-      history.length ? h('ul', { class: 'feat-history' }, history.slice(0, 12).map((x) => h('li', {}, h('b', { text: `${x.label} ${x.to ? 'on' : 'off'}` }), ` · ${x.by} · ${when(x.at)} · ${x.via}${x.reason ? ` · “${x.reason}”` : ''}`))) : h('p', { class: 'muted', style: 'margin:0', text: 'Nothing changed yet. Every change is kept here: who, when, from, to and why.' }));
+      history.length ? h('ul', { class: 'feat-history' }, history.slice(0, 12).map((x) => h('li', {}, h('b', { text: x.setting ? `${x.label}: ${x.reason ?? 'changed'}` : `${x.label} ${x.to ? 'on' : 'off'}` }), ` · ${x.by} · ${when(x.at)} · ${x.via}${x.reason && !x.setting ? ` · “${x.reason}”` : ''}`))) : h('p', { class: 'muted', style: 'margin:0', text: 'Nothing changed yet. Every change is kept here: who, when, from, to and why.' }));
 
     const views = h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'View' }, link('/console/features', { role: 'tab', class: 'btn small' + (view === 'main' ? '' : ' secondary'), 'aria-selected': String(view === 'main') }, 'Main switches'), link('/console/features?view=all', { role: 'tab', class: 'btn small' + (view === 'all' ? '' : ' secondary'), 'aria-selected': String(view === 'all') }, `Every switch (${F.switches.length})`));
     shell('features', head('Features', 'Choose what your company runs. You start from FreeWater’s choices; money, the blockchain and anything that can’t be undone need the usual steps. Turning something off is always quick.', views),
       fresh.length ? h('div', { class: 'notice' }, h('b', { text: 'New features available: ' }), fresh.map((s) => s.label).join(', '), '. They’re off until you decide.', ' ', link('/console/features?view=all&filter=new', {}, 'See them')) : null,
       confirmBox,
-      h('div', { class: 'stack' }, ...(view === 'main' ? [startCards, mainCards, locked, recent] : [h('div', { class: 'feat-tools' }, search, filters), results])));
+      h('div', { class: 'stack' }, ...(view === 'main' ? [startCards, mainCards, F.layouts && byId.get('ads')?.on ? layoutsPanel() : null, locked, recent].filter(Boolean) : [h('div', { class: 'feat-tools' }, search, filters), results])));
     if (view === 'all') drawAll();
     const hash = S.path.split('#')[1];
     if (hash) document.getElementById(hash)?.scrollIntoView?.();

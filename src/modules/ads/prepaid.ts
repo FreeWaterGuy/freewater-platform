@@ -5,7 +5,7 @@ import { SHARES, type Campaign, type PrepaidBottles, type Share } from '../../co
 import { newId } from '../../core/ids';
 import { AdsError } from './service';
 import { adBilling, chargeLimitProblem, anyFeeOn, extraPrice, feesOnWords, prepaidModel } from './billing';
-import { layoutsFor, shareLabel } from './layouts';
+import { shareLabel } from './layouts';
 import { prepaidLeft, syncPrepaidBuy } from './budget';
 import { PaymentError, PaymentsService } from '../payments/service';
 import { prepaidAccount } from '../ledger/ledger';
@@ -60,7 +60,7 @@ export class PrepaidService {
     if (!Number.isInteger(bottles) || bottles < PrepaidService.minBottles || bottles > 1_000_000) throw new AdsError(422, 'bad_bottles', `Choose ${PrepaidService.minBottles.toLocaleString('en-US')} to 1,000,000 bottles.`);
     const product = input.productId ? this.platform.products.get(input.productId) : this.platform.standardProduct(companyId);
     if (!product || (product.companyId && product.companyId !== companyId)) throw new AdsError(422, 'unknown_product', 'That product isn’t one this company hands out.');
-    const printable = new Set(layoutsFor(product, { maxAds: company.adRules.maxAdsPerUnit, minAds: company.adRules.minAdsPerUnit }).flatMap((l) => l.shares));
+    const printable = new Set(this.platform.layoutsOf(company, product).flatMap((l) => l.shares));
     const sizes = (allowed?.length ? allowed : SHARES).filter((s) => printable.has(s)).sort((x, y) => x - y);
     const share = (input.share ?? sizes[0]) as Share | undefined;
     if (!share || !sizes.includes(share)) throw new AdsError(422, 'size_not_printable', `Pick one size this ad has artwork for that prints on the ${product.name}: ${sizes.map(shareLabel).join(', ') || 'none do'}.`);

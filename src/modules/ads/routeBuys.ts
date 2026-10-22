@@ -5,7 +5,7 @@ import type { Campaign, CompanyConfig, Product, Share } from '../../core/types';
 import { SHARES } from '../../core/types';
 import { newId } from '../../core/ids';
 import { AdsError } from './service';
-import { holds, layoutsFor, shareLabel } from './layouts';
+import { holds, shareLabel } from './layouts';
 import { adLimits, chargeLimitProblem, prepaidModel } from './billing';
 import { syncPrepaidBuy } from './budget';
 import type { PrepaidService } from './prepaid';
@@ -287,7 +287,7 @@ export class RouteBuyService {
     const maxAds = company.adRules.maxAdsPerUnit;
     // The same rule the label is printed by: the pieces on one bottle must all fit one tidy template (layouts.ts), so a
     // mix no template holds (a third and a quarter) is never sold, rather than found out when the label prints.
-    const layouts = layoutsFor(product, { maxAds, minAds: company.adRules.minAdsPerUnit });
+    const layouts = this.platform.layoutsOf(company, product);
     const holdMemo = new Map<string, boolean>();
     const fitsTemplate = (shares: Share[]) => {
       const k = [...shares].sort((a, b) => a - b).join(',');
@@ -377,7 +377,8 @@ export class RouteBuyService {
     if (!input || !ROUTE_KINDS.includes(input.kind)) throw new AdsError(422, 'bad_kind', `Choose a kind of buy: ${ROUTE_KINDS.join(', ')}.`);
     this.need(companyId, KIND_SWITCH[input.kind], `“${KIND_WORDS[input.kind]}”`);
     const product = this.platform.standardProduct(companyId);
-    const printable = new Set(layoutsFor(product, { maxAds: company.adRules.maxAdsPerUnit, minAds: company.adRules.minAdsPerUnit }).flatMap((l) => l.shares));
+    // Only sizes some layout the company allows can hold (its switches, its choice for this product, its most ads).
+    const printable = new Set(this.platform.layoutsOf(company, product).flatMap((l) => l.shares));
     const sizes = (allowed?.length ? allowed : SHARES).filter((s) => printable.has(s)).sort((a, b) => a - b);
     const share = (input.kind === 'box' && input.share === undefined ? (sizes.includes(1) ? 1 : sizes[0]) : input.share ?? sizes[0]) as Share | undefined;
     if (!share || !sizes.includes(share)) throw new AdsError(422, 'size_not_printable', `Pick one size this ad has artwork for that prints on the ${product.name}: ${sizes.map(shareLabel).join(', ') || 'none do'}.`);

@@ -15,8 +15,10 @@ platform is the software that runs all of it. Other companies can also run it un
 **1. The bottle**
 - It takes an order, picks the ads (flat prices for the pilot; an auction like Google's for a company that chooses
   it), lays out a print-ready label, prints it and drops the bottle. Only bottles an advertiser paid for carry its ad.
-- The label is cut into near-square pieces, from the whole label down to a tenth. No two competitors share a
-  bottle.
+- The label is cut into near-square pieces, from the whole label down to a tenth, always in one of 16 tidy layouts.
+  No two competitors share a bottle. Each company chooses which layouts it uses (on its Features page, with a picture
+  of each), per product too, the most ads on one bottle (1 to 10), and whether each paid ad takes its turn or the
+  best-earning layout wins (with a fair turn for any ad left waiting).
 - It works for any drink and any size. There are samples for a 16 oz bottle, a 25 oz bottle and a 12 oz can.
 - Spots nobody buys carry approved filler (our own messages, Well Aware, advertisers' offered ads) before the house ad.
   **FreeWater News** (a topic on the bottle, the newest story behind its code) is built but switched off until it's
