@@ -149,9 +149,14 @@ junk mail but free water that gives to charity. Houses don't sign up and aren't 
   a polygon of [lat, lng] corners. A real map to draw the polygon on can come later; the console shows the houses as
   dots meanwhile. A new area starts **off**. Settings per area (docs/SWITCHES.md, "Delivery areas"): how often (weekly
   by default), 12- or 24-packs (24), packs per house (1), bottles a person a week once a household says its size (12),
-  the most packs per house (3), boxes per van (100).
-- **Houses** are addresses, not people: address, street and number, lat and lng, area, status (gets packs, stopped in
-  the app, driver skip waiting for review, skipped), household size only if someone told us, last delivered, next due.
+  the most packs per house (3), boxes per van (100). The company's own: minutes at each house (4), a van's payload
+  (900 kg, boxes weighed from their product) and the longest shift (8 hours), which also end a van's run.
+- **Houses** are addresses, not people: address, street, number and unit, ZIP code, lat and lng, area, status (gets
+  packs, stopped in the app, driver skip waiting for review, skipped until a date or for good, merged into another
+  house that is the same door), household size only if someone told us, last delivered, next due. One door, one house:
+  every address is read one way (`src/core/address.ts`: number, street and unit, the USPS way, without town or ZIP), so
+  a ZIP code given by one source and not another, or "North" for "N", never makes two houses; houses saved before are
+  re-keyed at start and any two that are one door merged.
   What happened to a house and who did it is kept in `house_events`, which can only be added to.
 - **The night's plan** (the same *Plan and print this night*, a signed-in ops person or owner). Every house due in
   every area that's on, in **street order**: one street at a time, every house on it by house number, driven from the
@@ -163,17 +168,18 @@ junk mail but free water that gives to charity. Houses don't sign up and aren't 
   (with an hourly "overdue" alert until then).
 - **Packs per house**: the area's packs per house; once a household tells us its size, enough for its people (one
   24-pack a week for one or two people, two for three or four, three for five or more, by default).
-- **At the door**: the driver leaves the box, takes a **photo of it where it was left**, and scans it (GPS within
-  100 m, or confirms). Delivered with its photo means delivered; what happens on the porch afterwards isn't a failed
+- **At the door**: the driver scans the box (GPS within 100 m, or confirms), leaves it, takes a **photo of it where it
+  was left** with the app's camera (after the scan; within 150 m of the house when the phone knows where it is, else
+  marked unverified for the team), and scans again. Delivered with its photo means delivered; what happens on the porch afterwards isn't a failed
   delivery. The drop time and the phone's position are kept on the stop, with the house and area on the
   `pack.delivered` event, as proof for advertisers (street level only: they never see photos). The driver can **skip a
   house** only for a real access or safety problem (a locked gate, a dangerous animal, not safe, no safe place to
   leave it) or because it isn't a home: its boxes come back and the house is left out until a person reviews it
-  (*Areas*). Signs on the door ("no soliciting") and what someone says at the door are never reasons: a house stops
+  (*Areas*); a skip for getting to the door then lasts 4 weeks and the house is tried again. Signs on the door ("no soliciting") and what someone says at the door are never reasons: a house stops
   only when someone there says so in the app.
 - **Stopping, in the app** (*Me → Your house's deliveries*, `/v1/me/house`). Someone at the house shows it's theirs by
-  scanning the code on the side of a box delivered there in the last 60 days (or typing the box number from its corner
-  with their house number; five wrong tries a day), then presses *Stop deliveries*: the house is left out of every
+  scanning the code on the side of a box delivered there in the last 60 days (or typing the whole box code printed
+  under it; never just the short number in the corner; five wrong tries a day), then presses *Stop deliveries*: the house is left out of every
   plan from then on, and a box already printed for that night comes back with the driver. *Start deliveries again*
   puts it back from the next night its route drives. They can also say how many people live there. Deleting the account
   removes the link to the house and the household size, never the choice made for the house.
@@ -193,7 +199,9 @@ junk mail but free water that gives to charity. Houses don't sign up and aren't 
   every house marked as a sample.
 - **Limits and decisions for the founder.** The box code proves a house to anyone who can scan the box, so a
   passer-by could stop a neighbour's water (the neighbour can claim it too and start again); a code printed inside the
-  box would be stronger. Stopping is app-only as chosen: someone without the app, or who never got a box, can't stop
+  box would be stronger. Within that design: a new claim of a claimed house is shown to the earlier claimants and the
+  team, a stop by a claim under 7 days old shows to the team as *new claim* (still effective), claims end after 12
+  months unused, and nobody sees door photos from before their claim. Stopping is app-only as chosen: someone without the app, or who never got a box, can't stop
   it yet. A box printed for a house that stops the same night still prints (and bills its ads); it comes back unopened.
   The streets order is straight-line, not real roads.
 
@@ -206,8 +214,8 @@ junk mail but free water that gives to charity. Houses don't sign up and aren't 
 **The driver app (`/driver`).**
 - **Load the van.** The driver takes a route, then scans each box into the van in load order (`POST /v1/driver/runs/:id/load`), last stop first, so stop 1 ends up by the door. A box out of order is refused.
 - **House after house.** Each stop shows the address, the note, the box to grab (stop code and box number) and the next few houses.
-- **At the door.** The driver leaves the box, takes a photo of it where it was left (`POST /v1/driver/photos?packId=`), and scans it. It's delivered only if it's that house's box, the driver is there (GPS within 100 m, or the driver confirms) and, with *Photo proof of each drop* on (FreeWater: on), there's that driver's photo of that box. The scan alone answers `photo_required` and is remembered; if the phone couldn't send the photo, a person on the team (ops or an owner, signed in, not the driver) can mark it delivered with a reason (`POST /v1/ops/runs/:id/stops/:stop/deliver-without-photo`). A wrong box shows a full-screen "Wrong box. Don't leave it." and names the right one. Ops sees every wrong scan.
-- **Proof and empties.** The photo, and a count of the empty bottles picked up. Photos show people's homes: each is re-encoded (JPEG, at most 1600 pixels a side; nothing the phone hid in the file, like where it was taken, is kept), 8 MB and 40 megapixels at most on the way in, kept apart from uploads and never at a public address, seen only by the team, a person signed in (*Routes*, `GET /v1/ops/drop-photos/:id`; never a service key) and by someone who proved in the app the house is theirs (*Your house*, `GET /v1/me/drop-photos`; only drops from two weeks before they proved it on, never a previous household's), and deleted after the company's keep (90 days unless set, 1 to 365: setting `delivery.photoKeepDays`) by the `drop-photos` job, whatever the switches say.
+- **At the door.** The driver scans the box, leaves it, takes a photo of it where it was left with the app's camera (`POST /v1/driver/photos?packId=&capture=camera&lat=&lng=&accuracy=`), and scans again. It's delivered only if it's that house's box, the driver is there (GPS within 100 m, or the driver confirms) and, with *Photo proof of each drop* on (FreeWater: on), there's that driver's photo of that box taken after the box was scanned at that door (a photo from before, or from the phone's gallery, doesn't count; one the phone places more than `delivery.photoMaxMeters`, 150 m, from the house is refused; one with no location counts and shows *unverified location* to the team). The scan alone answers `photo_required` and is remembered; if the phone couldn't send the photo, a person on the team (ops or an owner, signed in, not the driver) can mark it delivered with a reason (`POST /v1/ops/runs/:id/stops/:stop/deliver-without-photo`). A wrong box shows a full-screen "Wrong box. Don't leave it." and names the right one. Ops sees every wrong scan.
+- **Proof and empties.** The photo, and a count of the empty bottles picked up. Photos show people's homes: each is re-encoded (JPEG, at most 1600 pixels a side; nothing the phone hid in the file, like where it was taken, is kept), 8 MB and 40 megapixels at most on the way in, kept apart from uploads and never at a public address, seen only by the team, a person signed in (*Routes*, `GET /v1/ops/drop-photos/:id`; never a service key) and by someone who proved in the app the house is theirs (*Your house*, `GET /v1/me/drop-photos`; only drops from when they proved it on, never before), and deleted after the company's keep (90 days unless set, 1 to 365: setting `delivery.photoKeepDays`) by the `drop-photos` job, whatever the switches say.
 - **Can't deliver.** "Problem at this stop" sends the box back and tells the customer why.
 - **The customer hears about it.** They get a text or email when the box is delivered, or if it couldn't be left.
 
@@ -228,7 +236,10 @@ bottle: "as little as 1/10th of the label on a single bottle … to the house of
 the route, or every bottle in the box". Every size gets the same technology (printed for that house, its own code,
 the scan page and AR). Switches: *Ads → Buying on delivery routes* (docs/SWITCHES.md, "Buying on delivery routes").
 
-- **Four kinds of buy**, each for chosen weeks (Monday to Sunday, from next week): **spread** (N bottles shared evenly
+- **Four kinds of buy**, each for chosen weeks (Monday to Sunday, from next week; at most 26 unless the company sets
+  `adBilling.limits.maxRouteWeeks`; one charge at most $10,000 unless it sets `maxChargeCents`, above which the
+  advertiser is asked to buy less or talk to the team; at most 50,000 pieces, reserved in pieces of 5,000 rows inside
+  one transaction): **spread** (N bottles shared evenly
   over an area, streets or a shape drawn on the map), **blanket** (one piece on one bottle in every box at every
   house there), **whole box** (every bottle in a house's box, and its sides if chosen, at the chosen houses) and
   **chosen houses** (named by address, a number of bottles at each). Optional: only houses whose household data fits
@@ -251,10 +262,14 @@ the scan page and AR). Switches: *Ads → Buying on delivery routes* (docs/SWITC
   skipped, blocked the business (or every ad aimed at it alone), the week went by before they printed, or the box
   came back. For a buy aimed at one house: a refund of that part to the card, approved by an owner or finance
   person with the second step (`POST /v1/ops/route-refunds/:id/approve`). Otherwise: credit for other houses, used
-  first on the next route buy. Daily (job `route-buys`), at once when a house stops or blocks, and on request.
+  first on the next route buy, listed per advertiser in the books (reconciliation `route_credit`) and their portal,
+  expiring only if the company sets `adBilling.limits.creditExpiryDays` (booked out as income, once). A house skipped
+  for a while keeps its pieces: those of the skipped weeks move to its next delivery within the buy where there's
+  room. Daily (job `route-buys`), at once when a house stops or blocks, and on request.
 - **Guardrails on tiny audiences** (fewer than 50 houses; a company may only raise that): *Buys aimed at fewer than
   50 houses* on, a business the company verified (`POST /v1/advertisers/:id/verify`), no names, street addresses,
-  phone numbers, emails or personal messages in the ad (checked when paying and again at approval), approved by an
+  phone numbers, emails or personal messages in the ad (checked when paying and again at approval, on its artwork's
+  words decoded and read as people would, and on where its links and code go), approved by an
   owner or reviewer signed in (never a key), never a house that blocked it or said no to targeted ads.
 - **A house's say** (the app, *Your house*): the businesses whose ads came there, block one, or block every ad aimed
   at this house alone (`/v1/me/house/ads`, `/v1/me/house/ad-blocks`).

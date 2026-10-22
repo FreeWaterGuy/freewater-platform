@@ -259,7 +259,7 @@
           raf = requestAnimationFrame(tick);
         };
         tick();
-      }).catch(() => { toast('Camera is off. Type the box number instead.'); finish(null); });
+      }).catch(() => { toast('Camera is off. Type the box code instead.'); finish(null); });
     });
   }
   async function houseScreen() {
@@ -269,14 +269,13 @@
     const fail = (x) => { err.textContent = x.message; err.hidden = false; };
     if (!hs) {
       const claim = async (body) => { err.hidden = true; try { await api('POST', '/v1/me/house/claim', body); toast('Got it. This is your house.'); render(); } catch (x) { fail(x); } };
-      const box = h('input', { class: 'input', id: 'hs-box', placeholder: '#7K2QF', maxlength: '8', autocapitalize: 'characters', style: 'text-transform:uppercase' });
-      const num = h('input', { class: 'input', id: 'hs-num', inputmode: 'numeric', placeholder: '1502', maxlength: '6' });
+      const box = h('input', { class: 'input', id: 'hs-box', placeholder: '7K2Q F8MN 3XPA RT', maxlength: '24', autocapitalize: 'characters', autocomplete: 'off', style: 'text-transform:uppercase' });
       screen({ nav: 'me' }, backBar('Your house', 'Free water, left at every house on our streets', '/app/me'),
         h('p', { style: 'margin:0', text: 'We leave a free pack of water at every house on the streets we deliver to. You don’t have to sign up. To stop it, or to tell us how many people live with you, first show us it’s your house.' }),
         h('button', { class: 'btn', type: 'button', onclick: async () => { const text = await scanQr('Scan the code on the side of your box'); if (text) claim({ code: text }); } }, 'Scan the code on your box'),
-        h('p', { class: 'small muted', style: 'margin:0', text: 'Or type the box number from the box’s corner and your house number.' }),
-        h('form', { style: 'display:flex;flex-direction:column;gap:8px', onsubmit: (e) => { e.preventDefault(); if (box.value.trim() && /^\d+$/.test(num.value.trim())) claim({ code: box.value.trim(), houseNumber: Number(num.value.trim()) }); else fail(new Error('Type the box number and your house number.')); } },
-          h('label', { for: 'hs-box', text: 'Box number' }), box, h('label', { for: 'hs-num', text: 'Your house number' }), num, h('button', { class: 'btn secondary', type: 'submit' }, 'This is my house')),
+        h('p', { class: 'small muted', style: 'margin:0', text: 'Or type the box code printed under the code on the box’s side panel (14 letters and numbers).' }),
+        h('form', { style: 'display:flex;flex-direction:column;gap:8px', onsubmit: (e) => { e.preventDefault(); if (box.value.replace(/[\s-]/g, '').length >= 10) claim({ code: box.value.trim() }); else fail(new Error('Type the whole box code from the box’s side panel.')); } },
+          h('label', { for: 'hs-box', text: 'Box code' }), box, h('button', { class: 'btn secondary', type: 'submit' }, 'This is my house')),
         err,
         h('p', { class: 'small muted', style: 'margin:0', text: 'Use a box from the last two months. We keep only that this account goes with this address; your neighbours can’t see it.' }));
       return;
@@ -306,6 +305,8 @@
     screen({ nav: 'me' }, backBar('Your house', hs.address, '/app/me'),
       h('section', { class: 'hero-card' }, h('div', { class: 'headline' }, HOUSE_STATUS[hs.status] || hs.status, h('span', { text: active ? `A ${hs.packSize}-pack ${hs.everyDays === 7 ? 'every week' : `every ${hs.everyDays} days`}` : '' })),
         h('p', { style: 'margin:0;opacity:.85', text: hs.lastDeliveredAt ? `Last one left ${new Date(hs.lastDeliveredAt).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })}.` : 'Nothing left here yet.' })),
+      // Someone else said this is their house after you did (the team was told too).
+      ...(hs.notices || []).map((t) => h('div', { class: 'notice', role: 'status', text: t })),
       active ? h('button', { class: 'btn danger', type: 'button', onclick: () => { confirmStop.hidden = false; } }, 'Stop deliveries') : h('button', { class: 'btn', type: 'button', onclick: () => change({ action: 'restart' }, 'Back on. See you on delivery day!') }, 'Start deliveries again'),
       confirmStop,
       // Asked only where the company sizes packs by household (Features page, “More packs for bigger households”).

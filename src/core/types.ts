@@ -246,7 +246,7 @@ export interface CompanyConfig {
    */
   news?: { on: boolean; sources?: { id: string; name: string; url: string }[] };
   /** Home delivery: how many days a photo of a drop is kept before it's deleted (1 to 365; 90 unless set). */
-  delivery?: { photoKeepDays?: number };
+  delivery?: Partial<import('../modules/delivery/settings').DeliverySettings>;
   /** Which registered implementation each module slot uses. Swapping one never touches the others. */
   modules: {
     ads: string;
@@ -492,6 +492,8 @@ export interface BoxProduct {
   adFaces: BoxFace[];
   panelFace: BoxFace;
   blankFaces: BoxFace[];
+  /** What the box weighs full, for loading vans (a 24-pack of half-litre bottles is about 12 kg). */
+  weightKg?: number;
 }
 
 export interface Unit {

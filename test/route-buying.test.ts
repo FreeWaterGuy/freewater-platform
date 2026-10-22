@@ -82,8 +82,13 @@ async function deliverAll(runs: any[]) {
     expect((await call('POST', `/v1/driver/runs/${encodeURIComponent(r.id)}/start`, driver)).statusCode).toBe(200);
     for (const s of run.loadOrder) await call('POST', `/v1/driver/runs/${encodeURIComponent(r.id)}/load`, driver, { packId: s.packId });
     for (const s of run.stops) {
-      await app.dropPhotos.put({ companyId: 'freewater', packId: s.packId, takenBy: driverId, contentType: 'image/jpeg', bytes: await doorPhoto() }).catch(() => null);
-      const d = await call('POST', `/v1/driver/runs/${encodeURIComponent(r.id)}/stops/${s.stop}/deliver`, driver, { scannedPackId: s.packId, lat: s.point.lat + 0.00005, lng: s.point.lng, emptiesCollected: 0 });
+      const door = () => call('POST', `/v1/driver/runs/${encodeURIComponent(r.id)}/stops/${s.stop}/deliver`, driver, { scannedPackId: s.packId, lat: s.point.lat + 0.00005, lng: s.point.lng, emptiesCollected: 0 });
+      // Scanned at the door, then its photo, then scanned again.
+      let d = await door();
+      if (d.statusCode !== 200 && d.json().error?.code === 'photo_required') {
+        await app.dropPhotos.put({ companyId: 'freewater', packId: s.packId, takenBy: driverId, contentType: 'image/jpeg', bytes: await doorPhoto(), capture: 'camera' }).catch(() => null);
+        d = await door();
+      }
       if (d.statusCode !== 200) await call('POST', `/v1/driver/runs/${encodeURIComponent(r.id)}/stops/${s.stop}/fail`, driver, { reason: 'House stopped' });
     }
   }

@@ -31,7 +31,7 @@ const clock = () => new Date(now);
 const at = (iso: string) => { now = new Date(iso).getTime(); };
 const call = (method: string, url: string, token?: string, payload?: unknown, headers: Record<string, string> = {}) =>
   server.inject({ method: method as any, url, payload: payload as any, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...headers } });
-const photoUp = async (packId: string, token: string, bytes?: Buffer, type = 'image/jpeg') => call('POST', `/v1/driver/photos?packId=${packId}`, token, bytes ?? await doorPhoto(), { 'content-type': type });
+const photoUp = async (packId: string, token: string, bytes?: Buffer, type = 'image/jpeg') => call('POST', `/v1/driver/photos?packId=${packId}&capture=camera`, token, bytes ?? await doorPhoto(), { 'content-type': type });
 async function signIn(to: string) {
   await server.inject({ method: 'POST', url: '/v1/auth/start', payload: { companyId: 'freewater', channel: 'email', to } });
   const code = /(\d{6})/.exec((app.messenger as TestOutbox).lastTo(to)!.text)![1];
@@ -212,7 +212,7 @@ describe('1. a photo of each drop', () => {
     const settings = (d: unknown) => checkSettings({ ...structuredClone(app.platform.companies.get('freewater')!), delivery: d as any }, { ads: ['rules'], renderer: ['svg'], printer: ['test'] });
     expect(settings({ photoKeepDays: 0 })).toMatch(/1 to 365 days/);
     expect(settings({ photoKeepDays: 400 })).toMatch(/1 to 365 days/);
-    expect(settings({ photoKeepDays: 30, other: 1 })).toMatch(/1 to 365 days/);
+    expect(settings({ photoKeepDays: 30, other: 1 })).toMatch(/isn’t a delivery setting/);
     at('2027-01-20T15:00:00Z'); // 71 days on: still kept
     ops = await app.accounts.createSession(opsId);
     await app.dropPhotos.purge();
@@ -327,7 +327,7 @@ describe('3. a bottle with a bad label', () => {
     // Delivered: exactly 6 bottles with the ad reached houses, and the books agree.
     for (const r of runs) {
       const out = await packAndLoad(r.id);
-      for (const s of out.stops) { await photoUp(s.packId, driver); expect((await scan(r.id, s)).statusCode).toBe(200); }
+      for (const s of out.stops) { expect((await scan(r.id, s)).json().error.code).toBe('photo_required'); await photoUp(s.packId, driver); expect((await scan(r.id, s)).statusCode).toBe(200); }
     }
     expect(withAd().filter((x) => x.pack.status === 'delivered')).toHaveLength(6);
     const rc = await recon();

@@ -242,7 +242,7 @@
     return new Promise((res) => {
       if (!navigator.geolocation) return res(null);
       const giveUp = setTimeout(() => res(null), 9000); // if the phone never answers, the driver confirms instead
-      navigator.geolocation.getCurrentPosition((p) => { clearTimeout(giveUp); res({ lat: p.coords.latitude, lng: p.coords.longitude }); }, () => { clearTimeout(giveUp); res(null); }, { enableHighAccuracy: true, timeout: 8000, maximumAge: 10000 });
+      navigator.geolocation.getCurrentPosition((p) => { clearTimeout(giveUp); res({ lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy }); }, () => { clearTimeout(giveUp); res(null); }, { enableHighAccuracy: true, timeout: 8000, maximumAge: 10000 });
     });
   }
   async function atDoor(s) {
@@ -262,6 +262,8 @@
     }
     let point = null, gpsOk = false, empties = 0, photoOk = false, confirmed = false;
     const needPhoto = on('drop_photo_proof');
+    // The box was scanned at this door: the office records it now, and only a photo taken after this counts.
+    const doorScan = needPhoto ? api('POST', `/v1/driver/runs/${r.id}/stops/${s.stop}/deliver`, { scannedPackId: packId, confirmedAtDoor: true, emptiesCollected: 0 }).catch(() => null) : Promise.resolve();
     const whereBox = h('div', {}, h('p', { text: `#${s.boxNumber} belongs to this house. Checking your location…` }));
     here().then((p) => {
       point = p;
@@ -275,11 +277,18 @@
     const out = h('output', { text: '0' });
     const photoBtn = h('button', { class: 'photo', type: 'button', onclick: () => cam.click() }, needPhoto ? 'Take a photo of the box where you left it (needed)' : 'Tap to take a photo of the box at the door');
     // The photo proves the drop: only the office and the people who live there see it, and it's deleted after a while.
+    // Taken with the camera here and now: a photo picked from the phone (older than a few minutes) doesn't count.
     const cam = h('input', { type: 'file', accept: 'image/jpeg,image/png,image/webp', capture: 'environment', hidden: true, onchange: async () => {
       const f = cam.files[0]; if (!f) return;
       photoOk = false;
+      if (!fixture && f.lastModified && Date.now() - f.lastModified > 5 * 60_000) { cam.value = ''; return toast('Take a new photo with the camera, at the door. A photo from your gallery doesn’t count.'); }
       photoBtn.replaceChildren(h('img', { src: URL.createObjectURL(f), alt: 'Photo of the box at the door' }));
-      try { await api('POST', `/v1/driver/photos?packId=${encodeURIComponent(packId)}`, null, await shrink(f)); photoOk = true; } catch (x) { toast(x.message); photoBtn.replaceChildren(document.createTextNode('That photo didn’t send. Tap to take it again.')); }
+      try {
+        await doorScan;
+        const at = await here();
+        const where = at ? `&lat=${at.lat}&lng=${at.lng}${typeof at.accuracy === 'number' ? `&accuracy=${Math.round(at.accuracy)}` : ''}` : '';
+        await api('POST', `/v1/driver/photos?packId=${encodeURIComponent(packId)}&capture=camera${where}`, null, await shrink(f)); photoOk = true;
+      } catch (x) { toast(x.message); photoBtn.replaceChildren(document.createTextNode('That photo didn’t send. Tap to take it again.')); }
     } });
     screen(h('div', { class: 'dhead' }, h('div', { text: `Stop ${s.stop} · ${s.address.split(',')[0]}` })),
       h('div', { class: 'verdict ok' }, h('div', { class: 'mark', text: '✓' }), h('h2', { text: 'Right box' }), whereBox),

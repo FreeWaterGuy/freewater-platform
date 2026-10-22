@@ -3,7 +3,8 @@ import type { SqlClient } from '../../db/client';
 import { newId } from '../../core/ids';
 import type { Platform } from '../../platform';
 import { regionOf } from '../data/jurisdiction';
-import { areaProblem, householdAttributes, householdProblem, HOUSEHOLD_INTERESTS, normalizeAddress } from './vocabulary';
+import { addressKey } from '../../core/address';
+import { areaProblem, householdAttributes, householdProblem, HOUSEHOLD_INTERESTS, normalizeAddress, normalizeAddressV1 } from './vocabulary';
 
 /**
  * Household and area data, for choosing ads for houses that haven't signed up ("if direct mail can produce targeted ads
@@ -71,38 +72,51 @@ export class HouseholdService {
   pseudonymKey?: Buffer;
   /** A house's key: the same for every way of writing its address, different for every company, keyed (above). */
   houseKey(companyId: string, address: string) {
-    const s = `${companyId}|${normalizeAddress(address)}`;
-    return this.pseudonymKey ? createHmac('sha256', this.pseudonymKey).update(`house|${s}`).digest('base64url').slice(0, 32) : legacyHouseKey(s);
+    return this.keyed(`${companyId}|${normalizeAddress(address)}`);
   }
-  /** Both keys of a house: the keyed one, and the plain hash rows written before keying used (still honoured). */
-  houseKeys(companyId: string, address: string) { return [...new Set([this.houseKey(companyId, address), legacyHouseKey(`${companyId}|${normalizeAddress(address)}`)])]; }
+  /**
+   * Every key a house's rows may be under: today's; the plain hash rows written before keying used; and both as they
+   * were before 071, when the address form kept the town, state and ZIP code. All still honoured (a "no" is a "no"
+   * however it was written down), and rekey moves the old ones to today's.
+   */
+  houseKeys(companyId: string, address: string) {
+    const v1 = `${companyId}|${normalizeAddressV1(address)}`;
+    return [...new Set([this.houseKey(companyId, address), legacyHouseKey(`${companyId}|${normalizeAddress(address)}`), this.keyed(v1), legacyHouseKey(v1)])];
+  }
+  private keyed(s: string) { return this.pseudonymKey ? createHmac('sha256', this.pseudonymKey).update(`house|${s}`).digest('base64url').slice(0, 32) : legacyHouseKey(s); }
 
   /**
-   * Moves rows written under the plain hash to the keyed one: bought data by its own address, a house's "no" by the
-   * addresses of the company's delivery houses and subscriptions. A "no" whose address we don't hold stays as it was,
-   * and still counts (every lookup tries both keys). Run at start; safe to run again.
+   * Moves rows written under an older key to today's (run at start; safe to run again): the plain hash from before
+   * keying, and the address form from before 071 (which kept the town, state and ZIP code, so one door could have two
+   * keys). Bought data by its own address; a house's "no" by the addresses of the company's delivery houses,
+   * subscriptions and bought data. A "no" whose address we don't hold stays as it was, and still counts (every lookup
+   * tries every key: houseKeys).
    */
   async rekey() {
-    if (!this.pseudonymKey) return 0;
     let n = 0;
     const attrs = (await this.db.query<any>(`select distinct company_id, house_key, address from household_attributes`)).rows;
     for (const r of attrs) {
       const key = this.houseKey(r.company_id, r.address);
-      if (key === r.house_key) continue;
-      await this.db.query(`update household_attributes a set house_key = $3 where company_id = $1 and house_key = $2 and not exists (select 1 from household_attributes b where b.company_id = a.company_id and b.house_key = $3 and b.attribute = a.attribute and b.source = a.source)`, [r.company_id, r.house_key, key]);
-      await this.db.query(`delete from household_attributes where company_id = $1 and house_key = $2`, [r.company_id, r.house_key]);
+      const address = normalizeAddress(r.address);
+      if (key === r.house_key && address === r.address) continue;
+      await this.db.query(`update household_attributes a set house_key = $3, address = $4 where company_id = $1 and house_key = $2 and not exists (select 1 from household_attributes b where b.company_id = a.company_id and b.house_key = $3 and b.attribute = a.attribute and b.source = a.source and b.id <> a.id)`, [r.company_id, r.house_key, key, address]);
+      await this.db.query(`delete from household_attributes where company_id = $1 and house_key = $2 and house_key <> $3`, [r.company_id, r.house_key, key]);
       n++;
     }
     const optouts = (await this.db.query<any>(`select company_id, house_key, how, at from household_optouts`)).rows;
     if (!optouts.length) return n;
-    const legacy = new Map(optouts.map((o) => [`${o.company_id}|${o.house_key}`, o]));
-    const addresses = (await this.db.query<any>(`select company_id, address from houses union select company_id, address from subscriptions where address <> 'erased'`)).rows;
+    const old = new Map(optouts.map((o) => [`${o.company_id}|${o.house_key}`, o]));
+    const addresses = (await this.db.query<any>(`select company_id, address from houses union select company_id, address from subscriptions where address <> 'erased' union select company_id, address from household_attributes`)).rows;
     for (const a of addresses) {
-      const o = legacy.get(`${a.company_id}|${legacyHouseKey(`${a.company_id}|${normalizeAddress(a.address)}`)}`);
-      if (!o) continue;
-      await this.db.query(`insert into household_optouts (company_id, house_key, how, at) values ($1,$2,$3,$4) on conflict do nothing`, [a.company_id, this.houseKey(a.company_id, a.address), o.how, o.at]);
-      await this.db.query(`delete from household_optouts where company_id = $1 and house_key = $2`, [o.company_id, o.house_key]);
-      n++;
+      const key = this.houseKey(a.company_id, a.address);
+      for (const k of this.houseKeys(a.company_id, a.address)) {
+        const o = k !== key && old.get(`${a.company_id}|${k}`);
+        if (!o) continue;
+        await this.db.query(`insert into household_optouts (company_id, house_key, how, at) values ($1,$2,$3,$4) on conflict do nothing`, [a.company_id, key, o.how, o.at]);
+        await this.db.query(`delete from household_optouts where company_id = $1 and house_key = $2`, [o.company_id, o.house_key]);
+        old.delete(`${a.company_id}|${k}`);
+        n++;
+      }
     }
     return n;
   }
@@ -239,7 +253,7 @@ export class HouseholdService {
     // The law of where the house is: its delivery route's country and state. Unknown, or outside the US (where bought
     // data and aiming ads at a house need consent we don't have), the strictest: nothing about the house is used.
     const place = (await this.placeOf(companyId, houseKey)) ?? {};
-    const routeId = house.routeId ?? place.routeId ?? (await this.db.query<any>(`select a.route_id from houses h join delivery_areas a on a.id = h.area_id where h.company_id = $1 and h.address_key = $2`, [companyId, normalizeAddress(house.address).toLowerCase()])).rows[0]?.route_id;
+    const routeId = house.routeId ?? place.routeId ?? (await this.db.query<any>(`select a.route_id from houses h join delivery_areas a on a.id = h.area_id where h.company_id = $1 and h.address_key = $2`, [companyId, addressKey(house.address)])).rows[0]?.route_id;
     if (!this.inUS(routeId)) return { ...empty, strictest: true };
     const child = people.some((p) => p.child);
     const rows = child || !useBought ? [] : (await this.db.query<any>(`select attribute, value, source, source_date, block_id from household_attributes where company_id = $1 and house_key = any($2) order by imported_at desc`, [companyId, this.houseKeys(companyId, house.address)])).rows;

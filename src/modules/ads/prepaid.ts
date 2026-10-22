@@ -4,7 +4,7 @@ import type { Platform } from '../../platform';
 import { SHARES, type Campaign, type PrepaidBottles, type Share } from '../../core/types';
 import { newId } from '../../core/ids';
 import { AdsError } from './service';
-import { adBilling, anyFeeOn, extraPrice, feesOnWords, prepaidModel } from './billing';
+import { adBilling, chargeLimitProblem, anyFeeOn, extraPrice, feesOnWords, prepaidModel } from './billing';
 import { layoutsFor, shareLabel } from './layouts';
 import { prepaidLeft, syncPrepaidBuy } from './budget';
 import { PaymentError, PaymentsService } from '../payments/service';
@@ -84,6 +84,9 @@ export class PrepaidService {
 
   // ---------- paying ----------
 
+  /** The platform's clock (the same one every other time here comes from, so tests and replays agree). */
+  private now() { return this.platform.bus.now().toISOString(); }
+
   /** Taking money for ads is on for this company (its Features page: "Advertisers pay up front" and what it needs). */
   private payingOn(companyId: string) {
     if (this.platform.featureOn && !this.platform.featureOn(companyId, 'prepaid_ads')) {
@@ -117,11 +120,13 @@ export class PrepaidService {
     const q = this.quote(o.companyId, o.quote, o.sizes);
     if (!row) {
       if (o.expectedTotalCents !== q.totalCents) throw new AdsError(409, 'price_changed', `The total is ${dollars(q.totalCents)}, not ${dollars(o.expectedTotalCents)}. Check it and pay again.`);
+      const tooBig = chargeLimitProblem(this.company(o.companyId), q.totalCents);
+      if (tooBig) throw new AdsError(422, 'over_charge_limit', tooBig);
       const id = newId('ado');
       row = (await this.db.query<any>(
-        `insert into ad_orders (id, company_id, advertiser_id, campaign_id, draft_id, kind, bottles, share, product_id, price_cents, extras, extras_cents, total_cents, status) values ($1,$2,$3,$4,$5,'bottles',$6,$7,$8,$9,$10,$11,$12,'paying')
+        `insert into ad_orders (id, company_id, advertiser_id, campaign_id, draft_id, kind, bottles, share, product_id, price_cents, extras, extras_cents, total_cents, status, created_at) values ($1,$2,$3,$4,$5,'bottles',$6,$7,$8,$9,$10,$11,$12,'paying',$13)
          on conflict do nothing returning *`,
-        [id, o.companyId, o.advertiserId, o.campaignId ?? newId('cmp'), o.draftId ?? null, q.bottles, q.share, q.productId, q.perBottleCents, JSON.stringify(Object.fromEntries(q.extras.map((x) => [x.id, { uses: x.uses, perUseCents: x.perUseCents }]))), q.extrasCents, q.totalCents])).rows[0]
+        [id, o.companyId, o.advertiserId, o.campaignId ?? newId('cmp'), o.draftId ?? null, q.bottles, q.share, q.productId, q.perBottleCents, JSON.stringify(Object.fromEntries(q.extras.map((x) => [x.id, { uses: x.uses, perUseCents: x.perUseCents }]))), q.extrasCents, q.totalCents, this.now()])).rows[0]
         ?? await this.orderFor(o.companyId, 'bottles', { campaignId: o.campaignId, draftId: o.draftId }); // pressed twice at once: the other one
     }
     if (row.advertiser_id !== o.advertiserId) throw new AdsError(404, 'not_found', 'Campaign not found.');
@@ -138,8 +143,8 @@ export class PrepaidService {
       if (fee <= 0) return null;
       this.payingOn(o.companyId);
       if (o.expectedFeeCents !== fee) throw new AdsError(409, 'fee_changed', `Changing an ad costs ${dollars(fee)}. Confirm that amount to pay it.`);
-      row = (await this.db.query<any>(`insert into ad_orders (id, company_id, advertiser_id, campaign_id, draft_id, kind, total_cents, status) values ($1,$2,$3,$4,$5,'change',$6,'paying') on conflict do nothing returning *`,
-        [newId('ado'), o.companyId, o.advertiserId, o.campaignId, o.draftId, fee])).rows[0] ?? await this.orderFor(o.companyId, 'change', { draftId: o.draftId });
+      row = (await this.db.query<any>(`insert into ad_orders (id, company_id, advertiser_id, campaign_id, draft_id, kind, total_cents, status, created_at) values ($1,$2,$3,$4,$5,'change',$6,'paying',$7) on conflict do nothing returning *`,
+        [newId('ado'), o.companyId, o.advertiserId, o.campaignId, o.draftId, fee, this.now()])).rows[0] ?? await this.orderFor(o.companyId, 'change', { draftId: o.draftId });
     }
     if (row.status !== 'paid') await this.charge(row, 'ad_change', 'Changing an ad');
     return { orderId: row.id as string, feeCents: n(row.total_cents) };
@@ -523,7 +528,7 @@ export class PrepaidService {
         if (st === 'authorized') st = (await this.payments.capture(pay.id)).status;
         if (st === 'captured') { await this.finish(o.id, pay.id); await this.attach(o.campaign_id); }
         else if (!pay && n(o.total_cents) - n(o.credit_cents) <= 0) { await this.finish(o.id, null); await this.attach(o.campaign_id); } // all paid with credit
-        else if (st === 'declined' || st === 'failed' || st === 'voided' || (!pay && new Date(o.created_at).getTime() < Date.now() - PaymentsService.stuckAfterMs)) await this.decline(o.id, pay ? `Payment ${st}` : 'Never charged');
+        else if (st === 'declined' || st === 'failed' || st === 'voided' || (!pay && new Date(o.created_at).getTime() < this.platform.bus.now().getTime() - PaymentsService.stuckAfterMs)) await this.decline(o.id, pay ? `Payment ${st}` : 'Never charged');
       } catch { /* tried again next time; the reconciliation shows it */ }
     }
     for (const r of (await this.db.query<any>(`select id from ad_refunds where status = 'refunding' and ($1::text is null or company_id = $1)`, [companyId ?? null])).rows) await this.sendRefund(r.id).catch(() => {});
@@ -614,6 +619,11 @@ export class PrepaidService {
       const acct = prepaidAccount(r.advertiser_id);
       expected.set(acct, (expected.get(acct) ?? 0) - n(r.cents));
     }
+    // Credit that expired (only where the company set an expiry) left the advertiser's money as income.
+    for (const r of (await this.db.query<any>(`select advertiser_id, sum(cents)::bigint as cents from route_credit_expiries where company_id = $1 group by 1`, [companyId])).rows) {
+      const acct = prepaidAccount(r.advertiser_id);
+      expected.set(acct, (expected.get(acct) ?? 0) - n(r.cents));
+    }
     for (const id of paidOrders.keys()) if (!rows.some((r) => r.campaign_id === id)) off.push({ campaignId: id, paid: 0, ordered: paidOrders.get(id)!, printed: 0, bottlesPrinted: 0, printLines: printLines.get(id) ?? 0, held: 0, printing: 0 });
     out.push({ id: 'prepaid_bottles', what: 'Every prepaid ad’s bottles: paid equals what its orders bought, printed equals the bottles printed and the books’ print lines, and nothing prints beyond what was paid',
       status: off.length ? 'fail' : 'ok', detail: off.length ? `${off.length} ad(s) whose counts disagree` : `${rows.length} prepaid ad(s) agree`, figures: { off: off.slice(0, 50) } });
@@ -626,7 +636,7 @@ export class PrepaidService {
     out.push({ id: 'prepaid_balances', what: 'Each advertiser’s money paid up front, in the books, equals its bottles left to print and extras left to use, and is never below nothing',
       status: wrong.length ? 'fail' : 'ok', detail: wrong.length ? `${wrong.length} advertiser balance(s) off` : `${accts.size} prepaid balance(s) agree`, figures: { off: wrong.slice(0, 50) } });
 
-    const stuckAt = new Date(Date.now() - PaymentsService.stuckAfterMs).toISOString();
+    const stuckAt = new Date(this.platform.bus.now().getTime() - PaymentsService.stuckAfterMs).toISOString();
     const paying = (await this.db.query<any>(`select id from ad_orders where company_id = $1 and status = 'paying' and created_at < $2`, [companyId, stuckAt])).rows;
     const refunds = (await this.db.query<any>(`select id, status from ad_refunds where company_id = $1 and status <> 'refunded'`, [companyId])).rows;
     const orphans = (await this.db.query<any>(`select id, campaign_id from ad_orders where company_id = $1 and kind = 'bottles' and status = 'paid'`, [companyId])).rows.filter((o) => !this.platform.campaigns.has(o.campaign_id));

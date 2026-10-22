@@ -44,6 +44,8 @@ export interface Pack {
   checkedByHand?: { by: string; at: string; reason?: string };
   /** Its run was closed out from an earlier day and never driven: who, when and why. */
   closedOut?: { by: string; at: string; reason: string };
+  /** It was last scanned at its door without a photo when its photos were up to this one (a later photo proves the drop). */
+  doorScanSeq?: number;
 }
 
 /** Asked to do something a pack can't do in the state it is in. */
@@ -62,6 +64,15 @@ export type DeliveryResult =
  */
 export class PackService {
   readonly packs = new Map<string, Pack>();
+  /** The packs of each stop of each night's run, so a scan at a door looks at its stop, not at every pack ever made. */
+  private byStop = new Map<string, Set<string>>();
+  private stopKey(routeId: string, stop: number, run: string) { return `${routeId}|${stop}|${run}`; }
+  private index(p: Pack) { const k = this.stopKey(p.routeId, p.stop, p.runId ?? ''); const s = this.byStop.get(k) ?? new Set(); s.add(p.id); this.byStop.set(k, s); }
+  /** The packs planned for a stop of a run (by the index; a pack put in the map some other way is still found). */
+  forStop(routeId: string, stop: number, run: string): Pack[] {
+    const hit = [...(this.byStop.get(this.stopKey(routeId, stop, run)) ?? [])].map((id) => this.packs.get(id)).filter((p): p is Pack => !!p && p.routeId === routeId && p.stop === stop && (p.runId ?? '') === run);
+    return hit.length ? hit : [...this.packs.values()].filter((p) => p.routeId === routeId && p.stop === stop && (p.runId ?? '') === run);
+  }
   private boxTries = new Map<string, number>();
   /**
    * Packs whose bottles are printing right now (finish or replace). Two at once on one pack would each print what the
@@ -113,6 +124,7 @@ export class PackService {
 
     const pack: Pack = { id: newId('pk'), companyId: company.id, customerId: order.customerId, address: order.address, routeId: order.routeId, stop: order.stop, box, unitIds: [], faces: [], status: 'composed', ...(order.runId ? { runId: order.runId } : {}), ...(order.houseId ? { houseId: order.houseId, areaId: order.areaId, packNo: order.packNo ?? 1 } : {}) };
     this.packs.set(pack.id, pack);
+    this.index(pack);
     this.save(pack);
 
     await this.finish(pack.id, order.productId);
@@ -358,7 +370,7 @@ export class PackService {
    */
   deliver(input: { routeId: string; runId?: string; stop: number; scannedPackId: string; atAddress: boolean; photoProof: boolean; emptiesCollected: number; checkOnly?: boolean }): DeliveryResult {
     const run = input.runId ?? this.currentRun(input.routeId);
-    const forStop = [...this.packs.values()].filter((p) => p.routeId === input.routeId && p.stop === input.stop && (p.runId ?? '') === run);
+    const forStop = this.forStop(input.routeId, input.stop, run);
     const right = forStop.find((p) => p.status !== 'delivered' && p.status !== 'returned') ?? forStop[0];
     if (!right) return { ok: false, reason: `No pack is planned for stop ${input.stop}.` };
     const reject = (reason: string): DeliveryResult => {
@@ -392,7 +404,15 @@ export class PackService {
 
   /** Put packs loaded from storage back in place. */
   restore(packs: Pack[]) {
-    for (const p of packs) this.packs.set(p.id, p);
+    for (const p of packs) { this.packs.set(p.id, p); this.index(p); }
+  }
+
+  /** The box was scanned at its door (its photo must come after this: `photoSeq`, the last photo of it then). */
+  markDoorScan(packId: string, photoSeq: number) {
+    const p = this.packs.get(packId);
+    if (!p) return;
+    p.doorScanSeq = photoSeq;
+    this.save(p);
   }
 
   private save(p: Pack) {

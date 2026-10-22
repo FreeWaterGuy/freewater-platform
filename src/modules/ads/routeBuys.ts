@@ -6,13 +6,14 @@ import { SHARES } from '../../core/types';
 import { newId } from '../../core/ids';
 import { AdsError } from './service';
 import { layoutsFor, shareLabel } from './layouts';
-import { prepaidModel } from './billing';
+import { adLimits, chargeLimitProblem, prepaidModel } from './billing';
 import { syncPrepaidBuy } from './budget';
 import type { PrepaidService } from './prepaid';
 import { prepaidAccount } from '../ledger/ledger';
 import { insidePolygon } from '../delivery/planner';
 import { packsFor, splitAddress } from '../delivery/houses';
-import { normalizeAddress, HOUSEHOLD_INTERESTS, INCOME_BANDS } from '../households/vocabulary';
+import { HOUSEHOLD_INTERESTS, INCOME_BANDS } from '../households/vocabulary';
+import { addressKey, foldText } from '../../core/address';
 import type { HouseholdService } from '../households/service';
 import type { ReconCheck } from '../books/reconciliation';
 import type { Pack } from '../packs/service';
@@ -117,6 +118,11 @@ const addDays = (d: string, k: number) => new Date(noon(d) + k * 86_400_000).toI
 /** The Monday of the week a day is in (weeks run Monday to Sunday). */
 export const mondayOf = (d: string) => addDays(d, -((new Date(noon(d)).getUTCDay() + 6) % 7));
 const parse = <T>(v: unknown): T => (typeof v === 'string' ? JSON.parse(v) : v) as T;
+/** Rows written in one statement when a buy is paid (measured: docs/REVIEW-LOG.md, 2026-10-22). */
+export const ROWS_PER_STATEMENT = 5000;
+/** The most pieces one buy can reserve: past this, one request holds too much (ask the team for a bigger buy). */
+export const MAX_PIECES_PER_BUY = 50_000;
+function chunks<T>(xs: T[], size: number): T[][] { const out: T[][] = []; for (let i = 0; i < xs.length; i += size) out.push(xs.slice(i, i + size)); return out; }
 /** Streets with fewer houses reached than this are shown together, so a count never points at one house. */
 const STREET_MIN = 5;
 /** Reasons a piece came back that are a house's own business (or a driver's word about it): never shown to the advertiser as such. */
@@ -196,7 +202,7 @@ export class RouteBuyService {
     if (any(w.polygon)) houses = houses.filter((h) => insidePolygon({ lat: h.lat, lng: h.lng }, w.polygon!));
     const unknown: string[] = [];
     if (any(w.addresses) || any(w.houseIds)) {
-      const keys = new Map((w.addresses ?? []).map((a) => [normalizeAddress(String(a)).toLowerCase(), String(a)]));
+      const keys = new Map((w.addresses ?? []).map((a) => [addressKey(String(a)), String(a)]));
       const ids = new Set(w.houseIds ?? []);
       const hit = houses.filter((h) => keys.has(h.key) || ids.has(h.id));
       for (const [k, a] of keys) if (!hit.some((h) => h.key === k)) unknown.push(a);
@@ -374,7 +380,8 @@ export class RouteBuyService {
     const share = (input.kind === 'box' && input.share === undefined ? (sizes.includes(1) ? 1 : sizes[0]) : input.share ?? sizes[0]) as Share | undefined;
     if (!share || !sizes.includes(share)) throw new AdsError(422, 'size_not_printable', `Pick one size this ad has artwork for that prints on the ${product.name}: ${sizes.map(shareLabel).join(', ') || 'none do'}.`);
     const weeksN = input.weeks ?? 1;
-    if (!Number.isInteger(weeksN) || weeksN < 1 || weeksN > 26) throw new AdsError(422, 'bad_weeks', 'Choose 1 to 26 weeks.');
+    const maxWeeks = adLimits(company).maxRouteWeeks;
+    if (!Number.isInteger(weeksN) || weeksN < 1 || weeksN > maxWeeks) throw new AdsError(422, 'bad_weeks', `Choose 1 to ${maxWeeks} weeks.`);
     const first = this.firstWeek(companyId);
     const start = input.startWeek ?? first;
     if (!DAY.test(start) || Number.isNaN(noon(start)) || mondayOf(start) !== start) throw new AdsError(422, 'bad_week', 'Start on a Monday (YYYY-MM-DD).');
@@ -388,11 +395,66 @@ export class RouteBuyService {
     return { company, product, share, weeks: Array.from({ length: weeksN }, (_, i) => addDays(start, 7 * i)) };
   }
 
-  /** Credit an advertiser has from houses that stopped, not yet used (orders declined don't count as using it). */
+  /** Credit an advertiser has from houses that stopped, not yet used (orders declined don't count as using it) or expired. */
   async creditBalance(companyId: string, advertiserId: string, db: SqlClient = this.db) {
-    const got = n((await db.query<any>(`select coalesce(sum(total_cents),0)::bigint as c from route_settlements where company_id = $1 and advertiser_id = $2 and kind = 'credit'`, [companyId, advertiserId])).rows[0]?.c);
-    const used = n((await db.query<any>(`select coalesce(sum(u.cents),0)::bigint as c from route_credit_uses u join ad_orders o on o.id = u.order_id where u.company_id = $1 and u.advertiser_id = $2 and o.status <> 'declined'`, [companyId, advertiserId])).rows[0]?.c);
-    return Math.max(0, got - used);
+    const a = await this.creditAccounts(companyId, db, advertiserId);
+    return a[0]?.leftCents ?? 0;
+  }
+
+  /**
+   * Each advertiser's route credit, as the books hold it (part of the money it paid up front, still owed to it in
+   * pieces on later buys): got, used, expired, left; and, where the company set an expiry, what expires when (the
+   * oldest credit is used first).
+   */
+  async creditAccounts(companyId: string, db: SqlClient = this.db, advertiserId?: string) {
+    const days = adLimits(this.company(companyId)).creditExpiryDays;
+    const grants = (await db.query<any>(`select advertiser_id, total_cents, created_at from route_settlements where company_id = $1 and kind = 'credit' and ($2::text is null or advertiser_id = $2) order by created_at, id`, [companyId, advertiserId ?? null])).rows;
+    const used = new Map((await db.query<any>(`select u.advertiser_id, coalesce(sum(u.cents),0)::bigint as c from route_credit_uses u join ad_orders o on o.id = u.order_id where u.company_id = $1 and ($2::text is null or u.advertiser_id = $2) and o.status <> 'declined' group by 1`, [companyId, advertiserId ?? null])).rows.map((r) => [r.advertiser_id as string, n(r.c)]));
+    const expired = new Map((await db.query<any>(`select advertiser_id, coalesce(sum(cents),0)::bigint as c from route_credit_expiries where company_id = $1 and ($2::text is null or advertiser_id = $2) group by 1`, [companyId, advertiserId ?? null])).rows.map((r) => [r.advertiser_id as string, n(r.c)]));
+    const ids = [...new Set([...grants.map((g) => g.advertiser_id as string), ...used.keys(), ...expired.keys()])];
+    return ids.map((id) => {
+      const mine = grants.filter((g) => g.advertiser_id === id);
+      const got = mine.reduce((a, g) => a + n(g.total_cents), 0), u = used.get(id) ?? 0, x = expired.get(id) ?? 0;
+      // What's left of each grant, oldest used (and expired) first, with the day it expires.
+      let spent = u + x;
+      const left = mine.map((g) => { const c = n(g.total_cents), take = Math.min(c, spent); spent -= take; return { cents: c - take, grantedAt: new Date(g.created_at).toISOString() }; }).filter((g) => g.cents > 0);
+      return { advertiserId: id, gotCents: got, usedCents: u, expiredCents: x, leftCents: Math.max(0, got - u - x), expiresAfterDays: days,
+        expiring: days === null ? [] : left.map((g) => ({ cents: g.cents, on: new Date(Date.parse(g.grantedAt) + days * 86_400_000).toISOString().slice(0, 10) })) };
+    });
+  }
+
+  /**
+   * Credit older than the company's days, not used, expires (only where the company set days: none by default). Once
+   * per piece of credit: recorded (only ever added to) and booked out of the advertiser's money as income, under the
+   * advertiser's credit lock, so a buy spending it at the same moment and the expiry can't both have it.
+   */
+  async expireCredit(companyId: string) {
+    const days = adLimits(this.company(companyId)).creditExpiryDays;
+    if (days === null) return [];
+    const now = this.platform.bus.now();
+    const before = new Date(now.getTime() - days * 86_400_000).toISOString();
+    const out: { advertiserId: string; cents: number }[] = [];
+    const who = (await this.db.query<any>(`select distinct advertiser_id from route_settlements where company_id = $1 and kind = 'credit' and created_at < $2`, [companyId, before])).rows.map((r) => r.advertiser_id as string);
+    for (const advertiserId of who) {
+      const made = await this.db.transaction(async (tx) => {
+        await tx.query(`insert into route_credit_accounts (company_id, advertiser_id) values ($1,$2) on conflict do nothing`, [companyId, advertiserId]);
+        await tx.query(`select 1 from route_credit_accounts where company_id = $1 and advertiser_id = $2 for update`, [companyId, advertiserId]);
+        const old = n((await tx.query<any>(`select coalesce(sum(total_cents),0)::bigint as c from route_settlements where company_id = $1 and advertiser_id = $2 and kind = 'credit' and created_at < $3`, [companyId, advertiserId, before])).rows[0]?.c);
+        const a = (await this.creditAccounts(companyId, tx, advertiserId))[0];
+        // Used credit came from the oldest first: what's left of the old credit is what expires.
+        const due = Math.min(a?.leftCents ?? 0, old - (a?.usedCents ?? 0) - (a?.expiredCents ?? 0));
+        if (due <= 0) return null;
+        const id = newId('rce');
+        await tx.query(`insert into route_credit_expiries (id, company_id, advertiser_id, cents, granted_before, at) values ($1,$2,$3,$4,$5,$6)`, [id, companyId, advertiserId, due, before, now.toISOString()]);
+        return { id, cents: due };
+      });
+      if (!made) continue;
+      const name = [...this.platform.campaigns.values()].find((c) => c.advertiserId === advertiserId)?.advertiserName ?? advertiserId;
+      this.platform.bus.publish('ad.route_credit_expired', companyId, { expiryId: made.id, advertiserId, advertiserName: name, cents: made.cents, days }, made.id);
+      out.push({ advertiserId, cents: made.cents });
+    }
+    if (out.length) await this.flush();
+    return out;
   }
 
   /**
@@ -429,7 +491,7 @@ export class RouteBuyService {
     const small = targeted.length < T;
     if (small) targeted = targeted.filter((h) => !blocks.small.has(h.id));
     // A house named that we can't take: the same words whatever the reason (never says a house stopped or blocked).
-    const named = new Map((input.where.addresses ?? []).map((a) => [normalizeAddress(String(a)).toLowerCase(), String(a)]));
+    const named = new Map((input.where.addresses ?? []).map((a) => [addressKey(String(a)), String(a)]));
     const cannot = [...unknown, ...[...named].filter(([k]) => found.some((h) => h.key === k) && !targeted.some((h) => h.key === k)).map(([, a]) => a)];
     if (cannot.length) throw new AdsError(422, 'cannot_reach', `We can't take an ad for ${cannot.slice(0, 5).join('; ')}${cannot.length > 5 ? ` and ${cannot.length - 5} more` : ''}: it isn't on a street we deliver to every week.`);
     if (!targeted.length) throw new AdsError(422, 'no_houses', 'No house we deliver to every week matches that. Try another area or more streets.');
@@ -441,6 +503,8 @@ export class RouteBuyService {
     const { companyId, advertiserId, input, company, product, share, weeks, targeted, small, T } = t;
     const occ = await this.occupancy(db, targeted.map((h) => h.id), weeks);
     const { spots, noRoom, short } = this.plan(company, product, { ...input, kind: input.kind }, share, targeted, weeks, occ, { campaignId, group });
+    const asked = input.kind === 'spread' ? Math.max(spots.length, input.bottles ?? 0) : spots.length;
+    if (asked > MAX_PIECES_PER_BUY) throw new AdsError(422, 'too_big', `That’s ${asked.toLocaleString('en-US')} pieces in one buy; one buy can hold up to ${MAX_PIECES_PER_BUY.toLocaleString('en-US')}. Buy fewer weeks or houses, or contact ${company.name}’s team for a bigger buy. Nothing was charged.`);
     if (short.length) throw new AdsError(409, 'sold_out', `Not enough room left: ${short.slice(0, 5).join('; ')}${short.length > 5 ? ` and ${short.length - 5} more` : ''} ${input.kind === 'spread' ? 'have no space left on those weeks’ bottles' : 'already carry as much as their bottles hold that week'}. Try fewer bottles, a smaller size, more houses or other weeks.`);
     const bottles = spots.filter((s) => s.bottle).length, faces = spots.length - bottles;
     if (!bottles) throw new AdsError(409, 'sold_out', 'Every bottle there is already taken those weeks. Try other weeks or a smaller size.');
@@ -505,18 +569,24 @@ export class RouteBuyService {
       const t = await this.target(o.companyId, o.advertiserId, o.input, o.sizes, { sample: o.sample });
       const q0 = await this.priced(t, this.db, campaignId, o.group);
       if (o.expectedTotalCents !== q0.totalCents) throw new AdsError(409, 'price_changed', `The total is ${dollars(q0.totalCents)} for ${q0.bottles.toLocaleString('en-US')} pieces, not ${dollars(o.expectedTotalCents)}. Check it and pay again. Nothing was charged.`);
+      const tooBig = chargeLimitProblem(t.company, q0.totalCents - Math.max(0, Math.min(o.expectedCreditCents ?? 0, q0.totalCents)));
+      if (tooBig) throw new AdsError(422, 'over_charge_limit', tooBig);
       await this.guardrails(o.companyId, o.advertiserId, q0, o.words ?? []);
       const orderId = newId('ado');
       row = await this.db.transaction(async (tx) => {
         const made = (await tx.query<any>(
-          `insert into ad_orders (id, company_id, advertiser_id, campaign_id, draft_id, kind, bottles, share, product_id, price_cents, extras, extras_cents, total_cents, credit_cents, status) values ($1,$2,$3,$4,$5,'bottles',$6,$7,$8,$9,$10,$11,$12,$13,'paying')
+          `insert into ad_orders (id, company_id, advertiser_id, campaign_id, draft_id, kind, bottles, share, product_id, price_cents, extras, extras_cents, total_cents, credit_cents, status, created_at) values ($1,$2,$3,$4,$5,'bottles',$6,$7,$8,$9,$10,$11,$12,$13,'paying',$14)
            on conflict do nothing returning *`,
-          [orderId, o.companyId, o.advertiserId, campaignId, o.draftId ?? null, q0.bottles, q0.share, q0.productId, q0.perBottleCents, JSON.stringify(q0.faces ? { boxSide: { uses: q0.faces, perUseCents: q0.perFaceCents } } : {}), q0.facesCents, q0.totalCents, 0])).rows[0];
+          [orderId, o.companyId, o.advertiserId, campaignId, o.draftId ?? null, q0.bottles, q0.share, q0.productId, q0.perBottleCents, JSON.stringify(q0.faces ? { boxSide: { uses: q0.faces, perUseCents: q0.perFaceCents } } : {}), q0.facesCents, q0.totalCents, 0, this.platform.bus.now().toISOString()])).rows[0];
         if (!made) return null; // pressed twice at once: the other press made it
         // Under the lock: each house and week this buy touches, in one order (so two payments never wait on each other).
         const keys = [...new Map(q0.plan.map((s) => [`${s.houseId}|${s.week}`, s])).values()].sort((a, b) => a.houseId.localeCompare(b.houseId) || a.week.localeCompare(b.week));
-        await tx.query(`insert into route_weeks (company_id, house_id, week) select $1, x.h, x.w from unnest($2::text[], $3::date[]) as x(h, w) on conflict do nothing`, [o.companyId, keys.map((k) => k.houseId), keys.map((k) => k.week)]);
-        await tx.query(`select 1 from route_weeks where (house_id, week) in (select x.h, x.w from unnest($1::text[], $2::date[]) as x(h, w)) order by house_id, week for update`, [keys.map((k) => k.houseId), keys.map((k) => k.week)]);
+        // In bounded pieces (a 26-week buy on 1,000 houses is 26,000 house-weeks), still in that one order and still in
+        // this one transaction: all of it or none of it, and no one statement big enough to time out.
+        for (const part of chunks(keys, ROWS_PER_STATEMENT)) {
+          await tx.query(`insert into route_weeks (company_id, house_id, week) select $1, x.h, x.w from unnest($2::text[], $3::date[]) as x(h, w) on conflict do nothing`, [o.companyId, part.map((k) => k.houseId), part.map((k) => k.week)]);
+          await tx.query(`select 1 from route_weeks where (house_id, week) in (select x.h, x.w from unnest($1::text[], $2::date[]) as x(h, w)) order by house_id, week for update`, [part.map((k) => k.houseId), part.map((k) => k.week)]);
+        }
         // What's committed now decides: the quote again, against it. A total that moved means someone paid first.
         const q = await this.priced(t, tx, campaignId, o.group);
         if (q.totalCents !== o.expectedTotalCents || q.totalCents !== q0.totalCents || q.bottles !== q0.bottles) throw new AdsError(409, 'price_changed', `The total is now ${dollars(q.totalCents)} for ${q.bottles.toLocaleString('en-US')} pieces, not ${dollars(o.expectedTotalCents)}: someone else paid for some of that space first. Check the new quote and pay again. Nothing was charged.`);
@@ -530,11 +600,12 @@ export class RouteBuyService {
           await tx.query(`update ad_orders set credit_cents = $2 where id = $1`, [orderId, credit]);
           await tx.query(`insert into route_credit_uses (id, company_id, advertiser_id, order_id, cents) values ($1,$2,$3,$4,$5)`, [newId('rcu'), o.companyId, o.advertiserId, orderId, credit]);
         }
-        const s = q.plan;
-        await tx.query(
-          `insert into route_spots (id, company_id, campaign_id, advertiser_id, order_id, house_id, week, bottle, pack, face, share, units, price_cents, status)
-           select x.id, $1, $2, $3, $4, x.h, x.w, x.b, x.p, x.f, x.s, x.u, x.c, 'open' from unnest($5::text[], $6::text[], $7::date[], $8::int[], $9::int[], $10::text[], $11::int[], $12::int[], $13::int[]) as x(id, h, w, b, p, f, s, u, c)`,
-          [o.companyId, campaignId, o.advertiserId, orderId, s.map(() => newId('rs')), s.map((x) => x.houseId), s.map((x) => x.week), s.map((x) => x.bottle ?? null), s.map((x) => x.pack ?? null), s.map((x) => x.face ?? null), s.map((x) => x.share), s.map((x) => x.units), s.map((x) => (x.face ? q.perFaceCents : q.perBottleCents))]);
+        for (const s of chunks(q.plan, ROWS_PER_STATEMENT)) {
+          await tx.query(
+            `insert into route_spots (id, company_id, campaign_id, advertiser_id, order_id, house_id, week, bottle, pack, face, share, units, price_cents, status)
+             select x.id, $1, $2, $3, $4, x.h, x.w, x.b, x.p, x.f, x.s, x.u, x.c, 'open' from unnest($5::text[], $6::text[], $7::date[], $8::int[], $9::int[], $10::text[], $11::int[], $12::int[], $13::int[]) as x(id, h, w, b, p, f, s, u, c)`,
+            [o.companyId, campaignId, o.advertiserId, orderId, s.map(() => newId('rs')), s.map((x) => x.houseId), s.map((x) => x.week), s.map((x) => x.bottle ?? null), s.map((x) => x.pack ?? null), s.map((x) => x.face ?? null), s.map((x) => x.share), s.map((x) => x.units), s.map((x) => (x.face ? q.perFaceCents : q.perBottleCents))]);
+        }
         const target = { ...o.input.where, ...(o.input.attributes ? { attributes: o.input.attributes } : {}), ...(o.input.kind === 'spread' ? { bottles: o.input.bottles } : {}), ...(o.input.kind === 'houses' ? { perHouse: o.input.perHouse ?? 1 } : {}), ...(o.input.boxSides ? { boxSides: true } : {}) };
         const rb = (await tx.query<any>(
           `insert into route_buys (campaign_id, company_id, advertiser_id, order_id, kind, share, product_id, start_week, weeks, houses, bottles, faces, small, target) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
@@ -676,14 +747,18 @@ export class RouteBuyService {
    */
   async settle(companyId: string, opts: { houseId?: string } = {}) {
     await this.repairCredits(companyId);
+    if (!opts.houseId) await this.expireCredit(companyId);
     const thisWeek = mondayOf(this.today(companyId));
     const house = opts.houseId ?? null;
+    // A house skipped for a while (a locked gate, a dog): its pieces in the weeks it's skipped move to its first
+    // delivery after, within the buy, where there's room; the rest come back below, as before.
+    await this.rollSkipped(companyId, house);
     const open = (await this.db.query<any>(
       `select s.id, s.campaign_id, s.bottle, s.face, s.price_cents, s.week::text as week, h.status as house_status,
          exists (select 1 from house_ad_blocks b where b.house_id = s.house_id and b.removed_at is null and (b.advertiser_id = s.advertiser_id or (b.advertiser_id is null and rb.small))) as blocked
        from route_spots s join houses h on h.id = s.house_id join route_buys rb on rb.campaign_id = s.campaign_id
        where s.company_id = $1 and s.status = 'open' and ($3::text is null or s.house_id = $3)
-         and (s.week < $2 or h.status in ('opted_out', 'skipped') or exists (select 1 from house_ad_blocks b where b.house_id = s.house_id and b.removed_at is null and (b.advertiser_id = s.advertiser_id or (b.advertiser_id is null and rb.small))))`,
+         and (s.week < $2 or h.status in ('opted_out', 'merged') or (h.status = 'skipped' and (h.skip_until is null or s.week < h.skip_until)) or exists (select 1 from house_ad_blocks b where b.house_id = s.house_id and b.removed_at is null and (b.advertiser_id = s.advertiser_id or (b.advertiser_id is null and rb.small))))`,
       [companyId, thisWeek, house])).rows;
     // Printed pieces that won't reach the house: their box came back. (A bottle whose label came out wrong at the
     // packing check is reprinted with the same pieces, which move to the reprint: Platform.reprint. The check below
@@ -691,7 +766,7 @@ export class RouteBuyService {
     const packs = this.packs?.() ?? new Map<string, Pack>();
     const placed = (await this.db.query<any>(`select s.id, s.campaign_id, s.bottle, s.face, s.price_cents, s.unit_id, s.pack_id from route_spots s where s.company_id = $1 and s.status = 'placed' and ($2::text is null or s.house_id = $2)`, [companyId, house])).rows
       .filter((r) => { const p = r.pack_id ? packs.get(r.pack_id) : undefined; return p?.status === 'returned' || (!!p && p.status !== 'composed' && r.bottle !== null && !!r.unit_id && !p.unitIds.includes(r.unit_id)); }); // (a pack still printing adds its bottles as they print)
-    const why = (r: any) => (r.house_status === 'opted_out' ? 'the house stopped deliveries' : r.house_status === 'skipped' ? 'the house is skipped' : r.blocked ? 'the house blocked these ads' : 'the week went by before it printed');
+    const why = (r: any) => (r.house_status === 'opted_out' ? 'the house stopped deliveries' : r.house_status === 'skipped' || r.house_status === 'merged' ? 'the house is skipped' : r.blocked ? 'the house blocked these ads' : 'the week went by before it printed');
     const byCampaign = new Map<string, { open: any[]; back: any[] }>();
     for (const r of open) { const x = byCampaign.get(r.campaign_id) ?? { open: [], back: [] }; x.open.push(r); byCampaign.set(r.campaign_id, x); }
     for (const r of placed) { const x = byCampaign.get(r.campaign_id) ?? { open: [], back: [] }; x.back.push(r); byCampaign.set(r.campaign_id, x); }
@@ -701,6 +776,54 @@ export class RouteBuyService {
       if (s) out.push(s);
     }
     return out;
+  }
+
+  /**
+   * Pieces on bottles at a house skipped for a while, in the weeks before it's tried again: each moves to the first
+   * week from then on, within its buy, with room on a bottle there (the same rules as buying: room on the label, never
+   * twice on one bottle, never beside a competitor), under that house-week's lock. Its week moves forward once and
+   * where it came from is kept (rolled_from; 071 allows only that). Box sides aren't moved: they come back as credit.
+   */
+  async rollSkipped(companyId: string, houseId: string | null = null) {
+    const rows = (await this.db.query<any>(`select s.id, s.campaign_id, s.house_id, s.share, s.units, s.week::text as week, h.skip_until::text as until, rb.start_week::text as start, rb.weeks, rb.product_id
+      from route_spots s join houses h on h.id = s.house_id join route_buys rb on rb.campaign_id = s.campaign_id
+      where s.company_id = $1 and s.status = 'open' and s.bottle is not null and h.status = 'skipped' and h.skip_until is not null and s.week < h.skip_until and ($2::text is null or s.house_id = $2)
+      order by s.house_id, s.week, s.id`, [companyId, houseId])).rows;
+    if (!rows.length) return 0;
+    const company = this.company(companyId);
+    const homes = new Map<string, HouseRow | null>();
+    let moved = 0;
+    for (const r of rows) {
+      if (!homes.has(r.house_id)) homes.set(r.house_id, await this.houseRow(companyId, r.house_id));
+      const h = homes.get(r.house_id);
+      if (!h) continue;
+      const last = addDays(day(r.start), 7 * (n(r.weeks) - 1));
+      const product = this.platform.products.get(r.product_id) ?? this.platform.standardProduct(companyId);
+      const group = this.platform.campaigns.get(r.campaign_id)?.competitorGroup;
+      for (let w = mondayOf(r.until); w <= last; w = addDays(w, 7)) {
+        const done = await retryConflicts(() => this.db.transaction(async (tx) => {
+          await tx.query(`insert into route_weeks (company_id, house_id, week) values ($1,$2,$3) on conflict do nothing`, [companyId, h.id, w]);
+          await tx.query(`select 1 from route_weeks where house_id = $1 and week = $2 for update`, [h.id, w]);
+          const occ = await this.occupancy(tx, [h.id], [w]);
+          const { spots } = this.plan(company, product, { kind: 'houses', perHouse: 1, where: {} }, n(r.share) as Share, [h], [w], occ, { campaignId: r.campaign_id, group });
+          const b = spots[0]?.bottle;
+          if (!b) return false;
+          const u = await tx.query(`update route_spots set week = $2, bottle = $3, rolled_from = coalesce(rolled_from, week) where id = $1 and status = 'open' and week < $2`, [r.id, w, b]);
+          return Number((u as any).rowCount ?? 1) > 0;
+        }));
+        if (done) { moved++; break; }
+      }
+    }
+    return moved;
+  }
+
+  /** One house as a buy sees it (its boxes and bottles), whatever its status. */
+  private async houseRow(companyId: string, houseId: string): Promise<HouseRow | null> {
+    const r = (await this.db.query<any>(`select h.id, h.area_id, a.route_id, h.address, h.address_key, h.street, h.lat, h.lng, h.household_size, a.name as area_name, a.pack_size, a.packs_per_house, a.bottles_per_person_week, a.max_packs_per_house, a.frequency_days
+      from houses h join delivery_areas a on a.id = h.area_id where h.id = $1 and h.company_id = $2`, [houseId, companyId])).rows[0];
+    if (!r) return null;
+    const packs = packsFor({ packsPerHouse: n(r.packs_per_house), bottlesPerPersonWeek: r.bottles_per_person_week === null ? null : n(r.bottles_per_person_week), maxPacksPerHouse: n(r.max_packs_per_house), frequencyDays: n(r.frequency_days), packSize: n(r.pack_size) as 24 }, this.on(companyId, 'household_packs') && r.household_size !== null ? n(r.household_size) : null);
+    return { id: r.id, areaId: r.area_id, routeId: r.route_id, areaName: r.area_name, address: r.address, street: r.street, lat: n(r.lat), lng: n(r.lng), packs, packSize: n(r.pack_size), bottles: packs * n(r.pack_size), key: r.address_key };
   }
 
   private async settleOne(companyId: string, campaignId: string, openIds: string[], backIds: string[], reason: string) {
@@ -720,8 +843,8 @@ export class RouteBuyService {
       if (bottles) await tx.query(`update ad_prepaid set refunded = refunded + $2 where campaign_id = $1`, [campaignId, bottles]);
       for (const f of faces) await tx.query(`insert into ad_extra_uses (id, company_id, campaign_id, feature, status, charged_cents, ref, at) values ($1,$2,$3,'boxSide','credited',$4,$5,$6)`, [`aex_${f.id}`, companyId, campaignId, n(f.price_cents), id, this.platform.bus.now().toISOString()]);
       const unprintedCents = unprinted.reduce((a, r) => a + n(r.price_cents), 0), reversedCents = back.reduce((a, r) => a + n(r.price_cents), 0);
-      await tx.query(`insert into route_settlements (id, company_id, advertiser_id, campaign_id, kind, reason, bottles, faces, unprinted_cents, reversed_cents, total_cents, status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-        [id, companyId, rb.advertiser_id, campaignId, kind, reason.slice(0, 300), bottles + back.filter((r) => r.bottle !== null).length, faces.length + back.filter((r) => r.face !== null).length, unprintedCents, reversedCents, unprintedCents + reversedCents, kind === 'credit' ? 'done' : 'waiting']);
+      await tx.query(`insert into route_settlements (id, company_id, advertiser_id, campaign_id, kind, reason, bottles, faces, unprinted_cents, reversed_cents, total_cents, status, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+        [id, companyId, rb.advertiser_id, campaignId, kind, reason.slice(0, 300), bottles + back.filter((r) => r.bottle !== null).length, faces.length + back.filter((r) => r.face !== null).length, unprintedCents, reversedCents, unprintedCents + reversedCents, kind === 'credit' ? 'done' : 'waiting', this.platform.bus.now().toISOString()]);
       return { bottles, faces: faces.length, back, total: unprintedCents + reversedCents };
     }));
     if (!got) return null;
@@ -748,11 +871,18 @@ export class RouteBuyService {
     await this.flush();
   }
 
-  /** After a crash: a settlement whose returned pieces were never moved back in the books gets its line now (once). */
+  /**
+   * After a crash: a settlement whose returned pieces were never moved back in the books gets its line now (once), and
+   * so does credit that expired but whose line was never booked.
+   */
   private async repairCredits(companyId: string) {
     const rows = (await this.db.query<any>(`select s.id, s.campaign_id from route_settlements s where s.company_id = $1 and s.reversed_cents > 0
       and not exists (select 1 from events e where e.company_id = s.company_id and e.type = 'ad.route_credited' and e.idempotency_key = s.id)`, [companyId])).rows;
     for (const r of rows) await this.bookReversal(companyId, r.id, r.campaign_id);
+    const lost = (await this.db.query<any>(`select x.id, x.advertiser_id, x.cents from route_credit_expiries x where x.company_id = $1
+      and not exists (select 1 from events e where e.company_id = x.company_id and e.type = 'ad.route_credit_expired' and e.idempotency_key = x.id)`, [companyId])).rows;
+    for (const r of lost) this.platform.bus.publish('ad.route_credit_expired', companyId, { expiryId: r.id, advertiserId: r.advertiser_id, advertiserName: [...this.platform.campaigns.values()].find((c) => c.advertiserId === r.advertiser_id)?.advertiserName ?? r.advertiser_id, cents: n(r.cents), days: adLimits(this.company(companyId)).creditExpiryDays ?? 0 }, r.id);
+    if (lost.length) await this.flush();
   }
 
   /** Route refunds waiting for a person, and their state. */
@@ -935,7 +1065,7 @@ export class RouteBuyService {
     const buys = (await this.db.query<any>(`select r.*, o.status as order_status, o.total_cents, o.credit_cents from route_buys r join ad_orders o on o.id = r.order_id where r.company_id = $1 and r.advertiser_id = $2 order by r.created_at desc limit 100`, [companyId, advertiserId])).rows;
     const settlements = (await this.db.query<any>(`select * from route_settlements where company_id = $1 and advertiser_id = $2 order by created_at desc limit 100`, [companyId, advertiserId])).rows.map((r) => this.settlementView(r, 'advertiser'));
     return {
-      creditCents: await this.creditBalance(companyId, advertiserId), verified: await this.verified(companyId, advertiserId),
+      creditCents: await this.creditBalance(companyId, advertiserId), credit: (await this.creditAccounts(companyId, this.db, advertiserId))[0] ?? { advertiserId, gotCents: 0, usedCents: 0, expiredCents: 0, leftCents: 0, expiresAfterDays: adLimits(this.company(companyId)).creditExpiryDays, expiring: [] }, verified: await this.verified(companyId, advertiserId),
       buys: buys.map((r) => ({ campaignId: r.campaign_id as string, name: this.platform.campaigns.get(r.campaign_id)?.name ?? null, kind: r.kind as RouteKind, kindWords: KIND_WORDS[r.kind as RouteKind], size: shareLabel(n(r.share) as Share), startWeek: day(r.start_week), weeks: n(r.weeks), houses: n(r.houses), bottles: n(r.bottles), boxSides: n(r.faces), small: !!r.small, totalCents: n(r.total_cents), creditCents: n(r.credit_cents), paid: r.order_status === 'paid' })),
       givenBack: settlements,
     };
@@ -1000,16 +1130,18 @@ export class RouteBuyService {
     const thisWeek = mondayOf(this.today(companyId));
     const late = spots.filter((s) => s.status === 'open' && s.week < thisWeek).length;
     const waiting = (await this.db.query<any>(`select id from route_settlements where company_id = $1 and kind = 'refund' and status in ('waiting', 'failed', 'refunding')`, [companyId])).rows;
-    const negative: string[] = [];
-    for (const r of (await this.db.query<any>(`select distinct advertiser_id from route_credit_uses where company_id = $1`, [companyId])).rows) {
-      const got = n((await this.db.query<any>(`select coalesce(sum(total_cents),0)::bigint as c from route_settlements where company_id = $1 and advertiser_id = $2 and kind = 'credit'`, [companyId, r.advertiser_id])).rows[0]?.c);
-      const used = n((await this.db.query<any>(`select coalesce(sum(u.cents),0)::bigint as c from route_credit_uses u join ad_orders o on o.id = u.order_id where u.company_id = $1 and u.advertiser_id = $2 and o.status <> 'declined'`, [companyId, r.advertiser_id])).rows[0]?.c);
-      if (used > got) negative.push(r.advertiser_id);
-    }
+    // Each advertiser's credit: what it got, used and saw expire (the books' liability to it, per advertiser).
+    const accounts = await this.creditAccounts(companyId);
+    const negative = accounts.filter((a) => a.usedCents + a.expiredCents > a.gotCents).map((a) => a.advertiserId);
     out.push({ id: 'route_open', what: 'Nothing about route buys is left hanging: pieces whose week went by are given back, refunds are approved and sent, and no advertiser has used more credit than it got',
       status: negative.length ? 'fail' : late || waiting.length ? 'attention' : 'ok',
       detail: negative.length ? `${negative.length} advertiser(s) used more credit than they had` : late || waiting.length ? `${late} piece(s) past their week not given back yet (the daily run does it); ${waiting.length} refund(s) waiting for a person` : 'Nothing open',
       figures: { late, refundsWaiting: waiting.map((r) => r.id), negativeCredit: negative } });
+    const name = (id: string) => [...this.platform.campaigns.values()].find((c) => c.advertiserId === id)?.advertiserName ?? id;
+    const holding = accounts.filter((a) => a.leftCents > 0);
+    out.push({ id: 'route_credit', what: 'Route credit each advertiser holds: money it paid up front for pieces that couldn’t be delivered, owed to it on its next route buys (part of its prepaid balance in the books)',
+      status: 'ok', detail: holding.length ? `${holding.length} advertiser(s) hold ${dollars(holding.reduce((a, x) => a + x.leftCents, 0))} of credit${accounts.some((a) => a.expiresAfterDays !== null) ? `; it expires after ${accounts[0]!.expiresAfterDays} days` : '; it doesn’t expire'}` : 'No advertiser holds route credit',
+      figures: { advertisers: accounts.slice(0, 200).map((a) => ({ advertiserId: a.advertiserId, advertiser: name(a.advertiserId), gotCents: a.gotCents, usedCents: a.usedCents, expiredCents: a.expiredCents, leftCents: a.leftCents, expiring: a.expiring.slice(0, 5) })) } });
     return out;
   }
 
@@ -1043,24 +1175,77 @@ function groupSmall<T extends { area: string; street: string; houses: number; bo
   return [...big, other];
 }
 
-/** Every piece of words in an ad: its artwork's words, what its code opens, its name. */
-export function adWords(c: { creativeRef?: Campaign['creativeRef']; experienceConfig?: Record<string, unknown>; name?: string; poster?: unknown; studio?: unknown; variants?: { experienceConfig?: unknown }[] }): string[] {
+const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', shy: '' };
+/** Character references decoded (&#49; &#x31; &amp;), as a browser or a printer would show them. */
+export function decodeEntities(s: string): string {
+  return s.replace(/&(#\d{1,7}|#x[0-9a-f]{1,6}|[a-z]{2,8});/gi, (m, e: string) => {
+    if (e[0] === '#') { const cp = e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10); return cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : ''; }
+    return ENTITIES[e.toLowerCase()] ?? m;
+  });
+}
+/** Words as a person reads them: entities decoded, Unicode folded (full-width digits, ligatures), invisible characters gone. */
+export function readableText(s: string): string {
+  return foldText(decodeEntities(String(s ?? ''))).replace(/\s+/g, ' ').trim();
+}
+/** Where a link goes, in words: its site, then its path, query and fragment decoded ("hi-maria-1501-kenwood-ave" → "hi maria 1501 kenwood ave"). */
+export function linkWords(url: string): string | null {
+  const raw = readableText(url);
+  let u: URL;
+  try { u = new URL(raw); } catch { return null; }
+  if (u.protocol === 'mailto:' || u.protocol === 'tel:' || u.protocol === 'sms:') return `Link (${u.protocol.slice(0, -1)}): ${decodeURIComponentSafe(u.pathname)}`;
+  const rest = decodeURIComponentSafe(`${u.pathname}${u.search}${u.hash}`).replace(/[/\-_+.=&?#:;,~]+/g, ' ').trim();
+  return `Link to ${u.hostname}${rest ? `: ${rest}` : ''}`;
+}
+function decodeURIComponentSafe(s: string) { try { return decodeURIComponent(s.replace(/\+/g, ' ')); } catch { return s; } }
+
+/**
+ * Every piece of words in an ad, as the people who get it would read them: its artwork's words (an SVG's text, its
+ * character references decoded, the letters of each line together), where its links and code go (a static QR, a
+ * button's link: the site and the path and query in words), what its code opens, its name. What the small-audience
+ * guardrail and the AI reviewer check. Never the pictures themselves: the AI reviewer says so (aiReview.ts).
+ */
+export function adWords(c: { creativeRef?: Campaign['creativeRef']; experienceConfig?: Record<string, unknown>; name?: string; poster?: unknown; studio?: unknown; variants?: { experienceConfig?: unknown }[]; qr?: Campaign['qr'] }): string[] {
   const out: string[] = [];
+  const push = (t: string | null) => { if (t && out.length <= 200) { const r = readableText(t); if (r) out.push(r); } };
   const walk = (v: unknown, depth = 0) => {
     if (depth > 5 || out.length > 200) return;
-    if (typeof v === 'string') { if (!/^(#|data:|https?:|\/assets\/)/.test(v) && v.length <= 2000) out.push(v.replace(/<[^>]{0,500}>/g, ' ')); }
-    else if (Array.isArray(v)) for (const x of v.slice(0, 50)) walk(x, depth + 1);
+    if (typeof v === 'string') {
+      if (v.length > 2000 || /^(data:|\/assets\/)/i.test(v) || /^#[0-9a-f]{3,8}$/i.test(v)) return; // a picture, an uploaded file, a color
+      if (/^(https?|mailto|tel|sms):/i.test(v.trim())) push(linkWords(v.trim()));
+      else push(v.replace(/<[^>]{0,500}>/g, ' '));
+    } else if (Array.isArray(v)) for (const x of v.slice(0, 50)) walk(x, depth + 1);
     else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v).slice(0, 60)) if (!['colors', 'icon', 'font', 'photo', 'logo', 'image', 'asset', 'layout'].includes(k)) walk(x, depth + 1);
   };
   const ref = c.creativeRef as any;
-  walk(ref?.kind === 'svg' ? (String(ref.markup ?? '').match(/>[^<]{1,300}</g) ?? []).map((t: string) => t.slice(1, -1)) : ref?.spec);
+  if (ref?.kind === 'svg') {
+    const markup = String(ref.markup ?? '').slice(0, 200_000);
+    // Each run of text, and each line (<text>) with its pieces together: letters set one by one still read as words.
+    walk((markup.match(/>[^<]{1,300}</g) ?? []).map((t: string) => t.slice(1, -1)));
+    for (const t of (markup.match(/<text\b[\s\S]{0,4000}?<\/text>/gi) ?? []).slice(0, 50)) { const inner = t.replace(/<[^>]{0,500}>/g, ''); push(inner); }
+    // Links in the artwork itself.
+    for (const m of (markup.match(/\b(?:xlink:)?href\s*=\s*["']([^"']{1,2000})["']/gi) ?? []).slice(0, 20)) walk(/["']([^"']*)["']/.exec(m)?.[1] ?? '');
+  } else walk(ref?.spec);
   walk((c as any).poster); walk((c as any).studio);
   walk(c.experienceConfig); walk(c.name);
+  // Where a static code goes: what the bottle's QR opens without passing through us.
+  if (c.qr?.mode === 'static' && c.qr.staticUrl) walk(c.qr.staticUrl);
   // Its versions of the call to action are what some scanners see instead: the same words to check.
   for (const v of (c.variants ?? []).slice(0, 20)) walk(v?.experienceConfig);
-  return out;
+  return [...new Set(out)];
 }
 
+/**
+ * The same words as the checks read them: as written; with hyphens and underscores as spaces ("1501-kenwood-ave");
+ * and with letters set apart joined back up ("H a p p y", "1 5 0 1").
+ */
+export function checkForms(text: string): string[] {
+  const t = readableText(text);
+  const spaced = t.replace(/[-_]+/g, ' ');
+  const joined = spaced.replace(/(?<![\p{L}\p{N}])(?:[\p{L}\p{N}][ .*·•|/]){2,}[\p{L}\p{N}](?![\p{L}\p{N}])/gu, (m) => m.replace(/[ .*·•|/]/g, ''));
+  return [...new Set([t, spaced, joined])];
+}
+
+const GREET_ANYONE = new Set(['there', 'all', 'everyone', 'everybody', 'friend', 'friends', 'neighbor', 'neighbors', 'neighbour', 'neighbours', 'austin', 'folks', 'you', 'again', 'from', 'to', 'and', 'for', 'the']);
 const SUFFIX = '(?:st|street|ave|avenue|dr|drive|ln|lane|rd|road|blvd|boulevard|ct|court|pl|place|cir|circle|ter|terrace|way|trl|trail|pkwy|parkway|hwy|highway)';
 const ADDRESS = new RegExp(`\\b\\d{1,6}[a-z]?\\s+(?:[nsew]\\.?\\s+)?[a-z][a-z'.-]{0,30}(?:\\s[a-z][a-z'.-]{0,30}){0,2}\\s${SUFFIX}\\b`, 'i');
 
@@ -1071,7 +1256,9 @@ const ADDRESS = new RegExp(`\\b\\d{1,6}[a-z]?\\s+(?:[nsew]\\.?\\s+)?[a-z][a-z'.-
  */
 export function personalContent(texts: string[], streets: string[] = []): string[] {
   const out = new Set<string>();
-  const all = texts.join('\n').slice(0, 20_000);
+  // Every way the words can be read (decoded, joined up), so an address in character references or in spaced-out
+  // letters is still an address.
+  const all = checkForms(texts.join('\n').slice(0, 20_000)).join('\n');
   const scrubbed = scrubText(all, 40_000);
   if (scrubbed.includes('[email]')) out.add('an email address');
   if (scrubbed.includes('[phone]')) out.add('a phone number');
@@ -1082,8 +1269,11 @@ export function personalContent(texts: string[], streets: string[] = []): string
     if (name.length >= 4 && lower.includes(` ${name} `)) { out.add('the name of a street it goes to'); break; }
   }
   if (/\b(?:[Dd]ear|[Hh]i|[Hh]ello|[Hh]ey|[Cc]ongrats|[Cc]ongratulations|[Tt]hanks|[Tt]hank you)\s*,?\s+[A-Z][a-z]{1,20}\b/.test(all)) out.add('a name (a greeting to someone)');
+  // In a link's words everything may be lowercase ("…/hi-maria"): a greeting to anyone but everyone.
+  const links = texts.filter((t) => t.startsWith('Link')).join('\n').toLowerCase();
+  for (const m of links.matchAll(/\b(?:dear|hi|hello|hey|congrats|congratulations|thanks|thank you)\s+([a-z]{2,20})\b/g)) if (!GREET_ANYONE.has(m[1]!)) { out.add('a name (a greeting to someone)'); break; }
   if (/\bthe\s+[A-Z][a-z]{1,20}(?:s|'s)?\s+(?:family|household|residence|house|home)\b/.test(all)) out.add('a family’s name');
-  if (/\bhappy\s+(?:birthday|anniversary|retirement|graduation)\b/i.test(all)) out.add('a personal message');
+  if (/\bhappy\s*(?:birthday|b-?day|anniversary|retirement|graduation)\b/i.test(all)) out.add('a personal message');
   if (/\b(?:we know (?:you|your)|we (?:saw|noticed|see) (?:you|your)|your (?:address|house at|home at))\b/i.test(all)) out.add('a personal message');
   return [...out];
 }

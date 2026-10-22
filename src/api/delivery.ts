@@ -4,6 +4,8 @@ import { ApiError, obj, S, type RouteDef, Q } from './http';
 import { SKIP_REASONS } from '../modules/delivery/houses';
 
 /** Home delivery for people, the night's routes for ops, and the driver's day. */
+/** A coordinate or a distance in a query string: a plain decimal number. */
+const COORD = { type: 'string', pattern: '^-?[0-9]{1,6}(\\.[0-9]{1,20})?$' };
 export function deliveryRoutes(app: App, route: (r: RouteDef) => void, h: { me: (key: ApiKey | null) => string }) {
   const { delivery, ops, houses } = app;
   const staff = (key: ApiKey | null) => { if (!key || key.advertiserId || key.locationId) throw new ApiError(403, 'missing_scope', 'Only the company’s team can do this.'); };
@@ -26,7 +28,7 @@ export function deliveryRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
 
   // ---------- your house, in a delivery area (no sign-up: houses get packs unless someone there says stop) ----------
   route({ method: 'GET', url: '/v1/me/house', scope: 'me', summary: 'The house you said is yours in a delivery area: whether it gets packs, and when the last one came. Null if you haven’t said.', handler: async (_req, key) => ({ body: await houses.mine(h.me(key), key!.companyId) }) });
-  route({ method: 'POST', url: '/v1/me/house/claim', scope: 'me', summary: 'Say which house is yours: the code scanned from the side of a box we delivered there in the last 60 days, or the box number from its corner together with your house number. Five wrong tries a day.', body: obj({ code: { type: 'string', minLength: 5, maxLength: 300 }, houseNumber: { type: 'integer', minimum: 0, maximum: 999999 } }, ['code']), handler: async (req, key) => ({ status: 201, body: await houses.claim(h.me(key), key!.companyId, req.body as any) }) });
+  route({ method: 'POST', url: '/v1/me/house/claim', scope: 'me', summary: 'Say which house is yours: the code scanned from the side of a box we delivered there in the last 60 days, or the whole box code printed under it (never just the short box number from the corner). Five wrong tries a day. Anyone who already claimed the house sees it in the app, and the team is told.', body: obj({ code: { type: 'string', minLength: 5, maxLength: 300 }, houseNumber: { type: 'integer', minimum: 0, maximum: 999999 } }, ['code']), handler: async (req, key) => ({ status: 201, body: await houses.claim(h.me(key), key!.companyId, req.body as any) }) });
   route({ method: 'PATCH', url: '/v1/me/house', scope: 'me', summary: 'Stop deliveries to your house (at once: it’s left out of every plan from now), start them again, or say how many people live there.', body: obj({ action: { type: 'string', enum: ['stop', 'restart', 'household'] }, householdSize: { type: 'integer', minimum: 1, maximum: 20 } }, ['action']), handler: async (req, key) => ({ body: await houses.change(h.me(key), key!.companyId, req.body as any) }) });
   route({ method: 'DELETE', url: '/v1/me/house', scope: 'me', summary: 'This isn’t your house any more. The house keeps what was chosen for it.', handler: async (_req, key) => ({ body: await houses.unclaim(h.me(key), key!.companyId) }) });
 
@@ -71,7 +73,7 @@ export function deliveryRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     staff(key);
     return { body: await houses.updateArea((req.params as any).id, key!.companyId, person(key), req.body as any) };
   } });
-  route({ method: 'GET', url: '/v1/ops/areas/:id/houses', query: { status: { type: 'string', enum: ['active', 'opted_out', 'skip_pending', 'skipped'] } }, scope: ['admin', 'packs'], summary: 'The houses in a delivery area (?status=active|opted_out|skip_pending|skipped). Addresses only: houses aren’t people.', handler: async (req, key) => {
+  route({ method: 'GET', url: '/v1/ops/areas/:id/houses', query: { status: { type: 'string', enum: ['active', 'opted_out', 'skip_pending', 'skipped', 'merged'] } }, scope: ['admin', 'packs'], summary: 'The houses in a delivery area (?status=active|opted_out|skip_pending|skipped|merged), with how many people claimed each and whether a stop came from a new claim. Addresses only: houses aren’t people.', handler: async (req, key) => {
     staff(key);
     return { body: await houses.houses((req.params as any).id, key!.companyId, (req.query as any).status) };
   } });
@@ -116,14 +118,17 @@ export function deliveryRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     const b = req.body as any;
     return { body: await delivery.skipHouse({ runId: p.id, companyId: key!.companyId, driverId: person(key), stop: Number(p.stop), reason: b.reason, note: b.note }) };
   } });
-  route({ method: 'POST', url: '/v1/driver/photos', query: { packId: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,80}$' } }, scope: 'packs', summary: 'A photo of the box where you left it (?packId= the box; JPEG, PNG or WebP as the body, up to 8 MB). Kept without the phone’s hidden data, seen only by the team and the house’s resident, and deleted after the company’s keep (90 days unless set).', rawBodyLimit: 8 * 1024 * 1024, handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/driver/photos', query: { packId: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,80}$' }, capture: { type: 'string', enum: ['camera', 'upload'] }, lat: COORD, lng: COORD, accuracy: COORD }, scope: 'packs', summary: 'A photo of the box where you left it, taken after scanning it at the door (?packId= the box; capture=camera: taken with the driver app’s camera, not picked from the phone; lat, lng and accuracy in metres: where the phone was. JPEG, PNG or WebP as the body, up to 8 MB). Refused if the phone puts you farther from the house than the company allows (150 m unless set); with no location it counts, marked unverified for the team. Kept without the phone’s hidden data, seen only by the team and the house’s resident, and deleted after the company’s keep (90 days unless set).', rawBodyLimit: 8 * 1024 * 1024, handler: async (req, key) => {
     const by = person(key);
     if (key!.advertiserId || key!.locationId) throw new ApiError(403, 'missing_scope', 'Only the company’s drivers take delivery photos.');
     const packId = String((req.query as any).packId ?? '');
     if (!packId) throw new ApiError(400, 'pack_required', 'Say which box the photo is of (?packId=).');
     const type = String(req.headers['content-type'] ?? '').split(';')[0]!.trim();
     if (!Buffer.isBuffer(req.body)) throw new ApiError(415, 'unsupported_type', 'Send a photo: JPEG, PNG or WebP.');
-    const made = await app.dropPhotos.put({ companyId: key!.companyId, packId, takenBy: by, contentType: type, bytes: new Uint8Array(req.body) });
+    const q = req.query as any;
+    const lat = q.lat === undefined ? NaN : Number(q.lat), lng = q.lng === undefined ? NaN : Number(q.lng), acc = q.accuracy === undefined ? NaN : Number(q.accuracy);
+    const point = Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180 ? { lat, lng } : undefined;
+    const made = await app.dropPhotos.put({ companyId: key!.companyId, packId, takenBy: by, contentType: type, bytes: new Uint8Array(req.body), capture: q.capture === 'camera' ? 'camera' : 'upload', point, accuracyM: Number.isFinite(acc) && acc >= 0 ? acc : undefined });
     return { status: 201, body: made };
   } });
   // The team, a person signed in (never a service key, never an advertiser): a drop's photo, while it's kept.

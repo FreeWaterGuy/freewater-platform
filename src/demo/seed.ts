@@ -32,9 +32,10 @@ export const products: Product[] = [bottle16oz, bottle25oz, can12oz];
 
 const sides = { adFaces: ['top', 'front', 'back', 'right'] as BoxProduct['adFaces'], panelFace: 'left' as const, blankFaces: ['bottom'] as BoxProduct['blankFaces'] };
 export const boxes: BoxProduct[] = [
-  { id: 'box-6', bottles: 6, lengthIn: 8, widthIn: 5.4, heightIn: 7.8, ...sides },
-  { id: 'box-12', bottles: 12, lengthIn: 10.6, widthIn: 8, heightIn: 7.8, ...sides },
-  { id: 'box-24', bottles: 24, lengthIn: 15.8, widthIn: 10.6, heightIn: 7.8, ...sides },
+  // Full, with 16 oz bottles (about half a kilo each) and the box: what loading a van is planned by.
+  { id: 'box-6', bottles: 6, lengthIn: 8, widthIn: 5.4, heightIn: 7.8, weightKg: 3.2, ...sides },
+  { id: 'box-12', bottles: 12, lengthIn: 10.6, widthIn: 8, heightIn: 7.8, weightKg: 6.2, ...sides },
+  { id: 'box-24', bottles: 24, lengthIn: 15.8, widthIn: 10.6, heightIn: 7.8, weightKg: 12.2, ...sides },
 ];
 
 /**

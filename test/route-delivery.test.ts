@@ -62,10 +62,14 @@ async function packAndLoad(runId: string, token = driver) {
   expect(out.status).toBe('out');
   return out;
 }
-/** At the door: a photo of the box where it's left, then scan the stop's own box, standing at the house. */
+/** At the door: scan the stop's own box standing at the house, take the photo of it where it's left, scan again. */
 const drop = async (runId: string, s: any, token = driver) => {
-  await server.inject({ method: 'POST', url: `/v1/driver/photos?packId=${s.packId}`, payload: await doorPhoto(), headers: { authorization: `Bearer ${token}`, 'content-type': 'image/jpeg' } });
-  return call('POST', `/v1/driver/runs/${encodeURIComponent(runId)}/stops/${s.stop}/deliver`, token, { scannedPackId: s.packId, lat: s.point.lat + 0.00005, lng: s.point.lng, emptiesCollected: 0 });
+  const scan = () => call('POST', `/v1/driver/runs/${encodeURIComponent(runId)}/stops/${s.stop}/deliver`, token, { scannedPackId: s.packId, lat: s.point.lat + 0.00005, lng: s.point.lng, emptiesCollected: 0 });
+  const first = await scan();
+  if (first.statusCode === 200 || first.json().error?.code !== 'photo_required') return first;
+  const up = await server.inject({ method: 'POST', url: `/v1/driver/photos?packId=${s.packId}&capture=camera&lat=${s.point.lat + 0.00005}&lng=${s.point.lng}`, payload: await doorPhoto(), headers: { authorization: `Bearer ${token}`, 'content-type': 'image/jpeg' } });
+  expect(up.statusCode, up.body).toBe(201);
+  return scan();
 };
 const plan = async (date: string, token = ops) => {
   const r = await call('POST', '/v1/ops/runs/plan', token, { date });
@@ -102,8 +106,8 @@ describe('the pieces', () => {
   });
 
   it('reads addresses, CSV with commas in quotes, and polygons', () => {
-    expect(splitAddress('1602 Sunny Lane, Austin, TX')).toEqual({ number: 1602, street: 'sunny ln' });
-    expect(splitAddress('700 Big Bend Drive')).toEqual({ number: 700, street: 'big bend dr' });
+    expect(splitAddress('1602 Sunny Lane, Austin, TX')).toEqual({ number: 1602, street: 'sunny ln', unit: null, zip: null });
+    expect(splitAddress('700 Big Bend Drive')).toEqual({ number: 700, street: 'big bend dr', unit: null, zip: null });
     expect(parseCsv('a,b\n"1 X St, Austin",2\n')).toEqual([['a', 'b'], ['1 X St, Austin', '2']]);
     expect(insidePolygon({ lat: 30.245, lng: -97.74 }, POLY)).toBe(true);
     expect(insidePolygon({ lat: 30.31, lng: -97.70 }, POLY)).toBe(false);
@@ -233,9 +237,10 @@ describe('an area of houses, from the map to the door', () => {
     home = run1.stops[2]; next = run1.stops[3];
     const pack = app.packs.packs.get(home.packId)!;
     expect((await call('GET', '/v1/me/house', ana)).json()).toBeNull();
-    // A made-up code, or a box number with the wrong house number, doesn't claim anything.
+    // A made-up code doesn't claim anything; the short box number from the corner never does (anyone passing the porch
+    // can read it): the whole box code is needed.
     expect((await call('POST', '/v1/me/house/claim', ana, { code: 'https://freewater.example/p/pk_00000000000000000000' })).json().error.code).toBe('no_match');
-    expect((await call('POST', '/v1/me/house/claim', ana, { code: boxNumber(pack.id), houseNumber: 1 })).json().error.code).toBe('no_match');
+    expect((await call('POST', '/v1/me/house/claim', ana, { code: boxNumber(pack.id), houseNumber: splitAddress(home.address).number! })).json().error.code).toBe('full_code_needed');
     // The same box's code, from someone at another company: not a box that company delivered. (Through the service:
     // the other company has delivery areas off, so its route would refuse before the company check is reached.)
     const elsewhere = await app.accounts.invite({ companyId: 'peak-spring', email: 'ana.elsewhere@example.com', role: 'ops' });
@@ -251,14 +256,15 @@ describe('an area of houses, from the map to the door', () => {
     expect((await call('PATCH', '/v1/me/house', ana, { action: 'stop' })).json()).toMatchObject({ status: 'opted_out', nextDate: null });
   });
 
-  it('a person can claim with the box number and house number instead; five wrong tries a day at most', async () => {
+  it('a person can type the whole box code from the side panel instead; five wrong tries a day at most', async () => {
     const ben = await signIn('ben@example.com');
     const pack = app.packs.packs.get(next.packId)!;
-    const num = splitAddress(next.address).number!;
-    for (let i = 0; i < 5; i++) expect((await call('POST', '/v1/me/house/claim', ben, { code: 'ZZZZZ', houseNumber: num })).statusCode).toBe(404);
-    expect((await call('POST', '/v1/me/house/claim', ben, { code: boxNumber(pack.id), houseNumber: num })).json().error.code).toBe('too_many_tries');
+    const typed = pack.rendered!.packUrl.split('/').pop()!.replace(/(.{4})(?=.)/g, '$1 ').toLowerCase(); // as printed, typed loosely
+    expect(pack.rendered!.svg).toContain(`Box code ${pack.rendered!.packUrl.split('/').pop()!.replace(/(.{4})(?=.)/g, '$1 ')}`);
+    for (let i = 0; i < 5; i++) expect((await call('POST', '/v1/me/house/claim', ben, { code: 'ZZZZ ZZZZ ZZZZ ZZ' })).statusCode).toBe(404);
+    expect((await call('POST', '/v1/me/house/claim', ben, { code: typed })).json().error.code).toBe('too_many_tries');
     at('2026-11-04T16:00:00Z'); // the next day
-    expect((await call('POST', '/v1/me/house/claim', ben, { code: `#${boxNumber(pack.id).toLowerCase()}`, houseNumber: num })).json()).toMatchObject({ id: next.houseId });
+    expect((await call('POST', '/v1/me/house/claim', ben, { code: typed })).json()).toMatchObject({ id: next.houseId });
     // A big household gets more (the area's rule: 12 bottles a person a week, in 12-packs, at most 3 boxes).
     expect((await call('PATCH', '/v1/me/house', ben, { action: 'household', householdSize: 2 })).json().householdSize).toBe(2);
   });

@@ -254,8 +254,8 @@ await journey('a resident says which house is theirs and stops deliveries', asyn
   const token = (await pCall('POST', '/v1/auth/verify', undefined, { companyId: 'freewater', channel: 'email', to, code: /(\d{6})/.exec(pOutbox.lastTo(to)!.text)![1] })).body.token;
   await signedIn(page, 'fw_token', token);
   await page.goto(`${pBase}/app/house`);
-  await page.fill('#hs-box', boxNumber(dropped.pack.id), { timeout: 30_000 });
-  await page.fill('#hs-num', String(dropped.house.number));
+  // The whole box code from the box's side panel (the short number in the corner isn't enough).
+  await page.fill('#hs-box', dropped.pack.rendered!.packUrl.split('/').pop()!.replace(/(.{4})(?=.)/g, '$1 '), { timeout: 30_000 });
   await page.click('button:has-text("This is my house")');
   await toast(page, /This is your house/);
   expect((await one(`select count(*)::int as n from house_claims where house_id = $1`, [dropped.house.id])).n === 1, 'no claim saved');

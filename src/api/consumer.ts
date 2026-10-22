@@ -87,7 +87,7 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
   const limitCheck = (userId: string, companyId: string) => {
     const max = rules(companyId).freeBottlesPerDay;
     const since = platform.bus.now().getTime() - 24 * 3600 * 1000;
-    const recent = [...platform.units.values()].filter((u) => u.consumerId === userId && u.kind === 'ad_supported' && u.status !== 'failed' && Date.parse(u.createdAt) >= since).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const recent = platform.recentUnitsOf(userId).filter((u) => u.kind === 'ad_supported' && u.status !== 'failed' && Date.parse(u.createdAt) >= since).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     if (recent.length >= max) {
       const next = new Date(Date.parse(recent[recent.length - max]!.createdAt) + 24 * 3600 * 1000);
       throw new ApiError(429, 'daily_limit', `You've had your ${max} free bottles for today. Your next one is ready after ${next.toISOString()}.`);
@@ -153,7 +153,7 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     if (!code || !(await presence.check(locationId, code))) throw new ApiError(403, 'not_at_machine', "Scan the code on the machine's screen to get a bottle there. It changes every 30 seconds.");
   };
 
-  const freeLeft = (userId: string, companyId: string) => Math.max(0, rules(companyId).freeBottlesPerDay - [...platform.units.values()].filter((u) => u.consumerId === userId && u.kind === 'ad_supported' && u.status !== 'failed' && Date.parse(u.createdAt) >= platform.bus.now().getTime() - 864e5).length);
+  const freeLeft = (userId: string, companyId: string) => Math.max(0, rules(companyId).freeBottlesPerDay - platform.recentUnitsOf(userId).filter((u) => u.kind === 'ad_supported' && u.status !== 'failed' && Date.parse(u.createdAt) >= platform.bus.now().getTime() - 864e5).length);
   const vendState = (u: Unit) => (u.status === 'dispensed' || u.status === 'printed' ? 'ready' : u.status === 'failed' ? 'failed' : 'printing');
   const vendView = (u: Unit, userId: string) => {
     const loc = platform.locations.get(u.locationId)!;

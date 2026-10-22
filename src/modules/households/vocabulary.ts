@@ -1,3 +1,4 @@
+import { parseAddress } from '../../core/address';
 /**
  * What household and area data the platform takes, and what it never takes.
  *
@@ -60,7 +61,17 @@ export function areaProblem(attribute: string, value: unknown): string | null {
 }
 
 const ABBREV: Record<string, string> = { STREET: 'ST', AVENUE: 'AVE', ROAD: 'RD', DRIVE: 'DR', LANE: 'LN', BOULEVARD: 'BLVD', COURT: 'CT', CIRCLE: 'CIR', PLACE: 'PL', TERRACE: 'TER', PARKWAY: 'PKWY', HIGHWAY: 'HWY', NORTH: 'N', SOUTH: 'S', EAST: 'E', WEST: 'W', APARTMENT: '#', APT: '#', UNIT: '#', SUITE: '#', STE: '#' };
-/** One way of writing an address, so the data company's "123 Oak Street, Apt 4" finds the app's "123 Oak St #4". */
-export function normalizeAddress(a: string): string {
+/**
+ * The address form house keys used before 071 (it kept the town, state and ZIP code, so one door could have two keys).
+ * Only for finding rows written then: `HouseholdService.rekey` moves them to today's key, and lookups still try it.
+ */
+export function normalizeAddressV1(a: string): string {
   return a.toUpperCase().replace(/[.,]/g, ' ').replace(/#/g, ' # ').split(/\s+/).filter(Boolean).map((w) => ABBREV[w] ?? w).join(' ').replace(/# (\S)/g, '#$1').trim();
+}
+/**
+ * One way of writing an address, so the data company's "123 Oak Street, Apt 4, Austin, TX 78704" finds the app's
+ * "123 Oak St #4": the door (number, street, unit) the USPS way, without the town, state or ZIP (src/core/address.ts).
+ */
+export function normalizeAddress(a: string): string {
+  return parseAddress(a).line;
 }

@@ -2447,6 +2447,74 @@ begin
 end $$;
 `,
   },
+  {
+    id: '071_second_opinion',
+    sql: `
+-- A second reviewer's findings (docs/REVIEW-LOG.md, 2026-10-22).
+-- 1. One door, one house. A house's unit and ZIP code are kept apart from its street (src/core/address.ts), and a house
+-- found to be the same door as another (two ways of writing one address) is merged into it: it never gets a box again
+-- and points at the house it became. Skips for access reasons end on a date and the house is tried again.
+alter table houses add column if not exists unit text;
+alter table houses add column if not exists zip text;
+alter table houses add column if not exists merged_into text;
+alter table houses add column if not exists skip_until date;
+alter table houses drop constraint if exists houses_status_check;
+alter table houses add constraint houses_status_check check (status in ('active', 'opted_out', 'skip_pending', 'skipped', 'merged'));
+alter table houses add constraint houses_merged_points check ((status = 'merged') = (merged_into is not null));
+
+-- 2. A claim of a house: when its person was last seen (claims end after a long silence; settings adjust it).
+alter table house_claims add column if not exists last_seen_at timestamptz;
+update house_claims set last_seen_at = claimed_at where last_seen_at is null;
+create index if not exists house_claims_house on house_claims(house_id);
+
+-- 3. Photo proof of a drop: taken with the driver app's camera after the box was scanned at the door, and where the
+-- phone was when it was taken (verified within the company's distance of the house, or unverified for the team).
+alter table drop_photos add column if not exists capture text;
+alter table drop_photos add column if not exists lat double precision;
+alter table drop_photos add column if not exists lng double precision;
+alter table drop_photos add column if not exists meters_from_house integer;
+alter table drop_photos add column if not exists location_check text check (location_check in ('verified', 'unverified'));
+-- The order photos were taken in, whatever the clocks say: a drop's photo counts only if it came after the box's scan
+-- at the door (the scan remembers the last photo there was).
+alter table drop_photos add column if not exists seq bigint generated always as identity;
+
+-- 4. A route piece at a house skipped for a while moves to the house's next delivery within the buy: only its week and
+-- place on that week's bottles change, once forward, and where it came from is kept. Everything else stays as 069 has it.
+alter table route_spots add column if not exists rolled_from date;
+create or replace function route_spots_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then perform fw_refuse('route_spots', 'are kept: a piece paid for stays on record.'); end if;
+  if old.status = 'open' and new.status = 'open' and new.week > old.week and new.rolled_from = coalesce(old.rolled_from, old.week)
+     and fw_only_changed(to_jsonb(old), to_jsonb(new), array['week', 'bottle', 'pack', 'rolled_from']) then
+    return new; -- rolled to a later week at the same house
+  end if;
+  if not fw_only_changed(to_jsonb(old), to_jsonb(new), array['status', 'unit_id', 'pack_id', 'settlement_id']) then
+    perform fw_refuse('route_spots', 'can''t be edited: what was bought, where and at what price never changes.');
+  end if;
+  if new.status is distinct from old.status and not (
+       (old.status = 'open' and new.status in ('held', 'placed', 'credited', 'refunding', 'cancelled'))
+    or (old.status = 'held' and new.status in ('open', 'placed'))
+    or (old.status = 'placed' and new.status in ('credited', 'refunding'))
+    or (old.status = 'refunding' and new.status = 'refunded')) then
+    perform fw_refuse('route_spots', format('can''t go from %s to %s.', old.status, new.status));
+  end if;
+  return new;
+end $$;
+
+-- 5. Credit from pieces not delivered can expire (only where a company sets a number of days; none by default). What
+-- expired is only ever added to, and is booked out of the advertiser's money (ad.route_credit_expired).
+create table route_credit_expiries (
+  id text primary key,
+  company_id text not null,
+  advertiser_id text not null,
+  cents bigint not null check (cents > 0),
+  granted_before timestamptz not null,
+  at timestamptz not null
+);
+create index route_credit_expiries_advertiser on route_credit_expiries(company_id, advertiser_id);
+create trigger route_credit_expiries_append_only before update or delete on route_credit_expiries for each row execute function forbid_change();
+`,
+  },
 ];
 
 /** Runs every migration not yet run (or, for tests that start from an older schema, those in `list`). */

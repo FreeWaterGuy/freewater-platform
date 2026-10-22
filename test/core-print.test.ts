@@ -221,9 +221,9 @@ describe.each(engines)('the core on %s: the right bottle to the right person', {
 
     // Both doors at the same moment (the van's app sends both as the signal comes back): both recorded.
     const driverId = (await person('dana@freewater.io')).id;
-    // Each with its photo of the box at the door (Photo proof of each drop).
-    for (const p of [anaPack, benPack]) await app.dropPhotos.put({ companyId: 'freewater', packId: p.id, takenBy: driverId, contentType: 'image/jpeg', bytes: await doorPhoto() });
     const door = (p: typeof anaPack) => app.delivery.deliver({ runId, companyId: 'freewater', driverId, stop: p.stop, scannedPackId: p.id, confirmedAtDoor: true, emptiesCollected: 0 });
+    // Each scanned at its door, then with its photo of the box there (Photo proof of each drop).
+    for (const p of [anaPack, benPack]) { expect(await door(p)).toMatchObject({ code: 'photo_required' }); await app.dropPhotos.put({ companyId: 'freewater', packId: p.id, takenBy: driverId, contentType: 'image/jpeg', bytes: await doorPhoto(), capture: 'camera' }); }
     const [da, db2] = await Promise.all([door(anaPack), door(benPack)]);
     expect([da.ok, db2.ok]).toEqual([true, true]);
     const run = (await call('GET', `/v1/driver/runs/${runId}`, driver)).body;

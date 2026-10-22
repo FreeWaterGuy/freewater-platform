@@ -76,6 +76,8 @@ export interface EventPayloads {
    * the driver couldn't leave it): each one's price goes back from earned to the advertiser's money, as credit.
    */
   'ad.route_credited': { settlementId: string; campaignId: string; advertiserId: string; advertiserName: string; reversed: { kind: 'print' | 'extra'; unitId?: string; packId?: string; cents: Cents }[] };
+  /** Route credit the advertiser didn't use within the company's days (only where the company set some) expired. */
+  'ad.route_credit_expired': { expiryId: string; advertiserId: string; advertiserName: string; cents: Cents; days: number };
   'payment.voided': { paymentId: string; ref: string };
   'payment.declined': { paymentId: string; payerType: 'user' | 'advertiser'; payerId: string; reason: string; ref: string };
   'invoice.issued': { invoiceId: string; advertiserId: string; totalCents: Cents; lines: number };

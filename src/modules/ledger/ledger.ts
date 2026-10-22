@@ -40,7 +40,7 @@ export interface LedgerEntry {
   debit: string;
   credit: string;
   amountCents: Cents;
-  kind: 'print' | 'scan' | 'ar' | 'commission' | 'commission_reversal' | 'custom' | 'donation' | 'box_face' | 'payment' | 'charity_transfer' | 'expense' | 'prize' | 'ai_fund' | 'ai_allocation' | 'ai_spend' | 'reinvestment' | 'owner_payout' | 'giving_redirect' | 'reserve' | 'extra' | 'prepay_refund';
+  kind: 'print' | 'scan' | 'ar' | 'commission' | 'commission_reversal' | 'custom' | 'donation' | 'box_face' | 'payment' | 'charity_transfer' | 'expense' | 'prize' | 'ai_fund' | 'ai_allocation' | 'ai_spend' | 'reinvestment' | 'owner_payout' | 'giving_redirect' | 'reserve' | 'extra' | 'prepay_refund' | 'credit_expired';
   memo: string;
 }
 
@@ -110,6 +110,8 @@ export class Ledger {
         else this.add(e, { packId: r.packId, campaignId: e.payload.campaignId, debit: 'revenue:extras', credit: prepaidAccount(e.payload.advertiserId), amountCents: r.cents, kind: 'extra', memo: `${e.payload.advertiserName}, a box side whose box never reached the house: back as credit (${e.payload.settlementId})` });
       }
     });
+    // Route credit not used within the company's days (only where it set some): out of the advertiser's money, as income.
+    bus.on('ad.route_credit_expired', (e) => this.add(e, { debit: prepaidAccount(e.payload.advertiserId), credit: 'revenue:expired_credit', amountCents: e.payload.cents, kind: 'credit_expired', memo: `${e.payload.advertiserName}, route credit not used within ${e.payload.days} days expired (${e.payload.expiryId})` }));
     bus.on('ad.refunded', (e) => this.add(e, { campaignId: e.payload.campaignId, debit: prepaidAccount(e.payload.advertiserId), credit: `cash:${e.payload.provider}`, amountCents: e.payload.totalCents, kind: 'prepay_refund', memo: `${e.payload.advertiserName}'s ad stopped by the company: ${e.payload.bottles} unprinted bottle(s) and unused extras paid back (refund ${e.payload.refundId})` }));
     // Money going out: donations sent to charities, and the costs of running the business.
     bus.on('charity.transferred', (e) => this.add(e, { debit: `payable:charity:${e.payload.charity}`, credit: `cash:${e.payload.provider}`, amountCents: e.payload.amountCents, kind: 'charity_transfer', memo: `Transfer ${e.payload.number} to ${e.payload.charity}` }));

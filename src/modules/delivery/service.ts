@@ -8,6 +8,7 @@ import type { AccountsService } from '../accounts/service';
 import { PackStateError, type PackService } from '../packs/service';
 import { boxNumber, stopCode } from '../packs/boxRenderer';
 import { streetOrder, type RoutePlanner } from './planner';
+import { boxKg, deliverySettings } from './settings';
 import { packsFor, SKIP_LABELS, SKIP_REASONS, type HouseService, type SkipReason } from './houses';
 
 import { DeliveryError } from './errors';
@@ -33,9 +34,9 @@ export interface RunStop {
   /** Proof of the drop: where the driver's phone was when the box was scanned at the door, and how far from the house. */
   dropPoint?: GeoPoint; metersFromHouse?: number;
   /** The photo of the box at the door (src/modules/delivery/photos.ts): only the team and the house's resident see it. */
-  photo?: { id: string; at: string };
+  photo?: { id: string; at: string; location?: 'verified' | 'unverified'; metersFromHouse?: number };
   /** The right box was scanned at the door but no photo came with it: not delivered until there's one, or a person on the team vouches for it. */
-  doorScan?: { at: string; by: string; atAddressBy: 'gps' | 'driver'; dropPoint?: GeoPoint; metersFromHouse?: number; emptiesCollected: number };
+  doorScan?: { at: string; photoSeq?: number; by: string; atAddressBy: 'gps' | 'driver'; dropPoint?: GeoPoint; metersFromHouse?: number; emptiesCollected: number };
   /** Delivered without a photo because a person on the team said so, with why. */
   photoWaived?: { by: string; at: string; reason: string };
   /** Before 065: the address of a photo kept with the uploads. */
@@ -50,6 +51,8 @@ export interface Run {
   areaId?: string | null;
 }
 
+/** Streets aren't straight lines, and a van in town averages about 24 km/h. */
+const ROAD_FACTOR = 1.35, KM_PER_HOUR = 24;
 const parse = <T>(v: unknown): T => (typeof v === 'string' ? JSON.parse(v) : v) as T;
 const addDays = (date: string, n: number) => new Date(Date.parse(`${date}T12:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
 const weekday = (date: string) => new Date(`${date}T12:00:00Z`).getUTCDay();
@@ -68,6 +71,8 @@ export class DeliveryService {
   alert?: (key: string, title: string, detail: string) => void;
   /** Delivery areas and their houses. Set by the app. */
   houses?: HouseService;
+  /** The box products (what each weighs, for loading vans). Set by the app. */
+  boxes?: () => import('../../core/types').BoxProduct[];
   /** Photos of each drop. Set by the app. */
   photos?: import('./photos').DropPhotoService;
   /** Whether a switch on the company's Features page is on (src/runtime/registry.ts). Set by the app; unset: all on. */
@@ -258,7 +263,10 @@ export class DeliveryService {
 
   /**
    * One area's houses for one night: in street order from the depot, each with its packs (packsFor), split into one
-   * run per van (vanPacks; a house's boxes always go in the same van). The houses are taken and the runs written in
+   * run per van. A van's run ends when the next house's boxes wouldn't fit (the area's most boxes, and the company's
+   * payload by weight: `delivery.vanPayloadKg`, boxes weighed from their product), or when the run, driving there, the
+   * minutes at each house (`delivery.minutesPerStop`) and the drive back, would pass the longest shift
+   * (`delivery.maxShiftHours`). A house's boxes always go in the same van. The houses are taken and the runs written in
    * one transaction, and a house is only taken if it is still active and still due: two plans at once (or an opt-out
    * at the same moment) can never put a house on two runs, or a house that stopped on one.
    */
@@ -266,25 +274,29 @@ export class DeliveryService {
     const route = this.platform.locations.get(area.routeId)!;
     const order = streetOrder(route.depot!, houses.map((h) => ({ id: h.id, point: h.point, street: h.street, number: h.number })));
     const byId = new Map(houses.map((h) => [h.id, h]));
+    const set = deliverySettings(this.platform.companies.get(companyId));
+    const kgPerBox = boxKg(this.boxes?.().find((b) => b.bottles === area.packSize), area.packSize);
+    const driveMin = (km: number) => (km * ROAD_FACTOR * 60) / KM_PER_HOUR;
     return this.db.transaction(async (tx) => {
       const taken = await this.houses!.take(tx, area, order.order, date);
       const runs: Run[] = [];
-      let stops: RunStop[] = [], packs = 0, n = firstStop;
+      let stops: RunStop[] = [], packs = 0, kg = 0, km = 0, minutes = 0, at: GeoPoint = route.depot!, n = firstStop;
       const close = () => {
         if (!stops.length) return;
-        let km = 0, at: GeoPoint = route.depot!;
-        for (const s of stops) { km += distanceKm(at, s.point); at = s.point; }
-        km *= 1.35;
-        runs.push({ id: `${area.id}.${runs.length + 1}@${date}`, companyId, routeId: area.routeId, date, status: 'printing', driverId: null, distanceKm: +km.toFixed(1), minutes: Math.round((km / 24) * 60 + stops.length), stops, areaId: area.id });
-        stops = []; packs = 0;
+        runs.push({ id: `${area.id}.${runs.length + 1}@${date}`, companyId, routeId: area.routeId, date, status: 'printing', driverId: null, distanceKm: +(km * ROAD_FACTOR).toFixed(1), minutes: Math.round(minutes), stops, areaId: area.id });
+        stops = []; packs = 0; kg = 0; km = 0; minutes = 0; at = route.depot!;
       };
       for (const id of order.order) {
         if (!taken.has(id)) continue;
         const h = byId.get(id)!;
         const count = packsFor(area, this.on(companyId, 'household_packs') ? h.householdSize : null);
-        if (stops.length && packs + count > area.vanPacks) close();
+        // With this house: its boxes, their weight, the drive to it and its minutes, and (to check the shift) the drive home.
+        const leg = distanceKm(at, h.point), home = distanceKm(h.point, route.depot!);
+        const shiftWith = minutes + driveMin(leg) + set.minutesPerStop + driveMin(home);
+        if (stops.length && (packs + count > area.vanPacks || kg + count * kgPerBox > set.vanPayloadKg || shiftWith > set.maxShiftHours * 60)) close();
+        const legNow = distanceKm(at, h.point); // from the depot again when a new van was just started
         for (let i = 1; i <= count; i++) stops.push({ stop: ++n, userId: '', houseId: h.id, areaId: area.id, ...(count > 1 ? { pack: { n: i, of: count } } : {}), packId: null, address: h.address, point: h.point, packSize: area.packSize, notes: null, status: 'planned' });
-        packs += count;
+        packs += count; kg += count * kgPerBox; km += legNow; minutes += driveMin(legNow) + set.minutesPerStop; at = h.point;
       }
       close();
       for (const r of runs) {
@@ -538,12 +550,13 @@ export class DeliveryService {
     }
     const byGps = meters !== null && meters <= 100;
     const door = { routeId: run.routeId, runId: run.id, stop: s.stop, scannedPackId: input.scannedPackId, atAddress: byGps || !!input.confirmedAtDoor, emptiesCollected: input.emptiesCollected };
-    const photo = this.photos && s.packId ? await this.photos.proofFor(input.companyId, s.packId, input.driverId) : null;
+    // Only a photo taken after this box was scanned at this door counts (one taken before arriving proves nothing).
+    const photo = this.photos && s.packId ? await this.photos.proofFor(input.companyId, s.packId, input.driverId, s.doorScan?.photoSeq) : null;
     if (!photo && this.photoNeeded(input.companyId)) {
       // The right box at the right door, but no photo yet: remembered (so a person can vouch for it), not delivered.
       const check = this.packs.deliver({ ...door, photoProof: false, checkOnly: true });
       if (!check.ok) return { ok: false as const, code: 'wrong_box_or_place', reason: check.reason, grab: check.rightPack ? stopCode(check.rightPack.routeId, check.rightPack.stop) : null, metersAway: meters };
-      s.doorScan = { at: this.platform.bus.now().toISOString(), by: input.driverId, atAddressBy: byGps ? 'gps' : 'driver', emptiesCollected: input.emptiesCollected, ...(input.point ? { dropPoint: input.point, metersFromHouse: meters! } : {}) };
+      s.doorScan = { at: this.platform.bus.now().toISOString(), photoSeq: this.photos && s.packId ? await this.photos.lastSeq(input.companyId, s.packId) : 0, by: input.driverId, atAddressBy: byGps ? 'gps' : 'driver', emptiesCollected: input.emptiesCollected, ...(input.point ? { dropPoint: input.point, metersFromHouse: meters! } : {}) };
       await this.saveRun(run);
       return { ok: false as const, code: 'photo_required', reason: 'Take a photo of the box where you left it, then scan it again. It isn’t delivered until there’s a photo.', grab: null, metersAway: meters };
     }
@@ -556,7 +569,7 @@ export class DeliveryService {
       return { ok: false as const, code: 'wrong_box_or_place', reason: r.reason, grab: right ? stopCode(right.routeId, right.stop) : null, metersAway: meters };
     }
     delete s.doorScan;
-    Object.assign(s, { status: 'delivered', at: this.platform.bus.now().toISOString(), emptiesCollected: input.emptiesCollected, atAddressBy: byGps ? 'gps' : 'driver', ...(photo ? { photo: { id: photo.id, at: photo.takenAt } } : {}), ...(input.point ? { dropPoint: input.point, metersFromHouse: meters! } : {}) });
+    Object.assign(s, { status: 'delivered', at: this.platform.bus.now().toISOString(), emptiesCollected: input.emptiesCollected, atAddressBy: byGps ? 'gps' : 'driver', ...(photo ? { photo: { id: photo.id, at: photo.takenAt, location: photo.location ?? 'unverified', ...(photo.metersFromHouse !== null ? { metersFromHouse: photo.metersFromHouse } : {}) } } : {}), ...(input.point ? { dropPoint: input.point, metersFromHouse: meters! } : {}) });
     return { ok: true as const, run: await this.delivered(run, s) };
   }
 

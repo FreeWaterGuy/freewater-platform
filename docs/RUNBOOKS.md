@@ -207,6 +207,23 @@ The server keeps its working state in memory (about 13 KB per bottle printed).
    deploys (start new, stop old).
 2. At 85%, do it today. Tell a developer: the planned next stage moves the working state into the database.
 
+**What grows, and the plan to prune it** (second review, 2026-10-22; not built yet: a bigger change than a night's
+fixes should risk). Every bottle printed (`platform.units`) and every pack (`packs.packs`) is loaded at start and kept
+for the life of the server. At a pilot of 1,000 houses × 24 bottles a week that is about 1.2 million bottles a year
+(about 15 GB of memory a year at 13 KB each): fine for the first months, not for a year.
+
+- Done now: the hot paths no longer go through all of them. Printing a bottle for a person counts their bottles today
+  from a small index of each person's last two days (`Platform.withToday`), as do the free bottles a day a signed-in
+  person has left (`recentUnitsOf`); a scan at a door finds its stop's box by an index (`PackService.forStop`); and a
+  claim of a house needs the whole box code, looked up by its code, never by going through every pack.
+- The plan: keep in memory only what is still live (bottles and packs from the last 90 days, and any not yet
+  delivered, scanned out or settled), load an older one from the database when it's asked for (a scan of an old
+  bottle, a receipt, a statement), and move the reports that read every bottle (books by month, transparency counters,
+  profit, the agents' figures, the daily route-buy checks) to SQL over `units` and `packs`. In this order: (1) reports
+  to SQL, each checked against the in-memory figure for a week; (2) a `loadUnit`/`loadPack` fallback on every lookup
+  by id; (3) prune what's older than 90 days at start and nightly. Until then: watch memory (above) and give the
+  server more.
+
 ## "Background job … failed"
 
 Each job is tried again soon (after 1 minute, then 2, 4, 8… up to its usual interval). A green alert says when it's
@@ -364,6 +381,11 @@ Only a signed-in ops person or owner can plan (never an API key or a driver); th
    *Boxes per van* to what one van really carries, then *Turn on*.
 5. Each van's run then goes as usual: packing check, the driver loads it, scans each box at each house. A house that
    stopped deliveries after the plan shows "Don't leave a box here" to the driver; its box comes back.
+6. **How runs are split**: a van's run ends when the next house's boxes would pass the area's *Boxes per van*, the
+   company's payload by weight (`delivery.vanPayloadKg`, 900 kg unless set; a 24-pack weighs about 12 kg, so 73 boxes),
+   or the longest shift (`delivery.maxShiftHours`, 8 h) counting the driving and `delivery.minutesPerStop` (4 min) at
+   each house. Each run's planned minutes are shown on it. If drivers come back early or late week after week, change
+   the minutes per stop (a person signed in, `PATCH /v1/console/settings` with `{ "delivery": { "minutesPerStop": 5 } }`).
 6. **No area was planned at all** (the press returns only subscribers' runs, or `feature_off`): check *Console →
    Features → Delivery* for the company. With *Delivery areas* off nothing in any area is planned, printed or alerted
    as overdue (the houses keep their place); with *Home delivery* off nothing is planned at all. Turn it back on (an
@@ -390,8 +412,12 @@ the no soliciting signs; if they don't want any free stuff they can opt out in o
 reason.
 
 1. Read what the driver said. Is it still true (a gate that's locked only at night, a dog that's kept in now)?
-2. *Keep skipping* (the house stays out until someone there starts deliveries again in the app) or *Deliver again*
-   (back on the next night its route drives). Who decided and why is kept with the house.
+2. *Keep skipping* or *Deliver again* (back on the next night its route drives). Who decided and why is kept with the
+   house. *Keep skipping* for getting to the door (a locked gate, a dog, not safe, no safe place) lasts
+   `delivery.skipWeeks` (4 weeks unless set), to the Monday after; then the house comes back on its own from the next
+   night its route drives ("skip ended" in its history), and the driver tries again. *Not a home* stays until a person
+   changes it. Route ads paid for that house in the skipped weeks move to its first delivery after (within the buy);
+   what can't move comes back to the advertiser as credit.
 3. Someone at a skipped house who wants water can claim the house in the app and press *Start deliveries again*.
 4. If a driver tells you someone at the door doesn't want it: that person stops it in the app (scan the code on the
    side of the box, *Your house → Stop deliveries*). Drivers don't decide it for them.
@@ -402,7 +428,11 @@ With *Photo proof of each drop* on (FreeWater: on), a box is delivered only with
 left. The scan alone is remembered on the stop but not delivered.
 
 1. Ask the driver to take the photo again in the driver app and scan the box again (a weak signal is the usual cause:
-   the photo didn't send). That delivers it.
+   the photo didn't send). That delivers it. A photo counts only if it was taken after the box was scanned at that
+   door, with the app's camera (a photo picked from the phone's gallery is refused), and, when the phone knows where it
+   is, within 150 m of the house (`delivery.photoMaxMeters`): "Your phone puts you 400 m from …" means take it at the
+   door. A photo with no location (GPS off, indoors) counts but shows **unverified location** on the run: if one
+   driver's drops are often unverified, ask them to turn on location for the app, and look at a few of those photos.
 2. If the photo can't be taken (the phone's camera broke, the driver has left), an ops person or owner, signed in,
    opens *Routes*, presses *Delivered without photo…* on that stop and writes why (for example "camera broke; driver
    confirmed by phone it's on the porch"). It's kept on the stop with who and when. It must be someone other than the
@@ -451,13 +481,35 @@ get lost in packing; a bad label is replaced.
 ## Someone at a house wants deliveries to stop (or to start again)
 
 They do it themselves in the app: *Me → Your house's deliveries*, scan the code on the side of a box we left there
-(or type the box number from its corner and their house number), then *Stop deliveries*. It's left out from the next
+(or type the whole box code printed under that code on the box's side panel; the short number in the corner isn't
+enough), then *Stop deliveries*. It's left out from the next
 plan on; a box already printed for that night comes back with the driver. *Start deliveries again* puts it back from
 the next night its route drives. A code proves the house only from a box delivered there in the last 60 days, and a
 person gets five wrong tries a day.
 
 If they can't use the app (no smartphone, never had a box), an ops person can't stop it for them yet: the founder chose
 app-only. Note the address and pass it on; see "Decisions for the founder" in the delivery section of the README.
+
+**"A house someone already claimed was claimed by someone else"** or **"Deliveries stopped by a new claim"**: anyone
+with a delivered box's code can claim a house (that's the design: no sign-up). Usually it's a new household or a
+second person living there; the first claimant sees a notice in the app. If it looks wrong (the first claimant says
+it isn't theirs, or a stop came from a claim a day old at a house that wants water): look at the house under *Areas*
+(`GET /v1/ops/areas/:id/houses`: how many claimed it, and `stoppedByNewClaim`; its whole history is in `house_events`,
+for an engineer), and ask the household to start deliveries again in the app (any claimant can).
+Claims end by themselves after 12 months without use (`delivery.claimExpiryMonths`); nobody sees door photos from
+before their own claim.
+
+## "N houses were the same door as another and were merged"
+
+At start, every house's address is read the one way (`src/core/address.ts`). Two houses that turn out to be one door
+(one saved with its ZIP code, one without; "North" and "N") were merged into the older one, so the door never gets two
+boxes. The stricter choice of the two holds (a stop or a skip), claims and blocks moved over, the other house shows
+`merged` and is never planned, and ads reserved on it came back to their advertisers as credit. Nothing to do, unless
+the two were really two doors (two apartments imported without their unit): then import them again with the unit in
+the address ("20 Flats Way Apt 1", "… Apt 2"); tell a developer if many. Each house's history (`house_events`) says
+which it was merged with.
+A CSV line whose address the company already has more than a kilometre away is not added and is named in the import's
+problems ("another town?"): check it, and add the town's houses in their own area if they're really different doors.
 
 ## A paid ad was flagged in review
 
@@ -483,7 +535,9 @@ its box came back: the part not delivered goes back to the advertiser's card onc
    The refund goes to the card it was paid with, once (pressing again does nothing more).
 3. If it says *failed* (the provider refused), approve again later, or refund it at the provider and record it.
 
-Buys on more than one house get credit instead, automatically. The reconciliation's *route_open* check lists
+Buys on more than one house get credit instead, automatically. Each advertiser's credit (got, used, expired, left) is
+in the reconciliation's *route_credit* check and in their portal; it expires only if the company set
+`adBilling.limits.creditExpiryDays` (none by default), and then the daily job books what expired, once. The *route_open* check lists
 refunds still waiting and pieces past their week not yet given back (the daily `route-buys` job does that; to do it
 now, `POST /v1/ops/route-settle`).
 

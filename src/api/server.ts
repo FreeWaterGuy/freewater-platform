@@ -609,15 +609,17 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     let run: string;
     try { run = b.runId ?? packs.currentRun(b.routeId); } catch (e: any) { if (e instanceof AmbiguousRunError) throw new ApiError(400, 'run_required', e.message); throw e; }
     if (!b.runId) b.runId = run;
-    const planned = [...packs.packs.values()].find((p) => p.routeId === b.routeId && p.stop === b.stop && (p.runId ?? '') === run);
+    const planned = packs.forStop(b.routeId, b.stop, run)[0];
     if (!planned || planned.companyId !== key!.companyId) throw notFound('Stop');
     // A planned night run has its own driver, GPS check and photo: it can't be marked delivered around them here.
     if (await app.delivery.getRun(run, key.companyId).then(() => true, () => false)) throw new ApiError(409, 'use_driver_app', 'This box is on a planned run. Its driver delivers it in the driver app (/v1/driver/runs).');
     // Photo proof of each drop: the same rule as the driver app. The caller's word (photoProof) is never the photo.
-    const photo = await app.dropPhotos.proofFor(key.companyId, planned.id, key.userId);
+    // Only a photo taken after the box was scanned at the door counts: the first scan without one is remembered.
+    const photo = await app.dropPhotos.proofFor(key.companyId, planned.id, key.userId, planned.doorScanSeq);
     if (!photo && app.delivery.photoNeeded(key.companyId)) {
       const check = packs.deliver({ ...b, checkOnly: true });
-      if (check.ok) return { status: 409, body: { error: { code: 'photo_required', message: 'Take a photo of the box where you left it (POST /v1/driver/photos?packId=), then scan it again. It isn’t delivered until there’s a photo.' } } };
+      if (check.ok) packs.markDoorScan(planned.id, await app.dropPhotos.lastSeq(key.companyId, planned.id));
+      if (check.ok) return { status: 409, body: { error: { code: 'photo_required', message: 'Take a photo of the box where you left it now, with the driver app’s camera (POST /v1/driver/photos?packId=&capture=camera), then scan it again. It isn’t delivered until there’s a photo taken after this scan.' } } };
     }
     const r = packs.deliver({ ...b, photoProof: !!photo });
     if (!r.ok) return { status: 409, body: { error: { code: 'wrong_box', message: r.reason }, grab: r.rightPack ? { packId: r.rightPack.id, stopCode: `R${r.rightPack.routeId.replace(/^route-/, '')} · ${r.rightPack.stop}` } : null } };

@@ -6,7 +6,8 @@ import { checkAiSettings } from '../ai/settings';
 import { checkWallet, defaultWallet } from '../wallet/assets';
 import { checkChain, defaultChain } from '../chain/settings';
 import { extraAboveCents } from '../ledger/ledger';
-import { adBilling, checkAdBilling } from '../ads/billing';
+import { adBilling, adLimits, checkAdBilling } from '../ads/billing';
+import { checkDelivery } from '../delivery/settings';
 import { checkNewsSettings } from '../news/sources';
 
 // What a company may change about itself, the checks each change must pass, and plain words for what changed.
@@ -128,8 +129,9 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
   const billing = checkAdBilling(c.adBilling);
   if (billing) return `How advertisers pay: ${billing}`;
   // Photos of drops show people's homes: kept 1 to 365 days (90 unless set), then deleted.
-  const dv = c.delivery as Record<string, unknown> | undefined;
-  if (dv !== undefined && (typeof dv !== 'object' || dv === null || Array.isArray(dv) || Object.keys(dv).some((k) => k !== 'photoKeepDays') || (dv.photoKeepDays !== undefined && !isInt(dv.photoKeepDays, 1, 365)))) return 'Photos of drops are kept 1 to 365 days.';
+  // And the rest of delivery: minutes at each house, a van's payload and shift, the photo's distance, skips and claims.
+  const dvBad = checkDelivery(c.delivery);
+  if (dvBad) return dvBad;
 
   const pol = checkPolicy(c.data);
   if (pol) return `Data: ${pol}`;
@@ -239,6 +241,7 @@ export function applyChange(cur: CompanyConfig, change: Partial<Record<EditableK
         ...base, ...x,
         fees: { scan: { ...base.fees.scan, ...(fees.scan ?? {}) }, arLaunch: { ...base.fees.arLaunch, ...(fees.arLaunch ?? {}) }, boxFace: { ...base.fees.boxFace, ...(fees.boxFace ?? {}) }, commission: { ...base.fees.commission, ...(fees.commission ?? {}) } },
         extras: { ...base.extras, ...(x.extras && typeof x.extras === 'object' ? x.extras : {}) },
+        ...(x.limits && typeof x.limits === 'object' ? { limits: { ...adLimits(cur), ...x.limits } } : {}),
       };
       continue;
     }
@@ -254,7 +257,7 @@ export function applyChange(cur: CompanyConfig, change: Partial<Record<EditableK
 }
 
 const labels: Record<string, string> = {
-  news: 'News on unsold spots', 'delivery.photoKeepDays': 'Days a photo of a drop is kept',
+  news: 'News on unsold spots', 'delivery.photoKeepDays': 'Days a photo of a drop is kept', 'delivery.minutesPerStop': 'Minutes at each house', 'delivery.vanPayloadKg': 'What a van carries (kg)', 'delivery.maxShiftHours': 'Longest planned run (hours)', 'delivery.photoMaxMeters': 'Farthest a drop’s photo may be taken from the house (m)', 'delivery.skipWeeks': 'Weeks a driver’s skip lasts', 'delivery.claimExpiryMonths': 'Months a claim of a house lasts without use', 'delivery.newClaimDays': 'Days a claim counts as new',
   name: 'Company name', receiptBaseUrl: 'QR web address', 'brand.logoTop': 'Logo top line', 'brand.logoBottom': 'Logo bottom line', 'brand.tagline': 'Tagline',
   'brand.panelColor': 'Panel color', 'brand.accentColor': 'Accent color', 'brand.textColor': 'Text color', 'brand.fontFamily': 'Lettering', productFacts: 'Product facts',
   'giving.mode': 'How you give', 'giving.centsPerUnit': 'Giving per bottle', 'giving.percentOfRevenue': 'Share of ad money given', 'giving.percentOfExtra': 'Share of every other dollar given', 'giving.percentOfProfit': 'Share of the upside’s profit given', 'giving.extraAboveCents': 'Extra giving starts above', 'giving.defaultCharity': 'Charity', 'giving.charitySplit': 'Giving split between charities',
@@ -267,7 +270,7 @@ const labels: Record<string, string> = {
   'qr.advertiserLogos': 'Advertisers’ logos in their codes', 'qr.allowStatic': 'Static codes allowed', 'ar.trackingCodes': 'AR tracking strip', 'ar.stripEverywhere': 'Tracking strip along every ad',
   'machines.offlineWalkUp': 'Free bottles while offline', 'machines.offlinePerHour': 'Offline bottles per hour', 'machines.bufferSize': 'Labels kept ready', 'modules.ads': 'Ad engine', 'modules.renderer': 'Label maker', 'modules.printer': 'Printer',
   'transparency.liveFeed': 'Live public feed', 'transparency.counters': 'Live public counters', 'transparency.publishFingerprints': 'Publishing daily fingerprints', 'transparency.advertiserStatements': 'Advertiser statements', 'transparency.feedDetail': 'Places in the feed', 'transparency.showAmounts': 'Amounts in the feed', data: 'Data collection', 'agents.enabled': 'The AI agents’ fund', 'agents.percentOfExtra': 'The AI agents’ share of the upside', 'agents.percentOfProfit': 'The AI agents’ share of the profit', 'agents.milestone': 'The AI agents’ milestone', ratchet: 'Giving and the AI agents’ share only go up', 'security.ownersNeedSecondStep': 'Owners need a second sign-in step',
-  adBilling: 'How advertisers pay', 'adBilling.pricingMode': 'Pricing (flat or auction)', 'adBilling.requirePrepay': 'Advertisers pay up front', 'adBilling.fees': 'Fees on top of bottles (scan, AR, box side, commission)', 'adBilling.changeFeeCents': 'Fee for changing an ad', 'adBilling.extras': 'Costly extras and their markup',
+  adBilling: 'How advertisers pay', 'adBilling.pricingMode': 'Pricing (flat or auction)', 'adBilling.requirePrepay': 'Advertisers pay up front', 'adBilling.fees': 'Fees on top of bottles (scan, AR, box side, commission)', 'adBilling.changeFeeCents': 'Fee for changing an ad', 'adBilling.extras': 'Costly extras and their markup', 'adBilling.limits': 'Limits on one payment (weeks of a route buy, the most one charge can be, how long credit lasts)',
   'lottery.enabled': 'Prize game', 'lottery.oddsPercent': 'Chance of winning', 'lottery.chancesPerDay': 'Chances per person a day', 'lottery.winsPerDay': 'Prizes per person a day', 'lottery.watchSeconds': 'Watching before the ball', 'lottery.ballMs': 'Time the ball is on screen', 'lottery.prizes': 'Prizes', 'lottery.minAge': 'Youngest age to play', 'lottery.rulesUrl': 'Official rules link', 'lottery.rulesText': 'Rules note',
 };
 const deep = new Set(['brand', 'giving', 'consumer', 'machines', 'qr', 'ar', 'adRules', 'prices', 'modules', 'lottery', 'transparency', 'agents', 'security', 'adBilling', 'delivery']);

@@ -121,7 +121,9 @@ is part of *Ad review* on the Features page, which is locked on.
 passes it or flags it with its reasons; a flag is a flag like any other (above). On the review page a person can ask
 it why and push back; the talk is kept with the ad, apart from the notes with the advertiser. Every final decision a
 person makes on an ad it looked at is its **record** (*AI agents → AI reviewer of paid ads*): "agreed with your team
-on 96 of the last 100", by reason, false flags and missed problems.
+on 96 of the last 100", by reason, false flags and missed problems. It reads the ad's words and where its links and code go (the
+path and query as words); **it never sees the pictures**, and says so on the review page, in its flags and its
+record: a person checks the artwork.
 
 **AI makes the final call on paid ads** (Ads → Review; an *autonomy* switch; off for every company, FreeWater too):
 
@@ -258,17 +260,52 @@ apply from the next night planned. Planning itself is always a person's press of
 | **Packs per house** | 1 | 1–6 | Every house, until its household tells us its size. |
 | **Bottles a person a week** | 12 | 1–48, or empty | Once someone in the app says how many live there, the house gets enough boxes for this many bottles each a week, over the area's frequency. Empty: household size isn't used. |
 | **Most packs per house** | 3 | 1–6 | The cap on the rule above. |
-| **Boxes per van** | 100 | 1–1000 | A night's houses are split into one run per van; a house's boxes always go in one van. |
+| **Boxes per van** | 100 | 1–1000 | The most boxes in one van (the company's payload and shift below also end a van's run). A house's boxes always go in one van. |
 | **Polygon** | none | 3–500 corners | Houses added from CSV must fall inside it. |
+
+The company's delivery settings (`delivery.*`, through `PATCH /v1/console/settings` by a person signed in; no
+console field yet), each with its default and range (`src/modules/delivery/settings.ts`):
+
+| Setting | Default | Range | What it does |
+|---|---|---|---|
+| `minutesPerStop` | 4 | 1–30 | Minutes at each house (park, carry, photograph, back), counted in each run's planned time. |
+| `vanPayloadKg` | 900 | 100–5,000 | What a van carries, by weight. Boxes are weighed from their product (`weightKg`: a 24-pack of 16 oz bottles 12.2 kg, a 12-pack 6.2 kg; a box without one counts half a kilo a bottle). A cargo van's payload is about 1,000 kg; 900 leaves room for the driver and tools. 100 boxes of 24 (1.2 t) used to go in one van. |
+| `maxShiftHours` | 8 | 2–14 | A run ends before driving there, the minutes at each house and the drive back would pass this. |
+| `photoMaxMeters` | 150 | 25–2,000 | How far from the house the phone may be when a drop's photo is taken (below). |
+| `skipWeeks` | 4 | 1–52 | A driver's skip for getting to the door lasts this many weeks (below). |
+| `claimExpiryMonths` | 12 | 1–60 | A claim of a house ends after this many months without its person using the app. |
+| `newClaimDays` | 7 | 1–60 | A stop by a claim younger than this shows to the team as a new claim. |
+| `photoKeepDays` | 90 | 1–365 | Days a photo of a drop is kept (below). |
+
+**One door, one house.** An address is read one way everywhere (houses, household data, route buys aimed at named
+addresses, the keyed "no" to targeted ads; `src/core/address.ts`): the door is its number, street and unit, the USPS
+way ("North Lamar Boulevard" is "N LAMAR BLVD"; "100 North St" keeps its name), without the town, state or ZIP code,
+which are kept apart. A unit (Apt 2, #2, Suite 200) is its own field: two apartments imported as two houses are two
+doors on one street. An address the company already has, but more than a kilometre from where a new CSV line puts it,
+is held back and named (another town?), never merged. Houses saved before (with the ZIP code in their key) are
+re-keyed when the server starts, and two that turn out to be one door are merged into the older one: the stricter
+choice of the two holds (a stop or a skip), claims and blocks move over, the other is `merged` and never gets a box,
+what was reserved on it comes back as credit, both histories say so and the team is told.
 
 The rule in one line: packs = the most of *packs per house* and ⌈people × bottles a person a week × days ÷ 7 ÷ pack
 size⌉, never more than *most packs per house* (`packsFor` in `src/modules/delivery/houses.ts`). With the defaults, a
 24-pack a week: 1–2 people get one box, 3–4 get two, 5 or more get three.
 
 A house stops getting packs only if someone there stops it in the app (at once, and they can start again), or a
-driver marks it to skip for an access or safety problem and a person agrees (*Areas → driver skips to review*). "No
-soliciting" signs are ignored (the founder's decision): opting out is only ever done in the app. Houses are
-addresses, never people.
+driver marks it to skip for an access or safety problem and a person agrees (*Areas → driver skips to review*). A
+skip for getting to the door (a locked gate, a dangerous animal, not safe, no safe place) lasts `delivery.skipWeeks`
+(4 unless set) to the Monday after, then the house is tried again from the next night its route drives; "not a home"
+stays until a person changes it. "No soliciting" signs are ignored (the founder's decision): opting out is only ever
+done in the app. Houses are addresses, never people.
+
+**Claiming a house** (the app's *Your house*): scanning the code on the side of a box delivered there in the last 60
+days, or typing the whole box code printed under it on the side panel (14 letters and numbers). The short number in
+the box's corner is never enough: anyone passing the porch can read it. Several people can claim one house; a new
+claim of a house someone already claimed is shown to them in the app and told to the team. A claimant sees door
+photos only from their claim on, never before (another household's). Stopping deliveries always works at once (the
+founder's rule), but a stop by a claim younger than `delivery.newClaimDays` (7) shows to the team as *new claim*
+(the house list's `stoppedByNewClaim`, the house's history, and an alert). A claim ends after
+`delivery.claimExpiryMonths` (12) without its person using the app.
 
 The company's switches for delivery areas (*Console → Features → Delivery*, section 8; `src/runtime/registry.ts`):
 
@@ -279,7 +316,7 @@ The company's switches for delivery areas (*Console → Features → Delivery*, 
 | **Ads know the house's street and area** | On | Delivery areas, Ads | Any owner signed in | The ad engine gets no house context; ads are chosen as for any pack on that route. |
 | **Drivers skip a house, with a reason** | On | The driver app, Delivery areas | Any owner signed in | No *Skip this house* button; the driver uses *Problem at this stop* and the house stays on the next plan. On, the reasons are only real access or safety problems (a locked gate, a dangerous animal, not safe, no safe place to leave it) or not a home: never a sign on the door or what someone says there (people stop it in the app). |
 | **Photo at the door** (`door_photos`) | On | The driver app | Any owner signed in | No photos are taken; nothing else changes. Photos already kept are still deleted on time. |
-| **Photo proof of each drop** (`drop_photo_proof`, new in catalogue 4) | On | Photo at the door | Any owner signed in | The scan at the right door is enough. On: a box is delivered only with the driver's photo of it where it was left (the scan alone answers `photo_required`), unless an ops person or owner, signed in and not the driver, vouches for it with a reason. Delivered with its photo is delivered: theft from the porch afterwards isn't a failed delivery. |
+| **Photo proof of each drop** (`drop_photo_proof`, new in catalogue 4) | On | Photo at the door | Any owner signed in | The scan at the right door is enough. On: a box is delivered only with the driver's photo of it where it was left, taken **after** the box was scanned at that door (the scan alone answers `photo_required` and is remembered; a photo from before it, on the way, doesn't count), with the driver app's camera (not picked from the phone's gallery), and, when the phone gives its location, within `delivery.photoMaxMeters` (150 m) of the house (farther is refused: take it at the door). With no location, or one too vague to tell, it counts and is marked *unverified location* for the team on the run. An ops person or owner, signed in and not the driver, can still vouch for a drop scanned at its door, with a reason. Delivered with its photo is delivered: theft from the porch afterwards isn't a failed delivery. |
 
 **Photos of drops** show people's homes: re-encoded without the phone's hidden data, 8 MB and 40 megapixels at most,
 seen only by the team and by someone who proved in the app the house is theirs, never by advertisers, and deleted
@@ -297,13 +334,13 @@ README, "Buying on delivery routes"). Paid up front like every ad here; every si
 
 | What | How it works |
 |---|---|
-| **Kinds** | *Spread*: N bottles shared over an area, streets or a shape on the map. *Blanket*: one piece on one bottle in every box at every house there. *Whole box*: every bottle in a house's box (and its sides, if chosen). *Chosen houses*: named by address, a number of bottles at each. Each for 1 to 26 weeks (Monday to Sunday), from next week. Only weekly areas that are on. |
-| **The price** | Exact before paying: pieces × the size's price (*Ads and prices*: whole label $1 … 1/10 20¢) × the product's factor, plus box sides at the box side price (40¢), less any credit. The card is charged that or nothing. AR, video and scans are included. |
+| **Kinds** | *Spread*: N bottles shared over an area, streets or a shape on the map. *Blanket*: one piece on one bottle in every box at every house there. *Whole box*: every bottle in a house's box (and its sides, if chosen). *Chosen houses*: named by address, a number of bottles at each. Each for 1 to 26 weeks (Monday to Sunday; the company's `adBilling.limits.maxRouteWeeks`, 1 to 52), from next week. Only weekly areas that are on. One buy holds at most 50,000 pieces, reserved in pieces of 5,000 rows inside one transaction (all of it or none). |
+| **The price** | Exact before paying: pieces × the size's price (*Ads and prices*: whole label $1 … 1/10 20¢) × the product's factor, plus box sides at the box side price (40¢), less any credit. The card is charged that or nothing. One charge is at most the company's `adBilling.limits.maxChargeCents` ($10,000 unless set; bottles paid up front too): above it the advertiser is told plainly to buy less or contact the team (splitting into weekly or monthly charges isn't built). AR, video and scans are included. |
 | **Room** | A bottle is one label: what's sold on it never passes the whole label or ten pieces, only in mixes the bottle can print, never an ad twice, never two competitors (the database refuses more than a whole label). Blanket and whole-box buys skip a house whose box is already taken that week and don't charge for it; a buy that can't fit is refused with what's left. |
 | **First paid wins** | Paying reserves each piece on a bottle under a lock on each house and week, checked against what's committed then. Of two payments for the last space, the second is charged nothing and shown the new price. A declined card lets its space go at once. No bidding for houses while pricing is flat. |
 | **At print time** | Each bottle of a house's pack carries exactly the pieces reserved for it, each printed once; the rest of the label gets other paid ads, approved fillers, then the house ad. A route ad never prints anywhere else. |
-| **When a house stops** | Pieces that can't go out (the house stopped or was skipped, blocked the business or every ad aimed at it alone, the week went by before they printed, the box came back) come back: a buy aimed at **one house** gets a **refund** of that part to the card, approved by an owner or finance person with the second step (`POST /v1/ops/route-refunds/:id/approve`; the list is `GET /v1/ops/route-refunds`, no console page yet); any other buy gets **credit for other houses**, used first on the advertiser's next route buy (not on a one-house buy, so a refund never exceeds what the card paid). Nobody pays for a house that stopped. Runs daily (job `route-buys`), at once when a house stops or blocks, and on `POST /v1/ops/route-settle`. |
-| **Fewer than 50 houses** | A **small-audience** buy (the company's number, 50 or more: the setting `adRules.smallAudienceHouses` through `PATCH /v1/console/settings`, no console field yet; it can be raised, never lowered below 50): only with the switch below on; only a business the company verified (`POST /v1/advertisers/:id/verify`, an owner or reviewer signed in); no names, street addresses, phone numbers, emails or personal messages in the ad (checked when paying and again when approved); approved by an owner or reviewer signed in, never an API key (the review queue marks it); never a house that blocked ads aimed at it alone or said no to targeted ads, and only houses on a route known to be in the US (its `country`/`state`; unknown gets the strictest rules). A buy that **names** houses, however many, also leaves out every house that said no to targeted ads. The report shows the day only and no scans or saves, and what came back reads "the house is no longer on the route for this ad" (never that it stopped or blocked). Sensitive kinds of data are never targetable (household data refuses them). |
+| **When a house stops** | Pieces that can't go out (the house stopped or was skipped, blocked the business or every ad aimed at it alone, the week went by before they printed, the box came back) come back: a buy aimed at **one house** gets a **refund** of that part to the card, approved by an owner or finance person with the second step (`POST /v1/ops/route-refunds/:id/approve`; the list is `GET /v1/ops/route-refunds`, no console page yet); any other buy gets **credit for other houses**, used first on the advertiser's next route buy (not on a one-house buy, so a refund never exceeds what the card paid). Credit is part of the money the advertiser paid up front: listed per advertiser in the books (*reconciliation*, `route_credit`: got, used, expired, left) and in their portal. It lasts `adBilling.limits.creditExpiryDays` (none unless set, 30 to 3,650); expired credit is recorded once and booked out of the advertiser's money as income (`revenue:expired_credit`). A house **skipped for a while** (an access skip) keeps its pieces: those in the weeks it's skipped move to its first delivery after, within the buy, where there's room on a bottle (the same rules as buying); what can't move comes back as credit. Nobody pays for a house that stopped. Runs daily (job `route-buys`), at once when a house stops or blocks, and on `POST /v1/ops/route-settle`. |
+| **Fewer than 50 houses** | A **small-audience** buy (the company's number, 50 or more: the setting `adRules.smallAudienceHouses` through `PATCH /v1/console/settings`, no console field yet; it can be raised, never lowered below 50): only with the switch below on; only a business the company verified (`POST /v1/advertisers/:id/verify`, an owner or reviewer signed in); no names, street addresses, phone numbers, emails or personal messages in the ad (checked when paying and again when approved, on everything the ad says: its artwork's words with character references decoded and letters set apart read together, invisible and full-width characters folded, and where its links and code go, the path and query read as words); approved by an owner or reviewer signed in, never an API key (the review queue marks it); never a house that blocked ads aimed at it alone or said no to targeted ads, and only houses on a route known to be in the US (its `country`/`state`; unknown gets the strictest rules). A buy that **names** houses, however many, also leaves out every house that said no to targeted ads. The report shows the day only and no scans or saves, and what came back reads "the house is no longer on the route for this ad" (never that it stopped or blocked). Sensitive kinds of data are never targetable (household data refuses them). |
 | **Proof** | *Where it went*: streets and houses reached (streets with fewer than 5 houses shown together), each drop's time and rough place from the driver's scan (to about 100 m), scans by area, what came back. Never which house or who lives there, and never a photo of a drop. |
 
 The switches (*Console → Features*, category Ads, *Buying on delivery routes*):

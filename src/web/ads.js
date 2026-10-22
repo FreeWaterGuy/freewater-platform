@@ -933,7 +933,7 @@
     const kinds = Object.keys(ROUTE_KINDS).filter((k) => on(ROUTE_SWITCH[k]));
     const kind = h('select', { class: 'input', id: 'route-kind' }, kinds.map((k) => h('option', { value: k, text: ROUTE_KINDS[k] })));
     const size = h('select', { class: 'input', id: 'route-size' }, o.sizes.map((sz) => h('option', { value: String(sz), text: sizeName(sz) })));
-    const weeks = h('input', { class: 'input', id: 'route-weeks', type: 'number', min: 1, max: 26, value: 1 });
+    const weeks = h('input', { class: 'input', id: 'route-weeks', type: 'number', min: 1, max: 52, value: 1 });
     const start = h('input', { class: 'input', id: 'route-start', type: 'date', 'aria-describedby': 'route-start-hint' });
     const bottles = h('input', { class: 'input', id: 'route-bottles', type: 'number', min: 1, max: 1000000, value: 100 });
     const perHouse = h('input', { class: 'input', id: 'route-per-house', type: 'number', min: 1, max: 72, value: 1 });
@@ -1057,7 +1057,7 @@
         h('tbody', {}, terms.orders.map((o) => h('tr', {}, h('td', { text: new Date(o.at).toLocaleDateString() }), h('td', { text: kindText[o.kind] || o.kind }), h('td', { text: o.bottles ? `${num(o.bottles)} × ${cents(o.perBottleCents)}` : '–' }), h('td', { text: dollars(o.totalCents) }), h('td', { text: statusOf(o) }))))))
         : h('div', { class: 'empty', text: 'Nothing paid yet. You pay for an ad’s bottles when you submit it.' })) : null,
       routeInfo && (routeInfo.creditCents || routeInfo.buys.length) ? h('div', {}, h('h2', { class: 'section', style: 'margin-top:22px', text: 'Delivery routes' }),
-        h('p', { text: `Credit from houses that stopped or blocked: ${dollars(routeInfo.creditCents)}, used first on your next route buy.${routeInfo.verified ? ' Your business is verified.' : ''}` }),
+        h('p', { text: `Credit from houses that stopped or blocked: ${dollars(routeInfo.creditCents)}, used first on your next route buy.${routeInfo.credit?.expiresAfterDays ? ` Credit lasts ${routeInfo.credit.expiresAfterDays} days${routeInfo.credit.expiring?.length ? `: ${dollars(routeInfo.credit.expiring[0].cents)} of it expires ${routeInfo.credit.expiring[0].on}` : ''}.` : ''}${routeInfo.credit?.expiredCents ? ` ${dollars(routeInfo.credit.expiredCents)} expired unused.` : ''}${routeInfo.verified ? ' Your business is verified.' : ''}` }),
         routeInfo.buys.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Ad', 'Kind', 'Houses', 'Pieces', 'Weeks', 'Paid'].map((x) => h('th', { text: x })))),
           h('tbody', {}, routeInfo.buys.map((b) => h('tr', {}, h('td', {}, on('route_proof') ? link(`/ads/campaigns/${b.campaignId}/report`, {}, b.name || b.campaignId) : (b.name || b.campaignId)), h('td', { text: b.kindWords }), h('td', { text: num(b.houses) }), h('td', { text: `${num(b.bottles)} × ${b.size}${b.boxSides ? ` + ${num(b.boxSides)} sides` : ''}` }), h('td', { text: `${b.weeks} from ${b.startWeek}` }), h('td', { text: `${dollars(b.totalCents)}${b.creditCents ? ` (${dollars(b.creditCents)} credit)` : ''}` })))))) : null) : null,
       !prepaid || invoices.length ? h('h2', { class: 'section', style: 'margin-top:22px', text: prepaid ? 'Fees charged after the fact' : 'Invoices' }) : null,

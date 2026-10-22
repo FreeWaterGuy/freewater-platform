@@ -193,8 +193,10 @@ for (const engine of engines) {
             for (const s of v.loadOrder) await w.call('POST', `/v1/driver/runs/${encodeURIComponent(run.id)}/load`, driver, { packId: s.packId });
             for (const s of v.stops) {
               const back = random() < 0.15;
-              if (!back) await w.app.dropPhotos.put({ companyId: 'freewater', packId: s.packId, takenBy: w.driverId, contentType: 'image/jpeg', bytes: await doorPhoto() });
-              const d = back ? null : await w.call('POST', `/v1/driver/runs/${encodeURIComponent(run.id)}/stops/${s.stop}/deliver`, driver, { scannedPackId: s.packId, lat: s.point.lat + 0.00005, lng: s.point.lng, emptiesCollected: 0 });
+              const door = () => w.call('POST', `/v1/driver/runs/${encodeURIComponent(run.id)}/stops/${s.stop}/deliver`, driver, { scannedPackId: s.packId, lat: s.point.lat + 0.00005, lng: s.point.lng, emptiesCollected: 0 });
+              // Scanned at the door, then its photo, then scanned again.
+              if (!back && (await door()).statusCode !== 200) await w.app.dropPhotos.put({ companyId: 'freewater', packId: s.packId, takenBy: w.driverId, contentType: 'image/jpeg', bytes: await doorPhoto(), capture: 'camera' }).catch(() => null);
+              const d = back ? null : w.app.packs.packs.get(s.packId)?.status === 'delivered' ? { statusCode: 200 } : await door();
               if (!d || d.statusCode !== 200) await w.call('POST', `/v1/driver/runs/${encodeURIComponent(run.id)}/stops/${s.stop}/fail`, driver, { reason: 'Gate locked' });
             }
           }

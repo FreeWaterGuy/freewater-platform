@@ -221,9 +221,10 @@ describe('a restart in the middle of a driver’s day', () => {
     await app.delivery.start(run!.id, 'freewater', driver.id);
     for (const s of [...run!.stops].sort((a, b) => b.stop - a.stop)) expect((await app.delivery.loadScan({ runId: run!.id, companyId: 'freewater', driverId: driver.id, packId: s.packId! })).ok).toBe(true);
     const [first, second] = run!.stops;
-    // Stop 1: the photo sent and the box scanned at the door, but the server stopped after the box was marked delivered
+    // Stop 1: the box scanned at the door, its photo sent, but the server stopped after the box was marked delivered
     // and before the stop was saved on the run.
-    await app.dropPhotos.put({ companyId: 'freewater', packId: first!.packId!, takenBy: driver.id, contentType: 'image/jpeg', bytes: await doorPhoto() });
+    expect(await app.delivery.deliver({ runId: run!.id, companyId: 'freewater', driverId: driver.id, stop: first!.stop, scannedPackId: first!.packId!, confirmedAtDoor: true, emptiesCollected: 0 })).toMatchObject({ code: 'photo_required' });
+    await app.dropPhotos.put({ companyId: 'freewater', packId: first!.packId!, takenBy: driver.id, contentType: 'image/jpeg', bytes: await doorPhoto(), capture: 'camera' });
     expect(app.packs.deliver({ routeId: run!.routeId, runId: run!.id, stop: first!.stop, scannedPackId: first!.packId!, atAddress: true, photoProof: true, emptiesCollected: 0 }).ok).toBe(true);
     // Stop 2: the driver pressed "Problem at this stop"; the box was marked coming back, and then the server stopped.
     app.packs.fail(second!.packId!, 'No safe place');

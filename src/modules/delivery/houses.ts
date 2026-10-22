@@ -2,20 +2,22 @@ import { newId } from '../../core/ids';
 import type { RouteHouseContext } from '../../core/types';
 import type { SqlClient } from '../../db/client';
 import type { Platform } from '../../platform';
-import type { GeoPoint } from '../../adapters/geocoding/contract';
+import { distanceKm, type GeoPoint } from '../../adapters/geocoding/contract';
 import type { AccountsService } from '../accounts/service';
 import type { PackService } from '../packs/service';
 import { boxNumber } from '../packs/boxRenderer';
 import { insidePolygon } from './planner';
 import { DeliveryError } from './errors';
-import { normalizeAddress } from '../households/vocabulary';
+import { addressKey, parseAddress } from '../../core/address';
+import { deliverySettings } from './settings';
 
 // Delivery areas: FreeWater chooses the streets, and every house on them gets packs, in street order, with no sign-up.
 // A house is an address, not a person. The only ways a house stops getting packs: someone there says so in the app
 // (after proving it's their house with a code from a box delivered there), or a driver marks it to skip and a person
 // agrees. See docs/OVERVIEW.md ("Delivery areas") and docs/SWITCHES.md ("Delivery areas").
 
-export type HouseStatus = 'active' | 'opted_out' | 'skip_pending' | 'skipped';
+/** merged: found to be the same door as another house (two ways of writing one address); it never gets a box again. */
+export type HouseStatus = 'active' | 'opted_out' | 'skip_pending' | 'skipped' | 'merged';
 
 export interface Area {
   id: string; companyId: string; name: string; routeId: string; polygon: [number, number][] | null;
@@ -25,6 +27,10 @@ export interface Area {
 export interface House {
   id: string; companyId: string; areaId: string; address: string; street: string; number: number | null; point: GeoPoint;
   status: HouseStatus; householdSize: number | null; nextDate: string | null; lastPlanned: string | null; lastDeliveredAt: string | null; skipReason: string | null; sample: boolean;
+  /** The apartment or suite, when the house is one (two units imported as two houses are two doors on one street). */
+  unit: string | null;
+  /** A skip for an access reason ends on this day, and the house is tried again. */
+  skipUntil: string | null;
 }
 export type AreaSettings = Partial<Pick<Area, 'name' | 'polygon' | 'frequencyDays' | 'packSize' | 'packsPerHouse' | 'bottlesPerPersonWeek' | 'maxPacksPerHouse' | 'vanPacks' | 'active'>>;
 
@@ -36,27 +42,31 @@ export type AreaSettings = Partial<Pick<Area, 'name' | 'polygon' | 'frequencyDay
 export const SKIP_REASONS = ['locked_gate', 'dangerous_animal', 'unsafe', 'no_safe_place', 'not_a_home'] as const;
 export type SkipReason = (typeof SKIP_REASONS)[number];
 export const SKIP_LABELS: Record<SkipReason, string> = { locked_gate: 'Locked gate', dangerous_animal: 'Dangerous animal', unsafe: 'Not safe', no_safe_place: 'No safe place to leave it', not_a_home: 'Not a home' };
+/** Skips about getting to the door: a gate gets unlocked, a dog moves, so they end after a few weeks and the house is tried again. "Not a home" stays. */
+export const ACCESS_SKIPS: readonly SkipReason[] = ['locked_gate', 'dangerous_animal', 'unsafe', 'no_safe_place'];
 
+/** The Monday on or after a day (route weeks run Monday to Sunday). */
+const nextMonday = (date: string) => addDays(date, (8 - weekday(date)) % 7);
 const day = (v: unknown) => (v === null || v === undefined ? null : typeof v === 'string' ? v.slice(0, 10) : new Date(v as string).toISOString().slice(0, 10));
 const parse = <T>(v: unknown): T => (typeof v === 'string' ? JSON.parse(v) : v) as T;
 export const addDays = (date: string, n: number) => new Date(Date.parse(`${date}T12:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
 export const weekday = (date: string) => new Date(`${date}T12:00:00Z`).getUTCDay();
+/** One street address this far from a house the company already has is another place, not the same door. */
+const SAME_DOOR_KM = 1;
 /** How long a delivered box can prove a house is someone's (a code from an older box doesn't). */
 const CLAIM_WINDOW_DAYS = 60;
 /** Wrong codes a person may try in a day before claiming waits until tomorrow (kept in the database, so a restart keeps it). */
 const CLAIM_TRIES_PER_DAY = 5;
 
-const SUFFIXES: Record<string, string> = { avenue: 'ave', av: 'ave', street: 'st', drive: 'dr', lane: 'ln', road: 'rd', boulevard: 'blvd', court: 'ct', place: 'pl', circle: 'cir', terrace: 'ter', parkway: 'pkwy', trail: 'trl', way: 'way' };
-/** "1501 Kenwood Avenue, Austin, TX" → number 1501, street "kenwood ave": the same street however it was typed. */
-export function splitAddress(address: string): { number: number | null; street: string } {
-  const first = address.split(',')[0]!.trim().toLowerCase().replace(/[.#]/g, '').replace(/\s+/g, ' ');
-  const m = /^(\d{1,6})[a-z]?\s+(.+)$/.exec(first);
-  const words = (m ? m[2]! : first).split(' ').map((w) => SUFFIXES[w] ?? w);
-  return { number: m ? Number(m[1]) : null, street: words.join(' ') };
+/**
+ * "1501 Kenwood Avenue Apt 2, Austin, TX 78704" → number 1501, street "kenwood ave", unit "2": the same street however
+ * it was typed (USPS suffixes and directions: "North Lamar Blvd" is "n lamar blvd"), and a building's apartments on
+ * one street. See src/core/address.ts.
+ */
+export function splitAddress(address: string): { number: number | null; street: string; unit: string | null; zip: string | null } {
+  const a = parseAddress(address);
+  return { number: a.number, street: a.street, unit: a.unit, zip: a.zip };
 }
-// One way of writing an address, the same one household data uses (households/vocabulary): "700 Big Bend Drive" and
-// "700 Big Bend Dr." are one door, one pack, and one house for the ads chosen for it.
-const addressKey = (address: string) => normalizeAddress(address).toLowerCase();
 
 /** Reads CSV text (quotes allowed, so an address can hold commas). */
 export function parseCsv(text: string): string[][] {
@@ -111,7 +121,7 @@ export class HouseService {
   house(r: any): House {
     return { id: r.id, companyId: r.company_id, areaId: r.area_id, address: r.address, street: r.street, number: r.number === null ? null : Number(r.number), point: { lat: Number(r.lat), lng: Number(r.lng) },
       status: r.status, householdSize: r.household_size === null ? null : Number(r.household_size), nextDate: day(r.next_date), lastPlanned: day(r.last_planned),
-      lastDeliveredAt: r.last_delivered_at ? new Date(r.last_delivered_at).toISOString() : null, skipReason: r.skip_reason ?? null, sample: !!r.sample };
+      lastDeliveredAt: r.last_delivered_at ? new Date(r.last_delivered_at).toISOString() : null, skipReason: r.skip_reason ?? null, sample: !!r.sample, unit: r.unit ?? null, skipUntil: day(r.skip_until) };
   }
 
   async getArea(id: string, companyId: string): Promise<Area> {
@@ -128,7 +138,7 @@ export class HouseService {
     const areas = (await this.db.query<any>(`select * from delivery_areas where company_id = $1 order by created_at, id`, [companyId])).rows.map((r) => this.area(r));
     const counts = (await this.db.query<any>(`select area_id, status, count(*)::int as n from houses where company_id = $1 group by area_id, status`, [companyId])).rows;
     return areas.map((a) => {
-      const by: Record<HouseStatus, number> = { active: 0, opted_out: 0, skip_pending: 0, skipped: 0 };
+      const by: Record<HouseStatus, number> = { active: 0, opted_out: 0, skip_pending: 0, skipped: 0, merged: 0 };
       for (const c of counts) if (c.area_id === a.id) by[c.status as HouseStatus] = Number(c.n);
       const route = this.platform.locations.get(a.routeId);
       return { ...a, routeName: route?.name ?? a.routeId, deliveryDays: route?.deliveryDays ?? [], houses: by.active + by.opted_out + by.skip_pending + by.skipped, byStatus: by };
@@ -138,8 +148,10 @@ export class HouseService {
   async houses(areaId: string, companyId: string, status?: HouseStatus) {
     await this.getArea(areaId, companyId);
     const rows = (await this.db.query<any>(`select * from houses where area_id = $1 and company_id = $2 ${status ? 'and status = $3' : ''} order by street, number nulls last, address`, status ? [areaId, companyId, status] : [areaId, companyId])).rows;
-    const claimed = new Set((await this.db.query<any>(`select distinct house_id from house_claims where company_id = $1`, [companyId])).rows.map((r) => r.house_id));
-    return rows.map((r) => ({ ...this.house(r), claimed: claimed.has(r.id) }));
+    const claims = new Map((await this.db.query<any>(`select house_id, count(*)::int as n from house_claims where company_id = $1 group by 1`, [companyId])).rows.map((r) => [r.house_id as string, Number(r.n)]));
+    // Stopped by someone whose claim was new then: shown to the team (it still stopped them).
+    const newClaimStops = new Set((await this.db.query<any>(`select distinct on (house_id) house_id, reason from house_events where company_id = $1 and kind = 'opted_out' order by house_id, at desc, id desc`, [companyId])).rows.filter((r) => String(r.reason ?? '').startsWith('new claim')).map((r) => r.house_id as string));
+    return rows.map((r) => ({ ...this.house(r), claimed: claims.has(r.id), claims: claims.get(r.id) ?? 0, ...(r.status === 'opted_out' && newClaimStops.has(r.id) ? { stoppedByNewClaim: true } : {}) }));
   }
 
   async getHouse(id: string, companyId: string): Promise<House | null> {
@@ -240,7 +252,7 @@ export class HouseService {
     if (rows.length > 5000) throw new DeliveryError(413, 'too_many', 'Up to 5,000 houses at a time.');
     const problems: { line: number; reason: string }[] = [];
     const outside: string[] = [];
-    const fresh: { id: string; address: string; key: string; street: string; number: number | null; lat: number; lng: number }[] = [];
+    const fresh: { line: number; id: string; address: string; key: string; street: string; number: number | null; unit: string | null; zip: string | null; lat: number; lng: number }[] = [];
     const seen = new Set<string>();
     for (const [i, r] of rows.entries()) {
       const line = i + 2;
@@ -255,15 +267,93 @@ export class HouseService {
       const split = splitAddress(address);
       const street = col('street') >= 0 && r[col('street')]?.trim() ? splitAddress(`1 ${r[col('street')]}`).street : split.street;
       const num = col('number') >= 0 && /^\d{1,6}$/.test(r[col('number')]?.trim() ?? '') ? Number(r[col('number')]!.trim()) : split.number;
-      fresh.push({ id: newId('hs'), address, key, street, number: num, lat, lng });
+      fresh.push({ line, id: newId('hs'), address, key, street, number: num, unit: split.unit, zip: split.zip, lat, lng });
+    }
+    // A key is the door without its town or ZIP code (one company's houses are in one place). An address the company
+    // already has, but far from where this line puts it, is likely the same street name in another town: not added,
+    // said, so a person checks it (never two places treated as one door, never one door as two houses).
+    const known = fresh.length ? new Map((await this.db.query<any>(`select address_key, lat, lng from houses where company_id = $1 and address_key = any($2::text[])`, [companyId, fresh.map((f) => f.key)])).rows.map((r) => [r.address_key as string, { lat: Number(r.lat), lng: Number(r.lng) }])) : new Map();
+    for (let i = fresh.length - 1; i >= 0; i--) {
+      const k = known.get(fresh[i]!.key);
+      if (k && distanceKm(k, fresh[i]!) > SAME_DOOR_KM) { problems.push({ line: fresh[i]!.line, reason: `The company already has this street address ${distanceKm(k, fresh[i]!).toFixed(1)} km away (another town?). Not added: check it.` }); fresh.splice(i, 1); }
     }
     const added = fresh.length ? (await this.db.query<any>(
-      `insert into houses (id, company_id, area_id, address, address_key, street, number, lat, lng, sample)
-       select x.id, $1, $2, x.address, x.key, x.street, x.number, x.lat, x.lng, $10 from unnest($3::text[], $4::text[], $5::text[], $6::text[], $7::int[], $8::float8[], $9::float8[]) as x(id, address, key, street, number, lat, lng)
+      `insert into houses (id, company_id, area_id, address, address_key, street, number, lat, lng, sample, unit, zip)
+       select x.id, $1, $2, x.address, x.key, x.street, x.number, x.lat, x.lng, $10, x.unit, x.zip from unnest($3::text[], $4::text[], $5::text[], $6::text[], $7::int[], $8::float8[], $9::float8[], $11::text[], $12::text[]) as x(id, address, key, street, number, lat, lng, unit, zip)
        on conflict (company_id, address_key) do nothing returning id`,
-      [companyId, areaId, fresh.map((f) => f.id), fresh.map((f) => f.address), fresh.map((f) => f.key), fresh.map((f) => f.street), fresh.map((f) => f.number), fresh.map((f) => f.lat), fresh.map((f) => f.lng), sample])).rows.length : 0;
+      [companyId, areaId, fresh.map((f) => f.id), fresh.map((f) => f.address), fresh.map((f) => f.key), fresh.map((f) => f.street), fresh.map((f) => f.number), fresh.map((f) => f.lat), fresh.map((f) => f.lng), sample, fresh.map((f) => f.unit), fresh.map((f) => f.zip)])).rows.length : 0;
     return { added, alreadyKnown: fresh.length - added, outside: outside.length, outsideExamples: outside.slice(0, 10), problems: problems.slice(0, 100), problemCount: problems.length };
   }
+
+  /**
+   * One door, one house (run at start, safe to run again). Every house's key, street, unit and ZIP code are worked out
+   * again the one way (src/core/address.ts): a house written before 071 with its ZIP code, "Apt 2" in its street, or
+   * "North" spelled out gets today's key. Two houses that turn out to be one door are merged into the older one, so
+   * the door never gets two boxes:
+   *  - the strictest choice wins: a stop in the app (or a driver's skip) on either holds for the house kept;
+   *  - claims and blocks move to the house kept, and it's not due again before the later of the two plans;
+   *  - the other becomes `merged` (pointing at the one kept) and never gets a box again; route pieces reserved on it
+   *    come back to their advertisers (onStopped), as for a house that stopped;
+   *  - both houses' histories say so, and the team is told.
+   */
+  async rekeyHouses() {
+    const rows = (await this.db.query<any>(`select id, company_id, address, address_key, street, unit, zip, status, created_at from houses where status <> 'merged' order by company_id, created_at, id`)).rows;
+    const want = new Map<string, { key: string; street: string; unit: string | null; zip: string | null }>();
+    const byKey = new Map<string, any[]>();
+    for (const r of rows) {
+      const a = parseAddress(r.address);
+      const w = { key: a.line.toLowerCase(), street: a.street, unit: a.unit, zip: a.zip };
+      want.set(r.id, w);
+      const k = `${r.company_id}|${w.key}`;
+      byKey.set(k, [...(byKey.get(k) ?? []), r]);
+    }
+    const merged: { companyId: string; kept: string; merged: string; address: string }[] = [];
+    for (const group of byKey.values()) {
+      if (group.length < 2) continue;
+      const [keep, ...dupes] = group; // the oldest is kept
+      for (const d of dupes) { await this.merge(keep.company_id, keep.id, d.id); merged.push({ companyId: keep.company_id, kept: keep.id, merged: d.id, address: keep.address }); }
+    }
+    const gone = new Set(merged.map((m) => m.merged));
+    const change = rows.filter((r) => { const w = want.get(r.id)!; return !gone.has(r.id) && (w.key !== r.address_key || w.street !== r.street || (w.unit ?? null) !== (r.unit ?? null) || (w.zip ?? null) !== (r.zip ?? null)); });
+    // Two steps, so a house taking a key another house still holds (until that one moves on too) never collides. A stop
+    // in between leaves a stand-in key, which the next start puts right.
+    for (const r of change) if (want.get(r.id)!.key !== r.address_key) await this.db.query(`update houses set address_key = 'rekey:' || id where id = $1`, [r.id]);
+    for (const r of change) { const w = want.get(r.id)!; await this.db.query(`update houses set address_key = $2, street = $3, unit = $4, zip = $5, updated_at = now() where id = $1 and status <> 'merged'`, [r.id, w.key, w.street, w.unit, w.zip]); }
+    const rekeyed = change.length;
+    for (const companyId of new Set(merged.map((m) => m.companyId))) {
+      const mine = merged.filter((m) => m.companyId === companyId);
+      this.alert?.(`houses-merged:${companyId}`, `${mine.length} house${mine.length === 1 ? ' was' : 's were'} the same door as another and ${mine.length === 1 ? 'was' : 'were'} merged`, `Two ways of writing one address had made two houses (two boxes for one door). Each is now one house (the older one), keeping the strictest choice of the two. First: ${mine.slice(0, 5).map((m) => m.address).join('; ')}. See each house's history.`);
+    }
+    return { rekeyed, merged };
+  }
+
+  /** Merge house `dupe` into `keep` (the same door), in one transaction; then give back what was reserved on `dupe`. */
+  private async merge(companyId: string, keepId: string, dupeId: string) {
+    const rank: Record<string, number> = { active: 0, skip_pending: 1, skipped: 2, opted_out: 3 };
+    const keptStopped = await this.db.transaction(async (tx) => {
+      const k = (await tx.query<any>(`select * from houses where id = $1 for update`, [keepId])).rows[0];
+      const d = (await tx.query<any>(`select * from houses where id = $1 for update`, [dupeId])).rows[0];
+      if (!k || !d || d.status === 'merged') return false;
+      const strict = (rank[d.status] ?? 0) > (rank[k.status] ?? 0) ? d : k;
+      await tx.query(`update houses set status = $2, skip_reason = $3, skip_until = $4, household_size = coalesce(household_size, $5),
+          last_planned = greatest(last_planned, $6::date), next_date = greatest(next_date, $7::date), last_delivered_at = greatest(last_delivered_at, $8::timestamptz), updated_at = now() where id = $1`,
+        [keepId, strict.status, strict.skip_reason ?? null, strict.skip_until ?? null, d.household_size, d.last_planned, d.next_date, d.last_delivered_at]);
+      const claims = (await tx.query<any>(`delete from house_claims where house_id = $1 returning user_id, company_id, pack_id, claimed_at, last_seen_at`, [dupeId])).rows;
+      for (const c of claims) await tx.query(`insert into house_claims (house_id, user_id, company_id, pack_id, claimed_at, last_seen_at) values ($1,$2,$3,$4,$5,$6) on conflict do nothing`, [keepId, c.user_id, c.company_id, c.pack_id, c.claimed_at, c.last_seen_at]);
+      await tx.query(`insert into house_ad_blocks (id, company_id, house_id, user_id, advertiser_id, created_at) select 'hab_m_' || id, company_id, $1, user_id, advertiser_id, created_at from house_ad_blocks b where house_id = $2 and removed_at is null
+          and not exists (select 1 from house_ad_blocks x where x.house_id = $1 and x.removed_at is null and coalesce(x.advertiser_id, '*') = coalesce(b.advertiser_id, '*'))`, [keepId, dupeId]);
+      await tx.query(`update house_ad_blocks set removed_at = now() where house_id = $1 and removed_at is null`, [dupeId]);
+      await tx.query(`update houses set status = 'merged', merged_into = $2, address_key = 'merged:' || id, updated_at = now() where id = $1`, [dupeId, keepId]);
+      await this.event(companyId, dupeId, 'merged_into', null, `the same door as house ${keepId}`, tx);
+      await this.event(companyId, keepId, 'merged_from', null, `house ${dupeId} (${String(d.address).slice(0, 120)}) was the same door${strict === d && d.status !== k.status ? `; its ${d.status} holds here` : ''}`, tx);
+      return k.status !== strict.status && (strict.status === 'opted_out' || strict.status === 'skipped');
+    });
+    await this.onStopped?.(companyId, dupeId);
+    if (keptStopped) await this.onStopped?.(companyId, keepId);
+  }
+
+  /** Set by the app: tells the team (the platform's alerts). */
+  alert?: (key: string, title: string, detail: string) => void;
 
   /** Houses a driver said to skip, waiting for a person to agree or send the van back. */
   async reviews(companyId: string) {
@@ -271,13 +361,20 @@ export class HouseService {
     return rows.map((r) => ({ ...this.house(r), areaName: r.area_name }));
   }
 
-  /** A person decides a driver's skip: keep skipping the house ('skip'), or deliver to it again ('deliver'). */
+  /**
+   * A person decides a driver's skip: keep skipping the house ('skip'), or deliver to it again ('deliver'). A skip for
+   * getting to the door (a locked gate, a dog, not safe, no safe place) lasts the company's weeks (`delivery.skipWeeks`,
+   * 4 unless set), to the Monday after, then the house is tried again; "not a home" stays until a person changes it.
+   */
   async review(houseId: string, companyId: string, by: string, decision: 'skip' | 'deliver', note?: string) {
     await this.needOpsPerson(companyId, by, 'review a driver’s skip');
     const to = decision === 'skip' ? 'skipped' : 'active';
-    const r = (await this.db.query<any>(`update houses set status = $3, updated_at = now() where id = $1 and company_id = $2 and status = 'skip_pending' returning *`, [houseId, companyId, to])).rows[0];
+    const cur = await this.getHouse(houseId, companyId);
+    const reason = (cur?.skipReason ?? '').split(':')[0] as SkipReason;
+    const until = decision === 'skip' && ACCESS_SKIPS.includes(reason) ? nextMonday(addDays(this.today(companyId), 7 * deliverySettings(this.platform.companies.get(companyId)).skipWeeks)) : null;
+    const r = (await this.db.query<any>(`update houses set status = $3, skip_until = $4, updated_at = now() where id = $1 and company_id = $2 and status = 'skip_pending' returning *`, [houseId, companyId, to, until])).rows[0];
     if (!r) throw new DeliveryError(409, 'not_pending', 'That house isn’t waiting for a review.');
-    await this.event(companyId, houseId, decision === 'skip' ? 'skip_confirmed' : 'skip_overruled', by, note?.slice(0, 300) ?? null);
+    await this.event(companyId, houseId, decision === 'skip' ? 'skip_confirmed' : 'skip_overruled', by, [note?.slice(0, 300), until ? `tried again from ${until}` : null].filter(Boolean).join('; ') || null);
     if (decision === 'skip') await this.onStopped?.(companyId, houseId);
     return this.house(r);
   }
@@ -301,6 +398,27 @@ export class HouseService {
 
   // ---------- planning ----------
 
+  /** The company's date now, in its time zone. */
+  today(companyId: string) {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: this.platform.companies.get(companyId)?.timezone ?? 'UTC', year: 'numeric', month: '2-digit', day: '2-digit' }).format(this.platform.bus.now());
+  }
+
+  /**
+   * What time ends, before a night is planned: skips for access reasons whose weeks are over (the house is tried again,
+   * from the next night its route drives), and claims of a house whose person hasn't used the app for the company's
+   * months (`delivery.claimExpiryMonths`, 12 unless set). Each said in the house's history. Safe to run again.
+   */
+  async expire(companyId: string, date: string) {
+    const back = (await this.db.query<any>(`update houses set status = 'active', skip_reason = null, skip_until = null, next_date = case when next_date is null or next_date < $2 then $2::date else next_date end, updated_at = now()
+      where company_id = $1 and status = 'skipped' and skip_until is not null and skip_until <= $2 returning id`, [companyId, date])).rows;
+    for (const r of back) await this.event(companyId, r.id, 'skip_ended', null, 'its weeks were over: tried again');
+    const months = deliverySettings(this.platform.companies.get(companyId)).claimExpiryMonths;
+    const before = new Date(this.platform.bus.now().getTime() - months * 30.44 * 86_400_000).toISOString();
+    const gone = (await this.db.query<any>(`delete from house_claims where company_id = $1 and coalesce(last_seen_at, claimed_at) < $2 returning house_id, user_id`, [companyId, before])).rows;
+    for (const r of gone) await this.event(companyId, r.house_id, 'claim_expired', r.user_id, `not used for ${months} months`);
+    return { skipsEnded: back.length, claimsExpired: gone.length };
+  }
+
   /**
    * The houses due on `date` in each active area whose route drives that night. A house is due on its own night: the
    * first night its route drives on or after its next date. A house whose own night went by without a plan comes on
@@ -310,6 +428,7 @@ export class HouseService {
   async due(companyId: string, date: string, today: string, runsOn: (routeId: string, date: string) => boolean) {
     const out: { area: Area; houses: House[] }[] = [];
     if (!this.on(companyId, 'delivery_areas')) return out;
+    await this.expire(companyId, date < today ? today : date);
     for (const area of await this.activeAreas(companyId)) {
       if (!runsOn(area.routeId, date)) continue;
       const rows = (await this.db.query<any>(`select * from houses where area_id = $1 and status = 'active' and (next_date is null or next_date <= $2) and (last_planned is null or last_planned < $2)`, [area.id, date])).rows.map((r) => this.house(r));
@@ -343,9 +462,22 @@ export class HouseService {
 
   // ---------- people in the app ----------
 
+  /**
+   * The house this person claimed, if their claim still stands (it ends after the company's months without them using
+   * the app). Using it counts as being seen (at most once a day is written).
+   */
   private async claimed(userId: string, companyId: string) {
-    const r = (await this.db.query<any>(`select h.*, a.name as area_name, a.frequency_days, a.pack_size, a.route_id, c.claimed_at from house_claims c join houses h on h.id = c.house_id join delivery_areas a on a.id = h.area_id where c.user_id = $1 and c.company_id = $2`, [userId, companyId])).rows[0];
-    return r ?? null;
+    const r = (await this.db.query<any>(`select h.*, a.name as area_name, a.frequency_days, a.pack_size, a.route_id, c.claimed_at, c.last_seen_at from house_claims c join houses h on h.id = c.house_id join delivery_areas a on a.id = h.area_id where c.user_id = $1 and c.company_id = $2`, [userId, companyId])).rows[0];
+    if (!r) return null;
+    const now = this.platform.bus.now().getTime();
+    const seen = new Date(r.last_seen_at ?? r.claimed_at).getTime();
+    if (now - seen > deliverySettings(this.platform.companies.get(companyId)).claimExpiryMonths * 30.44 * 86_400_000) {
+      const gone = (await this.db.query<any>(`delete from house_claims where company_id = $1 and user_id = $2 and house_id = $3 returning house_id`, [companyId, userId, r.id])).rows[0];
+      if (gone) await this.event(companyId, r.id, 'claim_expired', userId, 'not used for a long time');
+      return null;
+    }
+    if (now - seen > 86_400_000) await this.db.query(`update house_claims set last_seen_at = $3 where company_id = $1 and user_id = $2`, [companyId, userId, new Date(now).toISOString()]);
+    return r;
   }
 
   /** Your house, if you've said which it is: its address, whether it gets packs, and when the last one came. */
@@ -353,48 +485,65 @@ export class HouseService {
     const r = await this.claimed(userId, companyId);
     if (!r) return null;
     const h = this.house(r);
-    return { id: h.id, address: h.address, areaName: r.area_name, status: h.status, householdSize: h.householdSize, lastDeliveredAt: h.lastDeliveredAt, nextDate: h.status === 'active' ? h.nextDate : null, packSize: Number(r.pack_size), everyDays: Number(r.frequency_days), claimedAt: new Date(r.claimed_at).toISOString() };
+    // Someone else said this is their house after you did: you see it here (it may be someone new living there).
+    const others = (await this.db.query<any>(`select at from house_events where house_id = $1 and company_id = $2 and kind = 'claimed' and by_user is distinct from $3 and at > $4 order by at desc limit 5`, [h.id, companyId, userId, r.claimed_at])).rows;
+    const notices = others.map((o) => `Someone else said this is their house on ${new Date(o.at).toISOString().slice(0, 10)}. If that’s not someone who lives with you, tell us (the team was told too).`);
+    return { id: h.id, address: h.address, areaName: r.area_name, status: h.status, householdSize: h.householdSize, lastDeliveredAt: h.lastDeliveredAt, nextDate: h.status === 'active' ? h.nextDate : null, packSize: Number(r.pack_size), everyDays: Number(r.frequency_days), claimedAt: new Date(r.claimed_at).toISOString(), notices };
   }
 
   /**
    * "This is my house": proved with a code from a box delivered there in the last 60 days. Scanning the box's QR
-   * sends its code; or the box number printed in the corner (#7K2QF) together with the house number. Five wrong tries
-   * a day at most. One house per person; several people can claim the same house.
+   * sends its code (the easy way); typing it, the whole box code printed under the QR on the box's side panel (never
+   * just the short box number in the corner: anyone passing the porch can read that). Five wrong tries a day at most.
+   * One house per person; several people can claim the same house: a new claim of a house someone already claimed is
+   * shown to them in the app and told to the team. A claim only ever sees what happened at the house after it.
    */
   async claim(userId: string, companyId: string, input: { code: string; houseNumber?: number }) {
+    const text = String(input.code ?? '').trim();
+    // The short number in the box's corner (#7K2QF) proves only that someone saw the box: not enough. Said plainly, and
+    // not counted as a wrong try (there was nothing to match).
+    if (/^#?\s*[a-z0-9]{5}$/i.test(text)) throw new DeliveryError(422, 'full_code_needed', 'That’s the box number from the corner. Scan the code on the side of the box, or type the whole box code printed under it.');
     const since = new Date(this.platform.bus.now().getTime() - 86_400_000).toISOString();
     const tooMany = () => new DeliveryError(429, 'too_many_tries', 'Too many codes that didn’t match today. Try again tomorrow, with the code from your most recent box.');
     const triesIn = async (db: SqlClient) => Number((await db.query<any>(`select count(*)::int as n from house_events where company_id = $1 and by_user = $2 and kind = 'claim_failed' and at > $3`, [companyId, userId, since])).rows[0]?.n ?? 0);
     if (await triesIn(this.db) >= CLAIM_TRIES_PER_DAY) throw tooMany();
-    const pack = await this.findPack(companyId, input.code, input.houseNumber);
+    let pack = await this.findPack(companyId, text);
+    // A house number sent with it must be the house's too.
+    if (pack && input.houseNumber !== undefined && (await this.getHouse(pack.houseId!, companyId))?.number !== input.houseNumber) pack = null;
+    const now = this.platform.bus.now().toISOString();
     // Counted and written under one lock per person, so codes sent all at once are still five a day (and two claims at
     // once leave one house, not an error). Over the limit, the answer is the same whether or not the code matched.
     const outcome = await this.db.transaction(async (tx) => {
       await tx.query(`select pg_advisory_xact_lock(hashtext('house-claim:' || $1 || ':' || $2))`, [companyId, userId]);
-      if (await triesIn(tx) >= CLAIM_TRIES_PER_DAY) return 'too_many' as const;
-      if (!pack?.houseId) { await this.event(companyId, null, 'claim_failed', userId, null, tx); return 'no_match' as const; }
-      await tx.query(`delete from house_claims where company_id = $1 and user_id = $2`, [companyId, userId]);
-      await tx.query(`insert into house_claims (house_id, user_id, company_id, pack_id, claimed_at) values ($1,$2,$3,$4,$5)`, [pack.houseId, userId, companyId, pack.id, this.platform.bus.now().toISOString()]);
-      await this.event(companyId, pack.houseId, 'claimed', userId, null, tx);
-      return 'claimed' as const;
+      if (await triesIn(tx) >= CLAIM_TRIES_PER_DAY) return { kind: 'too_many' as const };
+      if (!pack?.houseId) { await this.event(companyId, null, 'claim_failed', userId, null, tx); return { kind: 'no_match' as const }; }
+      const already = (await tx.query<any>(`select user_id from house_claims where house_id = $1 and user_id <> $2`, [pack.houseId, userId])).rows.map((r) => r.user_id as string);
+      const mineBefore = (await tx.query<any>(`select house_id from house_claims where company_id = $1 and user_id = $2`, [companyId, userId])).rows[0]?.house_id;
+      // Claiming your own house again keeps when you first did (and what you can see since); another house starts anew.
+      if (mineBefore === pack.houseId) await tx.query(`update house_claims set pack_id = $3, last_seen_at = $4 where company_id = $1 and user_id = $2`, [companyId, userId, pack.id, now]);
+      else {
+        await tx.query(`delete from house_claims where company_id = $1 and user_id = $2`, [companyId, userId]);
+        await tx.query(`insert into house_claims (house_id, user_id, company_id, pack_id, claimed_at, last_seen_at) values ($1,$2,$3,$4,$5,$5)`, [pack.houseId, userId, companyId, pack.id, now]);
+      }
+      await this.event(companyId, pack.houseId, 'claimed', userId, already.length ? `also claimed by ${already.length} other${already.length === 1 ? '' : 's'}` : null, tx);
+      return { kind: 'claimed' as const, houseId: pack.houseId, others: already, again: mineBefore === pack.houseId };
     });
-    if (outcome === 'too_many') throw tooMany();
-    if (outcome === 'no_match') throw new DeliveryError(404, 'no_match', input.houseNumber !== undefined ? 'That box number and house number don’t match a box we delivered. Check the number in the box’s corner.' : 'That code isn’t from a box we delivered in the last two months. Scan the code on the side of your most recent box.');
+    if (outcome.kind === 'too_many') throw tooMany();
+    if (outcome.kind === 'no_match') throw new DeliveryError(404, 'no_match', 'That code isn’t from a box we delivered in the last two months. Scan the code on the side of your most recent box, or type the whole box code printed under it.');
+    // Someone else already said this is their house: they see it in the app (mine().notices), and the team is told.
+    if (outcome.others.length && !outcome.again) {
+      const h = await this.getHouse(outcome.houseId, companyId);
+      this.alert?.(`house-claim-again:${outcome.houseId}`, 'A house someone already claimed was claimed by someone else', `${h?.address ?? outcome.houseId}: claimed again on ${now.slice(0, 10)} (${outcome.others.length} earlier claim${outcome.others.length === 1 ? '' : 's'}). Usually a new household or a second person living there; if a claimant says it isn’t theirs, look at the house’s history.`);
+    }
     return this.mine(userId, companyId);
   }
 
-  private async findPack(companyId: string, code: string, houseNumber?: number) {
+  /** The pack a scanned or typed box code is from: delivered, to a house of this company, in the last 60 days. */
+  private async findPack(companyId: string, text: string) {
     const today = this.platform.bus.now().getTime();
     const recent = (p: { runId?: string }) => { const d = /@(\d{4}-\d{2}-\d{2})$/.exec(p.runId ?? '')?.[1]; return !!d && today - Date.parse(`${d}T12:00:00Z`) <= CLAIM_WINDOW_DAYS * 86_400_000; };
     const ok = (p: import('../packs/service').Pack | undefined) => (p && p.companyId === companyId && p.houseId && p.status === 'delivered' && recent(p) ? p : null);
-    const text = String(code ?? '').trim();
-    if (houseNumber !== undefined) {
-      const want = text.replace(/[^a-z0-9]/gi, '').toUpperCase();
-      if (want.length !== 5) return null;
-      const hits = [...this.packs.packs.values()].filter((p) => ok(p) && boxNumber(p.id) === want);
-      for (const p of hits) { const h = await this.getHouse(p.houseId!, companyId); if (h?.number === houseNumber) return p; }
-      return null;
-    }
+    // Looked up by its code (an index), never by going through every pack.
     const packId = (await this.packFromCode?.(text)) ?? null;
     return packId ? ok(this.packs.packs.get(packId)) : null;
   }
@@ -410,8 +559,14 @@ export class HouseService {
     const id = r.id as string;
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: this.platform.companies.get(companyId)?.timezone ?? 'UTC', year: 'numeric', month: '2-digit', day: '2-digit' }).format(this.platform.bus.now());
     if (input.action === 'stop') {
+      // Effective at once, whoever asks (the founder: stopping is always honoured). A claim only days old is shown to
+      // the team as such, so a stop by someone who isn't the household can be noticed and put right.
+      const days = deliverySettings(this.platform.companies.get(companyId)).newClaimDays;
+      const ageDays = (this.platform.bus.now().getTime() - new Date(r.claimed_at).getTime()) / 86_400_000;
+      const fresh = ageDays < days;
       await this.db.query(`update houses set status = 'opted_out', updated_at = now() where id = $1`, [id]);
-      await this.event(companyId, id, 'opted_out', userId, null);
+      await this.event(companyId, id, 'opted_out', userId, fresh ? `new claim (${Math.max(0, Math.floor(ageDays))} day${Math.floor(ageDays) === 1 ? '' : 's'} old)` : null);
+      if (fresh) this.alert?.(`house-new-claim-stop:${id}`, 'Deliveries stopped by a new claim', `${r.address}: stopped in the app by someone who claimed the house ${Math.floor(ageDays)} day(s) ago. It’s stopped (as asked); if it looks wrong, check the house’s history and claims.`);
       await this.onStopped?.(companyId, id);
     } else if (input.action === 'restart') {
       // A long pause doesn't make the house "overdue": it's next due from today.
@@ -440,7 +595,7 @@ export class HouseService {
     const area = await this.getArea('area-austin-pilot', companyId);
     for (const p of rows) {
       const s = splitAddress(p.address);
-      await this.db.query(`insert into houses (id, company_id, area_id, address, address_key, street, number, lat, lng, sample) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,true) on conflict do nothing`, [newId('hs'), companyId, area.id, p.address, addressKey(p.address), s.street, s.number, p.lat, p.lng]);
+      await this.db.query(`insert into houses (id, company_id, area_id, address, address_key, street, number, lat, lng, sample, unit, zip) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,true,$10,$11) on conflict do nothing`, [newId('hs'), companyId, area.id, p.address, addressKey(p.address), s.street, s.number, p.lat, p.lng, s.unit, s.zip]);
     }
   }
 }

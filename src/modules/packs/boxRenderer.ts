@@ -126,9 +126,13 @@ function boxPanel(company: CompanyConfig, x: number, y: number, w: number, h: nu
   // Facts block at the bottom, sized first so the QR never overlaps it.
   const facts = [`${box.bottles} bottles`, ...company.productFacts].flatMap((l) => wrap(l, fit(9)));
   const factsTop = y + h - 10 - facts.length * 11;
-  const q = Math.max(56, Math.min(90, factsTop - ty - 30));
+  const q = Math.max(56, Math.min(90, factsTop - ty - 41));
   out.push(qrSvg(packUrl, cx - q / 2, ty + 2, q, 'H', companyQrStyle(company)));
   out.push(`<text x="${cx}" y="${ty + q + 14}" text-anchor="middle" ${font} font-size="9" fill="${b.textColor}">Scan for this pack&#39;s receipt</text>`);
+  // The whole code the QR holds, for typing in the app when the QR won't scan ("this is my house"). Only the box's own
+  // side panel carries it, not the short number in the corner.
+  const code = /\/Q\/([A-Za-z0-9]+)$/.exec(packUrl)?.[1];
+  if (code) out.push(`<text x="${cx}" y="${ty + q + 25}" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="${b.textColor}">Box code ${esc(code.replace(/(.{4})(?=.)/g, '$1 '))}</text>`);
   facts.forEach((l, i) => out.push(`<text x="${x + 10}" y="${factsTop + (i + 1) * 11}" ${font} font-size="9" ${i === 0 ? 'font-weight="700"' : ''} fill="${b.textColor}">${esc(l)}</text>`));
   return out.join('');
 }

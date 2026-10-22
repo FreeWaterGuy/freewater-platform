@@ -132,12 +132,36 @@ export class Platform {
     return { ...a, ...(on('targeting_people') ? {} : { interests: [], advertisersSeen: new Set<string>() }), ...(on('ad_preferences') ? {} : { avoid: [] }), ...(on('measurement') ? {} : { noAds: false }) };
   }
 
+  /**
+   * Each person's bottles of the last two days (unit ids), so "how many of this ad did they get today" reads a handful
+   * of bottles, not every bottle ever printed. Bounded: a person's older bottles drop off as new ones come, and people
+   * with none in two days are let go every 1,000 additions.
+   */
+  private recentByPerson = new Map<string, { id: string; at: number }[]>();
+  private recentAdds = 0;
+  private noteUnit(u: Unit) {
+    const keys = [u.intendedFor, u.consumerId ? `consumer:${u.consumerId}` : undefined].filter((k): k is string => !!k);
+    if (!keys.length) return;
+    const at = Date.parse(u.createdAt), keep = this.bus.now().getTime() - 2 * 86_400_000;
+    for (const key of keys) {
+      const list = (this.recentByPerson.get(key) ?? []).filter((x) => x.at >= keep && x.id !== u.id);
+      if (at >= keep) list.push({ id: u.id, at });
+      if (list.length) this.recentByPerson.set(key, list); else this.recentByPerson.delete(key);
+    }
+    if (++this.recentAdds % 1000 === 0) for (const [k, l] of this.recentByPerson) if (!l.some((x) => x.at >= keep)) this.recentByPerson.delete(k);
+  }
+  /** A signed-in person's bottles from the last two days (an index, not a pass over every bottle). */
+  recentUnitsOf(consumerId: string): Unit[] {
+    return (this.recentByPerson.get(`consumer:${consumerId}`) ?? []).map((r) => this.units.get(r.id)).filter((u): u is Unit => !!u && u.consumerId === consumerId);
+  }
+
   private withToday(a: import('./modules/ads/contract').PrintAudience | null, tz?: string) {
     if (!a) return null;
     const today = momentAt(this.bus.now(), tz ?? 'UTC').dayKey;
     const counts = new Map<string, number>();
-    for (const u of this.units.values()) {
-      if (u.intendedFor !== a.personKey || u.status === 'failed' || momentAt(new Date(u.createdAt), tz ?? 'UTC').dayKey !== today) continue;
+    for (const r of this.recentByPerson.get(a.personKey) ?? []) {
+      const u = this.units.get(r.id);
+      if (!u || u.intendedFor !== a.personKey || u.status === 'failed' || momentAt(new Date(u.createdAt), tz ?? 'UTC').dayKey !== today) continue;
       for (const p of u.placements) if (!p.isHouse) counts.set(p.campaignId, (counts.get(p.campaignId) ?? 0) + 1);
     }
     return { ...a, campaignsToday: counts };
@@ -175,6 +199,7 @@ export class Platform {
   /** Put a unit loaded from storage back in place. */
   restoreUnit(unit: Unit, label?: RenderedLabel) {
     this.units.set(unit.id, unit);
+    this.noteUnit(unit);
     if (label) this.keepLabel(label);
     // An order printed anew after a restart cut off its first try has two bottles: the order is the one that wasn't let go.
     if (unit.orderId) {
@@ -291,6 +316,7 @@ export class Platform {
       ...(opts.custom?.experienceConfig ? { experienceConfig: opts.custom.experienceConfig } : {}),
     };
     this.units.set(unit.id, unit);
+    this.noteUnit(unit);
     this.orderUnits.set(`${company.id}:${opts.orderId}`, unit.id);
     this.persist.unit(unit);
     this.bus.publish('slots.filled', company.id, { unitId: unit.id, layout: unit.layout, placements: unit.placements }, unit.id);
@@ -372,7 +398,7 @@ export class Platform {
   confirmPrepared(unitId: string, jobId: string, consumerId?: string): boolean {
     const unit = need(this.units, unitId, 'unit');
     if (unit.status !== 'rendered') return false;
-    if (consumerId) unit.consumerId = consumerId;
+    if (consumerId) { unit.consumerId = consumerId; this.noteUnit(unit); }
     this.confirm(unit, jobId);
     return true;
   }
@@ -432,6 +458,7 @@ export class Platform {
       ...(old.consumerId ? { consumerId: old.consumerId } : {}), ...(old.intendedFor ? { intendedFor: old.intendedFor } : {}), ...(old.experienceConfig ? { experienceConfig: old.experienceConfig } : {}),
     };
     this.units.set(unit.id, unit);
+    this.noteUnit(unit);
     this.orderUnits.set(`${company.id}:${orderId}`, unit.id);
     this.persist.unit(unit);
     this.bus.publish('slots.filled', company.id, { unitId: unit.id, layout: unit.layout, placements: unit.placements }, unit.id);

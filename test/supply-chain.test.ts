@@ -147,13 +147,13 @@ describe('door reports come from the driver', () => {
     const s1 = out.stops[0];
     const jpeg = await doorPhoto();
     // Another driver's photo of this box doesn't prove this driver's drop; a file that only starts like a JPEG isn't a photo.
-    expect((await call('POST', `/v1/driver/photos?packId=${s1.packId}`, other, jpeg, { 'content-type': 'image/jpeg' })).status).toBe(201);
-    expect((await call('POST', `/v1/driver/photos?packId=${s1.packId}`, dana, Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 74, 70, 73, 70, 0, 1]), { 'content-type': 'image/jpeg' })).body.error.code).toBe('not_a_photo');
+    expect((await call('POST', `/v1/driver/photos?packId=${s1.packId}&capture=camera`, other, jpeg, { 'content-type': 'image/jpeg' })).status).toBe(201);
+    expect((await call('POST', `/v1/driver/photos?packId=${s1.packId}&capture=camera`, dana, Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 74, 70, 73, 70, 0, 1]), { 'content-type': 'image/jpeg' })).body.error.code).toBe('not_a_photo');
     const at = { scannedPackId: s1.packId, lat: s1.point.lat, lng: s1.point.lng, emptiesCollected: 0 };
     expect((await call('POST', `/v1/driver/runs/${run.id}/stops/1/deliver`, dana, at)).body.error.code).toBe('photo_required');
     // Another driver can't report this run's door.
     expect((await call('POST', `/v1/driver/runs/${run.id}/stops/1/deliver`, other, at)).body.error.code).toBe('not_your_route');
-    const mine = (await call('POST', `/v1/driver/photos?packId=${s1.packId}`, dana, jpeg, { 'content-type': 'image/jpeg' })).body.id;
+    const mine = (await call('POST', `/v1/driver/photos?packId=${s1.packId}&capture=camera`, dana, jpeg, { 'content-type': 'image/jpeg' })).body.id;
     expect((await call('POST', `/v1/driver/runs/${run.id}/stops/1/deliver`, dana, at)).body.stops[0]).toMatchObject({ status: 'delivered', photo: { id: mine } });
   });
 });

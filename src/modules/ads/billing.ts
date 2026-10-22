@@ -37,7 +37,15 @@ export interface AdBilling {
   changeFeeCents: number;
   /** Costly extras (AI video footage and the like): cost plus this markup, paid up front with the bottles. */
   extras: { markupPercent: number; perUse: Record<string, AdExtra> };
+  /**
+   * How big one prepayment can be. A route buy covers at most `maxRouteWeeks` weeks, one charge to a card is at most
+   * `maxChargeCents` (above it, the advertiser is asked to talk to the team), and credit from pieces that couldn't be
+   * delivered lasts `creditExpiryDays` (null: it never expires). Missing: these defaults.
+   */
+  limits?: AdLimits;
 }
+export interface AdLimits { maxRouteWeeks: number; maxChargeCents: number; creditExpiryDays: number | null }
+export const DEFAULT_AD_LIMITS: AdLimits = { maxRouteWeeks: 26, maxChargeCents: 1_000_000, creditExpiryDays: null };
 
 /** Where every company starts, and what a company with no setting gets: prepaid, flat prices, no extra fees. */
 export function defaultAdBilling(): AdBilling {
@@ -70,8 +78,23 @@ export function adBilling(company: Pick<CompanyConfig, 'adBilling'>): AdBilling 
     },
     changeFeeCents: b.changeFeeCents ?? d.changeFeeCents,
     extras: { markupPercent: b.extras?.markupPercent ?? d.extras.markupPercent, perUse: b.extras?.perUse ?? d.extras.perUse },
+    ...(b.limits ? { limits: adLimits(company) } : {}),
   };
 }
+
+/** A company's limits on one prepayment, the defaults filling what it didn't set. */
+export function adLimits(company: Pick<CompanyConfig, 'adBilling'>): AdLimits {
+  const l = company.adBilling?.limits;
+  return { maxRouteWeeks: l?.maxRouteWeeks ?? DEFAULT_AD_LIMITS.maxRouteWeeks, maxChargeCents: l?.maxChargeCents ?? DEFAULT_AD_LIMITS.maxChargeCents, creditExpiryDays: l?.creditExpiryDays === undefined ? DEFAULT_AD_LIMITS.creditExpiryDays : l.creditExpiryDays };
+}
+
+/** Why one charge of this size is refused (above the company's most for one payment), in words to act on; null when fine. */
+export function chargeLimitProblem(company: Pick<CompanyConfig, 'adBilling' | 'name'>, cardCents: number): string | null {
+  const max = adLimits(company).maxChargeCents;
+  if (cardCents <= max) return null;
+  return `That’s ${dollars(cardCents)} in one payment, more than ${company.name} takes at once (${dollars(max)}). Buy fewer weeks, houses or bottles, or contact ${company.name}’s team to arrange a bigger buy. Nothing was charged.`;
+}
+const dollars = (c: number) => `$${(c / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 export const prepaidModel = (company: Pick<CompanyConfig, 'adBilling'>) => adBilling(company).requirePrepay;
 export const flatPricing = (company: Pick<CompanyConfig, 'adBilling'>) => adBilling(company).pricingMode === 'flat';
@@ -146,6 +169,13 @@ export function checkAdBilling(b: CompanyConfig['adBilling']): string | null {
   if (items.length > 20) return 'Up to 20 extras can be priced.';
   for (const [id, e] of items) {
     if (!/^[a-zA-Z][a-zA-Z0-9]{1,39}$/.test(id) || !e || typeof e.label !== 'string' || e.label.trim().length < 2 || e.label.length > 80 || !isInt(e.costCents, 1, 100_000)) return 'Each extra has a short id, a name (2 to 80 characters) and what one use costs us (1¢ to $1,000).';
+  }
+  const l = b.limits;
+  if (l !== undefined) {
+    if (!l || typeof l !== 'object') return 'The limits on one payment are missing.';
+    if (!isInt(l.maxRouteWeeks, 1, 52)) return 'A route buy can cover at most 1 to 52 weeks.';
+    if (!isInt(l.maxChargeCents, 100, 100_000_000)) return 'The most one payment can be must be $1 to $1,000,000.';
+    if (l.creditExpiryDays !== null && !isInt(l.creditExpiryDays, 30, 3650)) return 'Credit lasts 30 to 3,650 days, or never expires (empty).';
   }
   return null;
 }

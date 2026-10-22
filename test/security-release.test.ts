@@ -160,10 +160,10 @@ describe('3. a key never changes a switch', () => {
 describe('4. claiming a house', () => {
   it('five wrong tries a day, even when a dozen arrive at the same moment (P2)', async () => {
     const eve = await signIn('eve-sec@example.com');
-    const tries = await Promise.all(Array.from({ length: 12 }, (_, i) => call('POST', '/v1/me/house/claim', eve, { code: `${(0x10000 + i).toString(16)}`, houseNumber: 100 + i })));
+    const tries = await Promise.all(Array.from({ length: 12 }, (_, i) => call('POST', '/v1/me/house/claim', eve, { code: `NOPE${(0x10000 + i).toString(16)}WRONG`.toUpperCase(), houseNumber: 100 + i })));
     const wrong = tries.filter((t) => t.code === 'no_match').length;
     expect(wrong).toBeLessThanOrEqual(5);
     expect(tries.filter((t) => t.code === 'too_many_tries').length).toBe(12 - wrong);
-    expect((await call('POST', '/v1/me/house/claim', eve, { code: 'abcde', houseNumber: 1 })).code).toBe('too_many_tries');
+    expect((await call('POST', '/v1/me/house/claim', eve, { code: 'ABCDEFGHJKMNPQ' })).code).toBe('too_many_tries');
   });
 });

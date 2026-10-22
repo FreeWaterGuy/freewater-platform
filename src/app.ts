@@ -48,7 +48,7 @@ import { WebhookService } from './modules/webhooks/service';
 import { HttpWebhookSender, type WebhookSender } from './adapters/webhooks/contract';
 import { ConsoleService } from './modules/console/service';
 import { FleetService, MachineFleetPrinter } from './modules/fleet/service';
-import { CodeService, loadSecret } from './modules/codes/service';
+import { CODE_LEN, CodeService, loadSecret } from './modules/codes/service';
 import { ScanTokens } from './modules/codes/scanTokens';
 import { AttributionService } from './modules/attribution/service';
 import { LotteryService } from './modules/lottery/service';
@@ -470,12 +470,24 @@ export async function createApp(opts: AppOptions) {
   houses.packFromCode = async (text) => {
     const smart = /\/Q\/([A-Za-z0-9]+)\b/.exec(text)?.[1];
     if (smart) return (await codes.find(smart))?.packId ?? null;
+    // The whole box code typed from the box's side panel ("7K2Q F8MN 3XPA RT"): the same code the QR holds.
+    const typed = text.replace(/[\s-]/g, '');
+    if (typed.length === CODE_LEN && /^[A-Za-z0-9]+$/.test(typed)) return (await codes.find(typed))?.packId ?? null;
     return /\/(?:p|b)\/(pk_[A-Za-z0-9]+)/.exec(text)?.[1] ?? (/^pk_[A-Za-z0-9]+$/.test(text) ? text : null);
   };
   delivery.houses = houses;
+  houses.alert = (key, title, detail) => void runtime.alerts.alert(key, 'warning', title, detail);
+  delivery.boxes = () => state.boxes;
   // Photos of each drop: only the team and the house's resident see them, and they're deleted after the keep.
   const dropPhotos = new DropPhotoService(db, platform, opts.blobs, opts.clock);
   dropPhotos.packs = packs.packs;
+  // Where a box's door is: its stop on its night's run (or its house), for checking where the photo was taken.
+  dropPhotos.placeOf = async (companyId, pack) => {
+    const run = pack.runId ? await delivery.getRun(pack.runId, companyId).catch(() => null) : null;
+    const stop = run?.stops.find((x) => x.stop === pack.stop && (!x.packId || x.packId === pack.id));
+    if (stop) return stop.point;
+    return pack.houseId ? (await houses.getHouse(pack.houseId, companyId))?.point ?? null : null;
+  };
   delivery.photos = dropPhotos;
   packs.houseContextFor = (houseId, companyId) => houses.contextFor(houseId, companyId);
   if (demoKeys) await houses.seedSample('freewater', 'route-3', pilotHouses);
@@ -535,6 +547,9 @@ export async function createApp(opts: AppOptions) {
   packs.routeFor = (pack) => routeBuys.forPack(pack);
   packs.routeBoxPrinted = (pack) => routeBuys.boxPrinted(pack);
   houses.onStopped = (companyId, houseId) => routeBuys.settle(companyId, { houseId }).catch((e) => runtime.alerts.alert(`route-settle:${companyId}`, 'warning', 'Giving back route pieces for a house that stopped failed', String((e as Error)?.message ?? e)));
+  // One door, one house: today's address keys, and any two houses found to be one door merged (after onStopped is set,
+  // so what was reserved on the house merged away comes back to its advertisers).
+  await houses.rekeyHouses();
   await routeBuys.restore();
   if (demoKeys) await seedRouteBuys(platform, db, routeBuys, payments).catch((e) => console.error('Demo route buys weren’t made:', (e as Error).message));
 
