@@ -1,7 +1,7 @@
 // Where three features built side by side meet (integration of p-pay, p-route and p-news):
 // - packs printed for houses in a delivery area draw paid bottles from prepaid ads exactly like any other bottle
-//   (never free, never twice), and a night with nothing paid fills with approved fillers or the house ad, never with
-//   an ad nobody paid for;
+//   (never free, never twice), and a night with nothing paid fills from the unsold-space list (approved fillers, a
+//   charity partner's piece; never the company's own ads), never with an ad nobody paid for;
 // - fillers are never billed and never come before a paid ad;
 // - a house in a delivery area and the household data about it are the same house (one address key), and a person
 //   who claimed that house in the app is one of its residents for the household audience (their "do not sell" keeps
@@ -56,8 +56,8 @@ afterAll(async () => { PrepaidService.minBottles = 100; await app.persistence.fl
 describe('house packs, prepaid ads and fillers', () => {
   let area: any, filler: Campaign, unpaid: Campaign, paid: Campaign;
 
-  it('a night with nothing paid fills house packs with approved fillers or the house ad, never an ad nobody paid for', async () => {
-    const f = await app.fillers.propose('freewater', { kind: 'own', headline: 'Refill and reuse', text: 'Every bottle is recyclable. Thank you.' } as any, 'test');
+  it('a night with nothing paid fills house packs from the unsold-space list (never the house ad), never an ad nobody paid for', async () => {
+    const f = await app.fillers.propose('freewater', { kind: 'charity', name: 'Well Aware', headline: 'Wells in Kenya', text: 'Clean water for every village.', icon: 'drop' } as any, 'test');
     await app.fillers.approve('freewater', f.id, 'test');
     filler = app.platform.campaigns.get(f.id)!;
     unpaid = await newAd(4);
@@ -71,6 +71,7 @@ describe('house packs, prepaid ads and fillers', () => {
     expect(pls.some((p) => p.campaignId === unpaid.id)).toBe(false);
     expect(pls.every((p) => p.isHouse && p.priceCents === 0 && !p.prepaid)).toBe(true);
     expect(pls.some((p) => p.campaignId === filler.id)).toBe(true);
+    expect(pls.some((p) => p.campaignId === 'cmp-house')).toBe(false);
     await app.persistence.flush();
     // Fillers are never billed: no books line for them, nothing owed by the advertiser that never paid.
     expect(app.platform.ledger.entries.some((l) => l.campaignId === filler.id || l.campaignId === unpaid.id)).toBe(false);
@@ -83,10 +84,12 @@ describe('house packs, prepaid ads and fillers', () => {
     const runs = (await app.delivery.planNight('freewater', '2026-11-10', opsId)).filter((r: any) => r.areaId === area.id);
     expect(runs.length).toBeGreaterThan(0);
     const pls = housePlacements(runs);
-    const mine = pls.filter((p) => p.campaignId === paid.id);
+    const mine = pls.filter((p) => p.campaignId === paid.id && !p.isHouse);
     // 36 bottles, 5 paid: exactly 5 carry the paid ad (paid comes before any filler), each drawn once.
     expect(mine).toHaveLength(5);
     expect(mine.every((p) => p.prepaid && !p.isHouse)).toBe(true);
+    // Once its paid bottles are out it's a former advertiser: its ad may go on as a free bonus, never billed or drawn.
+    expect(pls.filter((p) => p.campaignId === paid.id && p.isHouse).every((p) => p.unsold === 'former_advertiser' && p.priceCents === 0 && !p.prepaid)).toBe(true);
     expect(pls.some((p) => p.campaignId === unpaid.id)).toBe(false);
     expect(pls.filter((p) => !p.isHouse).every((p) => p.campaignId === paid.id)).toBe(true);
     await app.persistence.flush();

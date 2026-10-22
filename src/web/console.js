@@ -435,12 +435,13 @@
       const chips = h('div', { class: 'chips', role: 'group', 'aria-label': 'Blocked categories' }, cats.map((c) => h('button', { type: 'button', 'aria-pressed': String(blocked.has(c)), onclick: (e) => { blocked.has(c) ? blocked.delete(c) : blocked.add(c); e.currentTarget.setAttribute('aria-pressed', String(blocked.has(c))); ctx.draft.adRules.blockedCategories = cats.filter((x) => blocked.has(x)); ctx.changed(); } }, c.replace(/-/g, ' '))));
       return [h('div', { class: 'stack' },
         section('Ads on each bottle', null, h('div', { class: 'form' },
-          num(ctx, 'adRules.minAdsPerUnit', 'Fewest ads on a bottle', { min: 0, max: 10, hint: 'Empty space is filled with your house ad.' }),
+          num(ctx, 'adRules.minAdsPerUnit', 'Fewest ads on a bottle', { min: 0, max: 10, hint: 'Space nobody bought is filled from your unsold-space list below, never with your own ad.' }),
           // The most ads on one bottle is set with the label layouts it limits, where paid bottles it would strand are counted first.
           h('div', { class: 'field' }, h('label', { text: 'Most ads on one bottle' }), h('div', { class: 'row' }, h('b', { text: String(ctx.draft.adRules.maxAdsPerUnit) }), link('/console/features#layouts', { class: 'btn secondary small' }, 'Change it with the label layouts')), h('div', { class: 'hint', text: '1 to 10. Set on the Features page, beside the layouts it allows.' })),
           num(ctx, 'adRules.maxPackShare', 'Most of a pack one advertiser can have', { min: 5, max: 100, scale: 100, suffix: '%', int: false, hint: 'In 6, 12 and 24 packs, so every pack has variety.' }),
           select(ctx, 'adRules.repeatScanWindowSec', 'Don’t bill the same person’s repeat scans within', [[0, 'Bill every scan'], [300, '5 minutes'], [600, '10 minutes'], [3600, '1 hour'], [86400, '1 day']]),
           toggle(ctx, 'adRules.competitorSeparation', 'Keep competitors apart', 'Two ads from the same competitor group never share a bottle.', { full: true }))),
+        unsoldSection(ctx),
         section('Categories you won’t print', 'Tap to block. Advertisers in a blocked category can’t sign up or run ads.', chips),
         (ctx.draft.adBilling?.pricingMode ?? 'flat') === 'flat'
           ? section('Price per bottle, by size', 'One flat price per bottle for each size of ad, everything included (AR, video and scans). Each piece is cut as close to square as the label allows.', h('div', { class: 'form' },
@@ -466,6 +467,51 @@
           num(ctx, 'adBilling.fees.commission.percent', `Commission on sales (${ctx.draft.adBilling.fees.commission.on ? 'on' : 'off'})`, { min: 0, max: 50, step: 0.5, int: false, suffix: '%' }),
           num(ctx, 'adBilling.extras.markupPercent', 'Markup on costly extras (AI video clips)', { min: 0, max: 500, suffix: '%', hint: (v) => Object.values(ctx.draft.adBilling.extras.perUse).map((x) => `${x.label}: costs us ${dollars(x.costCents)}, the advertiser pays ${dollars(Math.ceil(x.costCents * (100 + (v ?? 0)) / 100))} a use`).join('; ') }))) : null)];
     });
+  }
+
+  // ---------- unsold space (src/modules/fillers/unsold.ts) ----------
+  // The list that fills space nobody bought, in order: add, remove and reorder; the ads you picked; holding delivery
+  // bottles for paid ads, for the company and each area. Saved with the page (a person signed in).
+  function unsoldSection(ctx) {
+    const box = h('div', { class: 'stack' }, h('p', { class: 'muted', text: 'Loading…' }));
+    api('GET', '/v1/console/unsold').then((u) => {
+      const cur = () => (ctx.draft.unsold ??= structuredClone(u.settings));
+      const changed = () => { ctx.changed(); draw(); };
+      const labelOf = Object.fromEntries(u.sources.map((x) => [x.id, x.label]));
+      const draw = () => {
+        const s = ctx.draft.unsold ?? u.settings;
+        const move = (i, d) => { const o = cur().order; const [x] = o.splice(i, 1); o.splice(i + d, 0, x); changed(); };
+        const list = h('ol', { class: 'unsold-order', 'aria-label': 'What fills unsold space, in order' }, s.order.map((id, i) => h('li', {},
+          h('span', { class: 'grow', text: labelOf[id] ?? id }),
+          h('button', { type: 'button', class: 'btn secondary small', 'aria-label': `Move ${labelOf[id]} up`, disabled: i === 0, onclick: () => move(i, -1) }, '↑'),
+          h('button', { type: 'button', class: 'btn secondary small', 'aria-label': `Move ${labelOf[id]} down`, disabled: i === s.order.length - 1, onclick: () => move(i, 1) }, '↓'),
+          h('button', { type: 'button', class: 'btn secondary small', 'aria-label': `Remove ${labelOf[id]}`, onclick: () => { cur().order.splice(i, 1); changed(); } }, 'Remove'))));
+        const missing = u.sources.filter((x) => !s.order.includes(x.id));
+        const add = !missing.length ? '' : h('select', { class: 'input', 'aria-label': 'Add to the list', onchange: (e) => { if (e.target.value) { cur().order.push(e.target.value); changed(); } } }, h('option', { value: '', text: 'Add to the list…' }), missing.map((x) => h('option', { value: x.id, text: x.label })));
+        const pickSel = h('select', { class: 'input', 'aria-label': 'Pick an ad', onchange: (e) => { if (e.target.value && !cur().picks.includes(e.target.value)) { cur().picks.push(e.target.value); changed(); } } }, h('option', { value: '', text: 'Pick an approved ad…' }), u.choices.filter((c) => !s.picks.includes(c.id)).map((c) => h('option', { value: c.id, text: c.name })));
+        const picks = h('ul', { class: 'unsold-picks' }, s.picks.map((id, i) => { const p = u.picks.find((x) => x.id === id); const c = u.choices.find((x) => x.id === id); return h('li', {}, h('span', { class: 'grow', text: c?.name ?? p?.name ?? id }), p && !p.usable && p.why ? h('span', { class: 'pill', text: p.why }) : null, h('button', { type: 'button', class: 'btn secondary small', onclick: () => { cur().picks.splice(i, 1); changed(); } }, 'Remove')); }));
+        const holdOn = h('input', { type: 'checkbox' }); holdOn.checked = !!s.hold.on; holdOn.addEventListener('change', () => { cur().hold.on = holdOn.checked; changed(); });
+        const days = h('input', { class: 'input', type: 'number', min: 1, max: 30, value: s.hold.days, 'aria-label': 'Days held' }); days.addEventListener('change', () => { cur().hold.days = Math.max(1, Math.min(30, Math.round(Number(days.value) || 7))); changed(); });
+        const areaRows = u.areas.map((a) => {
+          const ov = s.hold.areas?.[a.id] ?? {};
+          const sel = h('select', { class: 'input', 'aria-label': `Hold for ${a.name}` }, [['', 'As the company'], ['on', 'Hold'], ['off', 'Don’t hold']].map(([v, l]) => h('option', { value: v, text: l })));
+          sel.value = ov.on === true ? 'on' : ov.on === false ? 'off' : '';
+          sel.addEventListener('change', () => { const areas = (cur().hold.areas ??= {}); const next = { ...(areas[a.id] ?? {}) }; if (sel.value) next.on = sel.value === 'on'; else delete next.on; if (Object.keys(next).length) areas[a.id] = next; else delete areas[a.id]; changed(); });
+          return h('div', { class: 'row' }, h('span', { class: 'grow', text: a.name }), sel);
+        });
+        box.replaceChildren(
+          h('p', { class: 'muted', style: 'margin:0', text: 'Never your own ads, “your ad here” or your news: only other businesses’ ads. If nothing on the list fits a piece, a tidier layout with fewer pieces is used (paid ones first); a plain blank piece only as a last resort, and your team is told.' }),
+          list, add,
+          h('h3', { text: 'Ads you picked' }), picks, pickSel,
+          !u.formerAdvertisers.length ? '' : h('details', {}, h('summary', { text: `Former advertisers (${u.formerAdvertisers.length})` }), h('ul', {}, u.formerAdvertisers.map((a) => h('li', { text: `${a.name}: ${a.why ?? `${a.usable} ad${a.usable === 1 ? '' : 's'} ready`} · ${a.bonusBottles} bonus bottle${a.bonusBottles === 1 ? '' : 's'}` })))),
+          h('h3', { text: 'Hold delivery bottles for paid ads' }),
+          h('label', { class: 'switch' }, holdOn, h('div', {}, h('b', { text: 'Hold' }), h('span', { text: 'A delivery night more than these days away isn’t printed yet, so paid ads can still be bought on it. The night before delivery is always printed, so no house misses its pack.' }))),
+          field('Days', days), ...areaRows,
+          !u.blanks.count ? '' : h('p', { class: 'notice', text: `${u.blanks.count} blank piece${u.blanks.count === 1 ? '' : 's'} printed since the server started (last ${new Date(u.blanks.last).toLocaleString()}). Add to the list so nothing prints blank.` }));
+      };
+      draw();
+    }).catch((x) => box.replaceChildren(h('p', { class: 'notice err', text: x.message })));
+    return section('Unsold space', 'What fills space nobody bought, in order. Every piece is another business’s ad: never billed, never counted against a paid ad.', box);
   }
 
   // ---------- QR codes and AR ----------

@@ -148,9 +148,15 @@ paid to take them), paid for by advertisers, with part of every bottle going to 
 
 ## Spots nobody buys
 
-- **Filler before the house ad.** A spot nobody bought gets a piece the company approved for that situation: its own
-  messages, charity (Well Aware) messages, advertisers' ads they offered free for unsold spots, and our own news when
-  news is on. The generic house ad is the last resort. A person approves every piece; filler is never billed.
+- **Third-party only.** "Every piece of real estate on these labels needs to be a third-party ad and never the
+  FreeWater stuff, other than all the way to the right in the tiny black area." The company's own ads, "your ad here",
+  its own messages and its news never go in the ad area (a white-label company may allow its own; FreeWater never).
+- **The unsold-space list, in the company's order** (docs/SWITCHES.md, "Unsold space"): former paying advertisers'
+  past ads still current, free as a bonus (they can say no; never billed; shown to them as bonus bottles; turns taken
+  fairly; competitors apart), approved filler ads, charity partners (Well Aware), the team's picks. Nothing fits: a
+  tidier template with fewer pieces; a blank piece only as a last resort, and the team is told. A person approves
+  every filler; nothing on the list is billed. Delivery bottles can be held for paid ads up to N days (off; 7), never
+  costing a house its delivery.
 - **News starts off** (built, switched off; rolled out over time with testing): the host must switch the area on
   (`FW_FEATURES_ON=news`) and a person must turn it on for the company. When on, the bottle carries a **topic and a
   photo only** ("<subject>: the latest"), never a claim that can go stale; a person approves each topic; its code is

@@ -266,6 +266,11 @@ export interface CompanyConfig {
   news?: { on: boolean; sources?: { id: string; name: string; url: string }[] };
   /** Home delivery: how many days a photo of a drop is kept before it's deleted (1 to 365; 90 unless set). */
   delivery?: Partial<import('../modules/delivery/settings').DeliverySettings>;
+  /**
+   * Space nobody bought (src/modules/fillers/unsold.ts): the list that fills it, in order, the team's picks, whether its
+   * own ads may come after the list (off; FreeWater never), and holding delivery bottles for paid ads. Unset: defaults.
+   */
+  unsold?: Partial<import('../modules/fillers/unsold').UnsoldSettings>;
   /** Which registered implementation each module slot uses. Swapping one never touches the others. */
   modules: {
     ads: string;
@@ -483,11 +488,19 @@ export interface Placement {
   /** For a bid: the campaign's spend day (its own time zone) the price was held against. */
   spentDay?: string;
   isHouse: boolean;
+  /**
+   * Space nobody bought, and what filled it (src/modules/fillers/unsold.ts): always `isHouse` too (never billed, never
+   * counted against a paid ad). 'former_advertiser' is a past advertiser's ad printed free as a bonus.
+   */
+  unsold?: UnsoldKind;
   /** Why this ad was chosen for this person ("likes coffee", "new customer"), when it targets people. */
   audienceMatch?: string[];
   /** How it won: its bid for the whole label after adjustments, what it paid for the whole label, its rank. */
   auction?: { bidCents: number; paidLabelCents: number; rankCents: number; adjustments: string[] };
 }
+
+/** What filled a piece nobody bought: a former advertiser's ad (a bonus), a filler ad, a charity partner's piece, the team's pick, the company's own (only where it allows that), or a plain blank piece. */
+export type UnsoldKind = 'former_advertiser' | 'filler' | 'charity' | 'picked' | 'own' | 'neutral';
 
 export type BoxFace = 'top' | 'front' | 'back' | 'right' | 'left' | 'bottom';
 
@@ -499,6 +512,8 @@ export interface BoxFacePlacement {
   experienceId: string;
   priceCents: Cents; // billed only when the box print is confirmed
   isHouse: boolean;
+  /** A side nobody bought, and what filled it (as on labels). */
+  unsold?: UnsoldKind;
   /** A box side bought on a delivery route and paid up front (route_spots): booked from the advertiser's prepaid money. */
   routeSpotId?: string;
 }

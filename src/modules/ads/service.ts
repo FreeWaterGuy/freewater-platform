@@ -1,5 +1,5 @@
 import type { BoxProduct, Campaign, CompanyConfig, Share, Unit } from '../../core/types';
-import { houseAd } from '../fillers/house';
+import { whereOnLabel } from '../fillers/unsold';
 import { shareLabel } from './layouts';
 import { bidFloor, prepaidLeft } from './budget';
 import { newId } from '../../core/ids';
@@ -344,20 +344,26 @@ export class AdsService {
       return { share: s, label: shareLabel(s), printable: shapes.length > 0, svg: shapes[0]?.svg ?? '', shapes };
     });
 
-    // A sample label: this ad at its biggest size, the rest filled with the company's own ad.
+    // A sample label: this ad at its biggest size, the other pieces neutral placeholders marked "Sample ad" (other
+    // businesses' ads go there; never the company's own), and where on the label this ad is, in words.
     const biggest = Math.min(...o.sizes) as Share;
-    const house = houseAd(this.platform.campaigns.values(), o.companyId);
     const temp: Campaign = { id: 'preview', companyId: o.companyId, advertiserId: o.advertiserId, advertiserName: o.advertiserName, category: o.category, sizes: [biggest], creative: { svg: o.draw }, experienceId: 'offer', targeting: {}, buy: { type: 'guaranteed', remainingPrints: 1 }, active: false };
     const campaigns = new Map(this.platform.campaigns);
     campaigns.set('preview', temp);
     const sample = [...layouts].filter((l) => l.shares.includes(biggest)).sort((a, b) => a.shares.length - b.shares.length)[0] ?? { shares: [1 as Share], rects: [{ x: 0, y: 0, w: 1, h: 1 }] };
     const mine = sample.shares.indexOf(biggest);
     const layout = sample.shares;
-    const placements = layout.map((s, i) => (i === mine
-      ? { slotIndex: i, share: s, rect: sample.rects[i]!, campaignId: 'preview', advertiserId: o.advertiserId, advertiserName: o.advertiserName, experienceId: 'offer', priceCents: 0, isHouse: false }
-      : { slotIndex: i, share: s, rect: sample.rects[i]!, campaignId: house!.id, advertiserId: house!.advertiserId, advertiserName: house!.advertiserName, experienceId: house!.experienceId, priceCents: 0, isHouse: true }));
+    const placements = layout.map((s, i) => {
+      if (i === mine) return { slotIndex: i, share: s, rect: sample.rects[i]!, campaignId: 'preview', advertiserId: o.advertiserId, advertiserName: o.advertiserName, experienceId: 'offer', priceCents: 0, isHouse: false };
+      const other = sampleAd(o.companyId, i);
+      campaigns.set(other.id, other);
+      return { slotIndex: i, share: s, rect: sample.rects[i]!, campaignId: other.id, advertiserId: other.advertiserId, advertiserName: other.advertiserName, experienceId: other.experienceId, priceCents: 0, isHouse: true };
+    });
     const unit: Unit = { id: 'preview', companyId: o.companyId, productId: product.id, locationId: 'preview', kind: 'ad_supported', placements, layout, status: 'rendered', createdAt: this.platform.bus.now().toISOString() };
     const label = await this.registry.rendererFor(company).render({ unit, product, company, campaigns });
+    const where = sample.rects[mine] ? whereOnLabel(sample.rects[mine]!) : 'across the whole label';
+    const caption = layout.length === 1 ? 'A sample label. Your ad takes the whole label. The black panel is the same on every bottle.'
+      : `A sample label. Your ad is ${where}; the pieces marked “Sample ad” go to other businesses. The black panel is the same on every bottle.`;
 
     // Box sides, each as it prints (its own size, the code in its corner). The 12-pack's front is the one shown first.
     const faceSeen = new Map<string, { w: number; h: number; boxes: string[] }>();
@@ -379,7 +385,7 @@ export class AdsService {
     // The main picture of each size at full preview quality; the other shapes smaller, so the whole preview stays light.
     return {
       sizes: await Promise.all(sizes.map(async (s) => ({ ...s, svg: await inline(s.svg), shapes: await Promise.all(s.shapes.map(async (x) => ({ ...x, svg: await inline(x.svg, 240) }))) }))),
-      labelSvg: await inline(label.svg), boxFaceSvg: boxFace ? await inline(boxFace) : null,
+      labelSvg: await inline(label.svg), labelCaption: caption, where, boxFaceSvg: boxFace ? await inline(boxFace) : null,
       boxFaces: await Promise.all(boxFaces.map(async (f) => ({ ...f, svg: await inline(f.svg, 240) }))),
       scan: scan ? { doc: scan, footer } : null,
     };
@@ -707,4 +713,11 @@ export class AdsService {
   private async addReviewNote(n: { companyId: string; campaignId: string; kind: 'flag' | 'note' | 'resubmitted' | 'approved' | 'rejected' | 'appeal'; authorKind: 'team' | 'advertiser' | 'automated' | 'ai'; authorId: string | null; text: string }) {
     await this.db.query(`insert into ad_review_notes (id, company_id, campaign_id, kind, author_kind, author_id, text, at) values ($1,$2,$3,$4,$5,$6,$7,$8)`, [newId('arn'), n.companyId, n.campaignId, n.kind, n.authorKind, n.authorId, n.text.slice(0, 2000), this.platform.bus.now().toISOString()]);
   }
+}
+
+const SAMPLE_ICONS = ['coffee', 'pizza', 'star', 'bag', 'music', 'paw'] as const;
+/** A neutral placeholder for another business's ad in a preview: plainly marked "Sample ad", never the company's own. */
+export function sampleAd(companyId: string, i: number): Campaign {
+  const spec = { brand: 'Sample ad', headline: 'Another local business', sub: 'Their ad goes here', colors: { bg: '#EEF1F4', fg: '#5B6670', accent: '#8A96A0' }, icon: SAMPLE_ICONS[i % SAMPLE_ICONS.length] };
+  return { id: `sample-ad-${i}`, companyId, advertiserId: `sample-${i}`, advertiserName: 'Sample ad', category: 'sample', sizes: [1, 2, 3, 4, 6, 8, 10] as Share[], creative: posterCreative(spec), creativeRef: { kind: 'poster', spec }, experienceId: 'offer', targeting: {}, buy: { type: 'guaranteed', remainingPrints: 0 }, active: false, isHouse: true };
 }

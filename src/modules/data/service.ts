@@ -304,6 +304,8 @@ export class DataService {
   }
   /** The company's machines and events nearest a point, closest first (within 50 km). */
   nearby(companyId: string, at: { lat: number; lng: number }, limit = 5) {
+    // Machines switched off (the pilot, or the company's Features page): there's no machine to send anyone to.
+    if (this.platform.featureOn && !this.platform.featureOn(companyId, 'machines')) return [];
     const km = (a: { lat: number; lng: number }, b: { lat: number; lng: number }) => {
       const r = Math.PI / 180, dLat = (b.lat - a.lat) * r, dLng = (b.lng - a.lng) * r;
       const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLng / 2) ** 2;

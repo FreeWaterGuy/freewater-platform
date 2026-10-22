@@ -1,10 +1,12 @@
 import type { BoxFacePlacement, BoxProduct, Campaign, CompanyConfig } from '../../core/types';
 import { isEligible } from '../ads/engine';
-import { houseAd } from '../fillers/house';
+import type { UnsoldFiller } from '../ads/contract';
+import { noUnsold } from '../fillers/unsold';
 
 /**
  * Choose who gets each ad face of a pack box: one advertiser per face, never two competitors,
- * only campaigns with box artwork. Faces nobody bought get the house ad.
+ * only campaigns with box artwork. Faces nobody bought are filled from the company's unsold-space list (box artwork
+ * only), else left plain; never the company's own ad unless it chose to allow its own ads.
  */
 export function fillBoxFaces(input: {
   company: CompanyConfig;
@@ -12,15 +14,17 @@ export function fillBoxFaces(input: {
   routeId: string;
   campaigns: Campaign[];
   random: () => number;
-  /** Which sides may be sold (the company's Features page); the others carry its own house ad. All, unless given. */
+  /** Which sides may be sold (the company's Features page); the others stay plain (its own ad only where it allows that). All, unless given. */
   faceOn?: (face: string) => boolean;
   /** Sides bought on a delivery route for this very box (route_spots): those go first, whatever else is running. */
   reserved?: { spotId: string; campaignId: string; face: string }[];
   /** Advertisers the house this box goes to has blocked. */
   blockedAdvertisers?: string[];
+  /** Space nobody bought (src/modules/fillers/unsold.ts, box artwork only). Without it, plain sides. */
+  unsold?: UnsoldFiller;
 }): BoxFacePlacement[] {
   const { company, box, routeId, random } = input;
-  const house = houseAd(input.campaigns, company.id);
+  const unsold = input.unsold ?? noUnsold(company.id);
   const blocked = new Set(input.blockedAdvertisers ?? []);
   const byId = new Map(input.campaigns.map((c) => [c.id, c]));
   // A route side prints while its ad is live and approved, not blocked by the house, and the side is sold here.
@@ -53,12 +57,24 @@ export function fillBoxFaces(input: {
     chosen.push(c);
   }
 
-  return box.adFaces.map((face) => {
+  const out: BoxFacePlacement[] = box.adFaces.map((face) => {
     const mine = pinned.get(face);
     if (mine) return mine;
     const c = chosen[sellable.indexOf(face)];
     if (c) return { face, campaignId: c.id, advertiserId: c.advertiserId, advertiserName: c.advertiserName, experienceId: c.experienceId, priceCents: company.prices.perBoxFace, isHouse: false };
-    if (!house) throw new Error(`Company ${company.id} has no house ad for empty box faces.`);
-    return { face, campaignId: house.id, advertiserId: house.advertiserId, advertiserName: house.advertiserName, experienceId: house.experienceId, priceCents: 0, isHouse: true };
+    return null as unknown as BoxFacePlacement;
   });
+  // Sides nobody bought: from the list where the side is sold here, the company's own ad only where it allows that,
+  // else plain.
+  const plain = (face: BoxFacePlacement['face']): BoxFacePlacement => {
+    const b = unsold.blank({ slotIndex: 0, share: 1, rect: { x: 0, y: 0, w: 1, h: 1 } });
+    return { face, campaignId: b.campaignId, advertiserId: b.advertiserId, advertiserName: b.advertiserName, experienceId: b.experienceId, priceCents: 0, isHouse: true, unsold: 'neutral' };
+  };
+  const own = unsold.house;
+  box.adFaces.forEach((face, i) => {
+    if (out[i]) return;
+    const listed = sellable.includes(face) ? unsold.face?.(face, out.filter(Boolean), random) ?? null : null;
+    out[i] = listed ?? (own ? { face, campaignId: own.id, advertiserId: own.advertiserId, advertiserName: own.advertiserName, experienceId: own.experienceId, priceCents: 0, isHouse: true, unsold: 'own' } : plain(face));
+  });
+  return out;
 }

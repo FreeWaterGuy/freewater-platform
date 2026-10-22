@@ -20,6 +20,8 @@
     return el;
   };
   /** "1 bottle", "2 bottles": a count with its noun, singular for exactly one. */
+  /** "for home delivery in Austin" for a delivery bottle, "at ATX-014, Congress Ave" for a machine's. */
+  const printedWhere = (place) => (/^home delivery/i.test(place || '') ? `for ${place.charAt(0).toLowerCase()}${place.slice(1)}` : `at ${place}`);
   const plural = (n, one, many) => `${n} ${String(n).replace(/[^0-9.-]/g, '') === '1' ? one : many}`;
   const store = {
     get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -111,7 +113,7 @@
     const consent = consentBar(opened);
     const env = opened.environment && !fixture ? yourChoices(opened, target) : null;
     const vb = opened.environment?.valueBack ? h('p', { class: 'value-back', text: opened.environment.valueBack.says }) : null;
-    app.replaceChildren(top, ...(game.info ? [gameNote(game.info)] : []), ...(vb ? [vb] : []), body, panel(footer, target), ...(env ? [env] : []), ...(fixture ? [] : [yourData(opened)]), ...(consent ? [consent] : []));
+    app.replaceChildren(top, ...(game.info ? [gameNote(game.info)] : []), ...(vb ? [vb] : []), body, ...(consent ? [consent] : []), panel(footer, target), ...(env ? [env] : []), ...(fixture ? [] : [yourData(opened)]));
     if (record) { pageCtx = ctx; pageStart = performance.now(); track(ctx, 'page_view'); }
     if (game.info && record) checkPending();
 
@@ -503,8 +505,10 @@
       api('POST', `/v1/public/data/${encodeURIComponent(opened.companyId)}/consent`, { viewerKey, choices: Object.fromEntries(ask.map((a) => [a.category, yes])) }).catch(() => {});
       bar.remove();
     };
+    // An inline banner below the page's main content: it never covers the AR view or the page, which work either way.
     const bar = h('div', { class: 'consent', role: 'region', 'aria-label': 'Your data' },
-      h('p', { text: `May we keep ${ask.map((a) => a.label.toLowerCase()).join(', ')} from this visit? We use it to train our AI and to plan future free and negatively priced products. We never sell your personal data. Everything on this page works either way, and you can change your mind any time.` }),
+      h('p', { text: `May we keep ${ask.map((a) => a.label.toLowerCase()).join(', ')} from this visit? Everything here works either way.` }),
+      h('details', {}, h('summary', { text: 'What for?' }), h('p', { text: 'We use it to train our AI and to plan future free and negatively priced products. We never sell your personal data, and you can change your mind any time.' })),
       // Both answers look the same: saying no is as easy as saying yes.
       h('div', { class: 'row' }, h('button', { type: 'button', class: 'btn', onclick: () => answer(true) }, 'Yes, that’s fine'), h('button', { type: 'button', class: 'btn', onclick: () => answer(false) }, 'No thanks')));
     return bar;
@@ -747,7 +751,7 @@
     if (f.story) {
       const m = f.story.minutesSincePrint;
       const ago = m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${plural(Math.round(m / 1440), 'day', 'days')} ago`;
-      facts.push(h('div', { class: 'story', text: `Genuine. Printed fresh at ${f.story.place}, ${ago}.${f.story.passedOn ? ` It’s been passed along: ${plural(f.story.people, 'person', 'people')} have scanned it.` : ''}` }));
+      facts.push(h('div', { class: 'story', text: `Genuine. Printed fresh ${printedWhere(f.story.place)}, ${ago}.${f.story.passedOn ? ` It’s been passed along: ${plural(f.story.people, 'person', 'people')} have scanned it.` : ''}` }));
     }
     const links = [];
     if (f.receiptUrl) links.push(h('a', { href: fixture ? '#' : f.receiptUrl, text: 'See this bottle’s receipt' }));

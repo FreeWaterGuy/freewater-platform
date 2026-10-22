@@ -99,6 +99,7 @@ import { leaseCheckedClient } from './db/leaseChecked';
 import type { JobRunner } from './runtime/jobs';
 import { boxes, builtinCreatives, freewater, locations, peakSpring, products, sampleCampaigns } from './demo/seed';
 import { FillerService } from './modules/fillers/service';
+import { UnsoldSpace } from './modules/fillers/unsold';
 import { NewsService, newsPlugin } from './modules/news/service';
 import { builtinNewsWriter, ClaudeNewsWriter, type NewsWriter } from './modules/news/writer';
 import { AiReviewService, ClaudeAdReviewer, standInReviewer, type AdReviewer } from './modules/ads/aiReview';
@@ -502,9 +503,16 @@ export async function createApp(opts: AppOptions) {
   if (demoKeys) await houses.seedSample('freewater', 'route-3', pilotHouses);
   const ops = new OpsService(db, platform, delivery, host);
 
-  // Spots nobody bought: approved filler before the generic house ad; news among it only where news is on.
+  // Space nobody bought (src/modules/fillers/unsold.ts): the company's list (former advertisers' ads as a bonus,
+  // approved fillers, charity partners, its picks), never its own ads unless it allows them; a plain piece is the last
+  // resort, and the team is told.
   const fillers = new FillerService(platform, () => persistence.flush(), opts.clock);
-  platform.unsold = (req) => fillers.fillUnsold(req);
+  const unsold = new UnsoldSpace(platform, fillers, db, opts.clock);
+  await unsold.load();
+  platform.unsoldFor = (ctx) => unsold.fillerFor(ctx);
+  platform.onBlank = (companyId, n, why) => unsold.noteBlank(companyId, n, why);
+  unsold.alert = (key, title, detail) => void runtime.alerts.alert(key, 'warning', title, detail);
+  platform.bus.on('label.printed', (e) => unsold.noteBottle(e.companyId, e.payload.placements));
   const news = new NewsService(db, platform, features, opts.newsWriter ?? (aiOn ? new ClaudeNewsWriter({ apiKey: anthropicKey, model: process.env.ANTHROPIC_MODEL }) : builtinNewsWriter), () => persistence.flush(), opts.clock);
   await news.load();
   fillers.news = news;
@@ -628,6 +636,7 @@ export async function createApp(opts: AppOptions) {
   videos.featureOn = featureOn;
   news.featureOn = featureOn;
   fillers.featureOn = featureOn;
+  unsold.featureOn = featureOn;
   households.featureOn = featureOn;
   routeBuys.featureOn = featureOn;
   attribution.featureOn = featureOn;
@@ -749,7 +758,7 @@ export async function createApp(opts: AppOptions) {
   await attribution.repairUnrecorded();
   await persistence.flush();
 
-  return { ...made, aiReview, fillers, news, households, routeBuys, features, companyFeatures, db, persistence, runtime, demoKeys, accounts, payments, credit, prepaid, messenger, experiences, assets, ads, designs, delivery, houses, dropPhotos, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
+  return { ...made, aiReview, fillers, unsold, news, households, routeBuys, features, companyFeatures, db, persistence, runtime, demoKeys, accounts, payments, credit, prepaid, messenger, experiences, assets, ads, designs, delivery, houses, dropPhotos, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

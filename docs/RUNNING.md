@@ -83,10 +83,10 @@ be proposed or run, and the console, app, ads portal and ops console hide them (
 The server logs what's off when it starts. It's a deploy setting: to switch an area back on, change the setting and
 restart. Nothing stored is deleted.
 
-**On in the pilot:** bottles, ads and printing; scans, AR, attribution (tracked sales and coupons); the app (free
-bottle, points in the wallet, data levels); delivery, packs and the driver app; the advertiser portal and studio; the
+**On in the pilot:** bottles, ads and printing; scans, AR, attribution (tracked sales and coupons); the app (points in
+the wallet, data levels); delivery, packs and the driver app; the advertiser portal and studio; the
 ops console, the owner console and the open books; giving; accounts, team and keys (and webhooks); data and privacy
-rights; transparency; machines; the games; the AI governor and the AI assistants; and launch up to **live with
+rights; transparency; the games; the AI governor and the AI assistants; and launch up to **live with
 points** (testing, bots, reset, going live with points, the pause switch, the hourly seals of the wallet books).
 
 **Off in the pilot**, and why:
@@ -103,6 +103,7 @@ points** (testing, bots, reset, going live with points, the pause switch, the ho
 | `lottery` | The prize game (chances on scan pages, claims, fairness, redeeming) | Off until a lawyer approves its rules. |
 | `video_generation` | Veo footage for "Show me more" and its `videos` job | Costs money per clip. Motion videos, made on the spot, stay. |
 | `offers` | Brand offers, receipts, barcode lookup, value-back tests on offers, and the `offers` job | They pay people real money from brand reserves and need receipt checking; not needed to give free water. |
+| `machines` | Vending machines: their screens and keys, the fleet pages and the `fleet-sweep` job, the free bottle from the app at a machine, choosing what you get there, machines near you | The Austin pilot is door-to-door delivery; machines come later. The app offers no machine and the scan page no "free water near me". |
 
 **Kept on, by judgment:** points and going live with points, because the app's wallet shows points, the full data
 level earns them, the games pay them, and only going live ends the test stage (where points are marked as test and

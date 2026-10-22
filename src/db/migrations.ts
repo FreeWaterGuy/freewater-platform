@@ -2515,6 +2515,19 @@ create index route_credit_expiries_advertiser on route_credit_expiries(company_i
 create trigger route_credit_expiries_append_only before update or delete on route_credit_expiries for each row execute function forbid_change();
 `,
   },
+  {
+    id: '074_unsold_space',
+    sql: `
+-- Space nobody bought (src/modules/fillers/unsold.ts): a former advertiser's past ad may print free, as a bonus.
+-- The advertiser can say no in its portal (allowed unless it does), and the company's team can refuse an advertiser
+-- for bonus printing, with who and why.
+alter table advertisers add column if not exists bonus_opt_out boolean not null default false;
+alter table advertisers add column if not exists bonus_refused_at timestamptz;
+alter table advertisers add column if not exists bonus_refused_by text;
+alter table advertisers add column if not exists bonus_refused_reason text;
+alter table advertisers add constraint advertisers_bonus_refused_whole check ((bonus_refused_at is null) = (bonus_refused_by is null));
+`,
+  },
 ];
 
 /** Runs every migration not yet run (or, for tests that start from an older schema, those in `list`). */
