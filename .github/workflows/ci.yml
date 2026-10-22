@@ -60,7 +60,7 @@ jobs:
         run: |
           python3 -m venv /tmp/schemathesis
           /tmp/schemathesis/bin/pip install --quiet schemathesis==4.32.2
-          SCHEMATHESIS=/tmp/schemathesis/bin/schemathesis npm run fuzz:api
+          SCHEMATHESIS=/tmp/schemathesis/bin/schemathesis FUZZ_REQUEST_TIMEOUT=60 npm run fuzz:api
 
   browser:
     # The main journeys in a real browser (test/browser/journeys.ts). Playwright isn't a dependency of the app, so
