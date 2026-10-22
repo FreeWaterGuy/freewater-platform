@@ -466,9 +466,16 @@ export class HouseService {
    * The house this person claimed, if their claim still stands (it ends after the company's months without them using
    * the app). Using it counts as being seen (at most once a day is written).
    */
-  private async claimed(userId: string, companyId: string) {
+  private async claimed(userId: string, companyId: string): Promise<any> {
     const r = (await this.db.query<any>(`select h.*, a.name as area_name, a.frequency_days, a.pack_size, a.route_id, c.claimed_at, c.last_seen_at from house_claims c join houses h on h.id = c.house_id join delivery_areas a on a.id = h.area_id where c.user_id = $1 and c.company_id = $2`, [userId, companyId])).rows[0];
     if (!r) return null;
+    // A claim left on a house merged away (made while the merge ran) moves to the house it became, as the merge does.
+    if (r.status === 'merged') {
+      const kept = await this.keptHouse(companyId, r.id);
+      if (kept === r.id) return null;
+      await this.db.query(`update house_claims set house_id = $3 where company_id = $1 and user_id = $2 and house_id = $4`, [companyId, userId, kept, r.id]);
+      return this.claimed(userId, companyId);
+    }
     const now = this.platform.bus.now().getTime();
     const seen = new Date(r.last_seen_at ?? r.claimed_at).getTime();
     if (now - seen > deliverySettings(this.platform.companies.get(companyId)).claimExpiryMonths * 30.44 * 86_400_000) {
@@ -507,7 +514,9 @@ export class HouseService {
     const tooMany = () => new DeliveryError(429, 'too_many_tries', 'Too many codes that didn’t match today. Try again tomorrow, with the code from your most recent box.');
     const triesIn = async (db: SqlClient) => Number((await db.query<any>(`select count(*)::int as n from house_events where company_id = $1 and by_user = $2 and kind = 'claim_failed' and at > $3`, [companyId, userId, since])).rows[0]?.n ?? 0);
     if (await triesIn(this.db) >= CLAIM_TRIES_PER_DAY) throw tooMany();
-    let pack = await this.findPack(companyId, text);
+    const found = await this.findPack(companyId, text);
+    // A box left before its house was merged (the same door written two ways) proves the house it became.
+    let pack = found ? { id: found.id, houseId: await this.keptHouse(companyId, found.houseId!) } : null;
     // A house number sent with it must be the house's too.
     if (pack && input.houseNumber !== undefined && (await this.getHouse(pack.houseId!, companyId))?.number !== input.houseNumber) pack = null;
     const now = this.platform.bus.now().toISOString();
@@ -536,6 +545,17 @@ export class HouseService {
       this.alert?.(`house-claim-again:${outcome.houseId}`, 'A house someone already claimed was claimed by someone else', `${h?.address ?? outcome.houseId}: claimed again on ${now.slice(0, 10)} (${outcome.others.length} earlier claim${outcome.others.length === 1 ? '' : 's'}). Usually a new household or a second person living there; if a claimant says it isn’t theirs, look at the house’s history.`);
     }
     return this.mine(userId, companyId);
+  }
+
+  /** The house a house became: itself, or (merged) the house it was merged into, followed to the end. */
+  private async keptHouse(companyId: string, houseId: string): Promise<string> {
+    let id = houseId;
+    for (let i = 0; i < 10; i++) {
+      const next = (await this.db.query<any>(`select merged_into from houses where id = $1 and company_id = $2`, [id, companyId])).rows[0]?.merged_into;
+      if (!next) return id;
+      id = next;
+    }
+    return id;
   }
 
   /** The pack a scanned or typed box code is from: delivered, to a house of this company, in the last 60 days. */

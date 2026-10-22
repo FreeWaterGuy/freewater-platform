@@ -807,11 +807,14 @@ export class RouteBuyService {
           const occ = await this.occupancy(tx, [h.id], [w]);
           const { spots } = this.plan(company, product, { kind: 'houses', perHouse: 1, where: {} }, n(r.share) as Share, [h], [w], occ, { campaignId: r.campaign_id, group });
           const b = spots[0]?.bottle;
-          if (!b) return false;
-          const u = await tx.query(`update route_spots set week = $2, bottle = $3, rolled_from = coalesce(rolled_from, week) where id = $1 and status = 'open' and week < $2`, [r.id, w, b]);
-          return Number((u as any).rowCount ?? 1) > 0;
+          if (!b) return 'no_room' as const;
+          // Only from the week it was read in: a piece another pass already moved (or that printed) is left where it is,
+          // never moved on again.
+          const u = await tx.query(`update route_spots set week = $2, bottle = $3, rolled_from = coalesce(rolled_from, week) where id = $1 and status = 'open' and week = $4::date returning id`, [r.id, w, b, r.week]);
+          return u.rows.length ? 'moved' as const : 'gone' as const;
         }));
-        if (done) { moved++; break; }
+        if (done === 'moved') moved++;
+        if (done !== 'no_room') break;
       }
     }
     return moved;

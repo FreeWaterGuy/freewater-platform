@@ -32,6 +32,19 @@ const SUFFIX: Record<string, string> = {
 const DIRECTION: Record<string, string> = { NORTH: 'N', SOUTH: 'S', EAST: 'E', WEST: 'W', NORTHEAST: 'NE', NORTHWEST: 'NW', SOUTHEAST: 'SE', SOUTHWEST: 'SW', N: 'N', S: 'S', E: 'E', W: 'W', NE: 'NE', NW: 'NW', SE: 'SE', SW: 'SW' };
 /** Words that start a unit: "Apt 2", "Unit B", "Suite 200", "#4". */
 const UNIT_WORDS = new Set(['APT', 'APARTMENT', 'UNIT', 'STE', 'SUITE', 'BLDG', 'BUILDING', 'FL', 'FLOOR', 'RM', 'ROOM', 'LOT', 'SPC', 'SPACE', 'TRLR', 'DEPT', 'NO', '#']);
+/**
+ * A unit written without its word: one letter or a number ("12 Oak St B", "12 Oak St 2"), a door's place in the
+ * building ("Rear", "Upper", "Bsmt"), or a floor ("2nd Floor"). Never a town (no town is called "B" or "Rear"), so it
+ * stays part of the door: a duplex's two sides, a front and a rear house, are two doors.
+ */
+const PLACE_WORDS = new Set(['REAR', 'FRONT', 'UPPER', 'LOWER', 'UPSTAIRS', 'DOWNSTAIRS', 'BSMT', 'BASEMENT', 'PH', 'PENTHOUSE', 'SIDE', 'LBBY', 'LOBBY', 'OFC', 'OFFICE', 'KEYS', 'GARAGE', 'COTTAGE']);
+function bareUnit(words: string[]): number {
+  const [w, next] = words;
+  if (!w) return 0;
+  if (/^\d{1,2}(ST|ND|RD|TH)$/.test(w) && (next === 'FLOOR' || next === 'FL')) return 2;
+  if (PLACE_WORDS.has(w) || /^[A-Z]$/.test(w) || /^\d{1,5}[A-Z]?$/.test(w) || /^[A-Z]\d{1,4}$/.test(w)) return 1;
+  return 0;
+}
 const STATES = new Set(['AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'DC', 'FL', 'GA', 'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD', 'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ', 'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY', 'PR', 'TEXAS', 'CALIFORNIA', 'COLORADO']);
 
 export interface Address {
@@ -69,7 +82,8 @@ export function parseAddress(raw: string): Address {
   parts = parts.filter((p, i) => {
     if (i === 0) return true;
     const w = p.split(' ');
-    if (UNIT_WORDS.has(w[0]!) && w.length >= 2) { unit = w.slice(1).join(' ').replace(/^# /, ''); return false; }
+    if (UNIT_WORDS.has(w[0]!) && w.length >= 2) { unit ??= w.slice(1).join(' ').replace(/^# /, ''); return false; }
+    if (unit === null && bareUnit(w) === w.length) { unit = w.join(' '); return false; }
     return true;
   });
   if (parts.length > 1) city = parts.slice(1).join(' ').trim() || null;
@@ -79,8 +93,16 @@ export function parseAddress(raw: string): Address {
   const m = /^(\d{1,6})([A-Z]?)$/.exec(words[0] ?? '') ?? /^(\d{1,6})-?([A-Z])$/.exec(words[0] ?? '');
   if (m) { number = Number(m[1]); numberText = `${m[1]}${m[2] ?? ''}`; words = words.slice(1); }
   // A unit in the line: "… Ave Apt 2", "… Ave #2", "… Ave Unit B".
+  // The unit is the word after ("Apt 2"), and a letter or number set apart after that ("Apt 2 B"); anything later is
+  // the town ("… Apt 2 Austin").
   const u = words.findIndex((w, i) => i > 0 && UNIT_WORDS.has(w) && i < words.length - 1);
-  if (u > 0) { unit ??= words.slice(u + 1).filter((w) => w !== '#').join(' '); words = words.slice(0, u); }
+  if (u > 0) {
+    const after = words.slice(u + 1).filter((w) => w !== '#');
+    const take = after.length > 1 && /^([A-Z]|\d{1,4})$/.test(after[1]!) ? 2 : 1;
+    unit ??= after.slice(0, take).join(' ');
+    if (after.length > take && parts.length === 1) city ??= after.slice(take).join(' ');
+    words = words.slice(0, u);
+  }
   // With no commas, what comes after the suffix (and a direction) is the town: "1501 Kenwood Ave Austin TX".
   if (parts.length === 1) {
     let sfx = -1;
@@ -89,7 +111,10 @@ export function parseAddress(raw: string): Address {
       let end = sfx + 1;
       // "Main St North" (the line ends there) or "Main St N Austin": a direction after the suffix is the street's.
       if (DIRECTION[words[end]!] && (end === words.length - 1 || words[end]!.length <= 2)) end++;
-      if (end < words.length) { city = words.slice(end).join(' '); words = words.slice(0, end); }
+      // A unit without its word ("… St B", "… St Rear") belongs to the door, not the town.
+      const bare = unit === null ? bareUnit(words.slice(end)) : 0;
+      if (bare) { unit = words.slice(end, end + bare).join(' '); words.splice(end, bare); }
+      if (end < words.length) { city ??= words.slice(end).join(' '); words = words.slice(0, end); }
     }
   }
   // Directions and the suffix, the USPS way. A word is a direction or a suffix only where the street still has a name
