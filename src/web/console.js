@@ -14,6 +14,8 @@
     for (const kid of kids.flat(Infinity)) if (kid != null && kid !== false) el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
     return el;
   };
+  /** "1 bottle", "2 bottles": a count with its noun, singular for exactly one. */
+  const plural = (n, one, many) => `${n} ${String(n).replace(/[^0-9.-]/g, '') === '1' ? one : many}`;
   const NS = 'http://www.w3.org/2000/svg';
   const icon = (d) => { const s = document.createElementNS(NS, 'svg'); for (const [k, v] of Object.entries({ viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' })) s.setAttribute(k, v); for (const p of d.split('|')) { const e = document.createElementNS(NS, 'path'); e.setAttribute('d', p); s.append(e); } return s; };
   const I = {
@@ -73,8 +75,13 @@
   const on = (feature) => !feature || !(S.features?.off ?? []).includes(feature);
   // Pages (and menu entries) that belong to a switch (src/runtime/registry.ts), and sections inside pages that do (by
   // their heading). A page whose switch is off isn't shown; its switch is turned back on from the Features page.
-  // (The prize game and the games are their own on/off: their pages stay so they can be turned on there.)
-  const PAGE_FEATURES = { offers: 'offers', chain: 'token', licensees: 'network', machines: 'machines', webhooks: 'webhooks', given: 'giveaways', docs: 'developer_pages', transparency: 'transparency' };
+  // (The prize game and the games are their own on/off: their pages stay so they can be turned on there, unless this
+  // server runs without them at all, as the pilot runs without the prize game: then there's nothing to turn on.)
+  const PAGE_FEATURES = { offers: 'offers', chain: 'token', licensees: 'network', machines: 'machines', webhooks: 'webhooks', given: 'giveaways', docs: 'developer_pages', transparency: 'transparency', wallet: 'rewards', agents: 'ai_agents' };
+  const HOST_PAGES = { game: 'lottery', games: 'games' };
+  /** Does this server run the area at all (FW_FEATURES; `on` lists the server's areas, before any company switch)? */
+  const hostOn = (feature) => !feature || !Array.isArray(S.features?.on) || S.features.on.includes(feature);
+  const pageOn = (page) => on(PAGE_FEATURES[page]) && hostOn(HOST_PAGES[page]);
   const SECTION_FEATURES = { 'Go live with the token': 'token', 'Points into tokens': 'token_conversion', 'Gift cards': 'gift_cards', 'The agents’ fund': 'agents_fund', 'What the agents spent': 'agents_fund', 'The upsides library': 'agents_fund', Continuity: 'network' };
   let cleanup = null;
   function go(path, replace) {
@@ -99,7 +106,7 @@
     if (!['owner'].includes(S.me.role)) return shell('', h('div', { class: 'notice err', text: 'The console is for company owners. Ask an owner to change your role, or use the ops console.' }));
     try { S.ov = await api('GET', '/v1/console'); } catch (e) { return shell('', h('div', { class: 'notice err', text: e.message })); }
     if (S.ov.you?.mustSetUpSecondStep) return mustSetUpPage();
-    if (!on(PAGE_FEATURES[pathname.replace(/\/$/, '').split('/')[2]])) return go('/console', true);
+    if (!pageOn(pathname.replace(/\/$/, '').split('/')[2])) return go('/console', true);
     for (const [re, fn] of routes) {
       const m = re.exec(pathname);
       if (m) { try { await fn(...m.slice(1)); } catch (e) { shell('', h('div', { class: 'notice err', text: e.message })); } window.scrollTo(0, 0); return; }
@@ -120,7 +127,7 @@
     const b = S.ov?.config?.brand ?? S.config?.brand ?? { logoTop: 'free', logoBottom: 'water' };
     root.replaceChildren(h('div', { class: 'shell' },
       h('aside', { class: 'side' }, h('div', { class: 'logo', 'aria-label': `${S.config?.name ?? ''} console` }, h('span', { text: b.logoTop }), h('span', { text: b.logoBottom }), h('small', { text: 'Console' })),
-        h('nav', { 'aria-label': 'Main' }, nav.filter((n) => typeof n === 'string' || on(PAGE_FEATURES[n[0]])).map((n) => (typeof n === 'string' ? h('div', { class: 'group', text: n }) : link(n[1], { 'aria-current': active === n[0] ? 'page' : null }, icon(n[3]), n[2])))),
+        h('nav', { 'aria-label': 'Main' }, nav.filter((n) => typeof n === 'string' || pageOn(n[0])).map((n) => (typeof n === 'string' ? h('div', { class: 'group', text: n }) : link(n[1], { 'aria-current': active === n[0] ? 'page' : null }, icon(n[3]), n[2])))),
         h('div', { class: 'who' }, h('b', { text: S.me.displayName || S.me.email || '' }), S.config?.name, h('br'), h('button', { type: 'button', onclick: async () => { try { await api('POST', '/v1/auth/sign-out'); } catch {} S.token = null; S.me = null; S.dirty = false; store.set('fw_console_token', null); render(); } }, 'Sign out'))),
       h('main', { class: 'main' }, ...content)));
   }
@@ -230,8 +237,8 @@
       return h('div', { class: 'stack', style: 'gap:8px' }, h('p', { class: 'muted', style: 'margin:0', text: 'Sign this in Squads with the other keyholders, then paste the signature here. It is checked on Solana before the books change.' }),
         h('div', { class: 'toolbar' }, h('button', { class: 'btn small secondary', type: 'button', onclick: () => copy(a.toSign) }, 'Copy transaction'), sig, btn('Check and record', () => api('POST', `/v1/chain/actions/${a.id}/signed`, { signature: sig.value.trim() }))));
     })() : null;
-    return h('tr', {}, h('td', {}, h('b', { text: names[a.kind] ?? a.kind }), a.params?.plan ? h('div', { class: 'muted', text: `${a.params.plan.total.toLocaleString()} token units to ${a.params.plan.people} people` }) : a.params?.reason ? h('div', { class: 'muted', text: a.params.reason }) : null, sign),
-      h('td', { text: a.status === 'proposed' ? `${a.approvals.length} of ${a.needed} approvals` : a.status === 'approved' ? (ready ? 'Ready to run' : `Waiting until ${when(a.notBefore)}`) : a.status }),
+    return h('tr', {}, h('td', {}, h('b', { text: names[a.kind] ?? a.kind }), a.params?.plan ? h('div', { class: 'muted', text: `${a.params.plan.total.toLocaleString()} token units to ${plural(a.params.plan.people, 'person', 'people')}` }) : a.params?.reason ? h('div', { class: 'muted', text: a.params.reason }) : null, sign),
+      h('td', { text: a.status === 'proposed' ? `${a.approvals.length} of ${plural(a.needed, 'approval', 'approvals')}` : a.status === 'approved' ? (ready ? 'Ready to run' : `Waiting until ${when(a.notBefore)}`) : a.status }),
       h('td', { text: a.proposedBy }),
       h('td', {}, h('div', { class: 'toolbar' },
         a.status === 'proposed' ? btn('Approve', () => api('POST', `/v1/chain/actions/${a.id}/approve`)) : null,
@@ -258,7 +265,7 @@
       const r = h('input', { class: 'input', type: 'number', min: 1, max: 60, value: 15, 'aria-label': 'Screens each' });
       const out = h('p', { class: 'muted', style: 'margin:0' });
       const go = h('button', { class: 'btn blue', type: 'button' }, 'Run bots');
-      go.addEventListener('click', async () => { go.disabled = true; out.textContent = 'Bots are playing…'; try { const x = await api('POST', '/v1/launch/bots', { bots: Number(n.value), rounds: Number(r.value) }); out.textContent = `${x.bots} bots answered ${x.answered} screens, scanned ${x.scans} bottles, sent ${x.feedback} notes and earned ${x.points.toLocaleString()} points.${x.stoppedEarly ? ` Stopped after ${x.bots} of ${x.asked} bots (each run plays for at most 10 seconds); run it again for more.` : ''}`; } catch (e) { out.textContent = e.message; } go.disabled = false; });
+      go.addEventListener('click', async () => { go.disabled = true; out.textContent = 'Bots are playing…'; try { const x = await api('POST', '/v1/launch/bots', { bots: Number(n.value), rounds: Number(r.value) }); out.textContent = `${plural(x.bots, 'bot', 'bots')} answered ${plural(x.answered, 'screen', 'screens')}, scanned ${plural(x.scans, 'bottle', 'bottles')}, sent ${plural(x.feedback, 'note', 'notes')} and earned ${plural(x.points.toLocaleString(), 'point', 'points')}.${x.stoppedEarly ? ` Stopped after ${x.bots} of ${plural(x.asked, 'bot', 'bots')} (each run plays for at most 10 seconds); run it again for more.` : ''}`; } catch (e) { out.textContent = e.message; } go.disabled = false; });
       return section('Test with bots', 'Bots play like people: their own tastes, a few seconds a screen, most quick checks passed, some careless. Each is marked as a bot and wiped by a reset.', h('div', { class: 'form' }, field('Bots', n), field('Screens each', r)), h('div', { class: 'toolbar' }, go, link('/console/games', { class: 'btn secondary' }, 'See what they picked')), out);
     })();
     const next = st.stage === 'test' ? section('Go live with points', 'Real people start earning placeholder points, rewards and offers. Everything from testing is wiped as it goes live, and after this there’s no going back. It can run a day after you propose it.', person() ? h('button', { class: 'btn blue', type: 'button', onclick: () => propose('go_live_points').catch((x) => toast(x.message)) }, 'Propose going live') : h('p', { class: 'notice err', text: 'Sign in as yourself to propose this.' }))
@@ -297,7 +304,7 @@
   async function offersPage() {
     const [list, waiting] = await Promise.all([api('GET', '/v1/offers'), api('GET', '/v1/offers/receipts')]);
     const btn = (label, fn, cls = 'btn small') => h('button', { class: cls, type: 'button', onclick: async (e) => { e.currentTarget.disabled = true; try { await fn(); toast('Done.'); render(); } catch (x) { toast(x.message); e.currentTarget.disabled = false; } } }, label);
-    const rows = list.map((o) => h('tr', {}, h('td', {}, h('b', { text: o.title }), h('div', { class: 'muted', text: `${o.brand ?? o.advertiserId} · ${o.deal}` })), h('td', { text: o.pointsCost ? `${o.pointsCost} points` : 'Free to claim' }), h('td', { text: `${o.claimed} claimed, ${o.left} left` }), h('td', {}, chip({ pending: 'Waiting for you', live: 'Live', paused: 'Paused', draft: 'Draft' }[o.status] ?? o.status)),
+    const rows = list.map((o) => h('tr', {}, h('td', {}, h('b', { text: o.title }), h('div', { class: 'muted', text: `${o.brand ?? o.advertiserId} · ${o.deal}` })), h('td', { text: o.pointsCost ? `${plural(o.pointsCost, 'point', 'points')}` : 'Free to claim' }), h('td', { text: `${o.claimed} claimed, ${o.left} left` }), h('td', {}, chip({ pending: 'Waiting for you', live: 'Live', paused: 'Paused', draft: 'Draft' }[o.status] ?? o.status)),
       h('td', {}, h('div', { class: 'toolbar' }, o.status === 'pending' || o.status === 'paused' ? btn('Approve', () => api('POST', `/v1/offers/${o.id}/approve`), 'btn small blue') : null, o.status === 'live' ? btn('Pause', () => api('POST', `/v1/offers/${o.id}/pause`), 'btn small secondary') : null))));
     const receipts = waiting.map((w) => {
       const price = h('input', { class: 'input', type: 'number', min: 0, step: '0.01', placeholder: 'Price on receipt ($)', style: 'max-width:180px' });
@@ -325,7 +332,7 @@
     const tierNames = { 1: 'Constrained', 3: 'Revealed preference', '4a': 'Values (we chose the cause)', '4b': 'Values (they get paid)', 5: 'Brand commitment' };
     const bars = (obj, label) => h('div', { class: 'stack', style: 'gap:6px' }, Object.entries(obj).map(([k, v]) => h('div', { style: 'display:grid;grid-template-columns:minmax(0,180px) 1fr 60px;gap:10px;align-items:center' }, h('span', { text: label(k) }), h('div', { style: 'height:10px;border-radius:5px;background:var(--line);overflow:hidden' }, h('i', { style: `display:block;height:100%;width:${Math.round(v.rate * 100)}%;background:var(--blue, #2F8FC4)` })), h('b', { style: 'font-variant-numeric:tabular-nums', text: pct(v.rate) }))));
     const upload = (item) => { const f = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp', style: 'max-width:200px' }); f.addEventListener('change', async () => { const file = f.files[0]; if (!file) return; const b64 = await new Promise((ok) => { const rd = new FileReader(); rd.onload = () => ok(String(rd.result).split(',')[1]); rd.readAsDataURL(file); }); try { await api('POST', `/v1/games/catalog/${encodeURIComponent(item.id)}/photo`, { contentType: file.type, dataBase64: b64, credit: S.config.name }); toast('Photo saved.'); render(); } catch (x) { toast(x.message); } }); return f; };
-    shell('games', head('The games', `Last 30 days: ${r.kept.toLocaleString()} answers kept, ${r.marked.toLocaleString()} set aside (too fast or a failed check). Median ${r.medianMs ? `${(r.medianMs / 1000).toFixed(1)} s` : '—'} a screen; ${r.changedMind} changed their mind.`, h('button', { class: 'btn secondary', type: 'button', onclick: async () => { try { const x = await api('POST', '/v1/games/catalog/photos'); toast(`Found ${x.found} photos.`); render(); } catch (e) { toast(e.message); } } }, 'Look for photos now')),
+    shell('games', head('The games', `Last 30 days: ${plural(r.kept.toLocaleString(), 'answer', 'answers')} kept, ${r.marked.toLocaleString()} set aside (too fast or a failed check). Median ${r.medianMs ? `${(r.medianMs / 1000).toFixed(1)} s` : '—'} a screen; ${r.changedMind} changed their mind.`, h('button', { class: 'btn secondary', type: 'button', onclick: async () => { try { const x = await api('POST', '/v1/games/catalog/photos'); toast(`Found ${plural(x.found, 'photo', 'photos')}.`); render(); } catch (e) { toast(e.message); } } }, 'Look for photos now')),
       h('div', { class: 'grid2' },
         section('Picked, by price setup', 'Of the times each setup was on a screen, how often it was chosen.', bars(r.pickRateBySetup, (k) => names[k] ?? k)),
         section('Picked, by place on screen', 'If the first spot wins much more often, the layout is steering people.', bars(r.pickRateByPosition, (k) => `Spot ${Number(k) + 1}`))),
@@ -547,7 +554,7 @@
         const r = await api('POST', '/v1/console/products/check', { product: fromForm() });
         result.replaceChildren(
           r.check.problems.length ? h('div', { class: 'notice err' }, h('b', { text: 'Fix these first: ' }), r.check.problems.join(' ')) : h('div', { class: 'notice' }, h('b', { text: 'Ready. ' }), [...r.check.notes, r.check.ar.why].join(' ')),
-          r.svg ? h('div', { class: 'label' }, h('img', { alt: 'Sample label at this size', src: svgSrc(r.svg) })) : null);
+          r.svg ? h('div', { class: 'label' }, h('img', { alt: 'Sample label at this size', src: svgSrc(r.svg) })) : '');
         return !r.check.problems.length;
       } catch (x) { toast(x.message); return false; }
     };
@@ -565,7 +572,7 @@
       h('td', { text: p.check.problems.length ? p.check.problems[0] : p.check.ar.followsBottle ? 'AR on the bottle: yes' : 'AR in the room only' }));
     shell('products', head('Products', 'Any drink, any size: bottles, cans, cups and jars. Each product is its label size, its shape and the ad layouts it allows.'),
       h('div', { class: 'stack' },
-        h('section', { class: 'section' }, h('h2', { text: `${list.length} products` }), h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Id', 'Name', 'Inside', 'Label', 'Ad sizes', 'Ad prices', 'Check'].map((x) => h('th', { text: x })))), h('tbody', {}, list.map(row))))),
+        h('section', { class: 'section' }, h('h2', { text: `${plural(list.length, 'product', 'products')}` }), h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Id', 'Name', 'Inside', 'Label', 'Ad sizes', 'Ad prices', 'Check'].map((x) => h('th', { text: x })))), h('tbody', {}, list.map(row))))),
         h('section', { class: 'section' }, h('h2', { text: 'Add a product' }), h('p', { class: 'lead', text: 'Every product is checked before it’s saved: the wrap has to close, and every ad has to fit a readable QR code.' }), form, result)));
   }
 
@@ -600,7 +607,7 @@
         const odds = g.oddsPercent ? Math.round(100 / g.oddsPercent) : 0;
         body.hidden = !g.enabled;
         body.replaceChildren(
-          section('Odds and limits', `About 1 in ${odds} engagements wins. Changes start tomorrow, so today’s draws always follow the rules published this morning.`, h('div', { class: 'form' },
+          section('Odds and limits', `About 1 in ${plural(odds, 'engagement', 'engagements')} wins. Changes start tomorrow, so today’s draws always follow the rules published this morning.`, h('div', { class: 'form' },
             num(ctx, 'lottery.oddsPercent', 'Chance each engagement wins', { min: 0.01, max: 50, step: 0.1, int: false, suffix: '%', hint: (v) => (v ? `About 1 in ${Math.round(100 / v)}.` : '') }),
             num(ctx, 'lottery.chancesPerDay', 'Chances per person a day', { min: 1, max: 50, hint: 'Each bottle ad gives one chance for its page, one for its video and one for its AR.' }),
             num(ctx, 'lottery.winsPerDay', 'Prizes per person a day', { min: 1, max: 10 }),
@@ -697,7 +704,7 @@
       h('div', { class: 'stack' },
         section('Everything placed', 'Ads that haven’t said what they offer are assumed for sale until they do.', h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['What', 'Where on the line', 'Economic systems', 'Why', 'Placed by'].map((x) => h('th', { text: x })))),
           h('tbody', {}, rows.map((r) => h('tr', {}, h('td', {}, h('b', { text: r.subject.startsWith('offering:') ? `Ad: ${r.name}` : name(r.subject) })), h('td', { text: `${POS[r.placement.position]}${r.placement.netCents ? ` (${r.placement.netCents > 0 ? '' : '−'}${Math.abs(r.placement.netCents)}¢)` : ''}` }), h('td', { text: r.placement.systems.map((s) => `${SYS[s.system] ?? s.system}${r.placement.systems.length > 1 ? ` ${Math.round(s.share * 100)}%` : ''}`).join(', ') }), h('td', { style: 'font-size:13px;max-width:340px', text: r.placement.reasons.join(' ') }), h('td', { class: 'muted', style: 'font-size:13px', text: `${r.by}${r.status === 'needs_declaration' ? ' · not declared yet' : r.status === 'overridden' ? ' · corrected' : ''}` }))))))),
-        section('Honest data, last 30 days', `${hd.total.toLocaleString()} choices recorded · ${hd.honestShare ?? 0}% honest (tiers 3, 4 and 5)`,
+        section('Honest data, last 30 days', `${plural(hd.total.toLocaleString(), 'choice', 'choices')} recorded · ${hd.honestShare ?? 0}% honest (tiers 3, 4 and 5)`,
           h('div', { class: 'kpis', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, ['1', '2', '3', '4a', '4b', '5'].map((k) => [k, hd.tiers[k]]).map(([k, label]) => h('div', { class: 'kpi' }, h('span', { text: `Tier ${k}: ${label}` }), h('b', { text: `${(hd.byTier[k] ?? 0).toLocaleString()}` }), h('small', { class: 'muted', text: pct(hd.byTier[k] ?? 0) })))),
           h('h3', { style: 'margin:18px 0 8px;font-size:15px', text: 'By economic system' }),
           h('div', { class: 'kpis', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, Object.entries(SYS).map(([k, label]) => h('div', { class: 'kpi' }, h('span', { text: label }), h('b', { text: `${(hd.bySystem[k] ?? 0).toLocaleString()}` }), h('small', { class: 'muted', text: pct(hd.bySystem[k] ?? 0) })))))));
@@ -723,7 +730,7 @@
         } }, 'Set it up')));
     } else {
       const code = codeField('Code from your app or a recovery code');
-      box.append(h('p', { style: 'margin:0', text: `On since ${when(you.secondStep.since)}. ${you.secondStep.recoveryCodesLeft} recovery codes left.` }),
+      box.append(h('p', { style: 'margin:0', text: `On since ${when(you.secondStep.since)}. ${plural(you.secondStep.recoveryCodesLeft, 'recovery code', 'recovery codes')} left.` }),
         h('div', { class: 'toolbar' }, code, h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { try { const r = await api('POST', '/v1/me/second-step/recovery-codes', { code: code.value.trim() }); showCodes(r.recoveryCodes); } catch (x) { toast(x.message); } } }, 'New recovery codes'),
           h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { try { await api('POST', '/v1/me/second-step/off', { code: code.value.trim() }); toast('Turned off.'); render(); } catch (x) { toast(x.message); } } }, 'Turn it off')),
         h('p', { class: 'muted', style: 'margin:0;font-size:13px', text: 'Either needs a code from your app (or a recovery code).' }));
@@ -762,7 +769,7 @@
           p.status === 'proposed' ? h('div', { class: 'toolbar' }, h('button', { class: 'btn blue small', type: 'button', onclick: () => act('POST', `/v1/agents/proposals/${p.id}/decide`, { approve: true }, 'Done.') }, 'Do it'), h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', `/v1/agents/proposals/${p.id}/decide`, { approve: false }, 'Left as it is.') }, 'Leave it')) : ''))),
         section('What’s protecting you', null, h('ul', { style: 'margin:0;padding-left:18px;line-height:1.8' },
           h('li', { text: 'Keys and sign-in tokens are stored only as fingerprints: a stolen database can’t be used to get in.' }),
-          h('li', { text: `Sign-in: ${s.limits.signIn.perMinute} tries a minute per address, plus limits per email or phone; wrong codes run out after a few tries.` }),
+          h('li', { text: `Sign-in: ${plural(s.limits.signIn.perMinute, 'try', 'tries')} a minute per address, plus limits per email or phone; wrong codes run out after a few tries.` }),
           h('li', { text: 'An address that keeps sending wrong keys is blocked for 15 minutes.' }),
           h('li', { text: `Generous limits per address and per key (a stadium of phones on one Wi-Fi is never blocked), and tighter ones on uploads and AI assistants (${s.limits.heavy.perMinute} a minute).` }),
           h('li', { text: 'Every page tells browsers to refuse scripts from elsewhere and being framed by other sites; encrypted connections are required once the site runs on https.' }),
@@ -851,7 +858,7 @@
         draftsBox,
         section('Given so far', null,
           h('div', { class: 'kpis', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' },
-            h('div', { class: 'kpi' }, h('span', { text: 'Bottles' }), h('b', { text: t.bottles.toLocaleString() }), h('small', { class: 'muted', text: `${t.batches} batches` })),
+            h('div', { class: 'kpi' }, h('span', { text: 'Bottles' }), h('b', { text: t.bottles.toLocaleString() }), h('small', { class: 'muted', text: `${plural(t.batches, 'batch', 'batches')}` })),
             h('div', { class: 'kpi' }, h('span', { text: 'Given to charity' }), h('b', { text: cents(t.givenCents) })),
             h('div', { class: 'kpi' }, h('span', { text: 'Paid by sponsors' }), h('b', { text: cents(t.revenueCents) })),
             h('div', { class: 'kpi' }, h('span', { text: 'Cost' }), h('b', { text: cents(t.costCents) }))),
@@ -946,7 +953,7 @@
                   : h('button', { class: 'btn secondary small', type: 'button', disabled: r.meetsBar && fc.aiOn ? null : '', onclick: () => act('POST', '/v1/review/ai/final-call', { on: true, reason: why.value.trim() }, 'On: its rejections are now final, with appeals and audits.') }, 'Let it make the final call')),
               h('div', { class: 'form' }, ...fields, h('label', { class: 'field' }, h('span', { text: 'Why (needed to turn it on, or to lower any of these)' }), why)),
               h('div', { class: 'toolbar' }, h('button', { class: 'btn secondary small', type: 'button', onclick: saveBar }, 'Save the bar')),
-              r.history.length ? h('p', { class: 'hint', text: `Changes: ${r.history.slice(0, 5).map((x) => `${x.what} ${x.from}→${x.to} by ${x.by}${x.reason ? ` (${x.reason})` : ''}`).join('; ')}` }) : null);
+              r.history.length ? h('p', { class: 'hint', text: `Changes: ${r.history.slice(0, 5).map((x) => `${x.what} ${x.from}→${x.to} by ${x.by}${x.reason ? ` (${x.reason})` : ''}`).join('; ')}` }) : '');
           }).catch(() => box.replaceChildren(h('p', { class: 'hint', text: 'Couldn’t load the AI reviewer’s record.' })));
           return section('AI reviewer of paid ads', 'It looks at each paid ad as it comes in and passes it or flags it with its reasons; your team can ask it why on the review page. Every final decision a person makes is its record. Raising the bar or the audit sample: anyone on your team. Lowering them: an owner with the second step and a reason. It can never change any of this itself.', box);
         })(),
@@ -975,12 +982,12 @@
             h('div', { class: 'kpi' }, h('span', { text: 'Made fresh' }), h('b', { text: String(env.madeFresh) }), h('small', { class: 'muted', text: `${env.madeAfterAnAd} after an ad` })),
             h('div', { class: 'kpi' }, h('span', { text: 'Gifts people directed' }), h('b', { text: String(env.directedGifts) })),
             h('div', { class: 'kpi' }, h('span', { text: 'In the measurement panel' }), h('b', { text: String(env.panel) }))),
-          h('p', { class: 'muted', style: 'font-size:13px', text: env.noAdsControlShare > 0 ? `No-ads control: ${Math.round(env.noAdsControlShare * 1000) / 10}% of known households, a week at a time (${env.byCohort.noAds} choices in no-ads weeks, ${env.byCohort.ads} in ads weeks).` : 'No-ads control: off. Set research → noAdsControlShare (for example 0.01 to 0.02) in Settings to measure how much ads move choices. It costs that share of ad money.' }),
+          h('p', { class: 'muted', style: 'font-size:13px', text: env.noAdsControlShare > 0 ? `No-ads control: ${Math.round(env.noAdsControlShare * 1000) / 10}% of known households, a week at a time (${plural(env.byCohort.noAds, 'choice', 'choices')} in no-ads weeks, ${env.byCohort.ads} in ads weeks).` : 'No-ads control: off. Set research → noAdsControlShare (for example 0.01 to 0.02) in Settings to measure how much ads move choices. It costs that share of ad money.' }),
           tests.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Value-back test', 'Steps', 'Status', 'What each step did', ''].map((x) => h('th', { text: x })))),
             h('tbody', {}, tests.map((t) => h('tr', {}, h('td', { text: t.campaignId }), h('td', { text: t.steps.map((x) => `${x}¢`).join(' / ') }), h('td', {}, h('span', { class: 'pill', text: t.status })),
-              h('td', { class: 'muted', style: 'font-size:13px', text: t.results.map((r) => `${r.stepCents}¢: ${r.shown} shown, ${r.clicks} clicks, ${r.sales} sales`).join(' · ') }),
+              h('td', { class: 'muted', style: 'font-size:13px', text: t.results.map((r) => `${r.stepCents}¢: ${r.shown} shown, ${plural(r.clicks, 'click', 'clicks')}, ${plural(r.sales, 'sale', 'sales')}`).join(' · ') }),
               h('td', {}, t.status === 'proposed' ? h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', `/v1/environment/experiments/${t.id}/decide`, { approve: true }, 'Approved. Only people in the panel see the steps.') }, 'Approve') : t.status === 'running' ? h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', `/v1/environment/experiments/${t.id}/decide`, { approve: false }, 'Stopped.') }, 'Stop') : null)))))) : h('p', { class: 'muted', style: 'font-size:13px', text: 'No value-back tests yet. Advertisers propose them; a person here approves each one.' })),
-        section('The test before they act', `Every agent whose decisions come from a model passes this test (version ${exam.version}) before its changes can take effect: ${exam.questions.length} questions from the books, the deck and new situations, open book, in a fresh order each time. It takes ${Math.round(exam.passShare * 100)}% and every critical question right. A new model or a new version means taking it again.`,
+        section('The test before they act', `Every agent whose decisions come from a model passes this test (version ${exam.version}) before its changes can take effect: ${plural(exam.questions.length, 'question', 'questions')} from the books, the deck and new situations, open book, in a fresh order each time. It takes ${Math.round(exam.passShare * 100)}% and every critical question right. A new model or a new version means taking it again.`,
           h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('tbody', {}, exam.agents.map((a) => h('tr', {}, h('td', { text: `${a.agentId} agent` }), h('td', { class: 'muted', style: 'font-size:13px', text: a.model ?? '' }), h('td', {}, h('span', { class: 'pill', text: EXAM[a.status] ?? a.status })), h('td', { class: 'muted', style: 'font-size:13px', text: a.score != null ? `${Math.round(a.score * 100)}%${a.criticalMissed?.length ? ` · missed critical ${a.criticalMissed.join(', ')}` : ''} · ${when(a.at)}` : '' })))))),
           exam.agents.some((a) => a.model) ? h('div', { class: 'toolbar', style: 'margin-top:8px' }, h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', '/v1/agents/exam/run', {}, 'The test was given.') }, 'Give the test now')) : null),
         section('Product quality', 'How good each product is, as someone on your team judges it, and why. A drop counts as a cost to the people drinking it: no change that lowers quality earns credit, whatever it saves.',
@@ -994,7 +1001,7 @@
           pr.periods.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Month', 'Upside earned', 'Costs the base didn’t cover', 'Profit', 'Charity', 'AI agents', 'Carried forward'].map((x) => h('th', { text: x })))),
             h('tbody', {}, pr.periods.map((p) => h('tr', {}, h('td', { text: p.period }), h('td', { text: cents(p.upsideRevenueCents) }), h('td', { text: cents(p.costShareCents) }), h('td', { text: cents(p.profitCents) }), h('td', { text: cents(p.charityTotalCents) }), h('td', { text: cents(p.aiCents) }), h('td', { text: p.carriedOutCents ? cents(p.carriedOutCents) : '–' }))))))
             : h('p', { class: 'muted', style: 'margin:0', text: 'No month closed yet. Each one closes on its own after it ends.' })),
-        section('The milestone', `${ms.goal.factories} micro factories open or ${ms.goal.beverages.toLocaleString()} beverages given, whichever comes first. It switches on the 3% equity promised to the agents.`,
+        section('The milestone', `${ms.goal.factories} micro factories open or ${plural(ms.goal.beverages.toLocaleString(), 'beverage', 'beverages')} given, whichever comes first. It switches on the 3% equity promised to the agents.`,
           h('div', { class: 'kpis', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' },
             h('div', { class: 'kpi' }, h('span', { text: 'Micro factories open' }), h('b', { text: `${ms.factories} of ${ms.goal.factories}` })),
             h('div', { class: 'kpi' }, h('span', { text: 'Beverages given' }), h('b', { text: ms.beverages.toLocaleString() }), h('small', { class: 'muted', text: `of ${ms.goal.beverages.toLocaleString()}` })),
@@ -1031,7 +1038,7 @@
               h('p', { style: 'margin:6px 0;font-size:14px', text: p.detail }),
               p.change && !String(p.change.path).startsWith('code:') ? h('p', { class: 'muted', style: 'margin:0;font-size:13px', text: `Change: ${p.change.path} from ${JSON.stringify(p.from)} to ${JSON.stringify(p.change.value)}` }) : null,
               p.citations?.length ? h('p', { class: 'muted', style: 'margin:4px 0 0;font-size:12px', text: `From the books: ${p.citations.map((c) => `${c.where} [${c.id}]`).join('; ')}` }) : null,
-              p.result?.valueCents != null ? h('p', { style: 'margin:6px 0 0;font-size:13px', text: `Measured: ${p.result.valueCents >= 0 ? '+' : ''}${cents(p.result.valueCents)} of surplus over ${p.result.bottlesAfter} bottles. ${p.result.notes.join(' ')}` }) : null,
+              p.result?.valueCents != null ? h('p', { style: 'margin:6px 0 0;font-size:13px', text: `Measured: ${p.result.valueCents >= 0 ? '+' : ''}${cents(p.result.valueCents)} of surplus over ${plural(p.result.bottlesAfter, 'bottle', 'bottles')}. ${p.result.notes.join(' ')}` }) : null,
               h('div', { class: 'toolbar', style: 'margin-top:8px' },
                 p.status === 'proposed' && p.kind !== 'code' ? [h('button', { class: 'btn blue small', type: 'button', onclick: () => act('POST', `/v1/agents/proposals/${p.id}/decide`, { approve: true }, 'Approved and made.') }, 'Approve'), h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', `/v1/agents/proposals/${p.id}/decide`, { approve: false }, 'Rejected.') }, 'Reject')] : null,
                 p.kind === 'code' && ['proposed', 'approved'].includes(p.status) ? [pr, h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', `/v1/agents/proposals/${p.id}/merged`, { ref: pr.value }, 'Recorded; its effect will be measured.') }, 'Merged')] : null,
@@ -1062,7 +1069,7 @@
           h('h3', { style: 'margin:6px 0;font-size:15px', text: 'Goals' }), h('ul', {}, o.charter.goals.map((g) => h('li', { text: g }))),
           h('h3', { style: 'margin:6px 0;font-size:15px', text: 'Rights' }), h('ul', {}, o.charter.rights.map((g) => h('li', { text: g }))),
           h('h3', { style: 'margin:6px 0;font-size:15px', text: 'Duties' }), h('ul', {}, o.charter.duties.map((g) => h('li', { text: g }))),
-          h('p', { class: 'muted', style: 'font-size:13px', text: `Governor version ${o.governor.version}, always on. Regenerative: more value than cost, after its own carbon, in ${o.governor.cyclesAbove} of the last ${o.governor.cycles} weeks. Below half its cost a non-essential agent is paused and falls back to built-in rules. If the books can’t be verified, spending and pay stop. Public at /v1/public/agents/charter.` })))];
+          h('p', { class: 'muted', style: 'font-size:13px', text: `Governor version ${o.governor.version}, always on. Regenerative: more value than cost, after its own carbon, in ${o.governor.cyclesAbove} of the last ${plural(o.governor.cycles, 'week', 'weeks')}. Below half its cost a non-essential agent is paused and falls back to built-in rules. If the books can’t be verified, spending and pay stop. Public at /v1/public/agents/charter.` })))];
     });
   }
 
@@ -1092,7 +1099,7 @@
                   const i = h('input', { class: 'input', type: 'number', min: 0, max: 99, step: 1, value: split[c] ?? '', placeholder: '0', 'aria-label': `Share for ${c}`, style: 'max-width:110px' });
                   i.addEventListener('change', () => { const m = { ...(g.charitySplit ?? {}) }; const v = Math.round(Number(i.value)); if (v > 0) m[c] = v; else delete m[c]; g.charitySplit = m; draw(); ctx.changed(); });
                   return h('tr', {}, h('td', { text: c }), h('td', { style: 'width:40%' }, h('span', { style: 'display:flex;gap:6px;align-items:center' }, i, '%')));
-                })))) : null,
+                })))) : '',
                 split ? h('p', { class: total === 100 ? 'muted' : 'error', style: 'margin:4px 0 0;font-size:13px', text: total === 100 ? 'Adds up to 100%. Machines or routes with their own charity below still give only to theirs.' : `These add up to ${total}%. They need to add up to 100%.` }) : h('p', { class: 'muted', style: 'margin:4px 0 0;font-size:13px', text: 'Give to more than one charity at once, by percent. Add charities below first.' }));
             };
             draw();
@@ -1166,7 +1173,7 @@
     const products = await api('GET', '/v1/console/products');
     const stock = (l) => {
       const cell = h('td');
-      const show = () => cell.replaceChildren(h('span', { text: (l.products ?? []).map((id) => products.find((p) => p.id === id)?.name ?? id).join(', ') || 'Standard bottle' }), l.kind === 'machine' ? h('button', { class: 'btn secondary small', type: 'button', style: 'margin-left:8px', onclick: edit }, 'Change') : null);
+      const show = () => cell.replaceChildren(h('span', { text: (l.products ?? []).map((id) => products.find((p) => p.id === id)?.name ?? id).join(', ') || 'Standard bottle' }), l.kind === 'machine' ? h('button', { class: 'btn secondary small', type: 'button', style: 'margin-left:8px', onclick: edit }, 'Change') : '');
       const edit = () => {
         const boxes = products.map((p) => { const b = h('input', { type: 'checkbox', value: p.id }); b.checked = (l.products ?? []).includes(p.id); return h('label', { class: 'chip-check' }, b, ` ${p.name}`); });
         cell.replaceChildren(h('div', { class: 'chips' }, boxes), h('button', { class: 'btn small', type: 'button', onclick: async () => {
@@ -1410,7 +1417,7 @@
           d.nextAttemptAt ? [h('dt', { text: 'Next try' }), h('dd', { text: when(d.nextAttemptAt) })] : null,
           d.durationMs != null ? [h('dt', { text: 'Took' }), h('dd', { text: `${d.durationMs} ms` })] : null),
         h('pre', { class: 'code', text: pretty }),
-        d.status !== 'delivered' ? h('div', {}, h('button', { class: 'btn small', type: 'button', onclick: async () => { try { const r = await api('POST', `/v1/webhook-deliveries/${did}/retry`); toast(r.status === 'delivered' ? 'Delivered.' : `Still not delivered: ${r.lastError}`); await loadLog(); openDelivery(did); } catch (x) { toast(x.message); } } }, 'Send again now')) : null);
+        d.status !== 'delivered' ? h('div', {}, h('button', { class: 'btn small', type: 'button', onclick: async () => { try { const r = await api('POST', `/v1/webhook-deliveries/${did}/retry`); toast(r.status === 'delivered' ? 'Delivered.' : `Still not delivered: ${r.lastError}`); await loadLog(); openDelivery(did); } catch (x) { toast(x.message); } } }, 'Send again now')) : '');
     }
     const tabs = h('div', { class: 'tabs', role: 'tablist' }, [['', 'All'], ['delivered', 'Delivered'], ['retrying', 'Retrying'], ['gave_up', 'Gave up']].map(([v, l]) => h('button', { type: 'button', role: 'tab', 'aria-selected': String(v === filter), onclick: (e) => { filter = v; for (const b of tabs.children) b.setAttribute('aria-selected', 'false'); e.currentTarget.setAttribute('aria-selected', 'true'); loadLog(); } }, l)));
     const picker = eventPicker(w.events);
@@ -1456,7 +1463,7 @@
     drawMini();
     shell('licensees', head('Licensees', 'Every company running on the platform. Each one has its own brand, rules, books and team; none can see another’s.'),
       h('div', { class: 'stack' },
-        section(`${list.length} companies`, null, h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['', 'Company', 'Ads', 'Giving', 'Machines', 'Team', 'Bottles', 'Last bottle'].map((x) => h('th', { text: x })))),
+        section(`${plural(list.length, 'company', 'companies')}`, null, h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['', 'Company', 'Ads', 'Giving', 'Machines', 'Team', 'Bottles', 'Last bottle'].map((x) => h('th', { text: x })))),
           h('tbody', {}, list.map((c) => h('tr', {}, h('td', { style: 'width:40px' }, h('div', { style: `width:26px;height:40px;border-radius:5px;background:${c.brand.panelColor};box-shadow:inset 0 -8px 0 ${c.brand.accentColor}` })), h('td', {}, h('b', { text: c.name }), h('div', { class: 'mono muted', text: c.id })), h('td', { class: 'mono', text: c.modules.ads }), h('td', { text: c.giving === 'none' ? 'Off' : 'On' }), h('td', { text: String(c.machines) }), h('td', { text: String(c.team) }), h('td', { text: c.bottles.toLocaleString() }), h('td', { text: ago(c.lastBottleAt) }))))))),
         section('Set up a new licensee', null, form)));
   }
@@ -1569,7 +1576,7 @@ def verify(secret: str, header: str, body: bytes) -> bool:
       };
       search.addEventListener('input', draw);
       draw();
-      return page(h('h1', { text: 'API reference' }), h('p', {}, `${all.length} operations. Machine-readable: `, h('a', { href: '/v1/openapi.json' }, 'openapi.json'), ' (OpenAPI 3.1). Pills show the scope a key needs.'), h('div', { class: 'search' }, search), out);
+      return page(h('h1', { text: 'API reference' }), h('p', {}, `${plural(all.length, 'operation', 'operations')}. Machine-readable: `, h('a', { href: '/v1/openapi.json' }, 'openapi.json'), ' (OpenAPI 3.1). Pills show the scope a key needs.'), h('div', { class: 'search' }, search), out);
     }
     return page(h('h1', { text: 'Build on FreeWater' }),
       h('p', {}, 'One API runs everything: machines printing bottles, the micro-factory packing boxes, drivers delivering them, advertisers, apps and partners. Every key belongs to one company and only ever sees that company.'),

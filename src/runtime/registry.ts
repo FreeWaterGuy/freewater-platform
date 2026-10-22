@@ -258,7 +258,7 @@ export const SWITCHES: Switch[] = [
     link: flag('machines.offlineWalkUp', { via: { on: 'Set the hourly limit under Company, then turn it on there.', page: 'company' } }) }),
 
   // ======================= Points & rewards =======================
-  sw({ id: 'rewards', category: 'rewards', parent: null, label: 'Points and rewards', description: 'The wallet: points for scans, games and feedback, dollar credit and brand offers.', routes: ['GET /v1/me/wallet', 'GET /v1/public/wallet/:companyId', 'GET /v1/public/wallet/:companyId/supply'], pages: ['wallet'] }),
+  sw({ id: 'rewards', category: 'rewards', parent: null, label: 'Points and rewards', description: 'The wallet: points for scans, games and feedback, dollar credit and brand offers.', routes: ['GET /v1/me/wallet', 'POST /v1/me/wallet/keep', 'GET /v1/public/wallet/:companyId', 'GET /v1/public/wallet/:companyId/supply'], pages: ['wallet'] }),
   sw({ id: 'points', category: 'rewards', group: 'Points', kind: 'linked', label: 'Points', description: 'Points for scans, games and feedback, the same whichever item someone picks. The cap never changes.', link: flag('wallet.points.enabled', { missing: true, base: (c) => defaultWallet(c.name) as any }) }),
   sw({ id: 'credit', category: 'rewards', group: 'Credit', kind: 'linked', risk: 'money', label: 'Dollar credit', description: 'People can be paid dollar credit, only from money a brand has really sent.', link: flag('wallet.credit.enabled', { base: (c) => defaultWallet(c.name) as any }) }),
   sw({ id: 'offers', category: 'rewards', group: 'Brand offers', host: 'offers', risk: 'money', label: 'Brand offers', description: 'Brands fund offers (free, cheaper or negatively priced products) redeemed with a receipt. Each offer needs your approval.',

@@ -477,13 +477,23 @@ export class DataService {
    * fingerprints, its own phone key). See the rules above.
    */
   async mayLinkDevice(companyId: string, userId: string, viewerKey: string, own: string[] = []) {
-    if (!viewerKey || viewerKey.includes(':')) return false;
+    const free = await this.phoneFreeFor(companyId, userId, viewerKey, own);
+    if (free !== 'free') return free === 'mine'; // already this person's: nothing new is joined; someone else's: never
+    return this.deviceUsed(companyId, viewerKey);
+  }
+  /**
+   * Rule 1 alone: is this phone free for this account ('free'), already this person's ('mine'), or someone else's
+   * ('theirs': joined to another person, or another account's own key)? Moving a phone's points into an account
+   * (WalletService.keepPhonePoints) needs it not to be someone else's.
+   */
+  async phoneFreeFor(companyId: string, userId: string, viewerKey: string, own: string[] = []): Promise<'free' | 'mine' | 'theirs'> {
+    if (!viewerKey || viewerKey.includes(':')) return 'theirs';
     const mine = new Set<string>();
     for (const s of [`user:${userId}`, ...own]) { const p = s ? await this.personFor(companyId, s) : null; if (p) mine.add(p); }
     const theirs = await this.personFor(companyId, viewerKey);
-    if (theirs) return mine.has(theirs); // already this person's: nothing new is joined; someone else's: never
-    if ((await this.db.query(`select 1 from users where viewer_key = $1 and id <> $2`, [viewerKey, userId])).rows.length) return false;
-    return this.deviceUsed(companyId, viewerKey);
+    if (theirs) return mine.has(theirs) ? 'mine' : 'theirs';
+    if ((await this.db.query(`select 1 from users where viewer_key = $1 and id <> $2`, [viewerKey, userId])).rows.length) return 'theirs';
+    return 'free';
   }
   /** Has this phone key done anything here: a scan, a page interaction, a place, a wallet entry? */
   private async deviceUsed(companyId: string, viewerKey: string) {

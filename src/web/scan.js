@@ -19,6 +19,8 @@
     for (const kid of kids.flat()) if (kid != null && kid !== false) el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
     return el;
   };
+  /** "1 bottle", "2 bottles": a count with its noun, singular for exactly one. */
+  const plural = (n, one, many) => `${n} ${String(n).replace(/[^0-9.-]/g, '') === '1' ? one : many}`;
   const store = {
     get(k) { try { return localStorage.getItem(k); } catch { return null; } },
     set(k, v) { try { localStorage.setItem(k, v); } catch {} },
@@ -119,7 +121,7 @@
       const rec = target.kind === 'slot'
         ? api('POST', '/v1/public/scans', withToken({ unitId: target.unitId, slot: target.slot, viewerKey, experienceLoaded: loaded, ...(opened.variant ? { variant: opened.variant.id } : {}), ...(store.get('fw_no_tracking') === '1' ? {} : { context: visitContext() }) }))
         : api('POST', '/v1/public/box-scans', withToken({ packId: target.packId, face: target.face, viewerKey, experienceLoaded: loaded }));
-      rec.then((r) => { if (loaded) play('scan', ctx); if (r?.points) toast(`+${r.points} points · they’re in your wallet`); }).catch(() => {});
+      rec.then((r) => { if (loaded) play('scan', ctx); if (r?.points) toast(`+${plural(r.points, 'point', 'points')} · they’re in your wallet`); }).catch(() => {});
     }, 0));
   }
 
@@ -544,7 +546,7 @@
     if (e.panel) {
       const t = h('input', { type: 'checkbox', ...(e.panel.inPanel ? { checked: true } : {}) });
       t.addEventListener('change', () => api('POST', `/v1/public/companies/${cid}/panel`, { viewerKey, join: t.checked }).then((r) => toast(r.inPanel ? 'You’re in. Thank you.' : 'You’ve left the panel.')).catch(() => { t.checked = !t.checked; }));
-      parts.push(h('label', { class: 'check' }, t, ` Take part in measurements. ${e.panel.about.replace(/^Take part in measurements: /, '')}`));
+      parts.push(h('label', { class: 'check' }, t, ` ${e.panel.about}`));
     }
     return parts.length > 1 ? h('section', { class: 'your-choices' }, parts) : null;
   }
@@ -595,9 +597,12 @@
     box.addEventListener('change', () => {
       api('POST', `/v1/public/data/${encodeURIComponent(opened.companyId)}/do-not-sell`, { viewerKey, on: box.checked }).catch(() => { box.checked = !box.checked; });
     });
-    const near = nearbyBlock(opened);
-    const playLink = h('p', { class: 'your-data' }, h('a', { href: `/play?c=${encodeURIComponent(opened.companyId)}`, text: 'Play for points' }), ' · ', h('a', { href: '/app/wallet', text: 'Your wallet' }));
-    return h('div', { class: 'your-data-all' }, playLink, whyBlock(opened), ...(near ? [near] : []), eraseData(opened), h('p', { class: 'your-data' }, dns), homeOptOut(opened));
+    // Only doors to areas that are on here (GET /v1/public/features: the server's areas and the company's switches).
+    const on = (area) => !(opened.featuresOff ?? []).includes(area);
+    const near = on('machines') && on('exact_location') ? nearbyBlock(opened) : null;
+    const doors = [on('games') && h('a', { href: `/play?c=${encodeURIComponent(opened.companyId)}`, text: 'Play for points' }), on('rewards') && h('a', { href: '/app/wallet', text: 'Your wallet' })].filter(Boolean);
+    const playLink = doors.length ? h('p', { class: 'your-data' }, doors.flatMap((d, i) => (i ? [' · ', d] : [d]))) : null;
+    return h('div', { class: 'your-data-all' }, ...(playLink ? [playLink] : []), whyBlock(opened), ...(near ? [near] : []), eraseData(opened), h('p', { class: 'your-data' }, dns), homeOptOut(opened));
   }
 
   /**
@@ -741,8 +746,8 @@
     if (f.giving) facts.push(h('div', { class: 'giving', text: f.giving }));
     if (f.story) {
       const m = f.story.minutesSincePrint;
-      const ago = m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`;
-      facts.push(h('div', { class: 'story', text: `Genuine. Printed fresh at ${f.story.place}, ${ago}.${f.story.passedOn ? ` It’s been passed along: ${f.story.people} people have scanned it.` : ''}` }));
+      const ago = m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${plural(Math.round(m / 1440), 'day', 'days')} ago`;
+      facts.push(h('div', { class: 'story', text: `Genuine. Printed fresh at ${f.story.place}, ${ago}.${f.story.passedOn ? ` It’s been passed along: ${plural(f.story.people, 'person', 'people')} have scanned it.` : ''}` }));
     }
     const links = [];
     if (f.receiptUrl) links.push(h('a', { href: fixture ? '#' : f.receiptUrl, text: 'See this bottle’s receipt' }));

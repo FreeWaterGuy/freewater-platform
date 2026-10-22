@@ -18,6 +18,8 @@
     for (const kid of kids.flat(Infinity)) if (kid != null && kid !== false) el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
     return el;
   };
+  /** "1 bottle", "2 bottles": a count with its noun, singular for exactly one. */
+  const plural = (n, one, many) => `${n} ${String(n).replace(/[^0-9.-]/g, '') === '1' ? one : many}`;
   const svgNS = 'http://www.w3.org/2000/svg';
   const icon = (d, cls = 'ico') => { const s = document.createElementNS(svgNS, 'svg'); s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('fill', 'none'); s.setAttribute('stroke', 'currentColor'); s.setAttribute('stroke-width', '2'); s.setAttribute('stroke-linecap', 'round'); s.setAttribute('stroke-linejoin', 'round'); s.setAttribute('aria-hidden', 'true'); s.setAttribute('class', cls); for (const part of d.split('|')) { const p = document.createElementNS(svgNS, 'path'); p.setAttribute('d', part); s.append(p); } return s; };
   const I = {
@@ -70,17 +72,17 @@
   // ---------- routing ----------
   const routes = [
     [/^\/app\/?$/, homeScreen],
-    [/^\/app\/machines$/, machinesScreen],
-    [/^\/app\/m\/([A-Za-z0-9_-]+)$/, machineScreen],
+    [/^\/app\/machines$/, machinesScreen, 'machines'],
+    [/^\/app\/m\/([A-Za-z0-9_-]+)$/, machineScreen, 'machines'],
     [/^\/app\/scan$/, scanScreen],
     [/^\/app\/saved$/, savedScreen],
-    [/^\/app\/wallet$/, walletScreen],
+    [/^\/app\/wallet$/, walletScreen, 'rewards'],
     [/^\/app\/me$/, meScreen],
     [/^\/app\/bottles\/([A-Za-z0-9_-]+)$/, bottleScreen],
-    [/^\/app\/design$/, designScreen],
+    [/^\/app\/design$/, designScreen, 'bottle_designer'],
     [/^\/app\/printing$/, printingScreen],
-    [/^\/app\/delivery$/, deliveryScreen],
-    [/^\/app\/house$/, houseScreen],
+    [/^\/app\/delivery$/, deliveryScreen, 'delivery'],
+    [/^\/app\/house$/, houseScreen, 'delivery_areas'],
   ];
   let stopCurrent = null;
   function go(path, replace) {
@@ -89,12 +91,19 @@
     render();
   }
   window.addEventListener('popstate', () => { state.path = location.pathname + location.search; render(); });
-  const link = (path, attrs, ...kids) => h('a', { href: fixture ? '#' : path, ...attrs, onclick: (e) => { if (e.metaKey || e.ctrlKey) return; e.preventDefault(); go(path); } }, ...kids);
+  /** Is this one of the app's own screens (drawn here), or another page (Play, a scan page) the browser opens? */
+  const inApp = (path) => routes.some(([re]) => re.test(path.split('?')[0]));
+  const link = (path, attrs, ...kids) => h('a', { href: fixture ? '#' : path, ...attrs, onclick: (e) => {
+    if (e.metaKey || e.ctrlKey) return;
+    if (!inApp(path)) { if (fixture) { e.preventDefault(); toast(`Opens ${path.split('?')[0]}`); } return; } // the browser goes there
+    e.preventDefault(); go(path);
+  } }, ...kids);
   const query = () => new URLSearchParams(state.path.split('?')[1] || '');
   async function render() {
     if (stopCurrent) { stopCurrent(); stopCurrent = null; }
     const [pathname] = state.path.split('?');
-    for (const [re, fn] of routes) {
+    for (const [re, fn, area] of routes) {
+      if (area && !on(area)) continue; // switched off here: back to Home
       const m = re.exec(pathname);
       if (m) {
         try { await fn(...m.slice(1)); } catch (e) { root.replaceChildren(screen({ nav: true }, h('div', { class: 'notice err', text: e.message }))); }
@@ -111,7 +120,7 @@
     return s;
   };
   const nav = (active) => h('nav', { class: 'nav', 'aria-label': 'Main' }, h('div', { class: 'nav-inner' },
-    [['home', '/app', 'Home', I.home], ['machines', '/app/machines', 'Machines', I.pin], ['scan', '/app/scan', 'Scan', I.scan], ['wallet', '/app/wallet', 'Wallet', I.wallet], ['me', '/app/me', 'Me', I.me]].map(([id, path, label, ic]) =>
+    [['home', '/app', 'Home', I.home], ['machines', '/app/machines', 'Machines', I.pin, 'machines'], ['scan', '/app/scan', 'Scan', I.scan], ['wallet', '/app/wallet', 'Wallet', I.wallet, 'rewards'], ['me', '/app/me', 'Me', I.me]].filter(([, , , , area]) => !area || on(area)).map(([id, path, label, ic]) =>
       link(path, { class: id === 'scan' ? 'scan' : '', 'aria-current': active === id ? 'page' : null }, id === 'scan' ? h('span', { class: 'bubble' }, icon(ic)) : icon(ic), label))));
   const backBar = (title, sub, to) => h('div', { class: 'title-row' }, h('button', { class: 'back', type: 'button', 'aria-label': 'Back', onclick: () => (to ? go(to) : fixture || history.length < 2 ? go('/app') : history.back()) }, icon(I.back)), h('div', {}, h('h1', { text: title }), sub && h('p', { text: sub })));
   const initials = (me) => (me?.displayName ? me.displayName.trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('') : (me?.email || '').slice(0, 1) || '#').toUpperCase();
@@ -177,7 +186,7 @@
   async function homeScreen() {
     const me = await loadMe();
     const [machines, mine, saved, delivery, house] = await Promise.all([
-      api('GET', `/v1/public/companies/${state.config.companyId}/machines`).catch(() => []),
+      on('machines') ? api('GET', `/v1/public/companies/${state.config.companyId}/machines`).catch(() => []) : [],
       me ? api('GET', '/v1/me/bottles').catch(() => null) : null,
       me ? api('GET', '/v1/me/saved').catch(() => []) : [],
       me ? api('GET', '/v1/me/delivery').catch(() => null) : null,
@@ -198,7 +207,7 @@
       link('/app/scan', { class: 'tile blue' }, h('span', { class: 'tile-ico' }, icon(I.scan)), h('span', { class: 'grow' }, h('b', { text: 'Scan a bottle' }), h('span', { text: 'Open the AR printed on any FreeWater' }))),
       on('rewards') ? link('/app/wallet', { class: 'tile ice' }, h('span', { class: 'grow' }, h('b', { text: 'Your wallet' }), h('span', { class: 'muted small', text: 'Points, offers, coupons and what you saved' })), h('span', { class: 'go', text: 'Open' })) : null,
       on('delivery') ? (house && on('delivery_areas') ? houseCard(house) : deliveryCard(delivery)) : null,
-      on('app_free_bottle') && m0 && link(`/app/m/${m0.id}`, { class: 'tile ice' }, h('span', { class: 'grow' }, h('b', { text: `${m0.id} on ${m0.name}` }), h('span', { class: 'muted small', text: m0.address || m0.city })), h('span', { class: 'go', text: 'Get one' })),
+      on('machines') && on('app_free_bottle') && m0 && link(`/app/m/${m0.id}`, { class: 'tile ice' }, h('span', { class: 'grow' }, h('b', { text: `${m0.id} on ${m0.name}` }), h('span', { class: 'muted small', text: m0.address || m0.city })), h('span', { class: 'go', text: 'Get one' })),
       me && h('h2', { class: 'section' }, 'Your bottles'),
       me && (mine?.bottles.length
         ? h('div', { class: 'rail' }, mine.bottles.slice(0, 8).map((b) => bottleCard(b)))
@@ -303,7 +312,7 @@
       h('p', { class: 'small muted', style: 'margin:0', text: 'The driver’s photo of each box at your door. Only you and our team see them, and they’re deleted after a while.' }),
       h('div', { class: 'chips' }, photos.map((p) => h('button', { type: 'button', class: 'chip-btn', onclick: () => openPhoto(p) }, new Date(p.takenAt).toLocaleDateString([], { month: 'short', day: 'numeric' }))))) : null;
     screen({ nav: 'me' }, backBar('Your house', hs.address, '/app/me'),
-      h('section', { class: 'hero-card' }, h('div', { class: 'headline' }, HOUSE_STATUS[hs.status] || hs.status, h('span', { text: active ? `A ${hs.packSize}-pack ${hs.everyDays === 7 ? 'every week' : `every ${hs.everyDays} days`}` : '' })),
+      h('section', { class: 'hero-card' }, h('div', { class: 'headline' }, HOUSE_STATUS[hs.status] || hs.status, h('span', { text: active ? `A ${hs.packSize}-pack ${hs.everyDays === 7 ? 'every week' : `every ${plural(hs.everyDays, 'day', 'days')}`}` : '' })),
         h('p', { style: 'margin:0;opacity:.85', text: hs.lastDeliveredAt ? `Last one left ${new Date(hs.lastDeliveredAt).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })}.` : 'Nothing left here yet.' })),
       // Someone else said this is their house after you did (the team was told too).
       ...(hs.notices || []).map((t) => h('div', { class: 'notice', role: 'status', text: t })),
@@ -364,11 +373,11 @@
     const confirmBox = h('div', { class: 'notice err', hidden: true }, h('p', { style: 'margin:0 0 10px', text: 'Stop all deliveries? You can start again any time.' }), h('button', { class: 'btn small', style: 'background:var(--danger)', type: 'button', onclick: async (e) => { const b = e.currentTarget; b.disabled = true; try { await api('PATCH', '/v1/me/delivery', { action: 'cancel' }); toast('Deliveries stopped'); go('/app'); } catch (x) { toast(x.message); b.disabled = false; } } }, 'Yes, stop deliveries'));
     const notes = h('input', { class: 'input', id: 'dl-notes', maxlength: '300', value: d.notes ?? '', placeholder: 'Side gate, leave by the porch…' });
     screen({ nav: 'home' }, backBar('Home delivery', d.address, '/app'),
-      h('section', { class: 'hero-card' }, h('div', { class: 'headline' }, d.status === 'paused' ? 'Paused' : `${d.packSize} bottles`, h('span', { text: d.status === 'paused' ? 'Turn it back on any time.' : d.today && d.today.status === 'planned' ? 'Coming today' : d.nextDate ? niceDate(d.nextDate) : '' })),
+      h('section', { class: 'hero-card' }, h('div', { class: 'headline' }, d.status === 'paused' ? 'Paused' : `${plural(d.packSize, 'bottle', 'bottles')}`, h('span', { text: d.status === 'paused' ? 'Turn it back on any time.' : d.today && d.today.status === 'planned' ? 'Coming today' : d.nextDate ? niceDate(d.nextDate) : '' })),
         h('p', { style: 'margin:0;opacity:.85', text: deliveryLine(d) }), d.today ? h('p', { style: 'margin:0;opacity:.7;font-size:13px', text: `Your box is marked ${d.today.stopCode}.` }) : null),
       d.status === 'active' ? h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' }, h('button', { class: 'btn small secondary', type: 'button', onclick: () => change({ action: 'skip' }, 'Skipped. See you next time.') }, 'Skip the next one'), h('button', { class: 'btn small secondary', type: 'button', onclick: () => change({ action: 'pause' }, 'Paused') }, 'Pause'))
         : h('button', { class: 'btn', type: 'button', onclick: () => change({ action: 'resume' }, 'Back on. See you soon!') }, 'Turn deliveries back on'),
-      h('div', { class: 'field' }, h('label', { text: 'Pack size' }), choice([[6, '6 bottles'], [12, '12 bottles'], [24, '24 bottles']], d.packSize, (v) => change({ action: 'update', packSize: v }, `Now ${v} bottles`))),
+      h('div', { class: 'field' }, h('label', { text: 'Pack size' }), choice([[6, '6 bottles'], [12, '12 bottles'], [24, '24 bottles']], d.packSize, (v) => change({ action: 'update', packSize: v }, `Now ${plural(v, 'bottle', 'bottles')}`))),
       h('div', { class: 'field' }, h('label', { text: 'How often' }), choice(FREQ, d.frequency, (v) => change({ action: 'update', frequency: v }, 'Changed'))),
       h('div', { class: 'field' }, h('label', { text: `Which day (${d.routeName})` }), choice(d.routeDays.map((x) => [x, DAYS[x]]), d.day, (v) => change({ action: 'update', day: v }, `Moved to ${DAYS[v]}`))),
       h('form', { class: 'field', onsubmit: (e) => { e.preventDefault(); change({ action: 'update', notes: notes.value.trim() }, 'Note saved'); } }, h('label', { for: 'dl-notes', text: 'Note for the driver' }), h('div', { style: 'display:flex;gap:8px' }, notes, h('button', { class: 'btn small', type: 'submit' }, 'Save'))),
@@ -379,7 +388,7 @@
     const strip = h('div', { class: 'strip' });
     labelImage(b).then((src) => { if (src) strip.style.backgroundImage = `url("${src}")`; });
     return link(`/app/bottles/${b.id}`, { class: 'bottle-card' }, strip,
-      h('b', { text: b.kind === 'custom' ? 'Your design' : `${b.ads.filter((a) => !a.isHouse).length} ads · gave ${money(b.donatedCents)}` }),
+      h('b', { text: b.kind === 'custom' ? 'Your design' : `${plural(b.ads.filter((a) => !a.isHouse).length, 'ad', 'ads')} · gave ${money(b.donatedCents)}` }),
       h('span', { class: 'small muted', text: `${new Date(b.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })} · ${b.place}` }));
   }
   function savedCard(s) {
@@ -435,13 +444,13 @@
       backBar(`${m.id} · ${m.name}`, m.address || m.city, '/app'),
       h('div', { class: 'sample' }, bottle, h('span', { class: 'small muted', text: 'Sample label. Yours prints fresh with different ads.' })),
       h('h1', { class: 'display', text: m.pricing === 'free' ? 'Free spring water' : 'Spring water' }),
-      h('p', { class: 'muted', style: 'margin:-6px 0 0;font-size:17px', text: `16 oz aluminum bottle, ready in about ${m.printSeconds} seconds. Ads pay for it${m.giving ? `, and ${m.giving.replace(/ goes/, ' goes')}` : ''}.` }),
+      h('p', { class: 'muted', style: 'margin:-6px 0 0;font-size:17px', text: `16 oz aluminum bottle, ready in about ${plural(m.printSeconds, 'second', 'seconds')}. Ads pay for it${m.giving ? `, and ${m.giving.replace(/ goes/, ' goes')}` : ''}.` }),
       !code && h('div', { class: 'notice warn' }, h('b', { text: 'Scan the code on the machine’s screen. ' }), 'It proves you’re here, so nobody can take bottles from far away.'),
       m.availability && m.availability.state !== 'ready' ? h('div', { class: 'notice warn', text: m.availability.message }) : null,
       err,
       (m.availability && m.availability.state !== 'ready' && (get.disabled = true), get),
-      link(`/app/design?m=${m.id}`, { class: 'btn secondary' }, 'Design my own bottle'),
-      h('p', { class: 'small muted center', style: 'margin:-6px 0 0', text: `Your own design is paid and ad-free · ${money(m.customPriceCents)}` }));
+      on('bottle_designer') && on('card_payments') ? link(`/app/design?m=${m.id}`, { class: 'btn secondary' }, 'Design my own bottle') : null,
+      on('bottle_designer') && on('card_payments') ? h('p', { class: 'small muted center', style: 'margin:-6px 0 0', text: `Your own design is paid and ad-free · ${money(m.customPriceCents)}` }) : null);
   }
 
   // ---------- printing: the countdown, with an ad ----------
@@ -458,8 +467,8 @@
     const ring = document.createElementNS(svgNS, 'svg'); ring.setAttribute('viewBox', '0 0 112 112'); ring.append(track, arc);
     const num = h('b', { text: String(left) });
     const many = p.bottles?.length > 1;
-    const title = h('h1', { text: many ? `Your ${p.bottles.length} bottles are printing` : 'Your bottle is printing' });
-    const sub = h('p', { text: `${many ? 'They drop' : 'It drops'} into the tray in ${left} seconds` });
+    const title = h('h1', { text: many ? `Your ${plural(p.bottles.length, 'bottle', 'bottles')} are printing` : 'Your bottle is printing' });
+    const sub = h('p', { text: `${many ? 'They drop' : 'It drops'} into the tray in ${plural(left, 'second', 'seconds')}` });
     const bar = h('i');
     const pct = h('span', { text: '0%' });
     const ads = p.bottle.ads.filter((a) => !a.isHouse).length;
@@ -473,7 +482,7 @@
           if (!(await ensureSignedIn())) return;
           try { await api('POST', '/v1/me/saved', { target: ad.target }); b.replaceChildren(icon(I.check), 'Saved'); b.disabled = true; toast('Saved. It’s on your Home screen.'); } catch (x) { toast(x.message); }
         } }, icon(I.saved), `Save this from ${ad.advertiser}`))),
-      h('div', {}, h('div', { class: 'progress-row' }, h('span', { text: p.bottles?.length > 1 ? `Printing your ${p.bottles.length} bottles` : p.bottle.kind === 'custom' ? 'Printing your design' : `Printing ${ads} ${ads === 1 ? 'ad' : 'ads'} on your label` }), pct), h('div', { class: 'progress', role: 'progressbar', 'aria-label': 'Printing' }, bar)),
+      h('div', {}, h('div', { class: 'progress-row' }, h('span', { text: p.bottles?.length > 1 ? `Printing your ${plural(p.bottles.length, 'bottle', 'bottles')}` : p.bottle.kind === 'custom' ? 'Printing your design' : `Printing ${ads} ${ads === 1 ? 'ad' : 'ads'} on your label` }), pct), h('div', { class: 'progress', role: 'progressbar', 'aria-label': 'Printing' }, bar)),
       done);
     // At a Model 6 the bottle really is printing: follow it until it's in the tray (or say it didn't work).
     let status = p.status ?? 'ready';
@@ -597,7 +606,7 @@
     const choose = async (level) => {
       try {
         const r = me ? await api('POST', '/v1/me/data/level', { level }) : await api('POST', `/v1/public/data/${cid}/level`, { viewerKey: viewerKey(), level });
-        toast(r.points ? `Set to ${level}. +${r.points} points` : `Set to ${level}`);
+        toast(r.points ? `Set to ${level}. +${plural(r.points, 'point', 'points')}` : `Set to ${level}`);
         // Full and medium include your exact location when you scan: your phone asks first.
         if (level !== 'lite' && !fixture && navigator.geolocation) navigator.geolocation.getCurrentPosition((p) => api('POST', `/v1/public/data/${cid}/location`, { viewerKey: viewerKey(), lat: p.coords.latitude, lng: p.coords.longitude, accuracyM: Math.round(p.coords.accuracy) }).catch(() => {}), () => {}, { maximumAge: 600000, timeout: 10000 });
         render();
@@ -619,7 +628,7 @@
     const me = await loadMe();
     const cid = encodeURIComponent(state.config.companyId);
     const vk = viewerKey();
-    const [w, offers] = await Promise.all([me ? api('GET', '/v1/me/wallet') : api('GET', `/v1/public/wallet/${cid}?viewer=${encodeURIComponent(vk)}`), on('offers') ? api('GET', `/v1/public/offers/${cid}?viewer=${encodeURIComponent(vk)}`).catch(() => ({ offers: [], mine: [] })) : { offers: [], mine: [] }]);
+    const [w, offers] = await Promise.all([me ? api('GET', `/v1/me/wallet?viewer=${encodeURIComponent(vk)}`) : api('GET', `/v1/public/wallet/${cid}?viewer=${encodeURIComponent(vk)}`), on('offers') ? api('GET', `/v1/public/offers/${cid}?viewer=${encodeURIComponent(vk)}`).catch(() => ({ offers: [], mine: [] })) : { offers: [], mine: [] }]);
     const tok = (n) => (n / 1e6).toLocaleString(undefined, { maximumFractionDigits: 6 });
     const claim = async (o, btn) => {
       if (!me && !(await signIn('Offers pay real money, so they need an account.'))) return;
@@ -646,24 +655,38 @@
       w.test ? h('div', { class: 'notice', text: 'Testing: these points are for trying things out and will be wiped before going live.' }) : null,
       h('section', { class: 'hero-card' },
         h('div', { class: 'stats' },
-          h('div', {}, h('b', { text: w.points.balance.toLocaleString() }), h('span', { text: 'points' })),
+          h('div', {}, h('b', { text: w.points.balance.toLocaleString() }), h('span', { text: w.points.balance === 1 ? 'point' : 'points' })),
           (w.credit.enabled || w.credit.balanceCents) ? h('div', {}, h('b', { text: money(w.credit.balanceCents) }), h('span', { text: 'credit' })) : null,
           (w.token.live || w.token.balance) ? h('div', {}, h('b', { text: tok(w.token.balance) }), h('span', { text: 'tokens' })) : null),
         w.token.live ? h('p', { style: 'margin:8px 0 0;opacity:.85;font-size:14px', text: w.token.held }) : null),
       lvl?.askNow ? levelPicker(me, lvl, { card: true }) : null,
       me && on('gift_cards') && w.exchange.enabled && w.credit.balanceCents >= 500 ? giftCardTile(w) : null,
-      !on('games') ? null : link('/play', { class: 'tile blue' }, h('span', { class: 'tile-ico' }, icon(I.scan)), h('span', { class: 'grow' }, h('b', { text: 'Play for points' }), h('span', { text: 'Pick what you’d really choose. Same points whichever you pick.' }))),
+      // Points this phone earned before signing in stay with the phone until the person keeps them (nobody is joined to a
+      // phone silently: docs/REQUIREMENTS.md, "Points on this phone").
+      me && w.phone ? h('div', { class: 'list-row', style: 'flex-wrap:wrap;gap:8px' }, h('span', { class: 'grow' }, h('b', { text: `${plural(w.phone.points, 'point', 'points')} on this phone` }), h('span', { class: 'small muted', text: 'Earned here before you signed in. They’re not in your account yet.' })),
+        h('button', { class: 'btn small', type: 'button', onclick: (e) => keepPhonePoints(e.currentTarget) }, 'Keep them in your account')) : null,
+      !on('games') ? null : link(`/play?c=${cid}`, { class: 'tile blue' }, h('span', { class: 'tile-ico' }, icon(I.scan)), h('span', { class: 'grow' }, h('b', { text: 'Play for points' }), h('span', { text: 'Pick what you’d really choose. Same points whichever you pick.' }))),
       offers.offers.length || offers.mine.length ? h('h2', { class: 'section' }, 'Offers') : null,
-      ...offers.offers.map((o) => { const b = h('button', { class: 'btn small', type: 'button', text: o.pointsCost ? `Claim for ${o.pointsCost} points` : 'Claim' }); b.addEventListener('click', () => claim(o, b)); return h('div', { class: 'list-row' }, h('span', { class: 'grow' }, h('b', { text: o.title }), h('span', { class: 'small muted', text: `${o.deal} · ${o.retailers.includes('any') ? 'any store' : o.retailers.join(', ')}` })), b); }),
+      ...offers.offers.map((o) => { const b = h('button', { class: 'btn small', type: 'button', text: o.pointsCost ? `Claim for ${plural(o.pointsCost, 'point', 'points')}` : 'Claim' }); b.addEventListener('click', () => claim(o, b)); return h('div', { class: 'list-row' }, h('span', { class: 'grow' }, h('b', { text: o.title }), h('span', { class: 'small muted', text: `${o.deal} · ${o.retailers.includes('any') ? 'any store' : o.retailers.join(', ')}` })), b); }),
       ...offers.mine.map((c) => h('div', { class: 'list-row', style: 'flex-wrap:wrap' }, h('span', { class: 'grow' }, h('b', { text: c.title }), h('span', { class: 'small muted', text: said[c.status] ?? c.status })), c.status === 'claimed' ? receipt(c) : null)),
       w.coupons.length ? h('h2', { class: 'section' }, 'Coupons') : null,
       ...w.coupons.map((c) => h('div', { class: 'list-row' }, h('span', { class: 'grow' }, h('b', { text: c.advertiser ?? 'Coupon' }), h('span', { class: 'small muted', style: 'font-family:ui-monospace,Menlo,monospace', text: c.code })))),
       h('h2', { class: 'section' }, 'Saved from your scans', me ? link('/app/saved', {}, 'See all') : null),
       w.saved.length ? h('div', { class: 'rail' }, w.saved.slice(0, 10).map(savedCard)) : h('div', { class: 'empty', text: me ? 'Tap “Save” on any ad you scan and it waits for you here.' : 'Sign in, then tap “Save” on any ad you scan.' }),
       w.history.length ? h('h2', { class: 'section' }, 'Recent') : null,
-      ...w.history.slice(0, 12).map((x) => h('div', { class: 'list-row' }, h('span', { class: 'grow' }, h('b', { text: { 'earn:scan': 'Scanned a bottle', 'earn:game_round': 'Played a screen', 'earn:ad_feedback': 'Picked an ad', 'earn:feedback': 'Sent feedback', 'earn:data_full': 'Chose Full sharing', 'earn:prompt': 'Asked a question', 'earn:upload': 'Added a picture', 'earn:streak_bonus': 'Streak bonus', spend: 'Claimed an offer', correction: 'Corrected', offer: 'Offer paid', convert: 'Became tokens', mint: 'Tokens' }[x.kind] ?? x.kind }), h('span', { class: 'small muted', text: new Date(x.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) })), h('b', { text: `${x.amount > 0 ? '+' : ''}${x.what === 'credit' ? money(x.amount) : x.what === 'token' ? tok(x.amount) : x.amount.toLocaleString()}` }))),
+      ...w.history.slice(0, 12).map((x) => h('div', { class: 'list-row' }, h('span', { class: 'grow' }, h('b', { text: { 'earn:scan': 'Scanned a bottle', 'earn:game_round': 'Played a screen', 'earn:ad_feedback': 'Picked an ad', 'earn:feedback': 'Sent feedback', 'earn:data_full': 'Chose Full sharing', 'earn:prompt': 'Asked a question', 'earn:upload': 'Added a picture', 'earn:streak_bonus': 'Streak bonus', spend: 'Claimed an offer', keep: 'Kept from this phone', correction: 'Corrected', offer: 'Offer paid', convert: 'Became tokens', mint: 'Tokens' }[x.kind] ?? x.kind }), h('span', { class: 'small muted', text: new Date(x.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) })), h('b', { text: `${x.amount > 0 ? '+' : ''}${x.what === 'credit' ? money(x.amount) : x.what === 'token' ? tok(x.amount) : x.amount.toLocaleString()}` }))),
       h('p', { class: 'small muted', style: 'margin-top:18px', text: w.points.terms }),
-      !me ? h('button', { class: 'btn secondary', type: 'button', onclick: async () => { if (await signIn('Keep your points on every phone.')) render(); } }, 'Sign in to keep your points') : null);
+      !me ? h('button', { class: 'btn secondary', type: 'button', onclick: async () => { if (await signIn('Keep your points on every phone.')) { await keepPhonePoints(null); render(); } } }, 'Sign in to keep your points') : null);
+  }
+  /** Move this phone's points into the signed-in account (POST /v1/me/wallet/keep: once; a second tap moves nothing more). */
+  async function keepPhonePoints(btn) {
+    if (btn) btn.disabled = true;
+    try {
+      const r = await api('POST', '/v1/me/wallet/keep', { viewerKey: viewerKey() });
+      if (r.kept) toast(`${plural(r.kept, 'point', 'points')} kept in your account${r.left ? `. ${plural(r.left, 'point', 'points')} earned today wait for tomorrow (daily limit)` : ''}`);
+      else if (r.reason === 'daily_limit') toast('Today’s points wait for tomorrow (daily limit).');
+      if (btn) render();
+    } catch (x) { toast(x.message); if (btn) btn.disabled = false; }
   }
 
   async function savedScreen() {
@@ -715,30 +738,29 @@
       h('p', { class: 'muted', style: 'margin:-8px 0 0', text: me.email || me.phone }),
       h('form', { class: 'field', onsubmit: async (e) => { e.preventDefault(); state.me = await api('PATCH', '/v1/me', { displayName: name.value.trim() || null }); toast('Saved'); } },
         h('label', { for: 'me-name', text: 'Your name' }), h('div', { style: 'display:flex;gap:8px' }, name, h('button', { class: 'btn small', type: 'submit' }, 'Save'))),
-      h('h2', { class: 'section' }, 'How much you share'),
-      lvl ? levelPicker(me, lvl) : null,
+      lvl ? [h('h2', { class: 'section' }, 'How much you share'), levelPicker(me, lvl)] : null,
       h('h2', { class: 'section' }, 'Your privacy'),
       h('p', { class: 'small muted', style: 'margin:0', text: 'Everything starts off. Turn on only what you want.' }),
       h('div', {},
         consent('personalizedOffers', 'Offers picked for me', 'Use the interests below to choose which offers you see when you scan.'),
         consent('shareInterestsWithAdvertisers', 'Share my interests with advertisers', 'Not used yet: today no advertiser sees anyone’s interests. If that changes, it will be only with this on, and never your name or contact details.'),
-        consent('location', 'Use my location', 'Show the nearest machines first.'),
+        on('machines') && consent('location', 'Use my location', 'Show the nearest machines first.'),
         consent('marketing', 'News from FreeWater', 'Now and then, by email or text.')),
       me.consents.personalizedOffers && h('div', { class: 'field' }, h('label', { text: 'Your interests' }), h('div', { class: 'chips' }, allInterests.map((i) => h('button', { type: 'button', class: 'chip-btn', 'aria-pressed': String(mine.has(i)), onclick: async (e) => {
         mine.has(i) ? mine.delete(i) : mine.add(i); e.currentTarget.setAttribute('aria-pressed', String(mine.has(i)));
         state.me = await api('PATCH', '/v1/me', { interests: [...mine] });
       } }, i)))),
       newsSection,
-      h('h2', { class: 'section' }, 'What you really get'),
-      h('p', { class: 'small muted', style: 'margin:0', text: 'Optional. Tells us honestly whether a free bottle is better than free for you, so we count what you really get.' }),
-      (() => {
+      on('honest_data') && h('h2', { class: 'section' }, 'What you really get'),
+      on('honest_data') && h('p', { class: 'small muted', style: 'margin:0', text: 'Optional. Tells us honestly whether a free bottle is better than free for you, so we count what you really get.' }),
+      on('honest_data') && (() => {
         const pick = (key, label, opts) => { const sel = h('select', { class: 'input', 'aria-label': label }, h('option', { value: '', text: 'Rather not say' }), opts.map(([v, l]) => h('option', { value: v, text: l }))); sel.value = me.consents?.[key === 'cause' ? 'causeStance' : 'adsStance'] ?? ''; sel.addEventListener('change', async () => { if (!sel.value) return; try { await api('POST', '/v1/me/stance', { [key]: sel.value }); toast('Saved'); } catch (x) { toast(x.message); } }); return h('div', { class: 'field' }, h('label', { text: label }), sel); };
         return h('div', {}, pick('cause', `The cause your bottles support${state.config?.giving?.charity ? ` (${state.config.giving.charity})` : ''}`, [['supports', 'I support it'], ['indifferent', 'I don’t mind either way'], ['opposes', 'I’d rather not support it']]), pick('ads', 'Ads on my bottles', [['welcome', 'Fine by me'], ['unwelcome', 'I’d rather not have them']]));
       })(),
       on('delivery_areas') ? [h('h2', { class: 'section' }, 'Free water at your house'),
         link('/app/house', { class: 'tile plain' }, h('span', { class: 'grow' }, h('b', { text: 'Your house’s deliveries' }), h('span', { class: 'muted small', text: 'Stop or restart the free water left at your door, or say how many live there.' })), h('span', { class: 'go', text: 'Open' }))] : null,
-      h('h2', { class: 'section' }, 'Payment'),
-      cards.length ? h('div', {}, cards.map((c) => h('div', { class: 'list-row' }, h('span', { class: 'grow' }, h('b', { text: `${c.brand[0].toUpperCase()}${c.brand.slice(1)} •••• ${c.last4}` }), h('span', { class: 'small muted', text: `Expires ${c.expMonth}/${c.expYear}` })))))
+      on('card_payments') && h('h2', { class: 'section' }, 'Payment'),
+      !on('card_payments') ? null : cards.length ? h('div', {}, cards.map((c) => h('div', { class: 'list-row' }, h('span', { class: 'grow' }, h('b', { text: `${c.brand[0].toUpperCase()}${c.brand.slice(1)} •••• ${c.last4}` }), h('span', { class: 'small muted', text: `Expires ${c.expMonth}/${c.expYear}` })))))
         : h('div', { class: 'empty', text: 'No card saved. You only need one to design your own bottles. Free water never needs a card.' }),
       h('h2', { class: 'section' }, 'Your data'),
       h('button', { class: 'btn secondary', type: 'button', onclick: async () => {

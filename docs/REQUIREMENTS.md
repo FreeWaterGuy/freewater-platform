@@ -109,6 +109,17 @@ paid to take them), paid for by advertisers, with part of every bottle going to 
 - Dollar credit is paid only from money a brand has really sent, never more than its reserve holds.
 - Gift cards (spending credit) and withdrawals start off and need approvals to turn on.
 - The app's Wallet tab shows points, credit and tokens, and holds the token safely in FreeWater's custody.
+- **Points on this phone.** Points earned before signing in (scan pages, Play) stay with the phone's random key. An
+  account's wallet adds up the account (and the key it was made with) plus only what the person's data choices let us
+  join (*One person across phones*), so a phone is never joined silently. When the signed-in wallet finds points on
+  this phone that aren't in the account, it says so ("25 points on this phone") with a **Keep them in your account**
+  button (`POST /v1/me/wallet/keep`; pressing "Sign in to keep your points" does it too). The move is one journal entry
+  from the phone to the account: no points are made (the cap is untouched), it happens once (a retry or a second tap
+  moves nothing more), what the phone earned today moves only as far as the account's own daily limit allows (the rest
+  can be kept the next day), a phone joined to someone else is refused, and in testing it is marked as test like every
+  test point. Play keeps showing the phone's own points and says where to keep them.
+- Screens show doors only to areas that are on (`GET /v1/public/features?company=`, and `featuresOff` on a scan
+  page): no Machines tab where machines are off, no Play or wallet link where those are off.
 
 ## The token and the blockchain
 
