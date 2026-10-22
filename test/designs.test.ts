@@ -43,7 +43,8 @@ describe('the keepsake label', () => {
   it('puts each name in, escapes everything, and keeps the QR corner clear', () => {
     const spec = { headline: 'Cheers, {name}!', sub: 'Love <3 & hugs', colors: { bg: '#F7C6D4', fg: '#0B0B0B', accent: '#B8862E' }, layout: 'words' as const, decoration: 'confetti' as const };
     const a = renderKeepsake(spec, 590, 450, 'Ana');
-    expect(a).toContain('Cheers, Ana!');
+    // (Lines may break anywhere between words: measured in the widest likely font, src/modules/creative/text.ts.)
+    expect(a.replace(/<\/text><text[^>]*>/g, ' ')).toContain('Cheers, Ana!');
     expect(a).toContain('Love &lt;3 &amp; hugs');
     expect(renderKeepsake(spec, 590, 450, 'Ana')).toBe(a); // the same design draws the same way every time
     expect(checkKeepsake({ ...spec, layout: 'photo-left' })).toMatch(/needs a photo/);

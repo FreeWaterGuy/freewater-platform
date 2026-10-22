@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import { SHARES, type Product, type Share } from '../src/core/types';
-import { MAX_ASPECT, adArea, layoutsFor, mixes } from '../src/modules/ads/layouts';
+import { MAX_ASPECT, TEMPLATES, adArea, holds, layoutsFor, mixes } from '../src/modules/ads/layouts';
 import { bottle16oz, bottle25oz, can12oz } from '../src/demo/seed';
 
 // Property tests for cutting a label into ad pieces. Seeded and bounded.
@@ -68,5 +68,51 @@ describe('layouts (property)', () => {
         if (p.sizes) expect(l.shares.every((s) => p.sizes!.includes(s))).toBe(true);
       }
     }), RUNS);
+  });
+});
+
+describe('tidy templates (property)', () => {
+  // The founder saw a bottle with pieces of three sizes cut with no visible method. Every label is now a uniform grid,
+  // or a uniform parent grid with its last cells cut into the same smaller grid.
+  it('every layout is a visible grid: at most two sizes, same-size pieces the same shape, small pieces inside cells of the big ones’ grid, big ones first', () => {
+    fc.assert(fc.property(productArb, fc.integer({ min: 1, max: 10 }), (p, maxAds) => {
+      const { w, h } = adArea(p);
+      fc.pre(w > 0.5 && h > 0.5);
+      const tol = 2e-4;
+      for (const l of layoutsFor(p, { maxAds })) {
+        const sizes = [...new Set(l.shares)].sort((a, b) => a - b);
+        expect(sizes.length).toBeLessThanOrEqual(2);
+        for (const s of sizes) {
+          const shapes = l.rects.filter((_, i) => l.shares[i] === s);
+          for (const r of shapes) { expect(Math.abs(r.w - shapes[0]!.w)).toBeLessThanOrEqual(tol); expect(Math.abs(r.h - shapes[0]!.h)).toBeLessThanOrEqual(tol); }
+        }
+        // Bigger pieces come first in reading order.
+        for (let i = 1; i < l.shares.length; i++) expect(l.shares[i]!).toBeGreaterThanOrEqual(l.shares[i - 1]!);
+        if (sizes.length === 2) {
+          // The big pieces' grid covers the label, and every small piece sits inside one cell of it.
+          const big = l.rects[0]!, cols = Math.round(1 / big.w), rows = Math.round(1 / big.h);
+          expect(Math.abs(cols * big.w - 1)).toBeLessThanOrEqual(tol * cols); expect(Math.abs(rows * big.h - 1)).toBeLessThanOrEqual(tol * rows);
+          for (const [i, r] of l.rects.entries()) {
+            if (l.shares[i] === sizes[0]) continue;
+            const cx = Math.floor((r.x + tol) / big.w), cy = Math.floor((r.y + tol) / big.h);
+            expect(r.x + r.w).toBeLessThanOrEqual((cx + 1) * big.w + tol);
+            expect(r.y + r.h).toBeLessThanOrEqual((cy + 1) * big.h + tol);
+          }
+        }
+        expect(TEMPLATES.some((t) => t.name === l.template)).toBe(true);
+      }
+    }), RUNS);
+  });
+
+  it('the catalogue is small and fixed, and a mix of sizes no template holds is refused (a third with a quarter)', () => {
+    expect(TEMPLATES.map((t) => t.name)).toEqual(['the whole label', 'halves', 'thirds', 'quarters', 'sixths', 'eighths', 'tenths', 'a half + 2 quarters', 'a half + 3 sixths', 'a half + 4 eighths', 'a half + 5 tenths', '2 thirds + 2 sixths', 'a third + 4 sixths', '3 quarters + 2 eighths', '2 quarters + 4 eighths', 'a quarter + 6 eighths']);
+    const l = layoutsFor(bottle16oz, { maxAds: 10 });
+    expect(holds(l, [3, 4])).toBe(false);
+    expect(holds(l, [2, 10])).toBe(false);
+    expect(holds(l, [4, 6])).toBe(false);
+    expect(holds(l, [2, 4, 8])).toBe(false); // two levels of nesting: not a tidy grid
+    expect(holds(l, [2, 4])).toBe(true);
+    expect(holds(l, [3, 6, 6, 6])).toBe(true);
+    expect(holds(l, [10, 10, 10])).toBe(true);
   });
 });

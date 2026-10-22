@@ -1,6 +1,9 @@
 import type { Creative, CreativeContext } from '../../core/types';
 import { contrast, iconDrawing, posterIcons, readableOn, type PosterIcon } from '../creative/poster';
 import type { PhotoInfo } from './photos';
+import { BASELINE, MIN_TEXT, balance, blockHeight, fitOrCut, fitText, qrBox, reservedBoxes, textEm, topRightStart, type Box, type Fitted } from '../creative/text';
+
+export { qrCorner } from '../creative/text';
 
 /**
  * The ad studio's layouts: editorial ads built from a brand's own photo, logo, colors and words, drawn well at every
@@ -9,7 +12,9 @@ import type { PhotoInfo } from './photos';
  * The AI (or a person) only fills in a spec: words, colors, a type style, a photo. The layouts do the design work
  * that makes an ad look professional, every time:
  *  - the photo is cropped around its subject (found when it was uploaded), never stretched;
- *  - the words are fitted to the space at the largest size that reads, in balanced lines;
+ *  - the words are fitted to the space at the largest size that reads, in balanced lines, measured in the widest font
+ *    a printer may fall back to (src/modules/creative/text.ts), never running off, under the code, or under a logo;
+ *  - a logo, a drawing and an offer badge each have a box of their own that words keep out of;
  *  - words on a photo sit on a shaded band, so they stay readable whatever the photo;
  *  - the corner where the QR code prints is always left clear;
  *  - colors are checked for contrast, and the readable one is used where a brand color wouldn't be;
@@ -18,10 +23,12 @@ import type { PhotoInfo } from './photos';
  */
 
 export const studioTypes = {
-  serif: { display: "Fraunces, 'DM Serif Display', Georgia, 'Times New Roman', serif", text: "'DM Sans', 'Helvetica Neue', Arial, sans-serif", w: 0.55, weight: 700, tracking: -0.01 },
-  grotesk: { display: "Archivo, 'Helvetica Neue', Arial, sans-serif", text: "'DM Sans', 'Helvetica Neue', Arial, sans-serif", w: 0.61, weight: 800, tracking: -0.02 },
-  condensed: { display: "Oswald, 'Arial Narrow', 'Helvetica Neue', Arial, sans-serif", text: "'DM Sans', 'Helvetica Neue', Arial, sans-serif", w: 0.47, weight: 700, tracking: 0 },
-  rounded: { display: "Comfortaa, 'DM Sans', Arial, sans-serif", text: "'DM Sans', Arial, sans-serif", w: 0.64, weight: 700, tracking: -0.01 },
+  // The fonts named are not embedded: a printer without them falls back, so words are measured in the widest likely
+  // fallback (src/modules/creative/text.ts), not in these fonts' own widths.
+  serif: { display: "Fraunces, 'DM Serif Display', Georgia, 'Times New Roman', serif", text: "'DM Sans', 'Helvetica Neue', Arial, sans-serif", weight: 700, tracking: -0.01 },
+  grotesk: { display: "Archivo, 'Helvetica Neue', Arial, sans-serif", text: "'DM Sans', 'Helvetica Neue', Arial, sans-serif", weight: 800, tracking: -0.02 },
+  condensed: { display: "Oswald, 'Arial Narrow', 'Helvetica Neue', Arial, sans-serif", text: "'DM Sans', 'Helvetica Neue', Arial, sans-serif", weight: 700, tracking: 0 },
+  rounded: { display: "Comfortaa, 'DM Sans', Arial, sans-serif", text: "'DM Sans', Arial, sans-serif", weight: 700, tracking: -0.01 },
 } as const;
 export type StudioType = keyof typeof studioTypes;
 export const studioLooks = ['auto', 'cover', 'split', 'band', 'frame', 'type'] as const;
@@ -73,89 +80,14 @@ export function checkStudioSpec(s: any): string | null {
 let assetUrl = (asset: string, ext = 'jpg') => `/assets/${asset}.${ext}`;
 export function setStudioAssetUrl(f: (asset: string, ext?: string) => string) { assetUrl = f; }
 
-const esc = (s: string) => s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+
+const esc = (s: string) => s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F￾￿]/g, '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 const f1 = (n: number) => (Math.round(n * 10) / 10).toString();
 let uid = 0;
 
-/**
- * The QR code's corner. The renderer says where it is; without that (previews), the standard 4.5 in label's rule.
- */
-export function qrCorner(w: number, h: number, ctx?: CreativeContext) {
-  if (ctx?.qr && Number.isFinite(ctx.qr.x) && Number.isFinite(ctx.qr.y) && ctx.qr.size > 0) return { x: ctx.qr.x, y: ctx.qr.y, size: ctx.qr.size, w: w - ctx.qr.x + 8, h: h - ctx.qr.y + 8 };
-  const q = Math.min(Math.max(Math.min(78, Math.min(w, h * 1.4) * 0.42), Math.min(60, w - 16)), h - 16);
-  return { x: w - q - 10, y: h - q - 10, size: q, w: q + 18, h: q + 18 };
-}
-
-/**
- * How wide text is, counted in average lowercase letters: capitals and m/w are wider, i/l/t and spaces narrower,
- * emoji and Chinese or Japanese characters about two. Counting every letter as average let all-caps words ("GRAND
- * OPENING", "WOW") run off the edge of their piece.
- */
-export function ems(text: string) {
-  let n = 0;
-  for (const c of text) {
-    const code = c.codePointAt(0)!;
-    // Arabic and Hebrew letters are counted wide: their widths vary most between the fonts a printer or a phone falls
-    // back to (Arabic in a Naskh font is about half again as wide as a Latin letter), and the label is drawn where we
-    // can't choose the font.
-    n += /[iljI.,:;'!|]/.test(c) ? 0.5 : /[ftr()\-"\s]/.test(c) ? 0.65 : /[MW@%]/.test(c) ? 1.75 : /[mw]/.test(c) ? 1.5 : /[A-Z&]/.test(c) ? 1.35 : code >= 0x2e80 || /\p{Extended_Pictographic}/u.test(c) ? 2 : /\p{Script=Arabic}/u.test(c) ? 1.6 : /\p{Script=Hebrew}/u.test(c) ? 1.25 : 1;
-  }
-  return n;
-}
-
-/** A word too long for any line is broken with a hyphen, so all of it prints instead of being cut off. */
-function breakLong(text: string, chars: number) {
-  return text.split(/\s+/).filter(Boolean).flatMap((w) => {
-    if (ems(w) <= chars) return [w];
-    const parts: string[] = []; let cur = '';
-    for (const c of w) { if (cur && ems(`${cur}${c}-`) > chars) { parts.push(`${cur}-`); cur = c; } else cur += c; }
-    return [...parts, cur];
-  }).join(' ');
-}
-
-/** Break words into lines no wider than `chars`: as few lines as fit, then as even as those lines allow. */
-function balance(text: string, chars: number, maxLines: number): string[] | null {
-  const words = text.split(/\s+/).filter(Boolean);
-  if (!words.length || words.some((w) => ems(w) > chars)) return null;
-  const greedy = (target: number) => { const out: string[] = []; let cur = ''; for (const w of words) { const t = cur ? `${cur} ${w}` : w; if (ems(t) > target && cur) { out.push(cur); cur = w; } else cur = t; } if (cur) out.push(cur); return out; };
-  let lines = greedy(chars);
-  if (lines.length > maxLines) return null;
-  const n = lines.length;
-  for (let target = chars - 1; target >= Math.max(...words.map(ems)); target--) {
-    const out = greedy(target);
-    if (out.length > n) break;
-    lines = out;
-  }
-  // No line ends on a little word ("a", "of", "the") when it can start the next one instead.
-  for (let i = 0; i < lines.length - 1; i++) {
-    const ws = lines[i]!.split(' ');
-    const last = ws[ws.length - 1]!;
-    if (ws.length > 1 && last.length <= 3 && /^[a-z&]+$/i.test(last) && ems(`${last} ${lines[i + 1]}`) <= chars) { lines[i] = ws.slice(0, -1).join(' '); lines[i + 1] = `${last} ${lines[i + 1]}`; }
-  }
-  return lines;
-}
-
-/** The biggest size, from max down to min, at which the text fits the box in at most maxLines lines. */
-function fit(text: string, boxW: number, boxH: number, maxLines: number, max: number, min: number, wf: number, lead = 1.06) {
-  for (let size = max; size >= min; size -= 0.5) {
-    const chars = boxW / (size * wf);
-    const lines = chars >= 3 ? balance(text, chars, maxLines) : null;
-    if (lines && lines.length * size * lead <= boxH) return { size, lines, height: lines.length * size * lead };
-  }
-  // Still too long at the smallest size: long words are broken with a hyphen, and only what fits the lines is kept.
-  const chars = Math.max(3, boxW / (min * wf));
-  const broken = breakLong(text, chars);
-  let lines = balance(broken, chars, maxLines);
-  if (!lines) {
-    lines = balance(broken, chars, 99) ?? [broken];
-    if (lines.length > maxLines) { lines = lines.slice(0, maxLines); let last = lines[maxLines - 1]!; while (last && ems(`${last}…`) > chars) last = last.slice(0, -1); lines[maxLines - 1] = `${last.trimEnd()}…`; }
-  }
-  return { size: min, lines, height: lines.length * min * lead };
-}
-
 function textLines(lines: string[], x: number, y: number, size: number, opts: { font: string; weight: number; fill: string; lead?: number; tracking?: number; anchor?: 'start' | 'middle' }) {
   const lead = opts.lead ?? 1.06;
-  return lines.map((l, i) => `<text x="${f1(x)}" y="${f1(y + size * 0.86 + i * size * lead)}" font-family="${esc(opts.font)}" font-weight="${opts.weight}" font-size="${f1(size)}"${opts.tracking && !/\p{Script=Arabic}/u.test(l) ? ` letter-spacing="${f1(size * opts.tracking)}"` : ''}${opts.anchor === 'middle' ? ' text-anchor="middle"' : ''} fill="${opts.fill}">${esc(l)}</text>`).join('');
+  return lines.map((l, i) => `<text x="${f1(x)}" y="${f1(y + size * BASELINE + i * size * lead)}" font-family="${esc(opts.font)}" font-weight="${opts.weight}" font-size="${f1(size)}"${opts.tracking && !/\p{Script=Arabic}/u.test(l) ? ` letter-spacing="${f1(size * opts.tracking)}"` : ''}${opts.anchor === 'middle' ? ' text-anchor="middle"' : ''} fill="${opts.fill}">${esc(l)}</text>`).join('');
 }
 
 /** The photo, cropped to fill the box around its subject. */
@@ -166,37 +98,76 @@ function photoIn(p: PhotoInfo, x: number, y: number, bw: number, bh: number) {
   return `<svg x="${f1(x)}" y="${f1(y)}" width="${f1(bw)}" height="${f1(bh)}" viewBox="${f1(vx)} ${f1(vy)} ${f1(vw)} ${f1(vh)}" preserveAspectRatio="none"><image data-fw-photo="1" href="${esc(assetUrl(p.asset, 'jpg'))}" width="${p.w}" height="${p.h}"/></svg>`;
 }
 
-function wordmark(s: StudioSpec, x: number, y: number, maxW: number, size: number, fill: string, plate?: string) {
+/** Something drawn, and the room it takes. */
+type Drawn = { svg: string; box: Box };
+
+/**
+ * The brand: its logo in a box of its own (scaled down to the room there is, never drawn over words), or its name in
+ * words, on one or two lines.
+ */
+function wordmark(s: StudioSpec, x: number, y: number, maxW: number, size: number, fill: string, plate?: string): Drawn | null {
+  if (maxW < 24) return null;
   if (s.logo) {
-    const h = size * 1.5, w = Math.min(maxW, (s.logo.w / s.logo.h) * h);
-    const lh = w / (s.logo.w / s.logo.h);
-    const img = `<image data-fw-photo="1" href="${esc(assetUrl(s.logo.asset, s.logo.ext ?? 'png'))}" x="${f1(x)}" y="${f1(y)}" width="${f1(w)}" height="${f1(lh)}" preserveAspectRatio="xMinYMid meet"/>`;
-    return { svg: plate ? `<rect x="${f1(x - 6)}" y="${f1(y - 5)}" width="${f1(w + 12)}" height="${f1(lh + 10)}" rx="4" fill="${plate}"/>${img}` : img, h: lh };
+    const ratio = s.logo.w / s.logo.h;
+    let lh = size * 1.5, lw = ratio * lh;
+    if (lw > maxW - (plate ? 12 : 0)) { lw = maxW - (plate ? 12 : 0); lh = lw / ratio; }
+    const img = `<image data-fw-photo="1" href="${esc(assetUrl(s.logo.asset, s.logo.ext ?? 'png'))}" x="${f1(x)}" y="${f1(y)}" width="${f1(lw)}" height="${f1(lh)}" preserveAspectRatio="xMidYMid meet"/>`;
+    const back = plate ? `<rect x="${f1(x - 6)}" y="${f1(y - 5)}" width="${f1(lw + 12)}" height="${f1(lh + 10)}" rx="4" fill="${plate}"/>` : '';
+    return { svg: `<g data-fw-keep="logo">${back}${img}</g>`, box: plate ? { x: x - 6, y: y - 5, w: lw + 12, h: lh + 10 } : { x, y, w: lw, h: lh } };
   }
   const t = studioTypes[s.type];
-  const sz = Math.min(size, maxW / Math.max(3, ems(s.brand) * t.w * 0.92 + s.brand.length * 0.02));
-  return { svg: `<text x="${f1(x)}" y="${f1(y + sz * 0.85)}" font-family="${esc(t.display)}" font-weight="${t.weight}" font-size="${f1(sz)}" letter-spacing="${f1(sz * 0.02)}" fill="${fill}">${esc(s.brand)}</text>`, h: sz };
+  const o = { x, top: y, bottom: y + blockHeight(2, size, 1.04), right: x + maxW, maxLines: 2, max: size, min: 9, lead: 1.04, tracking: 0.02 };
+  const f = fitText(s.brand, o) ?? fitOrCut(s.brand, o);
+  return { svg: textLines(f.lines, x, y, f.size, { font: t.display, weight: t.weight, fill, lead: 1.04, tracking: 0.02 }), box: { x, y, w: f.width, h: f.height } };
 }
 
-function kickerText(s: StudioSpec, x: number, y: number, maxW: number, size: number, fill: string) {
-  if (!s.kicker) return { svg: '', h: 0 };
+/** The small line above the headline, in capitals, on one line; left out when it doesn't fit at a readable size. */
+function kickerText(s: StudioSpec, x: number, y: number, right: number, avoid: Box[], size: number, fill: string): Drawn | null {
+  if (!s.kicker) return null;
   const k = s.kicker.toUpperCase();
-  const sz = Math.min(size, maxW / Math.max(4, ems(k) * 0.55 + k.length * 0.14));
-  return { svg: `<text x="${f1(x)}" y="${f1(y + sz * 0.85)}" font-family="${esc(studioTypes[s.type].text)}" font-weight="700" font-size="${f1(sz)}" letter-spacing="${f1(sz * 0.14)}" fill="${fill}">${esc(k)}</text>`, h: sz };
+  const f = fitText(k, { x, top: y, bottom: y + blockHeight(1, size, 1), right, avoid, maxLines: 1, max: size, min: MIN_TEXT, tracking: 0.14 });
+  if (!f) return null;
+  return { svg: textLines(f.lines, x, y, f.size, { font: studioTypes[s.type].text, weight: 700, fill, tracking: 0.14 }), box: { x, y, w: f.width, h: f.height } };
 }
 
-/** A round badge for the offer, slightly turned, the way a magazine flags a deal. */
-function badge(s: StudioSpec, cx: number, cy: number, r: number, qr: { x: number; y: number }) {
-  // On a short piece the badge would reach down into the code's corner: it shrinks to stay above it (same top-right).
-  if (cx + r > qr.x - 4 && cy + r > qr.y - 4) { const top = cy - r, right = cx + r; r = Math.min(r, (qr.y - 4 - top) / 2); cx = right - r; cy = top + r; }
-  if (!s.offer || r < 22) return '';
-  const words = balance(s.offer, Math.max(5, Math.round(r / 5.4)), 4) ?? [s.offer];
-  const size = Math.min(r * 0.34, (r * 1.55) / Math.max(...words.map((w) => ems(w) * 0.55)));
-  const ink = readableOn(s.colors.accent);
-  const top = cy - (words.length * size * 1.02) / 2;
-  return `<g transform="rotate(-9 ${f1(cx)} ${f1(cy)})"><circle cx="${f1(cx)}" cy="${f1(cy)}" r="${f1(r)}" fill="${s.colors.accent}"/><circle cx="${f1(cx)}" cy="${f1(cy)}" r="${f1(r - 4)}" fill="none" stroke="${ink}" stroke-opacity=".35" stroke-width="1"/>${textLines(words, cx, top, size, { font: studioTypes[s.type].text, weight: 800, fill: ink, lead: 1.02, anchor: 'middle' })}</g>`;
+/**
+ * A round badge for the offer, slightly turned, the way a magazine flags a deal. It keeps out of the QR code's corner
+ * (shrinking, same top-right corner), and is left out when its words wouldn't be readable.
+ */
+function badge(s: StudioSpec, cx: number, cy: number, r: number, avoid: Box[]): Drawn | null {
+  if (!s.offer) return null;
+  const hits = (b: Box) => cx + r > b.x - 4 && cy + r > b.y - 4 && cx - r < b.x + b.w + 4 && cy - r < b.y + b.h + 4;
+  // Below anything drawn over the top of the piece (a box's stop code); then above the code's corner.
+  for (const b of avoid) if (b.y + b.h / 2 < cy && hits(b)) cy = b.y + b.h + 4 + r;
+  for (const b of avoid) if (b.y + b.h / 2 >= cy - r && cx + r > b.x - 4 && cy + r > b.y - 4 && cx - r < b.x + b.w && cy - r < b.y + b.h) { const top = cy - r, right = cx + r; r = Math.min(r, (b.y - 4 - top) / 2); cx = right - r; cy = top + r; }
+  if (r < 22) return null;
+  const inner = 1.3 * (r - 3); // the square inside the ring, turned or not
+  for (let size = Math.min(r * 0.34, 16); size >= MIN_TEXT; size -= 0.5) for (let n = 1; n <= 4; n++) {
+    const words = balance(s.offer, inner / size, n);
+    if (!words || blockHeight(words.length, size, 1.02) > inner) continue;
+    const ink = readableOn(s.colors.accent);
+    const top = cy - blockHeight(words.length, size, 1.02) / 2;
+    return { svg: `<g data-fw-keep="badge"><g transform="rotate(-9 ${f1(cx)} ${f1(cy)})"><circle cx="${f1(cx)}" cy="${f1(cy)}" r="${f1(r)}" fill="${s.colors.accent}"/><circle cx="${f1(cx)}" cy="${f1(cy)}" r="${f1(r - 4)}" fill="none" stroke="${ink}" stroke-opacity=".35" stroke-width="1"/>${textLines(words, cx, top, size, { font: studioTypes[s.type].text, weight: 800, fill: ink, lead: 1.02, anchor: 'middle' })}</g></g>`, box: { x: cx - r, y: cy - r, w: 2 * r, h: 2 * r } };
+  }
+  return null;
 }
 
+/** A short offer as a pill under the words; left out when it doesn't fit or would reach the code. */
+function pill(s: StudioSpec, x: number, y: number, maxW: number, bottom: number, avoid: Box[]): Drawn | null {
+  if (!s.offer || y + 24 > bottom) return null;
+  const os = Math.min(11, (maxW - 22) / textEm(s.offer));
+  if (os < MIN_TEXT) return null;
+  const box = { x, y, w: textEm(s.offer) * os + 22, h: 24 };
+  if (avoid.some((b) => box.x + box.w > b.x - 4 && box.y + box.h > b.y - 4 && box.x < b.x + b.w && box.y < b.y + b.h)) return null;
+  const t = studioTypes[s.type];
+  return { svg: `<rect x="${f1(x)}" y="${f1(y)}" width="${f1(box.w)}" height="24" rx="12" fill="${s.colors.accent}"/><text x="${f1(x + 11)}" y="${f1(y + 12 + os * 0.35)}" font-family="${esc(t.text)}" font-weight="800" font-size="${f1(os)}" fill="${readableOn(s.colors.accent)}">${esc(s.offer)}</text>`, box };
+}
+
+/** How far right something spanning y0..y1 may reach, stopping short of each box in the way. */
+function roomRight(x: number, right: number, avoid: Box[], y0: number, y1: number, gap = 4) {
+  for (const b of avoid) if (y1 > b.y - gap && y0 < b.y + b.h + gap && b.x + b.w > x) right = Math.min(right, b.x - gap);
+  return right;
+}
 
 /** Choose the layout for this slot's shape. */
 export function chooseLook(s: StudioSpec, w: number, h: number): Exclude<StudioLook, 'auto'> {
@@ -212,16 +183,42 @@ export function chooseLook(s: StudioSpec, w: number, h: number): Exclude<StudioL
   return 'cover';
 }
 
+/** What a design leaves out when the headline needs the room, least important first. */
+type Drop = { icon?: boolean; kicker?: boolean; offer?: boolean; sub?: boolean };
+const DROPS: Drop[] = [{}, { icon: true }, { icon: true, kicker: true }, { icon: true, kicker: true, offer: true }, { icon: true, kicker: true, offer: true, sub: true }];
+
 export function renderStudio(s: StudioSpec, w: number, h: number, ctx?: CreativeContext): string {
   const look = chooseLook(s, w, h);
-  const t = studioTypes[s.type];
   const id = `st${(++uid).toString(36)}`;
-  const qr = qrCorner(w, h, ctx);
-  const pad = Math.max(10, Math.min(26, Math.min(w, h) * 0.07));
+  // The full design first; when its headline would come out small, the least important parts are left out, one at a
+  // time, until it reads (or the version with the biggest headline).
+  let best: { svg: string; score: number } | null = null;
+  for (const d of DROPS) {
+    const r = drawLook(look, s, w, h, ctx, id, d);
+    if (r.head && r.head.size >= r.good) return r.svg;
+    const score = r.head ? r.head.size : -1;
+    if (!best || score > best.score || (score === -1 && best.score === -1)) best = { svg: r.svg, score };
+  }
+  return best!.svg;
+}
+
+const pad0 = (w: number, h: number) => Math.max(10, Math.min(26, Math.min(w, h) * 0.07));
+
+function drawLook(look: Exclude<StudioLook, 'auto'>, s: StudioSpec, w: number, h: number, ctx: CreativeContext | undefined, id: string, d: Drop): { svg: string; head: Fitted | null; good: number } {
+  const t = studioTypes[s.type];
+  const qr = qrBox(w, h, ctx);
+  // The code's corner, and anything else the printer draws over this piece (a box's stop code).
+  const keep: Box[] = [qr, ...reservedBoxes(ctx)];
+  const trTop = topRightStart(w, pad0(w, h), ctx);
+  const pad = pad0(w, h);
   const small = w < 170 || h < 170 || (w < 230 && h < 300);
   const parts: string[] = [];
   const paper = s.colors.paper, ink = s.colors.ink;
   const accentOnPaper = contrast(s.colors.accent, paper) >= 3 ? s.colors.accent : ink;
+  const display = (f: Fitted, x: number, fill: string, lead = 1.06) => textLines(f.lines, x, f.y, f.size, { font: t.display, weight: t.weight, fill, tracking: t.tracking, lead });
+  const detail = (f: Fitted, x: number, fill: string, lead: number) => textLines(f.lines, x, f.y, f.size, { font: t.text, weight: 500, fill, lead });
+  let head: Fitted | null = null;
+  let max = 30;
 
   if (look === 'cover') {
     const p = s.photo!;
@@ -229,45 +226,58 @@ export function renderStudio(s: StudioSpec, w: number, h: number, ctx?: Creative
     // A dark band from the bottom up, deep enough for the words, so they read on any photo.
     const shade = ink === '#FFFFFF' || contrast(ink, '#000000') < 3 ? '#0B0B0B' : (contrast(ink, '#FFFFFF') > contrast(paper, '#FFFFFF') ? ink : '#0B0B0B');
     parts.push(`<defs><linearGradient id="${id}g" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="${shade}" stop-opacity=".88"/><stop offset=".45" stop-color="${shade}" stop-opacity=".55"/><stop offset="1" stop-color="${shade}" stop-opacity="0"/></linearGradient><linearGradient id="${id}t" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${shade}" stop-opacity=".45"/><stop offset="1" stop-color="${shade}" stop-opacity="0"/></linearGradient></defs>`);
-    parts.push(`<rect y="${f1(h * 0.38)}" width="${f1(w)}" height="${f1(h * 0.62)}" fill="url(#${id}g)"/><rect width="${f1(w)}" height="${f1(h * 0.24)}" fill="url(#${id}t)"/>`);
+    // The shade goes in once the words are placed: it reaches up behind them, wherever they land.
+    const shadeAt = parts.length;
     const light = '#FFFFFF';
-    const badgeR = !small && s.offer ? Math.min(46, w * 0.15) : 0;
-    const wm = wordmark(s, pad, pad, w - pad * 2 - (badgeR ? badgeR * 2 + 6 : 0), small ? 13 : 17, light, s.logo ? '#FFFFFF' : undefined);
-    parts.push(wm.svg);
-    // Words bottom-left, left of the QR corner.
-    const colW = w - pad - qr.w - 4;
-    const head = fit(s.headline, colW, h * 0.42, small ? 4 : 3, small ? 24 : Math.min(48, h * 0.17), 11, t.w);
-    const sub = s.sub && !small ? fit(s.sub, colW, 32, 2, 12, 9.5, 0.5, 1.25) : null;
-    const kick = !small && s.kicker ? kickerText(s, pad, 0, colW, 10.5, s.colors.accent) : null;
-    let y = h - pad - head.height - (sub ? sub.height + 6 : 0);
-    if (kick && s.kicker) {
+    const r = Math.min(46, w * 0.15);
+    const b = !small && !d.offer ? badge(s, w - pad - r, trTop + r + 2, r, keep) : null;
+    const avoid = [...keep, ...(b ? [b.box] : [])];
+    const wm = wordmark(s, pad, pad, roomRight(pad, w - pad, avoid, pad, pad + 30) - pad, small ? 13 : 17, light, s.logo ? '#FFFFFF' : undefined);
+    if (wm) parts.push(wm.svg);
+    // Words bottom-left, clear of the code's corner: the detail line at the bottom, the headline above it, the small
+    // line above that.
+    const top = Math.max((wm ? wm.box.y + wm.box.h : pad) + 10, h * 0.3);
+    let bottom = h - pad;
+    const sub = s.sub && !small && !d.sub ? fitText(s.sub, { x: pad, top, bottom, right: w - pad, avoid, maxLines: 2, max: 12, min: 8.5, lead: 1.25, anchor: 'bottom' }) : null;
+    if (sub) { parts.push(detail(sub, pad, light, 1.25)); bottom = sub.y - 6; }
+    const wantKick = !!s.kicker && !small && !d.kicker;
+    max = small ? 24 : Math.min(48, h * 0.17);
+    const o = { x: pad, top: top + (wantKick ? 22 : 0), bottom, right: w - pad, avoid, maxLines: small ? 4 : 3, max, min: 10, anchor: 'bottom' as const };
+    head = fitText(s.headline, o);
+    const hd = head ?? fitOrCut(s.headline, o);
+    parts.push(display(hd, pad, light));
+    if (wantKick) {
       // On a photo, the small line sits on its own accent strip so it reads on anything.
-      const k = s.kicker.toUpperCase(), kem = ems(k) * 0.55 + k.length * 0.12, ks = Math.min(9.5, colW / Math.max(4, kem)), kw = kem * ks + 12;
-      parts.push(`<rect x="${f1(pad)}" y="${f1(y - ks - 14)}" width="${f1(Math.min(colW, kw))}" height="${f1(ks + 8)}" fill="${s.colors.accent}"/><text x="${f1(pad + 6)}" y="${f1(y - 10)}" font-family="${esc(t.text)}" font-weight="700" font-size="${f1(ks)}" letter-spacing="${f1(ks * 0.12)}" fill="${readableOn(s.colors.accent)}">${esc(k)}</text>`);
+      const k = fitText(s.kicker!.toUpperCase(), { x: pad + 6, top, bottom: hd.y - 10, right: w - pad - 6, avoid, maxLines: 1, max: 9.5, min: MIN_TEXT, tracking: 0.12, anchor: 'bottom' });
+      if (k) parts.push(`<rect x="${f1(pad)}" y="${f1(k.y - 4)}" width="${f1(k.width + 12)}" height="${f1(k.height + 6)}" fill="${s.colors.accent}"/>${textLines(k.lines, pad + 6, k.y, k.size, { font: t.text, weight: 700, fill: readableOn(s.colors.accent), tracking: 0.12 })}`);
     }
-    parts.push(textLines(head.lines, pad, y, head.size, { font: t.display, weight: t.weight, fill: light, tracking: t.tracking }));
-    y += head.height + 6;
-    if (sub) parts.push(textLines(sub.lines, pad, y, sub.size, { font: t.text, weight: 500, fill: light, lead: 1.25 }));
-    if (badgeR) parts.push(badge(s, w - pad - badgeR, pad + badgeR + 2, badgeR, qr));
+    const from = Math.max(0, Math.min(h * 0.38, (wantKick ? hd.y - 30 : hd.y) - h * 0.12));
+    parts.splice(shadeAt, 0, `<rect y="${f1(from)}" width="${f1(w)}" height="${f1(h - from)}" fill="url(#${id}g)"/><rect width="${f1(w)}" height="${f1(h * 0.24)}" fill="url(#${id}t)"/>`);
+    if (b) parts.push(b.svg);
   } else if (look === 'split') {
     const p = s.photo!;
     const panelW = Math.round(w * 0.46);
     parts.push(`<rect width="${f1(w)}" height="${f1(h)}" fill="${paper}"/>`);
     parts.push(photoIn(p, panelW, 0, w - panelW, h));
-    const colW = panelW - pad * 2 - 6;
+    const right = panelW - pad - 6, avoid = keep;
     let y = pad;
-    const wm = wordmark(s, pad, y, colW, 16, ink); parts.push(wm.svg); y += wm.h + pad * 0.9;
-    const kick = kickerText(s, pad, y, colW, 10.5, accentOnPaper); parts.push(kick.svg); if (kick.h) y += kick.h + 8;
-    const sub = s.sub ? fit(s.sub, colW, 44, 3, 12.5, 9.5, 0.5, 1.28) : null;
-    const room = h - y - pad - (sub ? sub.height + 10 : 0) - (s.offer ? 30 : 0);
-    const head = fit(s.headline, colW, room, 4, Math.min(56, h * 0.2), 12, t.w);
-    parts.push(textLines(head.lines, pad, y, head.size, { font: t.display, weight: t.weight, fill: ink, tracking: t.tracking }));
-    y += head.height + 10;
-    if (sub && y + sub.height <= h - pad + 2) { parts.push(textLines(sub.lines, pad, y, sub.size, { font: t.text, weight: 500, fill: ink, lead: 1.28 })); y += sub.height + 10; }
-    if (s.offer && y + 24 <= h - pad && (y + 24 <= qr.y || pad + Math.min(colW, ems(s.offer) * 11 * 0.62 + 22) <= qr.x - 4)) {
-      const os = Math.min(11, (colW - 22) / Math.max(1, ems(s.offer) * 0.62)), ow = Math.min(colW, ems(s.offer) * os * 0.62 + 22);
-      parts.push(`<rect x="${f1(pad)}" y="${f1(y)}" width="${f1(ow)}" height="24" rx="12" fill="${s.colors.accent}"/><text x="${f1(pad + 11)}" y="${f1(y + 16)}" font-family="${esc(t.text)}" font-weight="800" font-size="${f1(os)}" fill="${readableOn(s.colors.accent)}">${esc(s.offer)}</text>`);
-    }
+    const wm = wordmark(s, pad, y, roomRight(pad, right, avoid, y, y + 30) - pad, 16, ink);
+    if (wm) { parts.push(wm.svg); y = wm.box.y + wm.box.h + pad * 0.9; }
+    const kick = !d.kicker ? kickerText(s, pad, y, right, avoid, 10.5, accentOnPaper) : null;
+    if (kick) { parts.push(kick.svg); y += kick.box.h + 8; }
+    const offerRoom = s.offer && !d.offer ? 34 : 0;
+    const subAt = (top: number, bottom: number) => (s.sub && !d.sub ? fitText(s.sub, { x: pad, top, bottom, right, avoid, maxLines: 3, max: 12.5, min: 8.5, lead: 1.28 }) : null);
+    const subRoom = subAt(y, h - pad - offerRoom);
+    max = Math.min(56, h * 0.2);
+    const o = { x: pad, top: y, bottom: h - pad - offerRoom - (subRoom ? subRoom.height + 10 : 0), right, avoid, maxLines: 4, max, min: 10 };
+    head = fitText(s.headline, o);
+    const hd = head ?? fitOrCut(s.headline, o);
+    parts.push(display(hd, pad, ink));
+    y = hd.y + hd.height + 10;
+    const sub = subAt(y, h - pad - offerRoom);
+    if (sub) { parts.push(detail(sub, pad, ink, 1.28)); y = sub.y + sub.height + 10; }
+    const pl = !d.offer ? pill(s, pad, y, right - pad, h - pad, avoid) : null;
+    if (pl) parts.push(pl.svg);
   } else if (look === 'band') {
     const p = s.photo!;
     const photoH = Math.round(h * (w < 160 ? 0.38 : small ? 0.5 : 0.56));
@@ -275,62 +285,72 @@ export function renderStudio(s: StudioSpec, w: number, h: number, ctx?: Creative
     parts.push(photoIn(p, 0, 0, w, photoH));
     // A thin accent line where photo meets paper.
     parts.push(`<rect y="${f1(photoH)}" width="${f1(w)}" height="3" fill="${s.colors.accent}"/>`);
+    const r = Math.min(38, w * 0.17);
+    const b = !small && !d.offer ? badge(s, w - pad - r, trTop + r, r, keep) : null;
+    const avoid = [...keep, ...(b ? [b.box] : [])];
     let y = photoH + pad * 0.8;
-    const fullW = w - pad * 2;
-    const wm = wordmark(s, pad, y, y + 16 > qr.y ? w - pad - qr.w : fullW, small ? 12 : 14, accentOnPaper); parts.push(wm.svg); y += wm.h + 6;
-    // Words go above the QR corner at full width when they fit there; otherwise beside it, down to the bottom.
-    const above = fit(s.headline, fullW, qr.y - y - 4, 4, small ? 20 : 30, 10, t.w);
-    const besideW = w - pad - qr.w;
-    const head = above.height <= qr.y - y - 4 && above.size >= 12 ? above : fit(s.headline, besideW, h - pad - y, 5, small ? 20 : 30, 9, t.w);
-    parts.push(textLines(head.lines, pad, y, head.size, { font: t.display, weight: t.weight, fill: ink, tracking: t.tracking }));
-    y += head.height + 4;
-    if (s.sub && !small && y + 14 < h - pad) {
-      const sub = fit(s.sub, w - pad - qr.w, h - pad - y, 3, 11, 9, 0.5, 1.25);
-      parts.push(textLines(sub.lines, pad, y, sub.size, { font: t.text, weight: 500, fill: ink, lead: 1.25 }));
-    }
-    if (!small && s.offer) parts.push(badge(s, w - pad - Math.min(38, w * 0.17), pad + Math.min(38, w * 0.17), Math.min(38, w * 0.17), qr));
+    const size = small ? 12 : 14;
+    const wm = wordmark(s, pad, y, roomRight(pad, w - pad, avoid, y, y + size * 2.2) - pad, size, accentOnPaper);
+    if (wm) { parts.push(wm.svg); y = wm.box.y + wm.box.h + 6; }
+    max = small ? 20 : 30;
+    const o = { x: pad, top: y, bottom: h - pad, right: w - pad, avoid, maxLines: 5, max, min: 10 };
+    head = fitText(s.headline, o);
+    const hd = head ?? fitOrCut(s.headline, o);
+    parts.push(display(hd, pad, ink));
+    y = hd.y + hd.height + 4;
+    const sub = s.sub && !small && !d.sub ? fitText(s.sub, { x: pad, top: y, bottom: h - pad, right: w - pad, avoid, maxLines: 3, max: 11, min: 8.5, lead: 1.25 }) : null;
+    if (sub) parts.push(detail(sub, pad, ink, 1.25));
+    if (b) parts.push(b.svg);
   } else if (look === 'frame') {
     const p = s.photo!;
     parts.push(`<rect width="${f1(w)}" height="${f1(h)}" fill="${paper}"/>`);
     let y = pad;
-    const kick = kickerText(s, pad, y, w - pad * 2, 10, accentOnPaper); parts.push(kick.svg); if (kick.h) y += kick.h + 6;
-    const photoH = h * 0.5;
+    const kick = !d.kicker ? kickerText(s, pad, y, w - pad, keep, 10, accentOnPaper) : null;
+    if (kick) { parts.push(kick.svg); y += kick.box.h + 6; }
+    // When the words need the room, the picture is smaller.
+    const photoTop = y, photoH = h * (d.icon ? 0.38 : 0.5);
     parts.push(photoIn(p, pad, y, w - pad * 2, photoH));
     y += photoH + 8;
-    const colW = w - pad - qr.w;
-    const head = fit(s.headline, colW, qr.y - y + qr.size * 0.6, 3, 34, 11, t.w);
-    parts.push(textLines(head.lines, pad, y, head.size, { font: t.display, weight: t.weight, fill: ink, tracking: t.tracking }));
-    y += head.height + 4;
-    const wm = wordmark(s, pad, Math.min(y, h - pad - 14), colW, 12, accentOnPaper); parts.push(wm.svg);
-    if (s.offer) parts.push(badge(s, w - pad - 30, pad + 30 + (kick.h ? kick.h + 6 : 0), 30, qr));
+    const b = !d.offer ? badge(s, w - pad - 30, photoTop + 30, 30, keep) : null;
+    const avoid = [...keep, ...(b ? [b.box] : [])];
+    const brandRoom = s.logo ? 22 : 18;
+    max = 34;
+    const o = { x: pad, top: y, bottom: h - pad - brandRoom, right: w - pad, avoid, maxLines: 3, max, min: 10 };
+    head = fitText(s.headline, o);
+    const hd = head ?? fitOrCut(s.headline, o);
+    parts.push(display(hd, pad, ink));
+    y = hd.y + hd.height + 4;
+    const wm = wordmark(s, pad, y, roomRight(pad, w - pad, avoid, y, y + 18) - pad, 12, accentOnPaper);
+    if (wm) parts.push(wm.svg);
+    if (b) parts.push(b.svg);
   } else {
     // Type only: the headline is the picture.
     parts.push(`<rect width="${f1(w)}" height="${f1(h)}" fill="${paper}"/>`);
+    const iconSz = s.icon && !small && !d.icon ? Math.min(w * 0.3, h * 0.28, 110) : 0;
+    const icon = iconSz ? { x: w - pad - iconSz, y: trTop, w: iconSz, h: iconSz } : null;
+    if (icon) parts.push(`<g data-fw-keep="mark"><g transform="translate(${f1(icon.x)} ${f1(icon.y)}) scale(${(iconSz / 100).toFixed(3)})" opacity=".95">${iconDrawing(s.icon!, s.colors.accent, paper)}</g></g>`);
+    const r = Math.min(40, w * 0.15);
+    const b = !small && !icon && !d.offer ? badge(s, w - pad - r, trTop + r, r, keep) : null;
+    const avoid = [...keep, ...(icon ? [icon] : []), ...(b ? [b.box] : [])];
     let y = pad;
-    const wm = wordmark(s, pad, y, w - pad * 2, small ? 12 : 15, accentOnPaper); parts.push(wm.svg); y += wm.h + 8;
-    parts.push(`<rect x="${f1(pad)}" y="${f1(y)}" width="${f1(Math.min(46, w * 0.2))}" height="3" fill="${s.colors.accent}"/>`);
+    const size = small ? 12 : 15;
+    const wm = wordmark(s, pad, y, roomRight(pad, w - pad, avoid, y, y + size * 2.2) - pad, size, accentOnPaper);
+    if (wm) { parts.push(wm.svg); y = wm.box.y + wm.box.h + 8; }
+    parts.push(`<rect x="${f1(pad)}" y="${f1(y)}" width="${f1(Math.min(46, w * 0.2, roomRight(pad, w - pad, avoid, y, y + 3) - pad))}" height="3" fill="${s.colors.accent}"/>`);
     y += 12;
-    if (s.icon && !small) {
-      const sz = Math.min(w * 0.3, h * 0.28, 110);
-      parts.push(`<g transform="translate(${f1(w - pad - sz)} ${f1(pad)}) scale(${(sz / 100).toFixed(3)})" opacity=".95">${iconDrawing(s.icon, s.colors.accent, paper)}</g>`);
-    }
-    const besideQr = w - pad - qr.w;
-    if (y + 12 <= qr.y || besideQr > 60) { const kick = kickerText(s, pad, y, y + 12 > qr.y ? besideQr : w - pad * 2, 10.5, accentOnPaper); parts.push(kick.svg); if (kick.h) y += kick.h + 8; }
-    // Beside the drawing, the words stop short of it; above the QR corner they use the width, otherwise they stop beside it.
-    const iconSz = s.icon && !small ? Math.min(w * 0.3, h * 0.28, 110) : 0;
-    const colW = w - pad * 2 - (iconSz ? iconSz + 12 : 0);
-    const maxSize = small ? 28 : Math.min(120, h * 0.3);
-    const above = qr.y - y - 8 >= 20 ? fit(s.headline, colW, qr.y - y - 8, small ? 5 : 4, maxSize, 11, t.w, 1.0) : null;
-    const head = above && above.height <= qr.y - y - 8 && above.size >= 12 ? above : fit(s.headline, Math.min(colW, besideQr), Math.max(14, h - pad - y), 5, maxSize, 9, t.w, 1.0);
-    parts.push(textLines(head.lines, pad, y, head.size, { font: t.display, weight: t.weight, fill: ink, tracking: t.tracking, lead: 1.0 }));
-    y += head.height + 8;
-    if (s.sub && !small && h - pad - y >= 12) {
-      const sub = fit(s.sub, w - pad - qr.w, h - pad - y, 3, 12, 9, 0.5, 1.25);
-      if (y + sub.height <= h - pad + 2) parts.push(textLines(sub.lines, pad, y, sub.size, { font: t.text, weight: 500, fill: ink, lead: 1.25 }));
-    }
-    if (!small && s.offer && !s.icon) parts.push(badge(s, w - pad - Math.min(40, w * 0.15), pad + Math.min(40, w * 0.15), Math.min(40, w * 0.15), qr));
+    const kick = !d.kicker ? kickerText(s, pad, y, w - pad, avoid, 10.5, accentOnPaper) : null;
+    if (kick) { parts.push(kick.svg); y += kick.box.h + 8; }
+    max = small ? 28 : Math.min(120, h * 0.3);
+    const o = { x: pad, top: y, bottom: h - pad, right: w - pad, avoid, maxLines: small ? 5 : 4, max, min: 10, lead: 1.0 };
+    head = fitText(s.headline, o);
+    const hd = head ?? fitOrCut(s.headline, o);
+    parts.push(display(hd, pad, ink, 1.0));
+    y = hd.y + hd.height + 8;
+    const sub = s.sub && !small && !d.sub ? fitText(s.sub, { x: pad, top: y, bottom: h - pad, right: w - pad, avoid, maxLines: 3, max: 12, min: 8.5, lead: 1.25 }) : null;
+    if (sub) parts.push(detail(sub, pad, ink, 1.25));
+    if (b) parts.push(b.svg);
   }
-  return parts.join('');
+  return { svg: parts.join(''), head, good: Math.min(14, max * 0.55) };
 }
 
 export function studioCreative(spec: StudioSpec): Creative {

@@ -29,7 +29,7 @@ async function printMany(n: number, s = setup()) {
 }
 
 describe('ad engine', () => {
-  it('fills every label edge to edge with 1 to 10 different ads, in pieces as square as possible', async () => {
+  it('fills every label edge to edge with 1 to 10 different ads, in a tidy template', async () => {
     const { units } = await printMany(40);
     for (const u of units) {
       expect(u.layout.reduce((a, b) => a + 1 / b, 0)).toBeCloseTo(1, 6); // the shares add up to the whole label

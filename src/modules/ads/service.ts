@@ -12,9 +12,10 @@ import { posterCreative, posterFonts, posterIcons, renderPoster, type PosterSpec
 import type { ExperienceHost } from '../experiences/host';
 import { themeFor } from '../experiences/host';
 import { givingLine, pieceOf, slotQr } from '../print/renderer';
+import { wordsUnderCode } from '../print/svgCreative';
 import { qrSvg } from '../print/qr';
 import { companyQrStyle } from '../codes/style';
-import { boxFaceQr, boxFaceSizes } from '../packs/boxRenderer';
+import { boxFaceQr, boxFaceSizes, stopCodeBox } from '../packs/boxRenderer';
 import type { AdAssistant, ChatMessage } from '../ai/contract';
 import { allowedSizes, applyPatch, draftTargeting, estimate, missing, missingLabels, themeFromPoster, type AdDraft } from './draft';
 import { withCompany } from '../ai/routing';
@@ -281,8 +282,28 @@ export class AdsService {
   async campaignPreview(campaignId: string, companyId: string) {
     const c = this.platform.campaigns.get(campaignId);
     if (!c || c.companyId !== companyId) throw new AdsError(404, 'not_found', 'Campaign not found.');
+    const views = await this.render({ companyId, advertiserId: c.advertiserId, advertiserName: c.advertiserName, category: c.category, draw: (w, h, ctx) => c.creative.svg(w, h, ctx), sizes: c.sizes, formats: c.formats ?? ['label'], experience: { id: c.experienceId, config: c.experienceConfig ?? {} }, theme: c.theme ?? {} });
+    // Uploaded artwork is printed as drawn, with the code over its corner: the reviewer is told when words sit there.
+    const warnings = c.creativeRef?.kind === 'svg' ? await this.artworkWarnings(companyId, c.creativeRef.markup, c.sizes) : [];
     return { campaign: { id: c.id, name: c.name ?? null, advertiser: c.advertiserName, category: c.category, where: c.targeting.locations ?? 'all', buy: c.buy, paid: this.prepaid?.progress(c) ?? null, review: c.review ?? null, experienceId: c.experienceId },
-      ...(await this.render({ companyId, advertiserId: c.advertiserId, advertiserName: c.advertiserName, category: c.category, draw: (w, h, ctx) => c.creative.svg(w, h, ctx), sizes: c.sizes, formats: c.formats ?? ['label'], experience: { id: c.experienceId, config: c.experienceConfig ?? {} }, theme: c.theme ?? {} })) };
+      warnings, ...views };
+  }
+
+  /** Uploaded artwork with words where the QR code prints, at any piece of these sizes on the company's products. */
+  async artworkWarnings(companyId: string, markup: string, sizes: Share[]): Promise<string[]> {
+    const company = this.platform.companies.get(companyId);
+    if (!company) return [];
+    const rules = { maxAds: company.adRules.maxAdsPerUnit, minAds: company.adRules.minAdsPerUnit };
+    const shapes: { where: string; w: number; h: number; qr: { x: number; y: number; size: number } }[] = [];
+    for (const p of this.platform.products.values()) {
+      if (p.companyId && p.companyId !== companyId) continue;
+      for (const l of layoutsFor(p, rules)) l.shares.forEach((share, i) => {
+        if (!sizes.includes(share)) return;
+        const { w, h } = pieceOf(p, l.rects[i]!);
+        if (!shapes.some((x) => Math.abs(x.w - w) < 1 && Math.abs(x.h - h) < 1)) shapes.push({ where: `${shareLabel(share)} on the ${p.name}`, w, h, qr: slotQr(p, w, h) });
+      });
+    }
+    return wordsUnderCode(markup, shapes);
   }
 
   private async render(o: { companyId: string; advertiserId: string; advertiserName: string; category: string; draw: (w: number, h: number, ctx?: import('../../core/types').CreativeContext) => string; sizes: Share[]; formats: string[]; experience: { id: string; config: unknown } | null; theme: Partial<import('../experiences/blocks').Theme> }) {
@@ -292,8 +313,9 @@ export class AdsService {
     const layouts = layoutsFor(product, rules);
     const sampleQr = `${company.receiptBaseUrl.replace(/\/$/, '')}/s/preview/0`;
     // A piece drawn exactly as it prints: the artwork told where its code goes, and the code drawn there.
-    const piece = (w: number, h: number, qr: { x: number; y: number; size: number }, code: string) =>
-      `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(w)}" height="${Math.round(h)}" viewBox="0 0 ${w} ${h}"><svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" overflow="hidden">${o.draw(w, h, { qr })}</svg>${code}</svg>`;
+    // (A box side is drawn keeping clear of the drivers' stop code too, as the front and top print.)
+    const piece = (w: number, h: number, qr: { x: number; y: number; size: number }, code: string, reserved?: { x: number; y: number; w: number; h: number }[]) =>
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(w)}" height="${Math.round(h)}" viewBox="0 0 ${w} ${h}"><svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" overflow="hidden">${o.draw(w, h, reserved?.length ? { qr, reserved } : { qr })}</svg>${code}</svg>`;
     // Each size, at every shape it can print at: a sixth can be a wide strip on one bottle and a tall column on the
     // next, and the design lays itself out differently for each. On every product the company's ads go on.
     const products = [product, ...[...this.platform.products.values()].filter((p) => p.id !== product.id && (!p.companyId || p.companyId === o.companyId))];
@@ -337,7 +359,7 @@ export class AdsService {
     }
     if (o.formats.includes('box-face') && !faceSeen.size) faceSeen.set('424x312', { w: 424, h: 312, boxes: [] });
     const boxFaces = [...faceSeen.values()].sort((a, b) => Number(b.w === 424 && b.h === 312) - Number(a.w === 424 && a.h === 312))
-      .map((f) => { const qr = boxFaceQr(f.w, f.h); return { boxes: f.boxes, w: f.w, h: f.h, svg: piece(f.w, f.h, qr, qrSvg(sampleQr, qr.x, qr.y, qr.size, 'H', companyQrStyle(company))) }; });
+      .map((f) => { const qr = boxFaceQr(f.w, f.h); return { boxes: f.boxes, w: f.w, h: f.h, svg: piece(f.w, f.h, qr, qrSvg(sampleQr, qr.x, qr.y, qr.size, 'H', companyQrStyle(company)), stopCodeBox('front', f.w)) }; });
     const boxFace = boxFaces[0]?.svg ?? null;
     const theme = themeFor(company.brand, o.theme);
     const scan = o.experience

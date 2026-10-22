@@ -732,3 +732,27 @@ describe('switches, per company', () => {
     expect(app.companyFeatures.on('freewater', 'route_buying')).toBe(true);
   });
 });
+
+describe('pieces are sold only in tidy templates', () => {
+  // Labels are cut only into tidy templates (src/modules/ads/layouts.ts). A bottle's reserved pieces must be ones a
+  // template holds, checked when the piece is sold, never found out at print: a third and a quarter mix three sizes on
+  // no template, so a bottle carrying a third has no room for a quarter (the old cutting mixed them as 1/3+1/6+1/4+1/4).
+  it('a house whose bottles each carry a third can’t also be sold a quarter, but can be sold a sixth beside it', async () => {
+    // A house of its own, on its own street, so what the other tests did to theirs doesn't matter.
+    const o = await app.accounts.createSession(opsId);
+    const area = (await call('POST', '/v1/ops/areas', o, { name: 'Tidy Template St', routeId: 'route-3' })).json();
+    expect((await call('POST', `/v1/ops/areas/${area.id}/houses/import`, o, { csv: 'address,lat,lng\n"301 Tidytemplate St, Austin, TX",30.2450,-97.7410' })).json().added).toBe(1);
+    expect((await call('PATCH', `/v1/ops/areas/${area.id}`, o, { active: true, packSize: 12 })).statusCode).toBe(200);
+    const monday = new Date(now + 21 * 86_400_000);
+    monday.setUTCDate(monday.getUTCDate() + ((8 - monday.getUTCDay()) % 7));
+    const W = monday.toISOString().slice(0, 10), where = { addresses: ['301 Tidytemplate St, Austin TX'] };
+    const third = await newAd(3);
+    const { paid } = await buy(third, { kind: 'houses', share: 3, perHouse: 12, weeks: 1, startWeek: W, where });
+    expect(paid.bottles).toBe(12);
+    const quarter = await newAd(4);
+    await expect(app.routeBuys.quote('freewater', quarter.advertiserId, { kind: 'houses', share: 4, perHouse: 1, weeks: 1, startWeek: W, where }, quarter.sizes, { campaignId: quarter.id })).rejects.toMatchObject({ code: 'sold_out' });
+    const sixth = await newAd(6);
+    const q = await app.routeBuys.quote('freewater', sixth.advertiserId, { kind: 'houses', share: 6, perHouse: 2, weeks: 1, startWeek: W, where }, sixth.sizes, { campaignId: sixth.id });
+    expect(q).toMatchObject({ houses: 1, bottles: 2 });
+  });
+});

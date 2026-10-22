@@ -265,6 +265,8 @@ export interface Creative {
 /** What the renderer tells artwork about its slot: where the QR code will print, in the slot's own coordinates. */
 export interface CreativeContext {
   qr?: { x: number; y: number; size: number };
+  /** Other corners the printer draws over (a box's stop code for drivers): words, logos and badges keep out of them. */
+  reserved?: { x: number; y: number; w: number; h: number }[];
 }
 
 export type Buy =

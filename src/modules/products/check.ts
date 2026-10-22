@@ -46,7 +46,7 @@ export function checkProduct(p: Product): ProductCheck {
   const slots: ProductCheck['slots'] = [];
   if (p.sizes !== undefined && (!Array.isArray(p.sizes) || !p.sizes.length || !p.sizes.every((x) => (SHARES as number[]).includes(x)))) problems.push('Sizes are shares of the label: 1 (the whole label), 2, 3, 4, 6, 8 or 10.');
   else if (!problems.length) {
-    // The label is divided into pieces as square as possible; every piece must hold a readable QR code.
+    // The label is cut only into tidy templates (layouts.ts); every piece must hold a readable QR code.
     const layouts = layoutsFor(p, { maxAds: 10 });
     const { w, h } = adArea(p);
     for (const share of p.sizes?.length ? p.sizes : SHARES) {
