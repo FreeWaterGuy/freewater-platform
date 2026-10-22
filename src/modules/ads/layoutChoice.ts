@@ -2,6 +2,10 @@ import { SHARES, type Campaign, type CompanyConfig, type Product, type Share } f
 import { SIZE_SWITCHES } from '../../runtime/registry';
 import { layoutSwitch, layoutsFor, templateFit, templateShares, TEMPLATES, type Layout } from './layouts';
 import { prepaidLeft } from './budget';
+import { companyLabel } from '../print/geometry';
+
+/** The product with this company's label numbers. The same object when the company has none (layouts stay cached). */
+const withLabel = (product: Product, company: CompanyConfig): Product => { const label = companyLabel(company, product); return label === product.label ? product : { ...product, label }; };
 
 // Each company's choice of label layouts (docs/SWITCHES.md, "Label layouts"; README, "Label layouts").
 //
@@ -38,6 +42,8 @@ export function allowedTemplates(company: CompanyConfig, productId: string, on: 
  * object back when nothing is narrowed (so layouts are cached as before).
  */
 export function productFor(company: CompanyConfig, product: Product, on: On = everything): Product {
+  // The company's own label numbers (print/geometry.ts) first: the ad area they leave decides which templates fit.
+  product = withLabel(product, company);
   const all = product.sizes?.length ? product.sizes : SHARES;
   const sizes = all.filter((s) => on(SIZE_SWITCHES[s] ?? ''));
   const layouts = allowedTemplates(company, product.id, on);

@@ -96,8 +96,8 @@ describe('logos in our QR codes', () => {
   it('prints the company’s logo on its own codes and an advertiser’s logo on theirs, as each company allows', async () => {
     const { label, slot } = await bottleWith('cmp-roast', { others: ['cmp-joes'] });
     const roastQr = label.codes!.find((c) => c.role === 'slot' && c.slotIndex === slot)!;
-    expect(label.svg).toContain('>R9</text>'); // Roastery 9's own logo in its code
-    expect(label.svg).toContain('<tspan fill="#7FC6EA">w</tspan>'); // FreeWater's initials in the receipt code
+    expect(label.svg).toContain('data-fw-text="R9"'); // Roastery 9's own logo in its code (its words as outlines)
+    expect(label.svg).toMatch(/data-fw-text="fw"[^>]*><g fill="#FFFFFF">(?:(?!<\/g>).)*<\/g><g fill="#7FC6EA">/); // FreeWater's initials in the receipt code, "w" in its accent
     expect(roastQr.text).toMatch(/^HTTPS:\/\/GO\.FREEWATER\.IO\/Q\//);
     // A white-label company can turn advertiser logos off.
     const peak = app.platform.companies.get('peak-spring')!;
@@ -285,7 +285,7 @@ describe('AR that follows the bottle', () => {
     expect(markers.length).toBeGreaterThanOrEqual(12); // about every 20 degrees round the full-wrap ad
     expect(new Set(markers.map((m) => m.markerId)).size).toBe(markers.length);
     const map = await call('GET', `/v1/public/ar/${fizz.unit.id}`);
-    expect(map.body).toMatchObject({ unitId: fizz.unit.id, label: { widthIn: 8.6, heightIn: 4.5 }, container: { shape: 'bottle', diameterIn: 2.66 } });
+    expect(map.body).toMatchObject({ unitId: fizz.unit.id, label: { widthIn: 8, heightIn: 4 }, container: { shape: 'bottle', diameterIn: 2.55 } });
     expect(map.body.slots[0].wrap).toMatchObject({ effect: 'sparkle', color: '#E8458B' });
     expect(map.body.codes.length).toBe(fizz.label.codes!.length);
     const svg = await server.inject({ method: 'GET', url: map.body.labelSvgUrl });
@@ -394,7 +394,7 @@ describe('any drink, any size', () => {
     const can = await bottleWith('cmp-luma', { productId: 'can-12oz', others: ['cmp-joes'] });
     expect(can.label.widthIn).toBe(8.37);
     expect(can.label.heightIn).toBe(3.9);
-    expect(can.label.svg).toContain('12 fl oz (355 ml)');
+    expect(can.label.svg).toContain('data-fw-text="12floz (355ml)"'); // what's inside, from the can itself
     luma.targeting = {};
     const big = await bottleWith('cmp-joes', { productId: 'bottle-25oz' });
     const small = await bottleWith('cmp-joes');

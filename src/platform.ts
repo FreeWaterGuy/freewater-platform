@@ -8,6 +8,7 @@ import { targetingPremium } from './modules/ads/targeting';
 import { AuctionStats, momentAt } from './modules/ads/auction';
 import { Ledger } from './modules/ledger/ledger';
 import type { RenderedLabel } from './modules/print/contract';
+import { printReady } from './modules/print/renderer';
 import { houseOnlyAdEngine } from './modules/ads/engine';
 import { companyLayouts, productFor as narrowProduct } from './modules/ads/layoutChoice';
 
@@ -593,7 +594,7 @@ export class Platform {
    * A label as a printer gets it: photos the artwork points at (from the ad studio) put inside the file, at print
    * size, so a machine prints it whole even offline. Set by the app; labels without photos are unchanged.
    */
-  forPrint: (svg: string) => Promise<string> = async (svg) => svg;
+  forPrint: (svg: string) => Promise<string> = (svg) => printReady(svg);
   /** The same for a label shown on a screen (an <img> can't fetch the photos it points at): preview-sized photos. */
   forView: (svg: string) => Promise<string> = async (svg) => svg;
   /** Packs live in the pack service; it tells the core which company each belongs to. */

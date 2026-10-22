@@ -7,15 +7,17 @@ import sharp from 'sharp';
 //  - its reserved boxes (`<g data-fw-keep="…">`: a logo, a drawn mark, an offer badge), their shapes in black;
 //  - the words that belong to a reserved box (an offer badge's own words), in black.
 // From those: ink beyond the piece's edge, words on the QR code or its white margin, words on a reserved box, and
-// any text smaller than the smallest size that prints readably. Rendered twice: in the fonts this machine resolves,
-// and with every font swapped for DejaVu Sans Bold, one of the widest fallbacks a printer or phone may use.
+// any text smaller than the smallest size that prints readably. Labels print their words as outlines
+// (src/modules/print/outline.ts): pass the artwork through `outlineText` first to check exactly what prints; words
+// outlined are found by their group (`<g data-fw-words>`). Words still as text can be drawn in the fonts this machine
+// resolves, or (`wide`) with every font swapped for DejaVu Sans Bold, one of the widest fallbacks.
 
 /** The smallest text that prints readably on a label: 8 drawing units (100 to the inch) is 0.08 in, about 5.8 pt. */
 export const MIN_TEXT = 8;
 const SCALE = 1.5; // pixels per drawing unit
 const M = 24; // margin drawn around the piece, in drawing units, to see ink that runs off it
 
-type Tok = { kind: 'open' | 'close' | 'self' | 'text'; name: string; raw: string; keep?: string };
+type Tok = { kind: 'open' | 'close' | 'self' | 'text'; name: string; raw: string; keep?: string; outlined?: boolean };
 
 function tokens(svg: string): Tok[] {
   const out: Tok[] = [];
@@ -24,7 +26,9 @@ function tokens(svg: string): Tok[] {
     if (m[5] !== undefined) { out.push({ kind: 'text', name: '#text', raw: m[5] }); continue; }
     const name = m[2]!.toLowerCase();
     const keep = /data-fw-keep="([^"]*)"/.exec(m[3] ?? '')?.[1];
-    out.push({ kind: m[1] ? 'close' : m[4] ? 'self' : 'open', name, raw: m[0], ...(keep !== undefined ? { keep } : {}) });
+    // Outlined words: a group of letter shapes, standing in for a <text>.
+    const words = name === 'g' && /data-fw-words="1"/.test(m[3] ?? '');
+    out.push({ kind: m[1] ? 'close' : m[4] ? 'self' : 'open', name: words ? 'text' : name, raw: m[0], ...(keep !== undefined ? { keep } : {}), ...(words ? { outlined: true } : {}) });
   }
   return out;
 }
@@ -41,7 +45,16 @@ export function splitArt(art: string, wide = false) {
   const black = (raw: string) => raw.replace(/\s(fill|stroke|fill-opacity|stroke-opacity|opacity)="[^"]*"/g, '');
   const font = (raw: string) => (wide ? raw.replace(/font-family="[^"]*"/, 'font-family="DejaVu Sans"').replace(/font-weight="[^"]*"/, 'font-weight="700"') : raw);
   let current = '';
-  for (const t of toks) {
+  let outlinedDepth = 0; // inside an outlined words group: how many <g> deep
+  for (const raw of toks) {
+    let t = raw;
+    // Inside outlined words every shape is part of the words; its groups close it only at the outermost.
+    if (outlinedDepth) {
+      if (t.name === 'g' && t.kind === 'open') outlinedDepth++;
+      if (t.name === 'g' && t.kind === 'close' && --outlinedDepth === 0) t = { ...t, name: 'text', raw: '</g>' };
+      else { if (t.kind !== 'text') (keepDepth ? keepWords : words).push(t.kind === 'close' ? t.raw : black(t.raw)); continue; }
+    }
+    if (t.outlined && t.kind === 'open') outlinedDepth = 1;
     const structural = t.name === 'g' || t.name === 'svg' || t.name === 'a';
     if (t.name === 'defs' || t.name === 'lineargradient' || t.name === 'radialgradient' || t.name === 'clippath' || t.name === 'filter') {
       if (t.kind === 'open') inDefs++; else if (t.kind === 'close') inDefs--;
@@ -54,10 +67,10 @@ export function splitArt(art: string, wide = false) {
       if (t.kind === 'open' && t.name === 'text') {
         inText++;
         current = '';
-        const s = /font-size="([\d.]+)"/.exec(t.raw);
-        if (s) sizes.push({ size: Number(s[1]), text: '' });
+        const s = /(?:font-size|data-fw-size)="([\d.]+)"/.exec(t.raw);
+        if (s) sizes.push({ size: Number(s[1]), text: /data-fw-text="([^"]*)"/.exec(t.raw)?.[1] ?? '' });
       }
-      const tag = t.kind === 'close' ? t.raw : black(font(t.raw)).replace(/^<(text|tspan)\b/, '<$1 fill="#000"');
+      const tag = t.kind === 'close' ? t.raw : black(font(t.raw)).replace(/^<(text|tspan|g)\b/, '<$1 fill="#000"');
       (keepDepth ? keepWords : words).push(tag);
       if (t.kind === 'close' && t.name === 'text') { inText--; if (sizes.length && !sizes.at(-1)!.text) sizes.at(-1)!.text = current; }
     } else if (t.kind === 'text') {

@@ -188,7 +188,8 @@ describe('news switched on', () => {
     expect(n[0]!.isHouse).toBe(true);
     unitId = u.id; slot = n[0]!.slotIndex;
     const svg = (await m.app.platform.labelSvg(u.id))!;
-    const words = svg.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' '); // the words printed, however they wrap
+    // The words printed, however they wrap (as outlines, each line's words kept beside its shapes).
+    const words = [...svg.matchAll(/data-fw-text="([^"]*)"/g)].map((m) => m[1]).join(' ').replace(/&amp;/g, '&').replace(/\s+/g, ' ');
     expect(words).toContain('Austin transit: the latest');
     expect(words).not.toContain('where things stand'); // the story's headline is never printed
     expect(words).toContain('FreeWater News');

@@ -471,10 +471,10 @@ export const SWITCHES: Switch[] = [
   sw({ id: 'core_platform', category: 'core', parent: null, locked: 'Needed to run anything: without it nothing else works.', label: 'Accounts, team, keys and settings', description: 'Signing in with a code, people’s accounts, the team, API keys, every setting and its history, health checks.',
     routes: ['GET /v1/public/features', 'GET /v1/public/app-config', 'POST /v1/auth/start', 'POST /v1/auth/verify', 'POST /v1/auth/second-step', 'POST /v1/auth/sign-out', 'GET /v1/me', 'PATCH /v1/me',
       'GET /v1/me/second-step', 'POST /v1/me/second-step/start', 'POST /v1/me/second-step/confirm', 'POST /v1/me/second-step/recovery-codes', 'POST /v1/me/second-step/off', 'POST /v1/team', 'GET /v1/team', 'DELETE /v1/team/:userId', 'POST /v1/advertisers', 'GET /v1/ads/advertiser',
-      'GET /v1/keys', 'POST /v1/keys', 'DELETE /v1/keys/:id', 'GET /v1/console', 'PATCH /v1/console/settings', 'POST /v1/console/preview-label', 'GET /v1/console/history', 'GET /v1/console/history/:version', 'POST /v1/console/history/:version/restore',
+      'GET /v1/keys', 'POST /v1/keys', 'DELETE /v1/keys/:id', 'GET /v1/console', 'PATCH /v1/console/settings', 'POST /v1/console/preview-label', 'GET /v1/console/history', 'GET /v1/console/history/:version', 'POST /v1/console/history/:version/restore', 'GET /v1/console/bottles/:code',
       'GET /v1/console/features', 'POST /v1/console/features/preview', 'POST /v1/console/features', 'GET /v1/console/features/history',
       'GET /health/deep', 'GET /v1/platform/status', 'POST /v1/platform/persistence/skip-stuck', 'POST /v1/platform/jobs/:name/run', 'GET /v1/ops/overview', 'GET /v1/ops/plugin-failures'],
-    jobs: ['memory', 'spool', 'capacity', 'backup', 'restore-check'], pages: ['start', 'company', 'brand', 'modules', 'team', 'history', 'keys', 'features'], plugins: ['house-promo'] }),
+    jobs: ['memory', 'spool', 'capacity', 'backup', 'restore-check'], pages: ['start', 'company', 'brand', 'label-panel', 'modules', 'team', 'history', 'keys', 'features'], plugins: ['house-promo'] }),
 ];
 for (const s of SWITCHES) if ((s.parent as unknown) === undefined) s.parent = CATEGORIES.find((c) => c.id === s.category)!.main;
 // A category's main switch has no parent of its own.

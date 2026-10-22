@@ -246,6 +246,8 @@ GitHub (and the chain when it's on). Anyone can check their own entry at
 | **Transparency** | Per company | *Transparency* | |
 | **Owners' second sign-in step** | Off | *Security* | Recommended on before going live. |
 | **API keys** | — | *API keys* | Turn off a key at once if it might be lost. |
+| **Label panel** | FreeWater: its real label; others: made from their brand | *Label panel* (`labelPanel`) | Every word, colour, logo, icon (uploaded, in order) and line of the company's panel. Refused if any line doesn't fit the panel of a product at its smallest print size; the message names the line. `null` puts back the one made from the brand. Not money: a key may change it. |
+| **Label size and areas** | Each product's own (the 16 oz bottle: 8 × 4 in, panel 0.85 in on the right, bleed 1/16 in) | Products page per product; `labelGeometry` per company (by product id, or `*`) | Width, height, seam, panel width and side, bleed, image-safe and text-safe areas. Checked: the panel 0.6 in to a third of the label, the safe areas inside the label, and the panel's lines still fitting. Changing the ad area can change which layout templates fit (README, *The label*). |
 
 ### Delivery areas (ops console, *Areas*)
 

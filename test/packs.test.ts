@@ -114,6 +114,7 @@ describe('packs', () => {
     expect(pack.rendered!.svg).not.toContain('goes to');
     const t = setup();
     const p2 = await t.compose(1, 'box-6');
-    expect(p2.rendered!.svg).toMatch(/Well\s*(<[^>]*>\s*)*Aware/);
+    // Words print as outlines; each line's words are kept beside its shapes.
+    expect([...p2.rendered!.svg.matchAll(/data-fw-text="([^"]*)"/g)].map((m) => m[1]).join(' ')).toMatch(/Well\s+Aware/);
   });
 });

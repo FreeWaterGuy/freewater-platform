@@ -10,6 +10,28 @@ import { adBilling, adLimits, checkAdBilling } from '../ads/billing';
 import { checkDelivery } from '../delivery/settings';
 import { checkNewsSettings } from '../news/sources';
 import { templateById } from '../ads/layouts';
+import { checkPanelSettings } from '../print/panel';
+
+const GEOMETRY_KEYS = ['widthIn', 'heightIn', 'seamIn', 'panelWidthIn', 'panelSide', 'bleedIn', 'imageSafe', 'textSafe', 'minQrIn'];
+/**
+ * The shape of a company's label numbers (by product id or "*"). Whether they fit each product (panel, safe areas,
+ * the panel's lines) is checked against the products themselves (console/service.ts `labelProblem`).
+ */
+function checkGeometryChange(g: unknown): string | null {
+  if (g === undefined) return null;
+  if (!g || typeof g !== 'object' || Array.isArray(g) || Object.keys(g).length > 40) return 'Label numbers are given per product (or * for all of them).';
+  for (const [id, x] of Object.entries(g as Record<string, unknown>)) {
+    if (id !== '*' && !/^[a-z0-9][a-z0-9-]{1,40}$/.test(id)) return `“${id}” isn’t a product id (or * for every product).`;
+    if (!x || typeof x !== 'object' || Array.isArray(x)) return `The label numbers for ${id} must be a set of numbers.`;
+    for (const [k, v] of Object.entries(x)) {
+      if (!GEOMETRY_KEYS.includes(k)) return `“${k}” isn’t a label number (${GEOMETRY_KEYS.join(', ')}).`;
+      if (k === 'panelSide') { if (v !== 'left' && v !== 'right') return 'The panel goes on the right or the left.'; continue; }
+      if (k === 'imageSafe' || k === 'textSafe') { const b = v as any; if (!b || typeof b !== 'object' || !isNum(b.widthIn, 0.1, 30) || !isNum(b.heightIn, 0.1, 12) || Object.keys(b).length !== 2) return `The ${k === 'imageSafe' ? 'image' : 'text'}-safe area is a width and a height in inches.`; continue; }
+      if (!isNum(v, 0, 30)) return `${k} must be a number of inches.`;
+    }
+  }
+  return null;
+}
 
 // What a company may change about itself, the checks each change must pass, and plain words for what changed.
 
@@ -25,7 +47,7 @@ export const fontChoices: { id: string; label: string; value: string }[] = [
 export const adCategories = ['food', 'drink', 'coffee', 'fitness', 'health', 'news', 'retail', 'local-services', 'real-estate', 'auto', 'finance', 'entertainment', 'events', 'travel', 'tech', 'education', 'nonprofit', 'politics', 'alcohol', 'tobacco', 'cannabis', 'gambling', 'weapons', 'dating'];
 
 /** The parts of the settings a PATCH may send. Anything else is refused. */
-export const editableKeys = ['name', 'receiptBaseUrl', 'scanBaseUrl', 'brand', 'productFacts', 'giving', 'openBooks', 'unitCosts', 'consumerPricing', 'timezone', 'consumer', 'machines', 'qr', 'ar', 'standardProductId', 'adRules', 'prices', 'modules', 'lottery', 'data', 'transparency', 'agents', 'ratchet', 'security', 'research', 'wallet', 'offers', 'games', 'minimumAge', 'chain', 'launch', 'ai', 'adBilling', 'news', 'delivery'] as const;
+export const editableKeys = ['name', 'receiptBaseUrl', 'scanBaseUrl', 'brand', 'productFacts', 'giving', 'openBooks', 'unitCosts', 'consumerPricing', 'timezone', 'consumer', 'machines', 'qr', 'ar', 'standardProductId', 'adRules', 'prices', 'modules', 'lottery', 'data', 'transparency', 'agents', 'ratchet', 'security', 'research', 'wallet', 'offers', 'games', 'minimumAge', 'chain', 'launch', 'ai', 'adBilling', 'news', 'delivery', 'labelPanel', 'labelGeometry'] as const;
 export type EditableKey = (typeof editableKeys)[number];
 /** Settings only a person signed in may change or put back: money, the chain, and every one-way or money-adjacent promise. */
 export const personOnlyKeys: readonly EditableKey[] = ['wallet', 'offers', 'chain', 'ratchet', 'agents', 'minimumAge', 'giving', 'lottery', 'ai', 'data', 'launch', 'security', 'adBilling', 'news', 'delivery'];
@@ -71,6 +93,8 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
   if (contrast(b.panelColor, b.accentColor) < 3) return 'The accent color is too hard to see on the panel color. Pick colors with more contrast.';
   if (!fontChoices.some((f) => f.value === b.fontFamily)) return `Pick one of the lettering choices: ${fontChoices.map((f) => f.label).join(', ')}.`;
 
+  { const bad = checkPanelSettings(c.labelPanel); if (bad) return bad; }
+  { const bad = checkGeometryChange(c.labelGeometry); if (bad) return bad; }
   if (!Array.isArray(c.productFacts) || c.productFacts.length < 1 || c.productFacts.length > 6 || !c.productFacts.every((l) => str(l, 1, 80))) return 'Product facts need 1 to 6 lines of up to 80 characters (what the water is, its size, who bottled it).';
 
   const g = c.giving;
@@ -244,6 +268,17 @@ export function applyChange(cur: CompanyConfig, change: Partial<Record<EditableK
   const next: any = structuredClone(cur);
   for (const [k, v] of Object.entries(change)) {
     if (!(editableKeys as readonly string[]).includes(k)) throw new Error(`“${k}” can’t be changed here.`);
+    // The label panel is replaced whole; null puts back the one made from the brand.
+    if (k === 'labelPanel') { if (v === null) delete next.labelPanel; else next.labelPanel = v; continue; }
+    // Label numbers, per product ("*" for all): a product set to null goes back to the product's own numbers.
+    if (k === 'labelGeometry') {
+      if (v === null) { delete next.labelGeometry; continue; }
+      const g = { ...(cur.labelGeometry ?? {}) } as Record<string, unknown>;
+      if (v && typeof v === 'object' && !Array.isArray(v)) for (const [id, x] of Object.entries(v)) { if (x === null) delete g[id]; else g[id] = x; }
+      else { next.labelGeometry = v; continue; }
+      if (Object.keys(g).length) next.labelGeometry = g; else delete next.labelGeometry;
+      continue;
+    }
     // How advertisers pay: each fee and the extras are changed one part at a time, on top of the full current setting.
     if (k === 'adBilling' && v && typeof v === 'object' && !Array.isArray(v)) {
       const base = adBilling(cur), x = v as any;
@@ -282,6 +317,7 @@ const labels: Record<string, string> = {
   'machines.offlineWalkUp': 'Free bottles while offline', 'machines.offlinePerHour': 'Offline bottles per hour', 'machines.bufferSize': 'Labels kept ready', 'modules.ads': 'Ad engine', 'modules.renderer': 'Label maker', 'modules.printer': 'Printer',
   'transparency.liveFeed': 'Live public feed', 'transparency.counters': 'Live public counters', 'transparency.publishFingerprints': 'Publishing daily fingerprints', 'transparency.advertiserStatements': 'Advertiser statements', 'transparency.feedDetail': 'Places in the feed', 'transparency.showAmounts': 'Amounts in the feed', data: 'Data collection', 'agents.enabled': 'The AI agents’ fund', 'agents.percentOfExtra': 'The AI agents’ share of the upside', 'agents.percentOfProfit': 'The AI agents’ share of the profit', 'agents.milestone': 'The AI agents’ milestone', ratchet: 'Giving and the AI agents’ share only go up', 'security.ownersNeedSecondStep': 'Owners need a second sign-in step',
   adBilling: 'How advertisers pay', 'adBilling.pricingMode': 'Pricing (flat or auction)', 'adBilling.requirePrepay': 'Advertisers pay up front', 'adBilling.fees': 'Fees on top of bottles (scan, AR, box side, commission)', 'adBilling.changeFeeCents': 'Fee for changing an ad', 'adBilling.extras': 'Costly extras and their markup', 'adBilling.limits': 'Limits on one payment (weeks of a route buy, the most one charge can be, how long credit lasts)',
+  labelPanel: 'Label panel', labelGeometry: 'Label size and areas',
   'lottery.enabled': 'Prize game', 'lottery.oddsPercent': 'Chance of winning', 'lottery.chancesPerDay': 'Chances per person a day', 'lottery.winsPerDay': 'Prizes per person a day', 'lottery.watchSeconds': 'Watching before the ball', 'lottery.ballMs': 'Time the ball is on screen', 'lottery.prizes': 'Prizes', 'lottery.minAge': 'Youngest age to play', 'lottery.rulesUrl': 'Official rules link', 'lottery.rulesText': 'Rules note',
 };
 const deep = new Set(['brand', 'giving', 'consumer', 'machines', 'qr', 'ar', 'adRules', 'prices', 'modules', 'lottery', 'transparency', 'agents', 'security', 'adBilling', 'delivery']);

@@ -10,6 +10,7 @@ import { svgCreative } from '../print/svgCreative';
 import type { ExperienceHost } from '../experiences/host';
 import { themeFor } from '../experiences/host';
 import { givingLine } from '../print/renderer';
+import { adArea } from '../ads/layouts';
 import type { DesignAssistant } from '../ai/designContract';
 import { applyDesignPatch, designMissing, designMissingLabels, experienceOf, labelSpec, type CustomDesign, type DesignAttachment } from './design';
 import { withCompany } from '../ai/routing';
@@ -29,7 +30,8 @@ export class DesignService {
 
   designArea() {
     const p = [...this.platform.products.values()][0]!;
-    return { productId: p.id, w: Math.round((p.label.widthIn - p.label.seamIn - p.label.panelWidthIn) * 100), h: Math.round(p.label.heightIn * 100) };
+    const a = adArea(p);
+    return { productId: p.id, w: Math.round(a.w * 100), h: Math.round(a.h * 100) };
   }
 
   private async row(id: string, userId: string): Promise<Row> {

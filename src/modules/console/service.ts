@@ -15,6 +15,9 @@ import { quietTransparency } from '../transparency/service';
 import { preset } from '../data/policy';
 import { adCategories, applyChange, checkSettings, describeChange, editableKeys, fontChoices, personOnlyKeys, ratchetProblem, chainProblem, walletProblem, printLimitsChanged, type EditableKey } from './settings';
 import { adBilling, defaultAdBilling } from '../ads/billing';
+import { labelGeometry, STANDARD_LABEL } from '../print/geometry';
+import { panelOf, PANEL_SIZES } from '../print/panel';
+import { givingLine, labelFitProblem, withLabel } from '../print/renderer';
 
 /** Where a settings change came from, and why (for the switches' history on the Features page). */
 export interface SaveNote { via: string; reason?: string }
@@ -114,7 +117,9 @@ export class ConsoleService {
     const charities = (await this.db.query<{ name: string }>(`select name from charities where company_id = $1 order by name`, [companyId])).rows.map((r) => r.name);
     return {
       config, version,
-      options: { modules: this.registry.names(), fonts: fontChoices, categories: adCategories, timezones: commonTimezones, editable: editableKeys, lottery: lotteryDefaults(config), wallet: defaultWallet(config.name), games: defaultGames, chain: defaultChain },
+      options: { modules: this.registry.names(), fonts: fontChoices, categories: adCategories, timezones: commonTimezones, editable: editableKeys, lottery: lotteryDefaults(config), wallet: defaultWallet(config.name), games: defaultGames, chain: defaultChain,
+        // The Label panel page starts from the panel the company prints now (its own, or the one made from its brand).
+        labelPanel: panelOf(config, givingLine(config, '')), panelSizes: PANEL_SIZES, standardLabel: STANDARD_LABEL },
       locations: this.locations(companyId),
       charities,
       checklist: await this.checklist(companyId),
@@ -157,7 +162,7 @@ export class ConsoleService {
     const cur = this.company(companyId);
     let next: CompanyConfig;
     try { next = applyChange(cur, change); } catch (e: any) { return e.message; }
-    return checkSettings(next, this.registry.names()) ?? ratchetProblem(cur, next) ?? chainProblem(cur, next, opts.chainApproved) ?? walletProblem(cur, next, opts.chainApproved);
+    return checkSettings(next, this.registry.names()) ?? ratchetProblem(cur, next) ?? chainProblem(cur, next, opts.chainApproved) ?? walletProblem(cur, next, opts.chainApproved) ?? this.labelProblem(companyId, cur, next);
   }
   private async saveNow(companyId: string, change: Partial<Record<EditableKey, unknown>>, by: string, expectedVersion: number | undefined, opts: SaveOpts) {
     const version = await this.baseline(companyId);
@@ -167,7 +172,7 @@ export class ConsoleService {
     try { next = applyChange(cur, change); } catch (e: any) { throw new ConsoleError('not_editable', e.message); }
     if (opts.person === false && printLimitsChanged(cur, next)) throw new ConsoleError('person_needed', 'The machines’ print limits are a safety limit: a person signed in changes them, not a service key.', 403);
     if (opts.person === false) { const flips = this.switchesChanged?.(cur, next) ?? []; if (flips.length) throw new ConsoleError('person_needed', `This turns a switch on or off (${flips.join(', ')}): a person signed in does that, never a service key.`, 403); }
-    const problem = checkSettings(next, this.registry.names()) ?? ratchetProblem(cur, next) ?? chainProblem(cur, next, opts.chainApproved) ?? walletProblem(cur, next, opts.chainApproved);
+    const problem = checkSettings(next, this.registry.names()) ?? ratchetProblem(cur, next) ?? chainProblem(cur, next, opts.chainApproved) ?? walletProblem(cur, next, opts.chainApproved) ?? this.labelProblem(companyId, cur, next);
     if (problem) throw new ConsoleError('invalid_settings', problem, 422);
     await this.layoutsAllow(companyId, cur, next, opts.confirmStranded, 'Check it first (Features → Label layouts shows the count), then save again confirming it.');
     const changes = describeChange(cur, next);
@@ -220,7 +225,7 @@ export class ConsoleService {
       const changed = [...new Set([...Object.keys(cur), ...Object.keys(next)])].filter((k) => JSON.stringify((cur as any)[k] ?? null) !== JSON.stringify((next as any)[k] ?? null));
       await opts.approval(changed);
     }
-    const problem = checkSettings(next, this.registry.names()) ?? ratchetProblem(cur, next) ?? chainProblem(cur, next) ?? walletProblem(cur, next);
+    const problem = checkSettings(next, this.registry.names()) ?? ratchetProblem(cur, next) ?? chainProblem(cur, next) ?? walletProblem(cur, next) ?? this.labelProblem(companyId, cur, next);
     if (problem) throw new ConsoleError('invalid_settings', `Version ${v} can’t be put back as it is: ${problem}`, 422);
     await this.layoutsAllow(companyId, cur, next, undefined, `Version ${v} isn’t put back by itself: change the label layouts on the Features page, where you can confirm.`);
     const changes = describeChange(cur, next);
@@ -235,7 +240,7 @@ export class ConsoleService {
     const cur = this.company(companyId);
     let draft: CompanyConfig;
     try { draft = applyChange(cur, change ?? {}); } catch (e: any) { return { svg: null, problem: e.message }; }
-    const problem = checkSettings(draft, this.registry.names());
+    const problem = checkSettings(draft, this.registry.names()) ?? this.labelProblem(companyId, cur, draft);
     const shown = problem ? cur : draft;
     const product = this.platform.standardProduct(companyId);
     const unit = this.sampleUnit(companyId);
@@ -243,7 +248,22 @@ export class ConsoleService {
     const label = await this.registry.rendererFor(shown).render({ unit: { ...unit, locationId: location }, product, company: shown, campaigns: this.platform.campaigns });
     // A change to the label layouts' settings: refused if no layout would be left, and what it would strand, counted.
     const layouts = problem ? null : (await this.layoutCheck?.(companyId, cur, draft)) ?? null;
-    return { svg: await this.platform.forView(label.svg), problem: problem ?? layouts?.problem ?? null, ...(layouts ? { stranded: layouts.stranded } : {}) };
+    // The panel on its own, as it prints (a close-up of the same drawing), for the Label panel page.
+    const g = labelGeometry(withLabel(product, shown).label);
+    const panel = label.svg.replace(/^<svg\b[^>]*>/, `<svg xmlns="http://www.w3.org/2000/svg" width="${g.panel.w}in" height="${g.height}in" viewBox="${g.panel.x * 100} 0 ${g.panel.w * 100} ${g.height * 100}">`);
+    return { svg: await this.platform.forView(label.svg), panelSvg: panel, problem: problem ?? layouts?.problem ?? null, ...(layouts ? { stranded: layouts.stranded } : {}) };
+  }
+
+  /**
+   * Whether the company's label settings fit every product it prints on: each product's label numbers with the
+   * company's own over them (print/geometry.ts), and every line of its panel at its smallest print size
+   * (print/panel.ts). Checked only when something the panel shows changed, so an old setting never blocks an
+   * unrelated save. Says which product and which line.
+   */
+  labelProblem(companyId: string, cur: CompanyConfig, next: CompanyConfig): string | null {
+    const keys = ['labelPanel', 'labelGeometry', 'brand', 'productFacts', 'giving', 'scanBaseUrl', 'receiptBaseUrl', 'qr'] as const;
+    if (keys.every((k) => JSON.stringify(cur[k] ?? null) === JSON.stringify(next[k] ?? null))) return null;
+    return labelFitProblem(next, [...this.platform.products.values()].filter((p) => !p.companyId || p.companyId === companyId));
   }
 
   /** The company's most recent bottle, or else its house ad across the whole label. */

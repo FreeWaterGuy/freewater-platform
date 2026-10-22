@@ -44,9 +44,14 @@ export interface RenderedSlot {
 
 export interface RenderedLabel {
   unitId: string;
+  /** The trimmed label as a screen shows it, every word an outline, its bleed drawn round it (print/renderer printFile). */
   svg: string;
   widthIn: number;
   heightIn: number;
+  /** How far the print file runs past the cut on each side (print/geometry.ts). Missing on old labels: none. */
+  bleedIn?: number;
+  /** The short code on the company panel ("B-7F3K29", print/bottleCode.ts). Missing on old labels. */
+  bottleCode?: string;
   slots: RenderedSlot[];
   receiptUrl: string; // the company panel's QR: this unit's open-books receipt
   codes?: PrintedCode[];

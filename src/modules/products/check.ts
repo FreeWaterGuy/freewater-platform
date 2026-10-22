@@ -1,5 +1,6 @@
 import { SHARES, type Product, type Share } from '../../core/types';
 import { adArea, layoutsFor } from '../ads/layouts';
+import { checkLabelGeometry } from '../print/geometry';
 
 // Any drink or product with a printed wrap can run on the platform: a 16 oz bottle, a 12 oz can, a 750 ml bottle,
 // a coffee can, a jar. A product is just its label's size, the container's shape, and the layouts of ad slots it
@@ -24,10 +25,14 @@ export function checkProduct(p: Product): ProductCheck {
   if (p.container !== undefined && (typeof p.container !== 'object' || p.container === null)) problems.push('The container must say its shape.');
   const l = p.label ?? ({} as Product['label']);
   const num = (v: unknown) => typeof v === 'number' && isFinite(v);
-  if (!num(l.widthIn) || l.widthIn < 2 || l.widthIn > 30) problems.push('The label width must be between 2 and 30 inches.');
-  if (!num(l.heightIn) || l.heightIn < 1 || l.heightIn > 12) problems.push('The label height must be between 1 and 12 inches.');
-  if (!num(l.seamIn) || l.seamIn < 0 || l.seamIn > 1) problems.push('The seam overlap must be between 0 and 1 inch.');
-  if (!num(l.panelWidthIn) || l.panelWidthIn < 0.6 || l.panelWidthIn > (l.widthIn ?? 0) / 3) problems.push('The company panel must be at least 0.6 inches wide and no more than a third of the label.');
+  if (!num(l.seamIn)) problems.push('The seam overlap must be between 0 and 1 inch.');
+  // Size, bleed, panel, image-safe and text-safe areas (print/geometry.ts).
+  problems.push(...checkLabelGeometry(l));
+  if (p.panelInfo !== undefined) {
+    const i = p.panelInfo as any;
+    const ok = (v: unknown) => v === undefined || (typeof v === 'string' && v.length <= 40);
+    if (!i || typeof i !== 'object' || !ok(i.contents) || !ok(i.volume) || (i.source !== undefined && !(Array.isArray(i.source) && i.source.length <= 4 && i.source.every((s: unknown) => typeof s === 'string' && s.trim() && s.length <= 60)))) problems.push('What’s inside: the contents and volume up to 40 characters each, and up to 4 source lines of up to 60.');
+  }
   const minQr = l.minQrIn ?? DEFAULT_MIN_QR;
   if (!num(minQr) || minQr < 0.4 || minQr > 3) problems.push('The smallest QR must be between 0.4 and 3 inches. Below 0.4 inches phones struggle to read it.');
   if (num(l.heightIn) && minQr > l.heightIn - 0.4) problems.push(`A ${minQr}" QR doesn't fit on a ${l.heightIn}" tall label.`);

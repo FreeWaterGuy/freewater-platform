@@ -1,6 +1,7 @@
 import type { BoxProduct, Campaign, CompanyConfig, Share, Unit } from '../../core/types';
 import { houseAd } from '../fillers/house';
-import { shareLabel } from './layouts';
+import { adArea, shareLabel } from './layouts';
+import { outlineText } from '../print/outline';
 import { bidFloor, prepaidLeft } from './budget';
 import { newId } from '../../core/ids';
 import type { SqlClient } from '../../db/client';
@@ -322,8 +323,9 @@ export class AdsService {
     const sampleQr = `${company.receiptBaseUrl.replace(/\/$/, '')}/s/preview/0`;
     // A piece drawn exactly as it prints: the artwork told where its code goes, and the code drawn there.
     // (A box side is drawn keeping clear of the drivers' stop code too, as the front and top print.)
-    const piece = (w: number, h: number, qr: { x: number; y: number; size: number }, code: string, reserved?: { x: number; y: number; w: number; h: number }[]) =>
-      `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(w)}" height="${Math.round(h)}" viewBox="0 0 ${w} ${h}"><svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" overflow="hidden">${o.draw(w, h, reserved?.length ? { qr, reserved } : { qr })}</svg>${code}</svg>`;
+    // Its words as outlines, exactly as they print (print/outline.ts).
+    const piece = (w: number, h: number, qr: { x: number; y: number; size: number }, code: string, reserved?: { x: number; y: number; w: number; h: number }[]) => outlineText(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(w)}" height="${Math.round(h)}" viewBox="0 0 ${w} ${h}"><svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" overflow="hidden">${o.draw(w, h, reserved?.length ? { qr, reserved } : { qr })}</svg>${code}</svg>`);
     // Each size, at every shape it can print at: a sixth can be a wide strip on one bottle and a tall column on the
     // next, and the design lays itself out differently for each. On every product the company's ads go on.
     const products = [product, ...[...this.platform.products.values()].filter((p) => p.id !== product.id && (!p.companyId || p.companyId === o.companyId))];
@@ -548,7 +550,7 @@ export class AdsService {
       if (e.action === 'link' || e.action === 'call') { t.linkTaps += Number(e.n); total.linkTaps += Number(e.n); }
     }
     const product = this.platform.standardProduct(input.companyId);
-    const thumbW = ((product.label.widthIn - product.label.seamIn - product.label.panelWidthIn) * 100) / 6 * 2;
+    const thumbW = (adArea(product).w * 100) / 6 * 2;
     const campaigns = [...this.platform.campaigns.values()].filter((c) => c.companyId === input.companyId && c.advertiserId === input.advertiserId && !c.isHouse)
       .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '') || a.id.localeCompare(b.id))
       .map((c) => ({

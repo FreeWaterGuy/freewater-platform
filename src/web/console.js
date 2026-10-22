@@ -66,7 +66,7 @@
   }
 
   const routes = [
-    [/^\/console\/?$/, startPage], [/^\/console\/company$/, companyPage], [/^\/console\/brand$/, brandPage], [/^\/console\/ads$/, adsPage], [/^\/console\/giving$/, givingPage], [/^\/console\/game$/, gamePage], [/^\/console\/transparency$/, transparencyPage], [/^\/console\/data$/, dataPage], [/^\/console\/numberline$/, numberLinePage], [/^\/console\/agents$/, agentsPage], [/^\/console\/given$/, givenPage], [/^\/console\/security$/, securityPage],
+    [/^\/console\/?$/, startPage], [/^\/console\/company$/, companyPage], [/^\/console\/brand$/, brandPage], [/^\/console\/label-panel$/, labelPanelPage], [/^\/console\/ads$/, adsPage], [/^\/console\/giving$/, givingPage], [/^\/console\/game$/, gamePage], [/^\/console\/transparency$/, transparencyPage], [/^\/console\/data$/, dataPage], [/^\/console\/numberline$/, numberLinePage], [/^\/console\/agents$/, agentsPage], [/^\/console\/given$/, givenPage], [/^\/console\/security$/, securityPage],
     [/^\/console\/modules$/, modulesPage], [/^\/console\/codes$/, codesPage], [/^\/console\/products$/, productsPage], [/^\/console\/machines$/, machinesPage], [/^\/console\/team$/, teamPage], [/^\/console\/history$/, historyPage],
     [/^\/console\/keys$/, keysPage], [/^\/console\/webhooks$/, webhooksPage], [/^\/console\/webhooks\/([\w-]+)$/, webhookPage], [/^\/console\/licensees$/, licenseesPage],
     [/^\/console\/features$/, featuresPage], [/^\/console\/launch$/, launchPage], [/^\/console\/wallet$/, walletPage], [/^\/console\/offers$/, offersPage], [/^\/console\/games$/, gamesPage], [/^\/console\/chain$/, chainPage],
@@ -118,7 +118,7 @@
     const nav = [
       ['start', '/console', 'Get started', I.start], ['features', '/console/features', 'Features', I.modules],
       'Points and rewards', ['launch', '/console/launch', 'Launch', I.start], ['wallet', '/console/wallet', 'Points and credit', I.giving], ['offers', '/console/offers', 'Brand offers', I.ads], ['games', '/console/games', 'The games', I.game], ['chain', '/console/chain', 'Blockchain', I.key],
-      'Settings', ['company', '/console/company', 'Company', I.company], ['brand', '/console/brand', 'Brand', I.brand], ['ads', '/console/ads', 'Ads and prices', I.ads], ['codes', '/console/codes', 'QR codes and AR', I.qr], ['products', '/console/products', 'Products', I.product],
+      'Settings', ['company', '/console/company', 'Company', I.company], ['brand', '/console/brand', 'Brand', I.brand], ['label-panel', '/console/label-panel', 'Label panel', I.product], ['ads', '/console/ads', 'Ads and prices', I.ads], ['codes', '/console/codes', 'QR codes and AR', I.qr], ['products', '/console/products', 'Products', I.product],
       ['giving', '/console/giving', 'Giving', I.giving], ['game', '/console/game', 'Prize game', I.game], ['transparency', '/console/transparency', 'Transparency', I.eye], ['data', '/console/data', 'Data and privacy', I.shield], ['numberline', '/console/numberline', 'Number line', I.line], ['agents', '/console/agents', 'AI agents', I.ai], ['security', '/console/security', 'Security', I.shield], ['modules', '/console/modules', 'Modules', I.modules], ['machines', '/console/machines', 'Machines', I.machine], ['team', '/console/team', 'Team', I.team], ['history', '/console/history', 'History', I.history],
       'Developers', ['keys', '/console/keys', 'API keys', I.key], ['webhooks', '/console/webhooks', 'Webhooks', I.hook], ['docs', '/developers', 'Docs', I.docs],
       ...(S.ov?.config?.id === 'freewater' ? ['FreeWater team', ['given', '/console/given', 'Bottles given & receipts', I.box]] : []),
@@ -426,6 +426,85 @@
     { onChange: (_d, ch) => refresh(ch) });
   }
 
+  // ---------- the label panel: the company's own space on every label ----------
+  // Top to bottom as printed (src/modules/print/panel.ts): logo, giving line, receipt QR and handle, icons, refill line,
+  // what's inside (from each product), the small print, the process line and recycling mark, the bottle code. Every
+  // word, colour and picture is the company's. The preview is the panel as it prints; a setting that doesn't fit is
+  // refused, naming the line.
+  function labelPanelPage() {
+    const img = h('img', { alt: 'Your label panel as it prints', style: 'height:520px;width:auto;max-width:100%;display:block;margin:0 auto;background:#222;border-radius:6px' });
+    const problem = h('div', { class: 'notice err', hidden: true });
+    let timer = null, seq = 0;
+    const refresh = (ch) => {
+      clearTimeout(timer);
+      timer = setTimeout(async () => {
+        const mine = ++seq;
+        try {
+          const r = await api('POST', '/v1/console/preview-label', { changes: ch });
+          if (mine !== seq) return;
+          if (r.panelSvg && (!r.problem || !img.src)) img.src = svgSrc(r.panelSvg);
+          problem.hidden = !r.problem; problem.textContent = r.problem ? `${r.problem} The preview keeps the last version that fit; this can’t be saved until it does.` : '';
+        } catch (e) { problem.hidden = false; problem.textContent = e.message; }
+      }, 220);
+    };
+    cleanup = () => clearTimeout(timer);
+    /** A picture the company uploads (PNG, JPEG, WebP or SVG), read into the settings as it is. */
+    const upload = (label, onFile) => {
+      const input = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/svg+xml', class: 'input' });
+      input.addEventListener('change', () => {
+        const file = input.files?.[0];
+        if (!file) return;
+        if (file.size > 300 * 1024) { toast('That file is larger than 300 KB; use a smaller one or an SVG.'); return; }
+        const rd = new FileReader();
+        rd.onload = () => onFile(String(rd.result));
+        if (file.type === 'image/svg+xml') rd.readAsText(file); else rd.readAsDataURL(file);
+      });
+      return field(label, input, { hint: 'PNG, JPEG or WebP at print resolution, or an SVG. Embedded in every label.' });
+    };
+    settingsPage('label-panel', 'Label panel', 'Your only space on each label: everything else is advertisers’. Every line, colour and picture here is yours; what’s inside comes from each product.', (ctx) => {
+      if (!ctx.draft.labelPanel) ctx.draft.labelPanel = structuredClone(S.ov.options.labelPanel);
+      const P = ctx.draft.labelPanel;
+      const lines = (path, label, hint) => text(ctx, `labelPanel.${path}`, label, { area: true, lines: true, full: true, hint });
+      const logoBox = h('div', { class: 'form' });
+      const drawLogo = () => logoBox.replaceChildren(...(P.logo.kind === 'text'
+        ? [text(ctx, 'labelPanel.logo.top', 'Logo, top line', { max: 16, hint: 'Light, in the text colour.' }), text(ctx, 'labelPanel.logo.bottom', 'Logo, bottom line', { max: 16, hint: 'Bold, in the accent colour.' }),
+          upload('Or upload a logo', (data) => { P.logo = { kind: 'image', image: data }; ctx.changed(); drawLogo(); })]
+        : [h('div', { class: 'field' }, h('label', { text: 'Logo' }), h('div', { class: 'row' }, h('span', { text: 'Your uploaded logo' }), h('button', { class: 'btn secondary small', type: 'button', onclick: () => { P.logo = { kind: 'text', top: S.ov.config.brand.logoTop, bottom: S.ov.config.brand.logoBottom }; ctx.changed(); drawLogo(); } }, 'Use words instead'))),
+          upload('Replace the logo', (data) => { P.logo = { kind: 'image', image: data }; ctx.changed(); })]));
+      drawLogo();
+      const iconBox = h('div', { class: 'stack' });
+      const drawIcons = () => iconBox.replaceChildren(
+        ...P.icons.map((ic, i) => h('div', { class: 'row' },
+          h('img', { src: ic.image.trimStart().startsWith('<') ? svgSrc(ic.image) : ic.image, alt: ic.name, style: 'width:28px;height:28px;object-fit:contain;background:#000;border-radius:6px' }),
+          h('b', { text: ic.name }),
+          h('button', { class: 'btn secondary small', type: 'button', disabled: i === 0, onclick: () => { [P.icons[i - 1], P.icons[i]] = [P.icons[i], P.icons[i - 1]]; ctx.changed(); drawIcons(); } }, 'Up'),
+          h('button', { class: 'btn secondary small', type: 'button', disabled: i === P.icons.length - 1, onclick: () => { [P.icons[i + 1], P.icons[i]] = [P.icons[i], P.icons[i + 1]]; ctx.changed(); drawIcons(); } }, 'Down'),
+          h('button', { class: 'btn secondary small', type: 'button', onclick: () => { P.icons.splice(i, 1); ctx.changed(); drawIcons(); } }, 'Remove'))),
+        ...(P.icons.length >= 6 ? [] : [(() => {
+          const name = h('input', { class: 'input', maxlength: 30, placeholder: 'Instagram' });
+          return h('div', { class: 'form' }, field('New icon’s name', name), upload('Its picture (your own file of the icon)', (data) => { if (!name.value.trim()) { toast('Name the icon first.'); return; } P.icons.push({ name: name.value.trim(), image: data }); ctx.changed(); drawIcons(); }));
+        })()]));
+      drawIcons();
+      return [h('div', { class: 'stack' },
+        h('div', { class: 'preview' }, h('div', { class: 'cap' }, h('b', { text: 'Your panel as it prints' }), h('span', { text: 'On your standard product, at its real proportions. Words are outlines in the print file, exactly as here.' })), img, problem),
+        section('Colours', 'Words must be easy to read on the background; the preview tells you if they aren’t.', h('div', { class: 'form' },
+          color(ctx, 'labelPanel.colors.background', 'Background'), color(ctx, 'labelPanel.colors.text', 'Text'), color(ctx, 'labelPanel.colors.accent', 'Accent', { hint: 'The logo’s bottom line, the first giving line, the refill line, the recycling mark.' }))),
+        section('Logo', null, logoBox),
+        section('Giving line', 'Under the logo, bold italic, one entry a line.', h('div', { class: 'form' },
+          lines('charity', 'Lines', 'Like 10 CENTS+ / PER WATER / GOES TO / CHARITY. Up to 6 lines of 24 characters.'),
+          toggle(ctx, 'labelPanel.accentFirst', 'First line in the accent colour', 'As on FreeWater’s label.', { full: true }))),
+        section('Under the QR code', 'The QR code opens each bottle’s receipt; it isn’t changed here.', h('div', { class: 'form' }, text(ctx, 'labelPanel.handle', 'Handle', { max: 40, placeholder: '@yourbrand' }))),
+        section('Social icons', 'Upload each icon’s picture yourself (the platform doesn’t draw other companies’ logos). They print in this order, in one row.', iconBox),
+        section('The rest, top to bottom', 'What’s inside and where it comes from are set on each product (Products page).', h('div', { class: 'form' },
+          lines('refill', 'Refill line', 'In the accent colour. Up to 3 lines.'),
+          lines('maker', 'Who makes it', 'Small print, wrapped to fit: maker, city, phone, email. Up to 10 lines.'),
+          text(ctx, 'labelPanel.process', 'Process line', { max: 60, hint: 'In italics, like “Processed by ozonation”. Leave empty for none.' }),
+          toggle(ctx, 'labelPanel.recycle.show', 'Recycling mark', 'Beside the process line.', { full: true }),
+          upload('Your own recycling mark (optional)', (data) => { P.recycle = { ...P.recycle, image: data }; ctx.changed(); }),
+          text(ctx, 'labelPanel.codeLabel', 'Before the bottle code', { max: 20, hint: 'The very bottom line, like “Bottle code: B-7F3K29”. Each bottle’s own code; your team can look a bottle up by it.' }))))];
+    }, { onChange: (_d, ch) => refresh(ch) });
+  }
+
   // ---------- ads and prices ----------
   function adsPage() {
     const sizes = [[1, 'The whole label'], [2, 'Half'], [3, 'A third'], [4, 'A quarter'], [6, 'A sixth'], [8, 'An eighth'], [10, 'A tenth']];
@@ -538,6 +617,11 @@
       width: h('input', { class: 'input', type: 'number', step: '0.01', placeholder: '8.37' }), labelH: h('input', { class: 'input', type: 'number', step: '0.01', placeholder: '3.9' }),
       seam: h('input', { class: 'input', type: 'number', step: '0.01', value: '0.2' }), panel: h('input', { class: 'input', type: 'number', step: '0.01', value: '0.9' }),
       price: h('input', { class: 'input', type: 'number', step: '0.05', value: '1' }), facts: h('textarea', { class: 'input', rows: 3, placeholder: 'SPARKLING SPRING WATER\n12 fl oz (355 ml)' }),
+      // Where things go on the label (src/modules/print/geometry.ts). Empty: the printer's guide's defaults.
+      bleed: h('input', { class: 'input', type: 'number', step: '0.0001', placeholder: '0.0625' }), side: h('select', { class: 'input' }, [['right', 'Right'], ['left', 'Left']].map(([v, l]) => h('option', { value: v, text: l }))),
+      imageW: h('input', { class: 'input', type: 'number', step: '0.01', placeholder: 'beside the panel' }), imageH: h('input', { class: 'input', type: 'number', step: '0.01', placeholder: 'full height' }),
+      textW: h('input', { class: 'input', type: 'number', step: '0.01', placeholder: '0.05 less' }), textH: h('input', { class: 'input', type: 'number', step: '0.01', placeholder: '0.2 less' }),
+      contents: h('input', { class: 'input', maxlength: 40, placeholder: 'SPRING WATER' }), volume: h('input', { class: 'input', maxlength: 40, placeholder: '16floz (473ml)' }), source: h('textarea', { class: 'input', rows: 2, placeholder: 'Source:\nNatural Spring Water, Tiger, GA' }),
     };
     const picks = sizesAll.map(([v, l]) => { const b = h('input', { type: 'checkbox' }); b.checked = true; return [v, b, l]; });
     const result = h('div', { class: 'stack' });
@@ -545,7 +629,9 @@
       const n = (i) => (i.value === '' ? undefined : Number(i.value));
       return { id: f.id.value.trim(), name: f.name.value.trim(), ...(f.category.value.trim() ? { category: f.category.value.trim().toLowerCase() } : {}),
         container: { shape: f.shape.value, ...(n(f.diameter) ? { diameterIn: n(f.diameter) } : {}), ...(n(f.height) ? { heightIn: n(f.height) } : {}) },
-        label: { widthIn: n(f.width), heightIn: n(f.labelH), seamIn: n(f.seam) ?? 0, panelWidthIn: n(f.panel) },
+        label: { widthIn: n(f.width), heightIn: n(f.labelH), seamIn: n(f.seam) ?? 0, panelWidthIn: n(f.panel), panelSide: f.side.value, ...(n(f.bleed) !== undefined ? { bleedIn: n(f.bleed) } : {}),
+          ...(n(f.imageW) && n(f.imageH) ? { imageSafe: { widthIn: n(f.imageW), heightIn: n(f.imageH) } } : {}), ...(n(f.textW) && n(f.textH) ? { textSafe: { widthIn: n(f.textW), heightIn: n(f.textH) } } : {}) },
+        ...(f.contents.value.trim() || f.volume.value.trim() || f.source.value.trim() ? { panelInfo: { ...(f.contents.value.trim() ? { contents: f.contents.value.trim() } : {}), ...(f.volume.value.trim() ? { volume: f.volume.value.trim() } : {}), ...(f.source.value.trim() ? { source: f.source.value.split('\n').map((x) => x.trim()).filter(Boolean) } : {}) } } : {}),
         sizes: picks.filter(([, b]) => b.checked).map(([v]) => v), ...(n(f.price) && n(f.price) !== 1 ? { priceFactor: n(f.price) } : {}),
         ...(f.facts.value.trim() ? { facts: f.facts.value.split('\n').map((x) => x.trim()).filter(Boolean) } : {}) };
     };
@@ -563,7 +649,11 @@
       field('Id', f.id, { hint: 'Lowercase letters, numbers and dashes.' }), field('Name', f.name), field('What’s inside', f.category), field('Shape', f.shape),
       field('Diameter (inches)', f.diameter, { hint: 'For round containers. The label must wrap exactly once.' }), field('Container height (inches)', f.height),
       field('Label width (inches)', f.width, { hint: 'The whole printed width, including the seam overlap.' }), field('Label height (inches)', f.labelH),
-      field('Seam overlap (inches)', f.seam), field('Your panel width (inches)', f.panel, { hint: 'At least 0.6 inches.' }),
+      field('Seam overlap (inches)', f.seam), field('Your panel width (inches)', f.panel, { hint: 'At least 0.6 inches. The standard bottle: 0.85.' }), field('Panel side', f.side),
+      field('Bleed (inches)', f.bleed, { hint: 'How far backgrounds run past the cut. The printer’s guide: 1/16 inch (0.0625).' }),
+      field('Image-safe width (inches)', f.imageW, { hint: 'Where ads go. The standard bottle: 7.15 × 4.' }), field('Image-safe height (inches)', f.imageH),
+      field('Text-safe width (inches)', f.textW, { hint: 'Where words go, inside the image-safe area. The standard bottle: 7.1 × 3.8.' }), field('Text-safe height (inches)', f.textH),
+      field('What’s inside (panel)', f.contents), field('Volume (panel)', f.volume), field('Where it comes from (panel)', f.source, { full: true, hint: 'Small print on your label panel, one line each.' }),
       field('Ad prices compared with your standard bottle', f.price, { hint: '1 is the same; 1.25 is a quarter more for a bigger label.' }),
       field('Panel lines for this product', f.facts, { full: true, hint: 'What’s inside, the size, who made it. Leave empty to use your company’s lines.' }),
       h('div', { class: 'field full' }, h('label', { text: 'Ad sizes offered (shares of the label)' }), h('div', { class: 'chips' }, picks.map(([, b, l]) => h('label', { class: 'chip-check' }, b, ` ${l}`))), h('div', { class: 'hint', text: 'Each size is cut as close to square as this label allows. Sizes too small for a readable QR code are left out automatically.' })),

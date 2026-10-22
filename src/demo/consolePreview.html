@@ -89,7 +89,10 @@
       let draft; try { draft = L.applyChange(S.config, body.changes || {}); } catch (e) { return { svg: null, problem: e.message }; }
       const problem = L.checkSettings(draft, registered);
       const label = await L.renderer.render({ unit: R.sample, product: L.product, company: problem ? S.config : draft, campaigns });
-      return { svg: label.svg, problem };
+      // The panel on its own, as the server answers it (a close-up of the same drawing, for the Label panel page).
+      const pw = (L.product.label.panelWidthIn) * 100, H = L.product.label.heightIn * 100, W = L.product.label.widthIn * 100;
+      const panelSvg = label.svg.replace(/^<svg\b[^>]*>/, `<svg xmlns="http://www.w3.org/2000/svg" width="${pw / 100}in" height="${H / 100}in" viewBox="${W - pw} 0 ${pw} ${H}">`);
+      return { svg: label.svg, panelSvg, problem };
     }
     if (key === 'POST /v1/qr/preview') {
       if (body.logo) { const bad = L.checkQrLogo(body.logo); if (bad) fail(422, `The logo: ${bad}.`); }

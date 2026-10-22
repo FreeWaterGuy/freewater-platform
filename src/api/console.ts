@@ -45,6 +45,17 @@ export function consoleRoutes(app: App, route: (r: RouteDef) => void) {
     approval: async (changed) => { if (approvalSettings.some((k) => changed.includes(k))) await approverStep(key!); },
   }) }) });
 
+  // ---------- bottle codes ----------
+  // The short code at the bottom of each label's panel ("Bottle code: B-7F3K29", print/bottleCode.ts): the team finds
+  // the bottle from it (a customer reading it out, a returned bottle). Only the company's own bottles; nothing personal.
+  route({ method: 'GET', url: '/v1/console/bottles/:code', params: { code: { type: 'string', minLength: 6, maxLength: 12, pattern: '^[A-Za-z0-9 -]+$' } }, scope: 'admin', summary: 'The bottle a printed bottle code belongs to (“B-7F3K29”; case, dashes and O/0, I/1 mix-ups don’t matter).', handler: async (req, key) => {
+    const companyId = staff(key).companyId;
+    const found = await app.codes.findBottle(companyId, (req.params as any).code);
+    const unit = found ? app.platform.units.get(found.unitId) : undefined;
+    if (!found) throw new ApiError(404, 'not_found', 'No bottle of yours has that code.');
+    return { body: { code: found.code, unitId: found.unitId, ...(unit ? { status: unit.status, productId: unit.productId, locationId: unit.locationId, createdAt: unit.createdAt } : {}) } };
+  } });
+
   // ---------- machines ----------
   const machineProps = { name: { type: 'string', minLength: 1, maxLength: 60 }, city: { type: 'string', minLength: 1, maxLength: 60 }, address: { type: 'string', maxLength: 200 }, lat: { type: 'number', minimum: -90, maximum: 90 }, lng: { type: 'number', minimum: -180, maximum: 180 }, printSeconds: { type: 'integer', minimum: 5, maximum: 300 }, hardware: { type: 'string', enum: ['model6', 'virtual'] }, products: { type: 'array', minItems: 1, maxItems: 12, items: { type: 'string', maxLength: 60 } } };
   route({ method: 'POST', url: '/v1/console/machines', scope: 'admin', summary: 'Add a machine. The answer includes its API key, shown only this once; put it in the machine.', body: obj({ id: S.str, ...machineProps }, ['id', 'name', 'city']), handler: async (req, key) => ({ status: 201, body: await cons.addMachine(staff(key).companyId, req.body as any, by(key!)) }) });

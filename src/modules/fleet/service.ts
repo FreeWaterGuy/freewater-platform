@@ -1,4 +1,5 @@
 import { placementShare } from '../ads/layouts';
+import { outlineText } from '../print/outline';
 import type { SqlClient } from '../../db/client';
 import type { Platform } from '../../platform';
 import type { Messenger } from '../../adapters/messaging/contract';
@@ -276,7 +277,7 @@ export class FleetService {
     const own = [...u.placements].filter((p) => !p.isHouse).sort((a, b) => placementShare(a) - placementShare(b))[0] ?? u.placements[0];
     const c = own ? this.platform.campaigns.get(own.campaignId) : null;
     if (!c) return null;
-    return { advertiser: c.advertiserName, art: `<svg xmlns="http://www.w3.org/2000/svg" width="360" height="440" viewBox="0 0 360 440">${c.creative.svg(360, 440)}</svg>` };
+    return { advertiser: c.advertiserName, art: outlineText(`<svg xmlns="http://www.w3.org/2000/svg" width="360" height="440" viewBox="0 0 360 440">${c.creative.svg(360, 440)}</svg>`) };
   }
 
   /** What happened to a job. Only "dispensed" (the bottle reached the tray) is billed. */
@@ -351,7 +352,7 @@ export class FleetService {
     const ads = [...this.platform.campaigns.values()]
       .filter((c) => c.companyId === company.id && c.active && !c.isHouse && (c.review?.status ?? 'approved') === 'approved' && !company.adRules.blockedCategories.includes(c.category) && (!c.targeting.locations?.length || c.targeting.locations.includes(l.id)))
       .sort((a, b) => a.id.localeCompare(b.id)).slice(0, 8)
-      .map((c) => ({ advertiser: c.advertiserName, art: `<svg xmlns="http://www.w3.org/2000/svg" width="360" height="440" viewBox="0 0 360 440">${c.creative.svg(360, 440)}</svg>` }));
+      .map((c) => ({ advertiser: c.advertiserName, art: outlineText(`<svg xmlns="http://www.w3.org/2000/svg" width="360" height="440" viewBox="0 0 360 440">${c.creative.svg(360, 440)}</svg>`) }));
     const config = {
       company: company.name, brand: company.brand, machine: { id: l.id, name: l.name, city: l.city },
       pricing: company.consumerPricing, freeBottlesPerDay: company.consumer?.freeBottlesPerDay ?? 3, giving: givingLine(company, l.id),

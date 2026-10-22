@@ -1,3 +1,4 @@
+import { measure } from '../src/modules/print/fonts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import sharp from 'sharp';
@@ -13,6 +14,14 @@ import { parseGlb } from '../src/modules/models/usdz';
 import { contrast } from '../src/modules/creative/poster';
 
 const photoFile = (f: string) => readFileSync(new URL(`../src/modules/studio/stand-in-photos/${f}`, import.meta.url));
+
+/** How wide a <text>'s words print, in ems: in the face its font-family prints in, with its letter-spacing. */
+function printedWidth(tag: string, words: string) {
+  const at = (k: string) => new RegExp(`${k}="([^"]*)"`).exec(tag)?.[1];
+  const unesc = (v: string) => v.replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+  const size = Number(at('font-size')), ls = Number(at('letter-spacing') ?? 0);
+  return measure(unesc(words), { family: unesc(at('font-family') ?? ''), weight: at('font-weight') }, ls / size);
+}
 
 describe('getting a photo ready', () => {
   it('turns it upright, sizes it, drops hidden data, and finds its subject and colors', async () => {
@@ -54,10 +63,12 @@ describe('the layouts', () => {
         const s = look === 'type' ? { ...spec, photo: undefined, look } : spec;
         const svg = renderStudio(s, w, h);
         const q = qrCorner(w, h);
-        // Every line of words starts left of the QR corner, or ends above it.
+        // Every line of words starts left of the QR corner, or ends above it: measured exactly as it prints (its
+        // words are outlines from the label's own fonts, src/modules/print/fonts).
         for (const m of svg.matchAll(/<text x="([\d.]+)" y="([\d.]+)"[^>]*font-size="([\d.]+)"[^>]*>([^<]*)</g)) {
-          const x = Number(m[1]), y = Number(m[2]), size = Number(m[3]), chars = m[4]!.length;
-          const right = /text-anchor="middle"/.test(m[0]) ? x + (chars * size * 0.3) : x + chars * size * 0.5;
+          const x = Number(m[1]), y = Number(m[2]), size = Number(m[3]);
+          const width = printedWidth(m[0], m[4]!) * size;
+          const right = /text-anchor="middle"/.test(m[0]) ? x + width / 2 : x + width;
           const overlaps = right > q.x + 2 && y > q.y + 2;
           expect(overlaps, `${w}×${h} ${look}: “${m[4]}” runs into the QR corner`).toBe(false);
           expect(y, `${w}×${h} ${look}: “${m[4]}” falls off the bottom`).toBeLessThanOrEqual(h + 1);
@@ -72,7 +83,7 @@ describe('the layouts', () => {
     for (const m of svg.matchAll(/<text x="([\d.]+)" y="([\d.]+)"[^>]*font-size="([\d.]+)"[^>]*>([^<]*)</g)) {
       const x = Number(m[1]), y = Number(m[2]), size = Number(m[3]);
       if (/text-anchor="middle"/.test(m[0])) continue;
-      expect(x + m[4]!.length * size * 0.5 > 182 && y > 302, `“${m[4]}” runs into the code`).toBe(false);
+      expect(x + printedWidth(m[0], m[4]!) * size > 182 && y > 302, `“${m[4]}” runs into the code`).toBe(false);
     }
   });
 

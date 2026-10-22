@@ -346,3 +346,15 @@ Without keys, each uses a stand-in that says it's a stand-in, so everything can 
 
 Photos are kept once, shrunk to print size, and stripped of hidden data. Labels point at them; a label sent to a
 printer or machine carries its photos inside it, so it prints whole even offline.
+
+## Print files
+
+What a printer or machine gets (and `GET /v1/units/:id/label.svg`) follows the printer's design guide: the label with
+its bleed (8.125 × 4.125 in for the standard 8 × 4 in bottle; backgrounds run into the bleed), every picture inside the
+file, every word converted to outlines so no printer can swap a font, QR codes as vector squares, and each part its own
+element. The outlines come from fonts that ship in the code (`src/modules/print/fonts/files`); nothing has to be
+installed for them. Emoji and Chinese, Japanese or Korean letters in an ad, which those fonts don't have, are drawn as
+pictures at 600 dpi with the fonts of the machine making the file: the container image has none, so add a font package
+(for example `fonts-noto-color-emoji`, `fonts-noto-cjk`) to the image if ads use them, or they print blank (never a
+wrong letter). To change the fonts, run `python3 -I scripts/fonts/build-fonts.py <font folder>` (needs fontTools) and
+commit the result.

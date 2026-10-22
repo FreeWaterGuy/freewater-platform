@@ -836,6 +836,7 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 425 | `POST /v1/review/campaigns/:id/ai` | campaigns | yes | a person on the team, signed in (not a key); only paid ads; at most 60 messages an ad | OK (through the company's AI routing, metered, the governor first; the stand-in without AI; the AI can't approve, reject or refund) |
 | 426 | `POST /v1/ads/campaigns/:id/appeal` | campaigns | no | the ad's own advertiser; only an AI's final rejection, once, not after it was paid back | OK (back to a person, flagged: money held, nothing prints) |
 | 427 | `POST /v1/me/wallet/keep` | me | yes | the signed-in person; never a phone joined to someone else or another account's own key | OK (moves only what that phone holds, under the points lock, once; no points made; today's part within the account's daily limit) |
+| 428 | `GET /v1/console/bottles/:code` | admin | no | team only (no advertiser/machine key); only the company's own bottles (`bottle_codes` by company) | OK: turns a printed bottle code ("B-7F3K29", made from the bottle's random id, nothing personal) into the bottle; a code of another company's bottle is 404 |
 
 ---
 

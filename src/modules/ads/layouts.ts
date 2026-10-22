@@ -1,4 +1,5 @@
 import { SHARES, type Product, type Share, type SlotRect } from '../../core/types';
+import { labelGeometry } from '../print/geometry';
 
 // Dividing a label's ad area between ads: a small catalogue of tidy templates, never an ad-hoc mix.
 //
@@ -92,9 +93,10 @@ function fitTemplate(t: Template, w: number, h: number): { rects: Rect[]; shares
   return best!;
 }
 
-/** The ad area of a product's label, in inches. */
+/** The ad area of a product's label (its image-safe area, print/geometry.ts), in inches. */
 export function adArea(p: Product) {
-  return { w: p.label.widthIn - p.label.seamIn - p.label.panelWidthIn, h: p.label.heightIn };
+  const a = labelGeometry(p.label).ad;
+  return { w: a.w, h: a.h };
 }
 
 const cache = new Map<string, Layout[]>();

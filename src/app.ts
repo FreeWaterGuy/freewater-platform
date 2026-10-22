@@ -1,3 +1,4 @@
+import { printReady } from './modules/print/renderer';
 import type { SqlClient } from './db/client';
 import { migrate } from './db/migrations';
 import { createApiKey, loadState, saveCatalog, SqlPersistence, type Scope } from './db/store';
@@ -466,7 +467,8 @@ export async function createApp(opts: AppOptions) {
     return svg.replace(STUDIO_IMAGE, (m, id, rest) => { const d = cache.get(keyOf(id)); return d ? `<image href="${d}"${rest}/>` : ''; });
   };
   const printCopies = photoCache(256 * 1024 * 1024), previewCopies = photoCache(64 * 1024 * 1024);
-  platform.forPrint = (svg) => fillPhotos(svg, printCopies, null);
+  // Print files: photos inside, every word an outline, the bleed showing (print/renderer.ts printReady).
+  platform.forPrint = async (svg) => printReady(await fillPhotos(svg, printCopies, null));
   platform.forView = (svg) => fillPhotos(svg, previewCopies, 900).catch(() => svg);
   ads.inlineAssets = (svg, maxSide) => (maxSide ? fillPhotos(svg, previewCopies, maxSide).catch(() => svg) : platform.forView(svg));
   ads.boxProducts = () => [...state.boxes];
