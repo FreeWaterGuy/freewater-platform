@@ -11,8 +11,8 @@ import { houseAd } from '../fillers/house';
  * 1. Keep only campaigns this company allows here (category rules, targeting, budget left, pacing, frequency caps).
  * 2. Run the auction (modules/ads/auction): adjusted bids plus expected engagement, guaranteed buys first.
  * 3. Pick up to the most ads a bottle may carry, never two from the same competitor group.
- * 4. Each winner pays the second price. Try every layout and keep the one that earns the most; leftover pieces get
- *    the house ad.
+ * 4. Each winner pays the second price. Try every tidy template (layouts.ts) and keep the one that earns the most
+ *    among those carrying the ad first in line; leftover pieces get fillers or the house ad, in their own cells.
  */
 export const freewaterAdEngine: AdEngine = {
   name: 'freewater-ads',
@@ -57,21 +57,25 @@ export const freewaterAdEngine: AdEngine = {
 
     // Try each layout, and when a pack asks for variety, a few different line-ups of the same campaigns.
     // Keep the best-earning label that doesn't repeat one already in this pack.
-    type Option = { layout: Share[]; placements: Placement[]; revenue: number; pieces: number; aspect: number };
+    type Option = { layout: Share[]; placements: Placement[]; revenue: number; pieces: number; aspect: number; lead: boolean };
     let best: Option | null = null;
     let bestNew: Option | null = null;
     // With route pieces on the bottle, equal earnings go to the label with fewer, bigger pieces (a tenth bought on its
     // own shares the label with a few large fillers, not nine tiny ones), then the squarer one.
-    const better = (o: Option, than: Option | null) => !than || o.revenue > than.revenue || (fixed.length > 0 && o.revenue === than.revenue && (o.pieces < than.pieces || (o.pieces === than.pieces && o.aspect < than.aspect)));
+    // The ad first in line (whose turn it is at flat prices, or the auction's winner) goes on the label whenever a
+    // template can hold it: labels are cut only into tidy templates (layouts.ts), and without this an ad whose size
+    // mixes into fewer of them (a quarter beside a third's sixths) could lose every label to the same better-earning mix.
+    const better = (o: Option, than: Option | null) => !than || (o.lead !== than.lead ? o.lead : o.revenue > than.revenue || (fixed.length > 0 && o.revenue === than.revenue && (o.pieces < than.pieces || (o.pieces === than.pieces && o.aspect < than.aspect))));
     const layouts = layoutsFor(product, { maxAds: company.adRules.maxAdsPerUnit, minAds: company.adRules.minAdsPerUnit });
-    const lineups = req.avoidSignatures ? [chosen, ...Array.from({ length: 6 }, () => shuffle(chosen, random))] : [chosen];
-    for (const pool of lineups) {
+    const lineups = req.avoidSignatures ? [chosen, ...Array.from({ length: 30 }, () => shuffle(chosen, random))] : [chosen];
+    for (const [k, pool] of lineups.entries()) {
       for (const layout of shuffle(layouts, random)) {
         const pinned = fixed.length ? pin(layout, fixed) : new Map<number, Placement>();
         if (!pinned) continue;
-        const placements = assign(layout, pool, house, company, factor, why, priceOf, labelPrice, pinned);
+        const placements = assign(layout, pool, house, company, factor, why, priceOf, labelPrice, pinned, k > 0 ? random : undefined);
         if (!placements) continue;
-        const option = { layout: layout.shares, placements, revenue: placements.reduce((s, p) => s + p.priceCents, 0), pieces: layout.shares.length, aspect: layout.worstAspect };
+        const lead = !pool[0] || placements.some((p) => p.campaignId === pool[0]!.id);
+        const option = { layout: layout.shares, placements, revenue: placements.reduce((s, p) => s + p.priceCents, 0), pieces: layout.shares.length, aspect: layout.worstAspect, lead };
         if (better(option, best)) best = option;
         if (req.avoidSignatures && !req.avoidSignatures.has(labelSignature(placements)) && better(option, bestNew)) bestNew = option;
       }
@@ -194,8 +198,9 @@ function pin(layout: Layout, fixed: Fixed[]): Map<number, Placement> | null {
 }
 
 /** Fill the biggest slots first with the best-paying campaign that has artwork that size. */
-function assign(layout: Layout, chosen: Campaign[], house: Campaign | undefined, company: CompanyConfig, factor = 1, why = new Map<string, string[]>(), priceOf?: (c: Campaign, share: Share) => number, auction?: Map<string, { paid: number; bidder: Bidder }>, pinned = new Map<number, Placement>()): Placement[] | null {
-  const order = layout.shares.map((share, slotIndex) => ({ share, slotIndex })).sort((a, b) => a.share - b.share);
+function assign(layout: Layout, chosen: Campaign[], house: Campaign | undefined, company: CompanyConfig, factor = 1, why = new Map<string, string[]>(), priceOf?: (c: Campaign, share: Share) => number, auction?: Map<string, { paid: number; bidder: Bidder }>, pinned = new Map<number, Placement>(), varied?: () => number): Placement[] | null {
+  // Biggest pieces first; for a pack's variety, the pieces of one size in a varied order (same earnings, a new label).
+  const order = layout.shares.map((share, slotIndex) => ({ share, slotIndex, r: varied ? varied() : slotIndex })).sort((a, b) => a.share - b.share || a.r - b.r);
   const pool = [...chosen];
   const out: Placement[] = [...pinned.values()];
   for (const { share, slotIndex } of order) {

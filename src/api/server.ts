@@ -269,7 +269,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const rules = await app.data.rulesFor(companyId, [viewer], place);
     const playable = rules.rewards && (await app.data.ageOk(companyId, [viewer])) !== false;
     const privacy = { askFirst: rules.askFirst, region: rules.region, minimumAge: rules.minimumAge, rewards: rules.rewards, doNotSell: await app.data.doesNotSell(companyId, [viewer]), why: target.kind === 'slot' ? `/v1/public/why/${encodeURIComponent(target.unitId)}/${target.slot}` : null };
-    return { body: { ...opened, companyId, lottery: game && playable ? app.lottery.publicInfo(game) : null, privacy, ...(environment ? { environment } : {}) }, headers: { 'cache-control': 'private, no-store' } }; // one person's page: their own coupon, key and choices
+    // What's switched off here (this server's areas and the company's own switches), so the page hides its doors.
+    const featuresOff = [...new Set([...app.features.view().off, ...app.companyFeatures.offIds(companyId)])];
+    return { body: { ...opened, companyId, lottery: game && playable ? app.lottery.publicInfo(game) : null, privacy, featuresOff, ...(environment ? { environment } : {}) }, headers: { 'cache-control': 'private, no-store' } }; // one person's page: their own coupon, key and choices
   };
   route({ method: 'GET', url: '/v1/public/experience/:unitId/:slot', scope: 'public', summary: 'The page a bottle slot opens, as blocks. Opening it is free; the page then reports the scan once it has shown.', handler: async (req) => {
     const { unitId, slot } = req.params as any;
@@ -483,7 +485,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     if (extra) throw new ApiError(422, 'campaign_invalid', extra);
     platform.campaigns.set(c.id, c);
     platform.persist.campaign(c);
-    return { status: 201, body: campaignView(c) };
+    // The QR code prints over the bottom-right corner of each piece: words of the artwork there are said, not refused.
+    const warnings = await app.ads.artworkWarnings(company.id, b.svg, c.sizes);
+    return { status: 201, body: { ...campaignView(c), ...(warnings.length ? { warnings } : {}) } };
   } });
 
   route({ method: 'PATCH', url: '/v1/campaigns/:id', scope: 'campaigns', summary: 'Pause or resume a campaign, or change what its QR opens. Only a company key (content review) turns a campaign on; an advertiser changing what people see sends it back to review.', body: { ...obj({ active: S.bool, experienceId: S.str, experienceConfig: { type: 'object' }, theme: themeProp }), minProperties: 1 }, handler: async (req, key) => {

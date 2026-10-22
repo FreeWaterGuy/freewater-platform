@@ -184,16 +184,24 @@ describe('quote, pay, review, print: only paid bottles', () => {
     expect(r.payments_match_processor!.status).toBe('ok');
   });
 
-  it('mixed sizes on shared labels: a half, a quarter and two eighths, each at its own paid price', async () => {
-    const half = await newAd(app, 2), quarter = await newAd(app, 4), e1 = await newAd(app, 8), e2 = await newAd(app, 8);
-    for (const c of [half, quarter, e1, e2]) await payAndApprove(app, c, 2);
-    onlyThese(app, [half, quarter, e1, e2].map((c) => c.id));
+  // Labels are cut only into tidy templates (src/modules/ads/layouts.ts): a half beside two quarters, or two quarters
+  // above four eighths; never a half, a quarter and two eighths, which mixes three sizes.
+  it('mixed sizes on shared labels: a half and two quarters, then two quarters and two eighths, each at its own paid price', async () => {
+    const half = await newAd(app, 2), quarter = await newAd(app, 4), q2 = await newAd(app, 4), e1 = await newAd(app, 8), e2 = await newAd(app, 8);
+    for (const c of [half, quarter, q2, e1, e2]) await payAndApprove(app, c, 2);
+    onlyThese(app, [half, quarter, q2].map((c) => c.id));
     const u = (await print(app)).unit;
+    expect(u.layout).toEqual([2, 4, 4]);
     const by = new Map(u.placements.filter((p) => !p.isHouse).map((p) => [p.campaignId, p]));
     expect(by.get(half.id)).toMatchObject({ share: 2, priceCents: 65, prepaid: true });
     expect(by.get(quarter.id)).toMatchObject({ share: 4, priceCents: 42, prepaid: true });
-    expect(by.get(e1.id)).toMatchObject({ share: 8, priceCents: 24 });
-    expect(by.get(e2.id)).toMatchObject({ share: 8, priceCents: 24 });
+    expect(by.get(q2.id)).toMatchObject({ share: 4, priceCents: 42, prepaid: true });
+    onlyThese(app, [quarter, q2, e1, e2].map((c) => c.id));
+    const v = (await print(app)).unit;
+    expect([...v.layout].sort((a, b) => a - b).slice(0, 2)).toEqual([4, 4]);
+    const by2 = new Map(v.placements.filter((p) => !p.isHouse).map((p) => [p.campaignId, p]));
+    expect(by2.get(e1.id)).toMatchObject({ share: 8, priceCents: 24 });
+    expect(by2.get(e2.id)).toMatchObject({ share: 8, priceCents: 24 });
     await app.persistence.flush();
     expect(balance(app, `prepaid:advertiser:${half.advertiserId}`)).toBe(65);
     expect((await recon(app)).prepaid_balances!.status).toBe('ok');

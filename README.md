@@ -252,8 +252,8 @@ the scan page and AR). Switches: *Ads → Buying on delivery routes* (docs/SWITC
   boxes that week) or one box side (`route_spots`), in one transaction that locks each house and week first and works
   the quote again against what is committed then: of two payments for the last space the second is charged nothing
   and told the new price. The database refuses more than a whole label (or ten pieces) on one bottle whatever the
-  code decided. Small pieces share labels: each goes on the fullest bottle it still fits, only in mixes some layout
-  of the bottle can print, never an ad twice on a bottle, never two competitors. A declined card lets the space go.
+  code decided. Small pieces share labels: each goes on the fullest bottle it still fits, only in mixes some tidy
+  template of the bottle holds, never an ad twice on a bottle, never two competitors. A declined card lets the space go.
 - **Printed exactly once, at the right house.** When the night is planned, each bottle of a house's pack carries the
   pieces reserved for it, placed first (the label with the fewest, biggest pieces around them), each claimed open →
   held in the database before the label is drawn and placed when it prints; the rest of the label gets other paid
@@ -359,7 +359,9 @@ the scan page and AR). Switches: *Ads → Buying on delivery routes* (docs/SWITC
 
 ## Prices, square pieces, targeting and giving
 
-**Pieces as square as possible (`src/modules/ads/layouts.ts`).** An ad gets a share of the label: the whole label, 1/2, 1/3, 1/4, 1/6, 1/8 or 1/10. For every mix of sizes that fills the label (up to 10 ads), the label is cut in two again and again along whichever side gives the squarest pieces. On the 16 oz bottle quarters are 2 × 2, sixths 3 × 2, eighths 4 × 2, and a half with two quarters is a column beside two stacked pieces. Pieces too thin (more than 2.6 times as long as wide) or too small for a readable QR code are never used. Products say which sizes they offer; the console shows how each one is cut.
+**Tidy label templates (`src/modules/ads/layouts.ts`).** An ad gets a share of the label: the whole label, 1/2, 1/3, 1/4, 1/6, 1/8 or 1/10. A label is always one of a small, fixed catalogue of templates, never an ad-hoc mix: a **uniform grid** (whole; halves; thirds; quarters 2 × 2; sixths 3 × 2; eighths 4 × 2; tenths 5 × 2 on the 16 oz bottle), or a **nested grid**, where a uniform parent grid (halves, thirds or quarters) has its last cells each cut into the same smaller grid: a half + 2 quarters, a half + 3 sixths, a half + 4 eighths, a half + 5 tenths, 2 thirds + 2 sixths, a third + 4 sixths, 3 quarters + 2 eighths, 2 quarters + 4 eighths, a quarter + 6 eighths. So every piece sits on the grid lines, pieces of one size on a label have one shape, and the bigger pieces come first (left or top). Each grid is turned whichever way gives the squarest pieces on that product; a template is offered only if every piece is no more than 2.6 times as long as wide and big enough for a readable QR code. The engine chooses among these templates only (the one that earns the most, carrying the ad whose turn it is), leftover cells get fillers or the house ad, and route buys sell a piece on a bottle only if a template holds all of that bottle's pieces (a third and a quarter never share a bottle). Prices by share are unchanged. `npm run demo:label-sheet -- <folder>` draws every template of every product, filled with hard sample ads, as contact sheets; the console shows how each product is cut.
+
+**Words on the label (`src/modules/creative/text.ts`).** The fonts an ad names aren't embedded, so a printer or phone may fall back to a wider one (Oswald came out as Arial, and "every" ran off its piece). Every template that draws words (the studio, the poster used by the assistant, fillers, news and house ads, the keepsake) measures them letter by letter in the widest of the common fallback fonts, keeps them inside the piece, off the QR code's corner, off anything else printed over the piece (a box's stop code) and off the logo, drawing or offer badge (each has its own box), and never smaller than 0.08 in. When they don't fit they are wrapped, long words broken with a hyphen, then the least important part left out (the drawing, the small line above the headline, the offer, the detail line), never run off. Uploaded artwork (the advertiser's own design) prints as drawn with the code over its corner; words of theirs there are pointed out on upload and on the review page. `test/label-visual.test.ts` draws every hard sample ad at every piece of every template, product and box side, in two fonts, and finds the words in pixels.
 
 **FreeWater's prices** (each company sets its own; white-label licensees keep theirs): whole label $1.00, 1/2 65¢, 1/3 51¢, 1/4 42¢, 1/6 33¢, 1/8 24¢, 1/10 20¢ per bottle, times the product's price factor (the 25 oz bottle is 1.25×). For the pilot these are flat and all-inclusive: AR, video and scans are included at every size, and every size gets the same tech.
 
@@ -631,7 +633,8 @@ The server keeps working state in memory and writes through to the database, so 
 | `src/modules/ai/personalizer.ts` | AI personalization: choosing versions and writing greetings |
 | `src/modules/handoff` | Proof that targeted bottles reached the person they were printed for |
 | `src/modules/products` | Product checks: any drink, any size |
-| `src/modules/ads/layouts.ts`, `targeting.ts` | Cutting labels into near-square pieces; the targeting premium on engagement |
+| `src/modules/ads/layouts.ts`, `targeting.ts` | The tidy label templates; the targeting premium on engagement |
+| `src/modules/creative/text.ts` | Measuring and placing words on a label: inside the piece, off the code, logos and badges |
 | `src/modules/models/usdz.ts` | Our own GLB to USDZ converter, for iPhone AR with a buy button |
 | `src/modules/fleet` | Model 6 machines: jobs, heartbeats, problems, commands, labels kept for offline |
 | `src/machine` | The machine software: agent, screen server, memory, hardware contracts and the simulated Model 6 |

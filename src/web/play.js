@@ -17,6 +17,8 @@
     for (const kid of kids.flat()) if (kid != null && kid !== false) el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
     return el;
   };
+  /** "1 bottle", "2 bottles": a count with its noun, singular for exactly one. */
+  const plural = (n, one, many) => `${n} ${String(n).replace(/[^0-9.-]/g, '') === '1' ? one : many}`;
   const store = {
     get(k) { try { return localStorage.getItem(k); } catch { return null; } },
     set(k, v) { try { localStorage.setItem(k, v); } catch {} },
@@ -51,7 +53,7 @@
     const notice = h('details', { class: 'notice' }, h('summary', { text: 'What you give and what you get' }), h('p', { text: st.notice }), h('p', { text: st.use }));
     if (st.needs === 'not_available_here' || st.needs === 'off') return show(h('h1', { text: 'Play for points' }), h('p', { class: 'lead', text: 'The games aren’t available where you are. Everything else on your bottle still works.' }));
     if (st.needs === 'too_young') return show(h('h1', { text: 'Play for points' }), h('p', { class: 'lead', text: `The games are for people ${st.minimumAge} and up. Everything else on your bottle still works.` }));
-    const intro = [h('h1', { text: 'Play for points' }), h('p', { class: 'lead', text: `Pick what you’d really choose. Every answer earns ${perRound} points, whichever you pick. Nothing else is locked: AR, videos and offers work either way.` })];
+    const intro = [h('h1', { text: 'Play for points' }), h('p', { class: 'lead', text: `Pick what you’d really choose. Every answer earns ${plural(perRound, 'point', 'points')}, whichever you pick. Nothing else is locked: AR, videos and offers work either way.` })];
     if (st.needs === 'age') {
       const input = h('input', { type: 'date', required: true, max: new Date().toISOString().slice(0, 10), 'aria-label': 'Your birthday' });
       const go = h('button', { type: 'button', class: 'btn', disabled: true, text: 'Continue' });
@@ -180,7 +182,7 @@
 
   async function stop() {
     try { await api('POST', `${base}/leave`, { viewerKey }); } catch {}
-    show(h('h1', { text: 'Thanks for playing' }), h('p', { class: 'lead', text: `You have ${balance.toLocaleString('en-US')} points. Nothing more is kept from the games unless you play again.` }), h('button', { type: 'button', class: 'btn ghost', text: 'Play again', onclick: start }));
+    show(h('h1', { text: 'Thanks for playing' }), h('p', { class: 'lead', text: `You have ${plural(balance.toLocaleString('en-US'), 'point', 'points')}. Nothing more is kept from the games unless you play again.` }), h('button', { type: 'button', class: 'btn ghost', text: 'Play again', onclick: start }));
   }
 
   // ---------- feedback, the wallet, the prompt box ----------
@@ -224,6 +226,8 @@
         w.credit.enabled || w.credit.balanceCents ? h('div', { class: 'wallet-row' }, 'Credit', h('b', { text: `$${(w.credit.balanceCents / 100).toFixed(2)}` })) : null,
         w.coupons.length ? h('div', { class: 'wallet-row' }, 'Coupons', h('b', { text: String(w.coupons.length) })) : null,
         h('p', { class: 'notice', text: w.points.terms }),
+        // Play keeps points with this phone; the app's wallet moves them into an account, when the person chooses.
+        h('p', { class: 'msg' }, 'These points are kept on this phone. ', h('a', { href: '/app/wallet', text: 'Open your wallet' }), ' to keep them in your account.'),
         await offersBlock());
     } catch (e) { toast(e.message); }
   }
@@ -234,7 +238,7 @@
     if (!o.offers.length && !o.mine.length) return null;
     const box = h('div', { class: 'offers' }, h('h3', { text: 'Offers' }));
     for (const of of o.offers) {
-      const btn = h('button', { type: 'button', class: 'btn', text: of.pointsCost ? `Claim for ${of.pointsCost} points` : 'Claim' });
+      const btn = h('button', { type: 'button', class: 'btn', text: of.pointsCost ? `Claim for ${plural(of.pointsCost, 'point', 'points')}` : 'Claim' });
       btn.addEventListener('click', async () => {
         btn.disabled = true;
         try { const r = await api('POST', `/v1/public/offers/${encodeURIComponent(companyId)}/${of.id}/claim`, { viewerKey }); balance -= r.pointsSpent; showPoints(true); btn.textContent = 'Claimed'; toast(r.how); }

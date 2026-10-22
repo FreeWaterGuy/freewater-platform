@@ -83,3 +83,28 @@ async function picturePixelsProblem(bytes: Uint8Array): Promise<string | null> {
   const over = await overPixelLimit(bytes);
   return over ? `a picture in it is ${pixelsText(over)}; the most is 40 megapixels (like 8,000 × 5,000), so make it smaller` : null;
 }
+
+/**
+ * Uploaded artwork is the advertiser's own design, drawn as it is: the QR code prints over its corner of each piece
+ * (that corner is reserved for the code). Where the artwork has words (its <text>) under the code at some shape it
+ * prints at, says so in plain words, for the review page and the upload's reply. Words drawn as outlines can't be told
+ * from pictures, so they aren't found.
+ */
+export async function wordsUnderCode(markup: string, shapes: { where: string; w: number; h: number; qr: { x: number; y: number; size: number } }[]): Promise<string[]> {
+  const sharp = (await import('sharp')).default;
+  let creative: Creative;
+  try { creative = svgCreative(markup); } catch { return []; }
+  const out: string[] = [];
+  for (const s of shapes) {
+    // Only the words, in black: every other shape unpainted, pictures hidden.
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.ceil(s.w)}" height="${Math.ceil(s.h)}" viewBox="0 0 ${s.w} ${s.h}"><style>*{fill:none !important;stroke:none !important}text,tspan,textPath{fill:#000 !important;opacity:1 !important}image{display:none !important}</style><rect width="100%" height="100%" style="fill:#fff !important"/>${creative.svg(s.w, s.h)}</svg>`;
+    let dark = 0;
+    try {
+      const { data, info } = await sharp(Buffer.from(svg)).removeAlpha().greyscale().raw().toBuffer({ resolveWithObject: true });
+      const x0 = Math.max(0, Math.floor(s.qr.x)), y0 = Math.max(0, Math.floor(s.qr.y));
+      for (let y = y0; y < Math.min(info.height, s.qr.y + s.qr.size); y++) for (let x = x0; x < Math.min(info.width, s.qr.x + s.qr.size); x++) if (data[y * info.width + x]! < 140) dark++;
+    } catch { continue; }
+    if (dark > 6) out.push(s.where);
+  }
+  return out.length ? [`Words in this artwork sit where the QR code prints, bottom right (${out.slice(0, 3).join('; ')}${out.length > 3 ? ` and ${out.length - 3} more` : ''}): the code will cover them. Move them, or leave that corner plain.`] : [];
+}

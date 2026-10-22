@@ -586,7 +586,7 @@ export class HouseService {
       const fresh = ageDays < days;
       await this.db.query(`update houses set status = 'opted_out', updated_at = now() where id = $1`, [id]);
       await this.event(companyId, id, 'opted_out', userId, fresh ? `new claim (${Math.max(0, Math.floor(ageDays))} day${Math.floor(ageDays) === 1 ? '' : 's'} old)` : null);
-      if (fresh) this.alert?.(`house-new-claim-stop:${id}`, 'Deliveries stopped by a new claim', `${r.address}: stopped in the app by someone who claimed the house ${Math.floor(ageDays)} day(s) ago. It’s stopped (as asked); if it looks wrong, check the house’s history and claims.`);
+      if (fresh) this.alert?.(`house-new-claim-stop:${id}`, 'Deliveries stopped by a new claim', `${r.address}: stopped in the app by someone who claimed the house ${Math.floor(ageDays) === 0 ? 'today' : Math.floor(ageDays) === 1 ? '1 day ago' : `${Math.floor(ageDays)} days ago`}. It’s stopped (as asked); if it looks wrong, check the house’s history and claims.`);
       await this.onStopped?.(companyId, id);
     } else if (input.action === 'restart') {
       // A long pause doesn't make the house "overdue": it's next due from today.

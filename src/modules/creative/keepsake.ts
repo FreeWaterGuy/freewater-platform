@@ -1,3 +1,5 @@
+import { balance, breakLong } from './text';
+
 // The template for bottles people design for themselves: birthdays, weddings, teams, thank-yous.
 // The design assistant fills in a spec; this draws it. "{name}" in the words becomes each bottle's own name.
 
@@ -32,12 +34,6 @@ export function checkKeepsake(s: any): string | null {
 
 const esc = (s: string) => s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 const fill = (s: string, name?: string) => s.replace(/\{name\}/g, name ?? 'Name');
-function wrap(s: string, max: number): string[] {
-  const out: string[] = []; let cur = '';
-  for (const w of s.split(/\s+/).filter(Boolean)) { if ((cur + ' ' + w).trim().length > max && cur) { out.push(cur); cur = w; } else cur = (cur + ' ' + w).trim(); }
-  if (cur) out.push(cur);
-  return out;
-}
 function rng(seed: string) {
   let h = 2166136261;
   for (const c of seed) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
@@ -87,11 +83,14 @@ export function renderKeepsake(s: KeepsakeSpec, w: number, h: number, name?: str
     ty0 = h * 0.45;
   }
   // The biggest size at which the words fit.
-  let size = 64, lines: string[] = [headline];
-  for (; size > 18; size -= 2) { lines = wrap(headline, Math.max(5, Math.floor(tw / (size * 0.55)))); if (lines.length <= 3 && Math.max(...lines.map((l) => l.length)) * size * 0.55 <= tw) break; }
+  // Measured in the widest font a printer may fall back to (./text.ts); a word too long for a line is broken.
+  let size = 64, lines: string[] | null = null;
+  for (; size > 18 && !lines; size -= 2) lines = balance(headline, tw / size, 3);
+  if (lines) size += 2;
+  else lines = balance(breakLong(headline, tw / size), tw / size, 99) ?? [headline];
   // A name on its own is set big, so each person finds their bottle.
   const subSize = s.sub?.trim() === '{name}' ? Math.min(40, size * 0.75) : 21;
-  const subLines = sub ? wrap(sub, Math.floor(tw / (subSize * 0.55))).slice(0, 3) : [];
+  const subLines = sub ? (balance(breakLong(sub, tw / subSize), tw / subSize, 99) ?? [sub]).slice(0, 3) : [];
   const block = lines.length * size * 1.08 + (subLines.length ? 14 + subLines.length * subSize * 1.25 : 0);
   let y = s.layout === 'photo-full' ? h - pad - block + size * 0.85 : ty0 + (ty1 - ty0 - block) / 2 + size * 0.85;
   if (s.layout !== 'photo-full') parts.push(decoration(s.decoration, w, h, s.colors, headline, { x: tx, y: y - size, w: tw, h: block + 10 }));

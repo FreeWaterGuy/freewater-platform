@@ -38,7 +38,7 @@ describe('FreeWater’s prices', () => {
     expect(priceFor(bid(100), freewater, 2, 1.25)).toBe(81); // a bigger product costs more
   });
 
-  it('cuts the label into pieces as close to square as possible', () => {
+  it('cuts the label into tidy grids, each turned the squarest way', () => {
     const layouts = layoutsFor(bottle16oz, { maxAds: 10 });
     const grid = (n: number) => { const l = layouts.find((x) => x.shares.length === n && x.shares.every((s) => s === n))!; return { cols: new Set(l.rects.map((r) => r.x)).size, rows: new Set(l.rects.map((r) => r.y)).size, worst: l.worstAspect }; };
     expect(grid(4)).toMatchObject({ cols: 2, rows: 2 });

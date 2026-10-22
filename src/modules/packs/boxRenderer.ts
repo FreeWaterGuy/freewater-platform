@@ -53,7 +53,8 @@ export function renderBox(input: {
     const c = campaigns.get(f.campaignId);
     if (!c) throw new Error(`Box face ${f.face} points at unknown campaign ${f.campaignId}`);
     const qr = boxFaceQr(r.w, r.h), q = qr.size;
-    parts.push(`<svg x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" viewBox="0 0 ${r.w} ${r.h}" overflow="hidden">${c.creative.svg(r.w, r.h, { qr })}</svg>`);
+    // The artwork is told where its code goes and where the drivers' stop code is drawn over it, to keep words clear.
+    parts.push(`<svg x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" viewBox="0 0 ${r.w} ${r.h}" overflow="hidden">${c.creative.svg(r.w, r.h, { qr, reserved: stopCodeBox(f.face, r.w) })}</svg>`);
     const smart = input.codes ? input.codes.box(company, packId, f.face) : `${base}/b/${packId}/${f.face}`;
     const url = qrMode(company, c) === 'static' ? staticTarget(c, input.codes ? smart : null) : smart;
     faceUrls[f.face] = url;
@@ -72,9 +73,9 @@ export function renderBox(input: {
   }
 
   // Stop code for drivers, small, in the corner of the front and the top.
-  for (const face of ['front', 'top'] as BoxFace[]) {
+  for (const face of STOP_FACES) {
     const r = rects[face];
-    const cx0 = r.x + r.w - 64, cy0 = r.y + 6; // top-right corner, clear of the brand name and the QR
+    const s = stopCodeBox(face, r.w)[0]!, cx0 = r.x + s.x, cy0 = r.y + s.y; // top-right corner; the ad's words keep out of it
     parts.push(`<rect x="${cx0}" y="${cy0}" width="58" height="32" rx="5" fill="#ffffff" stroke="#000000" stroke-width="1"/><text x="${cx0 + 29}" y="${cy0 + 14}" text-anchor="middle" font-family="Arial, sans-serif" font-weight="700" font-size="11" fill="#000000">${code}</text><text x="${cx0 + 29}" y="${cy0 + 26}" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#000000">#${boxNumber(packId)}</text>`);
   }
 
@@ -84,6 +85,12 @@ export function renderBox(input: {
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${(totalW / PX).toFixed(2)}in" height="${(totalH / PX).toFixed(2)}in" viewBox="0 0 ${totalW} ${totalH}">${parts.join('')}${folds.join('')}</svg>`;
   return { packId, svg, widthIn: totalW / PX, heightIn: totalH / PX, faceUrls, packUrl };
+}
+
+const STOP_FACES: BoxFace[] = ['front', 'top'];
+/** Where the drivers' stop code is drawn over a box side (its own coordinates), or nothing on sides without one. */
+export function stopCodeBox(face: BoxFace, w: number): { x: number; y: number; w: number; h: number }[] {
+  return STOP_FACES.includes(face) ? [{ x: w - 64, y: 6, w: 58, h: 32 }] : [];
 }
 
 /** Where an ad's QR code goes on a box side (w by h drawing units, 40 to the inch). The box renderer and previews use this. */

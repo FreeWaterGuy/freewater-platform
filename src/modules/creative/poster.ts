@@ -1,4 +1,5 @@
-import type { Creative } from '../../core/types';
+import type { Creative, CreativeContext } from '../../core/types';
+import { BASELINE, blockHeight, fitOrCut, fitText, qrBox, reservedBoxes, topRightStart, type Box, type Fitted } from './text';
 
 // The artwork template the AI assistant designs with. The assistant picks words, colors, an icon or a photo;
 // this draws them well at every size, from a thin 1/6 slot to a full wrap to the side of a box.
@@ -44,15 +45,6 @@ export const contrast = (a: string, b: string) => { const [x, y] = [lum(a), lum(
 export const readableOn = (bg: string) => (contrast(bg, '#FFFFFF') >= contrast(bg, '#0B0B0B') ? '#FFFFFF' : '#0B0B0B');
 
 const esc = (s: string) => s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
-function wrap(s: string, max: number): string[] {
-  const out: string[] = [];
-  let cur = '';
-  for (const w of s.split(/\s+/).filter(Boolean)) {
-    if ((cur + ' ' + w).trim().length > max && cur) { out.push(cur); cur = w; } else cur = (cur + ' ' + w).trim();
-  }
-  if (cur) out.push(cur);
-  return out;
-}
 
 /** Simple icons drawn in a 100×100 box in the accent color. */
 export function iconDrawing(icon: PosterIcon, color: string, ink: string): string { return iconSvg(icon, color, ink); }
@@ -78,73 +70,103 @@ function iconSvg(icon: PosterIcon, color: string, ink: string): string {
   }
 }
 
-/** Draw the poster at any slot size. */
-export function renderPoster(s: PosterSpec, w: number, h: number): string {
+/** What a poster leaves out when the headline needs the room, least important first. */
+const POSTER_DROPS = [{}, { icon: true }, { icon: true, sub: true }] as const;
+
+/**
+ * Draw the poster at any slot size, with the QR code where the renderer says it prints (`ctx`). Words are measured in
+ * the widest likely font (./text.ts) and kept inside the piece, off the code's corner, and off the picture, the
+ * drawing and the logo, each of which has a box of its own; when they don't fit, the drawing is left out, then the
+ * small line, and the headline is never cut short while there's room for it.
+ */
+export function renderPoster(s: PosterSpec, w: number, h: number, ctx?: CreativeContext): string {
+  let best: { svg: string; score: number } | null = null;
+  for (const d of POSTER_DROPS) {
+    const r = drawPoster(s, w, h, ctx, d);
+    if (r.head && r.head.size >= r.good) return r.svg;
+    const score = r.head ? r.head.size : -1;
+    if (!best || score > best.score || (score === -1 && best.score === -1)) best = { svg: r.svg, score };
+  }
+  return best!.svg;
+}
+
+function drawPoster(s: PosterSpec, w: number, h: number, ctx: CreativeContext | undefined, d: { icon?: boolean; sub?: boolean }): { svg: string; head: Fitted | null; good: number } {
   const narrow = w < 160;
   const wide = w > h * 0.95; // box faces and full wraps: words on the left, picture on the right
   const font = posterFonts[s.font ?? 'rounded'];
-  const pad = narrow ? 10 : Math.min(26, w * 0.06);
-  const textW = wide ? w * 0.56 : w;
+  const pad = narrow ? 10 : Math.max(10, Math.min(26, w * 0.06));
   const photo = s.image?.role === 'photo' ? s.image.dataUrl : null;
   const logo = s.image?.role === 'logo' ? s.image.dataUrl : null;
-  const parts: string[] = [`<rect width="${w}" height="${h}" fill="${s.colors.bg}"/>`];
+  const qr = qrBox(w, h, ctx);
+  const avoid: Box[] = [qr, ...reservedBoxes(ctx)];
+  const trTop = topRightStart(w, pad, ctx);
+  const parts: string[] = [`<rect width="${f1(w)}" height="${f1(h)}" fill="${s.colors.bg}"/>`];
+  const right = wide ? (photo ? w * 0.48 - pad * 0.5 : w - pad) : w - pad;
+  let top = pad;
 
   if (photo) {
     const px = wide ? w * 0.48 : 0, pw = wide ? w * 0.52 : w, ph = wide ? h : h * 0.52;
-    parts.push(`<image href="${photo}" x="${px.toFixed(1)}" y="0" width="${pw.toFixed(1)}" height="${ph.toFixed(1)}" preserveAspectRatio="xMidYMid slice"/>`);
-    if (!wide) parts.push(`<rect y="${(ph - 2).toFixed(1)}" width="${w}" height="${(h - ph + 2).toFixed(1)}" fill="${s.colors.bg}"/>`);
-  } else if (s.icon) {
-    const size = wide ? Math.min(h * 0.6, w * 0.34) : Math.min(w * (narrow ? 0.72 : 0.62), h * 0.3, 150);
-    const ix = wide ? w * 0.62 + (w * 0.38 - size) / 2 : (w - size) / 2;
-    const iy = wide ? (h - size) / 2 : h * 0.17 + (narrow ? 22 : 18);
-    parts.push(`<g transform="translate(${ix.toFixed(1)} ${iy.toFixed(1)}) scale(${(size / 100).toFixed(3)})">${iconSvg(s.icon, s.colors.accent, s.colors.bg)}</g>`);
+    parts.push(`<image href="${photo}" x="${f1(px)}" y="0" width="${f1(pw)}" height="${f1(ph)}" preserveAspectRatio="xMidYMid slice"/>`);
+    if (!wide) top = ph + pad * 0.6;
   }
 
-  // The business name, or their logo, at the top.
-  const avail = textW - pad * 2;
-  const brandLines = narrow && s.brand.length * 11 * 0.6 > avail ? wrap(s.brand, Math.max(6, Math.floor(avail / (11 * 0.6)))).slice(0, 3) : [s.brand];
-  const brandLongest = Math.max(...brandLines.map((l) => l.length));
-  const brandSize = Math.max(narrow ? 9 : 11, Math.min(narrow ? 16 : 30, avail / Math.max(4, brandLongest * 0.6)));
-  let top = pad;
+  // A drawing, when there's no photo: beside the words on a wide piece (above the code), above them on a tall one.
+  const drawing = (box: Box) => {
+    if (box.w < 24) return false;
+    parts.push(`<g data-fw-keep="mark"><g transform="translate(${f1(box.x)} ${f1(box.y)}) scale(${(box.w / 100).toFixed(3)})">${iconSvg(s.icon!, s.colors.accent, s.colors.bg)}</g></g>`);
+    avoid.push(box);
+    return true;
+  };
+  const wantIcon = !photo && !!s.icon && !d.icon;
+  if (wantIcon && wide) {
+    const size = Math.min(h * 0.6, w * 0.34, qr.y - 6 - trTop);
+    drawing({ x: w * 0.62 + (w * 0.38 - size) / 2, y: trTop + (qr.y - 6 - trTop - size) / 2, w: size, h: size });
+  }
+
+  // The business name, or their logo (in its own box), at the top.
   if (logo) {
-    const lh = narrow ? 34 : 54, lw = Math.min(textW - pad * 2, lh * 3);
-    parts.push(`<image href="${logo}" x="${pad}" y="${pad}" width="${lw.toFixed(1)}" height="${lh}" preserveAspectRatio="xMinYMid meet"/>`);
-    top += lh;
-  } else if (!(photo && !wide)) {
-    brandLines.forEach((l, i) => parts.push(`<text x="${pad}" y="${(pad + brandSize * (1 + i * 1.1)).toFixed(1)}" font-family="${esc(font)}" font-weight="700" font-size="${brandSize.toFixed(1)}" fill="${s.colors.accent}">${esc(l)}</text>`));
-    top += brandSize * (1 + (brandLines.length - 1) * 1.1);
+    const lh = narrow ? 34 : 54, lw = Math.max(10, Math.min(roomRight(pad, right, avoid, top, top + lh) - pad, lh * 3));
+    const box = { x: pad, y: top, w: lw, h: Math.min(lh, Math.max(10, h * 0.25)) };
+    parts.push(`<g data-fw-keep="logo"><image href="${logo}" x="${f1(box.x)}" y="${f1(box.y)}" width="${f1(box.w)}" height="${f1(box.h)}" preserveAspectRatio="xMinYMid meet"/></g>`);
+    top = box.y + box.h + 8;
+  } else {
+    const size = narrow ? 16 : photo && !wide ? 16 : Math.min(30, Math.max(14, h * 0.1));
+    const o = { x: pad, top, bottom: top + blockHeight(narrow ? 3 : 2, size, 1.1), right: roomRight(pad, right, avoid, top, top + size * 2.3), maxLines: narrow ? 3 : 2, max: size, min: 9, lead: 1.1 };
+    const b = fitText(s.brand, o) ?? fitOrCut(s.brand, o);
+    parts.push(lines(b, pad, font, 700, s.colors.accent, 1.1));
+    top = b.y + b.height + (narrow ? 8 : 10);
   }
 
-  // The headline, as big as it fits.
-  // The biggest size at which the headline fits the width in a few lines.
-  const maxLines = narrow ? 5 : wide ? 3 : 4;
-  let size = narrow ? 20 : wide ? Math.min(h * 0.16, 52) : Math.min(46, w * 0.13);
-  let lines = [s.headline];
-  for (; size > 11; size -= 1) {
-    lines = wrap(s.headline, Math.max(4, Math.floor(avail / (size * 0.56))));
-    if (lines.length <= maxLines && Math.max(...lines.map((l) => l.length)) * size * 0.56 <= avail) break;
+  if (wantIcon && !wide) {
+    const at = Math.max(top, ...avoid.slice(1).filter((b) => b.y < top + 150 && b.x < (w + 150) / 2).map((b) => b.y + b.h + 4));
+    const size = Math.min(w * (narrow ? 0.62 : 0.55), h * 0.28, 150, qr.y - 6 - at);
+    if (drawing({ x: (w - size) / 2, y: at, w: size, h: size })) top = at + size + 8;
   }
-  lines = lines.slice(0, maxLines);
-  const subLines = s.sub && !narrow ? wrap(s.sub, Math.floor((textW - pad * 2) / 6.4)).slice(0, 2) : [];
-  const block = lines.length * size * 1.1 + subLines.length * 15;
-  let y = wide ? Math.max(top + size * 1.4, (h - block) / 2 + size * 0.9) : photo ? h * 0.52 + pad + size : Math.max(h * 0.58, h - pad - block - (narrow ? 70 : 92) + size);
-  if (photo && !wide) {
-    parts.push(`<text x="${pad}" y="${(y - size - 6).toFixed(1)}" font-family="${esc(font)}" font-weight="700" font-size="${Math.min(brandSize, 16).toFixed(1)}" fill="${s.colors.accent}">${esc(s.brand)}</text>`);
-    y += 6;
-  }
-  for (const l of lines) {
-    parts.push(`<text x="${pad}" y="${y.toFixed(1)}" font-family="${esc(font)}" font-weight="700" font-size="${size.toFixed(1)}" fill="${s.colors.fg}">${esc(l)}</text>`);
-    y += size * 1.1;
-  }
-  for (const l of subLines) {
-    parts.push(`<text x="${pad}" y="${(y + 2).toFixed(1)}" font-family="'DM Sans', Arial, sans-serif" font-size="12" fill="${s.colors.fg}" opacity=".85">${esc(l)}</text>`);
-    y += 15;
-  }
-  return parts.join('');
+
+  // The headline, as big as it fits; the small line under it when there's room.
+  const max = narrow ? 20 : wide ? Math.min(h * 0.16, 52) : Math.min(46, w * 0.13);
+  const subFit = (y: number) => (s.sub && !narrow && !d.sub ? fitText(s.sub, { x: pad, top: y, bottom: h - pad, right, avoid, maxLines: 2, max: 12, min: 8.5, lead: 1.25 }) : null);
+  const subRoom = subFit(top);
+  const o = { x: pad, top, bottom: h - pad - (subRoom ? subRoom.height + 6 : 0), right, avoid, maxLines: narrow ? 5 : wide ? 3 : 4, max, min: 10, lead: 1.1 };
+  const head = fitText(s.headline, o);
+  const hd = head ?? fitOrCut(s.headline, o);
+  parts.push(lines(hd, pad, font, 700, s.colors.fg, 1.1));
+  const sub = subFit(hd.y + hd.height + 6);
+  if (sub) parts.push(lines(sub, pad, "'DM Sans', Arial, sans-serif", 400, s.colors.fg, 1.25, ' opacity=".85"'));
+  return { svg: parts.join(''), head, good: Math.min(14, max * 0.55) };
+}
+
+const f1 = (n: number) => (Math.round(n * 10) / 10).toString();
+function lines(f: Fitted, x: number, font: string, weight: number, fill: string, lead: number, extra = '') {
+  return f.lines.map((l, i) => `<text x="${f1(x)}" y="${f1(f.y + f.size * BASELINE + i * f.size * lead)}" font-family="${esc(font)}" font-weight="${weight}" font-size="${f1(f.size)}" fill="${fill}"${extra}>${esc(l)}</text>`).join('');
+}
+function roomRight(x: number, right: number, avoid: Box[], y0: number, y1: number, gap = 4) {
+  for (const b of avoid) if (y1 > b.y - gap && y0 < b.y + b.h + gap && b.x + b.w > x) right = Math.min(right, b.x - gap);
+  return right;
 }
 
 export function posterCreative(spec: PosterSpec): Creative {
   const problem = checkPosterSpec(spec);
   if (problem) throw new Error(`Artwork refused: ${problem}`);
-  return { svg: (w, h) => renderPoster(spec, w, h) };
+  return { svg: (w, h, ctx) => renderPoster(spec, w, h, ctx) };
 }

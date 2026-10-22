@@ -76,7 +76,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm install --no-save playwright@1.48.2 && npx playwright install --with-deps chromium
+      - run: npm install --no-save playwright@1.56.0 && npx playwright install --with-deps chromium
       - run: npm run test:browser
 
   image:

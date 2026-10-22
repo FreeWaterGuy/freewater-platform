@@ -22,9 +22,17 @@ export function walletRoutes(app: App, route: (r: RouteDef) => void) {
     if (!/^[A-Za-z0-9_-]{8,64}$/.test(v)) throw new ApiError(400, 'viewer_required', 'Send ?viewer=<the random id this phone keeps>.');
     return { body: await wallet.wallet(company((req.params as any).companyId), v) };
   } });
-  route({ method: 'GET', url: '/v1/me/wallet', scope: 'me', summary: 'Your wallet: points, dollar credit, history, coupons and everything you saved, across your phones.', handler: async (_req, key) => {
+  route({ method: 'GET', url: '/v1/me/wallet', scope: 'me', summary: 'Your wallet: points, dollar credit, history, coupons and everything you saved, across your phones. With ?viewer=<this phone’s key>, also the points on this phone that aren’t in your account yet (`phone`, null when there are none to keep).', handler: async (req, key) => {
     if (!key?.userId) throw new ApiError(403, 'person_required', 'Sign in as a person to do this; API keys belong to systems.');
-    return { body: await wallet.wallet(key.companyId, `user:${key.userId}`, key.userId) };
+    const v = String((req.query as any)?.viewer ?? '');
+    const phone = v ? await wallet.phonePoints(key.companyId, `user:${key.userId}`, v) : null;
+    return { body: { ...(await wallet.wallet(key.companyId, `user:${key.userId}`, key.userId)), phone: phone && phone.points > 0 ? phone : null } };
+  } });
+  route({ method: 'POST', url: '/v1/me/wallet/keep', scope: 'me', summary: 'Move the points on this phone (earned before you signed in) into your account, once. No points are made; what this phone earned today moves only as far as your account’s daily limit allows.', body: obj({ viewerKey }, ['viewerKey']), handler: async (req, key) => {
+    if (!key?.userId) throw new ApiError(403, 'person_required', 'Sign in as a person to do this; API keys belong to systems.');
+    const userId = key.userId;
+    const v = (req.body as any).viewerKey as string;
+    return { body: await wrap(() => wallet.keepPhonePoints(key.companyId, `user:${userId}`, v, async () => (await app.data.phoneFreeFor(key.companyId, userId, v)) !== 'theirs')) };
   } });
   route({ method: 'GET', url: '/v1/public/wallet/:companyId/supply', scope: 'public', summary: 'The points supply, for anyone: how many exist, the cap, the halving era and what each action earns now.', handler: async (req) => ({ body: await wallet.supply(company((req.params as any).companyId)) }) });
 

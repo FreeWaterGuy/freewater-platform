@@ -58,4 +58,23 @@ describe.skipIf(!realPostgres)('two connections at once, on real Postgres', () =
     // Before the fix: every one of the twelve counted the tries before any was written, so all twelve were tried.
     expect((await db.query<any>(`select count(*)::int as n from house_events where by_user = 'usr_race_claims' and kind = 'claim_failed'`)).rows[0].n).toBe(5);
   }, 30_000);
+  it('keeping a phone’s points in an account: taps at once, and earning at the same time, move them exactly once', async () => {
+    const phone = 'pg-keep-phone-0001', account = 'user:usr_pg_keep';
+    let earned = 0;
+    for (let i = 0; i < 3; i++) earned += (await app.wallet.earn('freewater', phone, 'feedback', `pg-keep-${i}`)).points;
+    expect(earned).toBeGreaterThan(0);
+    const supplyBefore = (await app.wallet.supply('freewater')).issued;
+    const free = async () => true;
+    const out = await Promise.all([
+      app.wallet.keepPhonePoints('freewater', account, phone, free), app.wallet.keepPhonePoints('freewater', account, phone, free),
+      app.wallet.keepPhonePoints('freewater', account, phone, free), app.wallet.earn('freewater', account, 'feedback', 'pg-keep-account'),
+    ]);
+    const kept = out.slice(0, 3).reduce((n, r: any) => n + r.kept, 0);
+    const accountEarned = (out[3] as any).points as number;
+    expect(kept).toBe(earned);
+    expect(await app.wallet.pointsOf('freewater', phone)).toBe(0);
+    expect(await app.wallet.pointsOf('freewater', account)).toBe(earned + accountEarned);
+    expect((await app.wallet.supply('freewater')).issued).toBe(supplyBefore + accountEarned);
+    expect((await app.wallet.check('freewater')).ok).toBe(true);
+  }, 30_000);
 });

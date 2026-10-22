@@ -1,4 +1,5 @@
 // Sample data for the demo and tests. All advertisers here are made-up brands; prices are placeholders.
+import { posterCreative, type PosterIcon } from '../modules/creative/poster';
 import { defaultAdBilling } from '../modules/ads/billing';
 import { SHARES, type BoxProduct, type Campaign, type CompanyConfig, type Creative, type Location, type Product, type Share } from '../core/types';
 
@@ -128,58 +129,16 @@ export const locations: Location[] = [
 // ---------- artwork ----------
 // Each creative draws itself at any slot size, the way an AI-sized ad set would.
 
-type Look = { bg: string; fg: string; accent: string; brand: string; brandSize?: number; line: string; sub: string; mark: (w: number, h: number) => string };
+type Look = { bg: string; fg: string; accent: string; brand: string; line: string; sub: string; mark: PosterIcon };
 
+/**
+ * The demo businesses' artwork: the same measured poster template the assistant, fillers and news use, so their
+ * words fit every piece and stay clear of the code and the drawing (an earlier hand-drawn version put luma's cup over
+ * its words, and Austin Daily's headline under its QR code).
+ */
 function art(look: Look): Creative {
-  return {
-    svg(w, h) {
-      const narrow = w < 160;
-      const wide = w > h * 0.95; // box faces: text on the left, picture on the right
-      const textW = wide ? w * 0.52 : w;
-      const pad = narrow ? 10 : 18;
-      const brandSize = Math.min(look.brandSize ?? 34, textW / (look.brand.length * 0.62));
-      const lineSize = Math.min(narrow ? 17 : 30, (textW - pad * 2) / Math.max(6, longestWord(look.line) * 0.58));
-      const lines = wrapWords(look.line, narrow ? 9 : Math.max(10, Math.floor((textW - pad) / (lineSize * 0.56))));
-      let s = `<rect width="${w}" height="${h}" fill="${look.bg}"/>`;
-      s += wide ? `<g transform="translate(${(w * 0.24).toFixed(1)} 0)">${look.mark(w, h)}</g>` : look.mark(w, h);
-      s += `<text x="${pad}" y="${pad + brandSize}" font-family="Comfortaa, 'DM Sans', Arial, sans-serif" font-weight="700" font-size="${brandSize.toFixed(1)}" fill="${look.accent}">${look.brand}</text>`;
-      let y = wide ? Math.max(pad + brandSize + lineSize * 1.6, h * 0.5) : h * 0.6;
-      for (const l of lines) {
-        s += `<text x="${pad}" y="${y.toFixed(1)}" font-family="'DM Sans', Arial, sans-serif" font-weight="700" font-size="${lineSize.toFixed(1)}" fill="${look.fg}">${l}</text>`;
-        y += lineSize * 1.12;
-      }
-      if (!narrow) s += `<text x="${pad}" y="${(y + 4).toFixed(1)}" font-family="'DM Sans', Arial, sans-serif" font-size="12" fill="${look.fg}" opacity=".85">${look.sub}</text>`;
-      return s;
-    },
-  };
+  return posterCreative({ brand: look.brand, headline: look.line, sub: look.sub, colors: { bg: look.bg, fg: look.fg, accent: look.accent }, icon: look.mark, font: 'rounded' });
 }
-const longestWord = (s: string) => Math.max(...s.split(' ').map((w) => w.length));
-function wrapWords(s: string, max: number): string[] {
-  const out: string[] = [];
-  let cur = '';
-  for (const w of s.split(' ')) {
-    if ((cur + ' ' + w).trim().length > max && cur) { out.push(cur); cur = w; } else cur = (cur + ' ' + w).trim();
-  }
-  if (cur) out.push(cur);
-  return out;
-}
-
-const burger = (w: number, h: number) => {
-  const cx = w / 2, cy = h * 0.36, r = Math.min(w * 0.36, 70);
-  return `<path d="M${cx - r} ${cy} A${r} ${r * 0.75} 0 0 1 ${cx + r} ${cy} Z" fill="#F2A33A"/><rect x="${cx - r}" y="${cy + 2}" width="${2 * r}" height="${r * 0.14}" rx="4" fill="#7DBA4A"/><rect x="${cx - r * 0.95}" y="${cy + r * 0.16}" width="${1.9 * r}" height="${r * 0.28}" rx="8" fill="#5B2A12"/><rect x="${cx - r}" y="${cy + r * 0.46}" width="${2 * r}" height="${r * 0.3}" rx="${r * 0.15}" fill="#E58E2C"/>`;
-};
-const cup = (w: number, h: number) => {
-  const cx = w / 2, cy = h * 0.38, r = Math.min(w * 0.3, 58);
-  return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="#F4EDE3"/><circle cx="${cx}" cy="${cy}" r="${r * 0.78}" fill="#B9814F"/><path d="M${cx} ${cy + r * 0.4} C${cx - r * 0.5} ${cy} ${cx - r * 0.3} ${cy - r * 0.4} ${cx} ${cy - r * 0.15} C${cx + r * 0.3} ${cy - r * 0.4} ${cx + r * 0.5} ${cy} ${cx} ${cy + r * 0.4}Z" fill="#F7E9D5"/>`;
-};
-const house = (w: number, h: number) => {
-  const cx = w / 2, cy = h * 0.36, r = Math.min(w * 0.3, 60);
-  return `<path d="M${cx - r} ${cy} L${cx} ${cy - r * 0.8} L${cx + r} ${cy} V${cy + r * 0.8} H${cx - r} Z" fill="#E8F1EA"/><rect x="${cx - r * 0.2}" y="${cy + r * 0.25}" width="${r * 0.4}" height="${r * 0.55}" fill="#2F6B4F"/>`;
-};
-const paper = (w: number, h: number) => `<rect x="${w * 0.1}" y="${h * 0.2}" width="${w * 0.8}" height="${h * 0.25}" fill="#1B1B1B" opacity=".08"/><rect x="${w * 0.1}" y="${h * 0.2}" width="${w * 0.45}" height="${h * 0.25}" fill="#1B1B1B" opacity=".14"/>`;
-const bolt = (w: number, h: number) => `<path d="M${w * 0.55} ${h * 0.1} L${w * 0.3} ${h * 0.45} H${w * 0.5} L${w * 0.42} ${h * 0.62} L${w * 0.72} ${h * 0.27} H${w * 0.52} Z" fill="#FF6A13" opacity=".9"/>`;
-const drop = (w: number, h: number) => `<path d="M${w / 2} ${h * 0.12} C${w * 0.3} ${h * 0.35} ${w * 0.28} ${h * 0.45} ${w * 0.5} ${h * 0.5} C${w * 0.72} ${h * 0.45} ${w * 0.7} ${h * 0.35} ${w / 2} ${h * 0.12} Z" fill="#7FC6EA"/>`;
-const peak = (w: number, h: number) => `<path d="M0 ${h * 0.55} L${w * 0.35} ${h * 0.15} L${w * 0.55} ${h * 0.38} L${w * 0.7} ${h * 0.25} L${w} ${h * 0.55} Z" fill="#F2C14E" opacity=".9"/>`;
 
 const all: Share[] = [...SHARES];
 type CampaignInput = Omit<Campaign, 'companyId' | 'active' | 'targeting'> & Partial<Pick<Campaign, 'targeting' | 'active'>>;
@@ -188,22 +147,22 @@ const fw = (c: CampaignInput): Campaign => ({ companyId: 'freewater', active: tr
 export function sampleCampaigns(): Campaign[] {
   return [
     fw({ id: 'cmp-house', formats: ['label', 'box-face'], advertiserId: 'freewater', advertiserName: 'FreeWater', category: 'house', sizes: all, isHouse: true, experienceId: 'house-promo', experienceConfig: { headline: 'Save money. Drink FreeWater.', text: 'Free spring water, paid for by the ads on the bottle. 10¢ of every bottle goes to charity.', appUrl: 'https://freewater.io/app', advertiseUrl: 'https://freewater.io/advertise' }, theme: { background: '#EEF6FB', button: '#000000', accent: '#1E7DB8' }, buy: { type: 'guaranteed', remainingPrints: 1e9 },
-      creative: art({ bg: '#000000', fg: '#FFFFFF', accent: '#7FC6EA', brand: 'freewater', line: 'Save money. Drink FreeWater.', sub: 'Your ad here: freewater.io', mark: drop }) }),
+      creative: art({ bg: '#000000', fg: '#FFFFFF', accent: '#7FC6EA', brand: 'freewater', line: 'Save money. Drink FreeWater.', sub: 'Your ad here: freewater.io', mark: 'drop' }) }),
     fw({ id: 'cmp-joes', formats: ['label', 'box-face'], advertiserId: 'adv-joes', advertiserName: "Joe's Burgers", category: 'food', competitorGroup: 'burgers', sizes: [3, 4, 6], experienceId: 'ar-3d-menu', experienceConfig: { title: '$5 combo', subtitle: 'Burger, fries and a drink. Ready for pickup in 10 minutes.', model: { builtin: 'burger', alt: "Joe's cheeseburger" }, addOns: [{ id: 'fries', label: '+ Fries', model: { builtin: 'fries', alt: 'Fries' } }, { id: 'drink', label: '+ Drink', model: { builtin: 'drink', alt: 'Soft drink' } }], firstTimeOffer: 'First order? Fries are on us.', regularOffer: 'Welcome back. Your usual is 10 minutes away.', orderUrl: 'https://example.com/joes/order' }, theme: { background: '#FFF7E6', text: '#2B1A10', accent: '#D7262E', button: '#D7262E', buttonText: '#FFFFFF' }, buy: { type: 'guaranteed', remainingPrints: 20000 },
-      creative: art({ bg: '#D7262E', fg: '#FFFFFF', accent: '#FFC93C', brand: "JOE'S", line: '$5 combo', sub: 'Scan to see it on your table', mark: burger }) }),
+      creative: art({ bg: '#D7262E', fg: '#FFFFFF', accent: '#FFC93C', brand: "JOE'S", line: '$5 combo', sub: 'Scan to see it on your table', mark: 'burger' }) }),
     fw({ id: 'cmp-patty', advertiserId: 'adv-patty', advertiserName: 'Patty Shack', category: 'food', competitorGroup: 'burgers', sizes: [6, 8, 10], experienceId: 'coupon', experienceConfig: { headline: 'Double stack Tuesdays', code: 'BOTTLE2X', details: 'Show this code at the register. Tuesdays only.' }, theme: { background: '#FFF3D6', text: '#3B2410', accent: '#C2410C', button: '#C2410C' }, buy: { type: 'bid', maxCentsPerLabel: 110, dailyCapCents: 5000, spentTodayCents: 0 },
-      creative: art({ bg: '#FFF3D6', fg: '#3B2410', accent: '#C2410C', brand: 'Patty Shack', brandSize: 26, line: 'Double stack Tuesdays', sub: 'Scan for a coupon', mark: burger }) }),
+      creative: art({ bg: '#FFF3D6', fg: '#3B2410', accent: '#C2410C', brand: 'Patty Shack', line: 'Double stack Tuesdays', sub: 'Scan for a coupon', mark: 'burger' }) }),
     fw({ id: 'cmp-luma', formats: ['label', 'box-face'], advertiserId: 'adv-luma', advertiserName: 'Luma Coffee', category: 'coffee', sizes: [4, 6, 8], experienceId: 'offer', experienceConfig: { headline: 'Oat latte, on us', firstTimeHeadline: 'Your first oat latte is free', details: 'Show this at the counter before 11 am. Luma Coffee, 600 Congress Ave.', expires: 'Ends Sunday', link: { label: 'Find Luma', url: 'https://example.com/luma' } }, theme: { background: '#FBF3E8', text: '#3A1D10', accent: '#8A5A3B', button: '#3A1D10', buttonText: '#FBE9D0' }, buy: { type: 'bid', maxCentsPerLabel: 105, dailyCapCents: 4000, spentTodayCents: 0 },
-      creative: art({ bg: '#3A1D10', fg: '#FBE9D0', accent: '#F6E3C8', brand: 'luma', line: 'Oat latte, on us', sub: 'Before 11 am on Congress Ave', mark: cup }) }),
+      creative: art({ bg: '#3A1D10', fg: '#FBE9D0', accent: '#F6E3C8', brand: 'luma', line: 'Oat latte, on us', sub: 'Before 11 am on Congress Ave', mark: 'coffee' }) }),
     fw({ id: 'cmp-maple', formats: ['label', 'box-face'], advertiserId: 'adv-maple', advertiserName: 'Maple Realty', category: 'real-estate', sizes: [2, 3, 4], experienceId: 'ar-home-tour', experienceConfig: { address: '1406 Maple St', price: '$685,000', details: '3 bed, 2 bath, big back yard', model: { builtin: 'house', alt: '3D model of 1406 Maple St' }, rooms: [{ name: 'Living room', color: '#D9CBB4', note: 'South light all afternoon' }, { name: 'Kitchen', color: '#E8DCC8', note: 'New in 2024' }, { name: 'Main bedroom', color: '#C9D8C5' }, { name: 'Back yard', color: '#9DBF8F', note: 'Room for a pool' }], slots: ['Sat 10:00', 'Sat 11:30', 'Sun 1:00'], bookUrl: 'https://example.com/maple/book' }, theme: { background: '#F1F6F2', text: '#16352A', accent: '#2F6B4F', button: '#2F6B4F' }, buy: { type: 'guaranteed', remainingPrints: 5000 }, targeting: { locations: ['ATX-014', 'route-3'] },
-      creative: art({ bg: '#2F6B4F', fg: '#E8F1EA', accent: '#E8F1EA', brand: 'Maple Realty', brandSize: 26, line: '1406 Maple St. Tour it in 3D', sub: 'Scan the bottle to walk through', mark: house }) }),
+      creative: art({ bg: '#2F6B4F', fg: '#E8F1EA', accent: '#E8F1EA', brand: 'Maple Realty', line: '1406 Maple St. Tour it in 3D', sub: 'Scan the bottle to walk through', mark: 'house' }) }),
     fw({ id: 'cmp-daily', formats: ['label', 'box-face'], advertiserId: 'adv-daily', advertiserName: 'Austin Daily', category: 'news', sizes: [6, 8, 10], experienceId: 'news-card', experienceConfig: { headline: 'Rail line opens Monday', byline: 'Austin Daily', paragraphs: ['The new line connects downtown to the airport in 22 minutes, with stops at the convention center and Riverside.', 'Trains run every 10 minutes at rush hour and every 20 minutes late at night. Rides are free for the first week.'], url: 'https://example.com/daily/rail' }, theme: { background: '#F7F5EF', text: '#1B1B1B', accent: '#1B1B1B', button: '#1B1B1B' }, buy: { type: 'bid', maxCentsPerLabel: 100, dailyCapCents: 3000, spentTodayCents: 0 },
-      creative: art({ bg: '#F1EEE6', fg: '#1B1B1B', accent: '#1B1B1B', brand: 'Austin Daily', brandSize: 24, line: 'Rail line opens Monday', sub: 'Scan for the full story', mark: paper }) }),
+      creative: art({ bg: '#F1EEE6', fg: '#1B1B1B', accent: '#1B1B1B', brand: 'Austin Daily', line: 'Rail line opens Monday', sub: 'Scan for the full story', mark: 'news' }) }),
     fw({ id: 'cmp-orbit', formats: ['label', 'box-face'], advertiserId: 'adv-orbit', advertiserName: 'Orbit Fitness', category: 'fitness', sizes: [4, 6, 8], experienceId: 'booking', experienceConfig: { title: 'Your first class is free', details: 'Strength, cycling or yoga. Bring water. We have the rest.', slots: ['Mon 6:00 am', 'Mon 6:00 pm', 'Tue 7:00 am', 'Wed 12:15 pm'], bookUrl: 'https://example.com/orbit/book' }, theme: { background: '#17171C', text: '#FFFFFF', accent: '#FF6A13', button: '#FF6A13' }, buy: { type: 'bid', maxCentsPerLabel: 100, dailyCapCents: 2500, spentTodayCents: 0 },
-      creative: art({ bg: '#1E1E24', fg: '#FFFFFF', accent: '#FF6A13', brand: 'ORBIT', line: 'First class free', sub: 'Scan and book', mark: bolt }) }),
+      creative: art({ bg: '#1E1E24', fg: '#FFFFFF', accent: '#FF6A13', brand: 'ORBIT', line: 'First class free', sub: 'Scan and book', mark: 'bolt' }) }),
     // Blocked by FreeWater's rules (alcohol), allowed by a licensee that chooses to.
     fw({ id: 'cmp-lager', advertiserId: 'adv-lager', advertiserName: 'Lone Peak Lager', category: 'alcohol', sizes: [3, 4, 6], experienceId: 'offer', experienceConfig: { headline: 'Cold and local', details: 'Find Lone Peak at your local store. 21+ only.' }, buy: { type: 'bid', maxCentsPerLabel: 150, dailyCapCents: 9000, spentTodayCents: 0 },
-      creative: art({ bg: '#0F3D5E', fg: '#FFFFFF', accent: '#F2C14E', brand: 'Lone Peak', line: 'Cold and local', sub: '21+', mark: peak }) }),
+      creative: art({ bg: '#0F3D5E', fg: '#FFFFFF', accent: '#F2C14E', brand: 'Lone Peak', line: 'Cold and local', sub: '21+', mark: 'drop' }) }),
     // AR that follows the bottle. Paused in the sample data (so the other samples behave as before); the AR demos
     // turn them on.
     fw({ id: 'cmp-fizz', active: false, advertiserId: 'adv-fizz', advertiserName: 'Fizz Lab', category: 'drinks', sizes: [1], experienceId: 'ar-living-label',
@@ -214,15 +173,15 @@ export function sampleCampaigns(): Campaign[] {
       ],
       personalize: { ai: true, greeting: true },
       theme: { background: '#FFF0F6', text: '#2A0A1A', accent: '#E8458B', button: '#2A0A1A', buttonText: '#FFFFFF' }, buy: { type: 'guaranteed', remainingPrints: 3000 },
-      creative: art({ bg: '#E8458B', fg: '#FFFFFF', accent: '#FFE45C', brand: 'FIZZ LAB', line: 'Yuzu Spark', sub: 'Point your camera at me', mark: drop }) }),
+      creative: art({ bg: '#E8458B', fg: '#FFFFFF', accent: '#FFE45C', brand: 'FIZZ LAB', line: 'Yuzu Spark', sub: 'Point your camera at me', mark: 'drop' }) }),
     fw({ id: 'cmp-roast', active: false, advertiserId: 'adv-roast', advertiserName: 'Roastery 9', category: 'coffee', sizes: [3, 4], experienceId: 'ar-on-bottle',
       experienceConfig: { title: 'A latte, right on your bottle', subtitle: 'Roastery 9, 2 blocks away. Ready in 4 minutes.', caption: 'Turn the bottle', model: { builtin: 'latte', alt: 'Roastery 9 oat latte' }, placement: 'top', motion: 'spin', sizeIn: 2.6, link: { label: 'Order ahead', url: 'https://example.com/roast/order' } },
       personalize: { ai: false, greeting: true },
       qr: { mode: 'dynamic', logo: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="48" fill="#2B1A10"/><text x="50" y="66" text-anchor="middle" font-family="Arial, sans-serif" font-size="46" font-weight="700" fill="#F3D9B1">R9</text></svg>' },
       theme: { background: '#F7EFE6', text: '#2B1A10', accent: '#B5651D', button: '#2B1A10', buttonText: '#F7EFE6' }, buy: { type: 'guaranteed', remainingPrints: 3000 },
-      creative: art({ bg: '#2B1A10', fg: '#F3D9B1', accent: '#B5651D', brand: 'ROASTERY 9', line: 'Latte in AR', sub: 'Scan, then point at the bottle', mark: cup }) }),
+      creative: art({ bg: '#2B1A10', fg: '#F3D9B1', accent: '#B5651D', brand: 'ROASTERY 9', line: 'Latte in AR', sub: 'Scan, then point at the bottle', mark: 'coffee' }) }),
     { companyId: 'peak-spring', active: true, targeting: {}, creativeRef: { kind: 'builtin', id: 'cmp-peak-house' }, id: 'cmp-peak-house', advertiserId: 'peak-spring', advertiserName: 'Peak Spring', category: 'house', sizes: all, isHouse: true, experienceId: 'house-promo', experienceConfig: { headline: 'Cold mountain water', text: 'Peak Spring, bottled in the Rockies.' }, buy: { type: 'guaranteed', remainingPrints: 1e9 },
-      creative: art({ bg: '#123B2A', fg: '#FFFFFF', accent: '#F2C14E', brand: 'peak spring', line: 'Cold mountain water', sub: 'From the Rockies', mark: peak }) },
+      creative: art({ bg: '#123B2A', fg: '#FFFFFF', accent: '#F2C14E', brand: 'peak spring', line: 'Cold mountain water', sub: 'From the Rockies', mark: 'drop' }) },
   ];
 }
 

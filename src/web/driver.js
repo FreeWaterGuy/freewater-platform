@@ -13,6 +13,8 @@
     for (const kid of kids.flat(Infinity)) if (kid != null && kid !== false) el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
     return el;
   };
+  /** "1 bottle", "2 bottles": a count with its noun, singular for exactly one. */
+  const plural = (n, one, many) => `${n} ${String(n).replace(/[^0-9.-]/g, '') === '1' ? one : many}`;
   const NS = 'http://www.w3.org/2000/svg';
   const sv = (tag, a) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(a)) e.setAttribute(k, String(v)); return e; };
   const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} } };
@@ -98,7 +100,7 @@
     screen(h('div', { class: 'dhead' }, h('div', { text: `Hi${S.me.displayName ? `, ${S.me.displayName}` : ''}` }), h('span', { text: new Date().toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' }) })),
       h('h1', { class: 'dtitle', text: 'Today’s routes' }),
       runs.length ? h('div', { class: 'rows' }, runs.map((r) => h('div', { class: 'row' }, h('span', { class: 'n', text: r.routeId.replace(/^route-/, 'R') }),
-        h('span', { class: 'grow' }, h('b', { text: r.areaName ? `${r.areaName} · van ${r.van}` : r.routeName }), h('span', { text: `${r.counts.stops} stops · ${r.counts.bottles} bottles · about ${r.distanceKm} km, ${Math.round(r.minutes / 60 * 10) / 10} h` })),
+        h('span', { class: 'grow' }, h('b', { text: r.areaName ? `${r.areaName} · van ${r.van}` : r.routeName }), h('span', { text: `${plural(r.counts.stops, 'stop', 'stops')} · ${plural(r.counts.bottles, 'bottle', 'bottles')} · about ${r.distanceKm} km, ${Math.round(r.minutes / 60 * 10) / 10} h` })),
         r.status === 'ready' && !r.driverId ? h('button', { class: 'btn small', type: 'button', onclick: async () => { try { S.run = await api('POST', `/v1/driver/runs/${r.id}/start`); load(); } catch (x) { toast(x.message); } } }, 'Take it')
           : h('em', { class: r.status === 'done' ? 'ok' : '', text: r.driverId && r.driverId !== S.me.id ? 'Taken' : label[r.status] }))))
         : h('div', { class: 'empty', text: 'No routes today yet. They appear here once tonight’s boxes are printed and packed.' }),
@@ -312,7 +314,7 @@
   }
   function finished() {
     const c = S.run.counts;
-    screen(h('div', { class: 'verdict ok', style: 'margin-top:30px' }, h('div', { class: 'mark', text: '✓' }), h('h2', { text: 'Route done' }), h('p', { text: `${c.delivered} delivered${c.notDelivered ? `, ${c.notDelivered} coming back` : ''}. ${c.empties} empties picked up.` })),
+    screen(h('div', { class: 'verdict ok', style: 'margin-top:30px' }, h('div', { class: 'mark', text: '✓' }), h('h2', { text: 'Route done' }), h('p', { text: `${c.delivered} delivered${c.notDelivered ? `, ${c.notDelivered} coming back` : ''}. ${plural(c.empties, 'empty', 'empties')} picked up.` })),
       h('p', { class: 'dsub', style: 'text-align:center', text: 'Head back to the micro-factory. Thanks!' }), dock(h('button', { class: 'btn secondary', type: 'button', onclick: routes }, 'Today’s routes')));
   }
   function distance(a, b) { const R = 6371, r = Math.PI / 180, dLat = (b.lat - a.lat) * r, dLng = (b.lng - a.lng) * r; const s = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLng / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(s)); }

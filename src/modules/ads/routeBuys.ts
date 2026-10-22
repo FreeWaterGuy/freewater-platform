@@ -5,7 +5,7 @@ import type { Campaign, CompanyConfig, Product, Share } from '../../core/types';
 import { SHARES } from '../../core/types';
 import { newId } from '../../core/ids';
 import { AdsError } from './service';
-import { layoutsFor, shareLabel } from './layouts';
+import { holds, layoutsFor, shareLabel } from './layouts';
 import { adLimits, chargeLimitProblem, prepaidModel } from './billing';
 import { syncPrepaidBuy } from './budget';
 import type { PrepaidService } from './prepaid';
@@ -285,16 +285,18 @@ export class RouteBuyService {
    */
   private plan(company: CompanyConfig, product: Product, input: Required<Pick<RouteQuoteInput, 'kind'>> & RouteQuoteInput, share: Share, houses: HouseRow[], weeks: string[], occ: Occupancy, me: { campaignId: string; group?: string }) {
     const maxAds = company.adRules.maxAdsPerUnit;
-    const layouts = layoutsFor(product, { maxAds, minAds: company.adRules.minAdsPerUnit }).map((l) => counts(l.shares));
+    // The same rule the label is printed by: the pieces on one bottle must all fit one tidy template (layouts.ts), so a
+    // mix no template holds (a third and a quarter) is never sold, rather than found out when the label prints.
+    const layouts = layoutsFor(product, { maxAds, minAds: company.adRules.minAdsPerUnit });
     const holdMemo = new Map<string, boolean>();
-    const holds = (shares: Share[]) => {
+    const fitsTemplate = (shares: Share[]) => {
       const k = [...shares].sort((a, b) => a - b).join(',');
       let v = holdMemo.get(k);
-      if (v === undefined) { const want = counts(shares); v = layouts.some((l) => [...want].every(([s, c]) => (l.get(s) ?? 0) >= c)); holdMemo.set(k, v); }
+      if (v === undefined) { v = holds(layouts, shares); holdMemo.set(k, v); }
       return v;
     };
     const sep = company.adRules.competitorSeparation && !!me.group;
-    const fits = (o: Occ | undefined) => !o || (!o.campaigns.has(me.campaignId) && o.units + U(share) <= 120 && o.shares.length + 1 <= maxAds && !(sep && o.groups.has(me.group!)) && holds([...o.shares, share]));
+    const fits = (o: Occ | undefined) => !o || (!o.campaigns.has(me.campaignId) && o.units + U(share) <= 120 && o.shares.length + 1 <= maxAds && !(sep && o.groups.has(me.group!)) && fitsTemplate([...o.shares, share]));
     const spots: Draft[] = [];
     const take = (h: HouseRow, week: string, b: number) => {
       const o = bottleOf(slot(occ, h.id, week), b);
@@ -1165,7 +1167,6 @@ function bottleOf(hw: HouseWeek, b: number): Occ {
   if (!o) { o = { units: 0, shares: [], campaigns: new Set(), groups: new Set() }; hw.bottles.set(b, o); }
   return o;
 }
-function counts(shares: Share[]) { const m = new Map<Share, number>(); for (const s of shares) m.set(s, (m.get(s) ?? 0) + 1); return m; }
 const h0 = <T>(xs: T[]) => xs[0];
 const day = (v: unknown) => (typeof v === 'string' ? v.slice(0, 10) : new Date(v as string).toISOString().slice(0, 10));
 const titleCase = (s: string) => s.replace(/\b[a-z]/g, (c) => c.toUpperCase());

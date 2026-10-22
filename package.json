@@ -13,6 +13,7 @@
     "lint": "eslint src test",
     "lint:semgrep": "semgrep scan --config .semgrep/rules.yml --error --metrics=off --disable-version-check src",
     "demo:packs": "tsx src/demo/night.ts",
+    "demo:label-sheet": "tsx src/demo/labelSheet.ts",
     "start": "node --import tsx src/server/main.ts",
     "key": "tsx src/server/keys.ts",
     "key:machine-updates": "tsx src/server/updateKey.ts",

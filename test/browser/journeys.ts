@@ -19,11 +19,16 @@
  *   8. A driver takes the run, loads the van by box number, and drops the first box with a photo at the door.
  *   9. A resident says which house is theirs (box number + house number) and stops deliveries.
  *  10. The owner's Features page: turns a main switch off (saved, its routes refused), then applies a starting point.
+ * The app as the pilot runs it (FW_FEATURES=pilot, machines switched off for the company), on a third server:
+ *  11. The bottom bar shows only areas that are on; a switched-off screen's address goes Home.
+ *  12. Every tile and link on Home, Wallet and Me goes where it says (the wallet's "Play for points" opens Play).
+ *  13. Points earned on the phone before signing in show as "on this phone" and are kept in the account with one tap.
  */
 import { createRequire } from 'node:module';
 import { createApp } from '../../src/app';
 import { buildServer } from '../../src/api/server';
 import { createPgliteClient } from '../../src/db/pglite';
+import { featuresFrom } from '../../src/runtime/features';
 import { TestOutbox } from '../../src/adapters/messaging/contract';
 import { boxNumber } from '../../src/modules/packs/boxRenderer';
 import { doorPhoto } from '../door-photo';
@@ -182,6 +187,8 @@ await journey('an advertiser buys bottles on a delivery area and pays for them',
   await page.waitForSelector('.route-quote .facts', { timeout: 20_000 });
   const shown = await page.textContent('.route-quote');
   expect(/4 × 20¢/.test(shown) && /4 of the 6 chosen get it/.test(shown), `quote: ${shown}`);
+  // Nothing stray under the price: a missing part is drawn as nothing, never as the word "null" (walkthrough video).
+  expect(!/\bnull\b|\bundefined\b/.test(shown), `quote shows null: ${shown}`);
   await page.check('#agree');
   await page.click('button.btn.wide:has-text("Pay ")');
   await page.waitForSelector('.notice.ok', { timeout: 30_000 });
@@ -290,6 +297,83 @@ await journey('the owner turns a main switch off and applies a starting point on
   expect(!pilot.companyFeatures.on('freewater', 'delivery'), 'delivery is still on after “Machines + printed ads”');
 });
 
+// ---------- the app, as the pilot runs it (FW_FEATURES=pilot) with machines switched off for the company ----------
+const aOutbox = new TestOutbox(false);
+const aDb = await createPgliteClient();
+const aApp = await createApp({ db: aDb, seedDemo: true, seed: 13, messenger: aOutbox, assumePlace: { country: 'DE' }, features: featuresFrom({ FW_FEATURES: 'pilot' } as any).features, productLookup: null, anchorPublishers: [] } as any);
+const aOwner = await aApp.accounts.invite({ companyId: 'freewater', email: 'owner.app@freewater.io', role: 'owner' });
+await aApp.companyFeatures.change('freewater', { machines: false }, { userId: aOwner.id, name: 'Owner', approverProblem: async () => null } as any);
+const aServer = await buildServer(aApp);
+await aServer.listen({ port: 0, host: '127.0.0.1' });
+const aBase = `http://127.0.0.1:${(aServer.server.address() as any).port}`;
+const aCall = async (method: string, url: string, token?: string, payload?: unknown) => {
+  const r = await aServer.inject({ method: method as any, url, payload: payload as any, headers: token ? { authorization: `Bearer ${token}` } : {} });
+  let body: any; try { body = r.json(); } catch { body = r.body; }
+  return { status: r.statusCode, body };
+};
+// A phone that earned points before its person signed in (Play showed them; the wallet must too).
+const PHONE = 'journey-phone-before-signin';
+const earnedOnPhone = (await aApp.wallet.earn('freewater', PHONE, 'game_round', 'journey-phone-round')).points;
+await aCall('POST', '/v1/auth/start', undefined, { companyId: 'freewater', channel: 'email', to: 'walker@journey.example' });
+const aToken = (await aCall('POST', '/v1/auth/verify', undefined, { companyId: 'freewater', channel: 'email', to: 'walker@journey.example', code: /(\d{6})/.exec(aOutbox.lastTo('walker@journey.example')!.text)![1], viewerKey: PHONE })).body.token as string;
+const phone = { viewport: { width: 390, height: 844 } };
+const path = (page: any) => { const u = new URL(page.url()); return u.pathname + u.search; };
+
+await journey('the app’s bottom bar shows only areas that are on (no Machines in the pilot)', async (page) => {
+  await signedIn(page, 'fw_token', aToken, { fw_viewer: PHONE });
+  await page.goto(`${aBase}/app`);
+  await page.waitForSelector('nav.nav a', { timeout: 20_000 });
+  const labels = (await page.locator('nav.nav a').allTextContents()).map((t: string) => t.trim());
+  expect(JSON.stringify(labels) === JSON.stringify(['Home', 'Scan', 'Wallet', 'Me']), `bottom bar: ${labels.join(', ')}`);
+  // Typing the address of a switched-off screen goes Home.
+  await page.goto(`${aBase}/app/machines`);
+  await page.waitForFunction(() => location.pathname === '/app', null, { timeout: 10_000 });
+}, phone);
+
+await journey('every tile and link on the app’s screens goes where it says', async (page) => {
+  await signedIn(page, 'fw_token', aToken, { fw_viewer: PHONE });
+  const seen: string[] = [];
+  for (const screen of ['/app', '/app/wallet', '/app/me']) {
+    await page.goto(`${aBase}${screen}`);
+    await page.waitForSelector('main.screen', { timeout: 20_000 });
+    await page.waitForLoadState('networkidle');
+    const hrefs: string[] = await page.$$eval('main.screen a[href^="/"], nav.nav a[href^="/"]', (as: HTMLAnchorElement[]) => [...new Set(as.map((a) => a.getAttribute('href')!))]);
+    for (const href of hrefs) {
+      await page.goto(`${aBase}${screen}`);
+      await page.waitForSelector('main.screen', { timeout: 20_000 });
+      await page.locator(`a[href="${href}"]`).first().click();
+      // The click lands on the page the link names (the app's router never sends it Home instead).
+      await page.waitForFunction((want: string) => location.pathname + location.search === want, href, { timeout: 10_000 }).catch(() => {});
+      expect(path(page) === href, `${screen}: the link to ${href} went to ${path(page)}`);
+      seen.push(href);
+    }
+  }
+  expect(seen.some((h) => h.startsWith('/play?c=freewater')), `Play for points wasn't among the links: ${seen.join(' ')}`);
+  // Play opened from the wallet is the game itself.
+  await page.goto(`${aBase}/app/wallet`);
+  await page.getByText('Play for points').click();
+  await page.waitForURL(/\/play\?c=freewater$/, { timeout: 10_000 });
+  await page.waitForSelector('#app .pts', { timeout: 20_000 });
+}, phone);
+
+await journey('points earned on the phone before signing in are kept in the account with one tap', async (page) => {
+  expect(earnedOnPhone > 0, 'the phone earned nothing');
+  await signedIn(page, 'fw_token', aToken, { fw_viewer: PHONE });
+  await page.goto(`${aBase}/app/wallet`);
+  await page.waitForSelector('.hero-card .stats b', { timeout: 20_000 });
+  expect((await page.textContent('.hero-card .stats b'))!.trim() === '0', 'the account had the phone’s points before keeping them');
+  const row = page.locator('.list-row', { hasText: 'on this phone' });
+  expect(new RegExp(`^${earnedOnPhone} points? on this phone`).test((await row.locator('b').textContent())!.trim()), `phone row: ${await row.textContent()}`);
+  await row.getByRole('button', { name: 'Keep them in your account' }).click();
+  await toast(page, /kept in your account/);
+  await page.waitForFunction((n: number) => document.querySelector('.hero-card .stats b')?.textContent?.trim() === String(n), earnedOnPhone, { timeout: 10_000 });
+  expect((await page.locator('.list-row', { hasText: 'on this phone' }).count()) === 0, 'the phone row is still there');
+  const w = (await aCall('GET', `/v1/me/wallet?viewer=${PHONE}`, aToken)).body;
+  expect(w.points.balance === earnedOnPhone && w.phone === null, `wallet: ${JSON.stringify({ balance: w.points.balance, phone: w.phone })}`);
+}, phone);
+
+await aServer.close();
+await aDb.close();
 await pServer.close();
 await pDb.close();
 await browser.close();
