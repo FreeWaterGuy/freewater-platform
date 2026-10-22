@@ -12,6 +12,7 @@ import { posterCreative } from '../src/modules/creative/poster';
 import { statement } from '../src/modules/transparency/statements';
 import { bottle16oz, freewater, locations, sampleCampaigns } from '../src/demo/seed';
 import { engines, freshDb } from './db-helpers';
+import { billedAfter } from '../src/modules/ads/billing';
 
 // Core release review, slice 4: the bidding. From an advertiser's bid and budget, through the auction for each
 // bottle, to the charge when it prints, the statement, the overview and the invoice. Every money invariant is checked
@@ -89,7 +90,8 @@ for (const engine of engines) {
     const clock = () => new Date(now);
     beforeAll(async () => {
       db = await freshDb(engine);
-      app = await createApp({ db, seedDemo: true, seed: 404, clock, productLookup: null, anchorPublishers: [] });
+      // The auction is for companies that bill afterwards (FreeWater pays up front at flat prices).
+      app = await createApp({ db, seedDemo: true, demoBilling: 'billed_after', seed: 404, clock, productLookup: null, anchorPublishers: [] });
     });
     afterAll(async () => { await app.persistence.flush(); await db.close(); });
     const machines = () => [...app.platform.locations.values()].filter((l) => l.companyId === CO && l.kind === 'machine').map((l) => l.id);
@@ -145,7 +147,7 @@ describe('the bidding, end to end', () => {
   };
   beforeAll(async () => {
     db = await freshDb('pglite');
-    app = await createApp({ db, seedDemo: true, seed: 406, clock, productLookup: null, anchorPublishers: [] });
+    app = await createApp({ db, seedDemo: true, demoBilling: 'billed_after', seed: 406, clock, productLookup: null, anchorPublishers: [] });
     keys = app.demoKeys!;
     server = await buildServer(app);
   });
@@ -193,7 +195,7 @@ describe('the bidding, end to end', () => {
     const house = sampleCampaigns().find((c) => c.id === 'cmp-house')!;
     const mk = (id: string, adv: string, bid: number): Campaign => ({ id, companyId: CO, advertiserId: adv, advertiserName: adv, category: 'bakery', sizes: [2], creative: house.creative, experienceId: 'offer', targeting: {}, active: true, buy: { type: 'bid', maxCentsPerLabel: bid, dailyCapCents: 1e6, spentTodayCents: 0, spentDay: '2026-10-21', pacing: 'fast' } });
     const fill = freewaterAdEngine.fill({
-      company: freewater, product: bottle16oz, location: locations.find((l) => l.id === 'ATX-014')!, random: () => 0.5, stats: new AuctionStats(),
+      company: { ...freewater, adBilling: billedAfter() }, product: bottle16oz, location: locations.find((l) => l.id === 'ATX-014')!, random: () => 0.5, stats: new AuctionStats(),
       campaigns: [house, mk('a1', 'adv-a', 300), mk('a2', 'adv-a', 290), mk('b1', 'adv-b', 110)],
       moment: { daypart: 'afternoon', day: 2, dayKey: '2026-10-21', dayFraction: 0.5 },
     });

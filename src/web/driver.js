@@ -49,7 +49,11 @@
   const screen = (...kids) => { if (stop) { stop(); stop = null; } root.replaceChildren(h('main', { class: 'screen drive no-nav' }, ...kids)); window.scrollTo(0, 0); };
   const dock = (...btns) => h('div', { class: 'dock' }, h('div', { class: 'dock-inner' }, ...btns));
   const grabCard = (s, label = 'Box to grab') => h('div', { class: 'grab' }, h('div', { class: 'code' }, h('small', { text: 'Stop' }), h('b', { text: String(s.stop) })),
-    h('div', { class: 'what' }, h('small', { text: label }), h('b', { text: `#${s.boxNumber} · ${s.packSize}-pack` }), h('span', { text: `Stop code ${s.stopCode} is printed small on the box corner` })));
+    h('div', { class: 'what' }, h('small', { text: s.pack ? `${label} · box ${s.pack.n} of ${s.pack.of} for this house` : label }), h('b', { text: `#${s.boxNumber} · ${s.packSize}-pack` }), h('span', { text: `Stop code ${s.stopCode} is printed small on the box corner` })));
+  /** Is this switch on for the company (its Features page, or the host's FW_FEATURES)? */
+  const on = (feature) => !(S.features?.off ?? []).includes(feature);
+  /** A delivery area's run is named for the area and the van; a subscribers' run for its route. */
+  const runName = (r) => (r.areaName ? `${r.areaName} · van ${r.van}` : `${r.routeName} · ${r.routeId.replace(/^route-/, 'Route ')}`);
 
   async function signOut() {
     try { if (!fixture) await api('POST', '/v1/auth/sign-out'); } catch {}
@@ -62,6 +66,8 @@
   // ---------- sign in ----------
   async function boot() {
     if (!S.config) S.config = await api('GET', '/v1/public/app-config');
+    // What this company switched off (its Features page): the screens don't offer it.
+    if (!S.features) S.features = await api('GET', `/v1/public/features?company=${encodeURIComponent(S.config.companyId)}`).catch(() => ({ off: [] }));
     if (S.token && !S.me) { try { S.me = await api('GET', '/v1/me'); } catch { S.me = null; } }
     if (!S.me) return signIn();
     if (!S.me.scopes?.includes('packs') && !S.me.scopes?.includes('admin')) return screen(h('h1', { class: 'dtitle', text: 'This app is for drivers' }), h('p', { class: 'dsub', text: 'Ask your manager to add you as a driver, then sign in again.' }), signOutBtn());
@@ -92,7 +98,7 @@
     screen(h('div', { class: 'dhead' }, h('div', { text: `Hi${S.me.displayName ? `, ${S.me.displayName}` : ''}` }), h('span', { text: new Date().toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' }) })),
       h('h1', { class: 'dtitle', text: 'Today’s routes' }),
       runs.length ? h('div', { class: 'rows' }, runs.map((r) => h('div', { class: 'row' }, h('span', { class: 'n', text: r.routeId.replace(/^route-/, 'R') }),
-        h('span', { class: 'grow' }, h('b', { text: r.routeName }), h('span', { text: `${r.counts.stops} stops · ${r.counts.bottles} bottles · about ${r.distanceKm} km, ${Math.round(r.minutes / 60 * 10) / 10} h` })),
+        h('span', { class: 'grow' }, h('b', { text: r.areaName ? `${r.areaName} · van ${r.van}` : r.routeName }), h('span', { text: `${r.counts.stops} stops · ${r.counts.bottles} bottles · about ${r.distanceKm} km, ${Math.round(r.minutes / 60 * 10) / 10} h` })),
         r.status === 'ready' && !r.driverId ? h('button', { class: 'btn small', type: 'button', onclick: async () => { try { S.run = await api('POST', `/v1/driver/runs/${r.id}/start`); load(); } catch (x) { toast(x.message); } } }, 'Take it')
           : h('em', { class: r.status === 'done' ? 'ok' : '', text: r.driverId && r.driverId !== S.me.id ? 'Taken' : label[r.status] }))))
         : h('div', { class: 'empty', text: 'No routes today yet. They appear here once tonight’s boxes are printed and packed.' }),
@@ -145,7 +151,7 @@
     const loaded = order.filter((s) => s.loaded).length;
     const next = order.find((s) => !s.loaded);
     const stopOf = (n) => r.stops.find((s) => s.stop === n);
-    screen(h('div', { class: 'dhead' }, h('div', { text: `${r.routeName} · ${r.routeId.replace(/^route-/, 'Route ')}` }), h('span', { text: r.depot?.name ?? '' })),
+    screen(h('div', { class: 'dhead' }, h('div', { text: runName(r) }), h('span', { text: r.depot?.name ?? '' })),
       h('h1', { class: 'dtitle', text: 'Load the van' }), h('p', { class: 'dsub', text: 'Last stop goes in first, so stop 1 ends up by the door.' }),
       h('div', { class: 'dhead', style: 'font-size:14px' }, h('span', { text: 'Boxes loaded' }), h('b', { text: `${loaded} of ${order.length}` })),
       h('div', { class: 'bar' }, h('i', { style: `width:${(loaded / Math.max(1, order.length)) * 100}%` })),
@@ -177,21 +183,66 @@
     const s = r.stops.find((x) => x.status === 'planned');
     if (!s) return finished();
     const after = r.stops.filter((x) => x.status === 'planned' && x.stop > s.stop).slice(0, 3);
-    screen(h('div', { class: 'dhead' }, h('div', { text: `${r.routeName} · ${r.routeId.replace(/^route-/, 'Route ')}` }), h('span', { text: `${r.counts.delivered + r.counts.notDelivered} done · ${r.counts.stops - r.counts.delivered - r.counts.notDelivered} to go` })),
+    // A house that stopped deliveries in the app after tonight's plan (or is marked to skip): keep its box, go on.
+    const keep = s.houseId && s.houseStatus && s.houseStatus !== 'active';
+    screen(h('div', { class: 'dhead' }, h('div', { text: runName(r) }), h('span', { text: `${r.counts.delivered + r.counts.notDelivered} done · ${r.counts.stops - r.counts.delivered - r.counts.notDelivered} to go` })),
       miniMap(r, s),
       h('div', {}, h('div', { class: 'small muted', style: 'font-family:ui-monospace,Menlo,monospace;letter-spacing:.08em', text: `STOP ${s.stop} OF ${r.counts.stops}` }), h('h1', { class: 'dtitle', text: s.address.split(',')[0] }), h('p', { class: 'dsub', text: s.address.split(',').slice(1).join(',').trim() })),
       s.notes ? h('div', { class: 'notes' }, h('b', { text: 'Note: ' }), s.notes) : null,
+      keep ? h('div', { class: 'verdict bad' }, h('div', { class: 'mark', text: '!' }), h('h2', { text: 'Don’t leave a box here' }), h('p', { text: s.houseStatus === 'opted_out' ? 'This house stopped deliveries in the app after tonight’s plan. Keep the box; it goes back to the micro-factory.' : 'This house is marked to skip. Keep the box.' })) : null,
       grabCard(s),
       after.length ? h('div', {}, h('div', { class: 'small muted', style: 'font-family:ui-monospace,Menlo,monospace;letter-spacing:.08em;margin-bottom:4px', text: 'THEN' }), h('div', { class: 'rows' }, after.map((a) => h('div', { class: 'row' }, h('span', { style: 'width:28px;color:var(--muted)', text: String(a.stop) }), h('span', { class: 'grow', text: a.address.split(',')[0] }))))) : null,
-      dock(h('a', { class: 'btn secondary', href: `https://www.google.com/maps/dir/?api=1&destination=${s.point.lat},${s.point.lng}`, target: '_blank', rel: 'noopener' }, 'Directions'),
-        h('button', { class: 'btn', type: 'button', onclick: () => atDoor(s) }, 'I’m at the door · scan box')));
+      keep ? dock(h('button', { class: 'btn', type: 'button', onclick: () => keepBox(s) }, 'Keep the box · next house'))
+        : dock(h('a', { class: 'btn secondary', href: `https://www.google.com/maps/dir/?api=1&destination=${s.point.lat},${s.point.lng}`, target: '_blank', rel: 'noopener' }, 'Directions'),
+          h('button', { class: 'btn', type: 'button', onclick: () => atDoor(s) }, 'I’m at the door · scan box'),
+          s.houseId && on('driver_house_skip') ? h('button', { class: 'link-btn', type: 'button', onclick: () => skipSheet(s) }, 'Skip this house') : null));
+  }
+  /** A house that already stopped (or is marked to skip): the box comes back, nothing to review. Works with skipping switched off too. */
+  async function keepBox(s) {
+    try { S.run = await api('POST', `/v1/driver/runs/${encodeURIComponent(S.run.id)}/stops/${s.stop}/fail`, { reason: s.houseStatus === 'opted_out' ? 'They stopped deliveries in the app' : 'House marked to skip' }); toast('Box kept. Next house.'); nextStop(); }
+    catch (x) { toast(x.message); }
+  }
+  /** Pass a house in a delivery area by. Its boxes come back; a person reviews the skip before the house is left out for good. */
+  async function skipHouse(s, reason, note) {
+    try { S.run = await api('POST', `/v1/driver/runs/${encodeURIComponent(S.run.id)}/stops/${s.stop}/skip-house`, { reason, ...(note ? { note } : {}) }); toast('Skipped. The office will review it.'); nextStop(); }
+    catch (x) { toast(x.message); }
+  }
+  function skipSheet(s) {
+    const note = h('input', { class: 'input', id: 'skip-note', maxlength: '200', placeholder: 'What you saw (optional)' });
+    // Only real access or safety problems. A sign on the door, or someone saying they don't want it, isn't a reason:
+    // people stop deliveries themselves in the app (the code on the side of the box takes them there).
+    const reasons = [['locked_gate', 'Locked gate'], ['dangerous_animal', 'Dangerous animal'], ['unsafe', 'Not safe'], ['no_safe_place', 'No safe place to leave it'], ['not_a_home', 'Not a home (empty, business, building site)']];
+    screen(h('div', { class: 'dhead' }, h('div', { text: `Stop ${s.stop} · ${s.address.split(',')[0]}` })), h('h1', { class: 'dtitle', text: 'Can’t leave it here?' }),
+      h('p', { class: 'dsub', text: 'Only for a real access or safety problem. Its box comes back with you, and the house is left out of the next deliveries until the office has looked at why.' }),
+      h('p', { class: 'small muted', text: 'Signs on the door don’t count. If someone tells you they don’t want it, leave the box and tell them they can stop deliveries in the app (scan the code on the side of the box).' }),
+      h('label', { for: 'skip-note', style: 'font-weight:700', text: 'Note' }), note,
+      h('div', { class: 'reasons' }, reasons.map(([r, label]) => h('button', { type: 'button', onclick: () => skipHouse(s, r, note.value.trim()) }, label))),
+      dock(h('button', { class: 'btn secondary', type: 'button', onclick: nextStop }, 'Back to this stop')));
+  }
+  /**
+   * A phone's photo is 3 to 15 MB, and the server keeps at most 1600 pixels a side (and refuses more than 8 MB). Shrunk
+   * here first to about 300 KB of JPEG, it sends in a second on a weak signal at the door, and a photo from a big
+   * camera is never refused. If the phone can't shrink it, the photo is sent as it is.
+   */
+  async function shrink(f) {
+    try {
+      if (fixture || !window.createImageBitmap) return f;
+      const img = await createImageBitmap(f, { imageOrientation: 'from-image' });
+      const k = Math.min(1, 1600 / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(img.width * k)); c.height = Math.max(1, Math.round(img.height * k));
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      img.close?.();
+      const b = await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.85));
+      return b && b.size ? b : f;
+    } catch { return f; }
   }
   function here() {
     if (fixture) return Promise.resolve(fixture.here?.() ?? null);
     return new Promise((res) => {
       if (!navigator.geolocation) return res(null);
       const giveUp = setTimeout(() => res(null), 9000); // if the phone never answers, the driver confirms instead
-      navigator.geolocation.getCurrentPosition((p) => { clearTimeout(giveUp); res({ lat: p.coords.latitude, lng: p.coords.longitude }); }, () => { clearTimeout(giveUp); res(null); }, { enableHighAccuracy: true, timeout: 8000, maximumAge: 10000 });
+      navigator.geolocation.getCurrentPosition((p) => { clearTimeout(giveUp); res({ lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy }); }, () => { clearTimeout(giveUp); res(null); }, { enableHighAccuracy: true, timeout: 8000, maximumAge: 10000 });
     });
   }
   async function atDoor(s) {
@@ -209,7 +260,10 @@
         h('p', { class: 'small muted', text: 'This stop can’t be marked delivered until the right box is scanned here. Every box’s bottles were already checked at the micro-factory.' }),
         dock(h('button', { class: 'btn', type: 'button', onclick: () => atDoor(s) }, 'Scan the right box'), h('button', { class: 'btn secondary', type: 'button', onclick: () => problem(s) }, 'Box missing or damaged')));
     }
-    let point = null, gpsOk = false, empties = 0, photoUrl = null, confirmed = false;
+    let point = null, gpsOk = false, empties = 0, photoOk = false, confirmed = false;
+    const needPhoto = on('drop_photo_proof');
+    // The box was scanned at this door: the office records it now, and only a photo taken after this counts.
+    const doorScan = needPhoto ? api('POST', `/v1/driver/runs/${r.id}/stops/${s.stop}/deliver`, { scannedPackId: packId, confirmedAtDoor: true, emptiesCollected: 0 }).catch(() => null) : Promise.resolve();
     const whereBox = h('div', {}, h('p', { text: `#${s.boxNumber} belongs to this house. Checking your location…` }));
     here().then((p) => {
       point = p;
@@ -221,11 +275,20 @@
             h('label', { class: 'check', style: 'background:#fff;color:var(--ink);margin-top:10px;text-align:left' }, h('input', { type: 'checkbox', onchange: (e) => { confirmed = e.target.checked; } }), h('span', { text: `I’m at ${s.address.split(',')[0]}` }))));
     });
     const out = h('output', { text: '0' });
-    const photoBtn = h('button', { class: 'photo', type: 'button', onclick: () => cam.click() }, 'Tap to take a photo of the box at the door');
-    const cam = h('input', { type: 'file', accept: 'image/*', capture: 'environment', hidden: true, onchange: async () => {
+    const photoBtn = h('button', { class: 'photo', type: 'button', onclick: () => cam.click() }, needPhoto ? 'Take a photo of the box where you left it (needed)' : 'Tap to take a photo of the box at the door');
+    // The photo proves the drop: only the office and the people who live there see it, and it's deleted after a while.
+    // Taken with the camera here and now: a photo picked from the phone (older than a few minutes) doesn't count.
+    const cam = h('input', { type: 'file', accept: 'image/jpeg,image/png,image/webp', capture: 'environment', hidden: true, onchange: async () => {
       const f = cam.files[0]; if (!f) return;
+      photoOk = false;
+      if (!fixture && f.lastModified && Date.now() - f.lastModified > 5 * 60_000) { cam.value = ''; return toast('Take a new photo with the camera, at the door. A photo from your gallery doesn’t count.'); }
       photoBtn.replaceChildren(h('img', { src: URL.createObjectURL(f), alt: 'Photo of the box at the door' }));
-      try { photoUrl = (await api('POST', '/v1/driver/photos', null, f)).url; } catch (x) { toast(x.message); }
+      try {
+        await doorScan;
+        const at = await here();
+        const where = at ? `&lat=${at.lat}&lng=${at.lng}${typeof at.accuracy === 'number' ? `&accuracy=${Math.round(at.accuracy)}` : ''}` : '';
+        await api('POST', `/v1/driver/photos?packId=${encodeURIComponent(packId)}&capture=camera${where}`, null, await shrink(f)); photoOk = true;
+      } catch (x) { toast(x.message); photoBtn.replaceChildren(document.createTextNode('That photo didn’t send. Tap to take it again.')); }
     } });
     screen(h('div', { class: 'dhead' }, h('div', { text: `Stop ${s.stop} · ${s.address.split(',')[0]}` })),
       h('div', { class: 'verdict ok' }, h('div', { class: 'mark', text: '✓' }), h('h2', { text: 'Right box' }), whereBox),
@@ -234,15 +297,17 @@
         h('div', { class: 'ctl' }, h('button', { type: 'button', 'aria-label': 'One fewer', onclick: () => { empties = Math.max(0, empties - 1); out.textContent = String(empties); } }, '−'), out, h('button', { type: 'button', 'aria-label': 'One more', onclick: () => { empties += 1; out.textContent = String(empties); } }, '+'))),
       dock(h('button', { class: 'btn', type: 'button', onclick: async (e) => {
         if (!confirmed) return toast(point || gpsOk ? 'Confirm you’re at the door first.' : 'Still checking your location. Or tick “I’m at” to confirm.');
+        if (needPhoto && !photoOk) return toast('Take a photo of the box where you left it first. It isn’t delivered without one.');
         e.currentTarget.disabled = true;
-        try { S.run = await api('POST', `/v1/driver/runs/${r.id}/stops/${s.stop}/deliver`, { scannedPackId: packId, ...(point ? { lat: point.lat, lng: point.lng } : {}), confirmedAtDoor: confirmed, ...(photoUrl ? { photoUrl } : {}), emptiesCollected: empties }); navigator.vibrate?.(40); toast(`Stop ${s.stop} delivered`); nextStop(); }
+        try { S.run = await api('POST', `/v1/driver/runs/${r.id}/stops/${s.stop}/deliver`, { scannedPackId: packId, ...(point ? { lat: point.lat, lng: point.lng } : {}), confirmedAtDoor: confirmed, emptiesCollected: empties }); navigator.vibrate?.(40); toast(`Stop ${s.stop} delivered`); nextStop(); }
         catch (x) { toast(x.message); e.currentTarget.disabled = false; }
       } }, 'Done · next house'), h('button', { class: 'link-btn', type: 'button', onclick: () => problem(s) }, 'Problem at this stop')));
   }
   function problem(s) {
-    const go = async (reason) => { try { S.run = await api('POST', `/v1/driver/runs/${S.run.id}/stops/${s.stop}/fail`, { reason }); toast('Noted. The customer will be told.'); nextStop(); } catch (x) { toast(x.message); } };
+    const go = async (reason) => { try { S.run = await api('POST', `/v1/driver/runs/${encodeURIComponent(S.run.id)}/stops/${s.stop}/fail`, { reason }); toast(s.houseId ? 'Noted. The box comes back.' : 'Noted. The customer will be told.'); nextStop(); } catch (x) { toast(x.message); } };
     screen(h('div', { class: 'dhead' }, h('div', { text: `Stop ${s.stop} · ${s.address.split(',')[0]}` })), h('h1', { class: 'dtitle', text: 'What happened?' }), h('p', { class: 'dsub', text: 'The box goes back to the micro-factory and the customer gets a message.' }),
       h('div', { class: 'reasons' }, ['No safe place to leave it', 'Gate or door locked', 'Box missing from the van', 'Box damaged', 'Can’t find the address'].map((r) => h('button', { type: 'button', onclick: () => go(r) }, r))),
+      s.houseId && on('driver_house_skip') ? h('button', { class: 'link-btn', type: 'button', onclick: () => skipSheet(s) }, 'Can’t get to the door safely? Skip this house') : null,
       dock(h('button', { class: 'btn secondary', type: 'button', onclick: nextStop }, 'Back to this stop')));
   }
   function finished() {

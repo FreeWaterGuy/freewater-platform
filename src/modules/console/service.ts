@@ -1,4 +1,5 @@
 import { defaultWallet } from '../wallet/assets';
+import { houseAd } from '../fillers/house';
 import { defaultGames } from '../games/service';
 import { defaultChain } from '../chain/service';
 import type { SqlClient } from '../../db/client';
@@ -13,6 +14,11 @@ import { lotteryDefaults } from '../lottery/rules';
 import { quietTransparency } from '../transparency/service';
 import { preset } from '../data/policy';
 import { adCategories, applyChange, checkSettings, describeChange, editableKeys, fontChoices, personOnlyKeys, ratchetProblem, chainProblem, walletProblem, printLimitsChanged, type EditableKey } from './settings';
+import { adBilling, defaultAdBilling } from '../ads/billing';
+
+/** Where a settings change came from, and why (for the switches' history on the Features page). */
+export interface SaveNote { via: string; reason?: string }
+export interface SaveOpts { chainApproved?: boolean; person?: boolean; note?: SaveNote; inTx?: (tx: SqlClient) => Promise<void> }
 
 export class ConsoleError extends Error {
   constructor(public code: string, message: string, public status = 400) {
@@ -44,6 +50,16 @@ export class ConsoleService {
   ) {}
 
   private now() { return (this.opts.clock?.() ?? new Date()).toISOString(); }
+
+  /**
+   * Set by the app (the Features page, src/modules/features/service.ts): called inside each settings save's own
+   * transaction with the settings before and after, so a switch kept in the settings is logged with the save itself.
+   */
+  onCommit?: (tx: SqlClient, companyId: string, before: CompanyConfig, after: CompanyConfig, by: string, note: SaveNote) => Promise<void>;
+  /** Set by the app: a new company's switches, copied from FreeWater's (money, chain and one-way ones off), in its own transaction. */
+  onCreate?: (tx: SqlClient, companyId: string, by: string) => Promise<void>;
+  /** Set by the app: the switches kept in the settings that this change turns on or off (a key never changes a switch). */
+  switchesChanged?: (before: CompanyConfig, after: CompanyConfig) => string[];
 
   /**
    * Saves and restores for one company run one at a time (the platform runs as a single owner, so an in-process lock
@@ -79,7 +95,8 @@ export class ConsoleService {
   }
 
   async overview(companyId: string) {
-    const config = this.company(companyId);
+    // How advertisers pay is shown filled in (a company without the setting has exactly the defaults).
+    const config = { ...this.company(companyId), adBilling: adBilling(this.company(companyId)) };
     const version = await this.baseline(companyId);
     const charities = (await this.db.query<{ name: string }>(`select name from charities where company_id = $1 order by name`, [companyId])).rows.map((r) => r.name);
     return {
@@ -118,30 +135,43 @@ export class ConsoleService {
 
   /** Save a change. Send the version you started from; if someone saved in between, nothing is overwritten. */
   /** `person: false` (a service key) may not change the machines' print limits. */
-  async save(companyId: string, change: Partial<Record<EditableKey, unknown>>, by: string, expectedVersion?: number, opts: { chainApproved?: boolean; person?: boolean } = {}) {
+  /** `note`: where the change came from and why, for the switches' history. `inTx`: more to save in the same transaction. */
+  async save(companyId: string, change: Partial<Record<EditableKey, unknown>>, by: string, expectedVersion?: number, opts: SaveOpts = {}) {
     return this.serial(companyId, () => this.saveNow(companyId, change, by, expectedVersion, opts));
   }
-  private async saveNow(companyId: string, change: Partial<Record<EditableKey, unknown>>, by: string, expectedVersion: number | undefined, opts: { chainApproved?: boolean; person?: boolean }) {
+  /** The problem with this change, if any, without saving it (the same checks as a save). */
+  checkChange(companyId: string, change: Partial<Record<EditableKey, unknown>>, opts: { chainApproved?: boolean } = {}): string | null {
+    const cur = this.company(companyId);
+    let next: CompanyConfig;
+    try { next = applyChange(cur, change); } catch (e: any) { return e.message; }
+    return checkSettings(next, this.registry.names()) ?? ratchetProblem(cur, next) ?? chainProblem(cur, next, opts.chainApproved) ?? walletProblem(cur, next, opts.chainApproved);
+  }
+  private async saveNow(companyId: string, change: Partial<Record<EditableKey, unknown>>, by: string, expectedVersion: number | undefined, opts: SaveOpts) {
     const version = await this.baseline(companyId);
     const cur = this.company(companyId);
     if (expectedVersion !== undefined && expectedVersion !== version) throw new ConsoleError('version_conflict', `Someone else saved changes (now version ${version}). Reload to see them, then make your change again.`, 409);
     let next: CompanyConfig;
     try { next = applyChange(cur, change); } catch (e: any) { throw new ConsoleError('not_editable', e.message); }
     if (opts.person === false && printLimitsChanged(cur, next)) throw new ConsoleError('person_needed', 'The machines’ print limits are a safety limit: a person signed in changes them, not a service key.', 403);
+    if (opts.person === false) { const flips = this.switchesChanged?.(cur, next) ?? []; if (flips.length) throw new ConsoleError('person_needed', `This turns a switch on or off (${flips.join(', ')}): a person signed in does that, never a service key.`, 403); }
     const problem = checkSettings(next, this.registry.names()) ?? ratchetProblem(cur, next) ?? chainProblem(cur, next, opts.chainApproved) ?? walletProblem(cur, next, opts.chainApproved);
     if (problem) throw new ConsoleError('invalid_settings', problem, 422);
     const changes = describeChange(cur, next);
     if (!changes.length) return { config: cur, version, changes };
-    return this.commit(companyId, next, by, changes, version);
+    return this.commit(companyId, next, by, changes, version, opts);
   }
 
-  private async commit(companyId: string, next: CompanyConfig, by: string, changes: string[], from: number) {
+  private async commit(companyId: string, next: CompanyConfig, by: string, changes: string[], from: number, opts: SaveOpts = {}) {
     await this.flush();
     const v = from + 1;
+    const before = this.company(companyId);
     await this.db.transaction(async (tx) => {
       // The primary key stops two saves landing on the same version.
       await tx.query(`insert into company_config_versions (company_id, version, config, changed_by, summary, created_at) values ($1,$2,$3,$4,$5,$6)`, [companyId, v, JSON.stringify(next), by, JSON.stringify(changes), this.now()]);
       await tx.query(`update companies set config = $2, updated_at = now() where id = $1`, [companyId, JSON.stringify(next)]);
+      // Switches kept in the settings are logged with the save itself, wherever it came from.
+      await this.onCommit?.(tx, companyId, before, next, by, opts.note ?? { via: 'settings' });
+      await opts.inTx?.(tx);
     }).catch((e) => { throw /duplicate|unique/i.test(String(e?.message)) ? new ConsoleError('version_conflict', 'Someone else saved at the same moment. Reload and try again.', 409) : e; });
     this.platform.companies.set(companyId, next);
     return { config: next, version: v, changes };
@@ -170,8 +200,8 @@ export class ConsoleService {
     const cur = this.company(companyId);
     const next = { ...old, id: companyId };
     // Putting back an old version passes the same checks as any other change (the chain can't come back on this way).
-    const money = personOnlyKeys.some((k) => JSON.stringify((cur as any)[k] ?? null) !== JSON.stringify((next as any)[k] ?? null)) || printLimitsChanged(cur, next);
-    if (money && !opts.person) throw new ConsoleError('person_needed', 'This version changes money, chain or one-way settings; a person signed in has to put it back.', 403);
+    const money = personOnlyKeys.some((k) => JSON.stringify((cur as any)[k] ?? null) !== JSON.stringify((next as any)[k] ?? null)) || printLimitsChanged(cur, next) || !!this.switchesChanged?.(cur, next).length;
+    if (money && !opts.person) throw new ConsoleError('person_needed', 'This version changes money, chain or one-way settings, or turns a switch on or off; a person signed in has to put it back.', 403);
     if (opts.approval) {
       const changed = [...new Set([...Object.keys(cur), ...Object.keys(next)])].filter((k) => JSON.stringify((cur as any)[k] ?? null) !== JSON.stringify((next as any)[k] ?? null));
       await opts.approval(changed);
@@ -180,7 +210,7 @@ export class ConsoleService {
     if (problem) throw new ConsoleError('invalid_settings', `Version ${v} can’t be put back as it is: ${problem}`, 422);
     const changes = describeChange(cur, next);
     if (!changes.length) return { config: cur, version: latest, changes };
-    return this.commit(companyId, next, by, [`Put back version ${v}`, ...changes], latest);
+    return this.commit(companyId, next, by, [`Put back version ${v}`, ...changes], latest, { note: { via: `settings history (put back version ${v})` } });
   }
 
   // ---------- label preview ----------
@@ -204,7 +234,7 @@ export class ConsoleService {
     let last: Unit | null = null;
     for (const u of this.platform.units.values()) if (u.companyId === companyId && u.kind === 'ad_supported' && (u.status === 'dispensed' || u.status === 'printed') && u.placements.every((p) => this.platform.campaigns.has(p.campaignId))) last = u;
     if (last) return last;
-    const house = [...this.platform.campaigns.values()].find((c) => c.companyId === companyId && c.isHouse);
+    const house = houseAd(this.platform.campaigns.values(), companyId);
     const machine = this.locations(companyId).find((l) => l.kind === 'machine')?.id ?? 'SAMPLE';
     const placements = house ? [{ slotIndex: 0, share: 1 as Share, rect: { x: 0, y: 0, w: 1, h: 1 }, campaignId: house.id, advertiserId: house.advertiserId, advertiserName: house.advertiserName, experienceId: house.experienceId, priceCents: 0, isHouse: true }] : [];
     return { id: 'u_sample', companyId, productId: 'bottle-16oz', locationId: machine, kind: 'ad_supported', placements, layout: placements.length ? [1] : [], status: 'printed', createdAt: new Date().toISOString() };
@@ -282,6 +312,8 @@ export class ConsoleService {
       wallet: defaultWallet(name.slice(0, 33).trim()), // its points carry its own name (up to 40 characters)
       offers: { enabled: false },
       ai: { mode: 'network' },
+      // Advertisers pay up front at flat prices with no fees on top, whatever the template charges (P13).
+      adBilling: defaultAdBilling(),
     };
     delete config.lottery;
     delete config.agents;
@@ -303,7 +335,10 @@ export class ConsoleService {
     await this.db.transaction(async (tx) => {
       await tx.query(`insert into companies (id, config) values ($1,$2)`, [id, JSON.stringify(config)]);
       await tx.query(`insert into company_config_versions (company_id, version, config, changed_by, summary, created_at) values ($1,1,$2,$3,$4,$5)`, [id, JSON.stringify(config), by, JSON.stringify([`Company set up by ${by}`]), this.now()]);
-    });
+      // Its switches: a copy of FreeWater's choices, except anything with money, the chain or no way back (P13).
+      this.platform.companies.set(id, config);
+      await this.onCreate?.(tx, id, by);
+    }).catch((e) => { this.platform.companies.delete(id); throw e; });
     this.platform.companies.set(id, config);
     this.platform.campaigns.set(house.id, house);
     this.platform.persist.campaign(house);

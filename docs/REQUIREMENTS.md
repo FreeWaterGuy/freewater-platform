@@ -51,6 +51,52 @@ paid to take them), paid for by advertisers, with part of every bottle going to 
 - **AR and features are always unlocked**, and the free bottle is never gated behind anything.
 - The page belongs to the advertiser; "Show me more" leads deeper.
 
+## Advertisers pay up front
+
+- **Nothing is made unless it's paid for.** An advertiser pays by card for a number of bottles at one size before the
+  ad is reviewed; only paid bottles print, and exactly that many go out. No end date, no cancelling; pausing only
+  delays. Turning a switch off that holds paid bottles back says so first (`docs/SWITCHES.md`, section 8).
+- **Pilot prices are the size prices, all-inclusive:** whole label $1, 1/2 65¢, 1/3 51¢, 1/4 42¢, 1/6 33¢, 1/8 24¢,
+  1/10 20¢ a bottle (times the product's factor). AR, video and scans are included, and every size gets the same tech.
+  Flat prices; bidding is off (it needs billing afterwards).
+- **Fees on top** (per scan, per AR launch, per box side, commission on sales, 3% suggested) are each a switch, off.
+  Turned on, they're charged to the card each day; a declined card pauses the advertiser's ads.
+- **Costly extras** (AI video clips) cost what they cost us plus a markup, shown in the quote before paying.
+- **Changing a running ad** costs a fee the company sets ($100 to start), paid up front; the new ad is reviewed.
+- **If the company stops an ad**, a person (owner or finance, second step) pays back what wasn't printed.
+- **Route buying:** from a tenth of one bottle at one house up to every house on the route or whole boxes, aimed like
+  direct mail (area, street, a shape on the map, chosen houses, optionally household data). First paid wins; nothing
+  is sold twice. Buys aimed at fewer than 50 houses need a verified business, a person's approval and no personal
+  details in the ad.
+
+## Reviewing paid ads
+
+- An AI or automated check can only **flag** a paid ad. The team talks it over with the advertiser (and can ask the AI
+  why); the money stays held and nothing prints. **Only a person finally rejects it**, with a written reason.
+- The AI may make the final call on rejections only after an owner (second step) turns on *AI makes the final call on
+  paid ads*, once its record meets the company's bar; it starts off for every company, the advertiser can always
+  appeal to a person, a sample is audited, and the governor turns it off if its agreement drops.
+- **Refunds always need a person.**
+
+## Home delivery (the Austin pilot)
+
+- **House after house:** the company chooses streets on the map (about 1,000 homes to start); every house gets packs in
+  street order, with no sign-up. A 24-pack a week by default, set per area; bigger households get more once they tell
+  us their size in the app.
+- **Stopping is in the app only.** Signs on the door ("no soliciting") and what someone says at the door are not
+  reasons to skip. A driver skips a house only for a real access or safety problem, or because it isn't a home; a
+  person reviews it, and the van goes on to the next house.
+- **A photo of the box at the door means delivered.** What happens on the porch afterwards isn't a failed delivery.
+- **A bottle with a bad label is reprinted with the same ads** and never counts against the advertiser.
+
+## Every feature is a switch
+
+- Each feature is a per-company switch on the Features page, in categories, with starting points (*Full FreeWater*,
+  *Design studio only*, *Delivery + printed ads*, *Machines + printed ads*). Every route, job and screen belongs to a
+  switch (`test/features-registry.test.ts`).
+- FreeWater's choices are the defaults for a new company, except money, the chain, anything one-way and an AI deciding
+  on its own, which start off.
+
 ## Points, credit and the wallet
 
 - Points first: a placeholder reward that can later become the FreeWater token.
@@ -88,6 +134,54 @@ paid to take them), paid for by advertisers, with part of every bottle going to 
   only) can be launched.
 - Video and written feedback earn points.
 - Bots are always marked as bots and never bill an advertiser or count toward giving.
+
+## Spots nobody buys
+
+- **Filler before the house ad.** A spot nobody bought gets a piece the company approved for that situation: its own
+  messages, charity (Well Aware) messages, advertisers' ads they offered free for unsold spots, and our own news when
+  news is on. The generic house ad is the last resort. A person approves every piece; filler is never billed.
+- **News starts off** (built, switched off; rolled out over time with testing): the host must switch the area on
+  (`FW_FEATURES_ON=news`) and a person must turn it on for the company. When on, the bottle carries a **topic and a
+  photo only** ("<subject>: the latest"), never a claim that can go stale; a person approves each topic; its code is
+  permanent and always opens the newest version of the story. Stories are FreeWater News, written by our AI from
+  several outlets in its own words, citing and linking them, never using another network's name or look as ours.
+  People choose their favourite sources (their stated choice; the first sets the style); with no choice, the neutral
+  version. **We never infer political leaning (or anything else) from behaviour.** Every story has "report an error"
+  and its corrections, and corrections are logged. Advertisers can keep their ads away from news.
+
+## Household and area data
+
+- **Targeting houses that haven't signed up**, as direct mail does: area statistics (neighbourhood, census block),
+  household data bought from a data company (chosen by the founder later), and, strongest and preferred, what app
+  users who claimed the house chose to share. One view per house combines them for the ad engine.
+- **Bought data is never sold onward** and is used only to choose ads for houses. Each attribute keeps its source and
+  date and is flagged bought or first-party; a whole source can be deleted at once; it's deleted 13 months after import.
+- **Never in bought-data targeting, by rule:** health, religion, ethnicity, sexuality, immigration, children,
+  politics, and the precise location of individuals. A house can say no without an account; a resident's "do not
+  sell or share" keeps the whole house out; a child at home leaves only the area's statistics.
+- The law of where the house is applies (Austin: Texas, the TDPSA). Open questions are in `docs/COMPLIANCE.md`.
+
+## Machines: app-only, ordered ahead (planned, not built)
+
+The founder's flow for the machines, to replace walking up and tapping. **Planned, not built**:
+
+- You must be an app user. You order 1 to up to 10 minutes in advance.
+- The bottle is printed and labelled just for you (its ads chosen for you, as for home delivery).
+- At the machine you scan the machine with your phone, and it releases the bottle meant for you, so there aren't two
+  people at the tray.
+- Bottles not picked up within the window go to a second tray on the side that anyone can take from without the app.
+  Their ads are reported to advertisers as untargeted, and their scans are counted as a stranger's.
+
+What changes in today's machine code (`src/modules/fleet`, `src/modules/machines/presence.ts`, `src/api/consumer.ts`,
+`src/machine`): ordering no longer needs the screen's presence code (`POST /v1/me/vends` takes a pick-up time instead,
+1 to 10 minutes ahead); the presence code becomes the *release* step (scanning the machine hands over the one bottle
+printed for you); the fleet's 20-second pick-up clock (`FleetService.enqueue`) becomes a pick-up window with a held
+bottle per person; walk-up bottles without the app (`machines.offlineWalkUp`, the offline label buffer) give way to the
+side tray; a bottle moved to the side tray loses its person (`intendedFor`), so its targeted ads show as untargeted on
+the advertiser's statement and its first scan is a stranger's (`HandoffService`); the machine's screen (`src/machine/screen.ts`)
+shows "scan to release" and the side tray. The daily limit per person stays. It also settles the open item in
+`docs/REVIEW-LOG.md` about two people at one tray taking each other's bottle. Needs the Model 6 maker for a second tray
+and per-bottle release, and the founder's and lawyer's word on how an unclaimed targeted bottle is billed.
 
 ## Brand offers
 

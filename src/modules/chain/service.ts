@@ -36,9 +36,9 @@ export class ChainService {
   isMember?: (companyId: string, person: string, at: Date) => Promise<boolean>;
   /** Saves "the chain is on" in the company's settings (with its history). Set by the app. */
   turnOn?: (companyId: string, by: string, rules: ChainSettings, kind: ActionKind) => Promise<void>;
-  /** False for a step whose area is switched off in the host's settings (FW_FEATURES). Set by the app. */
-  kindAllowed?: (kind: ActionKind) => boolean;
-  private allowed(kind: ActionKind) { if (this.kindAllowed && !this.kindAllowed(kind)) throw new ChainError('feature_off', 'This part of the platform is switched off on this server (FW_FEATURES).', 404); }
+  /** False for a step whose area is switched off in the host's settings (FW_FEATURES), or for this company on its Features page. Set by the app. */
+  kindAllowed?: (kind: ActionKind, companyId: string) => boolean;
+  private allowed(kind: ActionKind, companyId: string) { if (this.kindAllowed && !this.kindAllowed(kind, companyId)) throw new ChainError('feature_off', 'This part of the platform is switched off (on this server, or for this company on its Features page).', 404); }
   /** Tells a person something needs them (an alert). Set by the app. */
   alert?: (companyId: string, message: string) => void;
 
@@ -132,7 +132,7 @@ export class ChainService {
    */
   async propose(companyId: string, kind: ActionKind, params: Record<string, unknown>, person: string) {
     if (!IRREVERSIBLE.includes(kind)) throw new ChainError('bad_kind', `Propose one of: ${IRREVERSIBLE.join(', ')}.`);
-    this.allowed(kind);
+    this.allowed(kind, companyId);
     if (kind === 'mint' && !(typeof params.to === 'string' && Number.isSafeInteger(params.amount) && (params.amount as number) > 0)) throw new ChainError('bad_params', 'A mint needs who it’s for and a whole amount.');
     if (kind === 'convert' && !(Number.isSafeInteger(params.tokensPerPoint) && (params.tokensPerPoint as number) > 0)) throw new ChainError('bad_params', 'Say how many token units each point becomes (a whole number).');
     // Every point there could ever be, at this rate, must still be a whole number the books can hold exactly.
@@ -193,7 +193,7 @@ export class ChainService {
   async run(companyId: string, id: string, person: string) {
     const a = (await this.db.query<any>(`select * from chain_actions where id = $1 and company_id = $2`, [id, companyId])).rows[0];
     if (!a) throw new ChainError('not_found', 'No such action.', 404);
-    this.allowed(a.kind);
+    this.allowed(a.kind, companyId);
     if (a.status === 'running') {
       const moved = await this.unstick(companyId, a);
       if (moved === 'recording') return this.finishRecording(companyId, (await this.db.query<any>(`select * from chain_actions where id = $1`, [id])).rows[0], person);

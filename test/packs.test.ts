@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { createPlatform } from '../src/setup';
-import { bottle16oz, boxes, freewater, locations, peakSpring, sampleCampaigns } from '../src/demo/seed';
+import { bottle16oz, boxes, freewater as paidUpFront, locations, peakSpring, sampleCampaigns } from '../src/demo/seed';
 import { labelSignature } from '../src/modules/ads/engine';
 import type { CompanyConfig } from '../src/core/types';
+import { billedAfter as billedAfterSetting } from '../src/modules/ads/billing';
+// The sample ads print here without paying first: FreeWater's settings billing afterwards (paying up front, where
+// only paid bottles print, is tested in prepaid.test.ts).
+const freewater: typeof paidUpFront = { ...paidUpFront, adBilling: billedAfterSetting() };
 
 function setup(companies: CompanyConfig[] = [freewater, peakSpring]) {
   const made = createPlatform({ companies, products: [bottle16oz], locations, campaigns: sampleCampaigns(), boxes, seed: 3 });

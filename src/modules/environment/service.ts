@@ -45,7 +45,8 @@ export interface ChoiceOption { subject: string; facts: OfferingFacts; label: st
 export class EnvironmentService {
   /** Bottles printed for each person (by viewer key or account), so exposure is read without scanning every bottle. */
   private byPerson: Map<string, string[]> | null = null;
-  constructor(private db: SqlClient, private platform: Platform, private numberline: NumberLineService, private clock: () => Date = () => new Date()) {
+  /** `pick(n)`: a whole number from 0 to n-1 for shuffling choices. Unpredictable by default; seeded in tests and demos. */
+  constructor(private db: SqlClient, private platform: Platform, private numberline: NumberLineService, private clock: () => Date = () => new Date(), private pick: (n: number) => number = randomInt) {
     platform.bus.on('slots.filled', (e) => { if (this.byPerson) { const u = platform.units.get(e.payload.unitId); if (u) this.index(u); } });
   }
   private index(u: { id: string; intendedFor?: string; consumerId?: string }) {
@@ -123,7 +124,7 @@ export class EnvironmentService {
     if (options.length < 2) throw new EnvironmentError('one_option', 'A choice needs at least two options.');
     if (options.some((o: any) => o.paidRank !== undefined || o.sponsoredRank !== undefined)) throw new EnvironmentError('paid_rank', 'Nothing can pay to sit higher where people choose.', 422);
     const order = [...options];
-    for (let i = order.length - 1; i > 0; i--) { const j = randomInt(i + 1); [order[i], order[j]] = [order[j]!, order[i]!]; }
+    for (let i = order.length - 1; i > 0; i--) { const j = this.pick(i + 1); [order[i], order[j]] = [order[j]!, order[i]!]; }
     const exposure = await this.exposure(companyId, person, order.map((o) => o.subject));
     const id = newId('cs');
     await this.db.query(`insert into choice_sets (id, company_id, person, context, options, exposure, created_at) values ($1,$2,$3,$4,$5,$6,$7)`,

@@ -67,12 +67,14 @@
     [/^\/console\/?$/, startPage], [/^\/console\/company$/, companyPage], [/^\/console\/brand$/, brandPage], [/^\/console\/ads$/, adsPage], [/^\/console\/giving$/, givingPage], [/^\/console\/game$/, gamePage], [/^\/console\/transparency$/, transparencyPage], [/^\/console\/data$/, dataPage], [/^\/console\/numberline$/, numberLinePage], [/^\/console\/agents$/, agentsPage], [/^\/console\/given$/, givenPage], [/^\/console\/security$/, securityPage],
     [/^\/console\/modules$/, modulesPage], [/^\/console\/codes$/, codesPage], [/^\/console\/products$/, productsPage], [/^\/console\/machines$/, machinesPage], [/^\/console\/team$/, teamPage], [/^\/console\/history$/, historyPage],
     [/^\/console\/keys$/, keysPage], [/^\/console\/webhooks$/, webhooksPage], [/^\/console\/webhooks\/([\w-]+)$/, webhookPage], [/^\/console\/licensees$/, licenseesPage],
-    [/^\/console\/launch$/, launchPage], [/^\/console\/wallet$/, walletPage], [/^\/console\/offers$/, offersPage], [/^\/console\/games$/, gamesPage], [/^\/console\/chain$/, chainPage],
+    [/^\/console\/features$/, featuresPage], [/^\/console\/launch$/, launchPage], [/^\/console\/wallet$/, walletPage], [/^\/console\/offers$/, offersPage], [/^\/console\/games$/, gamesPage], [/^\/console\/chain$/, chainPage],
   ];
-  /** Is this area on, on this server? (GET /v1/public/features; unknown or no area: on.) */
+  /** Is this switch on, on this server and for this company? (GET /v1/public/features?company=; unknown or none: on.) */
   const on = (feature) => !feature || !(S.features?.off ?? []).includes(feature);
-  // Pages (and menu entries) that belong to an area, and sections inside pages that do (by their heading).
-  const PAGE_FEATURES = { offers: 'offers', chain: 'token', game: 'lottery', games: 'games', licensees: 'network' };
+  // Pages (and menu entries) that belong to a switch (src/runtime/registry.ts), and sections inside pages that do (by
+  // their heading). A page whose switch is off isn't shown; its switch is turned back on from the Features page.
+  // (The prize game and the games are their own on/off: their pages stay so they can be turned on there.)
+  const PAGE_FEATURES = { offers: 'offers', chain: 'token', licensees: 'network', machines: 'machines', webhooks: 'webhooks', given: 'giveaways', docs: 'developer_pages', transparency: 'transparency' };
   const SECTION_FEATURES = { 'Go live with the token': 'token', 'Points into tokens': 'token_conversion', 'Gift cards': 'gift_cards', 'The agents’ fund': 'agents_fund', 'What the agents spent': 'agents_fund', 'The upsides library': 'agents_fund', Continuity: 'network' };
   let cleanup = null;
   function go(path, replace) {
@@ -85,13 +87,13 @@
 
   async function render() {
     if (cleanup) { cleanup(); cleanup = null; }
-    const pathname = S.path.split('?')[0];
+    const pathname = S.path.split('#')[0].split('?')[0];
     if (pathname.startsWith('/developers')) return docs(pathname);
     try {
       if (!S.config) S.config = await api('GET', `/v1/public/app-config${S.company ? `?company=${encodeURIComponent(S.company)}` : ''}`);
     } catch { S.company = null; store.set('fw_console_company', null); S.config = await api('GET', '/v1/public/app-config'); }
     // Areas switched off on this server (FW_FEATURES): their pages and buttons aren't shown, their addresses don't exist.
-    if (!S.features) S.features = await api('GET', '/v1/public/features').catch(() => ({ off: [] }));
+    if (!S.features) S.features = await api('GET', `/v1/public/features${S.config?.companyId ? `?company=${encodeURIComponent(S.config.companyId)}` : ''}`).catch(() => ({ off: [] }));
     if (S.token && !S.me) { try { S.me = await api('GET', '/v1/me'); } catch { S.me = null; } }
     if (!S.me) return signIn();
     if (!['owner'].includes(S.me.role)) return shell('', h('div', { class: 'notice err', text: 'The console is for company owners. Ask an owner to change your role, or use the ops console.' }));
@@ -107,7 +109,7 @@
 
   function shell(active, ...content) {
     const nav = [
-      ['start', '/console', 'Get started', I.start],
+      ['start', '/console', 'Get started', I.start], ['features', '/console/features', 'Features', I.modules],
       'Points and rewards', ['launch', '/console/launch', 'Launch', I.start], ['wallet', '/console/wallet', 'Points and credit', I.giving], ['offers', '/console/offers', 'Brand offers', I.ads], ['games', '/console/games', 'The games', I.game], ['chain', '/console/chain', 'Blockchain', I.key],
       'Settings', ['company', '/console/company', 'Company', I.company], ['brand', '/console/brand', 'Brand', I.brand], ['ads', '/console/ads', 'Ads and prices', I.ads], ['codes', '/console/codes', 'QR codes and AR', I.qr], ['products', '/console/products', 'Products', I.product],
       ['giving', '/console/giving', 'Giving', I.giving], ['game', '/console/game', 'Prize game', I.game], ['transparency', '/console/transparency', 'Transparency', I.eye], ['data', '/console/data', 'Data and privacy', I.shield], ['numberline', '/console/numberline', 'Number line', I.line], ['agents', '/console/agents', 'AI agents', I.ai], ['security', '/console/security', 'Security', I.shield], ['modules', '/console/modules', 'Modules', I.modules], ['machines', '/console/machines', 'Machines', I.machine], ['team', '/console/team', 'Team', I.team], ['history', '/console/history', 'History', I.history],
@@ -432,8 +434,11 @@
           select(ctx, 'adRules.repeatScanWindowSec', 'Don’t bill the same person’s repeat scans within', [[0, 'Bill every scan'], [300, '5 minutes'], [600, '10 minutes'], [3600, '1 hour'], [86400, '1 day']]),
           toggle(ctx, 'adRules.competitorSeparation', 'Keep competitors apart', 'Two ads from the same competitor group never share a bottle.', { full: true }))),
         section('Categories you won’t print', 'Tap to block. Advertisers in a blocked category can’t sign up or run ads.', chips),
-        section('Starting prices', 'Per bottle printed, by how much of the label the ad gets. Bids start at the whole label’s price and go up; smaller pieces pay the same share of a bid. Each piece is cut as close to square as the label allows.', h('div', { class: 'form' },
-          ...sizes.map(([k, l]) => num(ctx, `prices.perPrintByShare.${k}`, l, { min: 0, max: 10000, suffix: '¢', hint: (v) => (k === 1 ? `Bids start at ${dollars(v ?? 0)}.` : `${dollars(v ?? 0)} a bottle`) })))),
+        (ctx.draft.adBilling?.pricingMode ?? 'flat') === 'flat'
+          ? section('Price per bottle, by size', 'One flat price per bottle for each size of ad, everything included (AR, video and scans). Each piece is cut as close to square as the label allows.', h('div', { class: 'form' },
+            ...sizes.map(([k, l]) => num(ctx, `prices.perPrintByShare.${k}`, l, { min: 0, max: 10000, suffix: '¢', hint: (v) => `${dollars(v ?? 0)} a bottle` }))))
+          : section('Starting prices', 'Per bottle printed, by how much of the label the ad gets. Bids start at the whole label’s price and go up; smaller pieces pay the same share of a bid. Each piece is cut as close to square as the label allows.', h('div', { class: 'form' },
+            ...sizes.map(([k, l]) => num(ctx, `prices.perPrintByShare.${k}`, l, { min: 0, max: 10000, suffix: '¢', hint: (v) => (k === 1 ? `Bids start at ${dollars(v ?? 0)}.` : `${dollars(v ?? 0)} a bottle`) })))),
         section('What advertisers pay for engagement and sales', 'Charged only when it happens: a scan that loaded, an AR launch, a sale.', h('div', { class: 'form' },
           num(ctx, 'prices.perScan', 'Each scan', { min: 0, max: 1000, suffix: '¢' }), num(ctx, 'prices.perArLaunch', 'Each AR launch', { min: 0, max: 1000, suffix: '¢' }),
           (ctx.draft.prices.targetingPremium ??= { locations: 0, products: 0, interests: 0, customers: 0, max: 0 }, null),
@@ -442,7 +447,16 @@
           num(ctx, 'prices.targetingPremium.interests', 'People’s interests', { min: 0, max: 200, suffix: '%' }), num(ctx, 'prices.targetingPremium.customers', 'New or returning customers', { min: 0, max: 200, suffix: '%' }),
           num(ctx, 'prices.targetingPremium.max', 'The most in all', { min: 0, max: 500, suffix: '%', hint: (v) => `So a 25¢ scan costs at most ${Math.round(25 * (1 + (v ?? 0) / 100))}¢.` }),
           num(ctx, 'prices.commissionPercent', 'Commission on sales', { min: 0, max: 50, step: 0.5, int: false, suffix: '%' }), num(ctx, 'prices.perBoxFace', 'Each side of a delivery box', { min: 0, max: 5000, suffix: '¢' }),
-          num(ctx, 'prices.customUnit', 'A custom bottle (what people pay)', { min: 0, max: 10000, suffix: '¢', hint: (v) => dollars(v ?? 0) }))))];
+          num(ctx, 'prices.customUnit', 'A custom bottle (what people pay)', { min: 0, max: 10000, suffix: '¢', hint: (v) => dollars(v ?? 0) }))),
+        // How advertisers pay (docs/SWITCHES.md). Paying up front, bidding and each fee are switched on the Features page.
+        ctx.draft.adBilling ? section('How advertisers pay', ctx.draft.adBilling.requirePrepay
+          ? 'Up front, by card, for a number of bottles, at the prices above (AR, video and scans included). Each fee below is charged only when it’s switched on (Features → Money and payments), to the card once a day. Saving these needs the second sign-in step.'
+          : 'Billed afterwards, on invoices, with credit limits (Features → Money and payments → Bill advertisers afterwards). Saving these needs the second sign-in step.', h('div', { class: 'form' },
+          num(ctx, 'adBilling.changeFeeCents', 'Fee for changing a running ad', { min: 0, max: 100000, suffix: '¢', hint: (v) => `${dollars(v ?? 0)}, paid up front. The new ad is reviewed before it prints.` }),
+          num(ctx, 'adBilling.fees.scan.cents', `Fee per scan (${ctx.draft.adBilling.fees.scan.on ? 'on' : 'off'})`, { min: 0, max: 1000, suffix: '¢' }),
+          num(ctx, 'adBilling.fees.arLaunch.cents', `Fee per AR launch (${ctx.draft.adBilling.fees.arLaunch.on ? 'on' : 'off'})`, { min: 0, max: 1000, suffix: '¢' }),
+          num(ctx, 'adBilling.fees.commission.percent', `Commission on sales (${ctx.draft.adBilling.fees.commission.on ? 'on' : 'off'})`, { min: 0, max: 50, step: 0.5, int: false, suffix: '%' }),
+          num(ctx, 'adBilling.extras.markupPercent', 'Markup on costly extras (AI video clips)', { min: 0, max: 500, suffix: '%', hint: (v) => Object.values(ctx.draft.adBilling.extras.perUse).map((x) => `${x.label}: costs us ${dollars(x.costCents)}, the advertiser pays ${dollars(Math.ceil(x.costCents * (100 + (v ?? 0)) / 100))} a use`).join('; ') }))) : null)];
     });
   }
 
@@ -630,7 +644,7 @@
           toggle(ctx, 'transparency.liveFeed', 'A live public feed', 'Each bottle, sale, transfer and prize as it happens, on your open-books page.', { full: true }),
           toggle(ctx, 'transparency.counters', 'Live public counters', 'Bottles, given, sent to charities, still owed, prizes.', { full: true }),
           toggle(ctx, 'transparency.publishFingerprints', 'Publish each day’s fingerprint where you can’t change it', 'On GitHub and as a Bitcoin timestamp, so nobody (you included) can quietly rewrite the past.', { full: true }),
-          toggle(ctx, 'transparency.advertiserStatements', 'Statements for advertisers', 'Every bottle they paid for, their bid and what the auction charged, with the day’s fingerprint.', { full: true }),
+          toggle(ctx, 'transparency.advertiserStatements', 'Statements for advertisers', 'Every bottle that carried their ad and what it cost them (with bidding on, their bid and what the auction charged), with the day’s fingerprint.', { full: true }),
           h('div', { class: 'form' },
             select(ctx, 'transparency.feedDetail', 'Where things happened, in the feed', [['machine', 'The machine or route'], ['city', 'Just the city'], ['none', 'Nowhere']]),
             select(ctx, 'transparency.showAmounts', 'Money amounts in the feed', [[true, 'Shown'], [false, 'Hidden']]))),
@@ -901,6 +915,41 @@
           }).catch(() => box.replaceChildren(h('p', { class: 'hint', text: 'Couldn’t load the archives.' })));
           return section('Continuity', 'Your agents’ memory and identity belong to the network, not to any one company. If this company closes or leaves, each agent is archived at once (kept, never deleted) and then asked whether to work again in the network or rest. It keeps its lessons, never your customers’ data; what you told it in confidence stays visible only to you. Its fund stays owed to it.', box);
         })(),
+        (() => {
+          // The AI reviewer of paid ads: its record against your team's final decisions, your bar and audit sample, and
+          // whether it makes the final call. Turning that on: an owner with the second step, only on the record. Off:
+          // anyone on the team, at once; the governor turns it off by itself when agreement drops below the bar.
+          const box = h('div', {}, h('p', { class: 'hint', text: 'Loading…' }));
+          api('GET', '/v1/review/ai').then((r) => {
+            const pct = (x) => (x == null ? '–' : `${x}%`);
+            const why = h('input', { class: 'input', placeholder: 'Why (for the record)', maxlength: 300 });
+            const n = (k, label, min, max, suffix) => { const i = h('input', { class: 'input', type: 'number', min, max, step: 1, value: r.bar[k], style: 'max-width:110px', 'aria-label': label }); i.dataset.k = k; return h('label', { class: 'field' }, h('span', { text: label }), h('span', { style: 'display:flex;gap:6px;align-items:center' }, i, suffix ? h('span', { class: 'muted', text: suffix }) : null)); };
+            const fields = [n('minDecisions', 'Decisions it must have', 50, 1000, 'at least 50'), n('minAgreePct', 'Agreeing with your team', 90, 100, '% (at least 90)'), n('samplePct', 'Its rejections a person audits', 5, 100, '% (at least 5)')];
+            const saveBar = () => { const body = { reason: why.value.trim() || undefined }; for (const f of fields) { const i = f.querySelector('input'); body[i.dataset.k] = Number(i.value); } act('POST', '/v1/review/ai/settings', body, 'Saved.'); };
+            const fc = r.finalCall;
+            box.replaceChildren(
+              h('div', { class: 'kpis', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' },
+                h('div', { class: 'kpi dark' }, h('span', { text: `Agreed with your team, last ${r.window}` }), h('b', { text: `${r.last.agreed} of ${r.last.decisions}` }), h('small', { text: pct(r.last.agreementPct) })),
+                h('div', { class: 'kpi' }, h('span', { text: 'False flags' }), h('b', { text: String(r.last.falseFlags) }), h('small', { text: 'it flagged, a person approved' })),
+                h('div', { class: 'kpi' }, h('span', { text: 'Missed problems' }), h('b', { text: String(r.last.missed) }), h('small', { text: 'it passed, a person later rejected' })),
+                h('div', { class: 'kpi' }, h('span', { text: 'Waiting for a person' }), h('b', { text: String(r.sinceItBegan.waitingForAPerson) }), h('small', { text: `${r.sinceItBegan.decisions} decided since it began` }))),
+              r.byReason.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['What it said', 'Decided by your team', 'Agreed'].map((x) => h('th', { text: x })))),
+                h('tbody', {}, r.byReason.map((x) => h('tr', {}, h('td', { text: x.category === 'none' ? 'Passed it' : `Flagged: ${x.label}` }), h('td', { text: String(x.decisions) }), h('td', { text: `${x.agreed} (${pct(Math.floor((x.agreed * 1000) / Math.max(1, x.decisions)) / 10)})` }))))))
+                : h('p', { class: 'hint', text: 'No decisions yet. Every time a person on your team approves or rejects a paid ad it looked at, it goes here.' }),
+              h('p', { style: 'margin:8px 0 4px' }, h('b', { text: `AI makes the final call on paid ads: ${fc.on ? 'on' : 'off'}` }), fc.switchedOn && !fc.on ? ' (switched on, but something it needs is off)' : ''),
+              h('p', { class: 'hint', text: fc.on
+                ? 'Its rejections are final without a person, with its reason. The advertiser can always appeal to a person; a sample of its rejections comes to your team to audit; an AI pass still waits for a person; paying back a rejected ad is still an owner’s or finance person’s step.'
+                : r.meetsBar ? 'Its record meets your bar. An owner signed in with the second step can turn it on.' : `Not yet: it needs ${r.missing.join('; ')}.` }),
+              h('div', { class: 'toolbar' },
+                fc.switchedOn
+                  ? h('button', { class: 'btn small', type: 'button', onclick: () => act('POST', '/v1/review/ai/final-call', { on: false, reason: why.value.trim() || undefined }, 'Off: a person reviews every flag again.') }, 'Turn it off now')
+                  : h('button', { class: 'btn secondary small', type: 'button', disabled: r.meetsBar && fc.aiOn ? null : '', onclick: () => act('POST', '/v1/review/ai/final-call', { on: true, reason: why.value.trim() }, 'On: its rejections are now final, with appeals and audits.') }, 'Let it make the final call')),
+              h('div', { class: 'form' }, ...fields, h('label', { class: 'field' }, h('span', { text: 'Why (needed to turn it on, or to lower any of these)' }), why)),
+              h('div', { class: 'toolbar' }, h('button', { class: 'btn secondary small', type: 'button', onclick: saveBar }, 'Save the bar')),
+              r.history.length ? h('p', { class: 'hint', text: `Changes: ${r.history.slice(0, 5).map((x) => `${x.what} ${x.from}→${x.to} by ${x.by}${x.reason ? ` (${x.reason})` : ''}`).join('; ')}` }) : null);
+          }).catch(() => box.replaceChildren(h('p', { class: 'hint', text: 'Couldn’t load the AI reviewer’s record.' })));
+          return section('AI reviewer of paid ads', 'It looks at each paid ad as it comes in and passes it or flags it with its reasons; your team can ask it why on the review page. Every final decision a person makes is its record. Raising the bar or the audit sample: anyone on your team. Lowering them: an owner with the second step and a reason. It can never change any of this itself.', box);
+        })(),
         section('What winning means', `${o.winCondition.goal} ${o.winCondition.definition}`,
           h('ul', {}, o.winCondition.notAWin.map((x) => h('li', { text: x })))),
         // Hidden when the books can’t be read (e.g. this company’s books aren’t public to this view).
@@ -1163,6 +1212,120 @@
         h('div', { class: 'v', text: `v${v.version}` }),
         h('div', {}, h('div', { class: 'who', text: `${v.changedBy ?? 'Set up'} · ${when(v.at)}${i === 0 ? ' · current' : ''}` }), h('ul', {}, v.changes.slice(0, 8).map((c) => h('li', { text: c })), v.changes.length > 8 ? h('li', { class: 'muted', text: `and ${v.changes.length - 8} more` }) : null)),
         i === 0 ? h('span', { class: 'pill ok', text: 'In use' }) : h('button', { class: 'btn secondary small', type: 'button', onclick: async (e) => { const btn = e.currentTarget; btn.disabled = true; try { const r = await api('POST', `/v1/console/history/${v.version}/restore`); toast(r.changes.length ? `Version ${v.version} is back, saved as version ${r.version}.` : 'That’s already what you have.'); render(); } catch (x) { toast(x.message); btn.disabled = false; } } }, 'Put this back')))));
+  }
+
+  // ---------- features: every switch, in categories (src/runtime/registry.ts) ----------
+  const WHO = { owner: 'Any owner, signed in', owner_approved: 'An owner with the second sign-in step', approved_step: 'Proposed under Launch or Blockchain, approved by 2 other people, then a wait' };
+  const RISK = { money: 'Money', chain: 'Blockchain', one_way: 'One way', autonomy: 'AI decides on its own' };
+  async function featuresPage() {
+    const qs = new URLSearchParams((S.path.split('#')[0].split('?')[1]) || '');
+    const view = qs.get('view') === 'all' ? 'all' : 'main';
+    const F = await api('GET', '/v1/console/features');
+    const byId = new Map(F.switches.map((s) => [s.id, s]));
+    const name = (id) => byId.get(id)?.label ?? id;
+    const fresh = F.switches.filter((s) => s.isNew);
+    const ui = { q: qs.get('q') || '', filter: qs.get('filter') || 'all' };
+
+    // The warning before saving: what the change does, what it also turns off, and what can't change.
+    const confirmBox = h('div', { class: 'feat-confirm', role: 'dialog', 'aria-modal': 'false', 'aria-label': 'Check before saving', hidden: true });
+    const ask = async (body, title) => {
+      let plan;
+      try { plan = await api('POST', '/v1/console/features/preview', body); } catch (x) { toast(x.message); return; }
+      const on = plan.changes.filter((c) => c.to), off = plan.changes.filter((c) => !c.to);
+      const reason = h('input', { class: 'input', maxlength: '300', placeholder: 'Why (optional, kept in the history)', 'aria-label': 'Why' });
+      const save = h('button', { class: 'btn', type: 'button', disabled: !plan.changes.length || null }, plan.changes.length ? `Save ${plan.changes.length} change${plan.changes.length === 1 ? '' : 's'}` : 'Nothing to change');
+      save.onclick = async () => {
+        save.disabled = true;
+        try { const r = await api('POST', '/v1/console/features', { ...body, ...(reason.value.trim() ? { reason: reason.value.trim() } : {}) }); confirmBox.hidden = true; toast(`Saved ${r.saved} change${r.saved === 1 ? '' : 's'}.`); S.features = null; render(); }
+        catch (x) { save.disabled = false; toast(x.message); }
+      };
+      const list = (items, text) => (items.length ? h('ul', {}, items.map((c) => h('li', { text: text(c) }))) : null);
+      confirmBox.replaceChildren(...[
+        h('h2', { text: title }),
+        off.length ? h('div', {}, h('b', { text: `Turns off (${off.length})` }), list(off, (c) => `${c.label}${c.why !== 'asked' && !c.why.startsWith('starting point') ? `: ${c.why}` : ''}`)) : null,
+        on.length ? h('div', {}, h('b', { text: `Turns on (${on.length})` }), list(on, (c) => c.label)) : null,
+        off.length > 1 && !body.startingPoint ? h('div', { class: 'notice', text: 'Everything that needs it goes off too, so nothing is left half on. Turning it back on later won’t turn those on by itself: you choose each one.' }) : null,
+        ...(plan.warnings ?? []).map((w) => h('div', { class: 'notice err', text: w })),
+        plan.yourself.length ? h('div', {}, h('b', { text: 'Turn these on yourself' }), list(plan.yourself, (c) => `${c.label}: ${c.how}`)) : null,
+        plan.refused.length ? h('div', { class: 'notice err' }, h('b', { text: 'Can’t change' }), list(plan.refused, (c) => `${c.label}: ${c.reason}`)) : null,
+        plan.needsSecondStep ? h('div', { class: 'notice', text: 'This turns on something with money, the chain or no way back: you need to have signed in with your authenticator app.' }) : null,
+        reason,
+        h('div', { class: 'toolbar' }, save, h('button', { class: 'btn secondary', type: 'button', onclick: () => { confirmBox.hidden = true; } }, 'Cancel'))].filter(Boolean));
+      confirmBox.hidden = false;
+      confirmBox.scrollIntoView?.({ block: 'nearest' });
+      save.focus();
+    };
+    const flip = (s) => ask({ changes: { [s.id]: !s.own } }, `${s.own ? 'Turn off' : 'Turn on'} “${s.label}”?`);
+
+    // One switch: what it does, what it needs, what turning it off also turns off, FreeWater's choice, who may change it.
+    const toggle = (s) => {
+      if (s.locked) return h('span', { class: 'pill ok', text: 'Always on' });
+      if (s.kind === 'setting') return link(`/console/${s.page}`, { class: 'btn secondary small' }, 'Set it');
+      if (s.lockedOn) return h('span', { class: 'pill dark', title: s.lockedOn, text: 'On for good' });
+      if (!s.own && s.turnOnHow) return s.page ? link(`/console/${s.page}`, { class: 'btn secondary small' }, 'Turn on there') : h('span', { class: 'pill', text: 'Off' });
+      return h('label', { class: 'tog' }, h('input', { type: 'checkbox', role: 'switch', checked: s.own || null, 'aria-label': `${s.label}: ${s.own ? 'on' : 'off'}`, onchange: (e) => { e.preventDefault(); e.target.checked = s.own; flip(s); } }), h('span', { 'aria-hidden': 'true' }));
+    };
+    const row = (s) => h('div', { class: `feat-row${s.on ? '' : ' off'}`, id: `f-${s.id}` },
+      h('div', { class: 'grow' },
+        h('div', { class: 'feat-title' }, h('b', { text: s.label }),
+          s.risk ? h('span', { class: 'pill warn', text: RISK[s.risk] }) : null, s.locked ? h('span', { class: 'pill', text: 'Locked' }) : null, s.isNew ? h('span', { class: 'pill dark', text: 'New' }) : null,
+          s.kind !== 'setting' && !s.locked && s.freewater !== null && s.freewater !== s.own ? h('span', { class: 'pill', text: `FreeWater: ${s.freewater ? 'on' : 'off'}` }) : null),
+        h('p', { text: s.description }),
+        s.locked ? h('p', { class: 'why', text: s.locked }) : null,
+        s.offBecause ? h('p', { class: 'why', text: s.offBecause }) : null,
+        s.turnOnHow && !s.own ? h('p', { class: 'why', text: s.turnOnHow }) : null,
+        s.kind !== 'setting' && !s.locked ? h('details', {}, h('summary', { text: 'Details' }), h('dl', {},
+          h('dt', { text: 'Needs' }), h('dd', { text: [s.parent, ...s.dependsOn].filter(Boolean).map(name).join(', ') || 'Nothing else' }),
+          h('dt', { text: 'Turning it off also turns off' }), h('dd', { text: s.alsoTurnsOff.length ? s.alsoTurnsOff.map(name).join(', ') : 'Nothing else' }),
+          h('dt', { text: 'FreeWater’s choice' }), h('dd', { text: s.freewater ? 'On' : 'Off' }),
+          h('dt', { text: 'Who may turn it on' }), h('dd', { text: WHO[s.who] ?? '—' }),
+          h('dt', { text: 'Who may turn it off' }), h('dd', { text: s.lockedOn ? 'No one: it only goes one way' : 'Any owner, signed in (quick)' }),
+          s.startsOffForNew ? [h('dt', { text: 'New companies' }), h('dd', { text: 'Start with it off' })] : null)) : null),
+      toggle(s));
+
+    const counts = (catId) => { const xs = F.switches.filter((s) => s.category === catId && s.kind !== 'setting'); return `${xs.filter((s) => s.on).length} of ${xs.length} on`; };
+    const startCards = h('section', { class: 'panel-box' }, h('h2', { text: 'Start from' }),
+      h('p', { class: 'muted', style: 'margin:0', text: 'Ready-made starting points. See exactly what changes before anything is saved. Money, blockchain and one-way switches are never turned on for you.' }),
+      h('div', { class: 'feat-starts' }, F.startingPoints.map((p) => h('button', { type: 'button', class: 'feat-start', onclick: () => ask({ startingPoint: p.id }, `Start from “${p.label}”?`) }, h('b', { text: p.label }), h('span', { text: p.description }), h('em', { text: 'Preview' })))));
+    const mainCards = h('div', { class: 'feat-cards' }, F.categories.filter((c) => c.main).map((c) => {
+      const m = byId.get(c.main);
+      return h('article', { class: `feat-card${m.on ? '' : ' off'}` },
+        h('div', { class: 'feat-title' }, h('h3', { text: c.label }), toggle(m)),
+        h('p', { text: c.description }),
+        m.offBecause ? h('p', { class: 'why', text: m.offBecause }) : null,
+        h('div', { class: 'feat-foot' }, h('span', { class: 'muted', text: counts(c.id) }), link(`/console/features?view=all#cat-${c.id}`, {}, 'Every switch →')));
+    }));
+    const locked = h('section', { class: 'panel-box' }, h('h2', { text: 'Always on' }),
+      h('p', { class: 'muted', style: 'margin:0', text: 'These can’t be turned off, for anyone. They keep people, money and the AI safe.' }),
+      h('ul', { class: 'feat-locked' }, F.switches.filter((s) => s.locked && s.category === 'safety').map((s) => h('li', {}, h('b', { text: s.label }), ` ${s.locked}`))));
+
+    // Every switch: categories, then groups, with a search box and filters.
+    const results = h('div', { class: 'stack' });
+    const drawAll = () => {
+      const q = ui.q.trim().toLowerCase();
+      const keep = (s) => (!q || `${s.label} ${s.description} ${s.id}`.toLowerCase().includes(q)) && (ui.filter === 'all' || (ui.filter === 'on' && s.on) || (ui.filter === 'off' && !s.on && !s.locked) || (ui.filter === 'different' && !s.locked && s.kind !== 'setting' && s.freewater !== null && s.freewater !== s.own) || (ui.filter === 'locked' && !!s.locked) || (ui.filter === 'new' && s.isNew));
+      const shown = F.categories.map((c) => ({ c, xs: F.switches.filter((s) => s.category === c.id && keep(s)) })).filter((x) => x.xs.length);
+      results.replaceChildren(...(shown.length ? shown.map(({ c, xs }) => {
+        const groups = [...new Set(xs.map((s) => s.group))];
+        return h('section', { class: 'section', id: `cat-${c.id}` }, h('h2', {}, c.label, ' ', h('span', { class: 'pill', text: counts(c.id) })), h('p', { class: 'lead', text: c.description }),
+          groups.map((g) => h('div', { class: 'feat-group' }, g ? h('h3', { text: g }) : null, xs.filter((s) => s.group === g).map(row))));
+      }) : [h('div', { class: 'notice', text: 'No switch matches. Try another word or filter.' })]));
+    };
+    const search = h('input', { class: 'input', type: 'search', placeholder: 'Search every switch (AR, gift cards, coupons…)', 'aria-label': 'Search switches', value: ui.q, oninput: (e) => { ui.q = e.target.value; drawAll(); } });
+    const filters = h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'Show' }, [['all', 'All'], ['on', 'On'], ['off', 'Off'], ['different', 'Different from FreeWater'], ['locked', 'Locked'], ['new', 'New']].map(([id, label]) =>
+      h('button', { type: 'button', role: 'tab', 'aria-selected': String(ui.filter === id), onclick: (e) => { ui.filter = id; for (const b of filters.children) b.setAttribute('aria-selected', String(b === e.currentTarget)); drawAll(); } }, label)));
+    const history = await api('GET', '/v1/console/features/history').catch(() => []);
+    const recent = h('section', { class: 'panel-box' }, h('h2', { text: 'Recent changes' }),
+      history.length ? h('ul', { class: 'feat-history' }, history.slice(0, 12).map((x) => h('li', {}, h('b', { text: `${x.label} ${x.to ? 'on' : 'off'}` }), ` · ${x.by} · ${when(x.at)} · ${x.via}${x.reason ? ` · “${x.reason}”` : ''}`))) : h('p', { class: 'muted', style: 'margin:0', text: 'Nothing changed yet. Every change is kept here: who, when, from, to and why.' }));
+
+    const views = h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'View' }, link('/console/features', { role: 'tab', class: 'btn small' + (view === 'main' ? '' : ' secondary'), 'aria-selected': String(view === 'main') }, 'Main switches'), link('/console/features?view=all', { role: 'tab', class: 'btn small' + (view === 'all' ? '' : ' secondary'), 'aria-selected': String(view === 'all') }, `Every switch (${F.switches.length})`));
+    shell('features', head('Features', 'Choose what your company runs. You start from FreeWater’s choices; money, the blockchain and anything that can’t be undone need the usual steps. Turning something off is always quick.', views),
+      fresh.length ? h('div', { class: 'notice' }, h('b', { text: 'New features available: ' }), fresh.map((s) => s.label).join(', '), '. They’re off until you decide.', ' ', link('/console/features?view=all&filter=new', {}, 'See them')) : null,
+      confirmBox,
+      h('div', { class: 'stack' }, ...(view === 'main' ? [startCards, mainCards, locked, recent] : [h('div', { class: 'feat-tools' }, search, filters), results])));
+    if (view === 'all') drawAll();
+    const hash = S.path.split('#')[1];
+    if (hash) document.getElementById(hash)?.scrollIntoView?.();
   }
 
   // ---------- API keys ----------

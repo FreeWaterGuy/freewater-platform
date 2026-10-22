@@ -7,6 +7,7 @@ import type { SqlClient } from '../src/db/client';
 import { aiMeter } from '../src/modules/ai/anthropic';
 import { ClaudeNumberLineAgent } from '../src/modules/numberline/agent';
 import { efficiency, growthTest } from '../src/modules/agents/efficiency';
+import { adBilling } from '../src/modules/ads/billing';
 
 let db: SqlClient;
 let app: App;
@@ -209,6 +210,9 @@ describe('monthly profit sharing, the ratchet, the milestone and the upsides lib
   it('closes each month: costs come out of the $1 base first, then any promised share of the profit is given', async () => {
     const fw = app.platform.companies.get('freewater')!;
     fw.giving.percentOfProfit = 30; fw.agents = { ...fw.agents!, percentOfProfit: 10 }; // promised on top, for this test
+    // Commission on sales switched on (FreeWater's advertisers pay up front, with fees off until a person turns one on).
+    const b = adBilling(fw);
+    fw.adBilling = { ...b, fees: { ...b.fees, commission: { on: true, percent: 3 } } };
     // An outlier bottle: a big sale through its ad.
     const r = await app.platform.order({ companyId: 'freewater', orderId: 'outlier', locationId: 'ATX-014', productId: 'bottle-16oz' });
     const ad = r.unit.placements.find((p) => !p.isHouse)!;

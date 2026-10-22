@@ -118,8 +118,12 @@ export class BuiltinAdAssistant implements AdAssistant {
     // Budget: "$20 a day" or "5,000 bottles".
     const perDay = /\$\s?(\d[\d,]*)(?:\.\d\d)?\s*(?:a|per|\/)\s*day/i.exec(text);
     const bottles = /(\d[\d,]{2,})\s*(bottles|prints|labels)/i.exec(text);
-    if (perDay) { patch.buy = { type: 'bid', dailyCapCents: Number(perDay[1]!.replace(/,/g, '')) * 100 }; did.push(`a daily cap of $${perDay[1]} for printed labels only (scans and other charges are billed on top)`); }
-    else if (bottles) { patch.buy = { type: 'guaranteed', prints: Number(bottles[1]!.replace(/,/g, '')) }; did.push(`${bottles[1]} bottles`); }
+    const pre = ctx.prices.prepaid;
+    if (bottles) { patch.buy = { type: 'guaranteed', prints: Number(bottles[1]!.replace(/,/g, '')) }; did.push(pre ? `${bottles[1]} bottles, paid up front (${pre.included})` : `${bottles[1]} bottles`); }
+    else if (perDay && !pre) { patch.buy = { type: 'bid', dailyCapCents: Number(perDay[1]!.replace(/,/g, '')) * 100 }; did.push(`a daily cap of $${perDay[1]} for printed labels only (scans and other charges are billed on top)`); }
+    else if (perDay && pre) did.push('nothing for a daily amount: ads here are paid up front for a number of bottles');
+    // Houses, streets, a neighbourhood: that's a buy on the delivery routes, chosen on the review page.
+    if (pre?.routes && /\b(house|houses|home|homes|street|streets|neighbou?rhood|route|routes|door|doorstep|block)\b/.test(low)) did.push(`a note: to aim it at houses or streets, choose “On our delivery routes” on the review page (${pre.routes.kinds.join('; ')}), where you see the exact price before paying`);
 
     // What opens when people scan it.
     const url = /https:\/\/[^\s"'<>]+/.exec(text)?.[0];
@@ -137,8 +141,8 @@ export class BuiltinAdAssistant implements AdAssistant {
     if (exp?.complete) after.delete('scanPage');
     if (!headline && !draft.poster?.headline) after.add('artwork');
 
-    const reply = this.reply(did, [...after], ctx.business.name, !draft.poster);
-    return { reply, patch, suggestions: this.suggestions([...after], category) };
+    const reply = this.reply(did, [...after], ctx.business.name, !draft.poster, !!pre);
+    return { reply, patch, suggestions: this.suggestions([...after], category, !!pre) };
   }
 
   private experience(low: string, category: string, draft: AdAssistantInput['draft'], f: { headline?: string; url?: string; code?: string; sub?: string; slots: string[] }) {
@@ -165,24 +169,24 @@ export class BuiltinAdAssistant implements AdAssistant {
     return null;
   }
 
-  private reply(did: string[], left: Missing[], business: string, first: boolean): string {
+  private reply(did: string[], left: Missing[], business: string, first: boolean, prepaid = false): string {
     const start = did.length ? `${first ? `Here's a first version for ${business}` : 'Done'}: I set ${did.join(', ').replace(/, ([^,]*)$/, ' and $1')}.` : first ? `Let's make an ad for ${business}.` : 'Got it.';
-    if (!left.length) return `${start} Everything's ready. Look over the preview, then tap “Review and submit”.`;
+    if (!left.length) return `${start} Everything's ready. Look over the preview, then tap “Review and submit”${prepaid ? ': you’ll see the exact total before you pay' : ''}.`;
     const next = left[0]!;
     const q: Record<Missing, string> = {
       artwork: 'What should the ad say? A short offer works best, like “Free fries with any burger”.',
       category: 'What kind of business is it?',
       sizes: 'How big should it be? Small (a tenth to a sixth of the label), a quarter, half, or the whole label? Every piece is about square.',
       where: 'Where should it run? Name a machine, or say “everywhere”.',
-      budget: 'What’s your budget? Say a daily amount like “$20 a day”, or a number of bottles like “2,000 bottles”.',
+      budget: prepaid ? 'How many bottles should carry it? You pay for them up front and exactly that many go out, like “2,000 bottles” (at least 100).' : 'What’s your budget? Say a daily amount like “$20 a day”, or a number of bottles like “2,000 bottles”.',
       scanPage: 'What should open when people scan it? An offer to save, a coupon code, a booking page, or a 3D menu. A link to your website helps.',
     };
     return `${start} ${q[next]}`;
   }
 
-  private suggestions(left: Missing[], category: string): string[] {
+  private suggestions(left: Missing[], category: string, prepaid = false): string[] {
     const next = left[0];
-    if (next === 'budget') return ['$20 a day', '$50 a day', '2,000 bottles'];
+    if (next === 'budget') return prepaid ? ['500 bottles', '2,000 bottles', '10,000 bottles'] : ['$20 a day', '$50 a day', '2,000 bottles'];
     if (next === 'where') return ['Everywhere', 'Only ATX-014'];
     if (next === 'sizes') return ['Small', 'Half the label', 'Full wrap'];
     if (next === 'scanPage') return category === 'food' ? ['A 3D menu in AR', 'A coupon: code SAVE5'] : ['An offer to save', 'A coupon: code SAVE5', 'A booking page'];

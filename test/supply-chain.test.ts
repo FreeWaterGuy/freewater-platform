@@ -14,6 +14,7 @@ import type { TestOutbox } from '../src/adapters/messaging/contract';
 import { MachineAgent } from '../src/machine/agent';
 import { Journal } from '../src/machine/journal';
 import { checkUpdate, newUpdateKeyPair, signUpdate, UPDATE_VALID_MS } from '../src/machine/updates';
+import { doorPhoto } from './door-photo';
 
 // R13 (machines and vans trust what they are told) and R14 (the build): see docs/SUPPLY-CHAIN.md.
 
@@ -129,12 +130,12 @@ describe('door reports come from the driver', () => {
     expect((await call('POST', '/v1/deliveries', driver, body)).body.error.code).toBe('use_driver_app');
   });
 
-  it('a delivery photo counts only if this driver took it in the driver app', async () => {
+  it('a delivery photo counts only if this driver took it of this box in the driver app', async () => {
     const addrs: string[] = [];
     for (let i = 1; addrs.length < 1 && i < 4000; i++) { const a = `${1000 + i} Kenwood Ave, Austin, TX`; const c = await app.delivery.check('freewater', a); if (c.covered && c.routeId === 'route-3') addrs.push(a); }
     await call('POST', '/v1/me/delivery', await signIn('sc-ana@example.com'), { address: addrs[0], packSize: 6, frequency: 'weekly', day: 2 });
     const admin = keys['freewater-admin']!;
-    const [run] = (await call('POST', '/v1/ops/runs/plan', admin, { date: '2026-11-03' })).body;
+    const [run] = (await call('POST', '/v1/ops/runs/plan', await person('freewater', 'ops-sc@freewater.io', 'ops'), { date: '2026-11-03' })).body; // a person plans (it prints and bills)
     for (const s of run.stops) await call('POST', `/v1/packs/${s.packId}/verify`, admin, { scannedUnitIds: app.packs.packs.get(s.packId)!.unitIds });
     await call('POST', `/v1/ops/runs/${run.id}/pack-check`, admin);
     now = new Date('2026-11-03T14:00:00Z').getTime();
@@ -144,15 +145,16 @@ describe('door reports come from the driver', () => {
     const out = (await call('POST', `/v1/driver/runs/${run.id}/load`, dana, { packId: run.stops[0].packId })).body;
     expect(out.status).toBe('out');
     const s1 = out.stops[0];
-    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 74, 70, 73, 70, 0, 1]);
-    const theirs = (await call('POST', '/v1/driver/photos', other, jpeg, { 'content-type': 'image/jpeg' })).body.url;
+    const jpeg = await doorPhoto();
+    // Another driver's photo of this box doesn't prove this driver's drop; a file that only starts like a JPEG isn't a photo.
+    expect((await call('POST', `/v1/driver/photos?packId=${s1.packId}&capture=camera`, other, jpeg, { 'content-type': 'image/jpeg' })).status).toBe(201);
+    expect((await call('POST', `/v1/driver/photos?packId=${s1.packId}&capture=camera`, dana, Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 74, 70, 73, 70, 0, 1]), { 'content-type': 'image/jpeg' })).body.error.code).toBe('not_a_photo');
     const at = { scannedPackId: s1.packId, lat: s1.point.lat, lng: s1.point.lng, emptiesCollected: 0 };
-    expect((await call('POST', `/v1/driver/runs/${run.id}/stops/1/deliver`, dana, { ...at, photoUrl: theirs })).body.error.code).toBe('not_your_photo');
-    expect((await call('POST', `/v1/driver/runs/${run.id}/stops/1/deliver`, dana, { ...at, photoUrl: '/assets/ast_nothing.jpg' })).body.error.code).toBe('not_your_photo');
+    expect((await call('POST', `/v1/driver/runs/${run.id}/stops/1/deliver`, dana, at)).body.error.code).toBe('photo_required');
     // Another driver can't report this run's door.
     expect((await call('POST', `/v1/driver/runs/${run.id}/stops/1/deliver`, other, at)).body.error.code).toBe('not_your_route');
-    const mine = (await call('POST', '/v1/driver/photos', dana, jpeg, { 'content-type': 'image/jpeg' })).body.url;
-    expect((await call('POST', `/v1/driver/runs/${run.id}/stops/1/deliver`, dana, { ...at, photoUrl: mine })).body.stops[0]).toMatchObject({ status: 'delivered', photoUrl: mine });
+    const mine = (await call('POST', `/v1/driver/photos?packId=${s1.packId}&capture=camera`, dana, jpeg, { 'content-type': 'image/jpeg' })).body.id;
+    expect((await call('POST', `/v1/driver/runs/${run.id}/stops/1/deliver`, dana, at)).body.stops[0]).toMatchObject({ status: 'delivered', photo: { id: mine } });
   });
 });
 

@@ -33,6 +33,9 @@ export async function checkBooks(db: SqlClient) {
     add(bad.length === 0, bad.length ? `${c.name}: ${bad.length} published day fingerprint(s) no longer match the books: ${bad.map((b) => b.day).join(', ')}` : `${c.name}: ${published.length} published day fingerprint(s) match the books`);
   }
 
+  // Money advertisers paid up front: bottles and balances agree with the books.
+  for (const c of companies) for (const k of await app.prepaid.checks(c.id)) if (k.status !== 'attention') add(k.status === 'ok', `${c.name}: ${k.detail} (${k.id})`);
+
   const kept = (await db.query<any>(`select count(*) as n from persistence_failures where retried_at is null`)).rows[0];
   add(Number(kept.n) === 0, Number(kept.n) ? `${kept.n} change(s) are waiting to be saved (see the platform status page)` : 'No changes waiting to be saved');
 

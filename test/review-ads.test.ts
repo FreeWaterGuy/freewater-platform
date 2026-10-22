@@ -43,7 +43,8 @@ const balance = (account: string) => app.platform.ledger.balances().get(account)
 
 beforeAll(async () => {
   db = await createPgliteClient();
-  app = await createApp({ db, seedDemo: true, seed: 21, clock });
+  // Refunds, billed scans and AR, and bids: a company that bills afterwards (paying up front: prepaid.test.ts).
+  app = await createApp({ db, seedDemo: true, demoBilling: 'billed_after', seed: 21, clock });
   keys = app.demoKeys!;
   pattyKey = (await createApiKey(db, { companyId: 'freewater', name: 'Patty POS', scopes: ['purchases', 'campaigns'], advertiserId: 'adv-patty' })).key;
   server = await buildServer(app);

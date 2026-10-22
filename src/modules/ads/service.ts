@@ -1,6 +1,7 @@
 import type { BoxProduct, Campaign, Share, Unit } from '../../core/types';
+import { houseAd } from '../fillers/house';
 import { layoutsFor, shareLabel } from './layouts';
-import { bidFloor } from './budget';
+import { bidFloor, prepaidLeft } from './budget';
 import { newId } from '../../core/ids';
 import type { SqlClient } from '../../db/client';
 import type { Platform } from '../../platform';
@@ -17,6 +18,9 @@ import { boxFaceQr, boxFaceSizes } from '../packs/boxRenderer';
 import type { AdAssistant, ChatMessage } from '../ai/contract';
 import { allowedSizes, applyPatch, draftTargeting, estimate, missing, missingLabels, themeFromPoster, type AdDraft } from './draft';
 import { withCompany } from '../ai/routing';
+import { adBilling, extraPrice, feesOnWords, prepaidModel } from './billing';
+import type { PrepaidService, Quote } from './prepaid';
+import { adWords, KIND_SWITCH, KIND_WORDS, ROUTE_KINDS, type RouteBuyService, type RouteQuoteInput } from './routeBuys';
 
 export class AdsError extends Error {
   constructor(public status: number, public code: string, message: string) {
@@ -89,8 +93,40 @@ export class AdsService {
       id: r.id, status: r.status, campaignId: r.campaignId, updatedAt: r.updatedAt,
       draft: { ...rest, poster: poster ? { ...poster, image: poster.image ? { role: poster.image.role, attached: true } : undefined } : undefined },
       messages: r.messages, missing: left.map((m) => ({ id: m, label: missingLabels[m] })), ready: left.length === 0,
-      estimate: estimate(r.draft, company, this.maxFactor(company.id), r.campaignId ? this.platform.campaigns.get(r.campaignId) : undefined), assistant: this.assistant.name,
+      estimate: estimate(r.draft, company, this.maxFactor(company.id), r.campaignId ? this.platform.campaigns.get(r.campaignId) : undefined, this.platform.featureOn), assistant: this.assistant.name,
+      payment: this.paymentFor(r),
     };
+  }
+
+  /** Set by the app: paying up front for bottles (modules/ads/prepaid). */
+  prepaid?: PrepaidService;
+  /** Set by the app: buying on delivery routes (modules/ads/routeBuys). */
+  routeBuys?: RouteBuyService;
+
+  /**
+   * What submitting this draft will charge, for a company where ads are paid up front: the bottles (a new ad) or the
+   * change fee (a change to a running ad). Null where advertisers are billed after.
+   */
+  private paymentFor(r: DraftRow): { kind: 'bottles'; quote: Quote | null; problem: string | null } | { kind: 'change'; feeCents: number } | null {
+    const company = this.platform.companies.get(r.companyId)!;
+    if (!prepaidModel(company) || !this.prepaid) return null;
+    const live = r.campaignId ? this.platform.campaigns.get(r.campaignId) : undefined;
+    // A paid ad flagged in review is fixed and sent again at no fee while it's being discussed.
+    if (live?.prepaid) return { kind: 'change', feeCents: live.review?.status === 'flagged' ? 0 : adBilling(company).changeFeeCents };
+    if (this.platform.featureOn && !this.platform.featureOn(r.companyId, 'prepaid_ads')) return { kind: 'bottles', quote: null, problem: `${company.name} isn’t taking payments for ads right now, so this ad can’t be submitted yet.` };
+    const d = r.draft;
+    if (d.buy?.type !== 'guaranteed') return { kind: 'bottles', quote: null, problem: 'Say how many bottles (at least 100). Ads here are paid up front.' };
+    try { return { kind: 'bottles', quote: this.prepaid.quote(r.companyId, { bottles: d.buy.prints }, d.sizes), problem: null }; }
+    catch (e) { return { kind: 'bottles', quote: null, problem: (e as Error).message }; }
+  }
+
+  /** The exact quote for a draft with the size, product and extras chosen (the review page shows it before paying). */
+  async quoteDraft(id: string, companyId: string, advertiserId: string, choice: { share?: number; productId?: string; extras?: Record<string, number> }) {
+    const r = await this.row(id, companyId, advertiserId);
+    if (!this.prepaid) throw new AdsError(409, 'not_prepaid', 'Ads here are billed after the fact.');
+    const d = r.draft;
+    if (d.buy?.type !== 'guaranteed') throw new AdsError(422, 'bottles_needed', 'Say how many bottles first (at least 100). Ads here are paid up front.');
+    return this.prepaid.quote(companyId, { bottles: d.buy.prints, ...choice }, d.sizes);
   }
 
   async createDraft(input: { companyId: string; advertiserId: string; userId?: string; fromCampaignId?: string }) {
@@ -106,7 +142,15 @@ export class AdsService {
         buy: c.buy.type === 'guaranteed' ? { type: 'guaranteed', prints: c.buy.remainingPrints, unchanged: true } : { type: 'bid', dailyCapCents: c.buy.dailyCapCents, maxCentsPerLabel: c.buy.maxCentsPerLabel, unchanged: true },
         experienceId: c.experienceId, experienceConfig: c.experienceConfig, theme: c.theme,
       };
-      greeting = 'What would you like to change? Changes go back to review before they print.';
+      const company = this.platform.companies.get(input.companyId)!;
+      if (c.prepaid?.stoppedAt) throw new AdsError(409, 'stopped', 'This ad was stopped and its unprinted bottles paid back. Make a new ad instead.');
+      if (c.prepaid && prepaidLeft(c) <= 0) throw new AdsError(409, 'all_printed', 'Every paid bottle of this ad is out, so a change would never print. Make a new ad instead.');
+      const fee = adBilling(company).changeFeeCents;
+      greeting = c.prepaid && c.review?.status === 'flagged'
+        ? `What would you like to change? ${company.name}’s team raised a question about this ad (see the notes on it). Changing it while it’s being discussed is free; your money stays held and nothing prints until it’s approved.`
+        : c.prepaid
+        ? `What would you like to change? The bottles not printed yet will carry the new ad once it’s reviewed. Changing it costs $${(fee / 100).toFixed(2)}, paid when you submit; the size and the bottles you paid for stay as they are.`
+        : 'What would you like to change? Changes go back to review before they print.';
     }
     const r: DraftRow = { id: newId('dr'), companyId: input.companyId, advertiserId: input.advertiserId, status: 'open', draft, messages: [{ role: 'assistant', text: greeting, at: this.platform.bus.now().toISOString() }], campaignId: input.fromCampaignId ?? null, updatedAt: this.platform.bus.now().toISOString() };
     await this.db.query(`insert into ad_drafts (id, company_id, advertiser_id, created_by, status, data, messages, campaign_id) values ($1,$2,$3,$4,'open',$5,$6,$7)`, [r.id, r.companyId, r.advertiserId, input.userId ?? null, JSON.stringify(r.draft), JSON.stringify(r.messages), r.campaignId]);
@@ -147,12 +191,12 @@ export class AdsService {
         business: { name: adv.name, category: adv.category },
         company: { name: company.name, blockedCategories: company.adRules.blockedCategories, giving: givingLine(company, locations[0]?.id ?? '') },
         machines: locations.map((l) => ({ id: l.id, name: l.name, kind: l.kind })),
-        plugins: this.host.list().filter((p) => p.id !== 'custom-experience' && p.id !== 'house-promo').map(({ id, name, description, example, configSchema }) => ({ id, name, description, example, configSchema })),
+        plugins: this.host.list().filter((p) => p.id !== 'custom-experience' && p.id !== 'house-promo' && p.id !== 'news').map(({ id, name, description, example, configSchema }) => ({ id, name, description, example, configSchema })),
         icons: posterIcons, fonts: Object.keys(posterFonts), sizes: allowedSizes,
-        prices: { perPrintByShare: company.prices.perPrintByShare as any, bidStartsAt: bidFloor(company), perScan: company.prices.perScan, perArLaunch: company.prices.perArLaunch, commissionPercent: company.prices.commissionPercent },
+        prices: { perPrintByShare: company.prices.perPrintByShare as any, bidStartsAt: bidFloor(company), perScan: company.prices.perScan, perArLaunch: company.prices.perArLaunch, commissionPercent: company.prices.commissionPercent, ...(prepaidModel(company) ? { prepaid: this.prepaidTerms(company.id) } : {}) },
         missing: missing(r.draft, this.host),
       },
-    }));
+    }), 'ai_ad_assistant');
     // With a studio design, its words and colors change only when the message asks about them (an offer named for
     // the scan page isn't a new headline).
     const patch = { ...(out.patch ?? {}) };
@@ -168,6 +212,19 @@ export class AdsService {
     r.draft = draft;
     await this.save(r);
     return { ...this.view({ ...r, updatedAt: now }), suggestions: left.length || out.suggestions.length ? out.suggestions : ['Review and submit'] };
+  }
+
+  /** How ads are paid for here, in the terms the assistant and the portal use. */
+  prepaidTerms(companyId: string) {
+    const company = this.platform.companies.get(companyId)!;
+    const b = adBilling(company);
+    return {
+      minBottles: 100, changeFeeCents: b.changeFeeCents, included: 'AR, video and scans are included at every size',
+      feesOn: feesOnWords(company, this.platform.featureOn),
+      extras: Object.entries(b.extras.perUse).map(([id, x]) => ({ id, label: x.label, perUseCents: extraPrice(company, id)! })),
+      // Buying on the delivery routes, where it's on (the review page has the picker; the chat explains it).
+      ...(this.routeBuys && (!this.platform.featureOn || this.platform.featureOn(companyId, 'route_buying')) ? { routes: { kinds: ROUTE_KINDS.filter((k) => !this.platform.featureOn || this.platform.featureOn(companyId, KIND_SWITCH[k])).map((k) => KIND_WORDS[k]), smallAudienceHouses: this.routeBuys.smallAudienceHouses(company) } } : {}),
+    };
   }
 
   /** See it before submitting: every size, on a real label, on a box, and the scan page. */
@@ -224,7 +281,7 @@ export class AdsService {
   async campaignPreview(campaignId: string, companyId: string) {
     const c = this.platform.campaigns.get(campaignId);
     if (!c || c.companyId !== companyId) throw new AdsError(404, 'not_found', 'Campaign not found.');
-    return { campaign: { id: c.id, name: c.name ?? null, advertiser: c.advertiserName, category: c.category, where: c.targeting.locations ?? 'all', buy: c.buy, review: c.review ?? null, experienceId: c.experienceId },
+    return { campaign: { id: c.id, name: c.name ?? null, advertiser: c.advertiserName, category: c.category, where: c.targeting.locations ?? 'all', buy: c.buy, paid: this.prepaid?.progress(c) ?? null, review: c.review ?? null, experienceId: c.experienceId },
       ...(await this.render({ companyId, advertiserId: c.advertiserId, advertiserName: c.advertiserName, category: c.category, draw: (w, h, ctx) => c.creative.svg(w, h, ctx), sizes: c.sizes, formats: c.formats ?? ['label'], experience: { id: c.experienceId, config: c.experienceConfig ?? {} }, theme: c.theme ?? {} })) };
   }
 
@@ -259,7 +316,7 @@ export class AdsService {
 
     // A sample label: this ad at its biggest size, the rest filled with the company's own ad.
     const biggest = Math.min(...o.sizes) as Share;
-    const house = [...this.platform.campaigns.values()].find((c) => c.isHouse && c.companyId === o.companyId);
+    const house = houseAd(this.platform.campaigns.values(), o.companyId);
     const temp: Campaign = { id: 'preview', companyId: o.companyId, advertiserId: o.advertiserId, advertiserName: o.advertiserName, category: o.category, sizes: [biggest], creative: { svg: o.draw }, experienceId: 'offer', targeting: {}, buy: { type: 'guaranteed', remainingPrints: 1 }, active: false };
     const campaigns = new Map(this.platform.campaigns);
     campaigns.set('preview', temp);
@@ -298,10 +355,17 @@ export class AdsService {
     };
   }
 
-  async submit(input: { id: string; companyId: string; advertiserId: string }) {
+  /**
+   * Send the ad for review. Where ads are paid up front, this is also when it's paid for: a new ad's bottles (at the
+   * total the advertiser saw, or nothing is charged), or a change's fee. Nothing is sent for review unless that went
+   * through, and pressing it twice never pays twice.
+   */
+  async submit(input: { id: string; companyId: string; advertiserId: string; pay?: { share?: number; productId?: string; extras?: Record<string, number>; expectedTotalCents?: number; expectedFeeCents?: number; route?: RouteQuoteInput; expectedCreditCents?: number } }) {
     const r = await this.row(input.id, input.companyId, input.advertiserId);
     if (r.status !== 'open') throw new AdsError(409, 'already_submitted', 'This ad was already submitted.');
-    const left = missing(r.draft, this.host);
+    // Bought on delivery routes: the route buy says where and how many, so the chat's "where" and budget aren't needed.
+    const route = input.pay?.route && !r.campaignId ? input.pay.route : null;
+    const left = missing(r.draft, this.host).filter((m) => !route || (m !== 'where' && m !== 'budget'));
     if (left.length) throw new AdsError(422, 'not_ready', `Before submitting, add ${left.map((m) => missingLabels[m]).join(', ')}.`);
     const company = this.platform.companies.get(r.companyId)!;
     // An ad whose sizes fit on none of the company's bottles would be approved and then never print.
@@ -310,56 +374,101 @@ export class AdsService {
     if (!(r.draft.sizes ?? []).some((s) => prints.has(s))) throw new AdsError(422, 'sizes_never_print', `None of those sizes fit on ${company.name}'s bottles, so the ad would never print. Pick from: ${[...prints].sort((a, b) => a - b).map(shareLabel).join(', ')}.`);
     const adv = await this.advertiser(r.companyId, r.advertiserId);
     const d = r.draft as Required<Pick<AdDraft, 'sizes' | 'buy' | 'experienceId' | 'locations' | 'category'>> & AdDraft;
+    if (d.buy?.type === 'bid' && this.platform.featureOn && !this.platform.featureOn(r.companyId, 'bidding')) throw new AdsError(422, 'bidding_off', `${company.name} doesn’t sell space by bidding: buy a set number of bottles instead.`);
     const spec = d.poster as PosterSpec;
     const art = d.studio ? { creative: studioCreative(d.studio), creativeRef: { kind: 'studio' as const, spec: d.studio } } : { creative: posterCreative(spec), creativeRef: { kind: 'poster' as const, spec } };
     const now = this.platform.bus.now().toISOString();
     const existing = r.campaignId ? this.platform.campaigns.get(r.campaignId) : undefined;
+
+    // Paid up front: a new ad pays for its bottles, a change to a paid ad pays the change fee. Then it's reviewed.
+    let paid: { campaignId: string; prepaid: import('../../core/types').PrepaidBottles | null; totalCents: number } | null = null;
+    let routePaid: Awaited<ReturnType<RouteBuyService['pay']>> | null = null;
+    let feeCents = 0;
+    if (prepaidModel(company) && this.prepaid) {
+      if (existing?.prepaid) {
+        if (existing.prepaid.stoppedAt) throw new AdsError(409, 'stopped', 'This ad was stopped and its unprinted bottles paid back. Make a new ad instead.');
+        // Nothing left to print: the change would never print, so its fee isn't taken (a draft begun before it ran out).
+        if (prepaidLeft(existing) <= 0) throw new AdsError(409, 'all_printed', 'Every paid bottle of this ad is out, so a change would never print. Nothing was charged. Make a new ad instead.');
+        // Flagged in review: fixed and sent again at no fee while it's being discussed.
+        if (existing.review?.status !== 'flagged') feeCents = (await this.prepaid.payChangeFee({ companyId: r.companyId, advertiserId: r.advertiserId, campaignId: existing.id, draftId: r.id, expectedFeeCents: input.pay?.expectedFeeCents }))?.feeCents ?? 0;
+      } else if (!existing && route) {
+        if (!this.routeBuys) throw new AdsError(404, 'feature_off', 'Buying on delivery routes isn’t available here.');
+        const out = await this.routeBuys.pay({ companyId: r.companyId, advertiserId: r.advertiserId, draftId: r.id, input: route, expectedTotalCents: input.pay?.expectedTotalCents ?? -1, expectedCreditCents: input.pay?.expectedCreditCents, sizes: d.sizes, words: adWords({ ...d, name: d.name }) });
+        paid = { campaignId: out.campaignId, prepaid: out.prepaid, totalCents: out.totalCents };
+        routePaid = out;
+      } else if (!existing) {
+        if (d.buy.type !== 'guaranteed') throw new AdsError(422, 'bottles_needed', 'Ads here are paid up front for a number of bottles (at least 100). Tell the assistant how many.');
+        paid = await this.prepaid.payBottles({ companyId: r.companyId, advertiserId: r.advertiserId, draftId: r.id, quote: { bottles: d.buy.prints, share: input.pay?.share, productId: input.pay?.productId, extras: input.pay?.extras }, expectedTotalCents: input.pay?.expectedTotalCents ?? -1, sizes: d.sizes });
+      }
+    }
+
     // Changing an ad never buys it more bottles or drops its bid settings: a budget left as it was keeps the live
     // ad's own (the bottles left now, which may be fewer than when the change began); a bid keeps its adjustments,
     // pacing, frequency cap and today's spend.
     const live = existing?.buy;
-    const buy: Campaign['buy'] = d.buy.type === 'guaranteed'
+    const buy: Campaign['buy'] = !d.buy ? { type: 'guaranteed', remainingPrints: 0 } : d.buy.type === 'guaranteed'
       ? { type: 'guaranteed', remainingPrints: d.buy.unchanged && live?.type === 'guaranteed' ? live.remainingPrints : d.buy.prints }
       : live?.type === 'bid' && d.buy.unchanged ? { ...live }
       : { ...(live?.type === 'bid' ? live : {}), type: 'bid', dailyCapCents: d.buy.dailyCapCents, maxCentsPerLabel: Math.max(d.buy.maxCentsPerLabel ?? (live?.type === 'bid' ? live.maxCentsPerLabel : 0), bidFloor(company)), spentTodayCents: live?.type === 'bid' ? live.spentTodayCents : 0 };
+    const prepaid = existing?.prepaid ?? paid?.prepaid ?? undefined;
     const c: Campaign = {
       ...(existing ?? {}),
-      id: existing?.id ?? newId('cmp'), companyId: r.companyId, advertiserId: r.advertiserId, advertiserName: adv.name,
-      name: d.name ?? (d.studio?.headline ?? spec.headline), category: d.category, sizes: d.sizes, formats: d.formats ?? ['label'],
+      id: existing?.id ?? paid?.campaignId ?? newId('cmp'), companyId: r.companyId, advertiserId: r.advertiserId, advertiserName: adv.name,
+      // A paid ad prints at the one size it was paid for, whatever the change says.
+      name: d.name ?? (d.studio?.headline ?? spec.headline), category: d.category, sizes: prepaid ? [prepaid.share] : d.sizes, formats: d.formats ?? ['label'],
       ...art,
       experienceId: d.experienceId, experienceConfig: d.experienceConfig ?? {}, theme: themeFromPoster(d),
-      targeting: draftTargeting(d, existing), buy,
-      active: false, review: { status: 'submitted', at: now }, createdAt: existing?.createdAt ?? now,
+      targeting: draftTargeting(d, existing), buy: prepaid ? (existing?.buy ?? buy) : buy,
+      ...(prepaid ? { prepaid } : {}),
+      active: false, review: existing?.prepaid && existing.review?.status === 'flagged' ? { ...existing.review, at: now, resubmittedAt: now } : { status: 'submitted', at: now }, createdAt: existing?.createdAt ?? now,
     };
+    const resubmitted = c.review?.status === 'flagged';
     this.platform.campaigns.set(c.id, c);
+    if (paid) await this.prepaid!.attach(c.id);
+    if (routePaid) await this.routeBuys!.attach(c.id);
     this.platform.persist.campaign(c);
     r.status = 'submitted';
     r.campaignId = c.id;
-    r.messages.push({ role: 'assistant', text: `Submitted. ${company.name} reviews new ads, usually within a day. You'll see it running in your campaigns once it's approved.`, at: now });
+    const money = routePaid ? `Paid $${(routePaid.totalCents / 100).toFixed(2)}${routePaid.creditCents ? ` ($${(routePaid.creditCents / 100).toFixed(2)} of it from your credit)` : ''} for ${routePaid.bottles.toLocaleString('en-US')} pieces at ${routePaid.houses.toLocaleString('en-US')} houses over ${routePaid.weeks} week${routePaid.weeks === 1 ? '' : 's'}. ${routePaid.small ? 'It’s aimed at a few houses, so a person checks it more closely. ' : ''}`
+      : paid ? `Paid $${(paid.totalCents / 100).toFixed(2)} for ${(c.prepaid?.paid ?? 0).toLocaleString('en-US')} bottles. ` : feeCents ? `Paid the $${(feeCents / 100).toFixed(2)} change fee. ` : '';
+    r.messages.push({ role: 'assistant', text: resubmitted ? `Sent again, at no fee. ${company.name}’s team will look at the change in the notes on this ad; nothing prints until it’s approved.` : `${money}Submitted. ${company.name} reviews new ads, usually within a day. You'll see it running in your campaigns once it's approved.`, at: now });
     await this.save(r);
+    if (resubmitted) await this.addReviewNote({ companyId: c.companyId, campaignId: c.id, kind: 'resubmitted', authorKind: 'advertiser', authorId: r.advertiserId, text: 'The advertiser changed the ad and sent it again (no fee while it’s being discussed).' });
+    // A paid ad an AI objected to while it was being made goes to the team flagged, with the AI's reasons: an AI can only flag.
+    else if (c.prepaid) {
+      const objections = (await this.db.query<any>(`select agent, reason from ai_objections where company_id = $1 and subject = $2 order by at`, [c.companyId, `draft:${r.id}`])).rows;
+      if (objections.length) await this.flag({ companyId: c.companyId, campaignId: c.id, reasons: objections.map((o) => `${o.agent}: ${o.reason}`), by: { kind: 'automated', id: 'ai-objection' } });
+    }
+    // The AI reviewer looks at every paid ad as it comes in (src/modules/ads/aiReview.ts).
+    if (c.prepaid) await this.afterPaidSubmit(c).catch(() => {});
     await this.flush();
-    return { campaignId: c.id, status: 'in_review' };
+    return { campaignId: c.id, status: 'in_review', ...(paid ? { paidCents: paid.totalCents, bottles: c.prepaid?.paid ?? 0 } : {}), ...(routePaid ? { route: { houses: routePaid.houses, weeks: routePaid.weeks, creditCents: routePaid.creditCents, cardCents: routePaid.cardCents, small: routePaid.small } } : {}), ...(feeCents ? { changeFeeCents: feeCents } : {}) };
   }
 
   // ---------- results ----------
 
-  status(c: Campaign): 'in_review' | 'not_approved' | 'running' | 'paused' | 'finished' {
+  status(c: Campaign): 'in_review' | 'being_discussed' | 'not_approved' | 'running' | 'paused' | 'finished' | 'stopped' | 'not_paid' {
+    if (c.prepaid?.stoppedAt) return 'stopped';
+    // Every paid bottle printed (or paid back): done. No end date otherwise; pausing only delays.
+    if (c.prepaid && c.prepaid.printed + c.prepaid.refunded >= c.prepaid.paid) return 'finished';
     if (c.review?.status === 'submitted') return 'in_review';
+    if (c.review?.status === 'flagged') return 'being_discussed';
     if (c.review?.status === 'rejected') return 'not_approved';
+    if (!c.prepaid && !c.isHouse && prepaidModel(this.platform.companies.get(c.companyId)!)) return 'not_paid';
     if (c.buy.type === 'guaranteed' && c.buy.remainingPrints <= 0) return 'finished';
     return c.active ? 'running' : 'paused';
   }
 
   async overview(input: { companyId: string; advertiserId: string; days: number }) {
     const company = this.platform.companies.get(input.companyId)!;
-    const acct = `receivable:advertiser:${input.advertiserId}`;
+    const acct = `receivable:advertiser:${input.advertiserId}`, pre = `prepaid:advertiser:${input.advertiserId}`;
     // Days as the company counts them (its time zone), the same days its advertisers' daily budgets run on.
     const tz = company.timezone ?? 'UTC';
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(this.platform.bus.now());
     const dayBefore = (d: string, n: number) => new Date(Date.parse(`${d}T12:00:00Z`) - n * 86_400_000).toISOString().slice(0, 10);
     const lines = (await this.db.query<any>(
-      `select campaign_id, kind, to_char(at at time zone $3, 'YYYY-MM-DD') as day, debit = $2 as owes, count(*)::int as n, sum(amount_cents)::bigint as cents
-       from ledger_entries where company_id = $1 and (debit = $2 or credit = $2) group by 1, 2, 3, 4`, [input.companyId, acct, tz])).rows;
+      `select campaign_id, kind, to_char(at at time zone $3, 'YYYY-MM-DD') as day, debit in ($2, $4) as owes, count(*)::int as n, sum(amount_cents)::bigint as cents
+       from ledger_entries where company_id = $1 and (debit in ($2, $4) or credit in ($2, $4)) and kind not in ('payment', 'prepay_refund') group by 1, 2, 3, 4`, [input.companyId, acct, tz, pre])).rows;
     const engaged = (await this.db.query<any>(
       `select payload->>'campaignId' as campaign_id, payload->>'action' as action, count(*)::int as n from events
        where company_id = $1 and type = 'experience.engaged' and payload->>'advertiserId' = $2 group by 1, 2`, [input.companyId, input.advertiserId])).rows;
@@ -377,7 +486,7 @@ export class AdsService {
       if (r.kind === 'scan') t.scans += n;
       if (r.kind === 'ar') t.arLaunches += n;
       if (r.kind === 'box_face') t.boxFaces += n;
-      if (r.kind === 'commission' || r.kind === 'commission_reversal') { t.sales += n; t.salesCents += Math.round((cents * 100) / company.prices.commissionPercent); }
+      if ((r.kind === 'commission' || r.kind === 'commission_reversal') && company.prices.commissionPercent) { t.sales += n; t.salesCents += Math.round((cents * 100) / company.prices.commissionPercent); }
     };
     const total = blank(), period = blank();
     const byCampaign = new Map<string, Totals>();
@@ -391,7 +500,19 @@ export class AdsService {
       const day = days.get(r.day);
       if (day) { add(day, r); add(period, r); }
     }
+    // Sales with no commission line (paid up front, commission off): counted from the sales themselves, net of refunds.
+    const dayIn = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' });
+    for (const s of this.platform.ledger.salesWithoutCommission(input.companyId, input.advertiserId)) {
+      const open = s.refundedCents < s.amountCents ? 1 : 0, cents = Math.max(0, s.amountCents - s.refundedCents);
+      const day = days.get(dayIn.format(s.at));
+      const ts = [total, byCampaign.get(s.campaignId) ?? blank(), ...(day ? [day, period] : [])];
+      byCampaign.set(s.campaignId, ts[1]!);
+      for (const t of ts) { t.sales += open; t.salesCents += cents; }
+    }
     for (const e of engaged) {
+      // An ad aimed at a few houses: the advertiser knows the houses, so whether someone there saved it or tapped
+      // through stays theirs (as the route report keeps its scans).
+      if (this.platform.campaigns.get(e.campaign_id)?.routeBuy?.small) continue;
       const t = byCampaign.get(e.campaign_id) ?? blank();
       byCampaign.set(e.campaign_id, t);
       if (e.action === 'save') { t.saves += Number(e.n); total.saves += Number(e.n); }
@@ -403,14 +524,15 @@ export class AdsService {
       .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '') || a.id.localeCompare(b.id))
       .map((c) => ({
         id: c.id, name: c.name ?? (c.creativeRef?.kind === 'poster' || c.creativeRef?.kind === 'studio' ? c.creativeRef.spec.headline : c.advertiserName), status: this.status(c), review: c.review ?? null, creditHold: c.creditHold ?? null,
-        sizes: c.sizes, formats: c.formats ?? ['label'], where: c.targeting.locations ?? 'all', experienceId: c.experienceId,
-        budget: c.buy.type === 'guaranteed' ? { type: 'guaranteed', bottlesLeft: c.buy.remainingPrints } : { type: 'bid', dailyCapCents: c.buy.dailyCapCents, spentTodayCents: c.buy.spentTodayCents },
+        sizes: c.sizes, formats: c.formats ?? ['label'], where: c.routeBuy ? 'routes' : c.targeting.locations ?? 'all', experienceId: c.experienceId, ...(c.routeBuy ? { route: c.routeBuy } : {}),
+        budget: c.prepaid ? { type: 'prepaid', ...this.prepaid!.progress(c)! } : c.buy.type === 'guaranteed' ? { type: 'guaranteed', bottlesLeft: c.buy.remainingPrints } : { type: 'bid', dailyCapCents: c.buy.dailyCapCents, spentTodayCents: c.buy.spentTodayCents },
         editable: c.creativeRef?.kind === 'poster' || c.creativeRef?.kind === 'studio',
         thumbSvg: `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(thumbW)}" height="450" viewBox="0 0 ${thumbW.toFixed(1)} 450">${c.creative.svg(thumbW, 450)}</svg>`,
         results: byCampaign.get(c.id) ?? blank(),
       }));
     const adv = await this.advertiser(input.companyId, input.advertiserId);
-    return { advertiser: adv, days: input.days, total, period, daily: [...days.entries()].map(([day, t]) => ({ day, ...t })), campaigns, drafts: await this.listDrafts(input.companyId, input.advertiserId), prices: estimate({}, company, this.maxFactor(company.id)) };
+    const billing = prepaidModel(company) ? { model: 'prepaid' as const, ...this.prepaidTerms(company.id), orders: this.prepaid ? await this.prepaid.orders(input.companyId, input.advertiserId) : [] } : { model: 'billed_after' as const };
+    return { advertiser: adv, days: input.days, total, period, daily: [...days.entries()].map(([day, t]) => ({ day, ...t })), campaigns, drafts: await this.listDrafts(input.companyId, input.advertiserId), prices: estimate({}, company, this.maxFactor(company.id), undefined, this.platform.featureOn), billing };
   }
 
   // ---------- content review (the company) ----------
@@ -421,21 +543,139 @@ export class AdsService {
       .map((r) => ({ agent: r.agent, reason: r.reason, at: new Date(r.at).toISOString() }));
   }
 
+  /**
+   * Ads waiting for a person: new and changed ads, paid ads flagged and being discussed with the advertiser (an appeal
+   * of the AI's rejection among them), and the AI's own rejections picked for a person's audit.
+   */
   reviewQueue(companyId: string) {
-    return [...this.platform.campaigns.values()].filter((c) => c.companyId === companyId && c.review?.status === 'submitted');
+    return [...this.platform.campaigns.values()].filter((c) => c.companyId === companyId && (c.review?.status === 'submitted' || c.review?.status === 'flagged' || (c.review?.status === 'rejected' && c.review.auditPending)));
   }
+
+  /** Set by the app: the AI reviewer looks at a paid ad just submitted (AiReviewService.onSubmitted). */
+  afterPaidSubmit: (c: Campaign) => Promise<unknown> = async () => {};
+  /** Set by the app: a person finally decided a paid ad; the AI reviewer's record notes it (AiReviewService.onDecided). */
+  onDecided: (c: Campaign, decision: 'approved' | 'rejected', personId: string) => Promise<void> = async () => {};
 
   /** Set by the app: refuses an ad going live when its advertiser's credit doesn't allow it (CreditService). */
   beforeLive: (c: Campaign) => Promise<void> = async () => {};
 
-  async review(input: { companyId: string; campaignId: string; decision: 'approve' | 'reject'; note?: string }) {
+  /**
+   * Decide an ad. For a PAID ad (paid up front: bottles, a route buy, or a change to one) the money is already taken,
+   * so the founder's rule applies: "if review rejects a paid ad, that will need to be discussed with the FreeWater team
+   * to ensure that it was rejected for a valid reason". An automated check (an API key, an AI) can only flag it: a
+   * 'reject' from one becomes a flag. Only a person signed in finally rejects a paid ad, with a written reason; that is
+   * when its refund is offered (approved by a person, the usual way: POST /v1/ads/campaigns/:id/stop). Until then the
+   * money stays held and nothing prints. An ad not paid up front is decided as before.
+   */
+  async review(input: { companyId: string; campaignId: string; decision: 'approve' | 'reject' | 'flag'; note?: string; by?: { userId?: string | null; role?: string | null } }) {
     const c = this.platform.campaigns.get(input.campaignId);
     if (!c || c.companyId !== input.companyId) throw new AdsError(404, 'not_found', 'Campaign not found.');
+    const paid = !!c.prepaid;
+    const person = input.by?.userId ?? null;
+    const note = String(input.note ?? '').trim();
+    if (input.decision === 'flag' || (input.decision === 'reject' && paid && !person)) {
+      return this.flag({ companyId: c.companyId, campaignId: c.id, reasons: [note || 'Flagged for a closer look.'], by: person ? { kind: 'team', id: person } : { kind: 'automated', id: null } });
+    }
+    // An AI's rejection picked for audit: a person confirms it (reject) or overturns it (approve).
+    const audit = !!(c.review?.status === 'rejected' && c.review.auditPending);
+    // A paid ad (its bottles, a route buy, or a change to one) is approved by a person on the team, signed in: never a
+    // key, which an automated check or an AI could hold (*Ad review*, locked: "a person checks every ad"; P4). That
+    // includes overturning the AI reviewer's own rejection and deciding an advertiser's appeal of it.
+    if (input.decision === 'approve' && !person && (paid || c.routeBuy || c.review?.aiFinal || c.review?.appealedAt)) throw new AdsError(403, 'person_review', c.review?.aiFinal || c.review?.appealedAt ? 'The AI reviewer rejected this ad (or the advertiser appealed that): a person on the team decides it, signed in, not with an API key.' : 'A paid ad is approved by a person on the team, signed in, not with an API key (an automated check can flag it).');
+    if (input.decision === 'reject' && paid) {
+      if (c.review?.status !== 'submitted' && c.review?.status !== 'flagged' && !audit) throw new AdsError(409, 'not_in_review', 'Only an ad waiting for review can be rejected.');
+      if (note.length < 10) throw new AdsError(422, 'reason_required', 'Write why it’s rejected, in plain words (at least 10 characters): it’s kept, and the advertiser sees it.');
+    }
+    // Already stopped and paid back: it can't run again. An audit of the AI's rejection still records what the person
+    // thought (its record stays honest), and the ad stays stopped.
+    if (input.decision === 'approve' && c.prepaid?.stoppedAt) {
+      if (!audit || !person) throw new AdsError(409, 'stopped', 'This ad was stopped and its unprinted bottles paid back. Make a new ad instead.');
+      const { auditPending: _done, ...rest } = c.review!;
+      c.review = rest;
+      this.platform.persist.campaign(c);
+      await this.addReviewNote({ companyId: c.companyId, campaignId: c.id, kind: 'note', authorKind: 'team', authorId: person, text: `On audit, a person disagreed with the AI’s rejection${note ? `: ${note}` : ''}. It was already paid back, so it stays stopped.` });
+      await this.onDecided(c, 'approved', person);
+      return c;
+    }
+    // Aimed at a few houses: the stricter review (a person, the business verified, no names or addresses).
+    if (input.decision === 'approve' && c.routeBuy?.small) await this.routeBuys?.beforeApprove(c, input.by ?? {});
     if (input.decision === 'approve') await this.beforeLive(c);
     const at = this.platform.bus.now().toISOString();
-    c.review = { status: input.decision === 'approve' ? 'approved' : 'rejected', ...(input.note ? { note: input.note } : {}), at };
+    c.review = { status: input.decision === 'approve' ? 'approved' : 'rejected', ...(note ? { note } : {}), at, ...(person ? { by: person } : {}), ...(input.decision === 'reject' && paid ? { refundOffered: true } : {}) };
     c.active = input.decision === 'approve';
     this.platform.persist.campaign(c);
+    if (paid) await this.addReviewNote({ companyId: c.companyId, campaignId: c.id, kind: input.decision === 'approve' ? 'approved' : 'rejected', authorKind: 'team', authorId: person, text: input.decision === 'approve' ? (note || 'Approved: it prints from now on.') : `Rejected: ${note}. The bottles not printed can be paid back to your card.` });
+    // A person's final decision on a paid ad is the AI reviewer's record (agreed with it or not). A key's never is.
+    if (paid && person) await this.onDecided(c, input.decision === 'approve' ? 'approved' : 'rejected', person);
     return c;
+  }
+
+  /**
+   * The AI reviewer rejects a paid ad on its own: only where the company let it make the final call (AiReviewService
+   * decides that), with its written reason kept and shown to the advertiser, who can appeal to a person. The refund is
+   * offered, and a person approves it, as after any rejection. `audit`: a person checks this one too.
+   */
+  async aiReject(c: Campaign, reason: string, audit: boolean) {
+    const company = this.platform.companies.get(c.companyId)!;
+    const at = this.platform.bus.now().toISOString();
+    const note = reason.slice(0, 1000);
+    c.review = { status: 'rejected', note, at, by: 'ai:ad-reviewer', refundOffered: true, aiFinal: true, ...(audit ? { auditPending: true } : {}) };
+    c.active = false;
+    this.platform.persist.campaign(c);
+    await this.addReviewNote({ companyId: c.companyId, campaignId: c.id, kind: 'rejected', authorKind: 'ai', authorId: 'ad-reviewer', text: `Rejected by ${company.name}’s AI reviewer (${note}). You can appeal to a person on the team, who will look at it again. If it stays rejected, the bottles not printed can be paid back once a person approves the refund.` });
+    return c;
+  }
+
+  /** The advertiser appealed the AI's rejection: back to a person, flagged (money held, nothing prints, no refund yet). */
+  async reopenForAppeal(c: Campaign, text: string) {
+    const at = this.platform.bus.now().toISOString();
+    c.review = { status: 'flagged', note: `Appeal of the AI reviewer’s rejection (${c.review?.note ?? ''})`.slice(0, 1000), at, flaggedAt: at, appealedAt: at };
+    c.active = false;
+    this.platform.persist.campaign(c);
+    await this.addReviewNote({ companyId: c.companyId, campaignId: c.id, kind: 'appeal', authorKind: 'advertiser', authorId: c.advertiserId, text: text.slice(0, 2000) });
+    return c;
+  }
+
+  /**
+   * Flag an ad for the team: an automated check or AI (or a person) raised a concern. The ad stops (nothing prints),
+   * goes to the review queue with the reasons, and the team talks it over with the advertiser in its notes. A flag
+   * never rejects and never refunds.
+   */
+  async flag(input: { companyId: string; campaignId: string; reasons: string[]; by: { kind: 'automated' | 'team' | 'ai'; id: string | null } }) {
+    const c = this.platform.campaigns.get(input.campaignId);
+    if (!c || c.companyId !== input.companyId) throw new AdsError(404, 'not_found', 'Campaign not found.');
+    if (c.review?.status === 'rejected') throw new AdsError(409, 'already_rejected', 'A person already rejected this ad.');
+    const at = this.platform.bus.now().toISOString();
+    const reasons = input.reasons.map((x) => x.trim()).filter(Boolean).map((x) => x.slice(0, 600));
+    // Flagged again while it's being discussed: the new reasons join the earlier ones.
+    const earlier = c.review?.status === 'flagged' && c.review.note ? [c.review.note] : [];
+    c.review = { status: 'flagged', note: [...earlier, ...reasons].join(' · ').slice(0, 1000) || 'Flagged for a closer look.', at, flaggedAt: c.review?.status === 'flagged' ? c.review.flaggedAt ?? at : at };
+    c.active = false;
+    this.platform.persist.campaign(c);
+    for (const r of reasons.length ? reasons : ['Flagged for a closer look.']) await this.addReviewNote({ companyId: c.companyId, campaignId: c.id, kind: 'flag', authorKind: input.by.kind, authorId: input.by.id, text: r });
+    return c;
+  }
+
+  /** The notes on an ad's review, oldest first: the flags with their reasons, and what the team and the advertiser said. */
+  async reviewNotes(companyId: string, campaignId: string) {
+    const c = this.platform.campaigns.get(campaignId);
+    if (!c || c.companyId !== companyId) throw new AdsError(404, 'not_found', 'Campaign not found.');
+    return (await this.db.query<any>(`select id, kind, author_kind, author_id, text, at from ad_review_notes where company_id = $1 and campaign_id = $2 order by seq`, [companyId, campaignId])).rows
+      .map((r) => ({ id: r.id as string, kind: r.kind as string, from: r.author_kind === 'advertiser' ? 'advertiser' : r.author_kind === 'automated' ? 'automated check' : r.author_kind === 'ai' ? 'AI reviewer' : 'team', text: r.text as string, at: new Date(r.at).toISOString() }));
+  }
+
+  /** Someone writes in an ad's notes: a person on the team, or the advertiser. Only while it's in review or rejected. */
+  async writeReviewNote(input: { companyId: string; campaignId: string; from: 'team' | 'advertiser'; authorId: string; advertiserId?: string; text: string }) {
+    const c = this.platform.campaigns.get(input.campaignId);
+    if (!c || c.companyId !== input.companyId || (input.from === 'advertiser' && c.advertiserId !== input.advertiserId)) throw new AdsError(404, 'not_found', 'Campaign not found.');
+    if (!['submitted', 'flagged', 'rejected'].includes(c.review?.status ?? '')) throw new AdsError(409, 'not_in_review', 'Notes are for ads being reviewed.');
+    const text = input.text.trim();
+    if (!text) throw new AdsError(422, 'empty', 'Write something.');
+    await this.addReviewNote({ companyId: c.companyId, campaignId: c.id, kind: 'note', authorKind: input.from, authorId: input.authorId, text: text.slice(0, 2000) });
+    return this.reviewNotes(c.companyId, c.id);
+  }
+
+  private async addReviewNote(n: { companyId: string; campaignId: string; kind: 'flag' | 'note' | 'resubmitted' | 'approved' | 'rejected' | 'appeal'; authorKind: 'team' | 'advertiser' | 'automated' | 'ai'; authorId: string | null; text: string }) {
+    await this.db.query(`insert into ad_review_notes (id, company_id, campaign_id, kind, author_kind, author_id, text, at) values ($1,$2,$3,$4,$5,$6,$7,$8)`, [newId('arn'), n.companyId, n.campaignId, n.kind, n.authorKind, n.authorId, n.text.slice(0, 2000), this.platform.bus.now().toISOString()]);
   }
 }

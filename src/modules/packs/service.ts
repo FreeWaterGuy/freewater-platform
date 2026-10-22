@@ -1,5 +1,6 @@
+import { FACE_SWITCHES } from '../../runtime/registry';
 import { newId } from '../../core/ids';
-import type { BoxFacePlacement, BoxProduct } from '../../core/types';
+import type { BoxFacePlacement, BoxProduct, Unit } from '../../core/types';
 import type { Platform } from '../../platform';
 import { fillBoxFaces } from './boxFaces';
 import { labelSignature } from '../ads/engine';
@@ -14,6 +15,11 @@ export interface PackOrder {
   boxId: string; // "box-6", "box-12", "box-24"
   productId: string; // the bottle
   runId?: string; // one night's run of a route, like "route-3@2026-11-03"
+  /** A pack for a house in a delivery area (not a subscription): which house and area. */
+  houseId?: string;
+  areaId?: string;
+  /** Which of the house's boxes this is that night (1 when it gets one): route pieces are reserved box by box. */
+  packNo?: number;
 }
 
 export interface Pack {
@@ -30,10 +36,16 @@ export interface Pack {
   status: 'composed' | 'box_printed' | 'mismatch' | 'verified' | 'sealed' | 'loaded' | 'delivered' | 'returned';
   loadPosition?: number;
   runId?: string;
+  /** For a house in a delivery area: the house and its area, and which of its boxes that night this is. */
+  houseId?: string;
+  areaId?: string;
+  packNo?: number;
   /** Checked by a person, by hand, when no packing line was there to scan it: who and when, for the record. */
   checkedByHand?: { by: string; at: string; reason?: string };
   /** Its run was closed out from an earlier day and never driven: who, when and why. */
   closedOut?: { by: string; at: string; reason: string };
+  /** It was last scanned at its door without a photo when its photos were up to this one (a later photo proves the drop). */
+  doorScanSeq?: number;
 }
 
 /** Asked to do something a pack can't do in the state it is in. */
@@ -52,6 +64,15 @@ export type DeliveryResult =
  */
 export class PackService {
   readonly packs = new Map<string, Pack>();
+  /** The packs of each stop of each night's run, so a scan at a door looks at its stop, not at every pack ever made. */
+  private byStop = new Map<string, Set<string>>();
+  private stopKey(routeId: string, stop: number, run: string) { return `${routeId}|${stop}|${run}`; }
+  private index(p: Pack) { const k = this.stopKey(p.routeId, p.stop, p.runId ?? ''); const s = this.byStop.get(k) ?? new Set(); s.add(p.id); this.byStop.set(k, s); }
+  /** The packs planned for a stop of a run (by the index; a pack put in the map some other way is still found). */
+  forStop(routeId: string, stop: number, run: string): Pack[] {
+    const hit = [...(this.byStop.get(this.stopKey(routeId, stop, run)) ?? [])].map((id) => this.packs.get(id)).filter((p): p is Pack => !!p && p.routeId === routeId && p.stop === stop && (p.runId ?? '') === run);
+    return hit.length ? hit : [...this.packs.values()].filter((p) => p.routeId === routeId && p.stop === stop && (p.runId ?? '') === run);
+  }
   private boxTries = new Map<string, number>();
   /**
    * Packs whose bottles are printing right now (finish or replace). Two at once on one pack would each print what the
@@ -69,10 +90,30 @@ export class PackService {
     return run;
   }
 
-  constructor(private platform: Platform, private boxes: Map<string, BoxProduct>) {}
+  constructor(private platform: Platform, private boxes: Map<string, BoxProduct>) {
+    platform.onReprinted = (old, fresh) => this.swapIn(old, fresh);
+    platform.reprintPending = (old) => { const p = old.packId ? this.packs.get(old.packId) : undefined; return !!p && p.unitIds.includes(old.id); };
+  }
+
+  /** After a crash: reprints that printed but whose bad bottle wasn't voided, or whose pack still held it, are finished. */
+  repairReprints() { return this.platform.repairReprints(); }
 
   /** Who a pack is for, so ads that target people can go in it. Set at start-up. */
   audienceFor?: (customerId: string, companyId: string) => Promise<import('../ads/contract').PrintAudience | null>;
+  /** Where a pack for a house in a delivery area is going, handed to the ad engine with each bottle. Set at start-up. */
+  houseContextFor?: (houseId: string, companyId: string) => Promise<import('../../core/types').RouteHouseContext | null>;
+  private houseOf(pack: Pack) {
+    return pack.houseId && this.houseContextFor ? this.houseContextFor(pack.houseId, pack.companyId) : Promise.resolve(null);
+  }
+  /**
+   * Pieces bought on delivery routes for a house's pack (src/modules/ads/routeBuys.ts): per bottle (numbered across
+   * the house's boxes that week), its box sides, and the advertisers the house blocked. Set at start-up.
+   */
+  routeFor?: (pack: Pack) => Promise<{ bottle: (n: number) => { spotId: string; campaignId: string; share: import('../../core/types').Share }[]; faces: { spotId: string; campaignId: string; face: string }[]; blocked: string[] } | null>;
+  /** A house's box printed: its route sides are placed and booked. Set at start-up. */
+  routeBoxPrinted?: (pack: Pack) => Promise<void>;
+  /** The number, across the house's boxes that week, of the bottle at this place in this pack (1-based). */
+  private bottleNo(pack: Pack, index: number) { return ((pack.packNo ?? 1) - 1) * pack.box.bottles + index + 1; }
 
   async compose(order: PackOrder): Promise<Pack> {
     const p = this.platform;
@@ -81,8 +122,9 @@ export class PackService {
     if (!company) throw new Error(`Unknown company ${order.companyId}`);
     if (!box) throw new Error(`Unknown box ${order.boxId}`);
 
-    const pack: Pack = { id: newId('pk'), companyId: company.id, customerId: order.customerId, address: order.address, routeId: order.routeId, stop: order.stop, box, unitIds: [], faces: [], status: 'composed', ...(order.runId ? { runId: order.runId } : {}) };
+    const pack: Pack = { id: newId('pk'), companyId: company.id, customerId: order.customerId, address: order.address, routeId: order.routeId, stop: order.stop, box, unitIds: [], faces: [], status: 'composed', ...(order.runId ? { runId: order.runId } : {}), ...(order.houseId ? { houseId: order.houseId, areaId: order.areaId, packNo: order.packNo ?? 1 } : {}) };
     this.packs.set(pack.id, pack);
+    this.index(pack);
     this.save(pack);
 
     await this.finish(pack.id, order.productId);
@@ -111,8 +153,10 @@ export class PackService {
       const counts = new Map<string, number>();
       for (const id of pack.unitIds) for (const pl of p.units.get(id)?.placements ?? []) if (!pl.isHouse) counts.set(pl.campaignId, (counts.get(pl.campaignId) ?? 0) + 1);
       const max = Math.max(1, Math.floor(box.bottles * company.adRules.maxPackShare));
+      const house = await this.houseOf(pack);
+      const route = await this.routeFor?.(pack) ?? null;
       while (pack.unitIds.length < box.bottles) {
-        const unitId = await this.printBottle(pack, productId, counts, max);
+        const unitId = await this.printBottle(pack, productId, counts, max, house, route, this.bottleNo(pack, pack.unitIds.length));
         pack.unitIds.push(unitId);
         this.save(pack);
       }
@@ -121,7 +165,8 @@ export class PackService {
 
     // 2. The box itself.
     if (!pack.rendered) {
-      pack.faces = fillBoxFaces({ company, box, routeId: pack.routeId, campaigns: [...p.campaigns.values()], random: p.random });
+      const route = await this.routeFor?.(pack) ?? null;
+      pack.faces = fillBoxFaces({ company, box, routeId: pack.routeId, campaigns: [...p.campaigns.values()], random: p.random, faceOn: (face) => !p.featureOn || (p.featureOn(company.id, 'box_ads') && p.featureOn(company.id, FACE_SWITCHES[face] ?? 'box_ads')), reserved: route?.faces, blockedAdvertisers: route?.blocked });
       pack.rendered = renderBox({ packId: pack.id, box, company, faces: pack.faces, campaigns: p.campaigns, routeId: pack.routeId, stop: pack.stop, codes: p.codes });
       this.save(pack);
     }
@@ -136,6 +181,7 @@ export class PackService {
         pack.status = 'box_printed';
         this.save(pack);
         p.bus.publish('box.printed', company.id, { packId: pack.id, jobId, faces: pack.faces }, pack.id);
+        await this.routeBoxPrinted?.(pack);
         break;
       }
     }
@@ -143,11 +189,14 @@ export class PackService {
     return pack;
   }
 
-  private async printBottle(pack: Pack, productId: string, counts: Map<string, number>, max: number): Promise<string> {
+  private async printBottle(pack: Pack, productId: string, counts: Map<string, number>, max: number, house: import('../../core/types').RouteHouseContext | null, route: Awaited<ReturnType<NonNullable<PackService['routeFor']>>> = null, bottleNo = 0): Promise<string> {
     for (let tries = 0; tries < 3; tries++) {
       const avoidSignatures = new Set(pack.unitIds.map((id) => labelSignature(this.platform.units.get(id)?.placements ?? [])));
-      const audience = this.audienceFor ? await this.audienceFor(pack.customerId, pack.companyId) : null;
-      const r = await this.platform.order({ companyId: pack.companyId, locationId: pack.routeId, productId, packId: pack.id, consumerId: pack.customerId, frequency: { counts, max }, avoidSignatures, audience });
+      const audience = this.audienceFor && pack.customerId ? await this.audienceFor(pack.customerId, pack.companyId) : null;
+      // A route piece already on a bottle of this pack is never placed again (the database's claim refuses it too).
+      const done = new Set(pack.unitIds.flatMap((id) => this.platform.units.get(id)?.placements.flatMap((pl) => (pl.routeSpotId ? [pl.routeSpotId] : [])) ?? []));
+      const reserved = route ? route.bottle(bottleNo).filter((x) => !done.has(x.spotId)) : undefined;
+      const r = await this.platform.order({ companyId: pack.companyId, locationId: pack.routeId, productId, packId: pack.id, consumerId: pack.customerId || undefined, frequency: { counts, max }, avoidSignatures, audience, house, ...(reserved?.length ? { reserved } : {}), ...(route?.blocked.length ? { blockedAdvertisers: route.blocked } : {}) });
       if (r.ok) {
         for (const pl of r.unit.placements) if (!pl.isHouse) counts.set(pl.campaignId, (counts.get(pl.campaignId) ?? 0) + 1);
         return r.unit.id;
@@ -178,33 +227,43 @@ export class PackService {
     return { ok, missing, unexpected };
   }
 
-  /** Reprint the bottles a check found missing. The new bottle takes the old one's place in the pack. */
-  replace(packId: string, missingUnitIds: string[], productId: string): Promise<string[]> {
+  /**
+   * Reprint the bottles the packing check found wrong: a label torn, smudged, printed off or missing, so the line
+   * couldn't read it (bottles aren't lost in packing). Each is printed again exactly, with the same ads, for the same
+   * house or person (Platform.reprint): the bad one is voided and never counts against an advertiser, the reprint is
+   * billed instead, once. The new bottle takes the old one's place in the pack, which then needs a new check. The
+   * product is always the bad bottle's own (`_productId` is kept for callers that still send it).
+   */
+  replace(packId: string, badUnitIds: string[], _productId?: string): Promise<string[]> {
     const pack = this.need(packId);
     if (pack.status !== 'box_printed' && pack.status !== 'mismatch') return Promise.reject(new PackStateError(`Pack ${packId} is ${pack.status}; bottles can only be replaced before it is checked and sealed.`));
     // A second "replace" of the same box while the first is printing (a double tap, a retry) is refused, not printed twice.
     try { this.busy(packId); } catch (e) { return Promise.reject(e); }
-    return this.exclusive(packId, () => this.replaceNow(pack, missingUnitIds, productId));
+    return this.exclusive(packId, () => this.replaceNow(pack, badUnitIds));
   }
-  private async replaceNow(pack: Pack, missingUnitIds: string[], productId: string): Promise<string[]> {
-    const packId = pack.id;
-    const company = this.platform.companies.get(pack.companyId)!;
-    const counts = new Map<string, number>();
-    for (const id of pack.unitIds) for (const pl of this.platform.units.get(id)?.placements ?? []) if (!pl.isHouse) counts.set(pl.campaignId, (counts.get(pl.campaignId) ?? 0) + 1);
-    const max = Math.max(1, Math.floor(pack.box.bottles * company.adRules.maxPackShare));
+  private async replaceNow(pack: Pack, badUnitIds: string[]): Promise<string[]> {
     const fresh: string[] = [];
-    for (const old of missingUnitIds) {
-      const i = pack.unitIds.indexOf(old);
-      if (i < 0) continue;
-      const id = await this.printBottle(pack, productId, counts, max);
-      pack.unitIds[i] = id;
-      fresh.push(id);
-      this.save(pack);
-      this.platform.bus.publish('unit.replaced', pack.companyId, { packId, oldUnitId: old, newUnitId: id }, `${packId}:${old}`);
+    for (const old of new Set(badUnitIds)) {
+      if (!pack.unitIds.includes(old)) continue;
+      const r = await this.platform.reprint(old, 'label wrong at the packing check');
+      if (!r.ok) throw new Error(`Bottle ${old} couldn’t be reprinted (${r.reason}). Nothing was billed for a reprint; try again.`);
+      fresh.push(r.unit.id);
     }
-    // What is in the box changed: it needs a new check before it can be sealed.
-    if (fresh.length) { pack.status = 'mismatch'; this.save(pack); }
     return fresh;
+  }
+
+  /**
+   * A reprint printed: it takes the bad bottle's place in the pack (called inside the reprint's one step, and again by
+   * a repair after a crash; only once). What's in the box changed, so it needs a new check before it can be sealed.
+   */
+  private swapIn(old: Unit, fresh: Unit) {
+    const pack = old.packId ? this.packs.get(old.packId) : undefined;
+    const i = pack ? pack.unitIds.indexOf(old.id) : -1;
+    if (!pack || i < 0) return;
+    pack.unitIds[i] = fresh.id;
+    if (pack.status === 'box_printed' || pack.status === 'verified') pack.status = 'mismatch';
+    this.save(pack);
+    this.platform.bus.publish('unit.replaced', pack.companyId, { packId: pack.id, oldUnitId: old.id, newUnitId: fresh.id }, `${pack.id}:${old.id}`);
   }
 
   /**
@@ -305,10 +364,13 @@ export class PackService {
     return order;
   }
 
-  /** At the door: the stop is marked delivered only when the box scanned is the box for this address. */
-  deliver(input: { routeId: string; runId?: string; stop: number; scannedPackId: string; atAddress: boolean; photoProof: boolean; emptiesCollected: number }): DeliveryResult {
+  /**
+   * At the door: the stop is marked delivered only when the box scanned is the box for this address. `checkOnly`: only
+   * check it's the right box at the right place, still on the van (nothing changes).
+   */
+  deliver(input: { routeId: string; runId?: string; stop: number; scannedPackId: string; atAddress: boolean; photoProof: boolean; emptiesCollected: number; checkOnly?: boolean }): DeliveryResult {
     const run = input.runId ?? this.currentRun(input.routeId);
-    const forStop = [...this.packs.values()].filter((p) => p.routeId === input.routeId && p.stop === input.stop && (p.runId ?? '') === run);
+    const forStop = this.forStop(input.routeId, input.stop, run);
     const right = forStop.find((p) => p.status !== 'delivered' && p.status !== 'returned') ?? forStop[0];
     if (!right) return { ok: false, reason: `No pack is planned for stop ${input.stop}.` };
     const reject = (reason: string): DeliveryResult => {
@@ -323,9 +385,10 @@ export class PackService {
     }
     if (!input.atAddress) return reject(`You're not at ${right.address} yet.`);
     if (right.status !== 'loaded') return reject(`This pack isn't loaded on the van.`);
+    if (input.checkOnly) return { ok: true, pack: right };
     right.status = 'delivered';
     this.save(right);
-    this.platform.bus.publish('pack.delivered', right.companyId, { packId: right.id, routeId: right.routeId, stop: right.stop, emptiesCollected: input.emptiesCollected, photoProof: input.photoProof }, `${right.id}:delivered`);
+    this.platform.bus.publish('pack.delivered', right.companyId, { packId: right.id, routeId: right.routeId, stop: right.stop, emptiesCollected: input.emptiesCollected, photoProof: input.photoProof, ...(right.houseId ? { houseId: right.houseId, areaId: right.areaId } : {}) }, `${right.id}:delivered`);
     return { ok: true, pack: right };
   }
 
@@ -341,7 +404,15 @@ export class PackService {
 
   /** Put packs loaded from storage back in place. */
   restore(packs: Pack[]) {
-    for (const p of packs) this.packs.set(p.id, p);
+    for (const p of packs) { this.packs.set(p.id, p); this.index(p); }
+  }
+
+  /** The box was scanned at its door (its photo must come after this: `photoSeq`, the last photo of it then). */
+  markDoorScan(packId: string, photoSeq: number) {
+    const p = this.packs.get(packId);
+    if (!p) return;
+    p.doorScanSeq = photoSeq;
+    this.save(p);
   }
 
   private save(p: Pack) {

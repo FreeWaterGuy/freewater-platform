@@ -21,6 +21,8 @@ export interface EventPayloads {
   'pack.verified': { packId: string; scanned: number };
   'pack.mismatch': { packId: string; missing: string[]; unexpected: string[] };
   'unit.replaced': { packId: string; oldUnitId: string; newUnitId: string };
+  /** A bottle whose label came out wrong, reprinted as `replacedBy` with the same ads: its books lines are reversed. */
+  'unit.voided': { unitId: string; replacedBy: string; packId?: string; reason: string };
   'pack.sealed': { packId: string };
   'pack.loaded': { packId: string; routeId: string; loadPosition: number };
   'pack.delivered': { packId: string; routeId: string; stop: number; emptiesCollected: number; photoProof: boolean };
@@ -63,8 +65,19 @@ export interface EventPayloads {
   'machine.incident_opened': { incidentId: string; locationId: string; kind: string; severity: 'warning' | 'critical'; message: string };
   'machine.incident_resolved': { incidentId: string; locationId: string; kind: string; minutes: number };
   'unit.failed': { unitId: string; orderId?: string; reason: string };
-  'payment.authorized': { paymentId: string; payerType: 'user' | 'advertiser'; payerId: string; amountCents: Cents; purpose: 'custom_order' | 'invoice'; ref: string };
-  'payment.captured': { paymentId: string; payerType: 'user' | 'advertiser'; payerId: string; amountCents: Cents; purpose: 'custom_order' | 'invoice'; ref: string; provider: string };
+  'payment.authorized': { paymentId: string; payerType: 'user' | 'advertiser'; payerId: string; amountCents: Cents; purpose: 'custom_order' | 'invoice' | 'ad_order' | 'ad_change'; ref: string };
+  'payment.captured': { paymentId: string; payerType: 'user' | 'advertiser'; payerId: string; amountCents: Cents; purpose: 'custom_order' | 'invoice' | 'ad_order' | 'ad_change'; ref: string; provider: string };
+  /** One use of a costly extra (an AI video clip) paid for up front: its price moves from prepaid to earned. */
+  'ad.extra_used': { useId: string; campaignId: string; advertiserId: string; advertiserName: string; feature: string; chargedCents: Cents; costCents: Cents };
+  /** The company stopped an ad: what wasn't printed (and unused extras) went back to the advertiser's card. */
+  'ad.refunded': { refundId: string; campaignId: string; advertiserId: string; advertiserName: string; bottles: number; totalCents: Cents; provider: string };
+  /**
+   * Pieces bought on a delivery route that printed but never reached the house (its box came back: the house stopped,
+   * the driver couldn't leave it): each one's price goes back from earned to the advertiser's money, as credit.
+   */
+  'ad.route_credited': { settlementId: string; campaignId: string; advertiserId: string; advertiserName: string; reversed: { kind: 'print' | 'extra'; unitId?: string; packId?: string; cents: Cents }[] };
+  /** Route credit the advertiser didn't use within the company's days (only where the company set some) expired. */
+  'ad.route_credit_expired': { expiryId: string; advertiserId: string; advertiserName: string; cents: Cents; days: number };
   'payment.voided': { paymentId: string; ref: string };
   'payment.declined': { paymentId: string; payerType: 'user' | 'advertiser'; payerId: string; reason: string; ref: string };
   'invoice.issued': { invoiceId: string; advertiserId: string; totalCents: Cents; lines: number };
@@ -111,6 +124,11 @@ export class EventBus {
 
   now(): Date {
     return this.clock();
+  }
+
+  /** Was this action already recorded (here, or before a restart)? */
+  publishedBefore(companyId: string, type: EventType, idempotencyKey: string): boolean {
+    return this.seen.has(`${companyId}:${type}:${idempotencyKey}`);
   }
 
   on<T extends EventType>(type: T, handler: Handler<T>): void {

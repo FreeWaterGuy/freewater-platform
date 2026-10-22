@@ -1,4 +1,5 @@
 // Sample data for the demo and tests. All advertisers here are made-up brands; prices are placeholders.
+import { defaultAdBilling } from '../modules/ads/billing';
 import { SHARES, type BoxProduct, type Campaign, type CompanyConfig, type Creative, type Location, type Product, type Share } from '../core/types';
 
 export const bottle16oz: Product = {
@@ -31,9 +32,10 @@ export const products: Product[] = [bottle16oz, bottle25oz, can12oz];
 
 const sides = { adFaces: ['top', 'front', 'back', 'right'] as BoxProduct['adFaces'], panelFace: 'left' as const, blankFaces: ['bottom'] as BoxProduct['blankFaces'] };
 export const boxes: BoxProduct[] = [
-  { id: 'box-6', bottles: 6, lengthIn: 8, widthIn: 5.4, heightIn: 7.8, ...sides },
-  { id: 'box-12', bottles: 12, lengthIn: 10.6, widthIn: 8, heightIn: 7.8, ...sides },
-  { id: 'box-24', bottles: 24, lengthIn: 15.8, widthIn: 10.6, heightIn: 7.8, ...sides },
+  // Full, with 16 oz bottles (about half a kilo each) and the box: what loading a van is planned by.
+  { id: 'box-6', bottles: 6, lengthIn: 8, widthIn: 5.4, heightIn: 7.8, weightKg: 3.2, ...sides },
+  { id: 'box-12', bottles: 12, lengthIn: 10.6, widthIn: 8, heightIn: 7.8, weightKg: 6.2, ...sides },
+  { id: 'box-24', bottles: 24, lengthIn: 15.8, widthIn: 10.6, heightIn: 7.8, weightKg: 12.2, ...sides },
 ];
 
 /**
@@ -86,6 +88,9 @@ export const freewater: CompanyConfig = {
   unitCosts: { water: 4, bottle: 18, label: 3, machine: 6 }, // placeholders until real costs are known
   adRules: { minAdsPerUnit: 1, maxAdsPerUnit: 10, blockedCategories: ['alcohol', 'tobacco', 'gambling', 'weapons'], competitorSeparation: true, repeatScanWindowSec: 600, maxPackShare: 0.5 },
   prices: freewaterPrices,
+  // The pilot: advertisers pay up front for their bottles at these flat prices, AR, video and scans included. Fees on
+  // top (per scan, per AR launch, per box side, commission) are each off until a person turns one on.
+  adBilling: defaultAdBilling(),
   modules: { ads: 'freewater-ads', renderer: 'svg-label', printer: 'virtual-printer' },
   standardProductId: 'bottle-16oz',
   qr: { logo: 'brand', advertiserLogos: true, allowStatic: true },
@@ -115,8 +120,8 @@ export const peakSpring: CompanyConfig = {
 export const locations: Location[] = [
   { id: 'ATX-014', kind: 'machine', companyId: 'freewater', city: 'Austin', name: 'Congress Ave', address: '600 Congress Ave, Austin, TX', lat: 30.2687, lng: -97.7428, printSeconds: 24, products: ['bottle-16oz', 'can-12oz'] },
   { id: 'ATX-022', kind: 'machine', companyId: 'freewater', city: 'Austin', name: 'Rainey St', address: '70 Rainey St, Austin, TX', lat: 30.2589, lng: -97.7387, printSeconds: 24 },
-  { id: 'route-3', kind: 'route', companyId: 'freewater', city: 'Austin', name: 'Travis Heights', area: { lat: 30.2468, lng: -97.7445, radiusKm: 2.2 }, depot: { lat: 30.2597, lng: -97.7146, name: 'East Austin micro-factory' }, deliveryDays: [2, 5] },
-  { id: 'route-5', kind: 'route', companyId: 'freewater', city: 'Austin', name: 'Mueller', area: { lat: 30.2985, lng: -97.7040, radiusKm: 2 }, depot: { lat: 30.2597, lng: -97.7146, name: 'East Austin micro-factory' }, deliveryDays: [2, 5] },
+  { id: 'route-3', kind: 'route', companyId: 'freewater', city: 'Austin', country: 'US', state: 'TX', name: 'Travis Heights', area: { lat: 30.2468, lng: -97.7445, radiusKm: 2.2 }, depot: { lat: 30.2597, lng: -97.7146, name: 'East Austin micro-factory' }, deliveryDays: [2, 5] },
+  { id: 'route-5', kind: 'route', companyId: 'freewater', city: 'Austin', country: 'US', state: 'TX', name: 'Mueller', area: { lat: 30.2985, lng: -97.7040, radiusKm: 2 }, depot: { lat: 30.2597, lng: -97.7146, name: 'East Austin micro-factory' }, deliveryDays: [2, 5] },
   { id: 'PS-001', kind: 'machine', companyId: 'peak-spring', city: 'Denver', name: 'Union Station', address: '1701 Wynkoop St, Denver, CO', lat: 39.7527, lng: -105.0002, printSeconds: 30 },
 ];
 

@@ -7,6 +7,7 @@ import { TestOutbox } from '../adapters/messaging/contract';
 import { TestWebhookSender } from '../adapters/webhooks/contract';
 import { createApiKey } from '../db/store';
 import { simulateHistory } from './history';
+import { serverOnly } from './serverOnly';
 
 // Builds out/console-preview/index.html: the real console and developer portal running on answers recorded from
 // a real server (three days of settings changes, a team, keys, a healthy webhook and a failing one), with the
@@ -111,11 +112,20 @@ const rec = {
   })(),
   secondStepStart: await call('POST', '/v1/me/second-step/start', token),
   intake: await call('POST', '/v1/team/intake', token, { message: 'We gave 500 bottles at SXSW today in Austin for the WeFunder campaign' }),
+  // The Features page: every switch, a few changes in its history, and each starting point's preview.
+  ...(await (async () => {
+    await call('POST', '/v1/console/features', token, { changes: { box_back: false }, reason: 'Keeping the back of the box for our own message this month' });
+    await call('POST', '/v1/console/features', token, { changes: { studio_library: false } });
+    await call('POST', '/v1/console/features', token, { changes: { studio_library: true }, reason: 'Back on: designers asked for it' });
+    const features = await call('GET', '/v1/console/features', token);
+    const featurePlans = Object.fromEntries(await Promise.all(features.startingPoints.map(async (p: any) => [p.id, await call('POST', '/v1/console/features/preview', token, { startingPoint: p.id })])));
+    return { features, featurePlans, featureHistory: await call('GET', '/v1/console/features/history', token) };
+  })()),
   profit: await (async () => { await call('POST', '/v1/milestones/factories', token, { name: 'Austin micro factory 1', city: 'Austin', openedOn: new Date(end - 30 * 86_400_000).toISOString().slice(0, 10) }); return call('GET', '/v1/profit', token); })(),
 };
 await server.close();
 
-const bundle = await build({ entryPoints: ['src/demo/consolePreviewEntry.ts'], bundle: true, format: 'iife', globalName: 'FWLocal', platform: 'browser', minify: true, write: false, define: { 'process.env.NODE_ENV': '"production"' } });
+const bundle = await build({ entryPoints: ['src/demo/consolePreviewEntry.ts'], bundle: true, format: 'iife', globalName: 'FWLocal', platform: 'browser', minify: true, write: false, define: { 'process.env.NODE_ENV': '"production"' }, plugins: [serverOnly] });
 const safe = (s: string) => s.replace(/<\/script/gi, '<\\/script').replace(/<!--/g, '<\\!--');
 const out = 'out/console-preview';
 mkdirSync(out, { recursive: true });

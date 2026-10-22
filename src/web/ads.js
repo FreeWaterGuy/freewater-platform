@@ -74,7 +74,7 @@
   const routes = [
     [/^\/ads\/?$/, overview], [/^\/ads\/new$/, newAd], [/^\/ads\/drafts\/([\w-]+)$/, builder], [/^\/ads\/drafts\/([\w-]+)\/review$/, review],
     // eslint-disable-next-line security/detect-unsafe-regex -- route patterns, anchored and linear; the input is this page's own path
-    [/^\/ads\/campaigns\/([\w-]+)\/change$/, changeAd], [/^\/ads\/campaigns\/([\w-]+)\/code$/, codePage], [/^\/ads\/billing$/, billing], [/^\/ads\/studio(?:\?.*)?$/, studioPage], [/^\/ads\/tracking$/, tracking], [/^\/ads\/redeem(?:\/([\w-]+))?$/, redeem], [/^\/ads\/statement$/, statementPage], [/^\/ads\/offers$/, offersPage],
+    [/^\/ads\/campaigns\/([\w-]+)\/change$/, changeAd], [/^\/ads\/campaigns\/([\w-]+)\/code$/, codePage], [/^\/ads\/billing$/, billing], [/^\/ads\/studio(?:\?.*)?$/, studioPage], [/^\/ads\/tracking$/, tracking], [/^\/ads\/redeem(?:\/([\w-]+))?$/, redeem], [/^\/ads\/statement$/, statementPage], [/^\/ads\/offers$/, offersPage], [/^\/ads\/campaigns\/([\w-]+)\/report$/, routeReport],
   ];
   let cleanup = null;
   function go(path, replace) { state.path = path; if (!fixture) history[replace ? 'replaceState' : 'pushState'](null, '', path); render(); }
@@ -84,7 +84,7 @@
     if (cleanup) { cleanup(); cleanup = null; }
     if (!(await signedIn())) return;
     // Areas switched off on this server (FW_FEATURES): their pages and menu entries aren't shown.
-    if (!state.features) state.features = await api('GET', '/v1/public/features').catch(() => ({ off: [] }));
+    if (!state.features) state.features = await api('GET', `/v1/public/features${state.me?.companyId ? `?company=${encodeURIComponent(state.me.companyId)}` : ''}`).catch(() => ({ off: [] }));
     if (!on('offers') && /^\/ads\/offers/.test(state.path)) return go('/ads', true);
     for (const [re, fn] of routes) { const m = re.exec(state.path); if (m) { try { await fn(...m.slice(1)); } catch (e) { shell('', h('div', { class: 'notice err', text: e.message })); } window.scrollTo(0, 0); return; } }
     go('/ads', true);
@@ -97,13 +97,13 @@
         h('div', { class: 'logo', 'aria-label': 'FreeWater Ads' }, h('span', { text: 'free' }), h('span', { text: 'water' }), h('small', { text: 'Ads' })),
         h('nav', { 'aria-label': 'Main' },
           link('/ads', { 'aria-current': active === 'overview' ? 'page' : null }, icon(I.chart), 'Overview'),
-          link('/ads/new', { 'aria-current': active === 'new' ? 'page' : null }, icon(I.plus), 'New ad'),
-          link('/ads/studio', { 'aria-current': active === 'studio' ? 'page' : null }, icon(I.plus), 'Ad studio'),
+          !on('ad_chat') ? null : link('/ads/new', { 'aria-current': active === 'new' ? 'page' : null }, icon(I.plus), 'New ad'),
+          !on('studio') ? null : link('/ads/studio', { 'aria-current': active === 'studio' ? 'page' : null }, icon(I.plus), 'Ad studio'),
           !on('offers') ? null : link('/ads/offers', { 'aria-current': active === 'offers' ? 'page' : null }, icon(I.ticket), 'Offers'),
-          link('/ads/tracking', { 'aria-current': active === 'tracking' ? 'page' : null }, icon(I.target), 'Sales tracking'),
-          link('/ads/redeem', { 'aria-current': active === 'redeem' ? 'page' : null }, icon(I.ticket), 'Check a coupon'),
-          link('/ads/statement', { 'aria-current': active === 'statement' ? 'page' : null }, icon(I.chart), 'Statement'),
-          link('/ads/billing', { 'aria-current': active === 'billing' ? 'page' : null }, icon(I.card), 'Billing')),
+          !on('sales_tracking') ? null : link('/ads/tracking', { 'aria-current': active === 'tracking' ? 'page' : null }, icon(I.target), 'Sales tracking'),
+          !on('coupons') ? null : link('/ads/redeem', { 'aria-current': active === 'redeem' ? 'page' : null }, icon(I.ticket), 'Check a coupon'),
+          !on('advertiser_statements') ? null : link('/ads/statement', { 'aria-current': active === 'statement' ? 'page' : null }, icon(I.chart), 'Statement'),
+          !on('advertiser_billing') ? null : link('/ads/billing', { 'aria-current': active === 'billing' ? 'page' : null }, icon(I.card), 'Billing')),
         h('div', { class: 'who' }, h('b', { text: state.business?.name ?? '' }), me?.email || me?.phone || '', h('br'), h('button', { type: 'button', onclick: async () => { try { await api('POST', '/v1/auth/sign-out'); } catch {} state.token = null; state.me = null; state.business = null; store.set('fw_ads_token', null); render(); } }, 'Sign out'))),
       h('main', { class: 'main' }, ...content)));
   }
@@ -222,6 +222,8 @@
   // ---------- statement: every bottle, what you bid and what the auction charged ----------
   async function statementPage() {
     const to = new Date(), from = new Date(to.getTime() - 30 * 86_400_000);
+    // Paid up front at flat prices (FreeWater's way): no bids and no auction, so the statement doesn't speak of them.
+    const prepaid = (await api('GET', '/v1/ads/billing').catch(() => null))?.model === 'prepaid';
     const iso = (d) => d.toISOString().slice(0, 10);
     const fromI = h('input', { class: 'input', type: 'date', value: iso(from) }), toI = h('input', { class: 'input', type: 'date', value: iso(to) });
     const out = h('div', { class: 'stack' });
@@ -229,10 +231,11 @@
       try {
         const s = await api('GET', `/v1/ads/statement?from=${fromI.value}&to=${toI.value}`);
         const t = s.totals;
+        const bids = !prepaid || s.lines.some((l) => l.bidCents != null);
         out.replaceChildren(
           h('div', { class: 'kpis', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' }, [['Bottles', String(t.bottles)], ['Printing', cents(t.paidCents)], ['Scans and AR', cents(t.engagementCents)], ['Sales commission', cents(t.commissionCents)]].map(([k, v]) => h('div', { class: 'kpi' }, h('span', { text: k }), h('b', { text: v })))),
-          h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['When', 'Where', 'Piece', 'Your bid', 'Auction price', 'You paid', 'Why', 'Scans', 'AR', 'Sales'].map((x) => h('th', { text: x })))),
-            h('tbody', {}, s.lines.slice(-300).reverse().map((l) => h('tr', {}, h('td', { text: new Date(l.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) }), h('td', { text: l.place }), h('td', { text: l.piece }), h('td', { text: l.bidCents == null ? 'set price' : cents(l.bidCents) }), h('td', { text: l.paidLabelCents == null ? '–' : cents(l.paidLabelCents) }), h('td', {}, h('b', { text: cents(l.paidCents) })), h('td', { style: 'font-size:13px', text: l.adjustments.join(', ') || '–' }), h('td', { text: String(l.scans) }), h('td', { text: String(l.arLaunches) }), h('td', { text: String(l.sales) })))))),
+          h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['When', 'Where', 'Piece', ...(bids ? ['Your bid', 'Auction price'] : []), 'You paid', 'Why', 'Scans', 'AR', 'Sales'].map((x) => h('th', { text: x })))),
+            h('tbody', {}, s.lines.slice(-300).reverse().map((l) => h('tr', {}, h('td', { text: new Date(l.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) }), h('td', { text: l.place }), h('td', { text: l.piece }), bids ? h('td', { text: l.bidCents == null ? 'set price' : cents(l.bidCents) }) : null, bids ? h('td', { text: l.paidLabelCents == null ? '–' : cents(l.paidLabelCents) }) : null, h('td', {}, h('b', { text: cents(l.paidCents) })), h('td', { style: 'font-size:13px', text: l.adjustments.join(', ') || '–' }), h('td', { text: String(l.scans) }), h('td', { text: String(l.arLaunches) }), h('td', { text: String(l.sales) })))))),
           s.fingerprints.length ? h('p', { style: 'margin:0;font-size:13px;color:var(--muted)', text: `Each day’s books fingerprint, to check against the public open books: ${s.fingerprints.map((f) => `${f.date} ${f.fingerprint.slice(0, 12)}…`).join(' · ')}` }) : null);
       } catch (x) { out.replaceChildren(h('div', { class: 'notice err', text: x.message })); }
     };
@@ -242,7 +245,7 @@
         const blob = await res.blob(); const a = h('a', { href: URL.createObjectURL(blob), download: `statement-${fromI.value}-to-${toI.value}.csv` }); document.body.append(a); a.click(); a.remove();
       } catch (x) { toast(x.message); }
     };
-    shell('statement', h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Statement' }), h('p', { text: 'Every bottle you paid for: your bid, what the auction charged and why, and what each one earned you. You pay just enough to beat the next other advertiser’s ad, never more than your bid.' })), h('button', { class: 'btn secondary', type: 'button', onclick: csv }, 'Download spreadsheet')),
+    shell('statement', h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Statement' }), h('p', { text: prepaid ? 'Every bottle that carried your ad: what it took from what you paid up front, and what each one earned you (scans, AR and sales).' : 'Every bottle you paid for: your bid, what the auction charged and why, and what each one earned you. You pay just enough to beat the next other advertiser’s ad, never more than your bid.' })), h('button', { class: 'btn secondary', type: 'button', onclick: csv }, 'Download spreadsheet')),
       h('div', { class: 'form', style: 'max-width:520px;margin-bottom:16px' }, h('div', { class: 'field' }, h('label', { text: 'From' }), fromI), h('div', { class: 'field' }, h('label', { text: 'To' }), toI)),
       h('div', {}, h('button', { class: 'btn', type: 'button', onclick: load }, 'Show')), out);
     load();
@@ -634,7 +637,8 @@
           ),
         h('section', { class: 'panel', style: 'gap:12px' }, h('h2', { class: 'section', text: 'Who your ad is printed for' }),
           h('div', { class: 'form' }, field('People who like', tInterests, 'Your ad then only prints on bottles for someone who fits, and we show you each bottle reached them.'), field('Customers', tCustomers)),
-          c.engagement?.table ? h('p', { style: 'margin:0;color:var(--muted);font-size:14px', text: `Targeting makes each engagement worth more, so it costs more: places +${c.engagement.table.locations}%, products +${c.engagement.table.products}%, interests +${c.engagement.table.interests}%, new or returning customers +${c.engagement.table.customers}% (at most +${c.engagement.table.max}% in all). Right now yours adds ${c.engagement.premium.percent}%: ${cents(Math.round(c.engagement.perScanCents * (1 + c.engagement.premium.percent / 100)))} a scan and ${cents(Math.round(c.engagement.perArLaunchCents * (1 + c.engagement.premium.percent / 100)))} an AR launch.` }) : null,
+          // Paid up front with no fee per scan or AR launch: targeting costs nothing more, so nothing is said about it.
+          c.engagement?.table && (c.engagement.perScanCents || c.engagement.perArLaunchCents) ? h('p', { style: 'margin:0;color:var(--muted);font-size:14px', text: `Targeting makes each engagement worth more, so it costs more: places +${c.engagement.table.locations}%, products +${c.engagement.table.products}%, interests +${c.engagement.table.interests}%, new or returning customers +${c.engagement.table.customers}% (at most +${c.engagement.table.max}% in all). Right now yours adds ${c.engagement.premium.percent}%: ${cents(Math.round(c.engagement.perScanCents * (1 + c.engagement.premium.percent / 100)))} a scan and ${cents(Math.round(c.engagement.perArLaunchCents * (1 + c.engagement.premium.percent / 100)))} an AR launch.` }) : null,
           c.products.length > 1 ? h('div', { class: 'field' }, h('label', { text: 'Only on these products (none ticked: all)' }), h('div', { class: 'chips' }, prodBoxes.map(([, l]) => l))) : null),
         bidBox,
         h('section', { class: 'panel', style: 'gap:12px' }, h('h2', { class: 'section', text: 'When this ad ends' }),
@@ -646,10 +650,37 @@
   }
 
   // ---------- overview ----------
-  const statusText = { running: 'Running', in_review: 'In review', paused: 'Paused', finished: 'Finished', not_approved: 'Needs changes' };
+  const statusText = { running: 'Running', in_review: 'In review', being_discussed: 'Being discussed', paused: 'Paused', finished: 'Finished', not_approved: 'Needs changes', stopped: 'Stopped', not_paid: 'Not paid for' };
+  /**
+   * The notes on a paid ad's review: what the team raised and what you both wrote. A flag never rejects or charges:
+   * your money stays held, and changing the ad is free while it's being discussed.
+   */
+  function reviewNotes(c) {
+    const box = h('div', { class: 'note' }, h('p', { style: 'margin:0;color:var(--muted)', text: 'Loading the notes…' }));
+    const draw = async () => {
+      try {
+        const r = await api('GET', `/v1/ads/campaigns/${c.id}/notes`);
+        const say = h('textarea', { class: 'input', placeholder: `Answer ${state.config.name}’s team…`, maxlength: '2000' });
+        box.replaceChildren(
+          h('b', { text: c.status === 'being_discussed' ? `${state.config.name}’s team raised a question. Your money stays held and nothing prints until it’s settled; changing the ad is free meanwhile.` : 'Notes on this ad’s review' }),
+          h('ul', { style: 'margin:6px 0;padding-left:18px;line-height:1.6' }, r.notes.map((n) => h('li', {}, h('b', { text: `${n.from === 'advertiser' ? (n.kind === 'appeal' ? 'Your appeal' : 'You') : n.from === 'team' ? state.config.name : n.from === 'AI reviewer' ? `${state.config.name}’s AI reviewer` : 'Automated check'}: ` }), n.text))),
+          // The AI reviewer rejected it on its own: you can always appeal to a person, once (unless it was paid back).
+          r.review?.status === 'rejected' && r.review.aiFinal ? (() => {
+            const why = h('textarea', { class: 'input', placeholder: 'Why it should run: a person on the team reads this', maxlength: '2000' });
+            return h('div', { style: 'display:grid;gap:6px' }, h('b', { text: 'Appeal to a person' }), why, h('div', {}, h('button', { class: 'btn small', type: 'button', onclick: async () => { if (why.value.trim().length < 5) return toast('Say why, in a few words.'); try { await api('POST', `/v1/ads/campaigns/${c.id}/appeal`, { text: why.value.trim() }); toast('Sent to a person. Your money stays held meanwhile.'); render(); } catch (x) { toast(x.message); } } }, 'Appeal')));
+          })() : null,
+          c.status === 'being_discussed' || c.status === 'in_review' || c.status === 'not_approved' ? h('div', { style: 'display:grid;gap:6px' }, say, h('div', {}, h('button', { class: 'btn small', type: 'button', onclick: async () => { if (!say.value.trim()) return; try { await api('POST', `/v1/ads/campaigns/${c.id}/notes`, { text: say.value.trim() }); toast('Sent'); draw(); } catch (x) { toast(x.message); } } }, 'Send'))) : null);
+      } catch (x) { box.replaceChildren(h('p', { style: 'margin:0', text: x.message })); }
+    };
+    draw();
+    return box;
+  }
+  // How ads are paid for here, in plain words (prepaid: up front, per bottle; otherwise billed after the fact).
+  const prepaidTerms = (b) => `You pay up front for a number of bottles, and exactly that many go out with your ad: there's no end date and nothing to cancel, and pausing only delays. ${b.included}. ${b.feesOn.length ? `On top: ${b.feesOn.join(', ')}, charged to your card each day.` : 'Nothing is charged per scan, AR launch or sale.'} Changing a running ad costs ${dollars(b.changeFeeCents)}, paid when you submit the change.`;
   async function overview() {
     const o = await api('GET', '/v1/ads/overview?days=14');
     state.business = o.advertiser;
+    state.changeFeeCents = o.billing?.changeFeeCents;
     const p = o.period, t = o.total;
     shell('overview',
       h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: o.advertiser.name }), h('p', { text: 'The last 14 days. Every number comes from the books.' })), link('/ads/new', { class: 'btn' }, icon(I.plus), 'New ad')),
@@ -663,24 +694,32 @@
       o.drafts.length ? h('div', {}, h('h2', { class: 'section', text: 'Unfinished ads' }), h('div', { class: 'drafts' }, o.drafts.map((d) => link(`/ads/drafts/${d.id}`, {}, h('span', { text: d.headline || 'New ad' }), h('span', { style: 'color:var(--muted)', text: `${d.campaignId ? 'Change to a live ad · ' : ''}Continue` }))))) : null,
       h('h2', { class: 'section', text: 'Your ads' }),
       o.campaigns.length ? h('div', { class: 'cards' }, o.campaigns.map(campaignCard)) : h('div', { class: 'empty' }, 'No ads yet. ', link('/ads/new', {}, 'Make your first one'), ' — it takes a few minutes.'),
-      h('p', { style: 'color:var(--muted);font-size:13px;margin-top:22px', text: `Starting prices per bottle printed: ${Object.entries(o.prices.perPrintCents).map(([s, c]) => `${cents(c)} for ${sizeName(s)}`).join(', ')}. Bids start at ${cents(o.prices.bidStartsAtCents)} for the whole label and go up from there. Then ${cents(o.prices.perScanCents)} per scan that loads, ${cents(o.prices.perArLaunchCents)} per AR launch, and ${o.prices.commissionPercent}% of sales. The more an ad targets (places, products, interests, new or returning customers), the more each scan and AR launch costs. Repeat scans and failed prints are free.` }));
+      h('p', { style: 'color:var(--muted);font-size:13px;margin-top:22px', text: o.billing?.model === 'prepaid'
+        ? `Price per bottle: ${Object.entries(o.prices.perPrintCents).map(([s, c]) => `${cents(c)} for ${sizeName(s)}`).join(', ')}. ${prepaidTerms(o.billing)}`
+        : `Starting prices per bottle printed: ${Object.entries(o.prices.perPrintCents).map(([s, c]) => `${cents(c)} for ${sizeName(s)}`).join(', ')}. Bids start at ${cents(o.prices.bidStartsAtCents)} for the whole label and go up from there. Then ${cents(o.prices.perScanCents)} per scan that loads, ${cents(o.prices.perArLaunchCents)} per AR launch, and ${o.prices.commissionPercent}% of sales. The more an ad targets (places, products, interests, new or returning customers), the more each scan and AR launch costs. Repeat scans and failed prints are free.` }));
   }
   function campaignCard(c) {
     const r = c.results;
     const actions = [];
     if (c.status === 'running') actions.push(h('button', { class: 'btn small secondary', type: 'button', onclick: async () => { await api('PATCH', `/v1/campaigns/${c.id}`, { active: false }); toast('Paused'); render(); } }, 'Pause'));
     if (c.status === 'paused') actions.push(h('button', { class: 'btn small', type: 'button', onclick: async () => { try { await api('PATCH', `/v1/campaigns/${c.id}`, { active: true }); toast('Running again'); render(); } catch (x) { toast(x.message); } } }, 'Resume'));
-    if (c.editable && c.status !== 'in_review') actions.push(link(`/ads/campaigns/${c.id}/change`, { class: 'btn small secondary' }, 'Change it'));
+    const paid = c.budget.type === 'prepaid' ? c.budget : null;
+    if (c.editable && c.status !== 'in_review' && c.status !== 'stopped' && c.status !== 'finished') actions.push(link(`/ads/campaigns/${c.id}/change`, { class: 'btn small secondary' }, c.status === 'being_discussed' ? 'Change it (free while it’s discussed)' : paid ? `Change it (${dollars(state.changeFeeCents ?? 0)})` : 'Change it'));
     actions.push(link(`/ads/campaigns/${c.id}/code`, { class: 'btn small secondary' }, 'Code, versions and AI'));
-    const budget = c.budget.type === 'guaranteed' ? `${num(c.budget.bottlesLeft)} bottles left` : `up to ${dollars(c.budget.dailyCapCents)} a day for printed labels (scans and other charges on top)`;
+    if (c.route && on('route_proof')) actions.push(link(`/ads/campaigns/${c.id}/report`, { class: 'btn small secondary' }, 'Where it went'));
+    // Paid up front: how many of the bottles paid for are out. No end date and no cancelling: it runs until they are.
+    const budget = paid ? (paid.stopped ? `stopped by ${state.config.name}: ${num(paid.printed)} of ${num(paid.paid)} bottles went out, ${num(paid.refunded)} paid back`
+      : `${num(paid.printed)} of ${num(paid.paid)} bottles out${paid.printing ? ` (${num(paid.printing)} printing)` : ''}, ${sizeName(paid.share)} at ${cents(paid.perBottleCents)} each, paid`)
+      : c.budget.type === 'guaranteed' ? `${num(c.budget.bottlesLeft)} bottles left` : `up to ${dollars(c.budget.dailyCapCents)} a day for printed labels (scans and other charges on top)`;
     return h('article', { class: 'camp' },
       h('div', { class: 'thumb' }, h('img', { src: svgSrc(c.thumbSvg), alt: `Your ad: ${c.name}` })),
       h('div', {},
         h('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:4px' }, h('span', { class: `status ${c.status}`, text: statusText[c.status] })),
         h('h3', { text: c.name }),
-        h('div', { class: 'meta', text: `${c.where === 'all' ? 'Every machine' : c.where.join(', ')} · ${budget} · ${c.formats.includes('box-face') ? 'bottles and boxes' : 'bottles'}` }),
+        h('div', { class: 'meta', text: `${c.route ? `On delivery routes: ${ROUTE_KINDS[c.route.kind] ?? c.route.kind}, ${num(c.route.houses)} houses` : c.where === 'all' ? 'Every machine' : c.where.join(', ')} · ${budget} · ${c.formats.includes('box-face') ? 'bottles and boxes' : 'bottles'}` }),
         h('div', { class: 'nums' }, [['Bottles', num(r.prints)], ['Scans', num(r.scans)], ['AR', num(r.arLaunches)], ['Spent', dollars(r.spendCents)]].map(([k, v]) => h('div', {}, h('b', { text: v }), k))),
-        c.status === 'not_approved' && c.review?.note ? h('div', { class: 'note' }, h('b', { text: 'What to change: ' }), c.review.note) : null,
+        c.status === 'not_approved' && c.review?.note && !paid ? h('div', { class: 'note' }, h('b', { text: 'What to change: ' }), c.review.note) : null,
+        paid && (c.status === 'being_discussed' || c.status === 'not_approved') ? reviewNotes(c) : null,
         actions.length ? h('div', { class: 'actions' }, actions) : null));
   }
   function chart(daily) {
@@ -771,7 +810,14 @@
         frame = fixture?.scanFrame ? fixture.scanFrame() : h('iframe', { src: '/preview/scan', title: 'Your scan page' });
         stage.replaceChildren(frame, h('p', { class: 'caption', text: 'What opens on a phone when someone scans your ad.' }));
       }
-      if (tab === 'cost') {
+      if (tab === 'cost' && d.payment) {
+        // Paid up front: the exact total for the bottles (or the change fee), before anything is charged.
+        const pay = d.payment, q = pay.kind === 'bottles' ? pay.quote : null;
+        const rows = pay.kind === 'change' ? [['Changing this ad (paid when you submit the change)', dollars(pay.feeCents)], ['Your bottles', 'unchanged: the ones not printed yet carry the new ad once it’s approved']]
+          : q ? [[`${num(q.bottles)} bottles with your ad on ${sizeName(q.share)}`, `${cents(q.perBottleCents)} each`], ['AR, video and scans', 'included'], ['You pay up front', dollars(q.totalCents)]] : [];
+        stage.replaceChildren(h('table', { class: 'cost' }, h('tbody', {}, rows.map(([a, b]) => h('tr', {}, h('td', { text: a }), h('td', { text: b }))))),
+          h('p', { class: 'caption', style: 'text-align:left', text: pay.kind === 'change' ? 'The new ad is reviewed before it prints.' : q ? 'Exactly that many bottles go out. You can pick another size before you pay.' : pay.problem }));
+      } else if (tab === 'cost') {
         const e = d.estimate;
         const rows = [...Object.entries(e.perPrintCents).map(([s, c]) => [`Each bottle printed with your ad on ${sizeName(s)} (starting price)`, cents(c)]), ['Each scan that loads', cents(e.perScanCents)], ['Each AR launch', cents(e.perArLaunchCents)], ['Sales from the bottle', `${e.commissionPercent}%`]];
         if (d.draft.formats?.includes('box-face')) rows.push(['Each delivery box side', cents(e.perBoxFaceCents)]);
@@ -816,13 +862,40 @@
     const err = h('div', { class: 'notice err', hidden: true });
     const dr = d.draft;
     const budget = dr.buy?.type === 'guaranteed' ? `${num(dr.buy.prints)} bottles` : dr.buy ? `up to ${dollars(dr.buy.dailyCapCents)} a day for printed labels (scans and other charges on top)` : 'Not set';
-    const submit = h('button', { class: 'btn wide', type: 'button', onclick: async () => {
+    // Paid up front: pick the size (and any extras), see the exact total, then pay and submit in one step.
+    const pay = d.payment;
+    let quote = pay?.kind === 'bottles' ? pay.quote : null;
+    const sizePick = pay?.kind === 'bottles' && quote ? h('select', { class: 'input', id: 'pay-size' }, (dr.sizes || []).map((s) => h('option', { value: String(s), text: sizeName(s), ...(String(s) === String(quote.share) ? { selected: true } : {}) }))) : null;
+    const terms = pay ? (await api('GET', '/v1/ads/billing').catch(() => null)) : null;
+    const extraInputs = pay?.kind === 'bottles' && terms?.extras?.length ? terms.extras.map((x) => ({ x, input: h('input', { class: 'input', type: 'number', min: 0, max: 1000, value: 0, style: 'max-width:100px', 'aria-label': x.label }) })) : [];
+    const totalEl = h('b', { text: quote ? dollars(quote.totalCents) : '' });
+    const payLine = h('span', { text: quote ? `${num(quote.bottles)} bottles × ${cents(quote.perBottleCents)}${quote.extrasCents ? ` + extras ${dollars(quote.extrasCents)}` : ''}` : '' });
+    const requote = async () => {
+      try {
+        quote = await api('POST', `/v1/ads/drafts/${id}/quote`, { share: Number(sizePick.value), extras: Object.fromEntries(extraInputs.map(({ x, input }) => [x.id, Math.max(0, Math.floor(Number(input.value) || 0))])) });
+        totalEl.textContent = dollars(quote.totalCents); payLine.textContent = `${num(quote.bottles)} bottles × ${cents(quote.perBottleCents)}${quote.extrasCents ? ` + extras ${dollars(quote.extrasCents)}` : ''}`;
+        submit.textContent = `Pay ${dollars(quote.totalCents)} and submit for review`;
+      } catch (x) { err.textContent = x.message; err.hidden = false; }
+    };
+    if (sizePick) sizePick.addEventListener('change', requote);
+    for (const { input } of extraInputs) input.addEventListener('change', requote);
+    const submitLabel = pay?.kind === 'bottles' ? (quote ? `Pay ${dollars(quote.totalCents)} and submit for review` : 'Submit for review') : pay?.kind === 'change' && pay.feeCents ? `Pay the ${dollars(pay.feeCents)} change fee and submit` : 'Submit for review';
+    // Where it goes: anywhere (a number of bottles), or on the delivery routes (areas, streets, a shape, or houses).
+    let routeQuote = null, routeInput = null, submit = null;
+    const routes = pay?.kind === 'bottles' && on('route_buying') ? routePicker({ quoteUrl: `/v1/ads/drafts/${id}/route-quote`, sizes: dr.sizes || [], onQuote: (q, input) => { routeQuote = q; routeInput = input; if (submit && routeMode()) submit.textContent = q ? `Pay ${dollars(q.cardCents)}${q.creditCents ? ` (+ ${dollars(q.creditCents)} credit)` : ''} and submit for review` : 'See the price first'; } }) : null;
+    const whereMode = routes ? h('div', { class: 'seg', role: 'radiogroup', 'aria-label': 'Where your ad goes' },
+      ...[['anywhere', 'Anywhere we hand out bottles'], ['routes', 'On our delivery routes']].map(([v, t]) => h('label', { class: 'chip-check' }, h('input', { type: 'radio', name: 'where-mode', value: v, ...(v === 'anywhere' ? { checked: true } : {}), onchange: () => { routes.el.hidden = v !== 'routes'; submit.textContent = v === 'routes' ? (routeQuote ? `Pay ${dollars(routeQuote.cardCents)} and submit for review` : 'See the price first') : submitLabel; } }), t))) : null;
+    function routeMode() { return !!routes && !routes.el.hidden; }
+    submit = h('button', { class: 'btn wide', type: 'button', onclick: async () => {
       err.hidden = true;
       if (!agree.checked) { err.textContent = 'Check the box to confirm you looked it over.'; err.hidden = false; return; }
+      if (routeMode() && !routeQuote) { err.textContent = 'Choose where on the routes, then press “See the exact price”.'; err.hidden = false; return; }
+      if (pay?.kind === 'bottles' && !routeMode() && !quote) { err.textContent = pay.problem || 'Tell the assistant how many bottles first.'; err.hidden = false; return; }
       submit.disabled = true;
-      try { await api('POST', `/v1/ads/drafts/${id}/submit`, { approved: true }); done(); } catch (x) { err.textContent = x.message; err.hidden = false; submit.disabled = false; }
-    } }, 'Submit for review');
-    const done = () => shell('new', h('div', { class: 'review' }, h('div', { class: 'notice ok' }, h('b', { text: 'Submitted. ' }), `${state.config.name} reviews new ads, usually within a day. It starts printing as soon as it's approved, and you'll see results on your Overview.`), link('/ads', { class: 'btn' }, 'Go to Overview')));
+      const body = { approved: true, ...(routeMode() ? { pay: { route: routeInput, expectedTotalCents: routeQuote.totalCents, expectedCreditCents: routeQuote.creditCents } } : pay?.kind === 'bottles' ? { pay: { share: quote.share, extras: Object.fromEntries(extraInputs.map(({ x, input }) => [x.id, Math.max(0, Math.floor(Number(input.value) || 0))])), expectedTotalCents: quote.totalCents } } : pay?.kind === 'change' ? { pay: { expectedFeeCents: pay.feeCents } } : {}) };
+      try { const out = await api('POST', `/v1/ads/drafts/${id}/submit`, body); done(out); } catch (x) { err.textContent = x.code === 'card_needed' ? `${x.message} Add one under Billing.` : x.message; err.hidden = false; submit.disabled = false; }
+    } }, submitLabel);
+    const done = (out) => shell('new', h('div', { class: 'review' }, h('div', { class: 'notice ok' }, h('b', { text: out?.route ? `Paid ${dollars(out.paidCents)} for ${num(out.bottles)} pieces at ${num(out.route.houses)} houses. Submitted. ${out.route.small ? 'It’s aimed at a few houses, so a person looks at it more closely. ' : ''}` : out?.paidCents ? `Paid ${dollars(out.paidCents)} for ${num(out.bottles)} bottles. Submitted. ` : out?.changeFeeCents ? `Paid the ${dollars(out.changeFeeCents)} change fee. Submitted. ` : 'Submitted. ' }), `${state.config.name} reviews new ads, usually within a day. It starts printing as soon as it's approved, and you'll see results on your Overview.`), link('/ads', { class: 'btn' }, 'Go to Overview')));
     let frame;
     const onMsg = (e) => { if ((fixture || e.origin === location.origin) && e.data?.type === 'fw-preview-ready' && frame) frame.contentWindow.postMessage({ type: 'fw-preview', ...(p.scan ?? { doc: null }) }, fixture ? '*' : location.origin); };
     window.addEventListener('message', onMsg); cleanup = () => window.removeEventListener('message', onMsg);
@@ -836,25 +909,162 @@
         h('div', {}, h('span', { text: 'Where' }), dr.locations === 'all' ? 'Every machine' : (dr.locations || []).join(', ')),
         h('div', {}, h('span', { text: 'Budget' }), budget),
         h('div', {}, h('span', { text: 'Prints on' }), dr.formats?.includes('box-face') ? 'Bottles and delivery boxes' : 'Bottles'),
-        h('div', {}, h('span', { text: 'You pay' }), `${Object.entries(d.estimate.perPrintCents).map(([s, c]) => `from ${cents(c)} per bottle for ${sizeName(s)}`).join(', ')}; ${cents(d.estimate.perScanCents)} per scan; ${cents(d.estimate.perArLaunchCents)} per AR launch; ${d.estimate.commissionPercent}% of sales`)),
+        pay?.kind === 'bottles' && quote ? h('div', {}, h('label', { for: 'pay-size', text: 'Size you pay for' }), sizePick) : null,
+        ...extraInputs.map(({ x, input }) => h('div', {}, h('span', { text: `${x.label} (${dollars(x.perUseCents)} each, paid now)` }), input)),
+        pay?.kind === 'bottles' ? h('div', {}, h('span', { text: 'You pay now' }), totalEl, ' ', payLine, h('br'), h('small', { text: terms ? prepaidTerms(terms) : 'AR, video and scans included.' }))
+          : pay?.kind === 'change' ? h('div', {}, h('span', { text: 'You pay now' }), `${dollars(pay.feeCents)} to change it. Your bottles stay as they are; the ones not printed yet carry the new ad once it's approved.`)
+          : h('div', {}, h('span', { text: 'You pay' }), `${Object.entries(d.estimate.perPrintCents).map(([s, c]) => `from ${cents(c)} per bottle for ${sizeName(s)}`).join(', ')}; ${cents(d.estimate.perScanCents)} per scan; ${cents(d.estimate.perArLaunchCents)} per AR launch; ${d.estimate.commissionPercent}% of sales`)),
+      whereMode, routes ? routes.el : null,
       h('label', { class: 'check', for: 'agree' }, agree, h('span', {}, h('b', { text: 'It looks right. ' }), 'I checked the words, colors, picture and scan page, and I have the right to use them.')),
       err, submit));
+  }
+
+  // ---------- buying on delivery routes ----------
+  const ROUTE_KINDS = { spread: 'Bottles spread over an area', blanket: 'One bottle in every box, at every house', box: 'A whole box (every bottle, and its sides)', houses: 'Chosen houses' };
+  const ROUTE_SWITCH = { spread: 'route_buy_spread', blanket: 'route_buy_blanket', box: 'route_buy_box', houses: 'route_buy_houses' };
+  /**
+   * Choose where on the routes: the kind of buy, the size, the weeks, and areas, streets, a shape drawn on the map, or
+   * houses by address. "See the exact price" asks the server; nothing is charged until the advertiser pays.
+   */
+  function routePicker(o) {
+    const el = h('section', { class: 'route-pick', hidden: true, 'aria-label': 'Buy on our delivery routes' });
+    const err = h('div', { class: 'notice err', hidden: true });
+    const out = h('div', { class: 'route-quote' });
+    const kinds = Object.keys(ROUTE_KINDS).filter((k) => on(ROUTE_SWITCH[k]));
+    const kind = h('select', { class: 'input', id: 'route-kind' }, kinds.map((k) => h('option', { value: k, text: ROUTE_KINDS[k] })));
+    const size = h('select', { class: 'input', id: 'route-size' }, o.sizes.map((sz) => h('option', { value: String(sz), text: sizeName(sz) })));
+    const weeks = h('input', { class: 'input', id: 'route-weeks', type: 'number', min: 1, max: 52, value: 1 });
+    const start = h('input', { class: 'input', id: 'route-start', type: 'date', 'aria-describedby': 'route-start-hint' });
+    const bottles = h('input', { class: 'input', id: 'route-bottles', type: 'number', min: 1, max: 1000000, value: 100 });
+    const perHouse = h('input', { class: 'input', id: 'route-per-house', type: 'number', min: 1, max: 72, value: 1 });
+    const sides = h('input', { type: 'checkbox', id: 'route-sides' });
+    const addresses = h('textarea', { class: 'input', id: 'route-addresses', rows: 3, placeholder: '1501 Kenwood Ave, Austin, TX\none address a line' });
+    const areaBox = h('div', { class: 'route-areas' }, h('p', { class: 'muted', text: 'Loading the delivery areas…' }));
+    let areas = [], polygon = [];
+    const picked = new Set(), streets = new Set();
+    const field = (label, control, hint) => h('div', { class: 'field' }, h('label', { for: control.id, text: label }), control, hint ? h('div', { class: 'hint', id: `${control.id}-hint`, text: hint }) : null);
+    const show = () => {
+      const k = kind.value;
+      for (const [f, ks] of [[bottlesField, ['spread']], [perHouseField, ['houses']], [sidesField, ['box']], [addressField, ['houses', 'box']]]) f.hidden = !ks.includes(k);
+      areaBox.hidden = k === 'houses';
+      o.onQuote(null);
+    };
+    const bottlesField = field('How many bottles in all', bottles, 'Spread evenly over the houses and weeks you choose.');
+    const perHouseField = field('Bottles at each house, each week', perHouse);
+    const sidesField = h('label', { class: 'check', for: 'route-sides' }, sides, h('span', { text: 'Include the box’s sides too' }));
+    const addressField = field('Houses (street addresses, one a line)', addresses, 'Fewer than 50 houses: a person checks the ad more closely; no names, addresses or personal messages in it.');
+    // Each area as a small map: its outline and its streets (never a house). Click it to draw a shape: houses inside it.
+    const sketch = (a) => {
+      const pts = [...(a.polygon || []), ...a.streets.map((x) => [x.lat, x.lng])];
+      if (!pts.length) return null;
+      const lats = pts.map((p) => p[0]), lngs = pts.map((p) => p[1]);
+      const minLat = Math.min(...lats), maxLat = Math.max(...lats), minLng = Math.min(...lngs), maxLng = Math.max(...lngs);
+      const pad = 0.0006, W = 320, H = 200;
+      const X = (lng) => ((lng - (minLng - pad)) / ((maxLng - minLng) + 2 * pad)) * W, Y = (lat) => H - ((lat - (minLat - pad)) / ((maxLat - minLat) + 2 * pad)) * H;
+      const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, class: 'route-map', role: 'img', 'aria-label': `Map of ${a.name}: click to draw a shape` });
+      if (a.polygon) svg.append(svgEl('polygon', { points: a.polygon.map((p) => `${X(p[1])},${Y(p[0])}`).join(' '), fill: '#EEF6FB', stroke: '#1E7DB8', 'stroke-width': 1.5 }));
+      for (const st of a.streets) { const c = svgEl('circle', { cx: X(st.lng), cy: Y(st.lat), r: 5, fill: '#0B0B0B' }); const t = svgEl('title', {}); t.textContent = `${st.street}: ${st.houses} houses`; c.append(t); svg.append(c); }
+      const drawn = svgEl('polygon', { points: '', fill: 'rgba(215,38,46,.12)', stroke: '#D7262E', 'stroke-width': 2 });
+      svg.append(drawn);
+      svg.addEventListener('click', (e) => {
+        const r = svg.getBoundingClientRect();
+        const x = ((e.clientX - r.left) / r.width) * W, y = ((e.clientY - r.top) / r.height) * H;
+        polygon.push([+(minLat - pad + ((H - y) / H) * ((maxLat - minLat) + 2 * pad)).toFixed(6), +(minLng - pad + (x / W) * ((maxLng - minLng) + 2 * pad)).toFixed(6)]);
+        drawn.setAttribute('points', polygon.map((p) => `${X(p[1])},${Y(p[0])}`).join(' '));
+        o.onQuote(null);
+      });
+      return svg;
+    };
+    api('GET', '/v1/ads/route-areas').then((list) => {
+      areas = list;
+      areaBox.replaceChildren(...(areas.length ? areas.map((a) => h('fieldset', { class: 'route-area' },
+        h('legend', {}, h('label', { class: 'chip-check' }, h('input', { type: 'checkbox', onchange: (e) => { e.target.checked ? picked.add(a.id) : picked.delete(a.id); o.onQuote(null); } }), `${a.name}: ${num(a.houses)} houses, ${a.packSize}-packs`)),
+        h('div', { class: 'muted', text: `Next week: ${num(a.nextWeek.bottles)} bottles, ${a.nextWeek.labelsFree}% of their labels still free.` }),
+        sketch(a),
+        h('details', {}, h('summary', { text: `Or pick streets (${a.streets.length})` }), h('div', { class: 'street-list' }, a.streets.map((st) => h('label', { class: 'chip-check' }, h('input', { type: 'checkbox', onchange: (e) => { const k = JSON.stringify({ areaId: a.id, street: st.street }); e.target.checked ? streets.add(k) : streets.delete(k); o.onQuote(null); } }), `${st.street} (${st.houses})`)))))) : [h('p', { class: 'muted', text: 'No delivery areas are open for ads right now.' })]),
+        h('button', { class: 'btn small secondary', type: 'button', onclick: () => { polygon = []; for (const p of areaBox.querySelectorAll('.route-map polygon:last-of-type')) p.setAttribute('points', ''); o.onQuote(null); } }, 'Clear the shape'));
+    }).catch((x) => areaBox.replaceChildren(h('div', { class: 'notice err', text: x.message })));
+    const input = () => {
+      const k = kind.value;
+      const where = k === 'houses' || (k === 'box' && addresses.value.trim())
+        ? { addresses: addresses.value.split('\n').map((x) => x.trim()).filter(Boolean) }
+        : { ...(picked.size ? { areaIds: [...picked] } : {}), ...(streets.size ? { streets: [...streets].map((x) => JSON.parse(x)) } : {}), ...(polygon.length >= 3 ? { polygon } : {}) };
+      return { kind: k, share: Number(size.value), weeks: Math.max(1, Math.min(26, Math.floor(Number(weeks.value) || 1))), ...(start.value ? { startWeek: start.value } : {}), where,
+        ...(k === 'spread' ? { bottles: Math.max(1, Math.floor(Number(bottles.value) || 1)) } : {}), ...(k === 'houses' ? { perHouse: Math.max(1, Math.floor(Number(perHouse.value) || 1)) } : {}), ...(k === 'box' && sides.checked ? { boxSides: true } : {}) };
+    };
+    const ask = h('button', { class: 'btn', type: 'button', onclick: async () => {
+      err.hidden = true; out.replaceChildren();
+      const body = input();
+      try {
+        const q = await api('POST', o.quoteUrl, body);
+        o.onQuote(q, body);
+        out.replaceChildren(h('div', { class: 'facts' },
+          h('div', {}, h('span', { text: 'Houses' }), `${num(q.housesReached)} of the ${num(q.houses)} chosen get it${q.noRoom ? ` (${num(q.noRoom)} were already full those weeks; not charged)` : ''}`),
+          h('div', {}, h('span', { text: 'Bottles' }), `${num(q.bottles)} × ${cents(q.perBottleCents)} (${q.size}) = ${dollars(q.bottlesCents)}`),
+          q.faces ? h('div', {}, h('span', { text: 'Box sides' }), `${num(q.faces)} × ${cents(q.perFaceCents)} = ${dollars(q.facesCents)}`) : null,
+          h('div', {}, h('span', { text: 'Weeks' }), q.perWeek.map((w) => `${new Date(`${w.week}T12:00:00Z`).toLocaleDateString([], { month: 'short', day: 'numeric' })}: ${num(w.bottles)} bottles at ${num(w.houses)} houses`).join(' · ')),
+          h('div', {}, h('span', { text: 'Streets' }), q.streets.map((x) => `${x.street} (${x.houses})`).join(', ')),
+          h('div', {}, h('span', { text: 'You pay now' }), h('b', { text: dollars(q.cardCents) }), q.creditCents ? ` + ${dollars(q.creditCents)} from your credit` : '', h('br'), h('small', { text: `${q.included} Every piece paid for goes out; there's nothing to cancel. ${q.ifAHouseStops}` }))),
+        q.guardrails.length ? h('div', { class: 'notice' }, h('b', { text: 'Aimed at a few houses. ' }), q.guardrails.join(' ')) : null);
+      } catch (x) { o.onQuote(null); err.textContent = x.message; err.hidden = false; }
+    } }, 'See the exact price');
+    for (const c of [kind, size, weeks, start, bottles, perHouse, sides, addresses]) c.addEventListener('change', () => o.onQuote(null));
+    kind.addEventListener('change', show);
+    el.append(h('h2', { class: 'section', text: 'On our delivery routes' }),
+      h('p', { text: 'Every house on these streets gets a free box of water each week. Your ad goes on the bottles going to the houses you choose: as little as a tenth of one label at one house, or every bottle in every box.' }),
+      h('div', { class: 'facts' }, h('div', {}, field('Kind of buy', kind)), h('div', {}, field('Size on each bottle', size)), h('div', {}, field('Weeks', weeks)), h('div', {}, field('Starting the week of (a Monday; next week if empty)', start))),
+      bottlesField, perHouseField, sidesField, addressField, areaBox, ask, err, out);
+    show();
+    return { el };
+  }
+
+  /** Where a route ad went: streets and houses reached (never which house), each drop, scans by area, what came back. */
+  async function routeReport(id) {
+    const p = await api('GET', `/v1/ads/campaigns/${id}/route-report`);
+    const day = (iso) => (iso ? new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '–');
+    shell('overview', h('div', { class: 'review' },
+      h('div', { class: 'page-head', style: 'margin:0' }, h('div', {}, link('/ads', {}, '← Overview'), h('h1', { style: 'margin-top:8px', text: 'Where your ad went' }), h('p', { text: `${p.kindWords}, ${p.size}, ${p.weeks} week${p.weeks === 1 ? '' : 's'} from ${p.startWeek}.` }))),
+      h('div', { class: 'kpis' },
+        h('div', { class: 'kpi dark' }, h('span', { text: 'Houses reached' }), h('b', { text: num(p.housesReached) }), h('small', { text: `of ${num(p.bought.houses)} chosen` })),
+        h('div', { class: 'kpi' }, h('span', { text: 'Bottles delivered' }), h('b', { text: num(p.progress.delivered) }), h('small', { text: `${num(p.progress.printed)} printed, ${num(p.progress.waiting)} waiting` })),
+        h('div', { class: 'kpi' }, h('span', { text: 'Given back' }), h('b', { text: num(p.progress.credited + p.progress.refunded) }), h('small', { text: 'houses that stopped or blocked, weeks gone by' }))),
+      h('h2', { class: 'section', text: 'Streets' }),
+      p.streets.length ? h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Area', 'Street', 'Houses', 'Bottles'].map((x) => h('th', { text: x })))), h('tbody', {}, p.streets.map((x) => h('tr', {}, h('td', { text: x.area }), h('td', { text: x.street }), h('td', { text: num(x.houses) }), h('td', { text: num(x.bottles) })))))
+        : h('div', { class: 'empty', text: 'Nothing delivered yet.' }),
+      h('h2', { class: 'section', text: 'Scans by area' }),
+      h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Area', 'Bottles', 'Scans', 'Scan rate'].map((x) => h('th', { text: x })))), h('tbody', {}, p.scansByArea.map((a) => h('tr', {}, h('td', { text: a.area }), h('td', { text: num(a.bottles) }), h('td', { text: num(a.scans) }), h('td', { text: `${a.scanRatePercent}%` }))))),
+      h('h2', { class: 'section', text: 'Drops' }),
+      h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['When', 'Street', 'Where the driver scanned it (about 100 m)', 'At the door'].map((x) => h('th', { text: x })))),
+        h('tbody', {}, p.drops.map((d) => h('tr', {}, h('td', { text: day(d.at) }), h('td', { text: d.street }), h('td', { text: d.point ? `${d.point.lat}, ${d.point.lng}` : '–' }), h('td', { text: d.atDoor ? 'Yes' : 'Driver confirmed' })))))),
+      p.givenBack.length ? h('div', {}, h('h2', { class: 'section', text: 'Given back to you' }), h('ul', {}, p.givenBack.map((g) => h('li', { text: `${dollars(g.totalCents)} ${g.kind === 'credit' ? 'as credit' : g.status === 'refunded' ? 'refunded to your card' : 'to be refunded (waiting for approval)'}: ${g.reason}` })))) : null,
+      h('p', { class: 'muted', text: p.note })));
   }
 
   // ---------- billing ----------
   async function billing() {
     const advId = state.me.advertiserId;
-    const [invoices, cards] = await Promise.all([api('GET', '/v1/invoices'), api('GET', `/v1/advertisers/${advId}/cards`).catch(() => [])]);
+    const [invoices, cards, terms, routeInfo] = await Promise.all([api('GET', '/v1/invoices'), api('GET', `/v1/advertisers/${advId}/cards`).catch(() => []), api('GET', '/v1/ads/billing').catch(() => ({ model: 'billed_after' })), on('route_buying') ? api('GET', '/v1/ads/routes').catch(() => null) : null]);
+    const prepaid = terms.model === 'prepaid';
+    const kindText = { bottles: 'Bottles, paid in advance', change: 'Changing an ad' };
+    const statusOf = (o) => (o.refund ? (o.refund.status === 'refunded' ? `Paid; ${dollars(o.refund.totalCents)} paid back` : 'Paid; paying back') : { paid: 'Paid', paying: 'Being paid', declined: 'Card declined' }[o.status] || o.status);
     shell('billing',
-      h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Billing' }), h('p', { text: 'Invoices list every print, scan, AR launch and sale they charge for.' }))),
+      h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Billing' }), h('p', { text: prepaid ? prepaidTerms(terms) : 'Invoices list every print, scan, AR launch and sale they charge for.' }))),
       h('h2', { class: 'section', text: 'Card' }),
-      cards.length ? h('p', { text: `${cards[0].brand} •••• ${cards[0].last4}, charged automatically when an invoice is made.` })
+      cards.length ? h('p', { text: `${cards[0].brand} •••• ${cards[0].last4}, ${prepaid ? 'charged when you pay for an ad' : 'charged automatically when an invoice is made'}.` })
         : h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px' }, h('span', { style: 'background:#FFF4D6;color:#7A5300;border-radius:6px;padding:1px 6px;font-size:12px;font-weight:700', text: 'Test mode' }), 'Add a test card:', ...[['tok_visa', 'Visa 4242'], ['tok_amex', 'Amex 0005']].map(([t, l]) => h('button', { class: 'btn small secondary', type: 'button', onclick: async () => { await api('POST', `/v1/advertisers/${advId}/cards`, { token: t }); toast('Card saved'); render(); } }, l))),
-      h('h2', { class: 'section', style: 'margin-top:22px', text: 'Invoices' }),
+      prepaid ? h('h2', { class: 'section', style: 'margin-top:22px', text: 'What you paid' }) : null,
+      prepaid ? (terms.orders.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['When', 'For', 'Bottles', 'Total', 'Status'].map((x) => h('th', { text: x })))),
+        h('tbody', {}, terms.orders.map((o) => h('tr', {}, h('td', { text: new Date(o.at).toLocaleDateString() }), h('td', { text: kindText[o.kind] || o.kind }), h('td', { text: o.bottles ? `${num(o.bottles)} × ${cents(o.perBottleCents)}` : '–' }), h('td', { text: dollars(o.totalCents) }), h('td', { text: statusOf(o) }))))))
+        : h('div', { class: 'empty', text: 'Nothing paid yet. You pay for an ad’s bottles when you submit it.' })) : null,
+      routeInfo && (routeInfo.creditCents || routeInfo.buys.length) ? h('div', {}, h('h2', { class: 'section', style: 'margin-top:22px', text: 'Delivery routes' }),
+        h('p', { text: `Credit from houses that stopped or blocked: ${dollars(routeInfo.creditCents)}, used first on your next route buy.${routeInfo.credit?.expiresAfterDays ? ` Credit lasts ${routeInfo.credit.expiresAfterDays} days${routeInfo.credit.expiring?.length ? `: ${dollars(routeInfo.credit.expiring[0].cents)} of it expires ${routeInfo.credit.expiring[0].on}` : ''}.` : ''}${routeInfo.credit?.expiredCents ? ` ${dollars(routeInfo.credit.expiredCents)} expired unused.` : ''}${routeInfo.verified ? ' Your business is verified.' : ''}` }),
+        routeInfo.buys.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Ad', 'Kind', 'Houses', 'Pieces', 'Weeks', 'Paid'].map((x) => h('th', { text: x })))),
+          h('tbody', {}, routeInfo.buys.map((b) => h('tr', {}, h('td', {}, on('route_proof') ? link(`/ads/campaigns/${b.campaignId}/report`, {}, b.name || b.campaignId) : (b.name || b.campaignId)), h('td', { text: b.kindWords }), h('td', { text: num(b.houses) }), h('td', { text: `${num(b.bottles)} × ${b.size}${b.boxSides ? ` + ${num(b.boxSides)} sides` : ''}` }), h('td', { text: `${b.weeks} from ${b.startWeek}` }), h('td', { text: `${dollars(b.totalCents)}${b.creditCents ? ` (${dollars(b.creditCents)} credit)` : ''}` })))))) : null) : null,
+      !prepaid || invoices.length ? h('h2', { class: 'section', style: 'margin-top:22px', text: prepaid ? 'Fees charged after the fact' : 'Invoices' }) : null,
       invoices.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Up to', 'Lines', 'Total', 'Status', ''].map((x) => h('th', { text: x })))),
         h('tbody', {}, invoices.map((i) => h('tr', {}, h('td', { text: new Date(i.periodEnd).toLocaleDateString() }), h('td', { text: String(i.lines) }), h('td', { text: dollars(i.totalCents) }), h('td', { text: { open: 'Open', paid: 'Paid', failed: 'Card declined' }[i.status] || i.status }),
           h('td', {}, i.status !== 'paid' && cards.length ? h('button', { class: 'btn small', type: 'button', onclick: async () => { await api('POST', `/v1/invoices/${i.id}/pay`); toast('Paid'); render(); } }, 'Pay now') : null))))))
-        : h('div', { class: 'empty', text: 'No invoices yet. They’re made from what your ads actually did: prints that printed, scans that loaded, and sales.' }));
+        : prepaid ? null : h('div', { class: 'empty', text: 'No invoices yet. They’re made from what your ads actually did: prints that printed, scans that loaded, and sales.' }));
   }
 
   render();

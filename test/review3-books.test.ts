@@ -6,7 +6,11 @@ import { createPgliteClient } from '../src/db/pglite';
 import type { SqlClient } from '../src/db/client';
 import { TestPayoutProvider } from '../src/adapters/payouts/contract';
 import { createPlatform } from '../src/setup';
-import { bottle16oz, boxes, freewater, locations, peakSpring, sampleCampaigns } from '../src/demo/seed';
+import { bottle16oz, boxes, freewater as paidUpFront, locations, peakSpring, sampleCampaigns } from '../src/demo/seed';
+import { billedAfter as billedAfterSetting } from '../src/modules/ads/billing';
+// The sample ads print here without paying first: FreeWater's settings billing afterwards (paying up front, where
+// only paid bottles print, is tested in prepaid.test.ts).
+const freewater: typeof paidUpFront = { ...paidUpFront, adBilling: billedAfterSetting() };
 
 // Third review: charity money paid once, reversals counted by their side, one void and one close at a time, the
 // route's current run never an old one, the hand check for ops only, and picks that may come true.

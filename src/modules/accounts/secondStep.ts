@@ -142,6 +142,8 @@ export const approvalRoutes: ReadonlySet<string> = new Set([
   'POST /v1/wallet/reserve', 'POST /v1/wallet/correct', 'POST /v1/wallet/gift-cards/:ref/settle',
   'POST /v1/environment/experiments/:id/decide',
   'POST /v1/advertisers/:advertiserId/credit-limit',
+  'POST /v1/ads/campaigns/:id/stop',
+  'POST /v1/ops/route-refunds/:id/approve',
 ]);
 /**
  * Routes that are approvals only for some requests, so their handlers check the second step themselves (with
@@ -154,9 +156,12 @@ export const conditionalApprovalRoutes: Readonly<Record<string, string>> = {
   'POST /v1/agents/proposals/:id/decide': 'approving a proposal whose change is to one of approvalSettings',
   'POST /v1/agents/proposals/:id/undo': 'undoing a change to one of approvalSettings',
   'POST /v1/team': 'the role given, or the person’s current role, is owner or finance',
+  'POST /v1/console/features': 'turning ON a money, chain or one-way switch (turning anything off stays quick: any owner signed in)',
+  'POST /v1/review/ai/final-call': 'turning ON “AI makes the final call on paid ads” (turning it off: anyone on the team, at once)',
+  'POST /v1/review/ai/settings': 'lowering the AI reviewer’s bar or its audit sample (raising them: anyone on the team)',
 };
 /** Settings that switch money, prizes or the token on or off, or share money out: changing them is an approval too. */
-export const approvalSettings = ['wallet', 'offers', 'chain', 'launch', 'giving', 'agents', 'lottery'] as const;
+export const approvalSettings = ['wallet', 'offers', 'chain', 'launch', 'giving', 'agents', 'lottery', 'adBilling'] as const;
 
 export const approverStepMessage = {
   setUp: 'Owners and finance people need a second sign-in step before approving money or token steps. Set up an authenticator app first (in the console under Security, or POST /v1/me/second-step/start, then /confirm), then sign in again with its code. A new app can approve 24 hours after it’s set up.',

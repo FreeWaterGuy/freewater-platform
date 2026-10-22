@@ -11,7 +11,8 @@ describe('the data environment', () => {
   let db: SqlClient, app: App, server: FastifyInstance, key: string;
   beforeAll(async () => {
     db = await createPgliteClient();
-    app = await createApp({ db, assumePlace: { country: 'US', state: 'AL' }, seedDemo: true, seed: 5 });
+    // A scan earns money here (billing afterwards), so it gives more to the chosen cause.
+    app = await createApp({ db, assumePlace: { country: 'US', state: 'AL' }, seedDemo: true, demoBilling: 'billed_after', seed: 5 });
     key = app.demoKeys!['freewater-admin']!;
     server = await buildServer(app);
   });
@@ -35,7 +36,9 @@ describe('the data environment', () => {
       expect(cs.options.map((o) => o.position)).toEqual([1, 2]);
       orders.add(cs.options.map((o) => o.subject).join(','));
     }
-    expect(orders.size).toBe(2); // both orders turn up
+    // Both orders turn up. The app is seeded (seed: 5), so the shuffle is repeatable: this can't miss by chance, and
+    // fails every time if the shuffle is dropped or always picks the same order.
+    expect(orders.size).toBe(2);
     await expect(app.environment.present('freewater', 'viewer-paid-1', 'x', [{ subject: 'a', label: 'A', facts: {} as any, paidRank: 1 } as any, { subject: 'b', label: 'B', facts: {} as any }])).rejects.toThrow(/pay to sit higher/);
 
     const cs = (await app.environment.machineChoice('freewater', 'viewer-choose-1', 'ATX-014'))!;

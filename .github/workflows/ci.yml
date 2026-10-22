@@ -13,7 +13,19 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
+    # A real Postgres for the tests of locking and concurrency (they run on PGlite too, where one connection hides
+    # deadlocks and races: test/db-helpers.ts). Each file makes its own database and drops it.
+    services:
+      postgres:
+        image: postgres:16.10 # TODO(digest): pin as postgres:16.10@sha256:… (docker buildx imagetools inspect postgres:16.10)
+        env:
+          POSTGRES_USER: fw
+          POSTGRES_PASSWORD: fw
+          POSTGRES_DB: freewater
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U fw" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -35,11 +47,16 @@ jobs:
           export PATH="$RUNNER_TEMP/semgrep/bin:$PATH"
           node scripts/semgrep-selftest.mjs semgrep # the rules still catch the planted mistakes
           npm run lint:semgrep
+      - name: An empty database for the two-servers test (test/route-delivery.test.ts)
+        run: PGPASSWORD=fw psql -h 127.0.0.1 -U fw -d freewater -c 'create database fw_route'
       - run: npx vitest run --reporter=default --reporter=github-actions # failures show as annotations
+        env:
+          FW_TEST_PG_ADMIN_URL: postgres://fw:fw@127.0.0.1:5432/freewater
+          FW_TEST_PG_EMPTY_URL: postgres://fw:fw@127.0.0.1:5432/fw_route
       - name: Known security holes in what runs in production (moderate and above; allowed ones are listed with reasons)
         run: node scripts/audit.mjs
-      - name: Fuzz the running API (Schemathesis, pinned; no key and the sample admin key) - any server error fails
-        timeout-minutes: 8
+      - name: Fuzz the running API (Schemathesis, pinned; no key, the sample admin key and the sample advertiser's key) - any server error fails
+        timeout-minutes: 12
         run: |
           python3 -m venv /tmp/schemathesis
           /tmp/schemathesis/bin/pip install --quiet schemathesis==4.32.2

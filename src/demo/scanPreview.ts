@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createApp } from '../app';
+import { prepaidModel } from '../modules/ads/billing';
 import { buildServer } from '../api/server';
 import { createPgliteClient } from '../db/pglite';
 import { builtinModel, builtinModelIds } from '../modules/models/builtin';
@@ -36,8 +37,19 @@ const top = pack.faces.find((f) => f.face === 'top')!;
 // AR that follows the bottle: a full-wrap living label, and a latte that sits on top of the bottle.
 const active = new Map([...app.platform.campaigns.values()].map((c) => [c.id, c.active]));
 const only = (ids: string[]) => { for (const c of app.platform.campaigns.values()) if (!c.isHouse && c.companyId === 'freewater') c.active = ids.includes(c.id); };
+// FreeWater's advertisers pay up front: a sample ad the seed left unpaid (switched off in the sample) is paid for here
+// with the test card, as an advertiser would, so its bottles can print.
+const paidFor = async (campaignId: string) => {
+  const c = app.platform.campaigns.get(campaignId)!;
+  if (c.prepaid) return;
+  const share = [...c.sizes].sort((a, b) => a - b)[Math.floor((c.sizes.length - 1) / 2)]!;
+  await app.payments.addMethod('freewater', 'advertiser', c.advertiserId, 'tok_visa');
+  const quote = app.prepaid.quote('freewater', { bottles: 200, share }, c.sizes);
+  await app.prepaid.payBottles({ companyId: 'freewater', advertiserId: c.advertiserId, campaignId, quote: { bottles: 200, share }, expectedTotalCents: quote.totalCents, sizes: c.sizes });
+};
 const arBottle = async (campaignId: string, others: string[], tag: string) => {
   app.platform.campaigns.get(campaignId)!.review = { status: 'approved', at: '2026-10-20T19:00:00Z' };
+  if (prepaidModel(app.platform.companies.get('freewater')!)) for (const id of [campaignId, ...others]) await paidFor(id);
   only([campaignId, ...others]);
   for (let i = 0; i < 80; i++) {
     const r = await app.platform.order({ companyId: 'freewater', orderId: `${tag}-${i}`, locationId: 'ATX-014', productId: 'bottle-16oz' });

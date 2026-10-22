@@ -48,12 +48,12 @@
     if (!res.ok) throw new Error(data?.error?.message || 'Something went wrong.');
     return data;
   }
-  const routes = [[/^\/ops\/?$/, today, 'today'], [/^\/ops\/review$/, reviewPage, 'review'], [/^\/ops\/machines$/, machinesPage, 'machines'], [/^\/ops\/machines\/([\w-]+)$/, machinePage, 'machines'], [/^\/ops\/routes$/, routesPage, 'routes'], [/^\/ops\/subscriptions$/, subsPage, 'subs'], [/^\/ops\/books$/, booksPage, 'books']];
+  const routes = [[/^\/ops\/?$/, today, 'today'], [/^\/ops\/review$/, reviewPage, 'review'], [/^\/ops\/machines$/, machinesPage, 'machines'], [/^\/ops\/machines\/([\w-]+)$/, machinePage, 'machines'], [/^\/ops\/routes$/, routesPage, 'routes'], [/^\/ops\/subscriptions$/, subsPage, 'subs'], [/^\/ops\/areas$/, areasPage, 'areas'], [/^\/ops\/areas\/([\w-]+)$/, areaPage, 'areas'], [/^\/ops\/books$/, booksPage, 'books']];
   // The scopes each page's main call needs (from its route in src/api). 'admin' passes them all.
-  const PAGE_SCOPES = { today: ['packs', 'events', 'ledger', 'campaigns'], review: ['campaigns'], machines: ['orders', 'packs', 'events'], routes: ['packs'], subs: ['packs'], books: ['ledger'] };
-  // The area each page belongs to, if any (src/runtime/features.ts). Every ops page is part of the core loop today, so
-  // none is listed; a page for an area that can be switched off goes here and disappears when it's off.
-  const PAGE_FEATURES = {};
+  const PAGE_SCOPES = { today: ['packs', 'events', 'ledger', 'campaigns'], review: ['campaigns'], machines: ['orders', 'packs', 'events'], routes: ['packs'], subs: ['packs'], areas: ['packs'], books: ['ledger'] };
+  // The switch each page belongs to (src/runtime/registry.ts): a page whose switch is off, on this server or for this
+  // company (its Features page), isn't shown or opened.
+  const PAGE_FEATURES = { review: 'ads', machines: 'machines', routes: 'delivery', subs: 'delivery', areas: 'delivery_areas' };
   const on = (page) => !PAGE_FEATURES[page] || !(S.features?.off ?? []).includes(PAGE_FEATURES[page]);
   const can = (page) => { if (!on(page)) return false; const sc = S.me?.scopes; if (!Array.isArray(sc)) return true; return sc.includes('admin') || (PAGE_SCOPES[page] ?? []).some((x) => sc.includes(x)); };
   let cleanup = null;
@@ -64,7 +64,7 @@
     if (cleanup) { cleanup(); cleanup = null; }
     if (!S.config) S.config = await api('GET', '/v1/public/app-config');
     // Areas switched off on this server (FW_FEATURES): pages that belong to one aren't shown or opened.
-    if (!S.features) S.features = await api('GET', '/v1/public/features').catch(() => ({ off: [] }));
+    if (!S.features) S.features = await api('GET', `/v1/public/features?company=${encodeURIComponent(S.config.companyId)}`).catch(() => ({ off: [] }));
     if (S.token && !S.me) { try { S.me = await api('GET', '/v1/me'); } catch { S.me = null; } }
     if (!S.me) return signIn();
     if (S.me.advertiserId || S.me.role === 'consumer') return shell('', h('div', { class: 'notice err', text: 'This console is for the company’s team. Ask an owner to add you.' }));
@@ -73,7 +73,7 @@
     go('/ops', true);
   }
   function shell(active, ...content) {
-    const nav = [['today', '/ops', 'Today', I.today], ['review', '/ops/review', 'Ad review', I.review], ['machines', '/ops/machines', 'Machines', I.machine], ['routes', '/ops/routes', 'Routes', I.route], ['subs', '/ops/subscriptions', 'Deliveries', I.people], ['books', '/ops/books', 'Books', I.books]];
+    const nav = [['today', '/ops', 'Today', I.today], ['review', '/ops/review', 'Ad review', I.review], ['machines', '/ops/machines', 'Machines', I.machine], ['routes', '/ops/routes', 'Routes', I.route], ['areas', '/ops/areas', 'Areas', I.route], ['subs', '/ops/subscriptions', 'Deliveries', I.people], ['books', '/ops/books', 'Books', I.books]];
     root.replaceChildren(h('div', { class: 'shell' },
       h('aside', { class: 'side' }, h('div', { class: 'logo', 'aria-label': 'FreeWater Ops' }, h('span', { text: 'free' }), h('span', { text: 'water' }), h('small', { text: 'Ops' })),
         h('nav', { 'aria-label': 'Main' }, nav.filter(([id]) => can(id)).map(([id, path, label, ic]) => link(path, { 'aria-current': active === id ? 'page' : null }, icon(ic), label))),
@@ -126,18 +126,46 @@
     let frame = null, payload = null;
     const onMsg = (e) => { if ((fixture || e.origin === location.origin) && e.data?.type === 'fw-preview-ready' && frame && payload) frame.contentWindow.postMessage({ type: 'fw-preview', ...(payload.scan ?? { doc: null }) }, fixture ? '*' : location.origin); };
     window.addEventListener('message', onMsg); cleanup = () => window.removeEventListener('message', onMsg);
-    const drawList = () => list.replaceChildren(...queue.map((c) => h('button', { type: 'button', 'aria-current': String(c.id === current), onclick: () => { current = c.id; drawList(); show(); } }, h('b', { text: c.advertiser }), h('span', { text: `${c.name ?? c.category} · sent ${new Date(c.submittedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` }))));
+    const tag = (c) => (c.review?.auditPending ? 'audit of the AI’s rejection · ' : c.review?.appealedAt ? 'appealed · ' : c.review?.status === 'flagged' ? 'flagged · ' : '');
+    const drawList = () => list.replaceChildren(...queue.map((c) => h('button', { type: 'button', 'aria-current': String(c.id === current), onclick: () => { current = c.id; drawList(); show(); } }, h('b', { text: c.advertiser }), h('span', { text: `${tag(c)}${c.name ?? c.category} · sent ${new Date(c.submittedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` }))));
     async function show() {
       if (!current) { pane.replaceChildren(h('div', { class: 'empty', text: 'No ads waiting. New ones show up here as soon as an advertiser submits them.' })); return; }
       pane.replaceChildren(h('p', { class: 'caption', text: 'Loading…' }));
       payload = await api('GET', `/v1/review/campaigns/${current}/preview`);
       const c = payload.campaign;
-      const note = h('textarea', { class: 'input', id: 'r-note', placeholder: 'What needs to change? The advertiser sees this word for word.' });
+      const item = queue.find((q) => q.id === c.id) ?? {};
+      // A paid ad (paid up front): an automated check can only flag it; the team talks it over with the advertiser in
+      // the notes, and only a person finally rejects it, with a reason (that's when its refund is offered).
+      const paid = !!item.paid, flagged = item.review?.status === 'flagged';
+      const audit = !!item.review?.auditPending, appealed = !!item.review?.appealedAt;
+      const notes = paid ? await api('GET', `/v1/review/campaigns/${c.id}/notes`).catch(() => []) : [];
+      const ai = paid ? await api('GET', `/v1/review/campaigns/${c.id}/ai`).catch(() => null) : null;
+      const note = h('textarea', { class: 'input', id: 'r-note', placeholder: paid ? 'Why? Plain words: the advertiser sees this word for word, and it’s kept.' : 'What needs to change? The advertiser sees this word for word.' });
+      const say = h('textarea', { class: 'input', id: 'r-say', placeholder: 'Write to the advertiser…' });
+      const thread = h('div', { class: 'panel-box' }, h('b', { text: flagged ? 'Being discussed with the advertiser' : 'Notes with the advertiser' }),
+        notes.length ? h('ul', { style: 'margin:0;padding-left:18px;line-height:1.6' }, notes.map((n) => h('li', {}, h('b', { text: `${n.from === 'team' ? 'Team' : n.from === 'advertiser' ? c.advertiser : n.from === 'AI reviewer' ? 'AI reviewer' : 'Automated check'}${n.kind === 'flag' ? ' flagged' : n.kind === 'resubmitted' ? ' sent a change' : n.kind === 'appeal' ? ' appealed to a person' : n.kind === 'rejected' && n.from === 'AI reviewer' ? ' rejected (its final call)' : ''}: ` }), n.text, h('span', { style: 'color:var(--muted)', text: ` · ${new Date(n.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` })))) : h('p', { style: 'margin:0;color:var(--muted)', text: 'No notes yet.' }),
+        h('div', { class: 'field' }, h('label', { for: 'r-say', text: 'Write to the advertiser' }), say),
+        h('div', {}, h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { if (!say.value.trim()) return; try { await api('POST', `/v1/review/campaigns/${c.id}/notes`, { text: say.value.trim() }); toast('Sent.'); await show(); } catch (x) { toast(x.message); } } }, 'Send note')));
+      // The AI reviewer: what it said about this ad, and your team's talk with it. Kept with the ad, apart from the
+      // notes with the advertiser (who never sees it). It can explain and change its view; it can't decide anything.
+      const ask = h('textarea', { class: 'input', id: 'r-ask', maxlength: '2000', placeholder: 'Ask the AI why, or push back…' });
+      const latest = ai?.verdicts?.filter((v) => !v.superseded).at(-1) ?? null;
+      const said = (v) => (v.verdict === 'pass' ? 'It passed this ad.' : `${v.final ? 'It rejected this ad on its own (your company lets it make the final call)' : 'It flagged this ad'}: ${v.reasons}`);
+      const aiBox = ai && (ai.verdicts.length || ai.thread.length) ? h('div', { class: 'panel-box', style: 'border-left:3px solid var(--blue, #1E7DB8)' },
+        h('b', { text: 'The AI reviewer (only your team sees this)' }),
+        h('p', { style: 'margin:4px 0;color:var(--muted);font-size:13px', text: ai.looksAt || 'It read the ad’s words and links, not its pictures: check the artwork yourself.' }),
+        latest ? h('p', { style: 'margin:4px 0', text: `${said(latest)}${latest.changedView ? ` After talking it over, it now says it would ${latest.changedView === 'pass' ? 'pass' : 'flag'} it.` : ''}` }) : null,
+        ai.thread.length ? h('ul', { style: 'margin:0;padding-left:18px;line-height:1.6' }, ai.thread.map((m) => h('li', {}, h('b', { text: m.from === 'team' ? 'Team: ' : `AI${m.by === 'stand-in (no AI)' ? ' (stand-in)' : ''}${m.changedView ? `, now ${m.changedView === 'pass' ? 'passing' : 'flagging'} it` : ''}: ` }), m.text))) : null,
+        h('div', { class: 'field' }, h('label', { for: 'r-ask', text: 'Ask the AI' }), ask),
+        h('div', {}, h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { if (!ask.value.trim()) return; try { await api('POST', `/v1/review/campaigns/${c.id}/ai`, { text: ask.value.trim() }); await show(); } catch (x) { toast(x.message); } } }, 'Ask')),
+        h('p', { style: 'margin:0;color:var(--muted);font-size:13px', text: 'It explains, and may change its view; it can’t approve, reject or pay anything back. What it said first stays in its record against your decision.' })) : null;
       const decide = async (decision) => {
-        if (decision === 'reject' && !note.value.trim()) { toast('Say what needs to change.'); note.focus(); return; }
+        if ((decision === 'reject' || decision === 'flag') && !note.value.trim()) { toast(decision === 'flag' ? 'Say what the concern is.' : paid ? 'Write why it’s rejected.' : 'Say what needs to change.'); note.focus(); return; }
+        if (decision === 'reject' && paid && !window.confirm(`Reject ${c.advertiser}’s paid ad for good? Its refund is then offered for approval.`)) return;
         try {
-          await api('POST', `/v1/review/campaigns/${c.id}`, { decision, ...(note.value.trim() ? { note: note.value.trim() } : {}) });
-          toast(decision === 'approve' ? `Approved. ${c.advertiser} is printing.` : 'Sent back with your note.');
+          const out = await api('POST', `/v1/review/campaigns/${c.id}`, { decision, ...(note.value.trim() ? { note: note.value.trim() } : {}) });
+          toast(decision === 'approve' ? `Approved. ${c.advertiser} is printing.` : out.review?.status === 'flagged' ? 'Flagged: talk it over with the advertiser in the notes.' : paid ? 'Rejected. Its refund can now be approved (Books).' : 'Sent back with your note.');
+          if (out.review?.status === 'flagged') { item.review = out.review; return show(); }
           queue.splice(queue.findIndex((q) => q.id === c.id), 1); current = queue[0]?.id ?? null; drawList(); show();
         } catch (x) {
           // Someone else may have decided it already, or it changed: show why and reload the queue.
@@ -148,15 +176,22 @@
       frame = fixture?.scanFrame ? fixture.scanFrame() : h('iframe', { src: '/preview/scan', title: 'Scan page' });
       const buy = c.buy.type === 'guaranteed' ? `${c.buy.remainingPrints.toLocaleString()} bottles` : `${dollars(c.buy.dailyCapCents)} a day`;
       pane.replaceChildren(
-        h('div', { class: 'run-head' }, h('div', {}, h('h2', { style: 'margin:0;font-size:20px', text: c.name ?? c.advertiser }), h('div', { style: 'color:var(--muted)', text: `${c.advertiser} · ${c.category} · ${c.where === 'all' ? 'every machine' : c.where.join(', ')} · ${buy}` })), h('span', { class: 'pill warn', text: 'Waiting for review' })),
+        h('div', { class: 'run-head' }, h('div', {}, h('h2', { style: 'margin:0;font-size:20px', text: c.name ?? c.advertiser }), h('div', { style: 'color:var(--muted)', text: `${c.advertiser} · ${c.category} · ${c.where === 'all' ? 'every machine' : c.where.join(', ')} · ${buy}` })), h('span', { class: 'pill warn', text: audit ? 'Audit of the AI’s rejection' : appealed ? 'Appealed · back with you' : flagged ? 'Flagged · being discussed' : 'Waiting for review' })),
+        flagged ? h('div', { class: 'notice', style: 'border-left:3px solid var(--warn, #c80)' }, h('b', { text: appealed ? 'Appealed: ' : 'Flagged: ' }), item.flag?.reasons ?? '', h('div', { style: 'color:var(--muted)', text: appealed ? 'The advertiser appealed the AI reviewer’s rejection to a person. You decide: approve it, or reject it with your reason. The money stays held and nothing prints meanwhile.' : 'A flag never rejects or refunds. The money stays held and nothing prints. Talk it over in the notes; the advertiser can change it at no fee.' })) : null,
+        audit ? h('div', { class: 'notice', style: 'border-left:3px solid var(--warn, #c80)' }, h('b', { text: 'Audit: ' }), `The AI reviewer rejected this ad on its own (${item.review?.note ?? ''}). A sample of its rejections comes to a person. Confirm it (reject, with your reason) or overturn it (approve). Either way it goes in its record.`) : null,
         h('img', { class: 'label-img', style: 'width:100%;border-radius:8px;box-shadow:0 0 0 1px var(--line)', src: svgSrc(payload.labelSvg), alt: 'The ad on a sample label' }),
         h('div', { class: 'row3' },
           h('div', { style: 'display:flex;flex-direction:column;gap:12px' },
             h('div', { class: 'stage', style: 'min-height:0' }, h('div', { class: 'sizes' }, payload.sizes.flatMap((s) => (s.shapes ?? [{ svg: s.svg }]).map((x) => h('figure', {}, h('img', { src: svgSrc(x.svg), alt: s.label, style: 'height:200px' }), h('figcaption', { text: x.w ? `${s.label} · ${(x.w / 100).toFixed(1)} × ${(x.h / 100).toFixed(1)} in` : s.label }))))), ...(payload.boxFaces ?? (payload.boxFaceSvg ? [{ svg: payload.boxFaceSvg }] : [])).map((f) => h('img', { class: 'box-img', src: svgSrc(f.svg), alt: 'On a box side' }))),
             h('div', { class: 'panel-box' }, h('b', { text: 'Check' }), h('ul', { style: 'margin:0;padding-left:18px;line-height:1.8;color:var(--muted)' }, ['Words are true and legal; prices and offers are honest', 'Nothing your rules don’t allow (category, claims, images)', 'Readable at the smallest size', 'Links go where they say; the scan page works'].map((t) => h('li', { text: t })))),
             payload.objections?.length ? h('div', { class: 'panel-box', style: 'border-left:3px solid var(--warn, #c80)' }, h('b', { text: 'Our AI objected to this ad' }), h('p', { style: 'margin:4px 0;color:var(--muted)', text: 'It chose not to help make it, so the built-in helper carried on. You still decide whether it runs.' }), h('ul', { style: 'margin:0;padding-left:18px' }, payload.objections.map((o) => h('li', { text: o.reason })))) : null,
-            h('div', { class: 'field' }, h('label', { for: 'r-note', text: 'Note to the advertiser (needed to send it back)' }), note),
-            h('div', { class: 'toolbar' }, h('button', { class: 'btn', type: 'button', onclick: () => decide('approve') }, 'Approve and start printing'), h('button', { class: 'btn secondary', type: 'button', onclick: () => decide('reject') }, 'Send back'))),
+            aiBox,
+            paid ? thread : null,
+            h('div', { class: 'field' }, h('label', { for: 'r-note', text: paid ? 'Reason (needed to flag or reject)' : 'Note to the advertiser (needed to send it back)' }), note),
+            h('div', { class: 'toolbar' }, h('button', { class: 'btn', type: 'button', onclick: () => decide('approve') }, audit ? 'Overturn: approve and start printing' : 'Approve and start printing'),
+              paid && !flagged && !audit ? h('button', { class: 'btn secondary', type: 'button', onclick: () => decide('flag') }, 'Flag to discuss') : null,
+              h('button', { class: 'btn secondary', type: 'button', onclick: () => decide('reject') }, audit ? 'Confirm the rejection' : paid ? 'Reject for good (refund offered)' : 'Send back')),
+            paid ? h('p', { style: 'margin:0;color:var(--muted);font-size:13px', text: 'Paying back a rejected ad is always a separate step an owner or finance person approves (with the second sign-in step), even when the AI reviewer made the rejection.' }) : null),
           frame));
     }
     shell('review', head('Ad review', 'Nothing prints until it’s approved here. Changes to a live ad come back here too.'), queue.length ? h('div', { class: 'queue' }, list, pane) : h('div', { class: 'empty', text: 'No ads waiting. New ones show up here as soon as an advertiser submits them.' }));
@@ -228,6 +263,29 @@
   }
 
   // ---------- routes ----------
+  /** A drop's photo, for the team only: fetched with the sign-in (never a public address) and opened in a new tab. */
+  async function openDropPhoto(id) {
+    if (fixture) return toast('Photo');
+    try {
+      const res = await fetch(`/v1/ops/drop-photos/${encodeURIComponent(id)}`, { headers: S.token ? { authorization: `Bearer ${S.token}` } : {} });
+      if (!res.ok) return toast(res.status === 404 ? 'That photo was deleted after the keep.' : 'The photo didn’t load.');
+      window.open(URL.createObjectURL(await res.blob()), '_blank', 'noopener');
+    } catch { toast('The photo didn’t load.'); }
+  }
+  /** The driver scanned the right box at the door but no photo came: a person (not the driver) vouches for it, with why. */
+  async function vouch(r, s) {
+    const reason = window.prompt(`Box #${s.boxNumber ?? '—'} was scanned at ${s.address.split(',')[0]} but has no photo. Why is it delivered? (kept on the record)`);
+    if (!reason || reason.trim().length < 5) return;
+    try { await api('POST', `/v1/ops/runs/${encodeURIComponent(r.id)}/stops/${s.stop}/deliver-without-photo`, { reason: reason.trim() }); toast('Marked delivered, with your reason.'); } catch (x) { toast(x.message); }
+    render();
+  }
+  /** A run that will never be finished (a night long gone, a van that didn't go): its boxes go back, with why. */
+  async function closeOut(r) {
+    const reason = window.prompt(`Close out ${r.areaName ? `${r.areaName} · van ${r.van}` : r.routeName}? Stops not delivered are marked not delivered and their boxes go back. Why? (kept on the record)`);
+    if (!reason || reason.trim().length < 5) return;
+    try { const x = await api('POST', `/v1/ops/runs/${encodeURIComponent(r.id)}/close`, { reason: reason.trim() }); toast(`Closed out: ${x.closedOut.length} box(es) go back.`); } catch (x) { toast(x.message); }
+    render();
+  }
   async function routesPage() {
     const q = new URLSearchParams(S.path.split('?')[1] || '');
     const date = q.get('date') || (await api('GET', '/v1/ops/overview')).date;
@@ -236,20 +294,97 @@
     const plan = h('button', { class: 'btn', type: 'button', onclick: async () => { plan.disabled = true; plan.textContent = 'Planning and printing…'; try { const r = await api('POST', '/v1/ops/runs/plan', { date }); toast(r.length ? `${r.length} route${r.length === 1 ? '' : 's'} planned and printed` : 'Nobody is due that day'); } catch (x) { toast(x.message); } render(); } }, 'Plan and print this night');
     const stages = ['printing', 'packing', 'ready', 'out', 'done'];
     const stageName = { printing: 'Printing', packing: 'Packing check', ready: 'Ready to load', out: 'Out on the road', done: 'Done' };
-    shell('routes', head('Routes', 'Everyone due that night, in driving order, with a box printed for each stop.', picker, plan),
+    shell('routes', head('Routes', 'Everyone due that night, in driving order, and every house due in each delivery area that’s on, street by street, with a box printed for each stop.', picker, plan),
       data.runs.length ? h('div', { style: 'display:flex;flex-direction:column;gap:16px' }, data.runs.map((r) => {
         const at = stages.indexOf(r.status);
         return h('section', { class: 'run' },
-          h('div', { class: 'run-head' }, h('div', {}, h('h3', { text: `${r.routeName} · ${r.routeId.replace(/^route-/, 'Route ')}` }), h('div', { style: 'color:var(--muted);font-size:14px', text: `${r.counts.stops} stops · ${r.counts.bottles} bottles · about ${r.distanceKm} km, ${r.minutes} min · from ${r.depot?.name ?? 'the depot'}` })),
-            h('div', { class: 'toolbar' }, r.status === 'packing' ? h('button', { class: 'btn small', type: 'button', onclick: async () => { try { const x = await api('POST', `/v1/ops/runs/${r.id}/pack-check`); toast(x.problems.length ? `${x.problems.length} box(es) need attention` : 'Every box checked and sealed'); } catch (e) { toast(e.message); } render(); } }, 'Run packing check') : null, r.driverId ? h('span', { class: 'pill dark', text: 'Driver assigned' }) : null)),
+          h('div', { class: 'run-head' }, h('div', {}, h('h3', { text: r.areaName ? `${r.areaName} · van ${r.van} · ${r.routeId.replace(/^route-/, 'Route ')}` : `${r.routeName} · ${r.routeId.replace(/^route-/, 'Route ')}` }), h('div', { style: 'color:var(--muted);font-size:14px', text: `${r.counts.stops} stops · ${r.counts.bottles} bottles · about ${r.distanceKm} km, ${r.minutes} min · from ${r.depot?.name ?? 'the depot'}` })),
+            h('div', { class: 'toolbar' }, r.status === 'packing' ? h('button', { class: 'btn small', type: 'button', onclick: async () => { try { const x = await api('POST', `/v1/ops/runs/${r.id}/pack-check`); toast(x.problems.length ? `${x.problems.length} box(es) need attention` : 'Every box checked and sealed'); } catch (e) { toast(e.message); } render(); } }, 'Run packing check') : null, r.driverId ? h('span', { class: 'pill dark', text: 'Driver assigned' }) : null, r.status !== 'done' ? h('button', { class: 'btn secondary small', type: 'button', onclick: () => closeOut(r) }, 'Close out…') : null)),
           h('div', { class: 'steps' }, stages.map((s, i) => h('span', { class: i < at ? 'done' : i === at ? 'on' : '', text: stageName[s] }))),
           h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Stop', 'Address', 'Box', 'Pack', 'Status', ''].map((x) => h('th', { text: x })))),
             h('tbody', {}, r.stops.map((s) => h('tr', {}, h('td', {}, h('b', { text: s.stopCode })), h('td', { text: s.address }), h('td', { text: `#${s.boxNumber ?? '—'}` }), h('td', { text: `${s.packSize}` }),
-              h('td', {}, s.status === 'delivered' ? h('span', { class: 'pill ok', text: `Delivered${s.atAddressBy === 'driver' ? ' (driver confirmed)' : ''}` }) : s.status === 'not_delivered' ? h('span', { class: 'pill bad', text: `Not delivered: ${s.reason}` }) : h('span', { class: 'pill', text: s.packStatus === 'loaded' ? 'On the van' : s.packStatus === 'sealed' ? 'Sealed' : s.packStatus ?? 'Planned' })),
+              h('td', {}, s.status === 'delivered' ? h('span', {}, h('span', { class: 'pill ok', text: `Delivered${s.atAddressBy === 'driver' ? ' (driver confirmed)' : ''}${s.photoWaived ? ' without a photo' : ''}` }), s.photo ? h('button', { class: 'linkish', type: 'button', onclick: () => openDropPhoto(s.photo.id) }, ' Photo') : null, s.photo && s.photo.location === 'unverified' ? h('span', { class: 'pill warn', title: 'The phone gave no location (or too vague a one) when the photo was taken', text: 'unverified location' }) : null) :
+                s.doorScan ? h('span', {}, h('span', { class: 'pill warn', text: 'Scanned at the door, no photo yet' }), h('button', { class: 'btn secondary small', type: 'button', onclick: () => vouch(r, s) }, 'Delivered without photo…')) : s.status === 'not_delivered' ? h('span', { class: `pill ${s.skipped ? 'warn' : 'bad'}`, text: `${s.skipped ? 'Skipped' : 'Not delivered'}: ${s.reason}` }) : s.houseStatus && s.houseStatus !== 'active' ? h('span', { class: 'pill warn', text: 'Stopped since the plan: keep the box' }) : h('span', { class: 'pill', text: s.packStatus === 'loaded' ? 'On the van' : s.packStatus === 'sealed' ? 'Sealed' : s.packStatus ?? 'Planned' })),
               h('td', { style: 'color:var(--muted);font-size:13px' }, s.emptiesCollected ? `${s.emptiesCollected} empties` : '', s.checkedByHand ? `Checked by hand, ${ago(s.checkedByHand.at)}` : '',
                 // No packing line for this box: a signed-in person counts every bottle and checks it by hand (who and when are kept).
                 r.status === 'packing' && (s.packStatus === 'box_printed' || s.packStatus === 'mismatch') ? h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { if (!confirm(`Did you count all ${s.packSize} bottles in box #${s.boxNumber ?? '—'} and check each one belongs? It's sealed and recorded under your name.`)) return; try { const x = await api('POST', `/v1/ops/runs/${encodeURIComponent(r.id)}/stops/${s.stop}/check-by-hand`); toast(x.problems.length ? `Checked and sealed. ${x.problems.length} box(es) still need a check` : 'Checked and sealed. Every box is ready to load'); } catch (e) { toast(e.message); } render(); } }, 'Checked by hand') : null)))))));
       })) : h('div', { class: 'empty', text: 'No routes planned for this night yet. Plan and print it when the day’s orders are in.' }));
+  }
+
+  // ---------- delivery areas: the streets FreeWater chooses, every house on them ----------
+  const HS = { active: ['ok', 'Gets packs'], opted_out: ['warn', 'Stopped in the app'], skip_pending: ['bad', 'Driver skip: review'], skipped: ['', 'Skipped'] };
+  async function areasPage() {
+    const [areas, reviews] = await Promise.all([api('GET', '/v1/ops/areas'), api('GET', '/v1/ops/house-reviews').catch(() => [])]);
+    const name = h('input', { class: 'input', id: 'ar-name', placeholder: 'Travis Heights, first 1,000 homes', maxlength: '80' });
+    const routeId = h('input', { class: 'input', id: 'ar-route', placeholder: 'route-3', value: 'route-3' });
+    const create = h('form', { class: 'panel-box', onsubmit: async (e) => { e.preventDefault(); try { const a = await api('POST', '/v1/ops/areas', { name: name.value.trim(), routeId: routeId.value.trim() }); toast('Area made. It’s off until you turn it on.'); go(`/ops/areas/${a.id}`); } catch (x) { toast(x.message); } } },
+      h('h2', { text: 'New area' }), h('p', { style: 'margin:0;color:var(--muted);font-size:14px', text: 'Its vans start from the route’s micro-factory and drive on the route’s days. It starts off; add houses, check them, then turn it on.' }),
+      h('div', { class: 'field' }, h('label', { for: 'ar-name', text: 'Name' }), name), h('div', { class: 'field' }, h('label', { for: 'ar-route', text: 'Route' }), routeId), h('button', { class: 'btn', type: 'submit' }, 'Make the area'));
+    const review = (r) => h('tr', {}, h('td', {}, h('b', { text: r.address.split(',')[0] }), h('div', { style: 'color:var(--muted);font-size:12px', text: r.areaName })), h('td', { text: r.skipReason ?? '' }),
+      h('td', {}, h('div', { class: 'toolbar' },
+        h('button', { class: 'btn small', type: 'button', onclick: async () => { try { await api('POST', `/v1/ops/houses/${r.id}/review`, { decision: 'deliver' }); toast('It gets packs again from the next night'); } catch (x) { toast(x.message); } render(); } }, 'Deliver again'),
+        h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { try { await api('POST', `/v1/ops/houses/${r.id}/review`, { decision: 'skip' }); toast('Skipped from now on'); } catch (x) { toast(x.message); } render(); } }, 'Keep skipping'))));
+    shell('areas', head('Delivery areas', 'House after house on the streets we choose. Nobody signs up: every house gets packs unless someone there stops them in the app, or a driver’s skip is agreed.'),
+      reviews.length ? h('section', { class: 'panel-box' }, h('h2', { text: `${reviews.length} driver skip${reviews.length === 1 ? '' : 's'} to review` }), h('p', { style: 'margin:0;color:var(--muted);font-size:14px', text: 'These houses are left out until you decide.' }),
+        h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['House', 'Driver said', ''].map((x) => h('th', { text: x })))), h('tbody', {}, reviews.map(review))))) : null,
+      areas.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Area', 'Houses', 'Packs', 'How often', 'Status'].map((x) => h('th', { text: x })))),
+        h('tbody', {}, areas.map((a) => h('tr', {}, h('td', {}, link(`/ops/areas/${a.id}`, {}, h('b', { text: a.name })), h('div', { style: 'color:var(--muted);font-size:12px', text: `${a.routeName}${a.sample ? ' · sample houses' : ''}` })),
+          h('td', { text: `${a.byStatus.active} of ${a.houses}${a.byStatus.opted_out ? ` · ${a.byStatus.opted_out} stopped` : ''}${a.byStatus.skip_pending ? ` · ${a.byStatus.skip_pending} to review` : ''}` }),
+          h('td', { text: `${a.packsPerHouse} × ${a.packSize}` }), h('td', { text: a.frequencyDays === 7 ? 'Weekly' : `Every ${a.frequencyDays} days` }),
+          h('td', {}, h('span', { class: `pill ${a.active ? 'ok' : ''}`, text: a.active ? 'On' : 'Off' }))))))) : h('div', { class: 'empty', text: 'No delivery areas yet.' }),
+      create);
+  }
+  /** The area's houses as dots, coloured by status; a real map can replace this (docs/OVERVIEW.md). */
+  function houseMap(houses, polygon) {
+    const pts = [...houses.map((x) => x.point), ...(polygon ?? []).map(([lat, lng]) => ({ lat, lng }))];
+    if (!pts.length) return null;
+    const minLat = Math.min(...pts.map((p) => p.lat)), maxLat = Math.max(...pts.map((p) => p.lat)), minLng = Math.min(...pts.map((p) => p.lng)), maxLng = Math.max(...pts.map((p) => p.lng));
+    const W = 640, H = 300, pad = 14;
+    const x = (p) => pad + ((p.lng - minLng) / Math.max(1e-6, maxLng - minLng)) * (W - pad * 2);
+    const y = (p) => H - pad - ((p.lat - minLat) / Math.max(1e-6, maxLat - minLat)) * (H - pad * 2);
+    const svg = document.createElementNS(NS, 'svg');
+    for (const [k, v] of Object.entries({ viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `Map of ${houses.length} houses`, style: 'width:100%;height:auto;background:var(--soft);border-radius:12px' })) svg.setAttribute(k, v);
+    const el = (tag, a) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(a)) e.setAttribute(k, String(v)); svg.append(e); return e; };
+    if (polygon) el('polygon', { points: polygon.map(([lat, lng]) => `${x({ lat, lng })},${y({ lat, lng })}`).join(' '), fill: 'none', stroke: '#9AA6B2', 'stroke-dasharray': '5 4', 'stroke-width': 2 });
+    const color = { active: '#1F8A4C', opted_out: '#B7791F', skip_pending: '#B42318', skipped: '#9AA6B2' };
+    for (const hs of houses) el('circle', { cx: x(hs.point), cy: y(hs.point), r: 4, fill: color[hs.status] ?? '#1F2633' }).append(Object.assign(document.createElementNS(NS, 'title'), { textContent: `${hs.address} · ${HS[hs.status]?.[1] ?? hs.status}` }));
+    return svg;
+  }
+  async function areaPage(id) {
+    const [areas, houses] = await Promise.all([api('GET', '/v1/ops/areas'), api('GET', `/v1/ops/areas/${id}/houses`)]);
+    const a = areas.find((x) => x.id === id);
+    if (!a) throw new Error('Delivery area not found.');
+    const num = (key, label, min, max, help) => { const i = h('input', { class: 'input', id: `ar-${key}`, type: 'number', min, max, value: a[key] ?? '' }); return [h('div', { class: 'field' }, h('label', { for: `ar-${key}`, text: label }), i, help ? h('small', { style: 'color:var(--muted)', text: help }) : null), () => (i.value === '' ? null : Number(i.value)), key]; };
+    const fields = [num('frequencyDays', 'Every how many days', 1, 28, '7 = weekly (the pilot’s default).'), num('packsPerHouse', 'Packs per house', 1, 6, 'Until a household tells us its size.'), num('bottlesPerPersonWeek', 'Bottles a person a week', 1, 48, 'Once a household says its size it gets enough for this many each; empty = don’t use household size.'), num('maxPacksPerHouse', 'Most packs per house', 1, 6), num('vanPacks', 'Boxes per van', 1, 1000, 'A night’s houses are split into one run per van.')];
+    const size = h('select', { class: 'input', id: 'ar-size' }, [12, 24].map((n) => h('option', { value: String(n), text: `${n}-packs`, selected: a.packSize === n })));
+    const save = async (patch, msg) => { try { await api('PATCH', `/v1/ops/areas/${id}`, patch); toast(msg); } catch (x) { toast(x.message); } render(); };
+    const csv = h('textarea', { class: 'input', id: 'ar-csv', rows: '6', placeholder: 'address,lat,lng\n"1601 Ravey St, Austin, TX",30.2450,-97.7401' });
+    const file = h('input', { type: 'file', accept: '.csv,text/csv', onchange: async () => { const f = file.files[0]; if (f) csv.value = await f.text(); } });
+    const poly = h('textarea', { class: 'input', id: 'ar-poly', rows: '3', placeholder: '[[30.240,-97.746],[30.252,-97.746],[30.252,-97.734],[30.240,-97.734]]' });
+    poly.value = a.polygon ? JSON.stringify(a.polygon) : '';
+    const result = h('div', {});
+    const counts = houses.reduce((m, x) => ({ ...m, [x.status]: (m[x.status] ?? 0) + 1 }), {});
+    shell('areas', head(a.name, `${a.routeName} · ${a.houses} houses · ${a.packsPerHouse} × ${a.packSize}-pack ${a.frequencyDays === 7 ? 'every week' : `every ${a.frequencyDays} days`}${a.sample ? ' · sample houses, not real addresses' : ''}`,
+      h('button', { class: `btn ${a.active ? 'secondary' : ''}`, type: 'button', onclick: () => { if (a.active || confirm(`Turn on ${a.name}? Every active house in it is planned and printed from the next night you plan.`)) save({ active: !a.active }, a.active ? 'Turned off. Nothing more is planned for it.' : 'Turned on'); } }, a.active ? 'Turn off' : 'Turn on')),
+      h('div', { class: 'grid2' },
+        h('section', { class: 'panel-box' }, h('h2', { text: 'Houses' }), houseMap(houses, a.polygon),
+          h('div', { class: 'toolbar' }, Object.entries(HS).map(([k, [cls, label]]) => h('span', { class: `pill ${cls}`, text: `${label}: ${counts[k] ?? 0}` })))),
+        h('form', { class: 'panel-box', onsubmit: (e) => { e.preventDefault(); const patch = { packSize: Number(size.value) }; for (const [, get, key] of fields) { const v = get(); if (v !== null || key === 'bottlesPerPersonWeek') patch[key] = v; } save(patch, 'Saved. It applies from the next plan.'); } },
+          h('h2', { text: 'Settings' }), h('div', { class: 'field' }, h('label', { for: 'ar-size', text: 'Pack size' }), size), fields.map(([el]) => el), h('button', { class: 'btn', type: 'submit' }, 'Save settings'))),
+      h('section', { class: 'panel-box' }, h('h2', { text: 'Add houses' }),
+        h('p', { style: 'margin:0;color:var(--muted);font-size:14px', text: 'A CSV with a header line naming address, lat and lng (street and number are optional). Only houses inside the polygon are added; an address we already have stays as it is.' }),
+        file, csv, h('div', { class: 'field' }, h('label', { for: 'ar-poly', text: 'Polygon (optional): corners as [lat, lng]' }), poly),
+        h('div', { class: 'toolbar' },
+          h('button', { class: 'btn', type: 'button', onclick: async () => {
+            let polygon = null;
+            try { polygon = poly.value.trim() ? JSON.parse(poly.value) : null; } catch { return toast('The polygon isn’t valid: [[lat, lng], …]'); }
+            try { const r = await api('POST', `/v1/ops/areas/${id}/houses/import`, { csv: csv.value, ...(polygon ? { polygon } : {}) }); result.replaceChildren(h('div', { class: 'notice' }, `${r.added} added, ${r.alreadyKnown} already known, ${r.outside} outside the polygon${r.problemCount ? `, ${r.problemCount} lines not read (first: line ${r.problems[0].line}, ${r.problems[0].reason})` : ''}.`)); } catch (x) { toast(x.message); }
+          } }, 'Add these houses'),
+          h('button', { class: 'btn secondary', type: 'button', onclick: () => { let polygon = null; try { polygon = poly.value.trim() ? JSON.parse(poly.value) : null; } catch { return toast('The polygon isn’t valid: [[lat, lng], …]'); } save({ polygon }, 'Polygon saved for the next houses added'); } }, 'Save polygon')),
+        result),
+      h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Address', 'Status', 'People', 'Last left', 'Next due'].map((x) => h('th', { text: x })))),
+        h('tbody', {}, houses.map((x) => h('tr', {}, h('td', {}, x.address, x.claimed ? h('span', { class: 'pill', style: 'margin-left:6px', text: 'In the app' }) : null), h('td', {}, h('span', { class: `pill ${HS[x.status]?.[0] ?? ''}`, text: HS[x.status]?.[1] ?? x.status }), x.skipReason ? h('div', { style: 'color:var(--muted);font-size:12px', text: x.skipReason }) : null),
+          h('td', { text: x.householdSize ? String(x.householdSize) : '—' }), h('td', { text: x.lastDeliveredAt ? ago(x.lastDeliveredAt) : '—' }), h('td', { text: x.status === 'active' ? x.nextDate ?? 'Next plan' : '—' })))))));
   }
 
   // ---------- deliveries ----------

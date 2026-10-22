@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { createApp, type App } from '../src/app';
 import { buildServer } from '../src/api/server';
 import { createPgliteClient } from '../src/db/pglite';
+import { doorPhoto } from './door-photo';
 import type { SqlClient } from '../src/db/client';
 
 let db: SqlClient;
@@ -17,7 +18,8 @@ const art = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 450"><rect
 
 beforeAll(async () => {
   db = await createPgliteClient(); // in memory
-  app = await createApp({ db, seedDemo: true, seed: 5 });
+  // The API end to end for a company that bills afterwards (scans, sales and invoices); paying up front: prepaid.test.ts.
+  app = await createApp({ db, seedDemo: true, demoBilling: 'billed_after', seed: 5 });
   keys = app.demoKeys!;
   server = await buildServer(app);
 });
@@ -164,6 +166,11 @@ describe('packs over the API', () => {
     const wrong = await call('POST', '/v1/deliveries', driver, { routeId: 'route-3', stop: 41, scannedPackId: p2.id, atAddress: true, photoProof: true, emptiesCollected: 0 });
     expect(wrong.statusCode).toBe(409);
     expect(wrong.json().grab.stopCode).toBe('R3 · 41');
+    // The right box at the right door, but the caller's word for the photo (photoProof) isn't a photo: not delivered.
+    const noPhoto = await call('POST', '/v1/deliveries', driver, { routeId: 'route-3', stop: 41, scannedPackId: p1.id, atAddress: true, photoProof: true, emptiesCollected: 4 });
+    expect(noPhoto.json().error.code).toBe('photo_required');
+    expect(app.packs.packs.get(p1.id)!.status).toBe('loaded');
+    expect((await server.inject({ method: 'POST', url: `/v1/driver/photos?packId=${p1.id}&capture=camera`, payload: await doorPhoto(), headers: { authorization: `Bearer ${driver}`, 'content-type': 'image/jpeg' } })).statusCode).toBe(201);
     const right = await call('POST', '/v1/deliveries', driver, { routeId: 'route-3', stop: 41, scannedPackId: p1.id, atAddress: true, photoProof: true, emptiesCollected: 4 });
     expect(right.json().status).toBe('delivered');
   });

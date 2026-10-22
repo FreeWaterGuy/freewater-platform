@@ -10,8 +10,9 @@ import { themeFor } from '../modules/experiences/host';
 import { checkQrColor, checkQrLogo, monogramLogo, qrPlan, qrSvg } from '../modules/print/qr';
 import { checkProduct } from '../modules/products/check';
 import { targetingPremium } from '../modules/ads/targeting';
+import { engagementFee } from '../modules/ads/billing';
 import { ExperienceError } from '../modules/experiences/service';
-import { ApiError, notFound, obj, S, type RouteDef } from './http';
+import { ApiError, notFound, obj, S, teamPersonOf, type RouteDef } from './http';
 
 /**
  * QR codes (logos, static or dynamic, versions of the call to action, AI personalization), AR that follows the
@@ -73,18 +74,29 @@ export function codesArRoutes(app: App, server: FastifyInstance, route: (r: Rout
     const company = platform.companies.get(c.companyId)!;
     return { body: { ...extrasView(c), experienceId: c.experienceId, experienceConfig: c.experienceConfig ?? {}, arMode: experiences.host.info(c.experienceId)?.arMode ?? null,
       allowed: { static: !!company.qr?.allowStatic, logos: company.qr?.advertiserLogos ?? true },
-      engagement: { floorCents: company.prices.perPrintByShare[1], perScanCents: company.prices.perScan, perArLaunchCents: company.prices.perArLaunch, premium: targetingPremium(c, company), table: company.prices.targetingPremium ?? null },
+      engagement: { floorCents: company.prices.perPrintByShare[1], perScanCents: engagementFee(company, 'scan', platform.featureOn) ?? 0, perArLaunchCents: engagementFee(company, 'ar', platform.featureOn) ?? 0, premium: targetingPremium(c, company), table: company.prices.targetingPremium ?? null },
       products: productsFor(c.companyId).map((p) => ({ id: p.id, name: p.name, category: p.category ?? null })) } };
   } });
   route({ method: 'PATCH', url: '/v1/campaigns/:id/codes', scope: 'campaigns', summary: 'Change a campaign’s code, its versions of the call to action, AI personalization, what old bottles open once it ends, or who it targets. An advertiser changing what people see sends it back to review.', body: { ...obj(extrasSchema as any), minProperties: 1 }, handler: async (req, key) => {
     const c = campaignFor(key!, (req.params as any).id);
     const company = platform.companies.get(c.companyId)!;
     const x = req.body as CampaignExtras;
+    const reviewer = !key!.advertiserId || key!.scopes.includes('admin');
+    // The company changing what a paid ad shows: a person on the team, never a key (P3, P4: the same rule as approving
+    // it). Aimed at a few houses, only an owner or reviewer, and the new versions pass the stricter check. All checked
+    // before anything changes.
+    if (reviewer && (c.prepaid || c.routeBuy) && changesWhatPeopleSee(x)) {
+      const u = await teamPersonOf(app.accounts, key);
+      if (!u) throw new ApiError(403, 'person_review', 'What a paid ad shows is changed by a person on the team signed in, not with an API key.');
+      if (c.routeBuy?.small) await app.routeBuys.beforeApprove({ ...c, ...(x.variants !== undefined ? { variants: x.variants as Campaign['variants'] } : {}) }, { userId: u.id, role: u.role });
+    }
     const bad = applyExtras(company, c, x, experiences.host);
     if (bad) throw new ApiError(422, 'campaign_invalid', bad);
-    const reviewer = !key!.advertiserId || key!.scopes.includes('admin');
-    if (!reviewer && changesWhatPeopleSee(x)) { c.active = false; c.review = { status: 'submitted', at: platform.bus.now().toISOString() }; }
+    const resubmitted = !reviewer && changesWhatPeopleSee(x);
+    if (resubmitted) { c.active = false; c.review = { status: 'submitted', at: platform.bus.now().toISOString() }; }
     platform.persist.campaign(c);
+    // Sent back to review with new words: the AI reviewer looks again (its earlier verdict was about the old ad).
+    if (resubmitted && c.prepaid) await app.aiReview.onSubmitted(c).catch(() => null);
     return { body: extrasView(c) };
   } });
 

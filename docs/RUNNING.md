@@ -31,7 +31,8 @@ with a plain explanation.
 |---|---|
 | `NODE_ENV=production` | Turns on the strict checks and caching. |
 | `FW_FEATURES` | `pilot` switches off everything outside the core loop (see *The pilot* below). Unset (or `all`): everything on. |
-| `FW_FEATURES_OFF` | Comma list of further areas to switch off, e.g. `lottery,offers` (added to the preset). The areas: `token`, `token_conversion`, `withdrawals`, `gift_cards`, `partners`, `agents_fund`, `network`, `lottery`, `video_generation`, `offers`, `games`. An unknown name stops a production start. |
+| `FW_FEATURES_OFF` | Comma list of further areas to switch off, e.g. `lottery,offers` (added to the preset). The areas: `token`, `token_conversion`, `withdrawals`, `gift_cards`, `partners`, `agents_fund`, `network`, `lottery`, `video_generation`, `offers`, `games`, `news`. An unknown name stops a production start. |
+| `FW_FEATURES_ON` | Areas that start **off** everywhere until named here: today only `news` (FreeWater News on unsold spots; docs/SWITCHES.md “News”). Naming it brings it back even over the pilot preset, so it can be tried in the pilot on purpose; `FW_FEATURES_OFF` still wins. Each company must also turn `news.on` on itself (a person, in the console). |
 | `ALLOW_STANDINS=1` | Required in production for now: real payment, payout and email/text providers aren't wired yet, so the server runs on stand-ins (no real money moves, no message is sent) and refuses to start in production unless this says it's a staging rehearsal. It logs and alerts which stand-ins are active. Remove it once the real providers are in. |
 | `DATABASE_URL` | Postgres 13–17, e.g. `postgres://user:pass@host:5432/freewater?sslmode=require`. Use a managed one with automatic backups and point-in-time recovery. |
 | `PUBLIC_URL` | The https address of the site. It goes on every printed QR code and in every email. |
@@ -198,12 +199,17 @@ decision start once with `FW_SPOOL_SKIP=1` to set it aside unapplied (`….skipp
 | `fleet-sweep` | 15 s | Opens an "offline" problem for Model 6 machines that stopped calling in; lets go of kept offline labels 48 hours after their time (a machine still offline may yet report a bottle it gave before then). | Yes. |
 | `videos` | 10 s | Checks on footage being made; a clip claimed but never started (the server stopped) fails after 15 minutes so it can be tried again. | Yes. |
 | `credit` | hourly | Pauses the live ads of advertisers who owe more than their credit allows, alerting the team and emailing the advertiser (docs/SWITCHES.md, "Credit for advertisers"). Also runs at once when an invoice's card is declined. It never turns anything back on. | Yes: an ad already paused is left alone. |
-| `deliveries-overdue` | hourly | Alerts when active home deliveries' day went by without being planned or printed. It never plans a night itself (printing bills advertisers): a person does (docs/RUNBOOKS.md). | Yes: it only reads. |
+| `deliveries-overdue` | hourly | Alerts when active home deliveries' day (or a delivery area's houses' night) went by without being planned or printed, and when an area's run from an earlier day is still printing. It never plans a night itself (printing bills advertisers): a person does (docs/RUNBOOKS.md). | Yes: it only alerts, and moves on the next date of a subscription a printed run already covers. |
+| `ad-fees` | daily | Charges prepaid advertisers' cards for the fees a person switched on (scans, AR, box sides, commission): invoices what's new, and charges invoices an earlier run left open (the provider was down, or a restart). A declined card pauses their ads. | Yes: each line is invoiced once and each invoice charged once (the same request id). If the provider is down the job fails, alerts, and the next try charges what's open. |
+| `ad-payments` | hourly | Finishes ad payments and refunds a restart or a timeout cut off, from the payment provider's answer; an order never charged is let go after 2 minutes. | Yes: the same request id, so never twice. |
+| `route-buys` | daily | Gives back route pieces that can't go out (their week went by, the house stopped or blocked them, their box came back): credit, or a refund waiting for a person. Finishes approved refunds a restart cut off. | Yes: each piece once (by its status). |
+| `drop-photos` | daily | Deletes door photos past each company's keep (90 days unless set), for every company whatever its switches, oldest first, at most 5,000 per company a run. A photo whose file can't be deleted from file storage keeps its record and the job fails (alert), to try again. | Yes: a deleted photo is skipped. |
 | `books-and-agents` | hourly | Closes any month that's due, measures agents' changes, reads every agent's standing, shares out the AI fund, security review. Company by company. | Yes: a month closes once, a day's share-out once (crash-tested). |
 | `agent-exams` | daily | Any agent whose model hasn't passed the current test takes it. | Yes. |
 | `game-photos` | 6 hours | Finds photos of the real products for the games' cards, a few at a time. | Yes. |
 | `offers` | hourly | Closes brand-offer claims with no receipt after 14 days (points go back); pays approved ones that were held. | Yes: each claim once. |
 | `wallet-seals` | 10 min | Seals each finished hour of the wallet journal. | Yes: an hour is sealed once. |
+| `reconciliation` | daily | Reconciles each company's books (card processor, bank, invoices, wallet, published days, prepaid bottles, route pieces) and alerts on anything that fails or needs a look; the last result per company is in `GET /health/deep`. | Yes: it only reads and reports. |
 | `chain-check` | daily | Checks the books against the chain; pauses on a mismatch. | Yes. |
 | `fingerprints` | hourly | Publishes each finished day's books fingerprint. | Yes: a day is published once. |
 | `memory` | 1 min | Alerts when memory is filling. Runs while paused. | Yes. |
@@ -219,6 +225,9 @@ never runs twice at once: one past its time limit is reported as stuck and still
 Failures alert, and so does recovery. Run one now with `POST /v1/platform/jobs/<name>/run`.
 Jobs that belong to an area switched off with `FW_FEATURES` (`chain-check`: token, `videos`: video generation, `offers`:
 offers, `game-photos`: games) aren't scheduled at all; with the agents' fund off, `books-and-agents` skips the share-out.
+Jobs that run company by company also skip a company that switched the job's feature off on its Features page
+(`src/runtime/registry.ts`: `deliveries-overdue` with Home delivery, `credit` and `ad-fees` with Advertiser invoices and cards);
+the locked ones (`data-purge`, `drop-photos`, `ad-payments`, `route-buys`, the books) run for every company.
 
 ## Backups by hand
 

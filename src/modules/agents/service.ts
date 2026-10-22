@@ -107,6 +107,11 @@ export class AgentsService {
     if (!last?.passed) throw new AgentsError('not_examined', `The ${agentId} agent hasn’t passed the current test on ${model} (${last ? `scored ${Math.round(last.score * 100)}%${last.criticalMissed.length ? `, missed critical ${last.criticalMissed.join(', ')}` : ''}` : 'not taken'}), so its changes can’t take effect yet.`, 409);
   }
 
+  /** Why this agent's model hasn't passed the current test, or null (it has, or it runs on fixed rules). */
+  async examProblem(agentId: AgentId): Promise<string | null> {
+    try { await this.examined(agentId); return null; } catch (e) { if ((e as AgentsError).code === 'not_examined') return (e as Error).message; throw e; }
+  }
+
   private now() { return this.platform.bus.now(); }
 
   /** Start: every agent gets its record, the meter starts counting, and the governor reads the books once. */

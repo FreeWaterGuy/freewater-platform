@@ -26,7 +26,8 @@ const bottles = async (k: number) => {
 
 beforeAll(async () => {
   db = await createPgliteClient();
-  app = await createApp({ db, seedDemo: true, seed: 13, clock: () => new Date(now) });
+  // Value is read from what scans earn, so this runs where advertisers are billed for them (billing afterwards).
+  app = await createApp({ db, seedDemo: true, demoBilling: 'billed_after', seed: 13, clock: () => new Date(now) });
   keys = app.demoKeys!;
   server = await buildServer(app);
 });

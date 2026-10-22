@@ -23,6 +23,12 @@ export interface Location {
   lng?: number;
   /** About how long a bottle takes to print and drop, shown as the countdown. */
   printSeconds?: number;
+  /**
+   * Where it is, for the law that applies to its houses (ISO country, and US state). A route without them is "somewhere
+   * unknown": its houses get the strictest rules, so nothing about them aims an ad (src/modules/households/service.ts).
+   */
+  country?: string;
+  state?: string;
   /** For delivery routes: the area it covers, where vans start, and which days it runs (0 = Sunday). */
   area?: { lat: number; lng: number; radiusKm: number };
   depot?: { lat: number; lng: number; name: string };
@@ -207,6 +213,11 @@ export interface CompanyConfig {
     repeatScanWindowSec: number;
     /** In a 6, 12 or 24 pack, the most bottles one campaign may appear on, as a share of the pack (0–1). */
     maxPackShare: number;
+    /**
+     * Buying on delivery routes: a buy aimed at fewer houses than this is a small-audience buy (stricter review, a
+     * verified business, no names, addresses or personal messages). Unset: 50; never below 50.
+     */
+    smallAudienceHouses?: number;
   };
   prices: {
     /** The starting price of one print, by size. Bids start here and go up. */
@@ -223,6 +234,19 @@ export interface CompanyConfig {
     customUnit: Cents;
     perBoxFace: Cents;
   };
+  /**
+   * How advertisers pay: up front for their bottles (the default, and where every new company starts) or billed after,
+   * flat prices or an auction, and the fees on top (each off until a person turns it on). See modules/ads/billing.
+   */
+  adBilling?: import('../modules/ads/billing').AdBilling;
+  /**
+   * FreeWater News on unsold spots (docs/SWITCHES.md "News"). Off unless a person signed in turns it on, and only on a
+   * server whose host settings switch the news area on (FW_FEATURES_ON=news). `sources` replaces the sample list of
+   * outlets people can pick from.
+   */
+  news?: { on: boolean; sources?: { id: string; name: string; url: string }[] };
+  /** Home delivery: how many days a photo of a drop is kept before it's deleted (1 to 365; 90 unless set). */
+  delivery?: Partial<import('../modules/delivery/settings').DeliverySettings>;
   /** Which registered implementation each module slot uses. Swapping one never touches the others. */
   modules: {
     ads: string;
@@ -319,14 +343,77 @@ export interface Campaign {
   afterEnd?: 'current' | 'keep';
   buy: Buy;
   isHouse?: boolean; // the company's own filler, used when nothing else fits; never billed
+  /**
+   * A piece approved for unsold spots (src/modules/fillers): the company's own messages, charity messages, an
+   * advertiser's ad it offered free for unsold spots, or a news topic. Always `isHouse` too (never billed), and never
+   * the company's generic house ad (`houseAd`).
+   */
+  filler?: FillerInfo;
+  /** The advertiser asked never to be printed next to news (honoured while news is on). */
+  avoidNews?: boolean;
   active: boolean;
   /** Content review. A campaign only runs once the company has approved it. */
-  review?: { status: 'submitted' | 'approved' | 'rejected'; note?: string; at: string };
+  /**
+   * Content review. 'flagged': an automated check (or a person) raised a concern about a paid ad; the team talks it over
+   * with the advertiser (notes both see) and only a person signed in finally rejects it, with a reason, which is when a
+   * refund is offered. Nothing prints unless 'approved'.
+   */
+  review?: {
+    status: 'submitted' | 'approved' | 'rejected' | 'flagged'; note?: string; at: string; by?: string; flaggedAt?: string; resubmittedAt?: string; refundOffered?: boolean;
+    /** Rejected by the AI reviewer on its own (the company's "AI makes the final call on paid ads" was on): the advertiser can appeal to a person. */
+    aiFinal?: boolean;
+    /** That AI rejection was picked for a person's audit and is waiting in the review queue. */
+    auditPending?: boolean;
+    /** The advertiser appealed the AI's rejection: back with a person, who decides. */
+    appealedAt?: string;
+  };
   /** Paused because the advertiser owes more than its credit allows (docs/SWITCHES.md, "Credit for advertisers"). */
   creditHold?: { at: string; owedCents: number; limitCents: number | null; reason: string };
   /** A short name the advertiser knows it by. */
   name?: string;
   createdAt?: string;
+  /** Bottles paid for up front (prepaid companies). Only paid bottles print; the counts are kept in the database too. */
+  prepaid?: PrepaidBottles;
+  /**
+   * Bought on delivery routes (src/modules/ads/routeBuys.ts): it prints only on the bottles and box sides reserved for
+   * it at chosen houses in chosen weeks, never anywhere else. Read from the database (route_buys) at start.
+   */
+  routeBuy?: { kind: 'spread' | 'blanket' | 'box' | 'houses'; small: boolean; houses: number };
+}
+
+/**
+ * An ad's paid bottles: one size on one product, at the price per bottle fixed when it was paid. `held` are on labels
+ * being printed now (or kept ready in a machine); a failed print gives its bottle back. `refunded` were paid back when
+ * the company stopped the ad. Never more printed, held and refunded than paid.
+ */
+export interface PrepaidBottles {
+  share: Share;
+  productId: string;
+  priceCents: Cents;
+  paid: number;
+  printed: number;
+  held: number;
+  refunded: number;
+  /** Stopped by the company (and the rest paid back): nothing more prints. */
+  stoppedAt?: string;
+  /** Costly extras paid for up front: how many uses, how many used, and the price of one. */
+  extras?: Record<string, { paid: number; used: number; priceCents: Cents }>;
+}
+
+export interface FillerInfo {
+  kind: 'own' | 'charity' | 'advertiser' | 'news';
+  /** pending until a person on the company's team approves it; retired ones never print again (old bottles still open). */
+  status: 'pending' | 'approved' | 'retired';
+  proposedBy: string;
+  proposedAt: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  /** For an advertiser's filler: the ad it shows (its own page, unbilled). */
+  sourceCampaignId?: string;
+  /** For news: the topic whose latest story the code opens, forever. */
+  topicId?: string;
+  /** How often it comes up against the other fillers (1 to 10). */
+  weight: number;
 }
 
 /** Who an ad is for. Interests only count for people who turned on personalized offers. */
@@ -368,6 +455,10 @@ export interface Placement {
   advertiserName: string;
   experienceId: string;
   priceCents: Cents; // what the advertiser pays if, and only if, the print is confirmed
+  /** Drawn from the bottles the advertiser paid for up front (the print moves its price from prepaid to earned). */
+  prepaid?: true;
+  /** The spot bought on a delivery route that this piece fills (route_spots): placed once, at that house that week. */
+  routeSpotId?: string;
   /** For a bid: the campaign's spend day (its own time zone) the price was held against. */
   spentDay?: string;
   isHouse: boolean;
@@ -387,6 +478,8 @@ export interface BoxFacePlacement {
   experienceId: string;
   priceCents: Cents; // billed only when the box print is confirmed
   isHouse: boolean;
+  /** A box side bought on a delivery route and paid up front (route_spots): booked from the advertiser's prepaid money. */
+  routeSpotId?: string;
 }
 
 export interface BoxProduct {
@@ -399,6 +492,8 @@ export interface BoxProduct {
   adFaces: BoxFace[];
   panelFace: BoxFace;
   blankFaces: BoxFace[];
+  /** What the box weighs full, for loading vans (a 24-pack of half-litre bottles is about 12 kg). */
+  weightKg?: number;
 }
 
 export interface Unit {
@@ -420,6 +515,12 @@ export interface Unit {
   intendedFor?: string;
   /** For custom bottles: what scanning it opens (the sender's message, video, photos). */
   experienceConfig?: Record<string, unknown>;
+  /** A reprint: the bottle whose bad label this one replaces, with exactly the same ads (Platform.reprint). */
+  replaces?: string;
+  /** A reprint: the printer job that printed it (so a repair after a crash books it under the same job). */
+  printJob?: string;
+  /** Its label came out wrong at the packing check and it was reprinted: it never went out and counts against no one. */
+  voided?: { by: string; at: string; reason: string };
 }
 
 /**
@@ -493,4 +594,22 @@ export interface OfferingDeclaration {
   cause?: string;
   peerToPeer?: boolean;
   conditions?: string[];
+}
+
+/**
+ * Where a home-delivery pack in a delivery area is going, handed to the ad engine with every bottle printed for it
+ * (FillRequest.house). Houses aren't people: no name or contact, only the house, its area and street, and the
+ * household size if someone in the app told us. If a person claimed the house in the app, their audience (only what
+ * they allowed) comes separately as FillRequest.audience, exactly as for any bottle printed for a known person.
+ */
+export interface RouteHouseContext {
+  houseId: string;
+  areaId: string;
+  /** The route (depot and days) the area's vans drive from: the same location id campaigns can target. */
+  routeId: string;
+  /** The street name as imported, like "Kenwood Ave". */
+  street: string;
+  householdSize: number | null;
+  /** Someone in the app has said this is their house. */
+  claimed: boolean;
 }

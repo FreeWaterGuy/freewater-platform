@@ -9,3 +9,4 @@ export interface SqlClient {
   transaction<T>(fn: (tx: SqlClient) => Promise<T>): Promise<T>;
   close(): Promise<void>;
 }
+

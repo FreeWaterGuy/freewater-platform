@@ -6,9 +6,13 @@ import { createPgliteClient } from '../src/db/pglite';
 import type { SqlClient } from '../src/db/client';
 import type { TestOutbox } from '../src/adapters/messaging/contract';
 import { createPlatform } from '../src/setup';
-import { bottle16oz, boxes, freewater, locations, peakSpring, sampleCampaigns } from '../src/demo/seed';
+import { bottle16oz, boxes, freewater as paidUpFront, locations, peakSpring, sampleCampaigns } from '../src/demo/seed';
 import { AmbiguousRunError } from '../src/modules/packs/service';
 import { structuralTier } from '../src/modules/games/catalog';
+import { billedAfter as billedAfterSetting } from '../src/modules/ads/billing';
+// The sample ads print here without paying first: FreeWater's settings billing afterwards (paying up front, where
+// only paid bottles print, is tested in prepaid.test.ts).
+const freewater: typeof paidUpFront = { ...paidUpFront, adBilling: billedAfterSetting() };
 
 // Second review: reversals in the open books, the packing check by hand, the route's current run, and picks that
 // may come true.
@@ -93,7 +97,7 @@ describe('2. the packing check without a packing line: checked by hand, by a per
   it('seals each box a person counted, records who and when, and the route is ready once every box is sealed', async () => {
     const addrs = await addressesOn('route-3', 2);
     for (const [i, a] of addrs.entries()) expect((await call('POST', '/v1/me/delivery', await signIn(`hand-${i}@example.com`), { address: a, packSize: 6, frequency: 'weekly', day: 2 })).status).toBe(201);
-    const run = (await call('POST', '/v1/ops/runs/plan', keys['freewater-admin'], { date: '2026-10-20' })).body.find((r: any) => r.routeId === 'route-3');
+    const run = (await call('POST', '/v1/ops/runs/plan', person, { date: '2026-10-20' })).body.find((r: any) => r.routeId === 'route-3');
     expect(run).toMatchObject({ status: 'packing', counts: { stops: 2 } });
     const url = (stop: number) => `/v1/ops/runs/${run.id}/stops/${stop}/check-by-hand`;
 

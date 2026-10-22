@@ -17,7 +17,8 @@ const cards: Record<string, { brand: string; last4: string; outcome?: string; sa
 export class TestPaymentProvider implements PaymentProvider {
   readonly name = 'test-payments';
   private methods = new Map<string, { outcome?: string }>();
-  private holds = new Map<string, { amountCents: number; state: 'held' | 'captured' | 'voided'; capturedCents?: number }>();
+  private holds = new Map<string, { amountCents: number; state: 'held' | 'captured' | 'voided'; capturedCents?: number; refundedCents?: number }>();
+  private refunds = new Map<string, { status: 'refunded' } | { status: 'failed'; reason: string }>();
   private byKey = new Map<string, AuthorizeResult>();
 
   async createCustomer() {
@@ -64,6 +65,20 @@ export class TestPaymentProvider implements PaymentProvider {
     if (h.state === 'captured') return { state: 'captured', amountCents: h.capturedCents ?? h.amountCents };
     return { state: h.state };
   }
+
+  async refund(ref: string, amountCents: number, idempotencyKey: string) {
+    const prior = this.refunds.get(idempotencyKey);
+    if (prior) return prior;
+    const h = this.holds.get(ref);
+    let r: { status: 'refunded' } | { status: 'failed'; reason: string };
+    if (!h || h.state !== 'captured') r = { status: 'failed', reason: 'Nothing was taken on this payment.' };
+    else if (!Number.isInteger(amountCents) || amountCents <= 0 || (h.refundedCents ?? 0) + amountCents > (h.capturedCents ?? h.amountCents)) r = { status: 'failed', reason: 'Cannot give back more than was taken.' };
+    else { h.refundedCents = (h.refundedCents ?? 0) + amountCents; r = { status: 'refunded' }; }
+    this.refunds.set(idempotencyKey, r);
+    return r;
+  }
+  /** What has been given back on a payment (for tests). */
+  refundedOn(ref: string) { return this.holds.get(ref)?.refundedCents ?? 0; }
 
   async void(ref: string) {
     const h = this.holds.get(ref);

@@ -17,7 +17,8 @@ let beforeQuery: ((sql: string, params: unknown[]) => Promise<void>) | null = nu
 beforeAll(async () => {
   raw = await createPgliteClient();
   db = { ...raw, query: async (sql: string, params: unknown[] = []) => { if (beforeQuery) await beforeQuery(sql, params); return raw.query(sql, params); } } as SqlClient;
-  app = await createApp({ db, seedDemo: true, seed: 77, clock });
+  // Sales billed with commission: a company that bills afterwards (paying up front: prepaid.test.ts).
+  app = await createApp({ db, seedDemo: true, demoBilling: 'billed_after', seed: 77, clock });
   keys = app.demoKeys!;
   server = await buildServer(app);
 });

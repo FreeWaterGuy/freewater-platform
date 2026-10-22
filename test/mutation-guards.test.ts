@@ -30,7 +30,8 @@ const k = (name: string) => keys[name]!;
 
 beforeAll(async () => {
   db = await createPgliteClient();
-  app = await createApp({ db, seedDemo: true, seed: 21, clock: () => new Date('2026-11-02T16:00:00Z') });
+  // Cards and invoices per advertiser: billing afterwards, so the sample advertisers have invoices and no cards yet.
+  app = await createApp({ db, seedDemo: true, demoBilling: 'billed_after', seed: 21, clock: () => new Date('2026-11-02T16:00:00Z') });
   keys = app.demoKeys!;
   server = await buildServer(app);
   fwUnit = (await call('POST', '/v1/orders', k('freewater-admin'), { orderId: 'mg-1', locationId: 'ATX-014', productId: 'bottle-16oz' })).body.id;

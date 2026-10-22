@@ -4,31 +4,59 @@
 
 FreeWater gives people free, high-quality bottled water, paid for by the ads on the bottle. Each bottle is printed on
 the spot with up to ten ads, and each ad has its own QR code. When someone scans a code they get the advertiser's
-page, an offer, a 3D model to view in AR, or a way to buy. Advertisers pay only for what really happened: bottles
-actually printed, scans and AR launches that actually loaded, and a commission on sales that can be traced back to
-that exact bottle. Taps on links are counted, never billed. Part of every
+page, an offer, a 3D model to view in AR, or a way to buy. Advertisers pay up front for a number of bottles at a
+flat price per size, with AR, video and scans included, and exactly that many bottles go out with their ad. Taps on
+links are counted, never billed. Part of every
 bottle's money goes to clean-water wells through Well Aware, and the books are open for anyone to check. This
 platform is the software that runs all of it. Other companies can also run it under their own brand.
 
 ## The big pieces
 
 **1. The bottle**
-- It takes an order, picks the ads (an auction like Google's), lays out a print-ready label, prints it and drops the
-  bottle.
+- It takes an order, picks the ads (flat prices for the pilot; an auction like Google's for a company that chooses
+  it), lays out a print-ready label, prints it and drops the bottle. Only bottles an advertiser paid for carry its ad.
 - The label is cut into near-square pieces, from the whole label down to a tenth. No two competitors share a
   bottle.
 - It works for any drink and any size. There are samples for a 16 oz bottle, a 25 oz bottle and a 12 oz can.
+- Spots nobody buys carry approved filler (our own messages, Well Aware, advertisers' offered ads) before the house ad.
+  **FreeWater News** (a topic on the bottle, the newest story behind its code) is built but switched off until it's
+  rolled out.
+- Ads for houses that haven't signed up can use area statistics and household data from a data company (never
+  sensitive kinds, never sold), with what residents chose to share preferred.
 
 **2. The machines (Model 6)**
 - The software that runs inside the vending machine: its screen, printing, faults and keeping going when the
   internet drops.
 - You have to be standing at the machine to get a bottle, and there's a daily limit per person.
+- *Planned, not built:* app users order 1 to 10 minutes ahead, the bottle is printed just for them, and scanning the
+  machine releases theirs; bottles not picked up go to a side tray anyone can take from, counted as untargeted
+  (`docs/REQUIREMENTS.md`, "Machines").
 
 **3. Home delivery**
-- Free 6, 12 and 24 packs on a schedule. Every bottle in a pack is different, and the box itself carries ads.
+- The pilot: **house after house** on streets FreeWater chooses (about 1,000 homes in Austin to start). Nobody signs
+  up; every house gets a free 24-pack a week unless someone there stops it in the app. How often, pack size and packs
+  per house are set per area, and bigger households get more once they tell us their size.
+- Signs on the door ("no soliciting") are ignored: people who don't want free water stop it in the app and we skip
+  their house. Drivers can skip a house only for a real access or safety problem (a locked gate, a dangerous animal,
+  no safe place to leave it) or because it isn't a home; a person reviews it.
+- **Advertisers buy the routes**, paid up front at an exact price: N bottles spread over an area, one bottle in every
+  box at every house, a whole box (every bottle and its sides), or chosen houses (as little as a tenth of one label at
+  one house), for chosen weeks, by area, street, a shape on the map or address, optionally by household data. Every
+  piece is reserved on a real bottle when paid, so nothing is sold twice (first paid wins), and printed once, at that
+  house. If a house stops or blocks the ad, the advertiser gets that part back (credit for other houses, or a refund
+  for a one-house buy). Buys for fewer than 50 houses get stricter review, a verified business and no names or
+  addresses in the ad. Advertisers see streets, drop times and scans by area, never a house or a person.
+- Later, and for people who join the app: free 6, 12 and 24 packs on a schedule they choose.
+- Every bottle in a pack is different, and the box itself carries ads.
 - Each night is planned: routes are set, boxes are packed and checked, and the van is loaded so the next stop is
   always by the door.
-- The driver app only marks a delivery done when the right box is scanned at the right house.
+- The driver app only marks a delivery done when the right box is scanned at the right house **and** the driver took
+  a photo of it on the doorstep (or a person on the team vouches for it, with a reason). Delivered with its photo is
+  delivered: a box taken from the porch afterwards isn't our failure. The photos show people's homes, so only the team
+  and the people who live there see them, never advertisers; nothing hidden in the phone's file is kept; and they're
+  deleted after 90 days (each company can set 1 to 365).
+- A bottle whose label comes out wrong at the packing check is reprinted with exactly the same ads; the bad one never
+  counts against an advertiser, who pays once, for the bottle that went out.
 
 **4. Scanning, AR and buying**
 - Our own QR codes. They can't be faked or guessed, and every scan reaches us first.
@@ -39,15 +67,26 @@ platform is the software that runs all of it. Other companies can also run it un
 
 **5. The FreeWater app**
 - Get a free bottle at a machine and see every bottle you've had.
-- Set up home delivery.
+- Set up home delivery, or stop (and restart) the free water left at your house.
 - Design your own paid bottle by chatting (birthdays, weddings, teams).
 - A **Wallet** for points, credit and later the token.
 
 **6. FreeWater Ads (for advertisers)**
 - Advertisers sign up in a minute and make an ad by chatting with the AI, which can't break anything because every
   change is checked.
-- They preview the ad at every size, then it's approved twice: once by them and once by FreeWater.
-- They see results from the books and pay by invoice or card.
+- They preview the ad at every size, see the exact price, and **pay up front** by card for a number of bottles.
+  Then it's approved twice: once by them and once by FreeWater. Only paid bottles print, and they see "N of M bottles
+  out" until every one is. There's no end date and no cancelling; pausing only delays.
+- Changing a running ad costs a fee ($100 by default), paid up front; the new ad is reviewed before it prints.
+- If FreeWater stops an ad, a person on the team pays back the bottles not printed, to the card.
+- If review has a concern about a paid ad, an AI or automated check can only flag it. The team talks it over with
+  the advertiser (and can ask the AI why) in notes both see; the advertiser can fix it for free meanwhile; only a
+  person rejects it, with a written reason, and only then is a refund offered. The money stays held and nothing prints
+  until it's settled. Once the AI reviewer has earned it with its record, an owner may let it make the final call on
+  rejections (off to start, for every company); the advertiser can still appeal to a person, and every refund is
+  still approved by a person.
+- Fees on top (per scan, per AR launch, per box side, commission on sales) each have their own switch and are off.
+  Turned on, they're charged to the card each day, and a declined card pauses the ads at once.
 - Brands can fund **offers** for people.
 
 **7. The game**
@@ -58,7 +97,7 @@ platform is the software that runs all of it. Other companies can also run it un
 
 **8. Points, credit and the token**
 - Points come from scans, games and feedback. Dollar credit is paid only from money a brand has really sent.
-- Gift cards are available through Tremendous.
+- Gift cards through Tremendous, once people approve turning them on (they start off).
 - Later, the FreeWater token on **Solana**. On the real network it can only be created by people signing together
   in a Squads vault, never by the server alone.
 - Everything goes through three stages, in order: **testing** (with bots and a full reset), **live with points**,

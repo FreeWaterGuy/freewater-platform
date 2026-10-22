@@ -15,6 +15,7 @@ import { ClaudeWriter } from '../src/modules/video/motion';
 let db: SqlClient;
 let app: App;
 let server: FastifyInstance;
+let reviewer = '';
 let keys: Record<string, string>;
 let now = new Date('2026-11-03T14:00:00Z').getTime(); // 8 am in Austin
 const clock = () => new Date(now);
@@ -52,14 +53,16 @@ beforeAll(async () => {
   keys = app.demoKeys!;
   server = await buildServer(app);
   app.videos.random = () => 0.9;
+  // What a paid ad shows is changed by a person on the team, signed in (never a key).
+  reviewer = await app.accounts.createSession((await app.accounts.invite({ companyId: 'freewater', email: 'rev-more@freewater.io', role: 'reviewer' })).id);
 });
 afterAll(async () => { await server.close(); await db.close(); });
 
 describe('the page belongs to the advertiser who paid for it', () => {
   it('shows their own ad first, then their AR and offer, proof others bought, a way to pass it on, and more only on request', async () => {
     const joe = app.platform.campaigns.get('cmp-joes')!;
-    expect((await call('PATCH', '/v1/campaigns/cmp-joes/codes', keys['freewater-admin'], { firstSeen: { kind: 'video', url: '/assets/abc123.mp4', posterUrl: '/assets/abc124.jpg', alt: 'A double stack, sizzling' } })).status).toBe(200);
-    expect((await call('PATCH', '/v1/campaigns/cmp-joes/codes', keys['freewater-admin'], { firstSeen: { kind: 'video', url: 'javascript:alert(1)', alt: 'x' } })).body.error.message).toMatch(/uploaded/);
+    expect((await call('PATCH', '/v1/campaigns/cmp-joes/codes', reviewer, { firstSeen: { kind: 'video', url: '/assets/abc123.mp4', posterUrl: '/assets/abc124.jpg', alt: 'A double stack, sizzling' } })).status).toBe(200);
+    expect((await call('PATCH', '/v1/campaigns/cmp-joes/codes', reviewer, { firstSeen: { kind: 'video', url: 'javascript:alert(1)', alt: 'x' } })).body.error.message).toMatch(/uploaded/);
     const { unit, slot } = await bottleWith('cmp-joes');
     app.platform.purchase(unit.id, slot, 'proof-1', 1500);
     const page = (await call('GET', `/v1/public/experience/${unit.id}/${slot}?viewer=viewer-page-0001`)).body;
@@ -109,7 +112,7 @@ describe('"Show me more": personalized video, learned from every view', () => {
 
   it('makes live-action and animated footage in the background, and shows it only once the advertiser approves', async () => {
     const joe = app.platform.campaigns.get('cmp-joes')!;
-    await call('PATCH', '/v1/campaigns/cmp-joes/codes', keys['freewater-admin'], { more: { videos: ['live_action', 'motion'], approveFirst: true } });
+    await call('PATCH', '/v1/campaigns/cmp-joes/codes', reviewer, { more: { videos: ['live_action', 'motion'], approveFirst: true } });
     expect(joe.more).toEqual({ videos: ['live_action', 'motion'], approveFirst: true });
     const { unit, slot } = await bottleWith('cmp-joes');
     const more = () => call('GET', `/v1/public/experience/${unit.id}/${slot}/more?viewer=viewer-foot-0001`);

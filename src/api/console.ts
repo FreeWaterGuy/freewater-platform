@@ -30,7 +30,7 @@ export function consoleRoutes(app: App, route: (r: RouteDef) => void) {
   route({ method: 'PATCH', url: '/v1/console/settings', scope: 'admin', summary: 'Change your settings: brand, product facts, giving, open books, ad rules, prices, modules and more. Send only what changes, and the version you started from.', body: obj({ changes: changesProp, version: S.int }, ['changes']), handler: async (req, key) => {
     const b = req.body as any;
     // Money, chain and one-way settings are changed by a person signed in, never by a service key.
-    if (personOnlyKeys.some((k) => k in (b.changes ?? {})) && !key!.userId) throw new ApiError(403, 'person_needed', 'Money, chain and one-way settings (giving, the agents’ fund, the promise, the youngest age, the prize game, AI and data rules) are changed by a person signed in, not a service key.');
+    if (personOnlyKeys.some((k) => k in (b.changes ?? {})) && !key!.userId) throw new ApiError(403, 'person_needed', 'Money, chain and one-way settings (giving, the agents’ fund, the promise, the youngest age, the prize game, AI and data rules, news on bottles) are changed by a person signed in, not a service key.');
     // Switching money, prizes or the token is an approval: an owner's or finance person's sign-in must have passed the second step.
     if (approvalSettings.some((k) => k in (b.changes ?? {}))) await approverStep(key!);
     return { body: await cons.save(staff(key).companyId, b.changes, by(key!), b.version, { person: !!key!.userId }) };

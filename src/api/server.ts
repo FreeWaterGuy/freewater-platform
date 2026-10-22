@@ -1,8 +1,10 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
-import { ApiError, notFound, obj, S, signedInOwner, type Handler, type RouteDef, Q } from './http';
+import { ApiError, notFound, obj, S, signedInOwner, teamPersonOf, type Handler, type RouteDef, Q } from './http';
 import { consumerRoutes } from './consumer';
 import { adsRoutes } from './ads';
+import { aiReviewRoutes } from './aiReview';
 import { deliveryRoutes } from './delivery';
+import { routeBuyRoutes } from './routeBuys';
 import { booksRoutes } from './books';
 import { consoleRoutes } from './console';
 import { machineRoutes } from './machine';
@@ -25,6 +27,9 @@ import { UploadQuota, uploadLimitsFrom } from '../runtime/uploads';
 import { printLimits } from '../modules/fleet/printCap';
 import { BadKeyGuard, classify, limits, RateLimiter, securityHeaders, SecurityLog, shortIp } from './security';
 import { teamRoutes } from './team';
+import { newsRoutes } from './news';
+import { fillerRoutes } from './fillers';
+import { householdRoutes } from './households';
 import { loggerOptions, pathOnly } from './logging';
 import { operationsRoutes } from './operations';
 import { VideoError } from '../modules/video/service';
@@ -40,10 +45,11 @@ import { BooksError } from '../modules/books/service';
 import { DeliveryError } from '../modules/delivery/service';
 import { AdsError } from '../modules/ads/service';
 import { DesignError } from '../modules/custom/service';
+import { FeatureError } from '../modules/features/service';
 import type { App } from '../app';
 import { findApiKey, type ApiKey, type Scope , PersistencePaused } from '../db/store';
 import { LeaseLostError } from '../db/leaseChecked';
-import { OrderConflictError } from '../platform';
+import { OrderConflictError, ReprintError } from '../platform';
 import type { Campaign, Share } from '../core/types';
 import { checkSvgPictures, svgCreative } from '../modules/print/svgCreative';
 import { newId } from '../core/ids';
@@ -55,6 +61,8 @@ import { AssetError, allowedTypes } from '../modules/assets/store';
 import { builtinModel } from '../modules/models/builtin';
 import { glbToUsdz } from '../modules/models/usdz';
 import { arBundle } from '../web/ar/bundle';
+import { switchOf } from '../runtime/registry';
+import { featuresRoutes } from './features';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -124,7 +132,13 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   // A route whose area is switched off in the host's settings (FW_FEATURES, src/runtime/features.ts) is never
   // registered: it answers 404 like any address that doesn't exist, and isn't in /v1/openapi.json.
   const route = (r: RouteDef) => { if (app.features.routeOn(r)) routes.push(r); };
-  route({ method: 'GET', url: '/v1/public/features', scope: 'public', summary: 'Which areas of the platform this server runs (the rest are switched off in its settings and their addresses don’t exist). The screens hide what’s off.', handler: async () => ({ body: app.features.view() }) });
+  route({ method: 'GET', url: '/v1/public/features', scope: 'public', query: { company: Q.text }, summary: 'Which areas of the platform this server runs (the rest are switched off in its settings and their addresses don’t exist). With ?company=, also every switch that company has off on its Features page (in `off`, and on its own in `companyOff`). The screens hide what’s off.', handler: async (req) => {
+    const view = app.features.view();
+    const companyId = (req.query as any)?.company;
+    if (typeof companyId !== 'string' || !platform.companies.has(companyId)) return { body: view };
+    const companyOff = app.companyFeatures.offIds(companyId);
+    return { body: { ...view, off: [...new Set([...view.off, ...companyOff])], company: companyId, companyOff } };
+  } });
 
   const unitFor = (key: ApiKey, id: string) => {
     const u = platform.units.get(id);
@@ -137,6 +151,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     if (!p || p.companyId !== key.companyId) throw notFound('Pack');
     return p;
   };
+  const teamPerson = (key: ApiKey | null) => teamPersonOf(app.accounts, key);
   const campaignFor = (key: ApiKey, id: string) => {
     const c = platform.campaigns.get(id);
     if (!c || c.companyId !== key.companyId || (key.advertiserId && c.advertiserId !== key.advertiserId)) throw notFound('Campaign');
@@ -174,7 +189,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   };
   const campaignView = (c: Campaign) => ({ id: c.id, advertiserId: c.advertiserId, advertiserName: c.advertiserName, category: c.category, competitorGroup: c.competitorGroup ?? null, sizes: c.sizes, formats: c.formats ?? ['label'], experienceId: c.experienceId, experienceConfig: c.experienceConfig ?? null, theme: c.theme ?? null, targeting: c.targeting, buy: c.buy, active: c.active, isHouse: !!c.isHouse,
     qr: { mode: c.qr?.mode ?? 'dynamic', ...(c.qr?.staticUrl ? { staticUrl: c.qr.staticUrl } : {}), hasLogo: !!c.qr?.logo }, variants: c.variants?.length ?? 0, personalize: c.personalize ?? null, afterEnd: c.afterEnd ?? 'current' });
-  const checkExperience = (experienceId: string, config: unknown, theme: unknown) => {
+  const checkExperience = (experienceId: string, config: unknown, theme: unknown, companyId?: string) => {
+    // What a code opens must be switched on for the company (its Features page).
+    if (companyId && !app.companyFeatures.pluginOn(companyId, experienceId)) throw new ApiError(422, 'experience_off', `“${experienceId}” is switched off here. Pick another kind of page.`);
     const bad = experiences.host.checkConfig(experienceId, config) ?? experiences.host.checkTheme(theme);
     if (bad) throw new ApiError(422, 'experience_invalid', bad);
   };
@@ -453,7 +470,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     if (big) throw new ApiError(422, 'artwork_refused', `Artwork refused: ${big}.`);
     const company = platform.companies.get(key!.companyId)!;
     if (company.adRules.blockedCategories.includes(b.category)) throw new ApiError(422, 'category_blocked', `${company.name} doesn't print ${b.category} ads.`);
-    checkExperience(b.experienceId, b.experienceConfig ?? {}, b.theme);
+    if (b.buy.type === 'bid' && !app.companyFeatures.on(company.id, 'bidding')) throw new ApiError(422, 'bidding_off', `${company.name} doesn’t sell space by bidding: buy a set number of bottles instead.`);
+    checkExperience(b.experienceId, b.experienceConfig ?? {}, b.theme, company.id);
     const c: Campaign = {
       // An advertiser's own key prints under the name the business signed up with, never a name it sends.
       id: newId('cmp'), companyId: key!.companyId, advertiserId, advertiserName: key!.advertiserId ? (await app.ads.advertiser(key!.companyId, key!.advertiserId).catch(() => null))?.name ?? b.advertiserName : b.advertiserName, category: b.category, competitorGroup: b.competitorGroup,
@@ -474,30 +492,47 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const reviewer = !key!.advertiserId || key!.scopes.includes('admin');
     const approved = c.review ? c.review.status === 'approved' : false;
     if (b.active === true && !reviewer && !approved) throw new ApiError(403, 'review_required', 'Content review turns campaigns on. You can pause yours any time.');
+    // A paid ad that's flagged (being discussed, or appealed) or that the AI reviewer rejected is decided only in the
+    // review queue, where a person decides and the AI's record is kept: never switched on here (P3).
+    if (b.active === true && !approved && c.prepaid && (c.review?.status === 'flagged' || c.review?.aiFinal)) throw new ApiError(409, 'decide_in_review', 'This paid ad is being discussed, appealed, or was rejected by the AI reviewer: decide it in the review queue (a person, signed in).');
     const changesPage = b.experienceId !== undefined || b.experienceConfig !== undefined || b.theme !== undefined;
+    // A paid ad goes live, or changes what it shows, only by a person's decision: the same rule as the review queue's
+    // (P3, P4). A company key can still pause it.
+    if (reviewer && (c.prepaid || c.routeBuy) && ((b.active === true && !approved) || changesPage) && !(await teamPerson(key!))) throw new ApiError(403, 'person_review', 'A paid ad is approved, and what it shows is changed, by a person on the team signed in, not with an API key.');
+    // A route ad aimed at a few houses: the company turns it on, or changes what it says, only as a person (an owner or
+    // a reviewer, signed in), with the stricter review run on what it will say (routeBuys.beforeApprove). Checked
+    // before anything changes.
+    if (reviewer && c.routeBuy?.small && ((b.active === true && !approved) || changesPage)) {
+      const u = key!.userId ? await app.accounts.get(key!.userId) : null;
+      const page = changesPage ? { experienceId: b.experienceId ?? c.experienceId, experienceConfig: b.experienceConfig ?? c.experienceConfig } : {};
+      await app.routeBuys.beforeApprove({ ...c, ...page }, { userId: u && u.companyId === c.companyId ? u.id : null, role: u && u.companyId === c.companyId ? u.role : null });
+    }
     if (changesPage) {
       const id = b.experienceId ?? c.experienceId;
       const config = b.experienceConfig ?? (b.experienceId && b.experienceId !== c.experienceId ? undefined : c.experienceConfig);
       if (config === undefined) throw new ApiError(422, 'experience_invalid', `Send experienceConfig for "${id}" too.`);
-      checkExperience(id, config, b.theme ?? c.theme);
+      checkExperience(id, config, b.theme ?? c.theme, c.companyId);
       c.experienceId = id;
       c.experienceConfig = config;
       if (b.theme !== undefined) c.theme = b.theme;
       if (!reviewer) c.active = false;
     }
-    // Going live (approved by a reviewer, or turned back on by the advertiser) needs the advertiser's credit to allow it.
-    if (b.active === true && !c.active && (reviewer || (approved && !changesPage))) await app.credit.needCredit(c);
+    // Going live (approved by a reviewer, or turned back on by the advertiser): paid up front with bottles left, or (billed
+    // after) the advertiser's credit allows it. The same check as the review queue's (one rule, every route).
+    if (b.active === true && !c.active && (reviewer || (approved && !changesPage))) await app.ads.beforeLive(c);
     if (b.active !== undefined && (reviewer || b.active === false || (approved && !changesPage))) c.active = b.active;
     if (reviewer && b.active === true) c.review = { status: 'approved', at: platform.bus.now().toISOString() };
     if (changesPage && !reviewer) c.review = { status: 'submitted', at: platform.bus.now().toISOString() };
     platform.persist.campaign(c);
+    // Sent back to review with a new page: the AI reviewer looks again (its earlier verdict was about the old ad).
+    if (changesPage && !reviewer && c.prepaid) await app.aiReview.onSubmitted(c).catch(() => null);
     return { body: campaignView(c) };
   } });
 
   route({ method: 'GET', url: '/v1/experiences', scope: 'campaigns', summary: 'Every kind of experience a QR can open, with the settings each one takes and an example.', handler: async () => ({ body: experiences.host.list() }) });
   route({ method: 'POST', url: '/v1/experiences/preview', scope: 'campaigns', summary: 'See what an experience will look like with these settings, before saving.', body: obj({ experienceId: S.str, experienceConfig: { type: 'object' }, theme: themeProp, ownerName: S.str, firstTime: S.bool }, ['experienceId', 'experienceConfig']), handler: async (req, key) => {
     const b = req.body as any;
-    checkExperience(b.experienceId, b.experienceConfig, b.theme);
+    checkExperience(b.experienceId, b.experienceConfig, b.theme, key!.companyId);
     const company = platform.companies.get(key!.companyId)!;
     const { themeFor } = await import('../modules/experiences/host');
     const doc = await experiences.host.open({ pluginId: b.experienceId, config: b.experienceConfig, theme: themeFor(company.brand, b.theme), scan: {
@@ -545,11 +580,11 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     try { return { body: packs.verify(p.id, (req.body as any).scannedUnitIds) }; } catch (e: any) { if (e instanceof PackStateError) throw new ApiError(409, 'wrong_stage', e.message); throw e; }
   } });
 
-  route({ method: 'POST', url: '/v1/packs/:id/replace', scope: 'packs', summary: 'Reprint missing bottles; the new ones take their place in the pack.', body: obj({ missingUnitIds: { type: 'array', items: S.str, maxItems: 48 }, productId: S.str }, ['missingUnitIds', 'productId']), handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/packs/:id/replace', scope: 'packs', summary: 'Reprint bottles the packing check found wrong (a torn, smudged or missing label the line couldn’t read): each is printed again with exactly the same ads and takes its place in the pack; the bad one is voided and never billed to anyone. productId is ignored (a reprint is always the same product).', body: obj({ missingUnitIds: { type: 'array', items: S.str, maxItems: 48 }, productId: S.str }, ['missingUnitIds']), handler: async (req, key) => {
     const p = packFor(key!, (req.params as any).id);
     const b = req.body as any;
     let fresh: string[];
-    try { fresh = await packs.replace(p.id, b.missingUnitIds, b.productId); } catch (e: any) { if (e instanceof PackStateError) throw new ApiError(409, 'wrong_stage', e.message); throw e; }
+    try { fresh = await packs.replace(p.id, b.missingUnitIds); } catch (e: any) { if (e instanceof PackStateError || e instanceof ReprintError) throw new ApiError(409, 'wrong_stage', e.message); throw e; }
     return { body: { reprinted: fresh, pack: packView(p.id) } };
   } });
 
@@ -574,11 +609,19 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     let run: string;
     try { run = b.runId ?? packs.currentRun(b.routeId); } catch (e: any) { if (e instanceof AmbiguousRunError) throw new ApiError(400, 'run_required', e.message); throw e; }
     if (!b.runId) b.runId = run;
-    const planned = [...packs.packs.values()].find((p) => p.routeId === b.routeId && p.stop === b.stop && (p.runId ?? '') === run);
+    const planned = packs.forStop(b.routeId, b.stop, run)[0];
     if (!planned || planned.companyId !== key!.companyId) throw notFound('Stop');
     // A planned night run has its own driver, GPS check and photo: it can't be marked delivered around them here.
     if (await app.delivery.getRun(run, key.companyId).then(() => true, () => false)) throw new ApiError(409, 'use_driver_app', 'This box is on a planned run. Its driver delivers it in the driver app (/v1/driver/runs).');
-    const r = packs.deliver(b);
+    // Photo proof of each drop: the same rule as the driver app. The caller's word (photoProof) is never the photo.
+    // Only a photo taken after the box was scanned at the door counts: the first scan without one is remembered.
+    const photo = await app.dropPhotos.proofFor(key.companyId, planned.id, key.userId, planned.doorScanSeq);
+    if (!photo && app.delivery.photoNeeded(key.companyId)) {
+      const check = packs.deliver({ ...b, checkOnly: true });
+      if (check.ok) packs.markDoorScan(planned.id, await app.dropPhotos.lastSeq(key.companyId, planned.id));
+      if (check.ok) return { status: 409, body: { error: { code: 'photo_required', message: 'Take a photo of the box where you left it now, with the driver app’s camera (POST /v1/driver/photos?packId=&capture=camera), then scan it again. It isn’t delivered until there’s a photo taken after this scan.' } } };
+    }
+    const r = packs.deliver({ ...b, photoProof: !!photo });
     if (!r.ok) return { status: 409, body: { error: { code: 'wrong_box', message: r.reason }, grab: r.rightPack ? { packId: r.rightPack.id, stopCode: `R${r.rightPack.routeId.replace(/^route-/, '')} · ${r.rightPack.stop}` } : null } };
     return { body: packView(r.pack.id) };
   } });
@@ -799,7 +842,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   consumerRoutes(app, route, { me, checkExperience });
   adsRoutes(app, route, { me });
+  aiReviewRoutes(app, route);
   deliveryRoutes(app, route, { me });
+  routeBuyRoutes(app, route, { me });
   booksRoutes(app, route);
   consoleRoutes(app, route);
   machineRoutes(app, route);
@@ -817,6 +862,10 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   chainRoutes(app, route);
   studioRoutes(app, route);
   teamRoutes(app, route);
+  featuresRoutes(app, route);
+  newsRoutes(app, route);
+  fillerRoutes(app, route);
+  householdRoutes(app, route);
 
   // ---------- wiring ----------
 
@@ -916,6 +965,32 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     app.data.activity(companyId, actorOf(key, masked), `${r.method} ${r.url}`, { target: JSON.stringify(req.params ?? {}).slice(0, 200), detail: { status, ...(masked ? { body: masked } : {}) }, ip: req.ip, headers: req.headers, device: String(req.headers['user-agent'] ?? ''), gpc: String(req.headers['sec-gpc'] ?? '') === '1' }).catch(() => {});
   };
 
+  /**
+   * A route whose switch is off for the caller's company (its Features page, src/runtime/registry.ts) refuses, the
+   * same for every caller: 404 feature_off. The company is the key's, or for public routes the one the address names
+   * (a company, bottle, pack or machine). A switch kept in the settings (the games, the prize game…) handles its own
+   * "off" as before; it's refused here only when something it needs is off.
+   */
+  const companyOfRequest = (req: FastifyRequest, key: ApiKey | null): string | undefined => {
+    if (key) return key.companyId;
+    const p: any = req.params ?? {}, q: any = req.query ?? {};
+    if (typeof p.companyId === 'string') return p.companyId;
+    if (typeof p.unitId === 'string') return platform.units.get(p.unitId)?.companyId;
+    if (typeof p.packId === 'string') return packs.packs.get(p.packId)?.companyId;
+    if (typeof p.locationId === 'string') { const l = platform.locations.get(p.locationId); return l ? l.companyId ?? PLATFORM_COMPANY : undefined; }
+    const body: any = req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body) ? req.body : undefined;
+    return companyOfPublic(body) ?? (typeof q.company === 'string' ? q.company : typeof q.c === 'string' ? q.c : undefined);
+  };
+  const featureGate = (r: RouteDef, req: FastifyRequest, key: ApiKey | null) => {
+    const id = app.companyFeatures.routeSwitch(r.method, r.url);
+    if (!id) return;
+    const companyId = companyOfRequest(req, key);
+    if (!companyId || !platform.companies.has(companyId)) return;
+    const why = app.companyFeatures.whyOff(companyId, id);
+    if (!why || (why === 'off' && switchOf(id)?.kind === 'linked')) return;
+    throw new ApiError(404, 'feature_off', `${switchOf(id)?.label ?? 'This'} is switched off for ${platform.companies.get(companyId)!.name}.`);
+  };
+
   for (const r of routes) {
     server.route({
       method: r.method,
@@ -944,6 +1019,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
         (req as any).apiKey = key;
       },
       handler: async (req: FastifyRequest, reply: FastifyReply) => {
+        featureGate(r, req, (req as any).apiKey as ApiKey | null);
         const out = await r.handler(req, (req as any).apiKey as ApiKey | null);
         // Answer only once the change is safely stored. Things recorded on the way past (a scan, what someone did on
         // the page) don't wait while the database is refusing changes: they're queued in order and go in with the rest.
@@ -1049,7 +1125,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   server.get('/assets/:file', async (req, reply) => {
     const m = /^([A-Za-z0-9_-]+)\.([a-z0-9]+)$/.exec((req.params as any).file);
     const found = m ? await app.assets.get(m[1]!) : null;
-    if (!found) return reply.code(404).send({ error: { code: 'not_found', message: 'File not found.' } });
+    // A delivery photo shows someone's home: never served here to whoever has its address (before 065 they were kept
+    // with the uploads). The team sees drops' photos through /v1/ops/drop-photos, residents through /v1/me/drop-photos.
+    if (!found || found.asset.name === 'delivery-photo') return reply.code(404).send({ error: { code: 'not_found', message: 'File not found.' } });
     if (m![2] === 'usdz' && found.asset.contentType === 'model/gltf-binary') {
       try { return reply.type('model/vnd.usdz+zip').header('cache-control', 'public, max-age=31536000, immutable').header('access-control-allow-origin', '*').send(usdz(`a:${m![1]}`, found.bytes, 'Model')); } catch { return reply.code(422).send({ error: { code: 'not_convertible', message: 'This model can’t be shown in iPhone AR.' } }); }
     }
@@ -1063,7 +1141,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       securityLog.record({ kind: 'sign_in_failed', companyId: typeof b.companyId === 'string' && platform.companies.has(b.companyId) ? b.companyId : null, actor: mask(b.to), ip: req.ip, detail: { reason: err.code ?? 'invalid' } }, `sif:${req.ip}:${b.to}`);
     }
     if (err instanceof ApiError || err instanceof PersistencePaused || err instanceof LeaseLostError || err instanceof OrderConflictError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
-    if (err instanceof AccountsError || err instanceof PaymentError || err instanceof ExperienceError || err instanceof AssetError || err instanceof AdsError || err instanceof DesignError || err instanceof DeliveryError || err instanceof BooksError || err instanceof WebhookError || err instanceof ConsoleError || err instanceof FleetError || err instanceof AttributionError || err instanceof LotteryError || err instanceof VideoError || err instanceof DataError || err instanceof NumberLineError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
+    if (err instanceof AccountsError || err instanceof PaymentError || err instanceof ExperienceError || err instanceof AssetError || err instanceof AdsError || err instanceof DesignError || err instanceof DeliveryError || err instanceof BooksError || err instanceof WebhookError || err instanceof ConsoleError || err instanceof FleetError || err instanceof AttributionError || err instanceof LotteryError || err instanceof VideoError || err instanceof DataError || err instanceof NumberLineError || err instanceof FeatureError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
     if (err.code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE') return reply.code(415).send({ error: { code: 'unsupported_type', message: 'Send JSON, or for uploads a .glb, PNG, JPEG, WebP or MP4 file.' } });
     if (err.code === 'FST_ERR_CTP_BODY_TOO_LARGE') return reply.code(413).send({ error: { code: 'too_large', message: 'That is too big to upload.' } });
     if (err.validation) return reply.code(400).send({ error: { code: 'invalid_request', ...plainValidation(err.validation, err.validationContext, err.message) } });

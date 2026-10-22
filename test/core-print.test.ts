@@ -8,6 +8,7 @@ import { TestOutbox } from '../src/adapters/messaging/contract';
 import { MachineAgent } from '../src/machine/agent';
 import { SimulatedModel6 } from '../src/machine/hardware';
 import { Journal } from '../src/machine/journal';
+import { doorPhoto } from './door-photo';
 import { engines, freshDb } from './db-helpers';
 
 /**
@@ -221,6 +222,8 @@ describe.each(engines)('the core on %s: the right bottle to the right person', {
     // Both doors at the same moment (the van's app sends both as the signal comes back): both recorded.
     const driverId = (await person('dana@freewater.io')).id;
     const door = (p: typeof anaPack) => app.delivery.deliver({ runId, companyId: 'freewater', driverId, stop: p.stop, scannedPackId: p.id, confirmedAtDoor: true, emptiesCollected: 0 });
+    // Each scanned at its door, then with its photo of the box there (Photo proof of each drop).
+    for (const p of [anaPack, benPack]) { expect(await door(p)).toMatchObject({ code: 'photo_required' }); await app.dropPhotos.put({ companyId: 'freewater', packId: p.id, takenBy: driverId, contentType: 'image/jpeg', bytes: await doorPhoto(), capture: 'camera' }); }
     const [da, db2] = await Promise.all([door(anaPack), door(benPack)]);
     expect([da.ok, db2.ok]).toEqual([true, true]);
     const run = (await call('GET', `/v1/driver/runs/${runId}`, driver)).body;
@@ -239,7 +242,7 @@ describe.each(engines)('the core on %s: the right bottle to the right person', {
     expect(await app.handoff.forUnit(benPack.unitIds[0]!)).toMatchObject({ handedOver: { how: 'door' }, verdict: 'passed_on' });
   });
 
-  it('a box short a bottle: reprinting it twice at once prints one, and the bottle replaced never counts as handed over', async () => {
+  it('a bottle with a bad label: reprinting it twice at once prints one, with the same ads, billed once, and the bad one never counts as handed over', async () => {
     const admin = keys['freewater-admin']!;
     await signIn('zoe@example.com');
     const z = await person('zoe@example.com');
@@ -258,9 +261,14 @@ describe.each(engines)('the core on %s: the right bottle to the right person', {
     expect(pack.unitIds).toHaveLength(6);
     expect(pack.unitIds).not.toContain(missing);
     const printedFor = [...app.platform.units.values()].filter((u) => u.packId === packId && u.status === 'dispensed');
-    expect(printedFor).toHaveLength(7); // the six in the box and the one it lost: one reprint, not two
+    expect(printedFor).toHaveLength(7); // the six in the box and the one whose label came out wrong: one reprint, not two
     await app.persistence.flush();
-    expect(await printLines(printedFor.map((u) => u.id))).toBe(printedFor.reduce((n, u) => n + adsOn(u.id), 0));
+    // Billed once per ad: the reprint carries the same ads and is billed; the bad one's lines are reversed (voided).
+    expect(app.platform.units.get(pack.unitIds[2]!)!.placements).toEqual(app.platform.units.get(missing)!.placements);
+    expect(app.platform.units.get(missing)!.voided).toMatchObject({ by: pack.unitIds[2] });
+    expect(await printLines(pack.unitIds)).toBe(pack.unitIds.reduce((n, u) => n + adsOn(u), 0));
+    const net = (await db.query<any>(`select coalesce(sum(case when debit = 'revenue:print' then -amount_cents else amount_cents end), 0)::int as c from ledger_entries where kind = 'print' and unit_id = $1`, [missing])).rows[0].c;
+    expect(net).toBe(0);
     // Checked, sealed, loaded and delivered: the replaced bottle never went out in it.
     expect((await call('POST', `/v1/packs/${packId}/verify`, admin, { scannedUnitIds: pack.unitIds })).body.ok).toBe(true);
     expect((await call('POST', `/v1/packs/${packId}/seal`, admin)).status).toBe(200);

@@ -27,7 +27,7 @@ export class TransparencyService {
   constructor(private platform: Platform) {
     // Counters start from the books as they stand, then follow every new line.
     for (const l of platform.ledger.entries) this.count(l);
-    for (const u of platform.units.values()) if (u.status === 'dispensed' || u.status === 'printed') this.c(u.companyId).bottles++;
+    for (const u of platform.units.values()) if ((u.status === 'dispensed' || u.status === 'printed') && !u.voided) this.c(u.companyId).bottles++;
     platform.ledger.listen((l) => { this.count(l); this.push(l.companyId, undefined); });
     const bus = platform.bus;
     bus.on('label.printed', (e) => {
@@ -39,6 +39,8 @@ export class TransparencyService {
       const charity = g?.charityByLocation?.[e.payload.locationId] ?? (g?.charitySplit ? Object.keys(g.charitySplit).join(' & ') : g?.defaultCharity);
       this.add(e.companyId, e.at, e.payload.kind === 'custom' ? 'bottle' : 'bottle', e.payload.kind === 'custom' ? 'A custom bottle printed' : `A free bottle printed${ads ? `, carrying ${ads} ad${ads === 1 ? '' : 's'}` : ''}`, e.payload.locationId, { given, earned: r.earned.total }, given && charity ? ` · ${money(given)} to ${charity}` : '');
     });
+    // A bottle whose label came out wrong and was reprinted never went out: the public count has its reprint instead.
+    bus.on('unit.voided', (e) => { const c = this.c(e.companyId); c.bottles = Math.max(0, c.bottles - 1); });
     bus.on('unit.scanned', (e) => { if (e.payload.experienceLoaded) this.add(e.companyId, e.at, 'scan', `Someone scanned ${this.adOf(e.payload.unitId, e.payload.slotIndex)}`, platform.units.get(e.payload.unitId)?.locationId); });
     bus.on('ar.launched', (e) => { if (e.payload.loaded) this.add(e.companyId, e.at, 'ar', `Someone opened ${this.adOf(e.payload.unitId, e.payload.slotIndex)} in AR`, platform.units.get(e.payload.unitId)?.locationId); });
     bus.on('box.scanned', (e) => { if (e.payload.experienceLoaded) this.add(e.companyId, e.at, 'box', 'Someone scanned the side of a delivery box', undefined); });
@@ -154,7 +156,9 @@ export class TransparencyService {
     const names = new Set([...x.given.keys(), ...x.sent.keys()]);
     const byCharity = [...names].map((name) => ({ name, givenCents: x.given.get(name) ?? 0, sentCents: x.sent.get(name) ?? 0 })).sort((a, b) => b.givenCents - a.givenCents);
     const given = byCharity.reduce((a, c) => a + c.givenCents, 0), sent = byCharity.reduce((a, c) => a + c.sentCents, 0);
-    return { bottles: x.bottles, givenCents: given, sentCents: sent, owedCents: given - sent, prizesCents: x.prizes, adMoneyCents: x.adMoney, sales: x.sales, ...(x.ai.earnedCents > 0 ? { ai: { ...x.ai } } : {}), byCharity, updatedAt: x.updatedAt };
+    // Sales with no commission line (paid up front, commission off) count too, until refunded in full.
+    const uncharged = this.platform.ledger.companySalesStandingWithoutCommission(companyId);
+    return { bottles: x.bottles, givenCents: given, sentCents: sent, owedCents: given - sent, prizesCents: x.prizes, adMoneyCents: x.adMoney, sales: x.sales + uncharged, ...(x.ai.earnedCents > 0 ? { ai: { ...x.ai } } : {}), byCharity, updatedAt: x.updatedAt };
   }
 
   /** Follow the feed live. Returns a function that stops. */

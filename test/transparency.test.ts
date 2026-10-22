@@ -27,7 +27,8 @@ const print = () => app.platform.order({ companyId: 'freewater', orderId: `tr-${
 
 beforeAll(async () => {
   db = await createPgliteClient();
-  app = await createApp({ db, seedDemo: true, seed: 41, clock, anchorPublishers: [new GitHubPublisher({ repo: 'freewater/books', token: 't', fetch: fakeFetch }), new OpenTimestampsPublisher({ fetch: fakeFetch })] });
+  // Commission shown in the feed: a company that bills afterwards (sales without commission: prepaid.test.ts).
+  app = await createApp({ db, seedDemo: true, demoBilling: 'billed_after', seed: 41, clock, anchorPublishers: [new GitHubPublisher({ repo: 'freewater/books', token: 't', fetch: fakeFetch }), new OpenTimestampsPublisher({ fetch: fakeFetch })] });
   keys = app.demoKeys!;
   server = await buildServer(app);
   for (let i = 0; i < 12; i++) await print();

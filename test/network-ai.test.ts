@@ -169,7 +169,7 @@ describe('AI continuity, held by the network', () => {
   it('archives every agent when an operator closes, asks the model agents, and keeps lessons apart from secrets', async () => {
     await db.query(`insert into agent_proposals (id, company_id, agent_id, kind, title, detail, status, created_at) values ('p-1','peak-spring','value','pricing','Lower the scan price in Dallas','Our secret Dallas plan','proposed',$1)`, [new Date(now).toISOString()]);
     const r = await app.continuity.archiveAll('peak-spring', 'closing', 'user:test');
-    expect(r.archived).toBe(10);
+    expect(r.archived).toBe(12); // every agent, the news writer and the AI reviewer of paid ads included
     const all = await app.continuity.list('peak-spring', { confidential: true });
     const value = all.find((a) => a.agentId === 'value')!;
     expect(value.status).toBe('archived'); // fixed rules: kept, nothing to choose

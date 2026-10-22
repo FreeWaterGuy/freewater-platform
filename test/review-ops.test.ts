@@ -9,12 +9,16 @@ import { createPgliteClient } from '../src/db/pglite';
 import type { SqlClient } from '../src/db/client';
 import type { TestOutbox } from '../src/adapters/messaging/contract';
 import { createPlatform } from '../src/setup';
-import { bottle16oz, boxes, freewater, locations, peakSpring, sampleCampaigns } from '../src/demo/seed';
+import { bottle16oz, boxes, freewater as paidUpFront, locations, peakSpring, sampleCampaigns } from '../src/demo/seed';
 import { PackStateError } from '../src/modules/packs/service';
 import { lotteryDefaults } from '../src/modules/lottery/service';
 import type { MachineStatus } from '../src/modules/fleet/service';
 import { MachineAgent } from '../src/machine/agent';
 import { Journal } from '../src/machine/journal';
+import { billedAfter as billedAfterSetting } from '../src/modules/ads/billing';
+// The sample ads print here without paying first: FreeWater's settings billing afterwards (paying up front, where
+// only paid bottles print, is tested in prepaid.test.ts).
+const freewater: typeof paidUpFront = { ...paidUpFront, adBilling: billedAfterSetting() };
 
 // Review fixes for ops: machine keys, the free-bottle limit, packing and loading, the prize game, Model 6 jobs and the
 // machine's journal.
@@ -101,7 +105,11 @@ describe('with the API (one company, a controllable clock)', () => {
       const real = printer.print.bind(printer);
       let boxes = 0;
       (printer as any).print = async (job: any) => (job.unitId.endsWith('-box') && ++boxes > 1 ? { status: 'failed', jobId: job.jobId, reason: 'Box printer jammed' } : real(job));
-      const first = (await call('POST', '/v1/ops/runs/plan', keys['freewater-admin'], { date: '2026-11-03' }));
+      // Planning prints bottles that bill advertisers: a signed-in ops person does it, never a key.
+      await app.accounts.invite({ companyId: 'freewater', email: 'night-ops@freewater.io', role: 'ops' });
+      const opsPerson = await signIn('night-ops@freewater.io');
+      expect((await call('POST', '/v1/ops/runs/plan', keys['freewater-admin'], { date: '2026-11-03' })).json().error.code).toBe('person_required');
+      const first = (await call('POST', '/v1/ops/runs/plan', opsPerson, { date: '2026-11-03' }));
       expect(first.statusCode).toBe(201);
       run = first.json()[0];
       expect(run.status).toBe('printing');
@@ -112,7 +120,7 @@ describe('with the API (one company, a controllable clock)', () => {
       expect((await db.query<any>(`select next_date from subscriptions where route_id = 'route-3'`)).rows.every((r) => String(r.next_date).includes('2026-11-03') || new Date(r.next_date).toISOString().startsWith('2026-11-03'))).toBe(true);
 
       (printer as any).print = real;
-      run = (await call('POST', '/v1/ops/runs/plan', keys['freewater-admin'], { date: '2026-11-03' })).json()[0];
+      run = (await call('POST', '/v1/ops/runs/plan', opsPerson, { date: '2026-11-03' })).json()[0];
       expect(run.status).toBe('packing');
       expect(run.stops[1].packId).toBe(stuck); // the same pack, finished
       expect(run.stops.map((s: any) => s.packStatus)).toEqual(['box_printed', 'box_printed']);

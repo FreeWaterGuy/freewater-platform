@@ -84,7 +84,7 @@ export class NumberLineService {
       const placed = { id: row.id, placement: typeof row.placement === 'string' ? JSON.parse(row.placement) : row.placement, by: row.by, status: row.status, facts: factsJson };
       this.cache.set(key, placed); return placed;
     }
-    const p = await withCompany(companyId, async () => this.agent.place(facts));
+    const p = await withCompany(companyId, async () => this.agent.place(facts), 'numberline');
     const { by, ...placement } = p;
     const id = newId('nl');
     const undeclared = facts.kind === 'ad_offering' && facts.description?.startsWith('Not declared');

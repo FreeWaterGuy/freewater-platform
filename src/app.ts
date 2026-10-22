@@ -14,6 +14,7 @@ import { builtinPlugins } from './modules/experiences/builtins';
 import { ExperienceService } from './modules/experiences/service';
 import type { ExperiencePlugin } from './modules/experiences/contract';
 import { SqlAssetStore, type AssetStore } from './modules/assets/store';
+import { DropPhotoService } from './modules/delivery/photos';
 import { builtinModelIds } from './modules/models/builtin';
 import { AdsService } from './modules/ads/service';
 import { BuiltinAdAssistant } from './modules/ai/builtinAssistant';
@@ -31,7 +32,13 @@ import { join as joinPath, dirname as dirnamePath } from 'node:path';
 import { fileURLToPath as toPath } from 'node:url';
 import type { DesignAssistant } from './modules/ai/designContract';
 import { DeliveryService } from './modules/delivery/service';
+import { HouseService } from './modules/delivery/houses';
+import { pilotHouses } from './demo/pilotArea';
 import { CreditService } from './modules/ads/credit';
+import { PrepaidService } from './modules/ads/prepaid';
+import { RouteBuyService } from './modules/ads/routeBuys';
+import { seedRouteBuys } from './demo/routeBuys';
+import { adBilling, billedAfter, prepaidModel } from './modules/ads/billing';
 import { SimpleRoutePlanner, type RoutePlanner } from './modules/delivery/planner';
 import { TestGeocoder, type Geocoder } from './adapters/geocoding/contract';
 import { OpsService } from './modules/ops/service';
@@ -41,7 +48,7 @@ import { WebhookService } from './modules/webhooks/service';
 import { HttpWebhookSender, type WebhookSender } from './adapters/webhooks/contract';
 import { ConsoleService } from './modules/console/service';
 import { FleetService, MachineFleetPrinter } from './modules/fleet/service';
-import { CodeService, loadSecret } from './modules/codes/service';
+import { CODE_LEN, CodeService, loadSecret } from './modules/codes/service';
 import { ScanTokens } from './modules/codes/scanTokens';
 import { AttributionService } from './modules/attribution/service';
 import { LotteryService } from './modules/lottery/service';
@@ -58,6 +65,7 @@ import { WalletService } from './modules/wallet/service';
 import { giftCardsFromEnv, type GiftCardProvider } from './modules/wallet/giftcards';
 import { GamesService } from './modules/games/service';
 import { aiRouting } from './modules/ai/routing';
+import { FeatureService } from './modules/features/service';
 import { ContinuityService, type Asker } from './modules/agents/continuity';
 import { claudeWithTool } from './modules/ai/anthropic';
 import { ClaudePrompter, builtinPrompter, type Prompter } from './modules/games/prompter';
@@ -88,6 +96,13 @@ import type { InstanceLease } from './runtime/lease';
 import { leaseCheckedClient } from './db/leaseChecked';
 import type { JobRunner } from './runtime/jobs';
 import { boxes, builtinCreatives, freewater, locations, peakSpring, products, sampleCampaigns } from './demo/seed';
+import { FillerService } from './modules/fillers/service';
+import { NewsService, newsPlugin } from './modules/news/service';
+import { builtinNewsWriter, ClaudeNewsWriter, type NewsWriter } from './modules/news/writer';
+import { AiReviewService, ClaudeAdReviewer, standInReviewer, type AdReviewer } from './modules/ads/aiReview';
+import { HouseholdService } from './modules/households/service';
+import { sampleAustinAreas } from './modules/households/sampleAustin';
+import { prepaidLeft } from './modules/ads/budget';
 
 /** What the running server adds around the app: alerts, and (in production) the lease and the job runner. */
 /** The last result of the checks people rely on, for GET /health/deep (since this server started). */
@@ -119,6 +134,12 @@ export interface AppOptions {
   /** Which areas are switched off (src/runtime/features.ts). Default: read FW_FEATURES and FW_FEATURES_OFF. */
   features?: Features;
   seedDemo?: boolean; // load FreeWater's sample catalog and print demo API keys when the database is empty
+  /**
+   * How the sample FreeWater advertisers pay when the demo is seeded: 'prepaid' (FreeWater's way: their sample ads are
+   * paid for with the test card) or 'billed_after' (the older model a company can choose: the auction, invoices and
+   * credit limits). Only read when the demo is seeded into an empty database.
+   */
+  demoBilling?: 'prepaid' | 'billed_after';
   clock?: () => Date;
   seed?: number;
   messenger?: Messenger; // defaults to the test outbox (sends nothing)
@@ -167,6 +188,10 @@ export interface AppOptions {
   allowPrivateWebhooks?: boolean; // let webhooks reach localhost and private networks (development only)
   publicUrl?: string; // where the console lives, for links in emails, e.g. https://console.freewater.io
   fleet?: { claimTimeoutMs?: number; finishTimeoutMs?: number; offlineAfterMs?: number; bufferHours?: number; offlineGraceHours?: number };
+  /** Writes FreeWater News stories (Claude with a key, else the stand-in that only points to the reporting). */
+  newsWriter?: NewsWriter;
+  /** The AI reviewer of paid ads (tests pass a fake; with no AI key, the stand-in: no verdicts, a person reviews). */
+  adReviewer?: AdReviewer;
 }
 
 /** Start the platform on a database: migrate, load everything, and keep writing every change back. */
@@ -184,7 +209,7 @@ export async function createApp(opts: AppOptions) {
   let demoKeys: Record<string, string> | undefined;
   const empty = Number((await db.query<{ n: string }>(`select count(*)::int as n from companies`)).rows[0]?.n ?? 0) === 0;
   if (empty && opts.seedDemo) {
-    await saveCatalog(db, { companies: [freewater, peakSpring], products, boxes, locations, campaigns: sampleCampaigns() });
+    await saveCatalog(db, { companies: [opts.demoBilling === 'billed_after' ? { ...freewater, adBilling: billedAfter() } : freewater, peakSpring], products, boxes, locations, campaigns: sampleCampaigns() });
     demoKeys = {};
     const make = async (label: string, companyId: string, scopes: Scope[], advertiserId?: string, locationId?: string) => {
       demoKeys![label] = (await createApiKey(db, { companyId, name: label, scopes, advertiserId, locationId })).key;
@@ -203,6 +228,8 @@ export async function createApp(opts: AppOptions) {
       await db.query(`insert into charities (id, company_id, name, website, email, payout_label) values ($1,'freewater',$2,$3,$4,'Bank account (test)') on conflict do nothing`, [id, name, website, `giving@${id}.example.org`]);
     }
     await make('peak-spring-admin', 'peak-spring', ['orders', 'packs', 'campaigns', 'purchases', 'ledger', 'events', 'admin']);
+    // Area statistics for Austin's demo routes: SAMPLE values (made up), labelled as such everywhere they show.
+    for (const a of sampleAustinAreas) await db.query(`insert into area_attributes (company_id, area_id, kind, name, attributes, source, as_of, sample, lat, lng) values ('freewater',$1,$2,$3,$4,$5,$6,true,$7,$8) on conflict do nothing`, [a.areaId, a.kind, a.name, JSON.stringify(a.attributes), a.source, a.asOf, a.lat ?? null, a.lng ?? null]);
   }
 
   const now = opts.clock?.() ?? new Date();
@@ -236,11 +263,14 @@ export async function createApp(opts: AppOptions) {
   for (const u of state.units) platform.restoreUnit(u, state.labels.get(u.id));
   packs.restore(state.packs);
   platform.bus.restoreSeen(state.seen);
-  const printedUnits = state.units.filter((u) => u.status === 'dispensed' || u.status === 'printed').map((u) => ({ unitId: u.id, placements: u.placements, locationId: u.locationId }));
+  const printedUnits = state.units.filter((u) => (u.status === 'dispensed' || u.status === 'printed') && !u.voided).map((u) => ({ unitId: u.id, placements: u.placements, locationId: u.locationId }));
   const printedBoxes = state.packs.filter((p) => p.faces.length > 0).map((p) => ({ packId: p.id, faces: p.faces }));
   platform.ledger.restore({ entries: state.ledger, printed: printedUnits, boxes: printedBoxes, engagementEvents: state.engagementEvents, saleEvents: state.saleEvents });
+  // A reprint that printed just before a crash: its bad bottle voided and its pack holding it, now (before anything counts bottles).
+  const reprintsFinished = platform.repairReprints();
+  if (reprintsFinished) console.warn(`${reprintsFinished} reprint(s) cut off by a restart were finished: their bad bottles voided.`);
   // The auction picks up where it left off: what each ad has earned per bottle.
-  for (const l of state.ledger) if (l.campaignId && l.unitId) { if (l.kind === 'print') platform.auctionStats.add(l.campaignId, 'prints'); if (l.kind === 'scan') platform.auctionStats.add(l.campaignId, 'scans'); if (l.kind === 'ar') platform.auctionStats.add(l.campaignId, 'arLaunches'); }
+  for (const l of state.ledger) if (l.campaignId && l.unitId) { if (l.kind === 'print' && l.credit === 'revenue:print' && !platform.units.get(l.unitId)?.voided) platform.auctionStats.add(l.campaignId, 'prints'); if (l.kind === 'scan') platform.auctionStats.add(l.campaignId, 'scans'); if (l.kind === 'ar') platform.auctionStats.add(l.campaignId, 'arLaunches'); }
 
   const messenger = opts.messenger ?? new TestOutbox(process.env.ECHO_CODES === '1');
   const accounts = new AccountsService(db, messenger, opts.clock, (id) => platform.companies.get(id)?.name ?? 'FreeWater');
@@ -282,6 +312,8 @@ export async function createApp(opts: AppOptions) {
   const footageCeiling = Number(process.env.FOOTAGE_PER_COMPANY_DAY ?? '');
   if (process.env.FOOTAGE_PER_COMPANY_DAY && Number.isInteger(footageCeiling) && footageCeiling >= 0) videos.perCompanyDay = footageCeiling;
   videos.alert = (key, title, detail) => void runtime.alerts.alert(key, 'warning', title, detail);
+  // Each footage clip is a costly extra: paid up front, or not made (what it really cost is recorded against it).
+  videos.extras = { claim: (c) => prepaid.claimExtra(c, 'aiVideoClip'), settle: (id, made, cost) => prepaid.settleExtra(id, made, cost) };
   experiences.videos = videos;
   const interactions = new InteractionService(db, platform, opts.clock);
   const data = new DataService(db, platform, interactions, opts.clock);
@@ -316,7 +348,7 @@ export async function createApp(opts: AppOptions) {
 
   // The data environment: choices made in a clean setting, exposure recorded, people directing gifts and choosing ads.
   numberline.keepsChoicesOf = (companyId, person) => data.allowed(companyId, 'choices', [person]);
-  const environment = new EnvironmentService(db, platform, numberline, opts.clock);
+  const environment = new EnvironmentService(db, platform, numberline, opts.clock, opts.seed !== undefined ? ((r) => (n: number) => Math.floor(r() * n))(seededRandom(opts.seed + 303)) : undefined);
   environment.flush = () => persistence.flush();
   const wallet = new WalletService(db, platform, opts.clock);
   wallet.mayEarn = async (companyId, subject) => (await data.rewardsAllowed(companyId, [subject, ...(await data.linkedSubjects(companyId, subject))])) && (await data.ageOk(companyId, [subject])) !== false;
@@ -345,8 +377,31 @@ export async function createApp(opts: AppOptions) {
   // set, and pauses once its advertiser owes more than that (docs/SWITCHES.md, "Credit for advertisers").
   const credit = new CreditService(db, platform, messenger, () => persistence.flush());
   credit.alert = (key, title, detail) => void runtime.alerts.alert(key, 'warning', title, detail);
-  ads.beforeLive = (c) => credit.needCredit(c);
   platform.bus.on('invoice.failed', (e) => { void credit.enforce(e.companyId, e.payload.advertiserId).catch(() => {}); });
+  // Paying up front (docs/SWITCHES.md, "How advertisers pay"): quote, pay, review; only paid bottles print, each claimed
+  // in the database before its label is drawn; fees switched on are charged daily; a stopped ad is paid back.
+  const prepaid = new PrepaidService(db, platform, payments, () => persistence.flush());
+  prepaid.alert = (key, title, detail) => void runtime.alerts.alert(key, 'warning', title, detail);
+  prepaid.credit = credit;
+  ads.prepaid = prepaid;
+  ads.beforeLive = (c) => prepaid.beforeLive(c);
+  platform.claimPrepaid = (companyId, ids, spots) => prepaid.claim(companyId, ids, spots);
+  await prepaid.restore();
+  // The demo's made-up advertisers have paid for their sample ads (the test card, no real money), so they print: a set
+  // number of bottles as the sample says, or 2,000 for a sample written as a bid, and five AI video clips each (a
+  // costly extra, paid up front). Ads in a blocked category, or switched off in the sample, stay unpaid.
+  if (demoKeys) for (const c of sampleCampaigns().filter((x) => !x.isHouse && x.active !== false)) {
+    const live = platform.campaigns.get(c.id);
+    const company = platform.companies.get(c.companyId)!;
+    if (!live || live.prepaid || !prepaidModel(company) || company.adRules.blockedCategories.includes(c.category)) continue;
+    try {
+      await payments.addMethod(c.companyId, 'advertiser', c.advertiserId, 'tok_visa');
+      const share = [...c.sizes].sort((a, b) => a - b)[Math.floor((c.sizes.length - 1) / 2)]!;
+      const extras: Record<string, number> = adBilling(company).extras.perUse.aiVideoClip ? { aiVideoClip: 5 } : {};
+      const quote = prepaid.quote(c.companyId, { bottles: c.buy.type === 'guaranteed' ? c.buy.remainingPrints : 2_000, share, extras }, c.sizes);
+      await prepaid.payBottles({ companyId: c.companyId, advertiserId: c.advertiserId, campaignId: c.id, quote: { bottles: quote.bottles, share, extras }, expectedTotalCents: quote.totalCents, sizes: c.sizes });
+    } catch { /* a provider that doesn't know the test card: the sample ad stays unpaid */ }
+  }
 
   const builtinDesigner = new BuiltinDesigner();
   const designer = opts.designer ?? (aiOn ? new ClaudeDesigner({ apiKey: anthropicKey, model: process.env.ANTHROPIC_MODEL, fallback: builtinDesigner }) : builtinDesigner);
@@ -410,7 +465,93 @@ export async function createApp(opts: AppOptions) {
   const geocoder = opts.geocoder ?? new TestGeocoder({ Austin: { lat: 30.2672, lng: -97.7431, radiusKm: 6 }, Denver: { lat: 39.7392, lng: -104.9903, radiusKm: 6 } });
   const delivery = new DeliveryService(db, platform, packs, accounts, messenger, geocoder, opts.planner ?? new SimpleRoutePlanner(), () => persistence.flush());
   delivery.alert = (key, title, detail) => void runtime.alerts.alert(key, 'warning', title, detail);
+  // Delivery areas: every house on the chosen streets, in street order (src/modules/delivery/houses.ts).
+  const houses = new HouseService(db, platform, accounts, packs);
+  houses.packFromCode = async (text) => {
+    const smart = /\/Q\/([A-Za-z0-9]+)\b/.exec(text)?.[1];
+    if (smart) return (await codes.find(smart))?.packId ?? null;
+    // The whole box code typed from the box's side panel ("7K2Q F8MN 3XPA RT"): the same code the QR holds.
+    const typed = text.replace(/[\s-]/g, '');
+    if (typed.length === CODE_LEN && /^[A-Za-z0-9]+$/.test(typed)) return (await codes.find(typed))?.packId ?? null;
+    return /\/(?:p|b)\/(pk_[A-Za-z0-9]+)/.exec(text)?.[1] ?? (/^pk_[A-Za-z0-9]+$/.test(text) ? text : null);
+  };
+  delivery.houses = houses;
+  houses.alert = (key, title, detail) => void runtime.alerts.alert(key, 'warning', title, detail);
+  delivery.boxes = () => state.boxes;
+  // Photos of each drop: only the team and the house's resident see them, and they're deleted after the keep.
+  const dropPhotos = new DropPhotoService(db, platform, opts.blobs, opts.clock);
+  dropPhotos.packs = packs.packs;
+  // Where a box's door is: its stop on its night's run (or its house), for checking where the photo was taken.
+  dropPhotos.placeOf = async (companyId, pack) => {
+    const run = pack.runId ? await delivery.getRun(pack.runId, companyId).catch(() => null) : null;
+    const stop = run?.stops.find((x) => x.stop === pack.stop && (!x.packId || x.packId === pack.id));
+    if (stop) return stop.point;
+    return pack.houseId ? (await houses.getHouse(pack.houseId, companyId))?.point ?? null : null;
+  };
+  delivery.photos = dropPhotos;
+  packs.houseContextFor = (houseId, companyId) => houses.contextFor(houseId, companyId);
+  if (demoKeys) await houses.seedSample('freewater', 'route-3', pilotHouses);
   const ops = new OpsService(db, platform, delivery, host);
+
+  // Spots nobody bought: approved filler before the generic house ad; news among it only where news is on.
+  const fillers = new FillerService(platform, () => persistence.flush(), opts.clock);
+  platform.unsold = (req) => fillers.fillUnsold(req);
+  const news = new NewsService(db, platform, features, opts.newsWriter ?? (aiOn ? new ClaudeNewsWriter({ apiKey: anthropicKey, model: process.env.ANTHROPIC_MODEL }) : builtinNewsWriter), () => persistence.flush(), opts.clock);
+  await news.load();
+  fillers.news = news;
+  // Registered whatever the switches, so a bottle printed while news was on still opens (a plain card while news is off).
+  host.register(newsPlugin(news));
+  // Household and area data, for choosing ads for houses (the route-buying engine calls audienceForHouse).
+  const households = new HouseholdService(db, platform, opts.clock);
+  // A house's key is keyed with the platform's pseudonym secret, as phone keys are in the logs (docs/COMPLIANCE.md).
+  households.pseudonymKey = data.tagKey;
+  await households.rekey();
+  // A house's residents: people with a delivery there, and people who claimed it in a delivery area (house_claims), so
+  // a resident's "do not sell" or a child at home counts whichever way they came (one row per person).
+  const claimed = async (companyId: string, houseKey: string) => {
+    const rows = (await db.query<any>(`select s.user_id, s.address, s.route_id, s.lat, s.lng, u.viewer_key, u.consents, u.interests from subscriptions s join users u on u.id = s.user_id where s.company_id = $1 and s.status <> 'cancelled' and s.address <> 'erased' and u.deleted_at is null
+      union all select c.user_id, h.address, a.route_id, h.lat, h.lng, u.viewer_key, u.consents, u.interests from house_claims c join houses h on h.id = c.house_id join delivery_areas a on a.id = h.area_id join users u on u.id = c.user_id where c.company_id = $1 and u.deleted_at is null`, [companyId])).rows
+      .filter((r) => households.houseKey(companyId, r.address) === houseKey);
+    return rows.filter((r, i) => rows.findIndex((x) => x.user_id === r.user_id) === i);
+  };
+  const parse = <T>(v: unknown): T => (typeof v === 'string' ? JSON.parse(v) : v) as T;
+  households.claimants = async (companyId, houseKey) => Promise.all((await claimed(companyId, houseKey)).map(async (r) => {
+    const subjects = [r.viewer_key, `user:${r.user_id}`];
+    const child = (await data.ageOk(companyId, subjects)) === false;
+    // Their own choices decide: "do not sell or share" (or GPC) keeps the whole house out; only a yes to personalized
+    // offers lets what they shared be used, and never a child's.
+    const personalize = !!parse<any>(r.consents)?.personalizedOffers && !child;
+    const household = personalize ? (await db.query<any>(`select household from person_details where company_id = $1 and subject = any($2) and household is not null limit 1`, [companyId, subjects])).rows[0]?.household ?? null : null;
+    return { optedOut: await data.doesNotSell(companyId, subjects), child, personalize, interests: personalize ? parse<string[]>(r.interests) ?? [] : [], household: household === null ? null : Number(household) };
+  }));
+  households.placeOf = async (companyId, houseKey) => { const r = (await claimed(companyId, houseKey))[0]; return r ? { routeId: r.route_id, lat: Number(r.lat), lng: Number(r.lng) } : null; };
+  const addressesOf = async (companyId: string, userIds: string[]) => (await db.query<any>(`select address from subscriptions where company_id = $1 and user_id = any($2) and address <> 'erased'
+    union select h.address from house_claims c join houses h on h.id = c.house_id where c.company_id = $1 and c.user_id = any($2)`, [companyId, userIds])).rows.map((r) => r.address as string);
+  data.houseData = async (companyId, userIds) => households.aboutAddresses(companyId, await addressesOf(companyId, userIds));
+  data.dropPhotos = async (companyId, userIds) => (await Promise.all(userIds.map((u) => dropPhotos.forResident(companyId, u)))).flat();
+  data.eraseDropPhotos = (companyId, userIds) => dropPhotos.eraseFor(companyId, userIds);
+  data.eraseHouses = async (companyId, userIds) => {
+    let n = 0;
+    for (const a of await addressesOf(companyId, userIds)) { n += (await households.aboutAddresses(companyId, [a])).length; await households.optOut(companyId, a, 'a resident erased their data'); }
+    return n;
+  };
+
+  // Buying on delivery routes (src/modules/ads/routeBuys.ts): pieces of the labels at chosen houses in chosen weeks,
+  // reserved when paid (first paid wins), placed when each house's pack prints, given back when a house stops.
+  const routeBuys = new RouteBuyService(db, platform, prepaid, payments, () => persistence.flush());
+  routeBuys.households = households;
+  routeBuys.packs = () => packs.packs;
+  routeBuys.boxes = () => new Map(state.boxes.map((b) => [b.id, b]));
+  routeBuys.alert = (key, title, detail) => void runtime.alerts.alert(key, 'warning', title, detail);
+  ads.routeBuys = routeBuys;
+  packs.routeFor = (pack) => routeBuys.forPack(pack);
+  packs.routeBoxPrinted = (pack) => routeBuys.boxPrinted(pack);
+  houses.onStopped = (companyId, houseId) => routeBuys.settle(companyId, { houseId }).catch((e) => runtime.alerts.alert(`route-settle:${companyId}`, 'warning', 'Giving back route pieces for a house that stopped failed', String((e as Error)?.message ?? e)));
+  // One door, one house: today's address keys, and any two houses found to be one door merged (after onStopped is set,
+  // so what was reserved on the house merged away comes back to its advertisers).
+  await houses.rekeyHouses();
+  await routeBuys.restore();
+  if (demoKeys) await seedRouteBuys(platform, db, routeBuys, payments).catch((e) => console.error('Demo route buys weren’t made:', (e as Error).message));
 
   const handoff = new HandoffService(db, platform, packs);
   const books = new BooksService(db, platform, packs, messenger, opts.payouts ?? new TestPayoutProvider(), (c, at) => delivery.today(c, at), () => persistence.flush());
@@ -425,7 +566,7 @@ export async function createApp(opts: AppOptions) {
   // The chain layer, switched off: hourly seals of the wallet journal, actions needing several people, the daily check.
   const chain = new ChainService(db, platform, wallet, publishers, opts.clock);
   // A step that would switch on an area that's off (FW_FEATURES) can't be proposed or run.
-  chain.kindAllowed = (kind) => features.actionOn(kind);
+  chain.kindAllowed = (kind) => features.actionOn(kind); // and the company's own switches, once they're loaded (below)
   chain.alert = (companyId, message) => void runtime.alerts.alert(`chain:${companyId}`, 'critical', `Chain (${companyId})`, message);
   // An ad reached its daily ceiling of billed scans or AR launches (R3): more are counted, never billed, and a person looks.
   platform.ledger.onCeiling = (h) => void runtime.alerts.alert(`billing-ceiling:${h.companyId}:${h.campaignId}:${h.kind}:${h.day}`, 'warning', `Ad ${h.campaignId} reached its daily ceiling of ${h.ceiling} billed ${h.kind === 'scan' ? 'scans' : 'AR launches'} (${h.companyId}, ${h.day})`, `More are counted but not billed today. Far more ${h.kind === 'scan' ? 'scans' : 'AR launches'} than its bottles could get usually means fake scans: check where they come from (GET /v1/books/reconciliation) before the advertiser is invoiced.`);
@@ -452,15 +593,36 @@ export async function createApp(opts: AppOptions) {
   const allowPrivate = opts.allowPrivateWebhooks ?? process.env.ALLOW_PRIVATE_WEBHOOKS === '1';
   const webhooks = new WebhookService(db, opts.webhookSender ?? new HttpWebhookSender({ allowPrivate }), messenger, opts.clock, flush, { allowPrivate, consoleUrl: publicUrl });
   const consoleSvc = new ConsoleService(db, platform, made.registry, accounts, messenger, flush, { consoleUrl: publicUrl, clock: opts.clock });
+  // Each company's switches (its Features page, src/runtime/registry.ts): routes, jobs, screens and the engine read them.
+  // The host's settings (FW_FEATURES) stay the outer limit: a company can't turn on what the host has off.
+  const companyFeatures = new FeatureService(db, () => platform.companies, features, consoleSvc, opts.clock);
+  companyFeatures.paidWaiting = (companyId) => [...platform.campaigns.values()].filter((c) => c.companyId === companyId && c.prepaid).map((c) => ({ share: c.prepaid!.share, left: prepaidLeft(c) }));
+  await companyFeatures.load();
+  const featureOn = (companyId: string, id: string) => companyFeatures.on(companyId, id);
+  platform.featureOn = featureOn;
+  platform.ledger.featureOn = featureOn;
+  delivery.featureOn = featureOn;
+  houses.featureOn = featureOn;
+  host.pluginOn = (companyId, pluginId) => companyFeatures.pluginOn(companyId, pluginId);
+  aiRouting.useOn = featureOn;
+  videos.featureOn = featureOn;
+  news.featureOn = featureOn;
+  fillers.featureOn = featureOn;
+  households.featureOn = featureOn;
+  routeBuys.featureOn = featureOn;
+  attribution.featureOn = featureOn;
+  webhooks.companyOn = (companyId) => companyFeatures.on(companyId, 'webhooks');
+  chain.kindAllowed = (kind, companyId) => features.actionOn(kind) && companyFeatures.actionOn(companyId, kind);
   // Switched on with the rules as they were when people approved it, never weaker ones set since.
   chain.turnOn = async (companyId, by, rules, kind) => {
     const now = chain.settings(companyId);
     const launch = platform.companies.get(companyId)?.launch ?? { stage: 'test' as const };
-    if (kind === 'go_live_points') { await consoleSvc.save(companyId, { launch: { ...launch, stage: 'points' } }, by, undefined, { chainApproved: true }); return; }
-    if (kind === 'exchanges_on') { const w = wallet.settings(companyId); await consoleSvc.save(companyId, { wallet: { ...w, conversions: { enabled: true, approvedBy: by, approvedAt: new Date().toISOString() } } }, by, undefined, { chainApproved: true }); return; }
-    if (kind === 'withdrawals_on') { await consoleSvc.save(companyId, { launch: { ...launch, withdrawals: true } }, by, undefined, { chainApproved: true }); return; }
+    const note = { via: `approved step (${kind})` };
+    if (kind === 'go_live_points') { await consoleSvc.save(companyId, { launch: { ...launch, stage: 'points' } }, by, undefined, { chainApproved: true, note }); return; }
+    if (kind === 'exchanges_on') { const w = wallet.settings(companyId); await consoleSvc.save(companyId, { wallet: { ...w, conversions: { enabled: true, approvedBy: by, approvedAt: new Date().toISOString() } } }, by, undefined, { chainApproved: true, note }); return; }
+    if (kind === 'withdrawals_on') { await consoleSvc.save(companyId, { launch: { ...launch, withdrawals: true } }, by, undefined, { chainApproved: true, note }); return; }
     const chainOn = { ...now, network: rules.network, approvalsNeeded: Math.max(now.approvalsNeeded, rules.approvalsNeeded), delayHours: Math.max(now.delayHours, rules.delayHours), enabled: true };
-    await consoleSvc.save(companyId, { chain: chainOn, ...(kind === 'go_live_token' ? { launch: { ...launch, stage: 'token' } } : {}) }, by, undefined, { chainApproved: true });
+    await consoleSvc.save(companyId, { chain: chainOn, ...(kind === 'go_live_token' ? { launch: { ...launch, stage: 'token' } } : {}) }, by, undefined, { chainApproved: true, note });
   };
   chain.isMember = async (companyId, person, at) => {
     if (!person.startsWith('user:')) return false;
@@ -511,7 +673,7 @@ export async function createApp(opts: AppOptions) {
   if (opts.examModels) agents.examModels = opts.examModels;
   else if (process.env.ANTHROPIC_API_KEY) {
     const m = process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-5-5';
-    agents.examModels = { numberline: m, 'ad-assistant': m, designer: m, 'video-writer': m, 'team-assistant': m, personalizer: process.env.ANTHROPIC_PERSONALIZE_MODEL ?? 'claude-haiku-5-5' };
+    agents.examModels = { numberline: m, 'ad-assistant': m, 'ad-reviewer': m, designer: m, 'video-writer': m, 'team-assistant': m, personalizer: process.env.ANTHROPIC_PERSONALIZE_MODEL ?? 'claude-haiku-5-5' };
   }
   if (opts.examinee) agents.examinee = opts.examinee;
   else if (process.env.ANTHROPIC_API_KEY) {
@@ -520,6 +682,13 @@ export async function createApp(opts: AppOptions) {
     agents.examinee = (agentId, model) => claudeExaminee({ apiKey: key, agentId, model, system });
   };
   await agents.init();
+  // The AI reviewer of paid ads: flags (or, where a company let it on its record, rejects) paid ads; its record is every
+  // final decision a person makes; the governor turns its final call off when agreement drops (src/modules/ads/aiReview.ts).
+  const aiReview = new AiReviewService(db, platform, ads, companyFeatures, opts.adReviewer ?? (aiOn ? new ClaudeAdReviewer({ apiKey: anthropicKey, model: process.env.ANTHROPIC_MODEL }) : standInReviewer));
+  aiReview.examProblem = () => agents.examProblem('ad-reviewer');
+  aiReview.alert = (key, title, detail) => void runtime.alerts.alert(key, 'warning', title, detail);
+  ads.afterPaidSubmit = (c) => aiReview.onSubmitted(c);
+  ads.onDecided = (c, decision, personId) => aiReview.onDecided(c, decision, personId);
   // AI continuity: when an operator closes or leaves, its agents are archived by the network and asked what's next.
   const continuity = new ContinuityService(db, platform, opts.clock);
   continuity.fundOf = async (companyId, agentId) => { const f = (await agents.ledger(companyId, agentId)).fund; return f.balanceCents + f.heldCents; };
@@ -549,6 +718,7 @@ export async function createApp(opts: AppOptions) {
     wallet, flush: () => persistence.flush(), today: (companyId, at) => delivery.today(companyId, at),
     anchors: (companyId) => anchors.list(companyId), days: (companyId) => books.days(companyId),
     charities: async (companyId) => (await books.charities(companyId)).map((c: any) => c.name),
+    more: async (companyId) => [...await prepaid.checks(companyId), ...await routeBuys.checks(companyId)],
   });
   await payments.repairUnrecorded();
   for (const c of platform.companies.values()) { await books.repairUnrecorded(c.id); await profit.repairShares(c.id); }
@@ -559,7 +729,7 @@ export async function createApp(opts: AppOptions) {
   await attribution.repairUnrecorded();
   await persistence.flush();
 
-  return { ...made, features, db, persistence, runtime, demoKeys, accounts, payments, credit, messenger, experiences, assets, ads, designs, delivery, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
+  return { ...made, aiReview, fillers, news, households, routeBuys, features, companyFeatures, db, persistence, runtime, demoKeys, accounts, payments, credit, prepaid, messenger, experiences, assets, ads, designs, delivery, houses, dropPhotos, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

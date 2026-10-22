@@ -14,6 +14,7 @@ let server: FastifyInstance;
 let keys: Record<string, string>;
 let now = new Date('2026-11-02T15:00:00Z').getTime(); // a Monday morning in Austin
 const clock = () => new Date(now);
+import { doorPhoto } from './door-photo';
 const call = (method: string, url: string, token?: string, payload?: unknown, headers: Record<string, string> = {}) =>
   server.inject({ method: method as any, url, payload: payload as any, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...headers } });
 async function signIn(to: string) {
@@ -73,16 +74,20 @@ describe('home delivery, from sign-up to the door', () => {
     // One skips this week.
     expect((await call('PATCH', '/v1/me/delivery', people[2], { action: 'skip' })).json().nextDate).toBe('2026-11-10');
 
-    // Ops plans Tuesday night: two stops, in driving order, one pack each, printed with their stop code.
+    // Ops plans Tuesday night: two stops, in driving order, one pack each, printed with their stop code. A signed-in
+    // ops person or owner plans (it prints bottles that bill advertisers), never a key.
     const admin = keys['freewater-admin']!;
-    const plan = (await call('POST', '/v1/ops/runs/plan', admin, { date: '2026-11-03' })).json();
+    await app.accounts.invite({ companyId: 'freewater', email: 'olga@freewater.io', role: 'ops' });
+    const opsPerson = await signIn('olga@freewater.io');
+    expect((await call('POST', '/v1/ops/runs/plan', admin, { date: '2026-11-03' })).json().error.code).toBe('person_required');
+    const plan = (await call('POST', '/v1/ops/runs/plan', opsPerson, { date: '2026-11-03' })).json();
     expect(plan).toHaveLength(1);
     const run = plan[0];
     expect(run).toMatchObject({ id: 'route-3@2026-11-03', status: 'packing', counts: { stops: 2, bottles: 18 } });
     expect(run.stops.map((s: any) => s.stopCode)).toEqual(['R3 · 1', 'R3 · 2']);
     expect(run.loadOrder.map((s: any) => s.stop)).toEqual([2, 1]);
     for (const s of run.stops) expect(app.packs.packs.get(s.packId)!.runId).toBe(run.id);
-    expect((await call('POST', '/v1/ops/runs/plan', admin, { date: '2026-11-03' })).json()[0].id).toBe(run.id); // twice = no new printing
+    expect((await call('POST', '/v1/ops/runs/plan', opsPerson, { date: '2026-11-03' })).json()[0].id).toBe(run.id); // twice = no new printing
     expect(app.packs.packs.size).toBe(2);
     expect((await call('GET', '/v1/me/delivery', people[0])).json().nextDate).toBe('2026-11-10');
 
@@ -118,10 +123,19 @@ describe('home delivery, from sign-up to the door', () => {
     // The right box, but a block away and not confirmed, is refused too.
     const far = await call('POST', `/v1/driver/runs/${run.id}/stops/1/deliver`, driver, { scannedPackId: s1.packId, lat: s1.point.lat + 0.004, lng: s1.point.lng, emptiesCollected: 0 });
     expect(far.json().metersAway).toBeGreaterThan(300);
-    // At the door, with a photo and empties.
-    const photo = (await call('POST', '/v1/driver/photos', driver, Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 74, 70, 73, 70, 0]), { 'content-type': 'image/jpeg' })).json();
-    const done1 = (await call('POST', `/v1/driver/runs/${run.id}/stops/1/deliver`, driver, { scannedPackId: s1.packId, lat: s1.point.lat, lng: s1.point.lng, photoUrl: photo.url, emptiesCollected: 9 })).json();
-    expect(done1.stops[0]).toMatchObject({ status: 'delivered', atAddressBy: 'gps', emptiesCollected: 9, photoUrl: photo.url });
+    // A photo taken before the box was scanned at the door (on the way, say) proves nothing: not delivered.
+    const early = (await call('POST', `/v1/driver/photos?packId=${s1.packId}&capture=camera&lat=${s1.point.lat}&lng=${s1.point.lng}`, driver, await doorPhoto(), { 'content-type': 'image/jpeg' })).json();
+    expect(early.id).toBeTruthy();
+    const atDoor = await call('POST', `/v1/driver/runs/${run.id}/stops/1/deliver`, driver, { scannedPackId: s1.packId, lat: s1.point.lat, lng: s1.point.lng, emptiesCollected: 9 });
+    expect(atDoor.json().error.code).toBe('photo_required');
+    // A photo from the phone's gallery doesn't count, nor one the phone says was taken a block away.
+    expect((await call('POST', `/v1/driver/photos?packId=${s1.packId}`, driver, await doorPhoto(), { 'content-type': 'image/jpeg' })).json().error.code).toBe('camera_only');
+    expect((await call('POST', `/v1/driver/photos?packId=${s1.packId}&capture=camera&lat=${s1.point.lat + 0.004}&lng=${s1.point.lng}&accuracy=10`, driver, await doorPhoto(), { 'content-type': 'image/jpeg' })).json().error.code).toBe('too_far');
+    // At the door, after the scan, with the camera: a photo of the box where it was left, and empties.
+    const photo = (await call('POST', `/v1/driver/photos?packId=${s1.packId}&capture=camera&lat=${s1.point.lat}&lng=${s1.point.lng}&accuracy=8`, driver, await doorPhoto(), { 'content-type': 'image/jpeg' })).json();
+    expect(photo).toMatchObject({ location: 'verified', metersFromHouse: 0 });
+    const done1 = (await call('POST', `/v1/driver/runs/${run.id}/stops/1/deliver`, driver, { scannedPackId: s1.packId, lat: s1.point.lat, lng: s1.point.lng, emptiesCollected: 9 })).json();
+    expect(done1.stops[0]).toMatchObject({ status: 'delivered', atAddressBy: 'gps', emptiesCollected: 9, photo: { id: photo.id, location: 'verified' } });
     expect(done1.nextStop).toBe(2);
     const who = s1.userId === mine.userId ? 'ana@example.com' : 'ben@example.com';
     expect((app.messenger as TestOutbox).lastTo(who)!.text).toMatch(/was delivered, and we picked up 9 empties/);
@@ -170,6 +184,6 @@ describe('ops', () => {
     const p = (await call('GET', '/v1/review/campaigns/cmp-joes/preview', admin)).json();
     expect(p.campaign.advertiser).toBe("Joe's Burgers");
     expect(p.scan.doc.pluginId).toBe('ar-3d-menu');
-    expect(p.sizes.length).toBe(3);
+    expect(p.sizes.length).toBe(1); // Joe's paid up front for one size (of its three), and prints at that size
   });
 });

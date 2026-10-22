@@ -41,7 +41,8 @@ async function customOrder(token: string, orderId: string, svg: string, experien
 
 beforeAll(async () => {
   db = await createPgliteClient();
-  app = await createApp({ db, seedDemo: true, seed: 2, clock });
+  // Invoices for what printed and scanned: billing afterwards (paying up front is tested in prepaid.test.ts).
+  app = await createApp({ db, seedDemo: true, demoBilling: 'billed_after', seed: 2, clock });
   keys = app.demoKeys!;
   outbox = app.messenger as TestOutbox;
   server = await buildServer(app);
@@ -194,11 +195,11 @@ describe('custom bottles', () => {
     const s = await signIn('declined@example.com');
     expect((await call('POST', '/v1/me/cards', s.token, { token: 'tok_expired' })).json().error.code).toBe('card_refused');
     await call('POST', '/v1/me/cards', s.token, { token: 'tok_declined' });
-    const printedBefore = app.printer.printed.length;
+    const printedBefore = app.printer.printedCount;
     const r = await customOrder(s.token, 'd-1', art);
     expect(r.statusCode).toBe(402);
     expect(r.json().error.code).toBe('card_declined');
-    expect(app.printer.printed.length).toBe(printedBefore);
+    expect(app.printer.printedCount).toBe(printedBefore);
   });
 });
 

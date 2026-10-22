@@ -1636,6 +1636,885 @@ end $$;
 create trigger advertiser_credit_limits_guard before update or delete on advertiser_credit_limits for each row execute function advertiser_credit_limits_guard();
 `,
   },
+  {
+    id: '060_prepaid_advertisers',
+    sql: `
+-- Advertisers pay up front (docs/SWITCHES.md, "How advertisers pay"). Payments can now be for an ad's bottles (and the
+-- extras paid with them) or for changing an ad.
+alter table payments drop constraint if exists payments_purpose_check;
+alter table payments add constraint payments_purpose_check check (purpose in ('custom_order', 'invoice', 'ad_order', 'ad_change'));
+
+-- Each payment an advertiser makes for an ad: its bottles (one size, one product, a fixed price per bottle, and any
+-- extras), or the fee for changing it. 'paying' until the card is charged and the bottles are counted in ad_prepaid.
+create table ad_orders (
+  id text primary key,
+  company_id text not null,
+  advertiser_id text not null,
+  campaign_id text not null,
+  draft_id text,
+  kind text not null check (kind in ('bottles', 'change')),
+  bottles integer not null default 0 check (bottles >= 0),
+  share integer,
+  product_id text,
+  price_cents integer not null default 0 check (price_cents >= 0),
+  extras jsonb not null default '{}',
+  extras_cents bigint not null default 0 check (extras_cents >= 0),
+  total_cents bigint not null check (total_cents > 0),
+  payment_id text,
+  status text not null check (status in ('paying', 'paid', 'declined')),
+  failure text,
+  created_at timestamptz not null default now(),
+  paid_at timestamptz
+);
+create index ad_orders_company on ad_orders(company_id, campaign_id);
+-- One payment for an ad's bottles (and one change fee per change), however often the button is pressed.
+create unique index ad_orders_bottles_once on ad_orders(campaign_id) where kind = 'bottles' and status <> 'declined';
+-- A new ad's order is made before its campaign exists: one per draft too, so two presses at once are one charge.
+create unique index ad_orders_bottles_draft_once on ad_orders(draft_id) where kind = 'bottles' and status <> 'declined' and draft_id is not null;
+create unique index ad_orders_change_once on ad_orders(draft_id) where kind = 'change' and status <> 'declined';
+
+-- Each prepaid ad's bottles: paid, printed, being printed now (held), and paid back. A paid bottle is claimed here
+-- before its label is drawn (one guarded statement), so a bottle nobody paid for never prints, even if two servers
+-- or a restart disagree with memory.
+create table ad_prepaid (
+  campaign_id text primary key,
+  company_id text not null,
+  advertiser_id text not null,
+  share integer not null,
+  product_id text not null,
+  price_cents integer not null check (price_cents >= 0),
+  paid integer not null check (paid >= 0),
+  printed integer not null default 0 check (printed >= 0),
+  held integer not null default 0 check (held >= 0),
+  refunded integer not null default 0 check (refunded >= 0),
+  extras jsonb not null default '{}',
+  stopped_at timestamptz,
+  check (printed + held + refunded <= paid)
+);
+
+-- When the company stops an ad, what wasn't printed is paid back: once per ad.
+create table ad_refunds (
+  id text primary key,
+  company_id text not null,
+  campaign_id text not null unique,
+  advertiser_id text not null,
+  bottles integer not null check (bottles >= 0),
+  bottles_cents bigint not null check (bottles_cents >= 0),
+  extras_cents bigint not null check (extras_cents >= 0),
+  total_cents bigint not null check (total_cents >= 0),
+  payment_id text,
+  status text not null check (status in ('refunding', 'refunded', 'failed')),
+  failure text,
+  reason text not null,
+  stopped_by text not null,
+  created_at timestamptz not null default now(),
+  done_at timestamptz
+);
+
+-- Each use of a costly extra (an AI video clip): what it was charged (0 if it wasn't paid for) and what it really cost.
+create table ad_extra_uses (
+  id text primary key,
+  company_id text not null,
+  campaign_id text not null,
+  feature text not null,
+  status text not null check (status in ('claimed', 'used', 'returned')),
+  charged_cents integer not null check (charged_cents >= 0),
+  cost_cents integer check (cost_cents >= 0),
+  ref text,
+  at timestamptz not null
+);
+create index ad_extra_uses_campaign on ad_extra_uses(campaign_id);
+
+-- What each advertiser has paid up front and not yet used, kept by the database from the ledger itself: it can never
+-- go below nothing (a print, an extra or a refund drawing more than was paid is refused).
+create table ad_prepaid_balances (
+  company_id text not null,
+  account text not null,
+  cents bigint not null check (cents >= 0),
+  primary key (company_id, account)
+);
+create function ad_prepaid_balance() returns trigger language plpgsql as $$
+begin
+  if new.credit like 'prepaid:%' then
+    insert into ad_prepaid_balances (company_id, account, cents) values (new.company_id, new.credit, new.amount_cents)
+      on conflict (company_id, account) do update set cents = ad_prepaid_balances.cents + excluded.cents;
+  end if;
+  if new.debit like 'prepaid:%' then
+    -- (An update, not an insert's conflict: a negative row offered for insert fails its check before any conflict.)
+    update ad_prepaid_balances set cents = cents - new.amount_cents where company_id = new.company_id and account = new.debit;
+    if not found then
+      insert into ad_prepaid_balances (company_id, account, cents) values (new.company_id, new.debit, -new.amount_cents);
+    end if;
+  end if;
+  return null;
+end $$;
+create trigger ad_prepaid_balance after insert on ledger_entries for each row execute function ad_prepaid_balance();
+`,
+  },
+  {
+    id: '061_route_areas',
+    sql: `
+-- Delivery areas FreeWater chooses: every house on the chosen streets gets packs, in street order, with no sign-up.
+-- New areas start off; a person turns one on. Settings are the area's own (docs/SWITCHES.md, "Delivery areas").
+create table delivery_areas (
+  id text primary key,
+  company_id text not null,
+  name text not null check (length(name) between 2 and 80),
+  route_id text not null, -- the route whose depot and delivery days its vans use
+  polygon jsonb, -- [[lat, lng], ...]: imported houses must fall inside it; null means no limit
+  frequency_days integer not null default 7 check (frequency_days between 1 and 28),
+  pack_size integer not null default 24 check (pack_size in (12, 24)),
+  packs_per_house integer not null default 1 check (packs_per_house between 1 and 6),
+  bottles_per_person_week integer default 12 check (bottles_per_person_week between 1 and 48),
+  max_packs_per_house integer not null default 3 check (max_packs_per_house between 1 and 6),
+  van_packs integer not null default 100 check (van_packs between 1 and 1000),
+  active boolean not null default false,
+  sample boolean not null default false,
+  created_by text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index delivery_areas_company on delivery_areas(company_id);
+
+-- Houses are addresses, not people: no names, no contact details. Household size only if someone in the app tells us.
+create table houses (
+  id text primary key,
+  company_id text not null,
+  area_id text not null references delivery_areas(id),
+  address text not null,
+  address_key text not null,
+  street text not null,
+  number integer,
+  lat double precision not null check (lat between -90 and 90),
+  lng double precision not null check (lng between -180 and 180),
+  status text not null default 'active' check (status in ('active', 'opted_out', 'skip_pending', 'skipped')),
+  household_size integer check (household_size between 1 and 20),
+  next_date date, -- the first night it's due again; null: due at the next plan
+  last_planned date,
+  last_delivered_at timestamptz,
+  skip_reason text,
+  sample boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (company_id, address_key)
+);
+create index houses_area on houses(area_id, status);
+
+-- A person in the app who proved a house is theirs (a code from a box delivered there). One house per person.
+create table house_claims (
+  house_id text not null references houses(id),
+  user_id text not null references users(id),
+  company_id text not null,
+  pack_id text not null,
+  claimed_at timestamptz not null default now(),
+  primary key (house_id, user_id)
+);
+create unique index house_claims_one_per_person on house_claims(company_id, user_id);
+
+-- What happened to each house and who did it (opt-outs, restarts, driver skips, reviews, claims). Only added to.
+create table house_events (
+  id text primary key,
+  company_id text not null,
+  house_id text,
+  kind text not null,
+  by_user text,
+  reason text,
+  at timestamptz not null default now()
+);
+create index house_events_house on house_events(house_id, at);
+create index house_events_tries on house_events(company_id, by_user, kind, at);
+create function house_events_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' and fw_test_reset(old.company_id) then return old; end if;
+  -- Erasing a person takes their id off what they did; nothing else about an event changes.
+  if tg_op = 'UPDATE' and new.by_user is null and new.id = old.id and new.kind = old.kind and new.house_id is not distinct from old.house_id
+     and new.reason is not distinct from old.reason and new.at = old.at then return new; end if;
+  perform fw_refuse('house_events', 'is append-only.');
+  return null;
+end $$;
+create trigger house_events_guard before update or delete on house_events for each row execute function house_events_guard();
+
+alter table route_runs add column if not exists area_id text;
+alter table route_runs add column if not exists planned_by text;
+`,
+  },
+  {
+    id: '062_news_fillers_households',
+    sql: `
+-- FreeWater News (off unless the host and the company switch it on). A topic prints only once a person approved it;
+-- its code always opens the newest story. Stories and corrections are only ever added to (a correction is a new
+-- version and a note, never an edit).
+create table news_topics (
+  id text primary key,
+  company_id text not null,
+  subject text not null check (length(subject) between 2 and 30),
+  photo text,
+  status text not null check (status in ('pending', 'approved', 'retired')),
+  proposed_by text not null,
+  proposed_at timestamptz not null,
+  approved_by text,
+  approved_at timestamptz,
+  retired_at timestamptz
+);
+create index news_topics_company on news_topics(company_id, status);
+-- What outlets reported: the facts a story is written from, with where they came from.
+create table news_reports (
+  id text primary key,
+  company_id text not null,
+  topic_id text not null references news_topics(id),
+  outlet text not null,
+  url text not null,
+  title text not null,
+  facts text not null,
+  added_by text not null,
+  at timestamptz not null
+);
+create index news_reports_topic on news_reports(topic_id, at desc);
+create table news_stories (
+  id text primary key,
+  company_id text not null,
+  topic_id text not null references news_topics(id),
+  version integer not null check (version >= 1),
+  style text not null,
+  headline text not null,
+  paragraphs jsonb not null,
+  sources jsonb not null,
+  written_by text not null,
+  at timestamptz not null,
+  unique (topic_id, version, style)
+);
+create table news_corrections (
+  id text primary key,
+  company_id text not null,
+  topic_id text not null references news_topics(id),
+  version integer not null,
+  note text not null check (length(note) between 5 and 500),
+  by_person text not null,
+  at timestamptz not null
+);
+create index news_corrections_topic on news_corrections(topic_id, at);
+create function news_append_only() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' and fw_test_reset(old.company_id) then return old; end if;
+  perform fw_refuse(tg_table_name, 'is append-only: write a new version or a correction instead.');
+  return null;
+end $$;
+create trigger news_stories_append_only before update or delete on news_stories for each row execute function news_append_only();
+create trigger news_corrections_append_only before update or delete on news_corrections for each row execute function news_append_only();
+-- "Report an error" from a story's page: only what the reader wrote, never who they are. Kept a year.
+create table news_error_reports (
+  id text primary key,
+  company_id text not null,
+  topic_id text not null references news_topics(id),
+  version integer not null,
+  style text not null,
+  text text not null check (length(text) between 3 and 1000),
+  status text not null default 'new' check (status in ('new', 'corrected', 'dismissed')),
+  at timestamptz not null
+);
+create index news_error_reports_company on news_error_reports(company_id, at desc);
+-- The news sources a person chose (their own stated choice; never worked out from what they do).
+create table news_source_prefs (
+  company_id text not null,
+  subject text not null,
+  sources jsonb not null,
+  at timestamptz not null,
+  primary key (company_id, subject)
+);
+
+-- Area data: neighbourhood or census-block statistics (no person in them), attached to delivery areas or houses.
+create table area_attributes (
+  company_id text not null,
+  area_id text not null,
+  kind text not null check (kind in ('block_group', 'tract', 'zip', 'route', 'neighbourhood')),
+  name text not null,
+  attributes jsonb not null,
+  source text not null,
+  as_of date not null,
+  sample boolean not null default false,
+  lat double precision,
+  lng double precision,
+  primary key (company_id, area_id)
+);
+-- Household data bought from a data company (or first-party), one attribute per row with its source and date, so a
+-- source can be deleted whole. Used only to choose ads for houses; never sold or passed on.
+create table household_imports (
+  id text primary key,
+  company_id text not null,
+  source text not null check (length(source) between 2 and 60),
+  source_date date not null,
+  origin text not null check (origin in ('bought', 'first_party')),
+  rows integer not null,
+  refused integer not null,
+  imported_by text not null,
+  imported_at timestamptz not null
+);
+create table household_attributes (
+  id text primary key,
+  company_id text not null,
+  house_key text not null,
+  address text not null,
+  block_id text,
+  attribute text not null,
+  value text not null,
+  source text not null,
+  source_date date not null,
+  origin text not null check (origin in ('bought', 'first_party')),
+  import_id text not null references household_imports(id) on delete cascade,
+  imported_at timestamptz not null,
+  unique (company_id, house_key, attribute, source)
+);
+create index household_attributes_house on household_attributes(company_id, house_key);
+create index household_attributes_source on household_attributes(company_id, source);
+-- Houses that said no to ads chosen for them (no account needed): bought data about them is deleted and never used.
+create table household_optouts (
+  company_id text not null,
+  house_key text not null,
+  how text not null,
+  at timestamptz not null,
+  primary key (company_id, house_key)
+);
+`,
+  },
+  {
+    id: '063_company_features',
+    sql: `
+-- Each company's switches on the Features page (src/runtime/registry.ts). A switch already kept in the company's
+-- settings (the games, the prize game, offers paying out…) is never copied here: it is read from the settings.
+-- One row per company and switch, its current state.
+create table company_features (
+  company_id text not null references companies(id),
+  feature_id text not null,
+  is_on boolean not null,
+  set_by text not null,
+  set_at timestamptz not null,
+  primary key (company_id, feature_id)
+);
+-- Which catalogue a company's choices were first written from: switches added later are "new" for it, and off until
+-- its own people decide (FreeWater, the platform company, gets its own choice).
+create table company_feature_baselines (
+  company_id text primary key references companies(id),
+  catalogue integer not null,
+  at timestamptz not null
+);
+-- Every change to a switch, from either place (the Features page or a settings page): who, when, from, to, why.
+-- Append-only, like the settings history: a reset keeps it, and nothing can edit or delete it.
+create table company_feature_log (
+  seq bigint generated always as identity primary key,
+  company_id text not null,
+  feature_id text not null,
+  was_on boolean,
+  is_on boolean not null,
+  by text not null,
+  reason text check (reason is null or length(reason) <= 300),
+  via text not null,
+  at timestamptz not null
+);
+create index company_feature_log_company on company_feature_log(company_id, seq desc);
+create trigger company_feature_log_append_only before update or delete on company_feature_log for each row execute function forbid_change();
+create trigger company_feature_log_no_truncate before truncate on company_feature_log for each statement execute function forbid_change();
+`,
+  },
+  {
+    id: '064_route_buying',
+    sql: `
+-- Buying on delivery routes (docs/SWITCHES.md, "Buying on delivery routes"): an advertiser pays up front for pieces of
+-- labels on bottles going to chosen houses in chosen weeks. Each piece is a spot on one bottle (or one box side) of one
+-- house's delivery that week, reserved when the order is made, so a payment can never promise space that isn't there.
+
+-- A business the company checked is who it says it is (needed for buys aimed at fewer than ~50 houses). A person.
+alter table advertisers add column if not exists verified_at timestamptz;
+alter table advertisers add column if not exists verified_by text;
+
+-- Part of an order can be paid with credit the advertiser got back for houses that stopped (the rest goes on the card).
+alter table ad_orders add column if not exists credit_cents bigint not null default 0 check (credit_cents >= 0);
+alter table ad_orders add constraint ad_orders_credit_within check (credit_cents <= total_cents);
+-- A box side paid for and then given back as credit (it never printed): counted, so it's never paid back twice.
+alter table ad_extra_uses drop constraint if exists ad_extra_uses_status_check;
+alter table ad_extra_uses add constraint ad_extra_uses_status_check check (status in ('claimed', 'used', 'returned', 'credited'));
+
+-- What a route buy is: its kind, size, weeks and what was chosen (areas, streets, a polygon, houses, attributes).
+create table route_buys (
+  campaign_id text primary key,
+  company_id text not null,
+  advertiser_id text not null,
+  order_id text not null unique,
+  kind text not null check (kind in ('spread', 'blanket', 'box', 'houses')),
+  share integer not null check (share in (1, 2, 3, 4, 6, 8, 10)),
+  product_id text not null,
+  start_week date not null,
+  weeks integer not null check (weeks between 1 and 52),
+  houses integer not null check (houses >= 1),
+  bottles integer not null check (bottles >= 1),
+  faces integer not null default 0 check (faces >= 0),
+  small boolean not null,
+  target jsonb not null,
+  created_at timestamptz not null default now()
+);
+create index route_buys_company on route_buys(company_id);
+
+-- One row per house and week that has (or had) spots: locked while spots are reserved there, so two payments for the
+-- same house and week take turns and the second sees what the first took (first paid wins).
+create table route_weeks (
+  company_id text not null,
+  house_id text not null,
+  week date not null,
+  primary key (house_id, week)
+);
+
+-- Each piece reserved: on a bottle (numbered 1.. across the house's boxes that week) or on a box side of one of its
+-- boxes. open (waiting for the night), held (on a label being printed), placed (printed), or given back as credit,
+-- refunded, or cancelled (its order's card was declined, or the company stopped the ad).
+create table route_spots (
+  id text primary key,
+  company_id text not null,
+  campaign_id text not null,
+  advertiser_id text not null,
+  order_id text not null,
+  house_id text not null,
+  week date not null,
+  bottle integer check (bottle between 1 and 200),
+  pack integer check (pack between 1 and 10),
+  face text,
+  share integer not null check (share in (1, 2, 3, 4, 6, 8, 10)),
+  units integer not null check (units between 0 and 120),
+  price_cents integer not null check (price_cents >= 0),
+  status text not null check (status in ('open', 'held', 'placed', 'credited', 'refunding', 'refunded', 'cancelled')),
+  unit_id text,
+  pack_id text,
+  settlement_id text,
+  created_at timestamptz not null default now(),
+  check ((bottle is not null and face is null) or (bottle is null and face is not null and pack is not null))
+);
+-- An ad is at most once on a bottle, and a box side carries one ad.
+create unique index route_spots_once_per_bottle on route_spots(house_id, week, bottle, campaign_id) where bottle is not null and status in ('open', 'held', 'placed');
+create unique index route_spots_once_per_face on route_spots(house_id, week, pack, face) where face is not null and status in ('open', 'held', 'placed');
+create index route_spots_house_week on route_spots(house_id, week);
+create index route_spots_campaign on route_spots(campaign_id, status);
+create index route_spots_order on route_spots(order_id);
+-- A label is 120 units (a tenth is 12) and carries at most 10 pieces: the database refuses more on one bottle, whatever
+-- the code decided.
+create function route_spots_room() returns trigger language plpgsql as $$
+begin
+  if exists (select 1 from route_spots s join (select distinct house_id, week, bottle from fresh where bottle is not null) f
+               on f.house_id = s.house_id and f.week = s.week and f.bottle = s.bottle
+             where s.status in ('open', 'held', 'placed') group by s.house_id, s.week, s.bottle having sum(s.units) > 120 or count(*) > 10) then
+    perform fw_refuse('route_spots', 'a bottle can''t carry more than its whole label (or more than 10 pieces).');
+  end if;
+  return null;
+end $$;
+create trigger route_spots_room after insert on route_spots referencing new table as fresh for each statement execute function route_spots_room();
+
+-- Spots given back: as credit for other houses (most buys), or as a refund of the unused part (a buy of chosen houses,
+-- once a person approves). reversed_cents: pieces that printed but whose box never reached the house (it came back),
+-- moved back from earned to the advertiser's money. Only ever added to; a refund's status moves forward.
+create table route_settlements (
+  id text primary key,
+  company_id text not null,
+  advertiser_id text not null,
+  campaign_id text not null,
+  kind text not null check (kind in ('credit', 'refund')),
+  reason text not null,
+  bottles integer not null default 0 check (bottles >= 0),
+  faces integer not null default 0 check (faces >= 0),
+  unprinted_cents bigint not null default 0 check (unprinted_cents >= 0),
+  reversed_cents bigint not null default 0 check (reversed_cents >= 0),
+  total_cents bigint not null check (total_cents >= 0),
+  status text not null check (status in ('done', 'waiting', 'refunding', 'refunded', 'failed')),
+  payment_id text,
+  failure text,
+  approved_by text,
+  created_at timestamptz not null default now(),
+  done_at timestamptz,
+  check (total_cents = unprinted_cents + reversed_cents),
+  check ((kind = 'credit' and status = 'done') or (kind = 'refund' and status <> 'done'))
+);
+create index route_settlements_adv on route_settlements(company_id, advertiser_id);
+create function route_settlements_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then perform fw_refuse('route_settlements', 'is append-only.'); end if;
+  if not fw_only_changed(to_jsonb(old), to_jsonb(new), array['status', 'payment_id', 'failure', 'approved_by', 'done_at'])
+     or old.status in ('done', 'refunded') then
+    perform fw_refuse('route_settlements', 'can''t be edited: only a refund''s status moves forward.');
+  end if;
+  return new;
+end $$;
+create trigger route_settlements_guard before update or delete on route_settlements for each row execute function route_settlements_guard();
+
+-- Credit used to pay part of an order. Only added to; an order whose card was declined doesn't count.
+create table route_credit_uses (
+  id text primary key,
+  company_id text not null,
+  advertiser_id text not null,
+  order_id text not null unique,
+  cents bigint not null check (cents > 0),
+  created_at timestamptz not null default now()
+);
+create trigger route_credit_uses_append_only before update or delete on route_credit_uses for each row execute function forbid_change();
+-- One row per advertiser, locked while credit is spent, so two orders at once can't spend the same credit.
+create table route_credit_accounts (
+  company_id text not null,
+  advertiser_id text not null,
+  primary key (company_id, advertiser_id)
+);
+
+-- A house blocks an advertiser (or every ad aimed at it alone), by someone who proved it's their house in the app.
+create table house_ad_blocks (
+  id text primary key,
+  company_id text not null,
+  house_id text not null references houses(id),
+  user_id text,
+  advertiser_id text,
+  created_at timestamptz not null default now(),
+  removed_at timestamptz
+);
+create unique index house_ad_blocks_once on house_ad_blocks(house_id, coalesce(advertiser_id, '*')) where removed_at is null;
+`,
+  },
+  {
+    id: '065_founder_adjustments',
+    sql: `
+-- 1. Photo proof of each drop (docs/SWITCHES.md, Delivery). A photo of the box at the door, taken by the driver for
+-- one pack. It shows someone's home, so it is kept only as long as the company says (90 days unless set), then its
+-- picture is deleted by the drop-photos job; the row stays (that a photo was taken, when), the picture doesn't.
+-- Re-encoded on the way in, so nothing hidden in the phone's file (where, which phone) is kept.
+create table drop_photos (
+  id text primary key,
+  company_id text not null,
+  pack_id text not null,
+  run_id text,
+  stop integer,
+  house_id text,
+  customer_id text,
+  taken_by text not null,
+  content_type text not null check (content_type = 'image/jpeg'),
+  bytes bytea,
+  blob_key text,
+  size_bytes integer not null check (size_bytes > 0 and size_bytes <= 3145728),
+  sha256 text not null,
+  taken_at timestamptz not null,
+  deleted_at timestamptz,
+  check ((deleted_at is null) = (bytes is not null or blob_key is not null))
+);
+create index drop_photos_pack on drop_photos(company_id, pack_id);
+create index drop_photos_house on drop_photos(house_id) where house_id is not null;
+create index drop_photos_keep on drop_photos(company_id, taken_at) where deleted_at is null;
+-- A picture deleted stays deleted, and a photo never moves to another pack or company.
+create function drop_photos_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then perform fw_refuse('drop_photos', 'rows are kept; only the picture is deleted.'); end if;
+  if old.deleted_at is not null or not fw_only_changed(to_jsonb(old), to_jsonb(new), array['bytes', 'blob_key', 'deleted_at']) or new.deleted_at is null then
+    perform fw_refuse('drop_photos', 'only the picture can be deleted, once.');
+  end if;
+  return new;
+end $$;
+create trigger drop_photos_guard before update or delete on drop_photos for each row execute function drop_photos_guard();
+
+-- 3. A bottle whose label came out wrong at the packing check is reprinted with exactly the same ads; the bad one is
+-- voided (it never counts against an advertiser). A bottle is reprinted at most once (its reprint can be, in turn),
+-- and once voided it stays voided; which bottle a reprint replaces never changes.
+create unique index units_one_reprint on units ((data->>'replaces')) where data->>'replaces' is not null;
+create function units_void_once() returns trigger language plpgsql as $$
+begin
+  if (old.data->'voided') is not null and (new.data->'voided') is distinct from (old.data->'voided') then
+    raise exception 'bottle % was voided and stays voided', old.id using errcode = '23514';
+  end if;
+  if (new.data->>'replaces') is distinct from (old.data->>'replaces') then
+    raise exception 'bottle % can''t change which bottle it replaces', old.id using errcode = '23514';
+  end if;
+  return new;
+end $$;
+create trigger units_void_once before update on units for each row execute function units_void_once();
+
+-- 4. Review of paid ads: an automated check can only flag; the team talks it over with the advertiser in a notes
+-- thread both can read, and only a person signed in finally rejects, with a reason. Only added to.
+create table ad_review_notes (
+  seq bigint generated always as identity,
+  id text primary key,
+  company_id text not null,
+  campaign_id text not null,
+  kind text not null check (kind in ('flag', 'note', 'resubmitted', 'approved', 'rejected')),
+  author_kind text not null check (author_kind in ('team', 'advertiser', 'automated')),
+  author_id text,
+  text text not null check (length(text) between 1 and 2000),
+  at timestamptz not null
+);
+create index ad_review_notes_campaign on ad_review_notes(company_id, campaign_id, seq);
+create trigger ad_review_notes_append_only before update or delete on ad_review_notes for each row execute function forbid_change();
+`,
+  },
+  {
+    id: '066_ai_ad_review',
+    sql: `
+-- The AI reviewer of paid ads (docs/AI.md, "AI reviewer of paid ads"; docs/SWITCHES.md, "Review of a paid ad").
+-- The founder: "the AI can flag it and then we can have a conversation with it about why it is or is not okay… but
+-- over time it will need to be able to take over that role and do it without oversight."
+
+-- Its notes in the thread with the advertiser are its own (not an "automated check"), and an advertiser's appeal of
+-- an AI's rejection is a note of its own kind.
+alter table ad_review_notes drop constraint ad_review_notes_kind_check;
+alter table ad_review_notes add constraint ad_review_notes_kind_check check (kind in ('flag', 'note', 'resubmitted', 'approved', 'rejected', 'appeal'));
+alter table ad_review_notes drop constraint ad_review_notes_author_kind_check;
+alter table ad_review_notes add constraint ad_review_notes_author_kind_check check (author_kind in ('team', 'advertiser', 'automated', 'ai'));
+
+-- Each verdict the AI gave on a paid ad, and what a person finally decided: its track record. What it said never
+-- changes; a person's decision is written once (a pass a person approved and later rejected becomes a miss, the only
+-- change allowed). Only a person's decision counts (never a key's).
+create table ad_ai_verdicts (
+  seq bigint generated always as identity,
+  id text primary key,
+  company_id text not null,
+  campaign_id text not null,
+  agent text not null,
+  verdict text not null check (verdict in ('pass', 'flag')),
+  category text not null check (category in ('none', 'misleading', 'prohibited', 'legal', 'offensive', 'personal', 'quality', 'other')),
+  reasons text not null default '' check (length(reasons) <= 2000),
+  final boolean not null default false,
+  audit boolean not null default false,
+  appealed_at timestamptz,
+  superseded_at timestamptz,
+  human_decision text check (human_decision in ('approved', 'rejected')),
+  human_by text,
+  human_at timestamptz,
+  agreed boolean,
+  missed boolean not null default false,
+  changed_view text check (changed_view in ('pass', 'flag')),
+  at timestamptz not null,
+  check ((human_decision is null) = (agreed is null) and (human_decision is null) = (human_by is null) and (human_decision is null) = (human_at is null)),
+  check (not final or verdict = 'flag'),
+  check (not audit or final),
+  check (not missed or (verdict = 'pass' and human_decision = 'rejected'))
+);
+create index ad_ai_verdicts_campaign on ad_ai_verdicts(company_id, campaign_id, seq);
+create index ad_ai_verdicts_record on ad_ai_verdicts(company_id, agent, human_at) where human_decision is not null;
+create function ad_ai_verdicts_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then perform fw_refuse('ad_ai_verdicts', 'rows are kept: the record is the record.'); end if;
+  if not fw_only_changed(to_jsonb(old), to_jsonb(new), array['appealed_at', 'superseded_at', 'human_decision', 'human_by', 'human_at', 'agreed', 'missed', 'changed_view']) then
+    perform fw_refuse('ad_ai_verdicts', 'what the AI said never changes.');
+  end if;
+  if (old.appealed_at is not null and new.appealed_at is distinct from old.appealed_at) or (old.superseded_at is not null and new.superseded_at is distinct from old.superseded_at) then
+    perform fw_refuse('ad_ai_verdicts', 'an appeal or a newer verdict is recorded once.');
+  end if;
+  if old.human_decision is not null and (new.human_decision, new.human_by, new.human_at, new.agreed, new.missed) is distinct from (old.human_decision, old.human_by, old.human_at, old.agreed, old.missed)
+     and not (old.verdict = 'pass' and old.human_decision = 'approved' and new.human_decision = 'rejected' and new.missed and not new.agreed) then
+    perform fw_refuse('ad_ai_verdicts', 'a person''s decision is recorded once (a pass later rejected becomes a miss).');
+  end if;
+  return new;
+end $$;
+create trigger ad_ai_verdicts_guard before update or delete on ad_ai_verdicts for each row execute function ad_ai_verdicts_guard();
+
+-- The team talking with the AI about one ad: kept with the ad, apart from the notes with the advertiser. Only added to.
+create table ad_ai_conversation (
+  seq bigint generated always as identity,
+  id text primary key,
+  company_id text not null,
+  campaign_id text not null,
+  role text not null check (role in ('team', 'ai')),
+  author_id text,
+  text text not null check (length(text) between 1 and 4000),
+  changed_view text check (changed_view in ('pass', 'flag')),
+  by_model text,
+  at timestamptz not null,
+  check (role = 'ai' or (author_id is not null and changed_view is null))
+);
+create index ad_ai_conversation_campaign on ad_ai_conversation(company_id, campaign_id, seq);
+create trigger ad_ai_conversation_append_only before update or delete on ad_ai_conversation for each row execute function forbid_change();
+
+-- Each company's bar for letting the AI make the final call on paid ads, and its audit sample. Never looser than the
+-- floors here, whatever the code says.
+create table ad_ai_review_settings (
+  company_id text primary key,
+  min_decisions integer not null check (min_decisions between 50 and 1000),
+  min_agree_pct integer not null check (min_agree_pct between 90 and 100),
+  sample_pct integer not null check (sample_pct between 5 and 100),
+  updated_by text not null,
+  updated_at timestamptz not null
+);
+create table ad_ai_review_changes (
+  seq bigint generated always as identity,
+  company_id text not null,
+  what text not null,
+  from_value integer,
+  to_value integer not null,
+  by text not null,
+  reason text,
+  at timestamptz not null
+);
+create trigger ad_ai_review_changes_append_only before update or delete on ad_ai_review_changes for each row execute function forbid_change();
+`,
+  },
+  {
+    id: '069_db_prepaid_money_rules',
+    sql: `
+-- The database's own rules for the money tables that came with paying up front and buying on delivery routes (060,
+-- 064): the code already keeps them; this keeps them if the code (or a hand in the database) ever doesn't. What was
+-- paid, at what price, for which ad and which house never changes; a status only moves forward; nothing is deleted.
+
+-- An ad's order: only its payment's progress changes, and once paid or declined it is final.
+create function ad_orders_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then perform fw_refuse('ad_orders', 'are kept: a declined order stays, declined.'); end if;
+  if not fw_only_changed(to_jsonb(old), to_jsonb(new), array['status', 'failure', 'payment_id', 'paid_at', 'credit_cents'])
+     or (old.status <> 'paying' and (new.status, new.payment_id, new.paid_at, new.credit_cents) is distinct from (old.status, old.payment_id, old.paid_at, old.credit_cents)) then
+    perform fw_refuse('ad_orders', 'can''t be edited: only a payment in progress becomes paid or declined.');
+  end if;
+  return new;
+end $$;
+create trigger ad_orders_guard before update or delete on ad_orders for each row execute function ad_orders_guard();
+
+-- An ad's paid bottles: what was paid, at what price and size, never changes; bottles paid back are only ever added;
+-- a stopped ad stays stopped. (Printed and printing are recounted from the bottles after a restart.)
+create function ad_prepaid_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then perform fw_refuse('ad_prepaid', 'is kept: what an advertiser paid for stays on record.'); end if;
+  if not fw_only_changed(to_jsonb(old), to_jsonb(new), array['printed', 'held', 'refunded', 'stopped_at'])
+     or new.refunded < old.refunded or (old.stopped_at is not null and new.stopped_at is distinct from old.stopped_at) then
+    perform fw_refuse('ad_prepaid', 'can''t be edited: what was paid never changes, bottles paid back are only added, and a stopped ad stays stopped.');
+  end if;
+  return new;
+end $$;
+create trigger ad_prepaid_guard before update or delete on ad_prepaid for each row execute function ad_prepaid_guard();
+
+-- A refund to an advertiser: its amounts never change; once refunded it is done.
+create function ad_refunds_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then perform fw_refuse('ad_refunds', 'is a permanent record.'); end if;
+  if not fw_only_changed(to_jsonb(old), to_jsonb(new), array['status', 'failure', 'done_at']) or old.status = 'refunded' then
+    perform fw_refuse('ad_refunds', 'can''t be edited: only a refund''s progress moves forward, and a refund done is done.');
+  end if;
+  return new;
+end $$;
+create trigger ad_refunds_guard before update or delete on ad_refunds for each row execute function ad_refunds_guard();
+
+-- A use of a paid extra: what it was charged, for which ad, never changes; used, given back or credited is final.
+create function ad_extra_uses_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then perform fw_refuse('ad_extra_uses', 'is kept.'); end if;
+  if (new.id, new.company_id, new.campaign_id, new.feature, new.charged_cents) is distinct from (old.id, old.company_id, old.campaign_id, old.feature, old.charged_cents)
+     or (old.status <> 'claimed' and new.status is distinct from old.status) then
+    perform fw_refuse('ad_extra_uses', 'can''t be edited: what a use was charged never changes, and a use settled stays settled.');
+  end if;
+  return new;
+end $$;
+create trigger ad_extra_uses_guard before update or delete on ad_extra_uses for each row execute function ad_extra_uses_guard();
+
+-- A piece reserved on a route: its ad, house, week, place and price never change. Waiting → printing → printed
+-- (or back to waiting, a print that failed); waiting or printed → given back as credit, refunding, or (waiting)
+-- cancelled; refunding → refunded. Given back, refunded and cancelled are final. Nothing is deleted.
+create function route_spots_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then perform fw_refuse('route_spots', 'are kept: a piece paid for stays on record.'); end if;
+  if not fw_only_changed(to_jsonb(old), to_jsonb(new), array['status', 'unit_id', 'pack_id', 'settlement_id']) then
+    perform fw_refuse('route_spots', 'can''t be edited: what was bought, where and at what price never changes.');
+  end if;
+  if new.status is distinct from old.status and not (
+       (old.status = 'open' and new.status in ('held', 'placed', 'credited', 'refunding', 'cancelled'))
+    or (old.status = 'held' and new.status in ('open', 'placed'))
+    or (old.status = 'placed' and new.status in ('credited', 'refunding'))
+    or (old.status = 'refunding' and new.status = 'refunded')) then
+    perform fw_refuse('route_spots', format('can''t go from %s to %s.', old.status, new.status));
+  end if;
+  return new;
+end $$;
+create trigger route_spots_guard before update or delete on route_spots for each row execute function route_spots_guard();
+
+-- Route pieces grow by every house, bottle and week (a year of two buys on 20,000 houses is two million rows). The
+-- quote's space left in a week, the daily settle of pieces still waiting, and the restart's check of pieces being
+-- printed read only the live ones. Measured on real Postgres over two million pieces: the week's space 1.0 s to 0.15 s
+-- (read from the index alone), the restart's check 94 ms to 0.1 ms.
+create index route_spots_week on route_spots(company_id, week) include (house_id, bottle, units) where status in ('open', 'held', 'placed');
+create index route_spots_waiting on route_spots(status, company_id) where status in ('open', 'held');
+`,
+  },
+  {
+    id: '070_drop_photos_move',
+    sql: `
+-- Door photos kept in the database (no FILE_STORAGE at first) can be moved to file storage (npm run files:move): the
+-- bytes go and a blob key comes, once, nothing else changes. Everything else stays as 065 had it: a picture deleted
+-- stays deleted, the row is never deleted, and a photo never moves to another pack or company.
+create or replace function drop_photos_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then perform fw_refuse('drop_photos', 'rows are kept; only the picture is deleted.'); end if;
+  if old.deleted_at is null and new.deleted_at is null and old.bytes is not null and old.blob_key is null and new.bytes is null and new.blob_key is not null
+     and fw_only_changed(to_jsonb(old), to_jsonb(new), array['bytes', 'blob_key']) then
+    return new; -- moved to file storage
+  end if;
+  if old.deleted_at is not null or not fw_only_changed(to_jsonb(old), to_jsonb(new), array['bytes', 'blob_key', 'deleted_at']) or new.deleted_at is null then
+    perform fw_refuse('drop_photos', 'only the picture can be deleted, once.');
+  end if;
+  return new;
+end $$;
+`,
+  },
+  {
+    id: '071_second_opinion',
+    sql: `
+-- A second reviewer's findings (docs/REVIEW-LOG.md, 2026-10-22).
+-- 1. One door, one house. A house's unit and ZIP code are kept apart from its street (src/core/address.ts), and a house
+-- found to be the same door as another (two ways of writing one address) is merged into it: it never gets a box again
+-- and points at the house it became. Skips for access reasons end on a date and the house is tried again.
+alter table houses add column if not exists unit text;
+alter table houses add column if not exists zip text;
+alter table houses add column if not exists merged_into text;
+alter table houses add column if not exists skip_until date;
+alter table houses drop constraint if exists houses_status_check;
+alter table houses add constraint houses_status_check check (status in ('active', 'opted_out', 'skip_pending', 'skipped', 'merged'));
+alter table houses add constraint houses_merged_points check ((status = 'merged') = (merged_into is not null));
+
+-- 2. A claim of a house: when its person was last seen (claims end after a long silence; settings adjust it).
+alter table house_claims add column if not exists last_seen_at timestamptz;
+update house_claims set last_seen_at = claimed_at where last_seen_at is null;
+create index if not exists house_claims_house on house_claims(house_id);
+
+-- 3. Photo proof of a drop: taken with the driver app's camera after the box was scanned at the door, and where the
+-- phone was when it was taken (verified within the company's distance of the house, or unverified for the team).
+alter table drop_photos add column if not exists capture text;
+alter table drop_photos add column if not exists lat double precision;
+alter table drop_photos add column if not exists lng double precision;
+alter table drop_photos add column if not exists meters_from_house integer;
+alter table drop_photos add column if not exists location_check text check (location_check in ('verified', 'unverified'));
+-- The order photos were taken in, whatever the clocks say: a drop's photo counts only if it came after the box's scan
+-- at the door (the scan remembers the last photo there was).
+alter table drop_photos add column if not exists seq bigint generated always as identity;
+
+-- 4. A route piece at a house skipped for a while moves to the house's next delivery within the buy: only its week and
+-- place on that week's bottles change, once forward, and where it came from is kept. Everything else stays as 069 has it.
+alter table route_spots add column if not exists rolled_from date;
+create or replace function route_spots_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then perform fw_refuse('route_spots', 'are kept: a piece paid for stays on record.'); end if;
+  if old.status = 'open' and new.status = 'open' and new.week > old.week and new.rolled_from = coalesce(old.rolled_from, old.week)
+     and fw_only_changed(to_jsonb(old), to_jsonb(new), array['week', 'bottle', 'pack', 'rolled_from']) then
+    return new; -- rolled to a later week at the same house
+  end if;
+  if not fw_only_changed(to_jsonb(old), to_jsonb(new), array['status', 'unit_id', 'pack_id', 'settlement_id']) then
+    perform fw_refuse('route_spots', 'can''t be edited: what was bought, where and at what price never changes.');
+  end if;
+  if new.status is distinct from old.status and not (
+       (old.status = 'open' and new.status in ('held', 'placed', 'credited', 'refunding', 'cancelled'))
+    or (old.status = 'held' and new.status in ('open', 'placed'))
+    or (old.status = 'placed' and new.status in ('credited', 'refunding'))
+    or (old.status = 'refunding' and new.status = 'refunded')) then
+    perform fw_refuse('route_spots', format('can''t go from %s to %s.', old.status, new.status));
+  end if;
+  return new;
+end $$;
+
+-- 5. Credit from pieces not delivered can expire (only where a company sets a number of days; none by default). What
+-- expired is only ever added to, and is booked out of the advertiser's money (ad.route_credit_expired).
+create table route_credit_expiries (
+  id text primary key,
+  company_id text not null,
+  advertiser_id text not null,
+  cents bigint not null check (cents > 0),
+  granted_before timestamptz not null,
+  at timestamptz not null
+);
+create index route_credit_expiries_advertiser on route_credit_expiries(company_id, advertiser_id);
+create trigger route_credit_expiries_append_only before update or delete on route_credit_expiries for each row execute function forbid_change();
+`,
+  },
 ];
 
 /** Runs every migration not yet run (or, for tests that start from an older schema, those in `list`). */

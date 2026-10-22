@@ -32,6 +32,8 @@ export class Reconciliation {
     days: (companyId: string) => Promise<{ date: string; hash: string }[]>;
     /** The charities a company can pay (by name). */
     charities: (companyId: string) => Promise<string[]>;
+    /** More checks from other parts (advertisers' money paid up front). */
+    more?: (companyId: string) => Promise<ReconCheck[]>;
   }) {}
 
   async report(companyId: string, day?: string): Promise<ReconReport> {
@@ -186,6 +188,9 @@ export class Reconciliation {
         : unconfirmed || below ? `${unconfirmed} sale(s) the advertiser's tag saw over a week ago that their server never confirmed; ${below} confirmed for less than the tag saw`
         : `${conv.length} sale(s) agree with the books`,
       { missing: missing.slice(0, 50), wrong: wrong.slice(0, 50), unconfirmedOverAWeek: unconfirmed, confirmedBelowTag: below });
+
+    // 12. Money advertisers paid up front: bottles, balances, and nothing left half done.
+    for (const c of (await this.deps.more?.(companyId)) ?? []) checks.push(c);
 
     // The day itself: what came in and went out, by kind, and its fingerprint.
     const lines = mem.filter((l) => this.deps.today(companyId, l.at) === date);

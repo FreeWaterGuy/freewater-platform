@@ -1,9 +1,11 @@
 // A short fuzz of the running API (CI and by hand): starts the server on an empty sample database, lets Schemathesis
-// send generated and malformed requests to every operation in /v1/openapi.json, once with no key and once with the
-// sample admin key, and fails if any answer is a server error (5xx) or the server stops.
+// send generated and malformed requests to every operation in /v1/openapi.json, once with no key, once with the
+// sample admin key and once with the sample advertiser's key (the routes where advertisers quote, pay and buy on
+// delivery routes refuse every other key before reading the body), and fails if any answer is a server error (5xx)
+// or the server stops.
 //   npm run fuzz:api                         (needs `schemathesis` on PATH, or SCHEMATHESIS=/path/to/schemathesis)
 //   FUZZ_EXAMPLES=30 FUZZ_MAX_TIME=900 npm run fuzz:api   longer (default 5 cases per operation, at most 100 s per
-//                                                         identity: about 4 minutes in all)
+//                                                         identity: about 6 minutes in all)
 // The longer runs with every identity (consumer, advertiser, machine, owner) are in docs/REVIEW-LOG.md (2026-10-20).
 // Known and harmless, so not checked here: a body field the schema doesn't list is dropped, not refused (clients rely
 // on it; Schemathesis's negative_data_rejection reports it), and an over-size upload is a 413, not a 400.
@@ -66,7 +68,9 @@ if (!(await ready())) { console.error(`The server didn't start:\n${log.slice(-30
 const admin = /freewater-admin\s+(fwk_\S+)/.exec(log)?.[1];
 if (!admin) { console.error(`No sample admin key in the server's output:\n${log.slice(-3000)}`); await finish(1); }
 
-const results = [['no key', await run('no key')], ['admin key', await run('admin key', admin)]];
+const advertiser = /advertiser-joes\s+(fwk_\S+)/.exec(log)?.[1];
+if (!advertiser) { console.error(`No sample advertiser key in the server's output:\n${log.slice(-3000)}`); await finish(1); }
+const results = [['no key', await run('no key')], ['admin key', await run('admin key', admin)], ['advertiser key', await run('advertiser key', advertiser)]];
 const alive = !exited && (await fetch(`${base}/health/live`).then((r) => r.ok, () => false));
 const errors = [...log.matchAll(/Server error on [A-Z]+ \S+/g)].map((m) => m[0]);
 console.log('\n=== Fuzz summary ===');

@@ -54,7 +54,8 @@ async function customOrder(token: string, orderId: string, svg: string, experien
 
 beforeAll(async () => {
   db = await createPgliteClient();
-  app = await createApp({ db, seedDemo: true, seed: 7, clock });
+  // Scans and box sides are billed here (billing afterwards); paying up front includes them (prepaid.test.ts).
+  app = await createApp({ db, seedDemo: true, demoBilling: 'billed_after', seed: 7, clock });
   keys = app.demoKeys!;
   server = await buildServer(app);
 });

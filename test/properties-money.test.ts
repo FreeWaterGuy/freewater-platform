@@ -6,8 +6,13 @@ import { Ledger, type LedgerEntry } from '../src/modules/ledger/ledger';
 import { signed } from '../src/modules/books/service';
 import { pointsNow, era } from '../src/modules/wallet/assets';
 import { convertTotals, rateFitsCap } from '../src/modules/chain/service';
-import { freewater } from '../src/demo/seed';
+import { freewater as paidUpFront } from '../src/demo/seed';
+import { billedAfter } from '../src/modules/ads/billing';
 import { ratchetProblem } from '../src/modules/console/settings';
+
+// The ledger's billing rules where advertisers are billed afterwards (commission on every sale); paying up front,
+// with commission a fee that starts off, is tested in prepaid.test.ts.
+const freewater: typeof paidUpFront = { ...paidUpFront, adBilling: billedAfter() };
 
 // Property tests for the money math: what a bottle gives, commission, partial refunds, the ledger's balance, signed
 // totals in the books, points and token conversion. Seeded and bounded.

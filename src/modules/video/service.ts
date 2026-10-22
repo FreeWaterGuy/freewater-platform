@@ -32,6 +32,13 @@ export class VideoService {
   perCompanyDay = FOOTAGE_PER_COMPANY_DAY;
   /** Set by the app: tells the team when a company reaches its footage ceiling. */
   alert?: (key: string, title: string, detail: string) => void;
+  /**
+   * Set by the app: footage costs real money, so each clip is one use of a costly extra the advertiser paid for up
+   * front (modules/ads/prepaid). No use left: no clip (the motion video still shows). Settled with what it really cost.
+   */
+  extras?: { claim: (c: Campaign) => Promise<{ useId: string } | null>; settle: (useId: string, made: boolean, costCents?: number) => Promise<void> };
+  /** Set by the app: is this switch on for this company (its Features page)? */
+  featureOn?: (companyId: string, id: string) => boolean;
   constructor(private db: SqlClient, private platform: Platform, private assets: AssetStore, private writer: StoryWriter = builtinWriter, private footage?: FootageProvider, private clock: () => Date = () => new Date()) {}
 
   stylesOf(c: Campaign): VideoStyle[] { return c.more ? c.more.videos : ['motion']; }
@@ -90,7 +97,8 @@ export class VideoService {
     const styles = this.stylesOf(c);
     const rows = (await this.db.query<any>(`select * from videos where campaign_id = $1 and segment = $2 and content = $3`, [c.id, key, this.contentOf(c)])).rows;
     const out: VideoView[] = [];
-    for (const style of (['live_action', 'animated'] as const).filter((s) => styles.includes(s))) {
+    const footageOn = !this.featureOn || this.featureOn(c.companyId, 'video_generation');
+    for (const style of (['live_action', 'animated'] as const).filter((s) => styles.includes(s) && footageOn)) {
       const ready = rows.filter((r) => r.style === style && r.status === 'ready' && r.review === 'approved');
       if (ready.length) out.push(this.view(this.best(ready)));
       if (!rows.some((r) => r.style === style && (r.status === 'making' || (r.status === 'ready' && r.review !== 'rejected')))) this.startFootage(c, seg, style).catch(() => {});
@@ -133,7 +141,7 @@ export class VideoService {
   private async makeMotion(c: Campaign, seg: Segment, take: number, now: boolean) {
     const id = newId('vid');
     const writer = now ? builtinWriter : this.writer;
-    const spec = await withCompany(c.companyId, async () => writer.write(this.brief(c, seg, take)));
+    const spec = await withCompany(c.companyId, async () => writer.write(this.brief(c, seg, take)), 'ai_video_writer');
     await this.db.query(`insert into videos (id, company_id, campaign_id, segment, style, take, status, review, spec, provider, created_at, ready_at, content) values ($1,$2,$3,$4,'motion',$5,'ready','approved',$6,$7,$8,$8,$9)`,
       [id, c.companyId, c.id, segmentKey(seg), take, JSON.stringify(spec), writer.name, this.clock().toISOString(), this.contentOf(c)]);
     // Motion cuts use only the advertiser's own approved words and pictures, so they don't need another review.
@@ -142,6 +150,11 @@ export class VideoService {
 
   private async startFootage(c: Campaign, seg: Segment, style: 'live_action' | 'animated') {
     if (!this.footage?.styles.includes(style)) return;
+    // The company switched the AI video maker off (its Features page): no clip is started (it costs money).
+    if (this.featureOn && !this.featureOn(c.companyId, 'video_generation')) return;
+    // A paid-for use of the extra next: none left, no clip.
+    const use = this.extras ? await this.extras.claim(c).catch(() => null) : undefined;
+    if (use === null) return;
     const since = new Date(this.clock().getTime() - 86_400_000).toISOString();
     const id = newId('vid');
     const content = this.contentOf(c);
@@ -156,14 +169,16 @@ export class VideoService {
       if (busy) return 'busy' as const;
       await tx.query(`insert into videos (id, company_id, campaign_id, segment, style, take, status, review, provider, created_at, content) values ($1,$2,$3,$4,$5,0,'making','pending',$6,$7,$8)`, [id, c.companyId, c.id, segmentKey(seg), style, this.footage!.name, this.clock().toISOString(), content]);
       return 'claimed' as const;
-    });
+    }).catch(async (e) => { if (use) await this.extras!.settle(use.useId, false).catch(() => {}); throw e; });
     if (claim === 'company_ceiling') this.alert?.(`video-ceiling:${c.companyId}`, `Company ${c.companyId} reached its ceiling of ${this.perCompanyDay} video clips a day`, `No more live-action or animated clips are started for its ads until the last 24 hours fall under ${this.perCompanyDay} (each clip costs money; motion videos still show). Raise FOOTAGE_PER_COMPANY_DAY if that's expected.`);
-    if (claim !== 'claimed') return;
+    if (claim !== 'claimed') { if (use) await this.extras!.settle(use.useId, false).catch(() => {}); return; }
     try {
       const job = await this.footage.start(this.brief(c, seg, 0), style);
       await this.db.query(`update videos set job_id = $2, prompt = $3 where id = $1`, [id, job.jobId, job.prompt]);
+      if (use) await this.extras!.settle(use.useId, true, job.costCents).catch(() => {});
     } catch (e) {
       await this.db.query(`update videos set status = 'failed', error = $2 where id = $1`, [id, String((e as Error).message).slice(0, 300)]);
+      if (use) await this.extras!.settle(use.useId, false).catch(() => {});
     }
   }
 

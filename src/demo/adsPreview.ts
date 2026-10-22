@@ -6,6 +6,7 @@ import { createPgliteClient } from '../db/pglite';
 import type { TestOutbox } from '../adapters/messaging/contract';
 import { simulateHistory } from './history';
 import { builtinCreatives } from './seed';
+import { serverOnly } from './serverOnly';
 
 // Builds out/ads-preview/index.html: FreeWater Ads with Joe's real two weeks of results, and the real ad assistant
 // running in the page, so anyone can click through it with no server. npm run demo:ads-preview
@@ -76,7 +77,7 @@ const rec = {
 };
 await server.close();
 
-const bundle = await build({ entryPoints: ['src/demo/adsPreviewEntry.ts'], bundle: true, format: 'iife', globalName: 'FWLocal', platform: 'browser', minify: true, write: false });
+const bundle = await build({ entryPoints: ['src/demo/adsPreviewEntry.ts'], bundle: true, format: 'iife', globalName: 'FWLocal', platform: 'browser', minify: true, write: false, plugins: [serverOnly] });
 const safe = (s: string) => s.replace(/<\/script/gi, '<\\/script').replace(/<!--/g, '<\\!--');
 const out = 'out/ads-preview';
 mkdirSync(out, { recursive: true });

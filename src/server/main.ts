@@ -126,8 +126,9 @@ server.addHook('preClose', async () => {
 // The background work. Each job saves its changes before it counts as done.
 const saved = (f: () => Promise<unknown>) => async () => { await f(); await app!.persistence.flush(); };
 const companies = () => [...app!.platform.companies.values()];
-// One company's failure is reported with its id and never stops the job for the others.
-const perCompany = (job: string, step: (companyId: string) => Promise<unknown>, which: () => string[] = () => companies().map((c) => c.id)) =>
+// One company's failure is reported with its id and never stops the job for the others. A company that switched the
+// job's feature off (its Features page, src/runtime/registry.ts) is skipped.
+const perCompany = (job: string, step: (companyId: string) => Promise<unknown>, which: () => string[] = () => companies().map((c) => c.id).filter((id) => app!.companyFeatures.jobOn(id, job))) =>
   forEachCompany(which(), step, (companyId, error) => {
     reporter.captureException(error, { tags: { source: 'job', job, companyId } });
     void alerts.alert(`job:${job}:${companyId}`, 'warning', `Background job “${job}” failed for company ${companyId}`, String((error as Error)?.stack ?? error), { tracked: reporter.enabled });
@@ -143,6 +144,14 @@ const jobs: Job[] = [
   { name: 'deliveries-overdue', everyMs: 3600_000, timeoutMs: 5 * 60_000, run: () => perCompany('deliveries-overdue', (id) => app!.delivery.overdue(id)) },
   // Each hour: pause the ads of advertisers who owe more than their credit allows (docs/SWITCHES.md). It only pauses.
   { name: 'credit', everyMs: 3600_000, timeoutMs: 10 * 60_000, run: saved(() => perCompany('credit', (id) => app!.credit.enforce(id))) },
+  // Each day: fees a person switched on for prepaid advertisers (scans, AR, box sides, commission) are charged to their
+  // card; a declined card pauses their ads at once (docs/SWITCHES.md, "How advertisers pay"). Each hour, payments for
+  // ads and refunds a restart or a timeout cut off are finished from the provider's answer.
+  { name: 'ad-fees', everyMs: 24 * 3600_000, timeoutMs: 30 * 60_000, run: saved(() => perCompany('ad-fees', (id) => app!.prepaid.chargeFees(id))) },
+  { name: 'ad-payments', everyMs: 3600_000, timeoutMs: 10 * 60_000, run: saved(() => perCompany('ad-payments', (id) => app!.prepaid.recover(id))) },
+  // Each day: route pieces that can't go out (a house stopped or blocked them, their week went by, their box came
+  // back) are given back as credit, or as refunds waiting for a person; refunds a restart cut off are finished.
+  { name: 'route-buys', everyMs: 24 * 3600_000, timeoutMs: 30 * 60_000, run: saved(() => perCompany('route-buys', async (id) => { await app!.routeBuys.settle(id); await app!.routeBuys.recover(id); })) },
   { name: 'videos', everyMs: 10_000, timeoutMs: 120_000, run: saved(() => app!.videos.tick()) },
   // Each hour: close any month that's due, measure changes whose week is up, read every agent's standing, share out
   // the AI fund, and have the security agent look around.
@@ -189,6 +198,8 @@ const jobs: Job[] = [
   } },
   // Once a day, delete data older than each company keeps.
   { name: 'data-purge', everyMs: 24 * 3600_000, timeoutMs: 60 * 60_000, run: saved(() => app!.data.purge()) },
+  // Photos of drops show people's homes: each company's keep (90 days unless set), then the picture is deleted.
+  { name: 'drop-photos', everyMs: 24 * 3600_000, timeoutMs: 30 * 60_000, run: saved(() => app!.dropPhotos.purge()) },
   // Every ten minutes: how full the database and the spool's disk are (alerts at 70% and 85%; see src/runtime/capacity.ts).
   // Each minute: changes piling up while the database refuses them (src/runtime/capacity.ts, checkSpool).
   { name: 'spool', everyMs: 60_000, remember: false, whilePaused: true, timeoutMs: 30_000, run: () => checkSpool({ waiting: app!.persistence.waiting, spoolFile: app!.persistence.spool.file, alert: (k, sev, title, detail) => alerts.alert(k, sev, title, detail), state: capacityState }) },

@@ -40,7 +40,9 @@ One order goes through the print pipeline:
 4. **Print** (printer adapter): retries a jam once. A sale is confirmed only when the printer confirms.
 5. **Dispense**, then scans, AR launches and purchases come in as events.
 
-The **ledger** listens to events and bills:
+The **ledger** listens to events and bills (where advertisers pay up front, FreeWater's way, a print moves its
+price from the money the advertiser paid in advance to what's earned, and scans, AR launches, box sides and sales
+are billed only when a person switched that fee on: see *How advertisers pay* below):
 
 - each confirmed print, at that slot size's price
 - each scan and AR launch that loads (repeats by one viewer inside the repeat window are free)
@@ -57,7 +59,7 @@ Failed prints, failed AR and duplicate orders are never billed. Ledger lines are
 
 - **Every bottle is different.** The ad engine is told which labels are already in the pack and picks a different one, and no campaign can take more than its share of a pack (`maxPackShare`, 50% by default).
 - **The box is ad space.** Top, front, back and right are sold to four different advertisers (never two competitors), each with its own QR. The left face is the locked company panel with the pack's QR. The bottom stays blank. A small stop code (`R3 · 14`) sits in the corner of the front and top. Box faces are billed only when the box print is confirmed.
-- **Checked before sealing.** The packing line scans every bottle (where there's no line, a signed-in person counts the box by hand and that check is recorded with who and when). A missing bottle or one from another pack stops the line; the missing bottle is reprinted and the pack is checked again before it can be sealed.
+- **Checked before sealing.** The packing line scans every bottle (where there's no line, a signed-in person counts the box by hand and that check is recorded with who and when). A bottle it can't read (a label torn, smudged, printed off or missing; bottles don't get lost in packing) or one from another pack stops the line. A bad label is **reprinted exactly**: the same ads in the same places, for the same house or person (`POST /v1/packs/:id/replace`). The bad bottle is voided: its books lines are reversed and it counts against no one (no paid bottle used, nothing charged, nothing to give back); the reprint is billed instead, once, and an ad paid for N bottles still reaches exactly N. Voiding, billing the reprint, moving its route pieces and putting it in the pack happen in one write; a crash in the middle is finished at the next start. The pack is checked again before it can be sealed.
 - **Loaded in reverse.** The last stop goes in the van first, so the next box is always by the door.
 - **Right box, right door.** A stop is marked delivered only when the driver scans the box planned for that address while at that address. Anything else is rejected with what to grab instead.
 
@@ -76,7 +78,7 @@ One API for every app, machine, micro-factory, driver, advertiser and partner. T
 | Finance | `GET /v1/ledger`, `GET /v1/events`, `POST /v1/invoices/run`, `GET /v1/invoices`, `POST /v1/invoices/:id/pay`, `POST /v1/advertisers/:id/cards` |
 | Owners | `POST /v1/team` |
 
-**Keys.** Every call except the public ones needs `Authorization: Bearer <key>`. A key belongs to one company and only ever sees that company. It has scopes (`orders`, `packs`, `campaigns`, `purchases`, `ledger`, `events`, `admin`), and an advertiser's key only sees that advertiser's campaigns and sales. New campaigns start paused until a company key turns them on (content review). Only a hash of each key is stored. Make one with `npm run key -- freewater "ATX-022 machine" orders`.
+**Keys.** Every call except the public ones needs `Authorization: Bearer <key>`. A key belongs to one company and only ever sees that company. It has scopes (`orders`, `packs`, `campaigns`, `purchases`, `ledger`, `events`, `admin`), and an advertiser's key only sees that advertiser's campaigns and sales. New campaigns start paused until the company turns them on (content review); a paid ad (paid up front, a route buy, or a change to one) is approved, switched on or changed only by a person on the team signed in, never a key. Only a hash of each key is stored. Make one with `npm run key -- freewater "ATX-022 machine" orders`.
 
 ## Accounts and payments
 
@@ -88,6 +90,7 @@ One API for every app, machine, micro-factory, driver, advertiser and partner. T
 
 **Payments.** Card numbers never reach FreeWater: apps send them to the payment provider and FreeWater keeps only a reference, brand and last 4 digits.
 - *Custom bottles:* the price is set by the server. The money is held first, taken only once the bottle prints, and released if it doesn't. A declined card prints nothing. The same order sent twice is printed and charged once.
+- *Ads, paid up front:* the advertiser's card is charged for its bottles before the ad is reviewed, at the total it was shown (a total that changed charges nothing); pressing pay twice, even on two servers, is one charge (one order per ad and per draft, a database rule). See *How advertisers pay*.
 - *Advertiser invoices:* `POST /v1/invoices/run` bills each advertiser for every ledger line since their last invoice (prints, scans, AR launches, commission, box faces, less refunds). Each ledger line can be on only one invoice. A saved card is charged; without one the invoice stays open, and a declined card marks it failed until it's paid.
 - Every payment taken is a ledger line, so the books show both what was billed and what was collected.
 
@@ -138,27 +141,148 @@ npm run demo:ops           # ~30 homes on two routes due today, today's boxes pr
 npm run demo:ops-preview   # builds out/ops-preview/ and out/driver-preview/, clickable copies that need no server
 ```
 
+**Delivery areas: house after house (the Austin pilot, `src/modules/delivery/houses.ts`).** The pilot's main way of
+handing out water. FreeWater chooses the streets; every house on them gets a free pack, house after house, like
+junk mail but free water that gives to charity. Houses don't sign up and aren't app users.
+- **Areas** (ops console *Areas*, `/v1/ops/areas`). An ops person or owner makes an area on one of the routes (its
+  micro-factory and delivery days), adds houses from a CSV of addresses with lat and lng, and keeps only the ones inside
+  a polygon of [lat, lng] corners. A real map to draw the polygon on can come later; the console shows the houses as
+  dots meanwhile. A new area starts **off**. Settings per area (docs/SWITCHES.md, "Delivery areas"): how often (weekly
+  by default), 12- or 24-packs (24), packs per house (1), bottles a person a week once a household says its size (12),
+  the most packs per house (3), boxes per van (100). The company's own: minutes at each house (4), a van's payload
+  (900 kg, boxes weighed from their product) and the longest shift (8 hours), which also end a van's run.
+- **Houses** are addresses, not people: address, street, number and unit, ZIP code, lat and lng, area, status (gets
+  packs, stopped in the app, driver skip waiting for review, skipped until a date or for good, merged into another
+  house that is the same door), household size only if someone told us, last delivered, next due. One door, one house:
+  every address is read one way (`src/core/address.ts`: number, street and unit, the USPS way, without town or ZIP), so
+  a ZIP code given by one source and not another, or "North" for "N", never makes two houses; houses saved before are
+  re-keyed at start and any two that are one door merged.
+  What happened to a house and who did it is kept in `house_events`, which can only be added to.
+- **The night's plan** (the same *Plan and print this night*, a signed-in ops person or owner). Every house due in
+  every area that's on, in **street order**: one street at a time, every house on it by house number, driven from the
+  nearer end, then on to the nearest end of the next street (`streetOrder` in `src/modules/delivery/planner.ts`; a
+  routing service with real roads can replace it). Split into one run per van by boxes per van, a house's boxes in one
+  van, stop numbers running on from van to van. Houses that stopped, or wait on a driver's skip, are left out and the
+  next house still gets its box. A house is taken for a night in one guarded database statement, so two plans at once
+  (or two servers) never put a house on two runs, and a house whose night went by unplanned comes on the next night
+  (with an hourly "overdue" alert until then).
+- **Packs per house**: the area's packs per house; once a household tells us its size, enough for its people (one
+  24-pack a week for one or two people, two for three or four, three for five or more, by default).
+- **At the door**: the driver scans the box (GPS within 100 m, or confirms), leaves it, takes a **photo of it where it
+  was left** with the app's camera (after the scan; within 150 m of the house when the phone knows where it is, else
+  marked unverified for the team), and scans again. Delivered with its photo means delivered; what happens on the porch afterwards isn't a failed
+  delivery. The drop time and the phone's position are kept on the stop, with the house and area on the
+  `pack.delivered` event, as proof for advertisers (street level only: they never see photos). The driver can **skip a
+  house** only for a real access or safety problem (a locked gate, a dangerous animal, not safe, no safe place to
+  leave it) or because it isn't a home: its boxes come back and the house is left out until a person reviews it
+  (*Areas*); a skip for getting to the door then lasts 4 weeks and the house is tried again. Signs on the door ("no soliciting") and what someone says at the door are never reasons: a house stops
+  only when someone there says so in the app.
+- **Stopping, in the app** (*Me → Your house's deliveries*, `/v1/me/house`). Someone at the house shows it's theirs by
+  scanning the code on the side of a box delivered there in the last 60 days (or typing the whole box code printed
+  under it; never just the short number in the corner; five wrong tries a day), then presses *Stop deliveries*: the house is left out of every
+  plan from then on, and a box already printed for that night comes back with the driver. *Start deliveries again*
+  puts it back from the next night its route drives. They can also say how many people live there. Deleting the account
+  removes the link to the house and the household size, never the choice made for the house.
+- **For the ad engine**: every bottle printed for a house gets `FillRequest.house` (`RouteHouseContext` in
+  `src/core/types.ts`: house id, area id, route id, street, household size if known, whether someone claimed it) and,
+  if someone claimed the house, that person's audience as `FillRequest.audience` (only what they allowed), exactly as
+  for any bottle printed for a known person. Nothing is sold on it yet: what advertisers can buy on routes is next.
+- **Where route buying meets household data** (for the next builder): a house in a delivery area and the household
+  data about it are one house. Houses are keyed by the same address form household data uses (`normalizeAddress`, so
+  "700 Big Bend Drive" and "700 Big Bend Dr." are one door and one pack), and
+  `app.households.audienceForRouteHouse(companyId, RouteHouseContext.houseId)` gives that house's `HouseAudience`,
+  counting people who claimed it in the app as residents (their "do not sell", a child at home, and what they allowed
+  apply). It is empty while *Ads aimed at houses* is off. A house's bottles carry, in order: the pieces bought for that
+  house that week on the routes (below), then other paid ads in the space left (one claimed bottle per printed bottle,
+  as at machines), then approved fillers, then the house ad; never an unpaid ad.
+- **Demo**: an "Austin pilot (sample houses)" area of about 50 made-up houses on four Travis Heights streets, off,
+  every house marked as a sample.
+- **Limits and decisions for the founder.** The box code proves a house to anyone who can scan the box, so a
+  passer-by could stop a neighbour's water (the neighbour can claim it too and start again); a code printed inside the
+  box would be stronger. Within that design: a new claim of a claimed house is shown to the earlier claimants and the
+  team, a stop by a claim under 7 days old shows to the team as *new claim* (still effective), claims end after 12
+  months unused, and nobody sees door photos from before their claim. Stopping is app-only as chosen: someone without the app, or who never got a box, can't stop
+  it yet. A box printed for a house that stops the same night still prints (and bills its ads); it comes back unopened.
+  The streets order is straight-line, not real roads.
+
 **Home delivery (in the app, `/v1/me/delivery`).** Free 6, 12 or 24 packs every week, every 2 weeks or every 4 weeks, on the days a neighbourhood's route runs. Check an address first (`POST /v1/public/delivery/check`), then skip the next one, pause, resume, change size, day or the note for the driver, or stop. The app shows when it arrives and, on the day, how many stops away the van is. Bottles in a pack count as the customer's bottles, with their AR.
 
-**The night's routes (`POST /v1/ops/runs/plan`).** Everyone due that night, grouped by route, put in driving order from the micro-factory, and a pack printed for each stop. Every bottle in a pack is different and the box carries its stop code ("R3 · 14") and its own box number. Planning the same night twice prints nothing new.
+**The night's routes (`POST /v1/ops/runs/plan`, a signed-in ops person or owner).** Everyone due that night, grouped by route, put in driving order from the micro-factory, and a pack printed for each stop; then every delivery area's houses (above). Every bottle in a pack is different and the box carries its stop code ("R3 · 14") and its own box number. Planning the same night twice prints nothing new.
 - **Swappable pieces.** Addresses become map points through a `Geocoder` (the test geocoder stands in until a real one is chosen). Stops are ordered by a `RoutePlanner` (the simple planner goes to the nearest stop next and then untangles crossings; a real routing service with roads and traffic plugs in the same way).
 - **Packing check (`POST /v1/ops/runs/:id/pack-check`).** Every bottle in every box is checked before the box is sealed. The packing line reports each box's scan through the packs API (`POST /v1/packs/:id/verify`); the packing check then seals every box the line passed and lists the rest. Where there's no line, a signed-in person counts a box by hand and presses **Checked by hand** next to it on the routes page (`POST /v1/ops/runs/:id/stops/:stop/check-by-hand`, a person only, never an API key): the box is sealed and the stop records who checked it and when. Once every box is sealed the route is ready to load.
 
 **The driver app (`/driver`).**
 - **Load the van.** The driver takes a route, then scans each box into the van in load order (`POST /v1/driver/runs/:id/load`), last stop first, so stop 1 ends up by the door. A box out of order is refused.
 - **House after house.** Each stop shows the address, the note, the box to grab (stop code and box number) and the next few houses.
-- **At the door.** The driver scans the box. It's delivered only if it's that house's box and the driver is there: GPS within 100 m, or the driver confirms. A wrong box shows a full-screen "Wrong box. Don't leave it." and names the right one. Ops sees every wrong scan.
-- **Proof and empties.** A photo of the box at the door, and a count of the empty bottles picked up.
+- **At the door.** The driver scans the box, leaves it, takes a photo of it where it was left with the app's camera (`POST /v1/driver/photos?packId=&capture=camera&lat=&lng=&accuracy=`), and scans again. It's delivered only if it's that house's box, the driver is there (GPS within 100 m, or the driver confirms) and, with *Photo proof of each drop* on (FreeWater: on), there's that driver's photo of that box taken after the box was scanned at that door (a photo from before, or from the phone's gallery, doesn't count; one the phone places more than `delivery.photoMaxMeters`, 150 m, from the house is refused; one with no location counts and shows *unverified location* to the team). The scan alone answers `photo_required` and is remembered; if the phone couldn't send the photo, a person on the team (ops or an owner, signed in, not the driver) can mark it delivered with a reason (`POST /v1/ops/runs/:id/stops/:stop/deliver-without-photo`). A wrong box shows a full-screen "Wrong box. Don't leave it." and names the right one. Ops sees every wrong scan.
+- **Proof and empties.** The photo, and a count of the empty bottles picked up. Photos show people's homes: each is re-encoded (JPEG, at most 1600 pixels a side; nothing the phone hid in the file, like where it was taken, is kept), 8 MB and 40 megapixels at most on the way in, kept apart from uploads and never at a public address, seen only by the team, a person signed in (*Routes*, `GET /v1/ops/drop-photos/:id`; never a service key) and by someone who proved in the app the house is theirs (*Your house*, `GET /v1/me/drop-photos`; only drops from when they proved it on, never before), and deleted after the company's keep (90 days unless set, 1 to 365: setting `delivery.photoKeepDays`) by the `drop-photos` job, whatever the switches say.
 - **Can't deliver.** "Problem at this stop" sends the box back and tells the customer why.
 - **The customer hears about it.** They get a text or email when the box is delivered, or if it couldn't be left.
 
 **The ops console (`/ops`).** For the company's own team.
 - **Today:** bottles, scans, money earned and given, deliveries, and what needs attention (ads to review, failed prints, scan pages that fell back, wrong boxes).
-- **Ad review:** each ad on a sample label, at every size, on a box and as its scan page, with a checklist. Approve, or send it back with a note.
+- **Ad review:** each ad on a sample label, at every size, on a box and as its scan page, with a checklist. Approve, or send it back with a note. A paid ad flagged (by an automated check, an AI or a person) shows its reasons and a notes thread with the advertiser; only a person finally rejects it, with a reason (see *How advertisers pay*).
+- **The AI reviewer of paid ads:** looks at each paid ad and passes or flags it; the team can ask it why and push back on the review page (kept with the ad, apart from the advertiser's notes). Its record against the team's final decisions is on *AI agents*. A company can let it make the final call on rejections (*AI makes the final call on paid ads*, off for everyone) only once that record meets its bar (100 decisions, 95% agreeing), by an owner with the second step; the advertiser can always appeal to a person, a sample is audited, the governor turns it off if agreement drops, and refunds stay a person's step (docs/AI.md).
 - **Machines:** prints today, failures and the last print for each machine, plus any scan pages that fell back.
 - **Routes:** plan and print a night, run the packing check, and follow every stop.
-- **Deliveries:** everyone getting packs.
+- **Areas:** the delivery areas, their settings and houses, adding houses from CSV, and drivers' skips to review.
+- **Deliveries:** everyone getting packs by subscription.
 - **Books:** the public totals and the latest ledger lines.
+
+## Buying on delivery routes (`src/modules/ads/routeBuys.ts`)
+
+Advertisers buy pieces of the labels on the bottles going to houses in the delivery areas, like direct mail but on a
+bottle: "as little as 1/10th of the label on a single bottle … to the house of their dreams, or blanket every house on
+the route, or every bottle in the box". Every size gets the same technology (printed for that house, its own code,
+the scan page and AR). Switches: *Ads → Buying on delivery routes* (docs/SWITCHES.md, "Buying on delivery routes").
+
+- **Four kinds of buy**, each for chosen weeks (Monday to Sunday, from next week; at most 26 unless the company sets
+  `adBilling.limits.maxRouteWeeks`; one charge at most $10,000 unless it sets `maxChargeCents`, above which the
+  advertiser is asked to buy less or talk to the team; at most 50,000 pieces, reserved in pieces of 5,000 rows inside
+  one transaction): **spread** (N bottles shared evenly
+  over an area, streets or a shape drawn on the map), **blanket** (one piece on one bottle in every box at every
+  house there), **whole box** (every bottle in a house's box, and its sides if chosen, at the chosen houses) and
+  **chosen houses** (named by address, a number of bottles at each). Optional: only houses whose household data fits
+  (size, income band, owner or renter, interests), with *Ads aimed at houses* on.
+- **Exact quote first** (`POST /v1/ads/drafts/:id/route-quote`, `/v1/ads/campaigns/:id/route-quote`): pieces × the
+  size's price × the product's factor, plus box sides, less credit; houses aimed at and reached, bottles per week,
+  the streets (counts only, never which house). Paying (`submit` with `pay.route`, or `/route-pay`) charges exactly
+  that or nothing.
+- **Never more than exists; first paid wins.** Paying reserves each piece on one bottle (numbered across the house's
+  boxes that week) or one box side (`route_spots`), in one transaction that locks each house and week first and works
+  the quote again against what is committed then: of two payments for the last space the second is charged nothing
+  and told the new price. The database refuses more than a whole label (or ten pieces) on one bottle whatever the
+  code decided. Small pieces share labels: each goes on the fullest bottle it still fits, only in mixes some layout
+  of the bottle can print, never an ad twice on a bottle, never two competitors. A declined card lets the space go.
+- **Printed exactly once, at the right house.** When the night is planned, each bottle of a house's pack carries the
+  pieces reserved for it, placed first (the label with the fewest, biggest pieces around them), each claimed open →
+  held in the database before the label is drawn and placed when it prints; the rest of the label gets other paid
+  ads, approved fillers, then the house ad. A route ad never prints anywhere else.
+- **Nobody pays for a house that stopped.** Pieces that can't go out come back: the house stopped deliveries or was
+  skipped, blocked the business (or every ad aimed at it alone), the week went by before they printed, or the box
+  came back. For a buy aimed at one house: a refund of that part to the card, approved by an owner or finance
+  person with the second step (`POST /v1/ops/route-refunds/:id/approve`). Otherwise: credit for other houses, used
+  first on the next route buy, listed per advertiser in the books (reconciliation `route_credit`) and their portal,
+  expiring only if the company sets `adBilling.limits.creditExpiryDays` (booked out as income, once). A house skipped
+  for a while keeps its pieces: those of the skipped weeks move to its next delivery within the buy where there's
+  room. Daily (job `route-buys`), at once when a house stops or blocks, and on request.
+- **Guardrails on tiny audiences** (fewer than 50 houses; a company may only raise that): *Buys aimed at fewer than
+  50 houses* on, a business the company verified (`POST /v1/advertisers/:id/verify`), no names, street addresses,
+  phone numbers, emails or personal messages in the ad (checked when paying and again at approval, on its artwork's
+  words decoded and read as people would, and on where its links and code go), approved by an
+  owner or reviewer signed in (never a key), never a house that blocked it or said no to targeted ads.
+- **A house's say** (the app, *Your house*): the businesses whose ads came there, block one, or block every ad aimed
+  at this house alone (`/v1/me/house/ads`, `/v1/me/house/ad-blocks`).
+- **Proof** (`GET /v1/ads/campaigns/:id/route-report`, the portal's *Where it went*): streets and houses reached
+  (streets with fewer than 5 shown together), each drop's time and rough place from the driver's scan (to ~100 m)
+  and whether it was at the door, scans by area, and what came back. Never a house or a person.
+- **Books:** a route buy is a prepaid order (`ad_orders`, `ad_prepaid`); box sides are a prepaid extra booked when the
+  box prints; a piece whose box came back is moved back from `revenue:print` to the advertiser's money; credit used
+  pays part of the next order. The daily reconciliation adds `route_spots_printed`, `route_buys_add_up` and
+  `route_open`; `test/controls-route-buying.test.ts` runs randomized months of buys, stops, blocks and nights with
+  every invariant checked after every step, on PGlite and real Postgres.
+- **Demo:** three route buys on the sample pilot area: a blanket (a tenth of one bottle in every box, two weeks), a
+  whole box with its sides on Leland St, and one house (two quarter pieces a week at 1501 Kenwood Ave).
 
 ## Smart codes and seeing the sale
 
@@ -237,14 +361,27 @@ npm run demo:ops-preview   # builds out/ops-preview/ and out/driver-preview/, cl
 
 **Pieces as square as possible (`src/modules/ads/layouts.ts`).** An ad gets a share of the label: the whole label, 1/2, 1/3, 1/4, 1/6, 1/8 or 1/10. For every mix of sizes that fills the label (up to 10 ads), the label is cut in two again and again along whichever side gives the squarest pieces. On the 16 oz bottle quarters are 2 × 2, sixths 3 × 2, eighths 4 × 2, and a half with two quarters is a column beside two stacked pieces. Pieces too thin (more than 2.6 times as long as wide) or too small for a readable QR code are never used. Products say which sizes they offer; the console shows how each one is cut.
 
-**FreeWater's starting prices** (each company sets its own; white-label licensees keep theirs): whole label $1.00, 1/2 65¢, 1/3 51¢, 1/4 42¢, 1/6 33¢, 1/8 24¢, 1/10 20¢ per bottle printed.
+**FreeWater's prices** (each company sets its own; white-label licensees keep theirs): whole label $1.00, 1/2 65¢, 1/3 51¢, 1/4 42¢, 1/6 33¢, 1/8 24¢, 1/10 20¢ per bottle, times the product's price factor (the 25 oz bottle is 1.25×). For the pilot these are flat and all-inclusive: AR, video and scans are included at every size, and every size gets the same tech.
+
+**How advertisers pay (`src/modules/ads/prepaid.ts`, `billing.ts`; docs/SWITCHES.md).** "We don't manufacture anything unless they have paid up front."
+- **Quote → pay → review → print.** The review page shows the exact total (bottles × the size's price × the product's factor, plus any costly extras); *Pay and submit* charges the card; the company reviews the ad; then it prints until every paid bottle is out ("N of M bottles out"). No end date and no cancel button: pausing only delays.
+- **Only paid bottles print.** Each bottle's paid ads are claimed in the database before its label is drawn (`ad_prepaid`, one guarded statement each), so the last paid bottle prints once even with two servers or a restart. A failed or abandoned print gives its bottle back. Bottles in delivery packs and at machines draw the same way; a bottle with ten tenth-ads draws one from each of ten ads.
+- **Books:** the payment sits in `prepaid:advertiser:<id>` (a liability) until each bottle prints and moves its price to `revenue:print`. The database refuses a prepaid balance below nothing, more printed than paid, and a second refund for one ad. The daily reconciliation and `npm run books:check` compare paid, printed and printing bottles with the bottles themselves and the books.
+- **Changing a running ad** costs the change fee ($100 by default, per company), paid up front; the new ad is reviewed, then the bottles not printed yet carry it.
+- **If review has a problem with a paid ad** ("that will need to be discussed with the FreeWater team to ensure that it was rejected for a valid reason"): an automated check or AI can only **flag** it (a reject sent with an API key becomes a flag). A flagged ad goes to the team's queue with the reasons; the team and the advertiser talk it over in notes both see (`/v1/review/campaigns/:id/notes`, `/v1/ads/campaigns/:id/notes`); the advertiser can fix it and send it again at no change fee while it's flagged. The money stays held and nothing prints. Only a person signed in finally rejects it, with a written reason, kept and shown to the advertiser (unless an owner turned on *AI makes the final call on paid ads* once the AI reviewer's record earned it: then the AI's rejection is final, the advertiser can always appeal to a person, and a sample is audited; see docs/AI.md); only then is its refund offered, approved by an owner or finance person as below (stopping a flagged ad is refused). Ads not paid up front are reviewed as before.
+- **If FreeWater stops an ad**, an owner or finance person (signed in, second step) pays back the unprinted bottles and unused extras to the card, once (`POST /v1/ads/campaigns/:id/stop`).
+- **Fees on top** (per scan 25¢, per AR launch 40¢, per box side, 3% commission) each have their own switch, all off. Turned on, they're charged to the card on file once a day (the `ad-fees` job), never left on an invoice to wait; a declined card pauses that advertiser's ads at once.
+- **Costly extras** (AI video clips from Veo): cost plus the company's markup, in the quote and paid up front. No paid clip left, no clip made. What each use really cost is recorded; if it passes what was charged the team is alerted, and the advertiser is never billed more.
+- **Per company:** pricing `flat` or `auction`, paying up front or billing afterwards with credit limits (FreeWater: flat, up front, no credit). Each is a switch on the Features page; for a new white-label company the money switches start off.
+
+The rest of this section is for companies that bill afterwards and sell by auction.
 - **Bids start at $1** for the whole label and go up. A smaller piece pays the same share of the bid as its starting price is of $1 (a $1.20 bid pays 78¢ for a half). A product's price factor scales all of it.
 
-**Targeting costs more per engagement (`src/modules/ads/targeting.ts`).** Like Google and Facebook: each scan and AR launch costs the base price (FreeWater: 25¢ and 40¢) plus a premium for each kind of targeting. FreeWater's settings: chosen machines or routes +10%, chosen products +5%, people's interests +25%, new or returning customers +15%, at most +60% in all. The ledger line says what was added, and advertisers see their premium on the "Code, versions and AI" page.
+**Targeting costs more per engagement (`src/modules/ads/targeting.ts`), for companies that bill afterwards.** Like Google and Facebook: each scan and AR launch costs the base price (25¢ and 40¢ suggested) plus a premium for each kind of targeting. FreeWater's settings: chosen machines or routes +10%, chosen products +5%, people's interests +25%, new or returning customers +15%, at most +60% in all. The ledger line says what was added, and advertisers see their premium on the "Code, versions and AI" page.
 
 **Giving: 10¢ a bottle, plus 10% of every dollar beyond.** FreeWater's default charity is Well Aware (Austin; builds water wells in Africa). Each bottle gives 10¢, covering its first $1 of ads. On top of that, 10% of every other dollar goes to charity: print money above $1 (higher bids, several ads on one bottle), scans, AR launches, box sides, custom bottles and sales commissions. A refund takes its share back. The label says "10¢ a bottle + 10% of every dollar beyond goes to Well Aware". In the console (Giving), every company, white-label ones included, can change the amounts, add charities, give a machine or route its own charity, or split every gift between several charities by percent (to the cent).
 
-**3% commission on sales.** This is the default for FreeWater and new licensees. It applies to sales after a QR scan and to sales made straight from the buy button inside AR. AR clicks are marked, and advertisers see "sales from AR" on their tracking page.
+**Commission on sales (3% suggested).** Where advertisers pay up front (FreeWater, and every new licensee to start) it's a fee switch that starts off; where they're billed afterwards it's charged at the company's rate. It applies to sales after a QR scan and to sales made straight from the buy button inside AR. AR clicks are marked, and advertisers see "sales from AR" on their tracking page.
 
 **The auction (`src/modules/ads/auction.ts`).** It works like Google's and Meta's:
 - Bid adjustments by machine, product, time of day, day of week, interests, and new or returning customers. They multiply together.
@@ -364,6 +501,7 @@ npm run demo:console-preview   # builds out/console-preview/, a clickable copy t
 - **Machines:** add a machine and get its own key, which can only print bottles. The key is shown once.
 - **Team:** add people with a role, remove them (they're signed out everywhere). The last owner can't be removed.
 - **Licensees** (FreeWater only): set up a new company with its own brand, house ad and first owner, who is emailed a link. Licensee owners can never do this, and no company can see another's.
+- **Features page:** every feature as a switch (about 130, in categories, with main switches and finer ones beneath), starting points (Full FreeWater, Design studio only, Delivery + printed ads, Machines + printed ads), a search, and the locked items that are always on. Off for a company means its routes refuse, its jobs skip, its screens hide and the engine doesn't use it. A new company copies FreeWater's choices with money, chain and one-way switches off. Every change is kept. The list is `src/runtime/registry.ts`; how to add a feature is in `docs/SWITCHES.md` §8.
 
 **API keys (`/v1/keys`).** Each system gets its own key with only the scopes it needs. A key is shown once; only a fingerprint and a short hint are kept. The list shows when each key was last used. Advertiser keys are limited to their own campaigns, sales and invoices.
 
@@ -428,7 +566,8 @@ npm run demo:ads-preview   # builds out/ads-preview/, a clickable copy that need
 - **See it before submitting** (`GET /v1/ads/drafts/:id/preview`): every size at every shape it can print at, on every product (a sixth can be a wide strip on one bottle and a tall column on the next), each drawn the way the label renderer draws it with its QR code where it prints; a real sample label with the company panel; each box side; the real scan page in a phone frame; and what it costs. An ad whose sizes fit no bottle can't be submitted.
 - **Review twice.** The advertiser confirms the preview (`submit` needs `approved: true`), then the company approves or sends it back with a note (`GET /v1/review/campaigns`, `POST /v1/review/campaigns/:id`). Nothing prints before that. Once approved, the advertiser can pause and resume; changing the artwork or scan page sends it back to review. Changes are made the same way, by chatting (`POST /v1/ads/drafts` with `fromCampaignId`).
 - **Results from the books** (`GET /v1/ads/overview`): spend, bottles printed, box sides, scans, AR launches, sales, saves and link taps, day by day and per ad. Every ledger line now carries its campaign, so each number traces to the lines it adds up.
-- **Billing**: invoices made from those ledger lines, a saved card charged automatically, and pay-now for open ones.
+- **On our delivery routes**: on the review page, *Where it goes → On our delivery routes*: the kind of buy, the size, the weeks, and areas (each a small map of its streets, where a shape can be drawn), streets or addresses; *See the exact price*, then pay and submit. *Where it went* on the ad shows the report; *Billing* shows route buys and credit.
+- **Billing**: what was paid up front for each ad (and any refund), fees switched on charged to the card each day; for companies that bill afterwards, invoices made from those ledger lines, a saved card charged automatically, and pay-now for open ones.
 
 ## Where people are (`src/modules/data/jurisdiction.ts`)
 
@@ -499,6 +638,7 @@ The server keeps working state in memory and writes through to the database, so 
 | `src/modules/console` | Company settings, their rules and version history, machines, licensee setup |
 | `src/modules/webhooks`, `src/adapters/webhooks` | Webhook endpoints, signed deliveries, retries, the public event list, and the sender contract |
 | `src/modules/packs` | Packs, box faces, packing check, van loading and delivery |
+| `src/modules/delivery` | Subscriptions, delivery areas and houses (`houses.ts`), street-order and route planning, the night's runs |
 | `src/adapters/printers` | Printer contract and the virtual printer |
 | `src/db` | Database contract, PGlite and Postgres adapters, migrations, storage |
 | `src/modules/accounts` | Sign-in codes, sessions, roles, privacy, export and delete |

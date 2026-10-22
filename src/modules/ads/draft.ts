@@ -1,5 +1,6 @@
 import { SHARES, type Campaign, type CompanyConfig, type Location, type Share } from '../../core/types';
 import { bidFloor } from './budget';
+import { commissionPercent, engagementFee, prepaidModel, type SwitchOn } from './billing';
 import { engagementPrice } from './targeting';
 import { checkStudioSpec, type StudioSpec } from '../studio/layout';
 import { checkPosterSpec, posterIcons, posterFonts, readableOn, contrast, type PosterSpec } from '../creative/poster';
@@ -151,6 +152,8 @@ export function applyPatch(d: AdDraft, patch: DraftPatch, ctx: DraftContext): { 
   if (p.buy !== undefined) {
     const b: any = p.buy;
     if (b?.type === 'guaranteed' && Number.isInteger(b.prints) && b.prints >= 100 && b.prints <= 1_000_000) next.buy = { type: 'guaranteed', prints: b.prints };
+    // Paid up front: a number of bottles, never a daily amount (that's the auction, for companies that bill after).
+    else if (prepaidModel(ctx.company)) problems.push('Ads here are paid up front for a number of bottles (at least 100), like “2,000 bottles”.');
     else if (b?.type === 'bid' && Number.isInteger(b.dailyCapCents) && b.dailyCapCents >= 500 && b.dailyCapCents <= 10_000_000) next.buy = { type: 'bid', dailyCapCents: b.dailyCapCents, ...(Number.isInteger(b.maxCentsPerLabel) && b.maxCentsPerLabel > 0 ? { maxCentsPerLabel: Math.max(b.maxCentsPerLabel, bidFloor(ctx.company)) } : {}) };
     else problems.push('A budget is either a number of bottles (at least 100) or a daily amount (at least $5).');
   }
@@ -201,17 +204,19 @@ export function draftTargeting(d: Pick<AdDraft, 'locations'>, existing?: Pick<Ca
 
 /**
  * What it will cost, in plain numbers. Each scan and AR launch is priced as it will be billed: the base price plus the
- * targeting premium of the ad this draft becomes (`existing` is the live ad a change is for).
+ * targeting premium of the ad this draft becomes (`existing` is the live ad a change is for). Where advertisers pay up
+ * front, scans, AR launches, box sides and sales cost nothing unless that fee is switched on (`on`: the Features page).
  */
-export function estimate(d: AdDraft, company: CompanyConfig, maxFactor = 1, existing?: Pick<Campaign, 'targeting'>) {
+export function estimate(d: AdDraft, company: CompanyConfig, maxFactor = 1, existing?: Pick<Campaign, 'targeting'>, on?: SwitchOn) {
   const pr = company.prices;
   const targeted = { targeting: draftTargeting(d, existing) };
+  const fee = (kind: 'scan' | 'ar' | 'boxFace') => { const f = engagementFee(company, kind, on); return f === null ? 0 : kind === 'boxFace' ? f : engagementPrice(f, targeted, company); };
   const sizes = d.sizes?.length ? d.sizes : allowedSizes;
   const perPrint = Object.fromEntries(sizes.map((s) => [s, pr.perPrintByShare[s]]));
   const biggest = Math.min(...sizes) as Share; // 1 is the whole label
   const smallest = Math.max(...sizes) as Share;
   const out: { perPrintCents: Record<string, number>; bidStartsAtCents: number; perScanCents: number; perArLaunchCents: number; commissionPercent: number; perBoxFaceCents: number; printsCostCents?: [number, number]; bottlesPerDay?: [number, number] } = {
-    perPrintCents: perPrint, bidStartsAtCents: pr.perPrintByShare[1], perScanCents: engagementPrice(pr.perScan, targeted, company), perArLaunchCents: engagementPrice(pr.perArLaunch, targeted, company), commissionPercent: pr.commissionPercent, perBoxFaceCents: pr.perBoxFace,
+    perPrintCents: perPrint, bidStartsAtCents: pr.perPrintByShare[1], perScanCents: fee('scan'), perArLaunchCents: fee('ar'), commissionPercent: commissionPercent(company, on) ?? 0, perBoxFaceCents: fee('boxFace'),
   };
   // Bigger products (a price factor above 1) cost more per print: the top of each range allows for the dearest one.
   const top = (s: Share) => Math.round(pr.perPrintByShare[s] * Math.max(1, maxFactor));

@@ -15,7 +15,7 @@ export interface Payment {
   id: string;
   companyId: string;
   customerId: string;
-  purpose: 'custom_order' | 'invoice';
+  purpose: 'custom_order' | 'invoice' | 'ad_order' | 'ad_change';
   ref: string;
   amountCents: number;
   status: 'authorized' | 'capturing' | 'voiding' | 'captured' | 'voided' | 'declined' | 'failed';
@@ -87,10 +87,13 @@ export class PaymentsService {
     const r = await this.provider.authorize({ customerRef: c.provider_customer_id, methodRef: m.provider_method_id, amountCents: input.amountCents, idempotencyKey: input.idempotencyKey, description: input.description });
     const id = newId('pay');
     const status = r.status === 'authorized' ? 'authorized' : 'declined';
-    await this.db.query(
-      `insert into payments (id, company_id, customer_id, purpose, ref, amount_cents, status, provider_ref, failure, idempotency_key) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+    // Two calls with the same key at once both reach the provider (which gives both the same hold); only the first is
+    // recorded, and the other returns it.
+    const made = await this.db.query(
+      `insert into payments (id, company_id, customer_id, purpose, ref, amount_cents, status, provider_ref, failure, idempotency_key) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) on conflict (idempotency_key) do nothing`,
       [id, input.companyId, c.id, input.purpose, input.ref, input.amountCents, status, r.status === 'authorized' ? r.ref : null, r.status === 'declined' ? r.reason : null, input.idempotencyKey],
     );
+    if (!Number(made.rowCount ?? 0)) return toPayment((await this.db.query<any>(`select * from payments where idempotency_key = $1`, [input.idempotencyKey])).rows[0]);
     if (r.status === 'authorized') this.bus.publish('payment.authorized', input.companyId, { paymentId: id, payerType: input.ownerType, payerId: input.ownerId, amountCents: input.amountCents, purpose: input.purpose, ref: input.ref }, id);
     else this.bus.publish('payment.declined', input.companyId, { paymentId: id, payerType: input.ownerType, payerId: input.ownerId, reason: r.reason, ref: input.ref }, id);
     return (await this.get(id))!;
@@ -231,6 +234,21 @@ export class PaymentsService {
     return out;
   }
 
+  /**
+   * Give back part of a payment already taken, to the same card. `key` names this refund: a retry with it never pays
+   * back twice. The books are the caller's (the refund's own event); this only moves the money.
+   */
+  async refund(paymentId: string, amountCents: number, key: string): Promise<void> {
+    const p = (await this.db.query<any>(`select * from payments where id = $1`, [paymentId])).rows[0];
+    if (!p) throw new PaymentError('not_found', 'Payment not found.', 404);
+    if (p.status !== 'captured') throw new PaymentError('not_taken', `This payment is ${p.status}; there is nothing to give back.`, 409);
+    if (!this.provider.refund) throw new PaymentError('refund_unsupported', `${this.provider.name} can't give money back from here: refund it at the provider, then record it.`, 501);
+    const r = await this.provider.refund(p.provider_ref, amountCents, key);
+    if (r.status === 'failed') throw new PaymentError('refund_failed', r.reason, 502);
+  }
+  /** The payment provider's name (it names the cash account in the books). */
+  get providerName() { return this.provider.name; }
+
   async get(paymentId: string): Promise<Payment | null> {
     const r = (await this.db.query<any>(`select * from payments where id = $1`, [paymentId])).rows[0];
     return r ? toPayment(r) : null;
@@ -284,12 +302,20 @@ export class PaymentsService {
       }
       return made;
     });
+    for (const m of made) this.bus.publish('invoice.issued', companyId, { invoiceId: m.id, advertiserId: m.advertiserId, totalCents: m.total, lines: m.lines }, m.id);
+    // Charge the new invoices, and any left open by an earlier run that stopped short (the provider down, a restart
+    // after the invoices were written): their lines are invoiced already, so nothing else would ever charge them.
+    // Each is tried; one that fails doesn't stop the others, and the run then fails so the job alerts and retries.
+    const stranded = (await this.db.query<{ id: string }>(`select id from invoices where company_id = $1 and status = 'open' and period_end <= $2 and not (id = any($3::text[])) order by created_at`, [companyId, periodEnd.toISOString(), made.map((m) => m.id)])).rows.map((r) => r.id);
     const out: Invoice[] = [];
-    for (const m of made) {
-      this.bus.publish('invoice.issued', companyId, { invoiceId: m.id, advertiserId: m.advertiserId, totalCents: m.total, lines: m.lines }, m.id);
-      await this.payInvoice(m.id);
-      out.push((await this.invoice(m.id))!);
+    const errors: string[] = [];
+    let first: unknown = null;
+    for (const id of [...made.map((m) => m.id), ...stranded]) {
+      try { await this.payInvoice(id); } catch (e) { first ??= e; errors.push(`${id}: ${(e as Error)?.message ?? e}`); }
+      if (made.some((m) => m.id === id)) out.push((await this.invoice(id))!);
     }
+    if (errors.length === 1 && first instanceof Error) throw first;
+    if (errors.length) throw new Error(`${errors.length} invoices couldn't be charged now (they stay open and are tried again on the next run): ${errors.slice(0, 10).join('; ')}`);
     return out;
   }
 
