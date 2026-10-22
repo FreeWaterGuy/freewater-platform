@@ -353,6 +353,13 @@ export async function createApp(opts: AppOptions) {
   const wallet = new WalletService(db, platform, opts.clock);
   wallet.mayEarn = async (companyId, subject) => (await data.rewardsAllowed(companyId, [subject, ...(await data.linkedSubjects(companyId, subject))])) && (await data.ageOk(companyId, [subject])) !== false;
   wallet.linked = (companyId, subject) => data.linkedSubjects(companyId, subject);
+  // An account and the key it was made with are one wallet (scan pages earn to that key while it's signed in).
+  wallet.sameAccount = async (companyId, subject) => {
+    const r = subject.startsWith('user:')
+      ? await db.query<any>(`select viewer_key as s from users where id = $1 and company_id = $2 and deleted_at is null`, [subject.slice(5), companyId])
+      : subject.includes(':') ? { rows: [] as any[] } : await db.query<any>(`select 'user:' || id as s from users where viewer_key = $1 and company_id = $2 and deleted_at is null`, [subject, companyId]);
+    return r.rows.map((x) => x.s).filter(Boolean);
+  };
   wallet.sourceSecret = await loadSecret(db, 'wallet');
   lottery.tagOf = (k) => data.viewerTag(k);
   data.pointsForFull = (companyId) => wallet.settings(companyId).points.perAction?.data_full ?? null;

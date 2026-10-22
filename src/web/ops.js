@@ -13,6 +13,8 @@
     for (const kid of kids.flat(Infinity)) if (kid != null && kid !== false) el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
     return el;
   };
+  /** "1 bottle", "2 bottles": a count with its noun, singular for exactly one. */
+  const plural = (n, one, many) => `${n} ${String(n).replace(/[^0-9.-]/g, '') === '1' ? one : many}`;
   const NS = 'http://www.w3.org/2000/svg';
   const icon = (d) => { const s = document.createElementNS(NS, 'svg'); for (const [k, v] of Object.entries({ viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' })) s.setAttribute(k, v); for (const p of d.split('|')) { const e = document.createElementNS(NS, 'path'); e.setAttribute('d', p); s.append(e); } return s; };
   const I = { today: 'M3 12h4l3-8 4 16 3-8h4', review: 'M4 4h16v16H4z|M8 12l3 3 5-6', machine: 'M6 3h12v18H6z|M9 7h6|M10 17h4', route: 'M6 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z|M18 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z|M6 15V9a4 4 0 0 1 4-4h6|M18 9v6a4 4 0 0 1-4 4H8', people: 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z|M2 21a7 7 0 0 1 14 0|M17 3a4 4 0 0 1 0 8|M22 21a7 7 0 0 0-5-6.7', books: 'M4 4h12a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4z|M8 8h8|M8 12h8' };
@@ -174,11 +176,11 @@
         }
       };
       frame = fixture?.scanFrame ? fixture.scanFrame() : h('iframe', { src: '/preview/scan', title: 'Scan page' });
-      const buy = c.buy.type === 'guaranteed' ? `${c.buy.remainingPrints.toLocaleString()} bottles` : `${dollars(c.buy.dailyCapCents)} a day`;
+      const buy = c.buy.type === 'guaranteed' ? `${plural(c.buy.remainingPrints.toLocaleString(), 'bottle', 'bottles')}` : `${dollars(c.buy.dailyCapCents)} a day`;
       pane.replaceChildren(
         h('div', { class: 'run-head' }, h('div', {}, h('h2', { style: 'margin:0;font-size:20px', text: c.name ?? c.advertiser }), h('div', { style: 'color:var(--muted)', text: `${c.advertiser} · ${c.category} · ${c.where === 'all' ? 'every machine' : c.where.join(', ')} · ${buy}` })), h('span', { class: 'pill warn', text: audit ? 'Audit of the AI’s rejection' : appealed ? 'Appealed · back with you' : flagged ? 'Flagged · being discussed' : 'Waiting for review' })),
-        flagged ? h('div', { class: 'notice', style: 'border-left:3px solid var(--warn, #c80)' }, h('b', { text: appealed ? 'Appealed: ' : 'Flagged: ' }), item.flag?.reasons ?? '', h('div', { style: 'color:var(--muted)', text: appealed ? 'The advertiser appealed the AI reviewer’s rejection to a person. You decide: approve it, or reject it with your reason. The money stays held and nothing prints meanwhile.' : 'A flag never rejects or refunds. The money stays held and nothing prints. Talk it over in the notes; the advertiser can change it at no fee.' })) : null,
-        audit ? h('div', { class: 'notice', style: 'border-left:3px solid var(--warn, #c80)' }, h('b', { text: 'Audit: ' }), `The AI reviewer rejected this ad on its own (${item.review?.note ?? ''}). A sample of its rejections comes to a person. Confirm it (reject, with your reason) or overturn it (approve). Either way it goes in its record.`) : null,
+        flagged ? h('div', { class: 'notice', style: 'border-left:3px solid var(--warn, #c80)' }, h('b', { text: appealed ? 'Appealed: ' : 'Flagged: ' }), item.flag?.reasons ?? '', h('div', { style: 'color:var(--muted)', text: appealed ? 'The advertiser appealed the AI reviewer’s rejection to a person. You decide: approve it, or reject it with your reason. The money stays held and nothing prints meanwhile.' : 'A flag never rejects or refunds. The money stays held and nothing prints. Talk it over in the notes; the advertiser can change it at no fee.' })) : '',
+        audit ? h('div', { class: 'notice', style: 'border-left:3px solid var(--warn, #c80)' }, h('b', { text: 'Audit: ' }), `The AI reviewer rejected this ad on its own (${item.review?.note ?? ''}). A sample of its rejections comes to a person. Confirm it (reject, with your reason) or overturn it (approve). Either way it goes in its record.`) : '',
         h('img', { class: 'label-img', style: 'width:100%;border-radius:8px;box-shadow:0 0 0 1px var(--line)', src: svgSrc(payload.labelSvg), alt: 'The ad on a sample label' }),
         h('div', { class: 'row3' },
           h('div', { style: 'display:flex;flex-direction:column;gap:12px' },
@@ -298,16 +300,16 @@
       data.runs.length ? h('div', { style: 'display:flex;flex-direction:column;gap:16px' }, data.runs.map((r) => {
         const at = stages.indexOf(r.status);
         return h('section', { class: 'run' },
-          h('div', { class: 'run-head' }, h('div', {}, h('h3', { text: r.areaName ? `${r.areaName} · van ${r.van} · ${r.routeId.replace(/^route-/, 'Route ')}` : `${r.routeName} · ${r.routeId.replace(/^route-/, 'Route ')}` }), h('div', { style: 'color:var(--muted);font-size:14px', text: `${r.counts.stops} stops · ${r.counts.bottles} bottles · about ${r.distanceKm} km, ${r.minutes} min · from ${r.depot?.name ?? 'the depot'}` })),
+          h('div', { class: 'run-head' }, h('div', {}, h('h3', { text: r.areaName ? `${r.areaName} · van ${r.van} · ${r.routeId.replace(/^route-/, 'Route ')}` : `${r.routeName} · ${r.routeId.replace(/^route-/, 'Route ')}` }), h('div', { style: 'color:var(--muted);font-size:14px', text: `${plural(r.counts.stops, 'stop', 'stops')} · ${plural(r.counts.bottles, 'bottle', 'bottles')} · about ${r.distanceKm} km, ${r.minutes} min · from ${r.depot?.name ?? 'the depot'}` })),
             h('div', { class: 'toolbar' }, r.status === 'packing' ? h('button', { class: 'btn small', type: 'button', onclick: async () => { try { const x = await api('POST', `/v1/ops/runs/${r.id}/pack-check`); toast(x.problems.length ? `${x.problems.length} box(es) need attention` : 'Every box checked and sealed'); } catch (e) { toast(e.message); } render(); } }, 'Run packing check') : null, r.driverId ? h('span', { class: 'pill dark', text: 'Driver assigned' }) : null, r.status !== 'done' ? h('button', { class: 'btn secondary small', type: 'button', onclick: () => closeOut(r) }, 'Close out…') : null)),
           h('div', { class: 'steps' }, stages.map((s, i) => h('span', { class: i < at ? 'done' : i === at ? 'on' : '', text: stageName[s] }))),
           h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Stop', 'Address', 'Box', 'Pack', 'Status', ''].map((x) => h('th', { text: x })))),
             h('tbody', {}, r.stops.map((s) => h('tr', {}, h('td', {}, h('b', { text: s.stopCode })), h('td', { text: s.address }), h('td', { text: `#${s.boxNumber ?? '—'}` }), h('td', { text: `${s.packSize}` }),
               h('td', {}, s.status === 'delivered' ? h('span', {}, h('span', { class: 'pill ok', text: `Delivered${s.atAddressBy === 'driver' ? ' (driver confirmed)' : ''}${s.photoWaived ? ' without a photo' : ''}` }), s.photo ? h('button', { class: 'linkish', type: 'button', onclick: () => openDropPhoto(s.photo.id) }, ' Photo') : null, s.photo && s.photo.location === 'unverified' ? h('span', { class: 'pill warn', title: 'The phone gave no location (or too vague a one) when the photo was taken', text: 'unverified location' }) : null) :
                 s.doorScan ? h('span', {}, h('span', { class: 'pill warn', text: 'Scanned at the door, no photo yet' }), h('button', { class: 'btn secondary small', type: 'button', onclick: () => vouch(r, s) }, 'Delivered without photo…')) : s.status === 'not_delivered' ? h('span', { class: `pill ${s.skipped ? 'warn' : 'bad'}`, text: `${s.skipped ? 'Skipped' : 'Not delivered'}: ${s.reason}` }) : s.houseStatus && s.houseStatus !== 'active' ? h('span', { class: 'pill warn', text: 'Stopped since the plan: keep the box' }) : h('span', { class: 'pill', text: s.packStatus === 'loaded' ? 'On the van' : s.packStatus === 'sealed' ? 'Sealed' : s.packStatus ?? 'Planned' })),
-              h('td', { style: 'color:var(--muted);font-size:13px' }, s.emptiesCollected ? `${s.emptiesCollected} empties` : '', s.checkedByHand ? `Checked by hand, ${ago(s.checkedByHand.at)}` : '',
+              h('td', { style: 'color:var(--muted);font-size:13px' }, s.emptiesCollected ? `${plural(s.emptiesCollected, 'empty', 'empties')}` : '', s.checkedByHand ? `Checked by hand, ${ago(s.checkedByHand.at)}` : '',
                 // No packing line for this box: a signed-in person counts every bottle and checks it by hand (who and when are kept).
-                r.status === 'packing' && (s.packStatus === 'box_printed' || s.packStatus === 'mismatch') ? h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { if (!confirm(`Did you count all ${s.packSize} bottles in box #${s.boxNumber ?? '—'} and check each one belongs? It's sealed and recorded under your name.`)) return; try { const x = await api('POST', `/v1/ops/runs/${encodeURIComponent(r.id)}/stops/${s.stop}/check-by-hand`); toast(x.problems.length ? `Checked and sealed. ${x.problems.length} box(es) still need a check` : 'Checked and sealed. Every box is ready to load'); } catch (e) { toast(e.message); } render(); } }, 'Checked by hand') : null)))))));
+                r.status === 'packing' && (s.packStatus === 'box_printed' || s.packStatus === 'mismatch') ? h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { if (!confirm(`Did you count all ${plural(s.packSize, 'bottle', 'bottles')} in box #${s.boxNumber ?? '—'} and check each one belongs? It's sealed and recorded under your name.`)) return; try { const x = await api('POST', `/v1/ops/runs/${encodeURIComponent(r.id)}/stops/${s.stop}/check-by-hand`); toast(x.problems.length ? `Checked and sealed. ${x.problems.length} box(es) still need a check` : 'Checked and sealed. Every box is ready to load'); } catch (e) { toast(e.message); } render(); } }, 'Checked by hand') : null)))))));
       })) : h('div', { class: 'empty', text: 'No routes planned for this night yet. Plan and print it when the day’s orders are in.' }));
   }
 
@@ -330,7 +332,7 @@
       areas.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Area', 'Houses', 'Packs', 'How often', 'Status'].map((x) => h('th', { text: x })))),
         h('tbody', {}, areas.map((a) => h('tr', {}, h('td', {}, link(`/ops/areas/${a.id}`, {}, h('b', { text: a.name })), h('div', { style: 'color:var(--muted);font-size:12px', text: `${a.routeName}${a.sample ? ' · sample houses' : ''}` })),
           h('td', { text: `${a.byStatus.active} of ${a.houses}${a.byStatus.opted_out ? ` · ${a.byStatus.opted_out} stopped` : ''}${a.byStatus.skip_pending ? ` · ${a.byStatus.skip_pending} to review` : ''}` }),
-          h('td', { text: `${a.packsPerHouse} × ${a.packSize}` }), h('td', { text: a.frequencyDays === 7 ? 'Weekly' : `Every ${a.frequencyDays} days` }),
+          h('td', { text: `${a.packsPerHouse} × ${a.packSize}` }), h('td', { text: a.frequencyDays === 7 ? 'Weekly' : `Every ${plural(a.frequencyDays, 'day', 'days')}` }),
           h('td', {}, h('span', { class: `pill ${a.active ? 'ok' : ''}`, text: a.active ? 'On' : 'Off' }))))))) : h('div', { class: 'empty', text: 'No delivery areas yet.' }),
       create);
   }
@@ -343,7 +345,7 @@
     const x = (p) => pad + ((p.lng - minLng) / Math.max(1e-6, maxLng - minLng)) * (W - pad * 2);
     const y = (p) => H - pad - ((p.lat - minLat) / Math.max(1e-6, maxLat - minLat)) * (H - pad * 2);
     const svg = document.createElementNS(NS, 'svg');
-    for (const [k, v] of Object.entries({ viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `Map of ${houses.length} houses`, style: 'width:100%;height:auto;background:var(--soft);border-radius:12px' })) svg.setAttribute(k, v);
+    for (const [k, v] of Object.entries({ viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `Map of ${plural(houses.length, 'house', 'houses')}`, style: 'width:100%;height:auto;background:var(--soft);border-radius:12px' })) svg.setAttribute(k, v);
     const el = (tag, a) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(a)) e.setAttribute(k, String(v)); svg.append(e); return e; };
     if (polygon) el('polygon', { points: polygon.map(([lat, lng]) => `${x({ lat, lng })},${y({ lat, lng })}`).join(' '), fill: 'none', stroke: '#9AA6B2', 'stroke-dasharray': '5 4', 'stroke-width': 2 });
     const color = { active: '#1F8A4C', opted_out: '#B7791F', skip_pending: '#B42318', skipped: '#9AA6B2' };
@@ -364,7 +366,7 @@
     poly.value = a.polygon ? JSON.stringify(a.polygon) : '';
     const result = h('div', {});
     const counts = houses.reduce((m, x) => ({ ...m, [x.status]: (m[x.status] ?? 0) + 1 }), {});
-    shell('areas', head(a.name, `${a.routeName} · ${a.houses} houses · ${a.packsPerHouse} × ${a.packSize}-pack ${a.frequencyDays === 7 ? 'every week' : `every ${a.frequencyDays} days`}${a.sample ? ' · sample houses, not real addresses' : ''}`,
+    shell('areas', head(a.name, `${a.routeName} · ${plural(a.houses, 'house', 'houses')} · ${a.packsPerHouse} × ${a.packSize}-pack ${a.frequencyDays === 7 ? 'every week' : `every ${plural(a.frequencyDays, 'day', 'days')}`}${a.sample ? ' · sample houses, not real addresses' : ''}`,
       h('button', { class: `btn ${a.active ? 'secondary' : ''}`, type: 'button', onclick: () => { if (a.active || confirm(`Turn on ${a.name}? Every active house in it is planned and printed from the next night you plan.`)) save({ active: !a.active }, a.active ? 'Turned off. Nothing more is planned for it.' : 'Turned on'); } }, a.active ? 'Turn off' : 'Turn on')),
       h('div', { class: 'grid2' },
         h('section', { class: 'panel-box' }, h('h2', { text: 'Houses' }), houseMap(houses, a.polygon),
@@ -378,7 +380,7 @@
           h('button', { class: 'btn', type: 'button', onclick: async () => {
             let polygon = null;
             try { polygon = poly.value.trim() ? JSON.parse(poly.value) : null; } catch { return toast('The polygon isn’t valid: [[lat, lng], …]'); }
-            try { const r = await api('POST', `/v1/ops/areas/${id}/houses/import`, { csv: csv.value, ...(polygon ? { polygon } : {}) }); result.replaceChildren(h('div', { class: 'notice' }, `${r.added} added, ${r.alreadyKnown} already known, ${r.outside} outside the polygon${r.problemCount ? `, ${r.problemCount} lines not read (first: line ${r.problems[0].line}, ${r.problems[0].reason})` : ''}.`)); } catch (x) { toast(x.message); }
+            try { const r = await api('POST', `/v1/ops/areas/${id}/houses/import`, { csv: csv.value, ...(polygon ? { polygon } : {}) }); result.replaceChildren(h('div', { class: 'notice' }, `${r.added} added, ${r.alreadyKnown} already known, ${r.outside} outside the polygon${r.problemCount ? `, ${plural(r.problemCount, 'line', 'lines')} not read (first: line ${r.problems[0].line}, ${r.problems[0].reason})` : ''}.`)); } catch (x) { toast(x.message); }
           } }, 'Add these houses'),
           h('button', { class: 'btn secondary', type: 'button', onclick: () => { let polygon = null; try { polygon = poly.value.trim() ? JSON.parse(poly.value) : null; } catch { return toast('The polygon isn’t valid: [[lat, lng], …]'); } save({ polygon }, 'Polygon saved for the next houses added'); } }, 'Save polygon')),
         result),
@@ -392,7 +394,7 @@
     const subs = await api('GET', '/v1/ops/subscriptions');
     const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     const freq = { weekly: 'Weekly', biweekly: 'Every 2 weeks', every4weeks: 'Every 4 weeks' };
-    shell('subs', head('Deliveries', `${subs.length} home${subs.length === 1 ? '' : 's'} getting packs. ${subs.reduce((n, s) => n + (s.status === 'active' ? s.packSize : 0), 0)} bottles a cycle.`),
+    shell('subs', head('Deliveries', `${subs.length} home${subs.length === 1 ? '' : 's'} getting packs. ${plural(subs.reduce((n, s) => n + (s.status === 'active' ? s.packSize : 0), 0), 'bottle', 'bottles')} a cycle.`),
       subs.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Customer', 'Address', 'Route', 'Pack', 'How often', 'Next', 'Status'].map((x) => h('th', { text: x })))),
         h('tbody', {}, subs.map((s) => h('tr', {}, h('td', { text: s.customer }), h('td', { text: s.address }), h('td', { text: s.routeId }), h('td', { text: `${s.packSize}` }), h('td', { text: `${freq[s.frequency]}, ${days[s.day]}` }), h('td', { text: s.nextDate ?? '—' }), h('td', {}, h('span', { class: `pill ${s.status === 'active' ? 'ok' : 'warn'}`, text: s.status === 'active' ? 'Active' : 'Paused' })))))))
         : h('div', { class: 'empty', text: 'No one has signed up for delivery yet.' }));

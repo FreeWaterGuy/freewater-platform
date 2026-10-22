@@ -31,6 +31,11 @@ export class WalletService {
   mayEarn?: (companyId: string, subject: string) => Promise<boolean>;
   /** Every phone and account that belongs to the same person. Set by the app. */
   linked?: (companyId: string, subject: string) => Promise<string[]>;
+  /**
+   * The other name of the same account: an account (`user:<id>`) and the random key it was made with (what its scan
+   * pages use while it's signed in) are one wallet, whatever the person's linking choices. Set by the app.
+   */
+  sameAccount?: (companyId: string, subject: string) => Promise<string[]>;
 
   private pending = new Set<Promise<unknown>>();
   /** Earn in the background (from an event), so the caller isn't held up. `idle()` waits for all of them. */
@@ -90,8 +95,9 @@ export class WalletService {
       await tx.query(`insert into wallet_balances (company_id, asset, account, balance) values ($1,$2,'supply',0) on conflict do nothing`, [companyId, asset]);
       const supply = Number((await tx.query<any>(`select balance from wallet_balances where company_id = $1 and asset = $2 and account = 'supply' for update`, [companyId, asset])).rows[0].balance);
       if ((await tx.query(`select 1 from wallet_tx where company_id = $1 and ref = $2`, [companyId, `earn:${ref}`])).rows.length) return { points: 0, balance: await this.sum(tx, companyId, asset, subjects), reason: 'already_counted' };
-      const today = (await tx.query<any>(`select coalesce(sum(l.amount),0)::bigint as pts, count(*) filter (where t.kind = $4)::int as n from wallet_tx t join wallet_lines l on l.tx_id = t.id where t.company_id = $1 and t.asset = $2 and t.day = $3 and t.kind like 'earn:%' and l.account = any($5)`,
-        [companyId, asset, day, `earn:${action}`, await this.accountsOf(tx, companyId, subjects)])).rows[0];
+      const holders = await this.accountsOf(tx, companyId, subjects);
+      const today = { n: Number((await tx.query<any>(`select count(*)::int as n from wallet_tx t join wallet_lines l on l.tx_id = t.id where t.company_id = $1 and t.asset = $2 and t.day = $3 and t.kind = $4 and l.account = any($5)`,
+        [companyId, asset, day, `earn:${action}`, holders])).rows[0].n), pts: await this.earnedToday(tx, companyId, asset, day, holders) };
       if (today.n >= (s.actionDailyMax[action] ?? Infinity)) return { points: 0, balance: await this.sum(tx, companyId, asset, subjects), reason: 'daily_limit' };
       // A real bottle is held by one person, maybe a few: only the first few people earn for scanning it.
       if (opts.about && opts.perAbout !== undefined && Number((await tx.query<any>(`select count(*)::int as n from wallet_tx where company_id = $1 and about = $2 and kind = $3`, [companyId, opts.about, `earn:${action}`])).rows[0].n) >= opts.perAbout) return { points: 0, balance: await this.sum(tx, companyId, asset, subjects), reason: 'bottle_limit' };
@@ -421,6 +427,64 @@ export class WalletService {
     return { corrected: r.corrected, by: r.by };
   }
 
+  // ---------- points on this phone, kept in an account ----------
+  //
+  // Points earned on a phone before signing in stay with that phone's random key: an account's wallet adds up the
+  // account and only what the person's data choices let us join (one person across phones, `linked`). So nobody is
+  // joined to a phone silently: the signed-in wallet shows "points on this phone", and the person moves them into the
+  // account with one tap. A move is one journal entry from the phone's holder to the account's: no points are made, so
+  // the cap is untouched; of what the phone earned today, only what fits under the account's own daily limit moves
+  // today (the rest can be kept tomorrow); and a move takes what is there under the company's points lock, so a retry
+  // or a second tap moves nothing more.
+
+  /** The points on this phone that aren't already part of this account (null when the phone already is the account's). */
+  async phonePoints(companyId: string, account: string, viewerKey: string) {
+    if (!/^[A-Za-z0-9_-]{8,64}$/.test(viewerKey)) return null;
+    if ((await this.subjectsOf(companyId, account)).includes(viewerKey)) return null;
+    return { points: await this.sum(this.db, companyId, this.pointsAsset(companyId), [viewerKey]) };
+  }
+
+  /** Move this phone's points into the account. `mayTake` says the phone isn't someone else's (checked only when there's something to move). */
+  async keepPhonePoints(companyId: string, account: string, viewerKey: string, mayTake: () => Promise<boolean>): Promise<{ kept: number; left: number; reason?: string; test?: true }> {
+    const phone = await this.phonePoints(companyId, account, viewerKey);
+    if (!phone) return { kept: 0, left: 0, reason: 'already_yours' };
+    if (phone.points <= 0) return { kept: 0, left: 0 };
+    if (!(await mayTake())) throw new WalletError('not_your_phone', 'These points belong to a phone that’s joined to someone else, so they can’t move to your account.', 409);
+    const asset = this.pointsAsset(companyId);
+    const accountSubjects = await this.subjectsOf(companyId, account);
+    const day = this.clock().toISOString().slice(0, 10);
+    const test = (this.stageOf?.(companyId) ?? 'test') === 'test';
+    try {
+      return await this.db.transaction(async (tx) => {
+        // The same lock earning takes, in the same order: one move or earning at a time per company.
+        await tx.query(`insert into wallet_balances (company_id, asset, account, balance) values ($1,$2,'supply',0) on conflict do nothing`, [companyId, asset]);
+        await tx.query(`select balance from wallet_balances where company_id = $1 and asset = $2 and account = 'supply' for update`, [companyId, asset]);
+        const [from] = await this.accountsOf(tx, companyId, [viewerKey]);
+        const held = from ? await this.balance(tx, companyId, asset, from) : 0;
+        if (!from || held <= 0) return { kept: 0, left: 0 };
+        const todays = Math.min(held, await this.earnedToday(tx, companyId, asset, day, [from]));
+        const room = Math.max(0, this.settings(companyId).points.dailyMax - (await this.earnedToday(tx, companyId, asset, day, await this.accountsOf(tx, companyId, accountSubjects))));
+        const today = Math.min(todays, room);
+        const kept = held - todays + today;
+        if (kept <= 0) return { kept: 0, left: held, reason: 'daily_limit', ...(test ? { test: true as const } : {}) };
+        const to = await this.accountOf(tx, companyId, account);
+        // The same on every retry of this one move: the phone's entries so far (a later move has more).
+        const n = Number((await tx.query<any>(`select count(*)::int as n from wallet_lines l join wallet_tx t on t.id = l.tx_id where t.company_id = $1 and t.asset = $2 and l.account = $3`, [companyId, asset, from])).rows[0].n);
+        await this.post(tx, companyId, asset, 'keep', `keep:${from}:${n}`, [[from, -kept], [to, kept]], { why: 'Points on a phone, kept in the account', today, ...(test ? { test: true } : {}) });
+        return { kept, left: held - kept, ...(held > kept ? { reason: 'daily_limit' } : {}), ...(test ? { test: true as const } : {}) };
+      });
+    } catch (e: any) {
+      if (e?.code === '23505') return { kept: 0, left: 0, reason: 'already_counted' };
+      throw e;
+    }
+  }
+
+  /** Points these holders earned today: earnings, plus the part of moves into them that was earned today (each counted once). */
+  private async earnedToday(db: SqlClient, companyId: string, asset: string, day: string, holders: string[]) {
+    if (!holders.length) return 0;
+    return Number((await db.query<any>(`select coalesce(sum(case when t.kind like 'earn:%' then l.amount else coalesce((t.memo->>'today')::bigint, 0) end),0)::bigint as pts from wallet_tx t join wallet_lines l on l.tx_id = t.id where t.company_id = $1 and t.asset = $2 and t.day = $3 and (t.kind like 'earn:%' or (t.kind = 'keep' and l.amount > 0)) and l.account = any($4)`, [companyId, asset, day, holders])).rows[0].pts);
+  }
+
   // ---------- reading ----------
 
   async pointsOf(companyId: string, subject: string) {
@@ -492,7 +556,8 @@ export class WalletService {
   }
 
   private async subjectsOf(companyId: string, subject: string) {
-    return [...new Set([subject, ...((await this.linked?.(companyId, subject)) ?? [])])];
+    const own = [subject, ...((await this.sameAccount?.(companyId, subject)) ?? [])];
+    return [...new Set([...own, ...(await Promise.all(own.map(async (s) => (await this.linked?.(companyId, s)) ?? []))).flat()])];
   }
   private async post(tx: SqlClient, companyId: string, asset: string, kind: string, ref: string, lines: [string, number][], memo: Record<string, unknown>, extra: { source?: string; about?: string } = {}) {
     if (lines.reduce((a, [, n]) => a + n, 0) !== 0) throw new Error('wallet entry does not balance');

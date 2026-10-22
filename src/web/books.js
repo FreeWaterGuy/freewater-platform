@@ -13,6 +13,8 @@
     for (const kid of kids.flat(Infinity)) if (kid != null && kid !== false) el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
     return el;
   };
+  /** "1 bottle", "2 bottles": a count with its noun, singular for exactly one. */
+  const plural = (n, one, many) => `${n} ${String(n).replace(/[^0-9.-]/g, '') === '1' ? one : many}`;
   const NS = 'http://www.w3.org/2000/svg';
   const sv = (tag, a, text) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(a)) e.setAttribute(k, String(v)); if (text !== undefined) e.textContent = text; return e; };
   const usd = (c, dec = true) => `$${(c / 100).toLocaleString(undefined, { minimumFractionDigits: dec ? 2 : 0, maximumFractionDigits: dec ? 2 : 0 })}`;
@@ -151,7 +153,7 @@
   function transfersTable(list) {
     if (!list.length) return h('p', { class: 'sub', text: 'No transfers yet. Donations are sent once each charity’s total reaches the minimum.' });
     return h('div', { class: 'scroll' }, h('table', { class: 't' }, h('thead', {}, h('tr', {}, ['Transfer', 'Date', 'Charity', 'Amount', 'From', 'Proof'].map((x, i) => h('th', { class: i === 3 ? 'r' : null, text: x })))),
-      h('tbody', {}, list.map((t) => h('tr', {}, h('td', {}, h('code', { text: t.number })), h('td', { text: day(t.sentAt) }), h('td', { text: t.charity }), h('td', { class: 'r', text: usd(t.amountCents) }), h('td', { text: `${t.bottles.toLocaleString()} bottles` }),
+      h('tbody', {}, list.map((t) => h('tr', {}, h('td', {}, h('code', { text: t.number })), h('td', { text: day(t.sentAt) }), h('td', { text: t.charity }), h('td', { class: 'r', text: usd(t.amountCents) }), h('td', { text: `${plural(t.bottles.toLocaleString(), 'bottle', 'bottles')}` }),
         h('td', {}, h('span', { title: `Bank reference ${t.bankReference}`, class: `pill ${t.status === 'confirmed' ? 'ok' : ''}`, text: t.status === 'confirmed' ? 'Charity confirmed' : `Sent · ${t.bankReference}` })))))));
   }
   const lookupBox = () => { const input = h('input', { id: 'code', placeholder: 'Bottle code, like u_7f3a…', 'aria-label': 'Bottle code', autocomplete: 'off' }); return h('form', { class: 'lookup', onsubmit: (e) => { e.preventDefault(); const v = input.value.trim().replace(/^.*\/r\//, ''); if (v) go(`/books/bottle/${encodeURIComponent(v)}${q()}`); } }, input, h('button', { class: 'btn', type: 'submit' }, 'Look up a bottle')); };
@@ -217,7 +219,7 @@
       const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
       const hex = [...new Uint8Array(buf)].map((x) => x.toString(16).padStart(2, '0')).join('');
       const ok = hex === d.hash;
-      out.replaceChildren(h('div', { class: `notice ${ok ? 'ok' : 'err'}` }, h('b', { text: ok ? `${d.date} checks out. ` : `${d.date} doesn’t match. ` }), ok ? `Your browser just hashed all ${lines.length} lines of that day itself and got the same fingerprint we published.` : 'The lines we serve don’t add up to the fingerprint we published. Please tell us.'));
+      out.replaceChildren(h('div', { class: `notice ${ok ? 'ok' : 'err'}` }, h('b', { text: ok ? `${d.date} checks out. ` : `${d.date} doesn’t match. ` }), ok ? `Your browser just hashed all ${plural(lines.length, 'line', 'lines')} of that day itself and got the same fingerprint we published.` : 'The lines we serve don’t add up to the fingerprint we published. Please tell us.'));
     };
     page('proof', h('h1', { class: 'lead', text: 'Proof that nothing changes' }), h('p', { class: 'sub', text: 'Each day of the books gets a fingerprint, built from every line that day and the day before’s fingerprint. If anyone changed a single past line, every fingerprint after it would change too. Write one down, check it again any time, or tap “Check” and your own browser recomputes it.' }),
       h('section', { class: 'card', style: 'margin-top:24px' }, out, h('div', { class: 'scroll' }, h('table', { class: 't' }, h('thead', {}, h('tr', {}, ['Day', 'Lines', 'In', 'Out', 'Fingerprint', ''].map((x, i) => h('th', { class: i === 1 || i === 2 || i === 3 ? 'r' : null, text: x })))),
