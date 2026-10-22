@@ -280,3 +280,4 @@ founder), **planned** (documented as not built).
 | FreeWater's choices are defaults; money, chain, one-way, autonomy start off | `startsOffForNew` | `features-registry.test.ts` | enforced |
 | Standing rules (governor, approvals, keys in host, honest data, Well Aware only, AR unlocked, points equal, law follows the person, data never sold, Solana) | locked switches, `approvalRoutes`, giving seed | earlier review rounds' tests | enforced (not re-tested this run) |
 
+| 2026-10-22 | API fuzz in CI (advertiser key) | MEDIUM | P9 | `overPixelLimit` / `preparePhoto` (src/modules/studio/photos.ts): sharp throws at once on an empty input, outside the promise its `.catch()` guarded, so a chat picture with nothing in it (`data:image/png;base64,`) was a 500 on `POST /v1/ads/drafts/:id/messages` | One `headerOf` reads a header safely (empty or unreadable: null); both use it | `test/empty-picture.test.ts` (both fail on the old code) |

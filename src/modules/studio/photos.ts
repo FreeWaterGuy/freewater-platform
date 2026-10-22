@@ -27,8 +27,13 @@ export const MAX_PIXELS = 40_000_000;
 /** A picture whose header says it's over the limit: its size, to say so. (A header that can't be read: null.) */
 export async function overPixelLimit(bytes: Uint8Array): Promise<{ width: number; height: number } | null> {
   // Only the header is read; sharp's own limit is turned off here or it would refuse the very biggest unread.
-  const m = await sharp(bytes, { limitInputPixels: false }).metadata().catch(() => null);
+  const m = await headerOf(bytes);
   return m?.width && m.height && m.width * m.height > MAX_PIXELS ? { width: m.width, height: m.height } : null;
+}
+/** A picture's header, or null when it can't be read. sharp throws at once (not in the promise) on an empty input. */
+export async function headerOf(bytes: Uint8Array) {
+  if (!bytes?.length) return null;
+  try { return await sharp(bytes, { limitInputPixels: false }).metadata(); } catch { return null; }
 }
 export const pixelsText = (p: { width: number; height: number }) => `${p.width.toLocaleString('en-US')} × ${p.height.toLocaleString('en-US')} pixels`;
 export const readImage = (bytes: Uint8Array | Buffer) => sharp(bytes, { limitInputPixels: MAX_PIXELS, failOn: 'error' });
@@ -37,7 +42,7 @@ const hex = (r: number, g: number, b: number) => `#${[r, g, b].map((v) => Math.m
 const lum = (r: number, g: number, b: number) => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
 
 export async function preparePhoto(input: Uint8Array): Promise<PreparedPhoto> {
-  const meta = await sharp(input, { limitInputPixels: false }).metadata().catch(() => null); // the header only
+  const meta = await headerOf(input); // the header only
   if (!meta?.width || !meta.height) throw new Error('That file isn’t a picture we can read.');
   if (meta.width * meta.height > MAX_PIXELS) throw new Error('That picture is too big to use. Use one under 40 megapixels.');
   if (meta.width < 300 || meta.height < 300) throw new Error('That picture is too small for print. Use one at least 300 pixels on each side.');
