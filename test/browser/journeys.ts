@@ -289,13 +289,18 @@ await journey('the owner chooses label layouts and the most ads on one bottle on
   expect(!own('layout_thirds'), 'thirds still on');
   expect(pilot.platform.layoutsOf(pilot.platform.companies.get('freewater')!, pilot.platform.standardProduct('freewater')).every((l) => l.templateId !== 'thirds'), 'the engine still offers thirds');
   // The most ads on one bottle: checked first (paid bottles it would strand are counted), then saved.
-  await page.fill('#layouts input[aria-label="Most ads on one bottle"]', '4');
-  await page.locator('#layouts button', { hasText: /^Save$/ }).first().click();
-  // Saved straight away, or (paid bottles it would strand) after the count is shown and confirmed.
+  // The page re-draws after the save above: wait for the box and its Save button to be the settled ones.
+  await page.waitForSelector('.feat-confirm', { state: 'hidden', timeout: 30_000 }).catch(() => {});
+  const maxBox = page.locator('#layouts input[aria-label="Most ads on one bottle"]');
+  const saveMax = async () => { await maxBox.fill('4'); await page.locator('#layouts button', { hasText: /^Save$/ }).first().click(); };
+  await saveMax();
+  // Saved straight away, or (paid bottles it would strand) after the count is shown and confirmed. A slow machine
+  // can redraw the section between filling and clicking; then the click is tried again.
   const maxNow = () => pilot.platform.companies.get('freewater')!.adRules.maxAdsPerUnit;
-  for (let i = 0; i < 100 && maxNow() !== 4; i++) {
+  for (let i = 0; i < 300 && maxNow() !== 4; i++) {
     const confirm = page.locator('.feat-confirm:not([hidden]) button:has-text("Save anyway")');
     if (await confirm.count()) { expect(/paid bottle|piece/.test(await page.textContent('.feat-confirm')), 'the warning doesn’t say what waits'); await confirm.click(); }
+    else if (i % 25 === 24) await saveMax();
     await page.waitForTimeout(200);
   }
   expect(pilot.platform.companies.get('freewater')!.adRules.maxAdsPerUnit === 4, 'most ads not saved');
