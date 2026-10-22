@@ -9,8 +9,7 @@ import { AuctionStats, momentAt } from './modules/ads/auction';
 import { Ledger } from './modules/ledger/ledger';
 import type { RenderedLabel } from './modules/print/contract';
 import { houseOnlyAdEngine } from './modules/ads/engine';
-import { SHARES } from './core/types';
-import { SIZE_SWITCHES } from './runtime/registry';
+import { companyLayouts, productFor as narrowProduct } from './modules/ads/layoutChoice';
 
 export interface OrderOptions {
   companyId: string;
@@ -167,6 +166,29 @@ export class Platform {
     return { ...a, campaignsToday: counts };
   }
 
+  /**
+   * With "Most revenue per bottle": how many bottles in a row each paid ad that fits was left off (the fair-turn bound,
+   * modules/ads/layoutChoice). In memory: after a restart every count starts again at 0, so an ad's turn comes at most
+   * one bound later than it would have (P6, accepted: nothing is lost or charged). Bounded: an ad is dropped once it goes
+   * on a bottle, and the map is cleared of ads no longer running when it grows past MAX_WAITS (P7).
+   */
+  readonly adWaits = new Map<string, number>();
+  static readonly MAX_WAITS = 20_000;
+  private noteWaits(fill: { placements: Placement[]; waited?: string[] }) {
+    for (const p of fill.placements) if (!p.isHouse) this.adWaits.delete(p.campaignId);
+    for (const id of fill.waited ?? []) this.adWaits.set(id, (this.adWaits.get(id) ?? 0) + 1);
+    if (this.adWaits.size > Platform.MAX_WAITS) for (const id of this.adWaits.keys()) if (!this.campaigns.get(id)?.active) this.adWaits.delete(id);
+  }
+
+  /** The product as this company may cut it: the sizes and label layouts it switched off left out (modules/ads/layoutChoice). */
+  productFor(company: CompanyConfig, product: Product): Product {
+    return narrowProduct(company, product, (id) => !this.featureOn || this.featureOn(company.id, id));
+  }
+  /** The templates this company can print on this product (its switches, its choice for the product, its most ads a bottle). */
+  layoutsOf(company: CompanyConfig, product: Product) {
+    return companyLayouts(company, product, (id) => !this.featureOn || this.featureOn(company.id, id));
+  }
+
   /** The product a company hands out unless something else is asked for. */
   standardProduct(companyId?: string): Product {
     const c = companyId ? this.companies.get(companyId) : undefined;
@@ -265,9 +287,9 @@ export class Platform {
     // Paid bottles are claimed in the database too; an ad the database says has none left is taken out and the label
     // filled again without it.
     const on = (id: string) => !this.featureOn || this.featureOn(company.id, id);
-    const allSizes = product.sizes?.length ? product.sizes : SHARES;
-    const sizes = allSizes.filter((s) => on(SIZE_SWITCHES[s] ?? ''));
-    const engine = on('ads') && sizes.length ? this.registry.adsFor(company) : houseOnlyAdEngine;
+    // The product as this company may cut it: its sizes and label layouts switched on, its choice for this product.
+    const allowed = this.productFor(company, product);
+    const engine = on('ads') && companyLayouts(company, product, on).length ? this.registry.adsFor(company) : houseOnlyAdEngine;
     const audience = this.audienceFor(opts.audience ?? null, on);
     const without = new Set<string>();
     const usable = () => [...this.campaigns.values()].filter((c) => !without.has(c.id) && (on('bidding') || c.buy.type !== 'bid'));
@@ -277,7 +299,7 @@ export class Platform {
     const fillNow = (): import('./modules/ads/contract').FillResult => {
       if (opts.custom) return { layout: [1 as const], placements: [] };
       const reserved = (opts.reserved ?? []).filter((r) => !without.has(r.campaignId));
-      const f = engine.fill({ company, product: sizes.length === allSizes.length ? product : { ...product, sizes }, location, campaigns: usable(), random: this.random, frequency: opts.frequency, avoidSignatures: opts.avoidSignatures, audience: this.withToday(audience, company.timezone), moment: momentAt(this.bus.now(), company.timezone ?? 'UTC'), house: opts.house ?? null, stats: this.auctionStats, reserved, blockedAdvertisers: opts.blockedAdvertisers });
+      const f = engine.fill({ company, product: allowed, waits: this.adWaits, location, campaigns: usable(), random: this.random, frequency: opts.frequency, avoidSignatures: opts.avoidSignatures, audience: this.withToday(audience, company.timezone), moment: momentAt(this.bus.now(), company.timezone ?? 'UTC'), house: opts.house ?? null, stats: this.auctionStats, reserved, blockedAdvertisers: opts.blockedAdvertisers });
       if (this.unsold && on('fillers')) f.placements = this.unsold({ company, product, location, audience, placements: f.placements, random: this.random });
       return f;
     };
@@ -297,6 +319,7 @@ export class Platform {
       reserve(fill.placements, this.campaigns);
     }
     this.persistCampaigns(fill.placements);
+    this.noteWaits(fill);
 
     const unit: Unit = {
       id: newId('u'),

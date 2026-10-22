@@ -1,6 +1,6 @@
-import type { BoxProduct, Campaign, Share, Unit } from '../../core/types';
+import type { BoxProduct, Campaign, CompanyConfig, Share, Unit } from '../../core/types';
 import { houseAd } from '../fillers/house';
-import { layoutsFor, shareLabel } from './layouts';
+import { shareLabel } from './layouts';
 import { bidFloor, prepaidLeft } from './budget';
 import { newId } from '../../core/ids';
 import type { SqlClient } from '../../db/client';
@@ -193,7 +193,7 @@ export class AdsService {
         company: { name: company.name, blockedCategories: company.adRules.blockedCategories, giving: givingLine(company, locations[0]?.id ?? '') },
         machines: locations.map((l) => ({ id: l.id, name: l.name, kind: l.kind })),
         plugins: this.host.list().filter((p) => p.id !== 'custom-experience' && p.id !== 'house-promo' && p.id !== 'news').map(({ id, name, description, example, configSchema }) => ({ id, name, description, example, configSchema })),
-        icons: posterIcons, fonts: Object.keys(posterFonts), sizes: allowedSizes,
+        icons: posterIcons, fonts: Object.keys(posterFonts), sizes: this.printableSizes(company),
         prices: { perPrintByShare: company.prices.perPrintByShare as any, bidStartsAt: bidFloor(company), perScan: company.prices.perScan, perArLaunch: company.prices.perArLaunch, commissionPercent: company.prices.commissionPercent, ...(prepaidModel(company) ? { prepaid: this.prepaidTerms(company.id) } : {}) },
         missing: missing(r.draft, this.host),
       },
@@ -202,7 +202,7 @@ export class AdsService {
     // the scan page isn't a new headline).
     const patch = { ...(out.patch ?? {}) };
     if (st && patch.poster && !/\b(headline|title|big words|say|small line|subline|underneath|wording|colou?rs?|background|brand name)\b|["“]/i.test(input.text)) delete patch.poster;
-    const { draft, problems } = applyPatch(r.draft, patch, { company, locations, host: this.host, attachments: input.attachments });
+    const { draft, problems } = applyPatch(r.draft, patch, { company, locations, host: this.host, attachments: input.attachments, sizes: this.printableSizes(company) });
     const now = this.platform.bus.now().toISOString();
     const left = missing(draft, this.host);
     let reply = out.reply;
@@ -213,6 +213,15 @@ export class AdsService {
     r.draft = draft;
     await this.save(r);
     return { ...this.view({ ...r, updatedAt: now }), suggestions: left.length || out.suggestions.length ? out.suggestions : ['Review and submit'] };
+  }
+
+  /**
+   * The sizes an advertiser can choose here: those some label layout the company allows can hold, on any of its
+   * products (its Label layouts and size switches, its choice for each product, its most ads on a bottle).
+   */
+  printableSizes(company: CompanyConfig): Share[] {
+    const products = [...this.platform.products.values()].filter((p) => !p.companyId || p.companyId === company.id);
+    return [...new Set(products.flatMap((p) => this.platform.layoutsOf(company, p).flatMap((l) => l.shares)))].sort((a, b) => a - b);
   }
 
   /** How ads are paid for here, in the terms the assistant and the portal use. */
@@ -293,11 +302,10 @@ export class AdsService {
   async artworkWarnings(companyId: string, markup: string, sizes: Share[]): Promise<string[]> {
     const company = this.platform.companies.get(companyId);
     if (!company) return [];
-    const rules = { maxAds: company.adRules.maxAdsPerUnit, minAds: company.adRules.minAdsPerUnit };
     const shapes: { where: string; w: number; h: number; qr: { x: number; y: number; size: number } }[] = [];
     for (const p of this.platform.products.values()) {
       if (p.companyId && p.companyId !== companyId) continue;
-      for (const l of layoutsFor(p, rules)) l.shares.forEach((share, i) => {
+      for (const l of this.platform.layoutsOf(company, p)) l.shares.forEach((share, i) => {
         if (!sizes.includes(share)) return;
         const { w, h } = pieceOf(p, l.rects[i]!);
         if (!shapes.some((x) => Math.abs(x.w - w) < 1 && Math.abs(x.h - h) < 1)) shapes.push({ where: `${shareLabel(share)} on the ${p.name}`, w, h, qr: slotQr(p, w, h) });
@@ -309,8 +317,8 @@ export class AdsService {
   private async render(o: { companyId: string; advertiserId: string; advertiserName: string; category: string; draw: (w: number, h: number, ctx?: import('../../core/types').CreativeContext) => string; sizes: Share[]; formats: string[]; experience: { id: string; config: unknown } | null; theme: Partial<import('../experiences/blocks').Theme> }) {
     const company = this.platform.companies.get(o.companyId)!;
     const product = this.platform.standardProduct(o.companyId);
-    const rules = { maxAds: company.adRules.maxAdsPerUnit, minAds: company.adRules.minAdsPerUnit };
-    const layouts = layoutsFor(product, rules);
+    // Only the layouts this company allows (its switches, its choice for each product, its most ads on a bottle).
+    const layouts = this.platform.layoutsOf(company, product);
     const sampleQr = `${company.receiptBaseUrl.replace(/\/$/, '')}/s/preview/0`;
     // A piece drawn exactly as it prints: the artwork told where its code goes, and the code drawn there.
     // (A box side is drawn keeping clear of the drivers' stop code too, as the front and top print.)
@@ -322,7 +330,7 @@ export class AdsService {
     const sizes = o.sizes.map((s) => {
       const seen = new Map<string, { productId: string; products: string[]; w: number; h: number; count: number; qr: { x: number; y: number; size: number } }>();
       for (const p of products) {
-        for (const l of layoutsFor(p, rules)) l.shares.forEach((share, i) => {
+        for (const l of this.platform.layoutsOf(company, p)) l.shares.forEach((share, i) => {
           if (share !== s) return;
           const { w, h } = pieceOf(p, l.rects[i]!), qr = slotQr(p, w, h);
           const key = `${w.toFixed(1)}x${h.toFixed(1)}:${qr.size.toFixed(1)}`;
@@ -390,9 +398,8 @@ export class AdsService {
     const left = missing(r.draft, this.host).filter((m) => !route || (m !== 'where' && m !== 'budget'));
     if (left.length) throw new AdsError(422, 'not_ready', `Before submitting, add ${left.map((m) => missingLabels[m]).join(', ')}.`);
     const company = this.platform.companies.get(r.companyId)!;
-    // An ad whose sizes fit on none of the company's bottles would be approved and then never print.
-    const rules = { maxAds: company.adRules.maxAdsPerUnit, minAds: company.adRules.minAdsPerUnit };
-    const prints = new Set([...this.platform.products.values()].filter((p) => !p.companyId || p.companyId === r.companyId).flatMap((p) => layoutsFor(p, rules).flatMap((l) => l.shares)));
+    // An ad whose sizes fit on none of the company's bottles (in the layouts it allows) would be approved and never print.
+    const prints = new Set(this.printableSizes(company));
     if (!(r.draft.sizes ?? []).some((s) => prints.has(s))) throw new AdsError(422, 'sizes_never_print', `None of those sizes fit on ${company.name}'s bottles, so the ad would never print. Pick from: ${[...prints].sort((a, b) => a - b).map(shareLabel).join(', ')}.`);
     const adv = await this.advertiser(r.companyId, r.advertiserId);
     const d = r.draft as Required<Pick<AdDraft, 'sizes' | 'buy' | 'experienceId' | 'locations' | 'category'>> & AdDraft;

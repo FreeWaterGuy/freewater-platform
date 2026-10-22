@@ -2,6 +2,7 @@ import type { SqlClient } from '../../db/client';
 import type { CompanyConfig } from '../../core/types';
 import type { Features } from '../../runtime/features';
 import { applyChange, type EditableKey } from '../console/settings';
+import { TEMPLATES } from '../ads/layouts';
 import type { ConsoleService, SaveNote } from '../console/service';
 import {
   ACTION_SWITCHES, CATALOGUE, CATEGORIES, JOB_SWITCH, ROUTE_SWITCH, SIZE_SWITCHES, STARTING_POINTS, SWITCHES, byId, dependantsOf, needsOf, startsOffForNew, switchOfPlugin, whoTurnsOn, type Switch,
@@ -60,6 +61,16 @@ export class FeatureService {
    * founder's promise is that paid bottles always go out, so a switch that would hold them back says so first.
    */
   paidWaiting?: (companyId: string) => { share: number; left: number }[];
+  /**
+   * Set by the app: the label layouts' own checks (src/modules/ads/layoutGuard.ts), given what would be on after a
+   * change. A change that leaves no layout while ads are on is refused; paid pieces it would strand are warned first.
+   */
+  layouts?: {
+    switchProblem: (companyId: string, onAfter: (id: string) => boolean) => string | null;
+    switchWarnings: (companyId: string, onAfter: (id: string) => boolean) => string[];
+    switchRouteWarnings: (companyId: string, onAfter: (id: string) => boolean) => Promise<string[]>;
+    view: (companyId: string) => unknown;
+  };
 
   constructor(
     private db: SqlClient,
@@ -213,6 +224,8 @@ export class FeatureService {
       }),
       startingPoints: STARTING_POINTS.map((p) => ({ id: p.id, label: p.label, description: p.description })),
       platform: companyId === platform,
+      // The Label layouts section: every template with its picture, why any can't be used, each product's choice.
+      layouts: this.layouts?.view(companyId) ?? null,
     };
   }
 
@@ -230,7 +243,8 @@ export class FeatureService {
 
   async history(companyId: string, limit = 200) {
     const rows = (await this.db.query<any>(`select seq, feature_id, was_on, is_on, by, reason, via, at from company_feature_log where company_id = $1 and via <> 'starting choices' order by seq desc limit $2`, [companyId, limit])).rows;
-    return rows.map((r) => ({ seq: Number(r.seq), id: r.feature_id, label: byId.get(r.feature_id)?.label ?? r.feature_id, from: r.was_on, to: !!r.is_on, by: r.by, reason: r.reason, via: r.via, at: new Date(r.at).toISOString() }));
+    // A number or choice (most ads on one bottle) is logged with what it changed from and to, in its reason.
+    return rows.map((r) => ({ seq: Number(r.seq), id: r.feature_id, label: byId.get(r.feature_id)?.label ?? r.feature_id, setting: byId.get(r.feature_id)?.kind === 'setting', from: r.was_on, to: !!r.is_on, by: r.by, reason: r.reason, via: r.via, at: new Date(r.at).toISOString() }));
   }
 
   // ---------- planning and changing ----------
@@ -300,7 +314,39 @@ export class FeatureService {
       if (!opts.startingPoint) break;
       changes = changes.filter((x) => x.id !== linked.problem!.id);
     }
-    return { changes, refused, yourself, needsSecondStep: changes.some((x) => x.to && !!byId.get(x.id)!.risk), warnings: this.paidWarnings(companyId, changes) };
+    // Label layouts: while ads are on, at least one stays usable (refused otherwise); paid bottles left without a layout are said.
+    const onAfter = this.onAfter(companyId, changes);
+    const layoutProblem = changes.length ? this.layouts?.switchProblem(companyId, onAfter) ?? null : null;
+    if (layoutProblem) {
+      const culprit = changes.find((x) => !x.to && x.why === 'asked') ?? changes.find((x) => !x.to) ?? changes[0]!;
+      refused.push({ id: culprit.id, label: culprit.label, reason: layoutProblem });
+      if (opts.startingPoint) changes = changes.filter((x) => !x.id.startsWith('layout_') && !x.id.startsWith('size_'));
+    }
+    const warnings = [...this.paidWarnings(companyId, changes), ...(changes.length ? this.layouts?.switchWarnings(companyId, onAfter) ?? [] : [])];
+    return { changes, refused, yourself, needsSecondStep: changes.some((x) => x.to && !!byId.get(x.id)!.risk), warnings };
+  }
+
+  /** The plan, with the warnings that need the database too (route pieces that could no longer share a label). */
+  async preview(companyId: string, asked: Record<string, boolean>, opts: { startingPoint?: string } = {}): Promise<Plan> {
+    const plan = this.plan(companyId, asked, opts);
+    if (plan.changes.length && this.layouts) plan.warnings.push(...await this.layouts.switchRouteWarnings(companyId, this.onAfter(companyId, plan.changes)));
+    return plan;
+  }
+
+  /** What would be on for this company after these changes (its own choices changed, everything each needs, the host). */
+  private onAfter(companyId: string, changes: PlannedChange[]) {
+    const to = new Map(changes.map((x) => [x.id, x.to]));
+    const ownAfter = (s: Switch) => (to.has(s.id) ? to.get(s.id)! : this.own(companyId, s));
+    const on = (id: string, seen = new Set<string>()): boolean => {
+      const s = byId.get(id);
+      if (!s) return false;
+      if (s.locked) return true;
+      if (s.host && !this.host.on(s.host)) return false;
+      if (seen.has(id)) return true;
+      seen.add(id);
+      return ownAfter(s) && needsOf(s).every((n) => on(n, seen));
+    };
+    return (id: string) => on(id);
   }
 
   /** Paid bottles a change would hold back (they print again once it's back on, or a person stops them and pays them back). */
@@ -386,6 +432,17 @@ export class FeatureService {
       if (s.kind !== 'linked') continue;
       const a = s.link!.get(before), b = s.link!.get(after);
       if (a !== b) await this.log(tx, companyId, s.id, a, b, by, note.reason, note.via);
+    }
+    // The label layouts' settings show in the switches' history too: the most ads on one bottle (a number), and each
+    // product's own choice of layouts (logged on each layout's switch, saying which product).
+    const why = (w: string) => (note.reason ? `${w}: ${note.reason}` : w).slice(0, 300);
+    if (before.adRules.maxAdsPerUnit !== after.adRules.maxAdsPerUnit) await this.log(tx, companyId, 'max_ads_per_bottle', null, true, by, why(`${before.adRules.maxAdsPerUnit} → ${after.adRules.maxAdsPerUnit}`), note.via);
+    const was = before.adRules.productLayouts ?? {}, now = after.adRules.productLayouts ?? {};
+    for (const product of [...new Set([...Object.keys(was), ...Object.keys(now)])].sort()) {
+      for (const t of TEMPLATES) {
+        const a = !was[product] || was[product]!.includes(t.id), b = !now[product] || now[product]!.includes(t.id);
+        if (a !== b) await this.log(tx, companyId, `layout_${t.id}`, a, b, by, why(`only on ${product}`), note.via);
+      }
     }
   }
 

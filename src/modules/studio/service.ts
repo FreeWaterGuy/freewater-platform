@@ -211,7 +211,9 @@ export class StudioService {
       const share = opts.share ?? 1;
       const product = this.platform.standardProduct(companyId);
       const company = this.platform.companies.get(companyId)!;
-      const layout = layoutsFor(product, { maxAds: company.adRules.maxAdsPerUnit, minAds: 1 }).find((l) => l.shares.includes(share));
+      // The piece's shape as the company prints it (its allowed layouts); with ads off, as the label could be cut.
+      const find = (p: typeof product) => layoutsFor(p, { maxAds: company.adRules.maxAdsPerUnit, minAds: 1 }).find((l) => l.shares.includes(share));
+      const layout = find(this.platform.productFor(company, product)) ?? find(product);
       if (!layout) throw new StudioError(422, 'bad_size', `${shareLabel(share)} doesn’t fit on ${product.name}. Pick another size, or give a width and a height.`);
       ({ w, h } = pieceOf(product, layout.rects[layout.shares.indexOf(share)]!));
     }

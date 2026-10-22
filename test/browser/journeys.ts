@@ -18,11 +18,12 @@
  *   7. Ops plans and prints a night: the delivery area's houses get runs and boxes.
  *   8. A driver takes the run, loads the van by box number, and drops the first box with a photo at the door.
  *   9. A resident says which house is theirs (box number + house number) and stops deliveries.
- *  10. The owner's Features page: turns a main switch off (saved, its routes refused), then applies a starting point.
+ *  10. The owner's Features page: chooses label layouts from their pictures and the most ads on one bottle.
+ *  11. The owner's Features page: turns a main switch off (saved, its routes refused), then applies a starting point.
  * The app as the pilot runs it (FW_FEATURES=pilot, machines switched off for the company), on a third server:
- *  11. The bottom bar shows only areas that are on; a switched-off screen's address goes Home.
- *  12. Every tile and link on Home, Wallet and Me goes where it says (the wallet's "Play for points" opens Play).
- *  13. Points earned on the phone before signing in show as "on this phone" and are kept in the account with one tap.
+ *  12. The bottom bar shows only areas that are on; a switched-off screen's address goes Home.
+ *  13. Every tile and link on Home, Wallet and Me goes where it says (the wallet's "Play for points" opens Play).
+ *  14. Points earned on the phone before signing in show as "on this phone" and are kept in the account with one tap.
  */
 import { createRequire } from 'node:module';
 import { createApp } from '../../src/app';
@@ -273,6 +274,42 @@ await journey('a resident says which house is theirs and stops deliveries', asyn
   expect(h.status === 'opted_out', `house is ${h.status}`);
   await page.waitForSelector('button:has-text("Start deliveries again")', { timeout: 20_000 });
 }, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+
+await journey('the owner chooses label layouts and the most ads on one bottle on the Features page', async (page) => {
+  await signedIn(page, 'fw_console_token', await pilot.accounts.createSession(pOwner.id, { secondStep: true }), { fw_console_company: 'freewater' });
+  await page.goto(`${pBase}/console/features`);
+  await page.waitForSelector('#layouts .lay-card svg rect', { timeout: 30_000 });
+  const own = (id: string) => pilot.companyFeatures.own('freewater', [...pilot.companyFeatures.view('freewater').switches].find((s) => s.id === id) as any);
+  expect(own('layout_thirds'), 'thirds start on');
+  // Turn one layout off from its picture: previewed, then saved, and the engine stops using it.
+  await page.locator('#layouts .lay-card', { hasText: 'Thirds' }).first().locator('input[role="switch"]').click();
+  await page.waitForSelector('.feat-confirm:not([hidden])');
+  await page.click('.feat-confirm button:has-text("Save")');
+  await toast(page, /Saved \d+ change/);
+  expect(!own('layout_thirds'), 'thirds still on');
+  expect(pilot.platform.layoutsOf(pilot.platform.companies.get('freewater')!, pilot.platform.standardProduct('freewater')).every((l) => l.templateId !== 'thirds'), 'the engine still offers thirds');
+  // The most ads on one bottle: checked first (paid bottles it would strand are counted), then saved.
+  // The page re-draws after the save above: wait for the box and its Save button to be the settled ones.
+  await page.waitForSelector('.feat-confirm', { state: 'hidden', timeout: 30_000 }).catch(() => {});
+  const maxBox = page.locator('#layouts input[aria-label="Most ads on one bottle"]');
+  const saveMax = async () => { await maxBox.fill('4'); await page.locator('#layouts button', { hasText: /^Save$/ }).first().click(); };
+  await saveMax();
+  // Saved straight away, or (paid bottles it would strand) after the count is shown and confirmed. A slow machine
+  // can redraw the section between filling and clicking; then the click is tried again.
+  const maxNow = () => pilot.platform.companies.get('freewater')!.adRules.maxAdsPerUnit;
+  for (let i = 0; i < 300 && maxNow() !== 4; i++) {
+    const confirm = page.locator('.feat-confirm:not([hidden]) button:has-text("Save anyway")');
+    if (await confirm.count()) { expect(/paid bottle|piece/.test(await page.textContent('.feat-confirm')), 'the warning doesn’t say what waits'); await confirm.click(); }
+    else if (i % 25 === 24) await saveMax();
+    await page.waitForTimeout(200);
+  }
+  expect(pilot.platform.companies.get('freewater')!.adRules.maxAdsPerUnit === 4, 'most ads not saved');
+  // Layouts with more pieces than that are greyed, with the reason.
+  await page.waitForFunction(() => /at most 4 ads/.test(document.querySelector('#layouts .lay-card.off')?.parentElement?.textContent || ''), undefined, { timeout: 20_000 });
+  // Put it back for the journeys after this one.
+  await pilot.console.save('freewater', { adRules: { maxAdsPerUnit: 10 } }, 'journey', undefined, { person: true, confirmStranded: ((await pilot.console.previewLabel('freewater', { adRules: { maxAdsPerUnit: 10 } })) as any).stranded?.count || undefined });
+  await pilot.companyFeatures.change('freewater', { layout_thirds: true }, { userId: pOwner.id, name: 'journey', approverProblem: async () => null });
+});
 
 await journey('the owner turns a main switch off and applies a starting point on the Features page', async (page) => {
   await signedIn(page, 'fw_console_token', await pilot.accounts.createSession(pOwner.id, { secondStep: true }), { fw_console_company: 'freewater' });

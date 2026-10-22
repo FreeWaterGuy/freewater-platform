@@ -20,7 +20,7 @@ export function featuresRoutes(app: App, route: (r: RouteDef) => void) {
   route({ method: 'POST', url: '/v1/console/features/preview', scope: 'admin', summary: 'What a change (switch ids to true or false) or a starting point would do, before saving: every switch it turns on or off and why, what can’t change, and what you’d turn on yourself.', body, handler: async (req, key) => {
     const b = req.body as any;
     if (!b.changes && !b.startingPoint) throw new ApiError(400, 'nothing_to_preview', 'Send the switches to change, or a starting point.');
-    return { body: f.plan(staff(key).companyId, b.changes ?? {}, { startingPoint: b.startingPoint }) };
+    return { body: await f.preview(staff(key).companyId, b.changes ?? {}, { startingPoint: b.startingPoint }) };
   } });
   route({ method: 'POST', url: '/v1/console/features', scope: 'admin', summary: 'Change switches (ids to true or false), or apply a starting point, with an optional reason. An owner signed in, never a key; turning on money, chain or one-way switches needs the second sign-in step. Turning one off turns off what needs it.', body, handler: async (req, key) => {
     staff(key);

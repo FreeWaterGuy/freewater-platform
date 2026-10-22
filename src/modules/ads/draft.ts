@@ -43,6 +43,8 @@ export interface DraftContext {
   locations: Location[]; // the company's machines and routes
   host: ExperienceHost;
   attachments: { dataUrl: string; name?: string }[];
+  /** The sizes this company sells (some label layout it allows holds them). Every size if not given. */
+  sizes?: Share[];
 }
 
 export const missingLabels = {
@@ -130,8 +132,12 @@ export function applyPatch(d: AdDraft, patch: DraftPatch, ctx: DraftContext): { 
   }
 
   if (p.sizes !== undefined) {
-    const sizes = [...new Set((p.sizes ?? []).map(Number))].filter((s): s is Share => (allowedSizes as number[]).includes(s)).sort((a, b) => a - b);
-    if (sizes.length) next.sizes = sizes; else problems.push('Sizes are shares of the label: 1 (the whole label), 2 (half), 3, 4, 6, 8 or 10.');
+    const offered = ctx.sizes ?? allowedSizes;
+    const asked = [...new Set((p.sizes ?? []).map(Number))];
+    const sizes = asked.filter((s): s is Share => (offered as number[]).includes(s)).sort((a, b) => a - b);
+    const words = offered.map((s) => (s === 1 ? '1 (the whole label)' : s === 2 ? '2 (half)' : String(s))).join(', ');
+    if (sizes.length) next.sizes = sizes; else problems.push(`Sizes are shares of the label: ${words}.`);
+    if (sizes.length && sizes.length < asked.length) problems.push(`${ctx.company.name} prints only these sizes: ${words}.`);
   }
   if (p.formats !== undefined) {
     const f = (p.formats ?? []).filter((x) => x === 'label' || x === 'box-face');

@@ -474,6 +474,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     if (company.adRules.blockedCategories.includes(b.category)) throw new ApiError(422, 'category_blocked', `${company.name} doesn't print ${b.category} ads.`);
     if (b.buy.type === 'bid' && !app.companyFeatures.on(company.id, 'bidding')) throw new ApiError(422, 'bidding_off', `${company.name} doesn’t sell space by bidding: buy a set number of bottles instead.`);
     checkExperience(b.experienceId, b.experienceConfig ?? {}, b.theme, company.id);
+    // The same rule as a submitted draft: an ad whose sizes no layout the company allows can hold would never print.
+    const prints = app.ads.printableSizes(company);
+    if (!(b.sizes as number[]).some((s) => (prints as number[]).includes(s))) throw new ApiError(422, 'sizes_never_print', `None of those sizes fit on ${company.name}'s bottles, so the ad would never print. Pick from: ${prints.join(', ')} (shares of the label).`);
     const c: Campaign = {
       // An advertiser's own key prints under the name the business signed up with, never a name it sends.
       id: newId('cmp'), companyId: key!.companyId, advertiserId, advertiserName: key!.advertiserId ? (await app.ads.advertiser(key!.companyId, key!.advertiserId).catch(() => null))?.name ?? b.advertiserName : b.advertiserName, category: b.category, competitorGroup: b.competitorGroup,

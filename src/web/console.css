@@ -190,3 +190,20 @@ pre.code .c { color: #8A96A0; }
 .tog input:focus-visible + span { outline: 3px solid var(--link); outline-offset: 2px; }
 @media (max-width: 900px) { .feat-starts { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 560px) { .feat-starts { grid-template-columns: minmax(0, 1fr); } .feat-row { padding: 12px; } .feat-row dl { grid-template-columns: minmax(0, 1fr); } }
+/* Label layouts (Features page): a small picture of each template, greyed with its reason when it can't be used. */
+.lay-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+.lay-card { border-radius: 14px; box-shadow: inset 0 0 0 1.5px var(--line); padding: 12px; display: flex; flex-direction: column; gap: 6px; min-width: 0; background: #fff; }
+.lay-card.off { background: var(--soft); }
+.lay-card.off .lay-thumb { filter: grayscale(1); opacity: .45; }
+.lay-card .feat-title b { font-size: 14px; }
+.lay-card .muted { font-size: 13px; }
+.lay-card p.why, .lay-pick .why { color: var(--warn); font-size: 12px; margin: 0; display: block; }
+.lay-thumb { display: block; max-width: 100%; height: auto; background: #F4F8FB; border-radius: 6px; }
+.lay-sub { margin: 4px 0 0; font-size: 15px; }
+.lay-rules { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.lay-picks { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; }
+.lay-pick { display: flex; gap: 8px; align-items: center; padding: 8px; border-radius: 12px; box-shadow: inset 0 0 0 1.5px var(--line); font-size: 13px; cursor: pointer; }
+.lay-pick.off { background: var(--soft); cursor: not-allowed; }
+.lay-pick.off .lay-thumb { filter: grayscale(1); opacity: .45; }
+.lay-pick span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+@media (max-width: 560px) { .lay-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } .lay-rules { grid-template-columns: minmax(0, 1fr); } }

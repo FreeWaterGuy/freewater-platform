@@ -31,6 +31,11 @@ export interface FillRequest {
   moment?: Omit<import('./auction').AuctionMoment, 'product' | 'audience' | 'locationId'>;
   /** Each ad's results so far, to predict its engagement. */
   stats?: import('./auction').AuctionStats;
+  /**
+   * With "Most revenue per bottle": how many bottles in a row each paid ad that fits was left off (kept by the caller,
+   * from `FillResult.waited`). An ad at the company's fair-turn bound goes on first.
+   */
+  waits?: ReadonlyMap<string, number>;
 }
 
 export interface PrintAudience {
@@ -48,6 +53,8 @@ export interface PrintAudience {
 export interface FillResult {
   layout: Share[];
   placements: Placement[];
+  /** Paid ads that could have gone on this bottle (eligible, a size some allowed template holds) but didn't. */
+  waited?: string[];
 }
 
 export interface AdEngine {

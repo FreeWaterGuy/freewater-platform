@@ -66,11 +66,12 @@ describe('2. saves and restores run one at a time, against the latest settings',
   it('two saves without a version both land, neither overwriting the other', async () => {
     const [a, b] = await Promise.all([
       app.console.save('freewater', { brand: { tagline: 'Water for all' } }, 'Josh'),
-      app.console.save('freewater', { adRules: { maxAdsPerUnit: 5 } }, 'Sam'),
+      // (Not the most ads a bottle: lowering it now asks to confirm the demo's paid tenths it would strand.)
+      app.console.save('freewater', { adRules: { repeatScanWindowSec: 300 } }, 'Sam'),
     ]);
     expect(b.version).toBe(a.version + 1);
     expect(fw().brand.tagline).toBe('Water for all');
-    expect(fw().adRules.maxAdsPerUnit).toBe(5);
+    expect(fw().adRules.repeatScanWindowSec).toBe(300);
   });
 });
 

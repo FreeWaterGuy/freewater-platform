@@ -114,7 +114,7 @@ describe('the registry is the whole platform', () => {
     expect(switchOfPlugin('a-partners-own-page')).toBe('partner_plugins'); // every plug-in that isn't ours
     const code = ['src/platform.ts', 'src/modules/packs/service.ts', 'src/modules/video/service.ts', 'src/modules/attribution/service.ts', 'src/api/server.ts', 'src/modules/ads/service.ts', 'src/modules/features/service.ts', 'src/app.ts', 'src/web/app.js', 'src/web/ops.js', 'src/web/ads.js', 'src/web/console.js', 'src/modules/delivery/service.ts', 'src/modules/delivery/houses.ts', 'src/modules/ads/routeBuys.ts', 'src/modules/ads/aiReview.ts']
       .map(src).join('\n');
-    const engine = (id: string) => new RegExp(`'${id}'`).test(code) || (AI_USES as readonly string[]).includes(id) || /^size_|^box_/.test(id);
+    const engine = (id: string) => new RegExp(`'${id}'`).test(code) || (AI_USES as readonly string[]).includes(id) || /^size_|^box_|^layout_/.test(id);
     const lazy = SWITCHES.filter((s) => s.id !== 'partner_plugins' && !s.locked && s.kind === 'feature' && !s.routes.length && !s.jobs.length && !s.pages.length && !s.plugins.length && !SWITCHES.some((x) => x.parent === s.id) && !engine(s.id));
     expect(lazy.map((s) => s.id)).toEqual([]);
   });

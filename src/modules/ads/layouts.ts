@@ -17,6 +17,10 @@ import { SHARES, type Product, type Share, type SlotRect } from '../../core/type
 // readable QR code with its margin. The engine and the auction choose among these templates only; leftover pieces
 // get fillers or the house ad in their own tidy cells; and pieces reserved ahead (route buys) are sold only in
 // combinations some template holds (`holds`), so what was sold always prints.
+//
+// EACH COMPANY CHOOSES among them (layoutChoice.ts): a switch per template (Features → Ads → Label layouts), a narrower
+// list per product, and its most ads on a bottle. The caller passes the product already narrowed (`Product.layouts`,
+// `Platform.productFor` / `layoutsOf`), so everything here only ever sees the templates the company allows.
 
 export interface Layout {
   shares: Share[]; // slot index → size
@@ -25,27 +29,35 @@ export interface Layout {
   worstAspect: number;
   /** Which template this is, in words ("a half + 2 quarters"). */
   template: string;
+  /** Its id in the catalogue (`TEMPLATES`): what a company's switches and product choices name ("half_2quarters"). */
+  templateId: string;
 }
 
 /** Pieces longer than this many times their width are refused: too thin to read or to scan. */
 export const MAX_ASPECT = 2.6;
 
 /** A template, before it is fitted to a label: `parent` equal cells, the last `split` of them each cut into `sub`. */
-export interface Template { name: string; parent: Share; split: number; sub: number }
+export interface Template { id: string; name: string; parent: Share; split: number; sub: number }
+
+/** A template's id, from its name: "halves", "half_2quarters", "2thirds_2sixths". Its switch is `layout_<id>`. */
+const idOf = (name: string) => (name === 'the whole label' ? 'whole' : name.replace(/\b(a|an) /g, '').replace(/ \+ /g, '_').replace(/ /g, ''));
 
 const word: Record<number, [string, string]> = { 1: ['the whole label', 'whole'], 2: ['a half', 'halves'], 3: ['a third', 'thirds'], 4: ['a quarter', 'quarters'], 6: ['a sixth', 'sixths'], 8: ['an eighth', 'eighths'], 10: ['a tenth', 'tenths'] };
 const count = (n: number, s: number) => (n === 1 ? word[s]![0] : `${n} ${word[s]![1]}`);
 
 /** The whole catalogue, the same for every product (which of them a product can print is decided by its shape). */
 export const TEMPLATES: readonly Template[] = (() => {
-  const out: Template[] = SHARES.map((n) => ({ name: n === 1 ? 'the whole label' : word[n]![1], parent: n, split: 0, sub: 1 }));
+  const out: Omit<Template, 'id'>[] = SHARES.map((n) => ({ name: n === 1 ? 'the whole label' : word[n]![1], parent: n, split: 0, sub: 1 }));
   for (const parent of [2, 3, 4] as Share[]) for (const sub of [2, 3, 4, 5]) {
     const small = parent * sub;
     if (!(SHARES as number[]).includes(small)) continue;
     for (let split = 1; split < parent; split++) out.push({ name: `${count(parent - split, parent)} + ${count(split * sub, small)}`, parent, split, sub });
   }
-  return out;
+  return out.map((t) => ({ id: idOf(t.name), ...t }));
 })();
+export const templateById = new Map(TEMPLATES.map((t) => [t.id, t]));
+/** The switch on the Features page that allows a template (Ads → Label layouts). */
+export const layoutSwitch = (t: Template | string) => `layout_${typeof t === 'string' ? t : t.id}`;
 
 /** The sizes in a template, biggest first. */
 export const templateShares = (t: Template): Share[] => [...Array<Share>(t.parent - t.split).fill(t.parent), ...Array<Share>(t.split * t.sub).fill((t.parent * t.sub) as Share)];
@@ -92,13 +104,15 @@ const cache = new Map<string, Layout[]>();
  */
 export function layoutsFor(p: Product, opts: { maxAds: number; minAds?: number }): Layout[] {
   const allowed = p.sizes?.length ? p.sizes : SHARES;
-  const key = JSON.stringify([p.label, allowed, opts.maxAds, opts.minAds ?? 1]);
+  const key = JSON.stringify([p.label, allowed, opts.maxAds, opts.minAds ?? 1, p.layouts ?? null]);
   const hit = cache.get(key);
   if (hit) return hit;
   const { w, h } = adArea(p);
   const minSide = (p.label.minQrIn ?? 0.6) + 0.25;
   const out: Layout[] = [];
   for (const t of TEMPLATES) {
+    // Only the templates this company allows on this product (its switches and its choice for the product), if narrowed.
+    if (p.layouts && !p.layouts.includes(t.id)) continue;
     const shares = templateShares(t);
     if (shares.length > opts.maxAds || shares.length < (opts.minAds ?? 1) || !shares.every((s) => allowed.includes(s))) continue;
     const fitted = fitTemplate(t, w, h);
@@ -110,11 +124,29 @@ export function layoutsFor(p: Product, opts: { maxAds: number; minAds?: number }
       rects: order.map((i) => { const r = fitted.rects[i]!; return { x: round(r.x / w), y: round(r.y / h), w: round(r.w / w), h: round(r.h / h) }; }),
       worstAspect: Math.round(fitted.worst * 100) / 100,
       template: t.name,
+      templateId: t.id,
     });
   }
   if (cache.size > 200) cache.clear();
   cache.set(key, out);
   return out;
+}
+
+/**
+ * Every template on this product's label, whether or not it may print: where its pieces go (fractions of the ad area,
+ * for a small picture) and, if the label's shape keeps it off, why, in plain words. The Features page reads this.
+ */
+export function templateFit(p: Product): { template: Template; rects: SlotRect[]; shares: Share[]; fits: boolean; why: string | null }[] {
+  const { w, h } = adArea(p);
+  const minQr = p.label.minQrIn ?? 0.6, minSide = minQr + 0.25;
+  return TEMPLATES.map((t) => {
+    const f = fitTemplate(t, w, h);
+    const order = f.rects.map((_, i) => i).sort((i, j) => f.rects[i]!.y - f.rects[j]!.y || f.rects[i]!.x - f.rects[j]!.x);
+    const thin = f.worst > MAX_ASPECT, small = f.rects.some((r) => Math.min(r.w, r.h) < minSide - 1e-9);
+    const why = thin ? `Too thin on this label: its pieces would be ${f.worst.toFixed(1)} times as long as they are wide (at most ${MAX_ASPECT}).`
+      : small ? `Too small on this label: a piece would be narrower than a readable ${minQr}" QR code with its margin.` : null;
+    return { template: t, shares: order.map((i) => f.shares[i]!), rects: order.map((i) => { const r = f.rects[i]!; return { x: round(r.x / w), y: round(r.y / h), w: round(r.w / w), h: round(r.h / h) }; }), fits: !why, why };
+  });
 }
 
 /**

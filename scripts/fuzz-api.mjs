@@ -53,15 +53,25 @@ async function ready() {
 const run = (label, key) => new Promise((resolve) => {
   console.log(`\n=== Schemathesis: ${label} (${examples} cases per operation) ===`);
   const args = ['run', `${base}/v1/openapi.json`, '--checks', 'not_a_server_error', '-n', examples, '-w', '4', '--phases', 'examples,coverage,fuzzing',
-    '--no-shrink', '--request-timeout', '20', '--max-time', maxTime, '--continue-on-failure', '--seed', process.env.FUZZ_SEED ?? '20261020',
+    '--no-shrink', '--request-timeout', process.env.FUZZ_REQUEST_TIMEOUT ?? '20', '--max-time', maxTime, '--continue-on-failure', '--seed', process.env.FUZZ_SEED ?? '20261020',
     // Signing out, erasing yourself or turning off keys (the fuzzer finds real key ids in GET /v1/keys) would end the
     // identity mid-run and leave the rest of it testing only the 401; nothing else is left out.
     // (By name: Schemathesis joins filters of different kinds with AND, so a path regex beside names excludes nothing.)
     '--exclude-name', 'POST /v1/auth/sign-out', '--exclude-name', 'DELETE /v1/me', '--exclude-name', 'DELETE /v1/me/data', '--exclude-name', 'DELETE /v1/keys/{id}'];
   if (key) args.push('-H', `Authorization: Bearer ${key}`);
-  const p = spawn(st, args, { stdio: 'inherit', env: { ...process.env, NO_COLOR: '1' } });
+  // Its output is shown as it runs and kept, so a failure can be named on GitHub (the raw log isn't always reachable).
+  const p = spawn(st, args, { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, NO_COLOR: '1' } });
+  let out = '';
+  for (const s of [p.stdout, p.stderr]) s.on('data', (d) => { process.stdout.write(d); out += d; if (out.length > 400_000) out = out.slice(-200_000); });
   p.on('error', (e) => { console.error(`Couldn't run ${st}: ${e.message}. Install it: pip install schemathesis==4.32.2`); resolve(2); });
-  p.on('exit', (code) => resolve(code ?? 1));
+  p.on('exit', (code) => {
+    if (code && process.env.GITHUB_ACTIONS) {
+      const at = Math.max(out.lastIndexOf('Failures:'), out.lastIndexOf('Errors:'), out.lastIndexOf('ERRORS'), out.lastIndexOf('FAILURES'));
+      const part = (at >= 0 ? out.slice(at, at + 1500) : out.slice(-1500)).replace(/[\r\n%]+/g, ' ');
+      console.log(`::error title=Fuzz (${label}) details::${part}`);
+    }
+    resolve(code ?? 1);
+  });
 });
 
 if (!(await ready())) { console.error(`The server didn't start:\n${log.slice(-3000)}`); if (process.env.GITHUB_ACTIONS) console.log(`::error title=Fuzz server didn't start::${log.slice(-1500).replace(/[\r\n%]+/g, ' ')}`); await finish(1); }

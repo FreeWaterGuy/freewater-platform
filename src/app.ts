@@ -66,6 +66,8 @@ import { giftCardsFromEnv, type GiftCardProvider } from './modules/wallet/giftca
 import { GamesService } from './modules/games/service';
 import { aiRouting } from './modules/ai/routing';
 import { FeatureService } from './modules/features/service';
+import { LayoutGuard } from './modules/ads/layoutGuard';
+import { byId } from './runtime/registry';
 import { ContinuityService, type Asker } from './modules/agents/continuity';
 import { claudeWithTool } from './modules/ai/anthropic';
 import { ClaudePrompter, builtinPrompter, type Prompter } from './modules/games/prompter';
@@ -607,6 +609,17 @@ export async function createApp(opts: AppOptions) {
   await companyFeatures.load();
   const featureOn = (companyId: string, id: string) => companyFeatures.on(companyId, id);
   platform.featureOn = featureOn;
+  // Label layouts (src/modules/ads/layoutGuard.ts): the last usable one can't be turned off while ads are on, and a
+  // change that would strand paid pieces says how many first, on the Features page and in the settings alike.
+  const layoutGuard = new LayoutGuard(db, platform, featureOn);
+  layoutGuard.ownChoice = (companyId, id) => companyFeatures.own(companyId, byId.get(id)!);
+  companyFeatures.layouts = {
+    switchProblem: (companyId, onAfter) => layoutGuard.switchProblem(companyId, onAfter),
+    switchWarnings: (companyId, onAfter) => layoutGuard.switchWarnings(companyId, onAfter),
+    switchRouteWarnings: (companyId, onAfter) => layoutGuard.switchRouteWarnings(companyId, onAfter),
+    view: (companyId) => layoutGuard.view(companyId),
+  };
+  consoleSvc.layoutCheck = (companyId, cur, next) => layoutGuard.settingsCheck(companyId, cur, next);
   platform.ledger.featureOn = featureOn;
   delivery.featureOn = featureOn;
   houses.featureOn = featureOn;

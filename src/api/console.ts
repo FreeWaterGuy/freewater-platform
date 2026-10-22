@@ -27,13 +27,14 @@ export function consoleRoutes(app: App, route: (r: RouteDef) => void) {
       return { name: key!.name, platform: key!.scopes.includes('platform'), person: !!key!.userId, ...(ss ? { secondStep: ss } : {}), ...(u ? { role: u.role } : {}), mustSetUpSecondStep: must };
     })() } };
   } });
-  route({ method: 'PATCH', url: '/v1/console/settings', scope: 'admin', summary: 'Change your settings: brand, product facts, giving, open books, ad rules, prices, modules and more. Send only what changes, and the version you started from.', body: obj({ changes: changesProp, version: S.int }, ['changes']), handler: async (req, key) => {
+  route({ method: 'PATCH', url: '/v1/console/settings', scope: 'admin', summary: 'Change your settings: brand, product facts, giving, open books, ad rules, prices, modules and more. Send only what changes, and the version you started from.', body: obj({ changes: changesProp, version: S.int, confirmStranded: S.int }, ['changes']), handler: async (req, key) => {
     const b = req.body as any;
     // Money, chain and one-way settings are changed by a person signed in, never by a service key.
     if (personOnlyKeys.some((k) => k in (b.changes ?? {})) && !key!.userId) throw new ApiError(403, 'person_needed', 'Money, chain and one-way settings (giving, the agents’ fund, the promise, the youngest age, the prize game, AI and data rules, news on bottles) are changed by a person signed in, not a service key.');
     // Switching money, prizes or the token is an approval: an owner's or finance person's sign-in must have passed the second step.
     if (approvalSettings.some((k) => k in (b.changes ?? {}))) await approverStep(key!);
-    return { body: await cons.save(staff(key).companyId, b.changes, by(key!), b.version, { person: !!key!.userId }) };
+    // A label-layout change that would strand paid pieces is saved only with their count confirmed (the preview shows it).
+    return { body: await cons.save(staff(key).companyId, b.changes, by(key!), b.version, { person: !!key!.userId, confirmStranded: b.confirmStranded }) };
   } });
   route({ method: 'POST', url: '/v1/console/preview-label', scope: 'admin', summary: 'A sample bottle label with these settings, before saving. Problems are listed instead of saving anything.', body: obj({ changes: changesProp }), handler: async (req, key) => ({ body: await cons.previewLabel(staff(key).companyId, (req.body as any).changes ?? {}) }) });
   route({ method: 'GET', url: '/v1/console/history', scope: 'admin', summary: 'Every saved change to your settings, newest first: who, when and what.', handler: async (_req, key) => ({ body: await cons.history(staff(key).companyId) }) });

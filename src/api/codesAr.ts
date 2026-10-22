@@ -124,17 +124,18 @@ export function codesArRoutes(app: App, server: FastifyInstance, route: (r: Rout
 
   // ---------- products of any size ----------
   const productsFor = (companyId: string) => [...platform.products.values()].filter((p) => !p.companyId || p.companyId === companyId);
-  const productView = (p: Product) => ({ ...p, shared: !p.companyId, check: checkProduct(p) });
+  // `layouts`: this company's own choice of label layouts for the product (Features → Label layouts), or null for all.
+  const productView = (p: Product, companyId?: string) => ({ ...p, shared: !p.companyId, check: checkProduct(p), layouts: (companyId && platform.companies.get(companyId)?.adRules.productLayouts?.[p.id]) || null });
   const productBody = obj({ product: { type: 'object' }, shared: S.bool }, ['product']);
   const sampleLabel = async (companyId: string, p: Product) => {
     const company = platform.companies.get(companyId)!;
     const location = [...platform.locations.values()].find((l) => l.companyId === companyId);
     if (!location) throw new ApiError(422, 'no_machines', 'Add a machine first, so the sample label can be filled the way a real one would be.');
-    const fill = platform.registry.adsFor(company).fill({ company, product: p, location, campaigns: [...platform.campaigns.values()], random: platform.random });
+    const fill = platform.registry.adsFor(company).fill({ company, product: platform.productFor(company, p), location, campaigns: [...platform.campaigns.values()], random: platform.random });
     const unit: Unit = { id: 'sample', companyId, productId: p.id, locationId: location.id, kind: 'ad_supported', placements: fill.placements, layout: fill.layout, status: 'rendered', createdAt: platform.bus.now().toISOString() };
     return (await platform.registry.rendererFor(company).render({ unit, product: p, company, campaigns: platform.campaigns })).svg;
   };
-  route({ method: 'GET', url: '/v1/console/products', scope: 'admin', summary: 'The products you can print: shared ones and your own, each with its check.', handler: async (_req, key) => ({ body: productsFor(staff(key).companyId).map(productView) }) });
+  route({ method: 'GET', url: '/v1/console/products', scope: 'admin', summary: 'The products you can print: shared ones and your own, each with its check.', handler: async (_req, key) => { const id = staff(key).companyId; return { body: productsFor(id).map((p) => productView(p, id)) }; } });
   route({ method: 'POST', url: '/v1/console/products/check', scope: 'admin', summary: 'Check a product before saving, with a sample label printed at its size.', body: productBody, handler: async (req, key) => {
     const p = (req.body as any).product as Product;
     const check = checkProduct(p);
