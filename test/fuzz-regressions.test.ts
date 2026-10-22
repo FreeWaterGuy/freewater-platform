@@ -163,6 +163,10 @@ describe('text that can’t be decoded or drawn is the caller’s mistake, not a
   it('a refund for an order number that won’t decode is a 400', async () => {
     expect(await call('POST', '/v1/conversions/50%25/refund', keys['advertiser-joes'])).toMatchObject({ status: 400, code: 'bad_order' });
   });
+  it('deleting a household data source named with a % is not a 500 (the path was decoded twice)', async () => {
+    const admin = keys['freewater-admin'];
+    for (const src of ['50%25', 'data%25co', 'acme%20data']) expect((await call('DELETE', `/v1/households/sources/${src}`, admin)).status, src).toBeLessThan(500);
+  });
   it('control characters in an ad’s words never make a label or picture that can’t be drawn', async () => {
     const adv = keys['advertiser-joes'];
     const spec = { brand: 'Joe\u000e', headline: 'Big\u0001 burger', colors: { paper: '#ffffff', ink: '#111111', accent: '#ff0000' }, type: 'serif' };

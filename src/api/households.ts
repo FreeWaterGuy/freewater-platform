@@ -24,7 +24,7 @@ export function householdRoutes(app: App, route: (r: RouteDef) => void) {
   } });
   route({ method: 'GET', url: '/v1/households/imports', scope: 'admin', summary: 'Household data imports: source, date, bought or first-party, how much is still held.', handler: async (_req, key) => ({ body: { imports: await households.imports(staff(key).companyId) } }) });
   route({ method: 'DELETE', url: '/v1/households/imports/:id', scope: 'admin', summary: 'Delete everything one import brought. Immediate.', handler: async (req, key) => ({ body: await wrap(() => households.deleteImport(staff(key).companyId, (req.params as any).id)) }) });
-  route({ method: 'DELETE', url: '/v1/households/sources/:source', scope: 'admin', summary: 'Delete everything one data company gave us. Immediate.', handler: async (req, key) => ({ body: await households.deleteSource(staff(key).companyId, decodeURIComponent((req.params as any).source)) }) });
+  route({ method: 'DELETE', url: '/v1/households/sources/:source', scope: 'admin', summary: 'Delete everything one data company gave us. Immediate.', handler: async (req, key) => ({ body: await households.deleteSource(staff(key).companyId, (req.params as any).source) }) });
   route({ method: 'GET', url: '/v1/households/audience', scope: 'admin', summary: 'What may be used to choose ads for one house: first-party, bought and area data, strongest first. For checking; advertisers never see it.', query: { address: { type: 'string', minLength: 5, maxLength: 200 }, routeId: { type: 'string', maxLength: 40 } }, handler: async (req, key) => {
     const q = req.query as any;
     if (typeof q.address !== 'string' || q.address.length < 5) throw new ApiError(400, 'address_required', 'Send ?address=<the street address>.');
