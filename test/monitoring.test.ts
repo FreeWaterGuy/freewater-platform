@@ -26,6 +26,8 @@ const got: Got[] = [];
 let stubStatus = 200;
 let stubHeaders: Record<string, string> = {};
 const settle = (ms = 150) => new Promise((r) => setTimeout(r, ms));
+/** Waits until the stub has `n` deliveries (or a few seconds pass): on a loaded machine a fixed pause comes too early. */
+const arrived = async (n: number, ms = 8000) => { for (const end = Date.now() + ms; got.length < n && Date.now() < end;) await settle(50); await settle(); };
 const events = () => got.map((g) => { const [h, item, ev] = g.body.split('\n'); return { header: JSON.parse(h!), item: JSON.parse(item!), event: JSON.parse(ev!) }; });
 const dsn = () => `http://pubkey123@127.0.0.1:${stubPort}/42`;
 
@@ -314,11 +316,11 @@ describe('health endpoints and the server’s error reporting', () => {
 
   it('an unexpected error is tracked with its stack and route, scrubbed, and alerted once (not tracked twice)', async () => {
     got.length = 0; alertsSeen.length = 0;
-    app.runtime.reporter = new ErrorReporter({ dsn: dsn() });
+    app.runtime.reporter = new ErrorReporter({ dsn: dsn(), timeoutMs: 10_000 }); // a loaded test machine, not Sentry's speed
     try {
       const r = await server.inject({ method: 'GET', url: `/v1/test-only/boom?email=${encodeURIComponent(PERSONAL.email)}&viewer=${PERSONAL.viewer}`, headers: { authorization: `Bearer ${PERSONAL.apiKey}`, cookie: `fw=${PERSONAL.session}` } });
       expect(r.statusCode).toBe(500);
-      await app.runtime.reporter.flush(); await settle();
+      await app.runtime.reporter.flush(); await arrived(1);
       expect(got).toHaveLength(1);
       const { event } = events()[0]!;
       expect(event.request).toEqual({ method: 'GET', url: '/v1/test-only/boom' });
@@ -339,7 +341,7 @@ describe('health endpoints and the server’s error reporting', () => {
       app.runtime.lease = { held: false, fresh: false } as any;
       expect((await call('GET', '/health/uptime')).status).toBe(503);
       delete app.runtime.lease;
-      await app.runtime.reporter.flush(); await settle();
+      await app.runtime.reporter.flush(); await arrived(1);
       expect(got).toHaveLength(1);
       const { event } = events()[0]!;
       expect(event).toMatchObject({ level: 'warning', message: { formatted: '503 paused_for_safety' }, fingerprint: ['http-5xx', '503', 'paused_for_safety'], request: { method: 'POST', url: '/v1/orders' }, tags: { source: 'http', status: '503', code: 'paused_for_safety' } });
