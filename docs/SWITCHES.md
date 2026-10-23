@@ -91,7 +91,7 @@ wait is over. Anyone on the team can cancel a step before it runs.
 | **Fee per box side** (`fees.boxFace`) | Off (the box side price, 40¢) | Off: box sides with a paid ad are included. |
 | **Commission on sales** (`fees.commission`) | Off (3% when on) | Off: sales are still tracked and shown, never charged. |
 | **Fee for changing an ad** (`changeFeeCents`) | $100 | Paid up front when the change is submitted. The new ad is reviewed before it prints; the bottles not printed yet carry it once approved. The fee is the guard against changes every day. |
-| **Fee for changing a link** (`linkChangeFeeCents`; switch *Change a link (fee)*) | $50, on (a money switch: off for a new company until a person turns it on) | Changing where a live ad's code leads, paid up front once per change (pressing twice pays once); the new link is reviewed before it prints again. Off, or before the ad is live: free. The campaign's own settings and its versions can't change a live paid ad's links while it's on. |
+| **Fee for changing a link** (`linkChangeFeeCents`; switch *Change a link (fee)*) | $50, on (a money switch: off for a new company until a person turns it on) | Changing where a live ad's code leads, paid up front once per change (pressing twice pays once; a second, different change while one waits is refused before it's charged). **The old link stays live** (no pause in printing) while the new one is checked automatically (*Link safety*), looked at by the AI reviewer and approved by a person (or rejected by the AI where it has earned the final call; the advertiser can appeal once). The fee is kept if the change is rejected (a founder decision to confirm). Off, or before the ad is live: free. The campaign's own settings and its versions can't change a live paid ad's links while it's on. |
 | **Costly extras** (`extras`) | AI video clip (Veo): $3 cost, 50% markup = $4.50 a clip | Cost plus the markup, paid up front with the bottles; the advertiser sees it in the quote. No paid clip left, no clip made. What each use really cost is recorded; if an ad's extras cost more than it paid, the team is told (it's never billed more). |
 
 **The advertiser, step by step:** make the ad in the chat → the review page shows the exact total (bottles × price,
@@ -503,6 +503,7 @@ Each switches from a stand-in to the real company once its key is set. No code c
 | Where visitors are | `GEOIP_DB` (MaxMind file) or `TRUST_GEO_HEADERS=1` behind Cloudflare | Everyone gets the strictest rules |
 | Sanctioned countries | `SANCTIONED_COUNTRIES` | Cuba, Iran, North Korea, Syria |
 | Product photos for the games | `UNSPLASH_ACCESS_KEY` / `PEXELS_API_KEY` (generic items) | Wikipedia and Open Food Facts still work; generic items show name cards |
+| Safe Browsing for ad links | `SAFE_BROWSING_API_KEY` | A stand-in that says so; the list, redirects and page checks still run (*Link safety*) |
 
 Never send a key by email or chat. A minting key for the real Solana network is refused: minting there is signed
 only in Squads.
@@ -568,6 +569,62 @@ needs, what turning it off also turns off, FreeWater's choice and who may change
 All new in catalogue 6: an existing company sees them as new and decides; FreeWater has them on. PDF needs the PDF tools
 (poppler-utils) on the server; set `PDF_TOOLS=off` to refuse PDFs on purpose.
 
+**Paying with "Fix these" (the founder: advertisers may pay anyway).** When the check says *Fix these* and every issue
+is about quality (small or faint words, no bleed, low resolution, words outside the text-safe line, something in the QR
+box, see-through parts, fonts not embedded), the upload page shows the issues and a box: **"I understand — use it as it
+is"**. Ticking it (a person signed in, never a key: `POST /v1/ads/drafts/:id/artwork/as-is`) records who, when and the
+issues of each file (by code); then the ad can be paid for and submitted. The choice is kept with the ad
+(`Campaign.asIs`), shown to the reviewer in the review queue, and kept with the ad's version (`ad_versions.as_is`), so
+ratings and outcomes are read knowing it. A new file, or a file whose issues change, needs the tick again. **Never
+overridable:** a file that can't print at all (no size it fits, two it might be, too large), an unsafe link (*Link
+safety*) and the content policy (a person reviews every ad as before).
+
+### Link safety (Ads → Review → *Link safety*)
+
+The founder: every link an ad leads to is approved before it goes live, "what if they changed it to porn or malware".
+Code: `src/modules/ads/linkSafety.ts`, the list `src/modules/ads/link-blocklist.txt`. Threat model: *Link destinations*.
+
+| Switch | FreeWater | Every company | What it does |
+|---|---|---|---|
+| **Link safety** (`link_safety`) | on | **on** (new and existing: `since: 1`) | Every link an ad leads to is checked automatically before a person reviews it, and every live link again each day. Turned off **only by an owner signed in, with a written reason** (10+ characters), recorded in the switches' history, and the team is alerted; a starting point never turns it off. Off: only the basic checks run (https, no password, no address or private name), and people still review every link. |
+
+**What is checked, every link** (a new ad's, a changed link, a QR code's static address, a version's link: anything an
+ad leads to, by every route: the ad chat and upload page, `POST /v1/campaigns`, `PATCH /v1/campaigns/:id`, `PATCH
+…/codes`, *Change a link*):
+
+1. **On its face:** https only (an `http://` link is taken as its `https://` address), no user name or password, no
+   numeric address (any form), no `localhost`, `.local`, `.internal` or single-word name, no unusual port (flagged).
+2. **The list:** adult, malware and phishing domains and **link shorteners or QR redirect services** that hide where
+   people end up (their subdomains too), plus the company's own blocked domains (`adRules.linkBlocked`). A company can
+   allow a shortener for itself (`adRules.linkAllowed`), never an adult, malware or phishing domain.
+3. **Followed from our server:** every redirect (at most 5, 4 seconds each, 256 KB read), each hop's name looked up and
+   **refused if any address points into a private network** (IPv4 and IPv6, IPv4 inside IPv6 too), the request then made
+   to that same checked address (never looked up again), each hop checked by 1 and 2 again; a page that refreshes
+   itself elsewhere counts as a redirect.
+4. **The last page:** an error, a download instead of a page (refused), a page labelled adult (refused), adult words in
+   its title or description (flagged).
+5. **Google Safe Browsing** when the host sets `SAFE_BROWSING_API_KEY` (a match is refused); without a key a stand-in
+   answers (it knows only Google's own test pages) and every result says so.
+
+**Results:** *pass*, *flag* (a person decides, with the reasons in the review) or *refuse* (it can't be used: nothing is
+charged or changed). Every check is recorded (`link_checks`, append-only): what, why, where it ended up, for which ad.
+
+**Changing a link on a live ad:** the old link stays live; the new one is checked, paid once (the fee), looked at by
+the AI reviewer and decided by a person (*Ops → Ad review → Link changes*, `GET/POST /v1/review/link-changes`; a person
+signed in, never a key), or rejected by the AI where it has earned the final call (appeal once). At approval the link
+is checked again: one that turned unsafe since can't be approved.
+
+**Every day** (job `link-safety`): every live ad's links are checked again. A link that turned bad (refused, or now
+reading as adult) **sends that ad's code to a holding page** ("This link is being checked"), stops its links from being
+followed (old links handed out before too), makes new bottles carry our own code, and alerts the team. A person clears
+it with what they checked (`POST /v1/review/link-holds/:campaignId/release`), only once it checks safe again; or an
+approved link change that leaves nothing unsafe ends it. Holds are kept (`link_holds`). Already-printed *static* codes
+go straight to the advertiser's site and can't be held: a reason to keep static codes off.
+
+**Updating the list:** edit `src/modules/ads/link-blocklist.txt` (one `kind domain` per line; its header says how), run
+`npx vitest run test/link-safety.test.ts`, deploy. The next daily check holds any live ad that now leads somewhere
+listed. A company's own domains go in its settings (`adRules.linkBlocked` / `linkAllowed`).
+
 ### Label layouts (Ads → Label layouts, on the Features page)
 
 Every label is one of 16 tidy templates (`src/modules/ads/layouts.ts`). Each is a switch, shown with a small picture
@@ -601,7 +658,13 @@ calibration, benchmarks), `categories.ts` (the industries). Console: *Ad ratings
 | Switch | FreeWater | New company | Company that already existed | What it does |
 |---|---|---|---|---|
 | **Ad ratings** (`ad_ratings`) | on | copies FreeWater (on) | **on** (as the founder asked; a white-label company may turn it off) | Every ad version rated 1–10 once, in the background, before its first print; followed to its results; filed under an industry. Off: nothing rated or followed for that company. |
-| **Show the rating to advertisers** (`ad_rating_feedback`, under it) | **off** | copies (off) | off | The advertiser sees the score, a meter (Poor 1–3, Average 4–5, Good 6–7, Excellent 8–10) and up to three tips, on the review page before paying and on each ad in the portal. Its own request, after the page: it never stands between the advertiser and paying, and never stops an ad. Off: its two routes are off (404 `feature_off`) and the portal shows nothing. |
+| **Show the rating to advertisers** (`ad_rating_feedback`, under it) | **off** | copies (off) | off | The advertiser sees the score, a meter (Poor 1–3, Average 4–5, Good 6–7, Excellent 8–10) and up to three tips, on the review page before paying and on each ad in the portal, always with the words below. Its own request, after the page: it never stands between the advertiser and paying, and never stops an ad. Off: its two routes are off (404 `feature_off`) and the portal shows nothing. |
+
+**No promises.** Wherever a rating, score, meter, tip or benchmark is shown (the advertiser's portal, the console's
+*Ad ratings* and *Benchmarks* pages, every API answer and API description that carries one, the advertiser's own data
+download) it says: *"This rating is our opinion of how well the ad is put together. It isn't a promise of results."*
+(`NO_PROMISE`, `src/modules/ads/rating.ts`). Ratings and benchmarks are guidance, not guarantees
+(`docs/ADVERTISER-TERMS.md`, a draft for the lawyer; COMPLIANCE L-40).
 | **AI ad rater** (`ai_ad_rater`, AI category) | on | copies (on) | on | Claude rates (through the company's AI routing). Off, or no AI: the built-in rules rate, labelled so. |
 
 **When a version is rated.** A version is the ad's content: artwork, scan page and its links, AR, video (`contentHash`).
@@ -630,19 +693,24 @@ well the rating predicts results".
 
 | Switch | FreeWater | New company | Company that already existed | What it does |
 |---|---|---|---|---|
-| **Contribute to the network's benchmarks** (`benchmarks_contribute`) | on | copies (on) | **off until it decides** (new: its advertisers' results joining a pool is its own decision) | Its ads' results join the network's averages, as anonymous aggregates. Off: they leave the pool at once, and the company sees only its own figures (give to get). |
+| **Contribute to the network's benchmarks** (`benchmarks_contribute`) | on | copies (on) | **off until it decides** (new: its advertisers' results joining a pool is its own decision) | Its ads' results join the network's averages, as anonymous aggregates. Off: they're left out of every monthly release made from then on (releases already made stay as they were), and the company sees only its own figures (give to get). |
 | **Benchmarks page** (`benchmarks_view`) | on | copies (on) | off until it decides | The *Benchmarks* console page and its routes. |
 
 **The method.** Each ad counts once: its rates over the bottles of its first 30 days (7, 90 or so far can be chosen),
 once it has 100+ bottles. Grouped by industry, channel, industry and channel, offer type, and (the company's own only)
-its subcategories. Each figure is the average of the ads' rates (each ad equal), with the median scan rate. **A
-network figure is shown only when** at least **20 ads** from at least **5 advertisers** stand behind it (a company may
-raise these for itself: anyone on its team raises them; an owner lowers them back, with a reason; never under 20 and 5,
-held by the database too), **no advertiser has more than half** of the ads, and the same is still true **without the
-viewing company's own ads** (so nobody can subtract themselves to see someone else's). Never an ad, an advertiser or a
-company by name in the network's figures. **Kept for decades:** each month, once settled (45 days after it ends), the
-network's figures for the ads first printed that month are kept (`ad_benchmark_snapshots`, append-only), only for
-groups that would meet the bar without any one company; nothing else is kept with them. Never sold.
+its subcategories. Each figure is the average of the ads' rates (each ad equal). The company's own figures are its
+own, live. **The network's figures are released once a month only** (ads first printed that month, at 30 days, once
+the month has settled: 45 days after it ends) and kept (`ad_benchmark_snapshots`, append-only); nothing about the
+network is computed for the person asking. **A network cell is released only when** at least **20 ads** from at least
+**5 advertisers** stand behind it, **no advertiser has more than half** of the ads, and the same is still true
+**without any one company** (so nobody can subtract themselves to see someone else's). Then (`src/modules/ads/benchmarkRelease.ts`;
+the method in `docs/AI.md`, "Benchmarks: how they're kept anonymous"): **complementary suppression** (where one part of
+a total is held back, the smallest other part is too; a held-back total holds back its breakdown), **Laplace noise**
+drawn once per release with a fixed budget per cell (ε = 5: 0.5 for each count, 1 for each rate) and kept, so asking
+again gives the same figures, and **rounding** (counts to 5, never shown under the bar; rates to half a point). A
+company may raise the bar for itself (anyone on its team raises it; an owner lowers it back, with a reason; never under
+20 and 5, held by the database too): a released figure under its own bar isn't shown to it. Each figure shows the month
+it's from. Never an ad, an advertiser or a company in the network's figures, and no count of companies. Never sold.
 
 ### How to add a feature
 

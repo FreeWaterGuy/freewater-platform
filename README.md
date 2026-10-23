@@ -224,7 +224,7 @@ junk mail but free water that gives to charity. Houses don't sign up and aren't 
 - **Today:** bottles, scans, money earned and given, deliveries, and what needs attention (ads to review, failed prints, scan pages that fell back, wrong boxes).
 - **Ad review:** each ad on a sample label, at every size, on a box and as its scan page, with a checklist. Approve, or send it back with a note. A paid ad flagged (by an automated check, an AI or a person) shows its reasons and a notes thread with the advertiser; only a person finally rejects it, with a reason (see *How advertisers pay*).
 - **The AI reviewer of paid ads:** looks at each paid ad and passes or flags it; the team can ask it why and push back on the review page (kept with the ad, apart from the advertiser's notes). Its record against the team's final decisions is on *AI agents*. A company can let it make the final call on rejections (*AI makes the final call on paid ads*, off for everyone) only once that record meets its bar (100 decisions, 95% agreeing), by an owner with the second step; the advertiser can always appeal to a person, a sample is audited, the governor turns it off if agreement drops, and refunds stay a person's step (docs/AI.md).
-- **Ad ratings, industries and benchmarks** (`src/modules/ads/ratings.ts`, `rating.ts`, `categories.ts`; console *Ad ratings* and *Benchmarks*): every version of every ad is rated 1–10 once, in the background, before its first print (offer, design at print size, scan page, AR, video; sub-scores, reasons, tips; Claude where an AI is connected, built-in rules otherwise, labelled). Printing never waits: a slow or failing AI catches up later and the rating is marked late. Each ad gets an industry from FreeWater's own list (modelled on IAB's and Google's, not copied) plus the company's own subcategories, is followed to its results (bottles, scans, AR, clicks, sales by channel), and the *Ad ratings* page shows how well the score predicts them. *Benchmarks* pools anonymous averages across the companies that contribute, shown only at 20+ ads from 5+ advertisers (no one over half, and enough without your own), kept month by month. The score reaches advertisers only if the company turns on *Show the rating to advertisers* (off). docs/SWITCHES.md, "Ad ratings" and "Benchmarks".
+- **Ad ratings, industries and benchmarks** (`src/modules/ads/ratings.ts`, `rating.ts`, `categories.ts`; console *Ad ratings* and *Benchmarks*): every version of every ad is rated 1–10 once, in the background, before its first print (offer, design at print size, scan page, AR, video; sub-scores, reasons, tips; Claude where an AI is connected, built-in rules otherwise, labelled). Printing never waits: a slow or failing AI catches up later and the rating is marked late. Each ad gets an industry from FreeWater's own list (modelled on IAB's and Google's, not copied) plus the company's own subcategories, is followed to its results (bottles, scans, AR, clicks, sales by channel), and the *Ad ratings* page shows how well the score predicts them. *Benchmarks* pools anonymous averages across the companies that contribute (companies that don't, see only their own), released once a month only: 20+ ads from 5+ advertisers (no one over half, and enough without any one company), held back where a small figure could be worked out from the others, with random noise drawn once per release and rounded (docs/AI.md, "Benchmarks: how they're kept anonymous"). The score reaches advertisers only if the company turns on *Show the rating to advertisers* (off). Wherever a score or benchmark is shown: "This rating is our opinion of how well the ad is put together. It isn't a promise of results." (draft terms: docs/ADVERTISER-TERMS.md). docs/SWITCHES.md, "Ad ratings" and "Benchmarks".
 - **Machines:** prints today, failures and the last print for each machine, plus any scan pages that fell back.
 - **Routes:** plan and print a night, run the packing check, and follow every stop.
 - **Areas:** the delivery areas, their settings and houses, adding houses from CSV, and drivers' skips to review.
@@ -633,8 +633,11 @@ its switch is on.
   stretched a hair under itself, as the printer does for every ad), scale it to fit (whole, on its own background
   colour), clear the QR box (covered with the colour around it). A fix makes a new file; the original is kept
   (`ad_artwork`, never changed). Then the preview shows it **on a real 8 × 4 label beside sample ads**, at every shape,
-  before paying. An ad can't be paid for until every file passes. Content review is unchanged (an AI flags, a person
-  decides a paid ad).
+  before paying. **Paying anyway:** when only quality issues are left, the advertiser may tick **"I understand — use it
+  as it is"** (`POST /v1/ads/drafts/:id/artwork/as-is`, a person signed in): the choice (who, when, which issues) is
+  kept with the ad and its version, the reviewer sees it, and the ad can be paid for. A file that can't print at all
+  (no size it fits, too large), an unsafe link and the content policy still block. Content review is unchanged (an AI
+  flags, a person decides a paid ad).
 - **The QR code is always ours**: a secure code per bottle, printed in the QR box (`qrMode` is dynamic for these ads
   whatever is asked). The advertiser gives the **link** it leads to (`POST /v1/ads/drafts/:id/link`; an offer page with
   their button) and may choose its **colour and logo** (`POST /v1/ads/drafts/:id/qr`): refused unless it scans (4.5 to 1
@@ -643,9 +646,19 @@ its switch is on.
 - **Changing a link on a live ad costs a fee** (`GET/POST /v1/ads/campaigns/:id/links`; *Change a link* on the ad):
   $50 for FreeWater (`adBilling.linkChangeFeeCents`, per company, under *Ads and prices*), paid up front by card like
   the change fee, once per change however often it's pressed (the change is its own order key; a change paid for but
-  cut off before it was saved is finished at start-up). The new link goes back to review before the ad prints again.
-  The campaign's own settings and its versions can't be used to change a live paid ad's links while the fee is on.
-  Before an ad is live, or with *Change a link (fee)* off, a link changes for free.
+  cut off before it was saved is finished at start-up, waiting for review). **The old link stays live** (printing never
+  pauses) while the new one is checked automatically, looked at by the AI reviewer and approved by a person
+  (`/v1/review/link-changes`; checked again at approval). The campaign's own settings and its versions can't be used to
+  change a live paid ad's links while the fee is on. Before an ad is live, or with *Change a link (fee)* off, a link
+  changes for free.
+- **Link safety** (`src/modules/ads/linkSafety.ts`; Ads → *Link safety*, on; off only by an owner with a reason): every
+  link an ad leads to, by every route, is checked before review: https only (http is upgraded), no numeric, local or
+  private-network hosts, no passwords in links, a list of adult, malware and phishing sites and link shorteners
+  (`src/modules/ads/link-blocklist.txt`, plus each company's own), every redirect followed from our server (5 at most,
+  each address checked after lookup so nothing inside our network is ever fetched), the last page's type and title,
+  and Google Safe Browsing with `SAFE_BROWSING_API_KEY`. Unsafe: refused before anything is paid; doubtful: flagged for
+  a person. **Every day** every live link is checked again; one that turned bad sends that ad's code to a holding page
+  ("This link is being checked"), stops its links and alerts the team until a person clears it. Everything recorded.
 - **Print**: their files go through the same pipeline as every ad: pictures embedded, words outlined in the label's
   fonts, the QR code drawn over its box. A PDF's first page is turned into SVG by Poppler's `pdftocairo` (words become
   shapes), run as its own process with a time limit; the server image installs `poppler-utils` (Dockerfile). Without it,

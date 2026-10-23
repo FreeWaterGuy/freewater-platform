@@ -56,7 +56,7 @@ import type { Campaign, Share } from '../core/types';
 import { productWords, sizeRefusal } from '../modules/ads/layoutChoice';
 import { stickerPlace } from '../modules/packs/boxSettings';
 import { checkSvgPictures, svgCreative } from '../modules/print/svgCreative';
-import { linkFeeProblem } from '../modules/artwork/links';
+import { linkFeeProblem, linksOf } from '../modules/artwork/links';
 import { newId } from '../core/ids';
 import { AccountsError, roleScopes, type Role } from '../modules/accounts/service';
 import { approvalRoutes, approverStepProblem } from '../modules/accounts/secondStep';
@@ -501,8 +501,11 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     };
     const extra = applyExtras(company, c, { qr: b.qr, variants: b.variants, personalize: b.personalize, afterEnd: b.afterEnd, targeting: b.targeting }, experiences.host);
     if (extra) throw new ApiError(422, 'campaign_invalid', extra);
+    // Every link it leads to is checked first (src/modules/ads/linkSafety.ts): an unsafe one is refused, nothing saved.
+    const linkFlags = await app.linkSafety.screenChange(c, null, linksOf(c));
     platform.campaigns.set(c.id, c);
     platform.persist.campaign(c);
+    if (linkFlags.length && c.review?.status !== 'rejected') await app.ads.flag({ companyId: c.companyId, campaignId: c.id, reasons: linkFlags, by: { kind: 'automated', id: 'link-safety' } });
     app.ratings.noteVersion(c); // rated in the background before it first prints
     // The QR code prints over the bottom-right corner of each piece: words of the artwork there are said, not refused.
     const warnings = await app.ads.artworkWarnings(company.id, b.svg, c.sizes);
@@ -524,6 +527,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     // review queue, where a person decides and the AI's record is kept: never switched on here (P3).
     if (b.active === true && !approved && c.prepaid && (c.review?.status === 'flagged' || c.review?.aiFinal)) throw new ApiError(409, 'decide_in_review', 'This paid ad is being discussed, appealed, or was rejected by the AI reviewer: decide it in the review queue (a person, signed in).');
     const changesPage = b.experienceId !== undefined || b.experienceConfig !== undefined || b.theme !== undefined;
+    let linkFlags: string[] = [];
     // A paid ad goes live, or changes what it shows, only by a person's decision: the same rule as the review queue's
     // (P3, P4). A company key can still pause it.
     if (reviewer && (c.prepaid || c.routeBuy) && ((b.active === true && !approved) || changesPage) && !(await teamPerson(key!))) throw new ApiError(403, 'person_review', 'A paid ad is approved, and what it shows is changed, by a person on the team signed in, not with an API key.');
@@ -542,6 +546,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       // Where a live paid ad's code leads changes only through Change a link, which takes its fee (P3: the same rule here).
       if (!reviewer) linkFeeGuard(c, { ...c, experienceConfig: config });
       checkExperience(id, config, b.theme ?? c.theme, c.companyId);
+      // New links are checked before anything changes (src/modules/ads/linkSafety.ts; P3).
+      linkFlags = await app.linkSafety.screenChange(c, linksOf(c), linksOf({ ...c, experienceConfig: config }));
       c.experienceId = id;
       c.experienceConfig = config;
       if (b.theme !== undefined) c.theme = b.theme;
@@ -554,6 +560,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     if (reviewer && b.active === true) c.review = { status: 'approved', at: platform.bus.now().toISOString() };
     if (changesPage && !reviewer) c.review = { status: 'submitted', at: platform.bus.now().toISOString() };
     platform.persist.campaign(c);
+    if (linkFlags.length && c.review?.status !== 'rejected') await app.ads.flag({ companyId: c.companyId, campaignId: c.id, reasons: linkFlags, by: { kind: 'automated', id: 'link-safety' } });
     // Sent back to review with a new page: the AI reviewer looks again (its earlier verdict was about the old ad).
     if (changesPage && !reviewer && c.prepaid) await app.aiReview.onSubmitted(c).catch(() => null);
     if (changesPage) app.ratings.noteVersion(c); // a new version: rated in the background

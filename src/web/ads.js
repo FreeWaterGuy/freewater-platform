@@ -858,7 +858,13 @@
           h('button', { type: 'button', class: 'btn small secondary', onclick: async () => { try { await api('DELETE', `/v1/ads/drafts/${id}/artwork/${f.id}`); await refresh(); } catch (x) { fail(x); } } }, 'Remove')))) : [h('p', { class: 'muted', text: 'No artwork yet. Upload one file for each size you want to buy.' })]));
       coverEl.replaceChildren(...art.coverage.map((c) => h('span', { class: `chip-check${c.fileId ? ' done' : ''}`, text: `${c.fileId ? '✓' : '○'} ${c.name}` })));
       next.toggleAttribute('aria-disabled', !art.ready);
+      // Quality issues only: the advertiser may tick "I understand — use it as it is" and pay (kept with the ad).
+      const a = art.asIs ?? {};
+      asIsEl.replaceChildren(...(a.chosen ? [h('p', { class: 'notice', text: `${a.words}: ticked. Your files print as they are.` })]
+        : a.offered ? [h('label', { class: 'switch' }, h('input', { type: 'checkbox', id: 'art-as-is', onchange: async (e) => { if (!e.target.checked) return; try { art = await api('POST', `/v1/ads/drafts/${id}/artwork/as-is`, { understood: true }); drawFiles(); } catch (x) { e.target.checked = false; fail(x); } } }), h('div', {}, h('b', { text: a.words }), h('span', { text: 'The issues above stay as they are on the printed bottle. You can still fix them instead.' })))]
+        : []));
     }
+    const asIsEl = h('div', { class: 'art-as-is' });
     const shapeName = (sid) => { for (const p of tpl?.products ?? []) for (const x of p.shapes) if (x.id === sid) return `${x.name} (${p.name})`; return sid; };
     async function drawPreview() {
       if (!art.files.some((f) => f.shapeId)) { previewEl.replaceChildren(); return; }
@@ -885,7 +891,7 @@
     shell('new', h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Design it yourself' }), h('p', { text: `Use your own tools. We check every file (size, 300 dpi, bleed, safe areas, the QR box, small or faint words) and show it on a real label before you pay. ${state.config.name} reviews every ad before it prints.` })), link(`/ads/drafts/${id}`, { class: 'btn secondary' }, 'Chat instead')),
       err, templates,
       on('artwork_upload') ? h('section', { class: 'card' }, h('h2', { class: 'section', text: '2. Upload your artwork' }), h('p', { class: 'muted', text: `${art.pdf ? 'PDF, SVG, PNG or JPG' : 'SVG, PNG or JPG'}, up to 25 MB each. One file per size: we match each to its size by its dimensions.` }),
-        h('label', { class: 'btn', for: 'art-pick' }, 'Choose files'), pick, coverEl, filesEl) : null,
+        h('label', { class: 'btn', for: 'art-pick' }, 'Choose files'), pick, coverEl, filesEl, asIsEl) : null,
       h('section', { class: 'card' }, h('h2', { class: 'section', text: '3. Your QR code' }), h('p', { class: 'muted', text: 'Every bottle gets its own secure code from us, printed in the QR box. Where should it lead?' }),
         h('div', { class: 'form' }, h('label', { for: 'art-link' }, 'Link'), linkUrl, h('label', { for: 'art-link-label' }, 'Button words'), linkLabel,
           h('button', { type: 'button', class: 'btn small', onclick: async () => { err.hidden = true; try { art = await api('POST', `/v1/ads/drafts/${id}/link`, { url: linkUrl.value.trim(), ...(linkLabel.value.trim() ? { label: linkLabel.value.trim() } : {}) }); toast('Saved: your code leads there.'); } catch (x) { fail(x); } } }, 'Save the link')),

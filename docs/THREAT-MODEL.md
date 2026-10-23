@@ -3,6 +3,9 @@
 What FreeWater has worth protecting, who can reach it, what protects each thing today, and where the gaps are.
 Refreshed on every review run by the security architect (`.claude/agents/security-architect.md`).
 
+- **Updated 2026-10-23** (branch `k-link`, the founder's decisions on links, uploads and ratings): new asset A20 *Link
+  destinations* and A21 *Pooled benchmarks*, new boundary B11 *Server → advertisers' sites* (SSRF), rows in 4.1 and
+  4.2, section 5b and routes 452–459. docs/REVIEW-LOG.md, "security architect (link safety)".
 - **Updated 2026-10-22** (branch `s-fix`, a second reviewer's ten findings: rows A12, A14, A15, A16, N2 and the new
   N6–N8 below; docs/REVIEW-LOG.md, "security architect (second opinion fixes)").
 - **As of:** 2026-10-21, release check on branch `r-sec` (after `57ca8fd`: the Features registry, prepaid payments,
@@ -19,6 +22,20 @@ Refreshed on every review run by the security architect (`.claude/agents/securit
 ---
 
 ## In plain words
+
+**Links, uploads and ratings, 2026-10-23.** Where an ad sends people is now an asset of its own: a link that turns into
+porn, malware or a phishing page after it was approved harms the people who scan and the company's name. Every link an
+ad leads to is now checked automatically before a person reviews it (https only, no addresses or private names, no
+passwords, a list of adult, malware and phishing sites and link shorteners, every redirect followed from our server,
+the last page read, Google Safe Browsing with a key), a change to a live ad's link waits for a person while the old
+link stays live, and every live link is checked again each day: one that turned bad sends that ad's code to a holding
+page and stops its links. Following links from our server is itself a risk (server-side request forgery: an
+advertiser's link that points our server at something inside our network); every address is checked after its name is
+looked up, the request goes to that same address, and redirects are bounded. Pooled benchmarks are released monthly
+only, with noise and suppression, so no company's or advertiser's results can be worked out. Gaps left: printed static
+codes can't be held (keep them off); the AI's link-change verdicts aren't in its record yet; the stand-in Safe Browsing
+without a key knows only test pages.
+
 
 **Release check, 2026-10-21.** The new things to protect are advertisers' prepaid money and the route spots it reserves,
 houses (their addresses, status, household size) and who claimed them, photos of boxes at people's doors, bought
@@ -101,6 +118,8 @@ match or that the docs leave unclear.
 | A17 | **Household and area data** (new) | `household_*`, area statistics | Bought data about homes misused or kept after opt-out | Import by a person only, sensitive kinds refused (`HouseholdService.importHouseholds`); public opt-out with the same answer either way; deletes are immediate; advertisers never see a house's audience |
 | A18 | **The AI reviewer's final-call switch** (new) | `company_features` (`ai_ad_final_call`), bar and sample | An AI rejecting ads alone without having earned it, or turning itself on | Only on its own page by an owner with the second step on the record (`AiReviewService.turnOn`); never through the Features page (`ownPage`), never a key; the governor turns it off |
 | A19 | **Each company's switches** (new) | `company_features`, `company_feature_log` (append-only), linked settings | A switch flipped by a key, or a company turning on what the host forbids | `FeatureService.change` (an owner signed in; money/chain/one-way: the second step; host areas refused); linked switches only by a person (`ConsoleService.switchesChanged`, fixed in this check) |
+| A20 | **Link destinations** (new): every URL an ad leads to (its page's buttons, versions, a static QR, offer and shop links) | `campaigns` (experience config, variants, qr), `ad_link_changes`, `link_checks`, `link_holds` | People who scan sent to porn, malware or phishing; the company's name on it | `LinkSafetyService.screen` before review on every route that sets a link (`AdsService.submit`, `ArtworkService.setLink`/`changeLinks`, `POST /v1/campaigns`, `PATCH …/:id`, `PATCH …/:id/codes` via `screenChange`); a change waits for a person (`decideLinkChange`, checked again at approval) while the old link stays live; daily `recheck` → `hold` (holding page in `ExperienceService.open`, `/go` refused in `AttributionService.click`, dynamic code in `qrMode`); release by a person once safe; switch off only by an owner with a reason (`FeatureService.plan`, `offNeedsReason`) |
+| A21 | **Pooled benchmarks** (new): other companies' and advertisers' results inside network averages | `ad_benchmark_snapshots` (append-only) | A company or advertiser's results worked out from the averages; competitors' data exchanged | Monthly releases only (`AdRatingService.snapshotDue`, read by `benchmarks`); thresholds without any one company (`enough`); complementary suppression, Laplace noise drawn once and kept, rounding (`benchmarkRelease.ts`); give to get (`contributes`) |
 | A12 | **Machines, stock, labels, packs and deliveries** | Model 6 fleet, micro-factory, vans | Bottles printed and billed without a person; wrong box left; machine hijacked | Machine keys bound to one machine (`unitFor`, `machine.ts:mine`); print cap (`server.ts:printCap`); pack checks (`PackService.verify/seal`); right box at right door (`PackService.deliver`) |
 
 ---
@@ -158,6 +177,7 @@ helper that refuses keys without a `userId` (`me`, `person`, `fwPerson`).
 | B7 | **Server ↔ Solana** | Seals, mint checks, daily reconcile | Payer key pays fees only; mints signed by people in Squads; `confirmSigned` checks memo, amount, destination, authority |
 | B9 | **Porch ↔ app** (new) | A box's printed code proves "this is my house" | 60-day window, company match, 5 wrong tries a day under a lock; the code is on the outside of the box (N2) |
 | B10 | **Host ↔ company switches** (new) | `FW_FEATURES`, `FW_FEATURES_ON` against each company's Features page | The host is the outer limit (`FeatureService.whyOff` checks the host first; `plan` refuses); off-host routes are never registered; news needs the host and then a person (`news.on`, person-only) |
+| B11 | **Server → advertisers' sites** (new) | Our server fetches every ad link, its redirects and its last page (`LinkChecker.check`, `netTransport`), and asks Google Safe Browsing | Names looked up, **every address checked against private, local and reserved ranges** (IPv4 and IPv6, IPv4 inside IPv6) before connecting, the connection pinned to that address (`lookup` overridden: no second lookup to rebind); https only on the first hop, no credentials, no numeric hosts; at most 5 redirects, 4 s and 256 KB each, each hop checked again; no cookies; answers read as data (title, type) and never followed into scripts; offline outside production unless `FW_LINK_CHECK=network` |
 | B8 | **Load balancer ↔ server** | Visitor address (`X-Forwarded-For`), country headers | `TRUST_PROXY`, `TRUST_GEO_HEADERS`. **Weak: see R2** |
 
 ---
@@ -248,6 +268,14 @@ Status: **OK** (a control exists and was read), **PARTIAL** (a control exists bu
 | A17 | E | A key imports bought household data | `POST /v1/households/imports` needs a person | OK |
 | A18 | E | The AI (or a key) turns its own final call on | `src/api/aiReview.ts` `person`; `FeatureService.plan` refuses `ownPage` switches | OK (`test/ai-review-autonomy.test.ts` §3) |
 | A19 | E | A key flips a switch kept in the settings | `ConsoleService.saveNow` / `restoreNow` with `switchesChanged` | OK (fixed in this check) |
+| A20 Links | T | An approved link changed afterwards to porn or malware (the site itself changes) | `LinkSafetyService.recheck` daily → `hold`: holding page, `/go` refused, dynamic code for new bottles; alert; release by a person once safe | PARTIAL (5b K1: printed static codes; a site that changes between daily checks) |
+| A20 | T | A link changed through another route without review (P3) | `screenChange` on `POST /v1/campaigns`, `PATCH /v1/campaigns/:id`, `PATCH …/codes`; *Change a link* waits for a person; the link fee guard | OK (`test/link-safety.test.ts`, "every other way") |
+| A20 | S | A shortener or redirect hides the real destination | the list's shorteners refused (also as a redirect hop); every hop followed and checked | OK |
+| A20 | E | A key approves a link change or clears a hold | `reviewer()` in `src/api/ads.ts` (a person on the team, signed in) | OK |
+| A20 | R | Who checked, approved or cleared what | `link_checks`, `ad_link_changes`, `link_holds` (append-only or guarded), switch log with reason | OK |
+| A20 | E | Link safety switched off quietly | owner signed in with a reason (`offNeedsReason`), never a starting point, alert | PARTIAL (the host can still take the area out with `FW_FEATURES`; not recorded per company) |
+| A21 Benchmarks | I | Subtracting one's own ads, or a breakdown, to see another company's | releases computed once (no on-the-fly answers); thresholds without any one company; complementary suppression; noise; rounding | OK (`test/ad-ratings.test.ts`, benchmarks and releasing) |
+| A21 | I | Averaging repeated answers to remove the noise | noise drawn once per release and kept; append-only | OK |
 | A19 | E | A company turns on what the host forbids | `FeatureService.plan` (`host`), `whyOff` | OK (`test/features-registry.test.ts`) |
 
 ### 4.2 Boundaries
@@ -278,6 +306,10 @@ Status: **OK** (a control exists and was read), **PARTIAL** (a control exists bu
 | B6 | D | Two servers writing | `InstanceLease`, freshness gate | OK |
 | B7 Solana | T | Server records a mint that didn't happen | `confirmSigned` checks on chain | OK |
 | B7 | D | RPC lies or is down | daily `reconcile` pauses on mismatch | OK |
+| B11 Advertisers' sites | E | SSRF: an ad link (or a redirect, a meta refresh, a name that resolves inside) makes our server fetch an internal address (metadata service, database, admin pages) | `faceCheck` (no numeric or private names), `isPrivateAddress` on every resolved address of every hop, `netTransport` pinned to the checked address | OK (`test/link-safety.test.ts`: private by DNS, by redirect, by refresh, mixed answers, IPv4-mapped; pinned transport) |
+| B11 | D | Slow or huge pages tie up the server | 4 s and 256 KB per hop, 5 hops, 8 links at a time, 50 links per ad | OK |
+| B11 | I | Our server's address and the link list revealed to advertisers' sites | a fixed user agent; nothing else sent | Accepted |
+| B11 | S | DNS answers differently between check and fetch (rebinding) | one lookup; the connection uses that answer (`lookup` overridden) | OK |
 | B8 Proxy | S | Forged `X-Forwarded-For` / country header | `TRUST_PROXY=1` trusts every hop; `TRUST_GEO_HEADERS` only behind a CDN | **MISSING** for `1` (R2) |
 
 ---
@@ -351,6 +383,18 @@ verification by an owner or reviewer.
 limits stay a person's). Irreversible steps: pass. Correcting entries: pass (settlements, credit uses, house events and
 the switch log are append-only). Money, crypto and partners off until a person turns them on: pass for switches (fixed
 N3); N4 open. Keys only in host settings: unchanged from R9.
+
+## 5b. Links, uploads and ratings 2026-10-23 (branch `k-link`)
+
+| # | Risk | L | I | Score | Status | Specialist |
+|---|---|---|---|---|---|---|
+| K1 | **Printed static codes can't be held.** A static QR goes straight to the advertiser's site; if that site turns bad, bottles already printed still lead there (the holding page only covers our own codes). | 2 | 4 | 8 | Open by design: new bottles of a held ad get our own code; keep *Static codes* off (privacy-officer to confirm) | privacy-officer |
+| K2 | **A site that turns bad between daily checks** shows its new page until the next check (up to a day). | 3 | 3 | 9 | Accepted for the pilot; a more frequent check, or a check at scan time for links not checked in N hours, if needed | reliability-engineer |
+| K3 | **Two different link changes at once** each paid and only one waited (P2). | 3 | 3 | 9 | **FIXED**: one change per ad at a time, the one-waiting index the last word; CONFIRMED by test (pglite and Postgres 16) | database-engineer |
+| K4 | **The AI's link-change verdicts aren't in its record or audit sample**, yet its rejection is final where it has earned the final call on paid ads. | 2 | 2 | 4 | Open: count link-change decisions in its record before relying on it | test-engineer |
+| K5 | **The page check reads titles only.** Adult or scam content without telling words, or behind scripts, passes the automatic check. | 3 | 3 | 9 | Accepted: the list, Safe Browsing and a person reviewing remain; the check flags, never approves | privacy-officer |
+| K6 | **Without a Safe Browsing key** malware and phishing domains are caught only by the short list. | 3 | 3 | 9 | Open until the host sets the key (and the lawyer answers L-39 on its commercial use) | supply-chain-engineer |
+| K7 | **Benchmark noise budget** (ε = 5 per cell per month) is moderate; small cells are noisy, large ones accurate. | 2 | 2 | 4 | A founder decision (docs/AI.md) | privacy-officer |
 
 ---
 
@@ -856,10 +900,18 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 445 | `GET /v1/ratings` | campaigns | no | team only (no advertiser/machine key); *Ad ratings* | OK (078; read-only: the company's own ad versions, scores, results and calibration) |
 | 446 | `POST /v1/ratings/versions/:id/category` | campaigns | yes | team only (no advertiser/machine key); a person on the team, signed in, never a key; only the company's own versions | OK (078; every change logged in `ad_category_changes`, append-only) |
 | 447 | `POST /v1/ratings/subcategories` | campaigns | yes | team only (no advertiser/machine key); a person on the team, signed in, never a key | OK (078; archived, never deleted) |
-| 448 | `GET /v1/benchmarks` | campaigns | no | team only (no advertiser/machine key); *Benchmarks page* | OK (078; the network's figures are aggregates only, shown at 20+ ads from 5+ advertisers, no advertiser over half, and still so without the viewer's own ads; none unless the company contributes) |
+| 448 | `GET /v1/benchmarks` | campaigns | no | team only (no advertiser/machine key); *Benchmarks page* | OK (078, 079; the network's figures only from the monthly releases: 20+ ads from 5+ advertisers, no advertiser over half, still so without any one company, complementary suppression, noise kept per release, rounded; none unless the company contributes; never a count of companies) |
 | 449 | `POST /v1/benchmarks/settings` | campaigns | yes | team only (no advertiser/machine key); a person, never a key; raising: anyone on the team; lowering: an owner with a reason; floors 20 ads, 5 advertisers (also in the database) | OK (078; read and written under a row lock; changes logged) |
 | 450 | `GET /v1/ads/drafts/:id/rating` | campaigns | no | advertiser only (its own draft); *Show the rating to advertisers* (off unless the company turns it on) | OK (078; score, meter and up to three tips only; never blocks paying) |
 | 451 | `GET /v1/ads/ratings` | campaigns | no | advertiser only (its own ads); *Show the rating to advertisers* | OK (078; score, meter and tips only) |
+| 452 | `GET /v1/review/link-changes` | campaigns | no | team only | OK (079; the old and new links, the check's and the AI's view) |
+| 453 | `POST /v1/review/link-changes/:id` | campaigns | yes | a person on the team, signed in (403 `person_required` for a key); a rejection needs a reason the advertiser sees | OK (079; decided once, in one statement; approval checks the link again and refuses one that turned unsafe) |
+| 454 | `GET /v1/review/link-holds` | campaigns | no | team only | OK (079) |
+| 455 | `POST /v1/review/link-holds/:campaignId/release` | campaigns | yes | a person on the team, signed in, with what they checked; only once the links check safe again | OK (079; ended once, kept) |
+| 456 | `POST /v1/ads/link-changes/:id/appeal` | campaigns | no | advertiser only, its own change; once, only an AI's own rejection | OK (079) |
+| 457 | `POST /v1/ads/drafts/:id/artwork/as-is` | campaigns | yes | advertiser, signed in as a person (403 for a service key); its own draft; refused while a file can't print at all | OK (079; recorded with the ad and its version) |
+| 458 | `GET /v1/ads/campaigns/:id/links` (changed) | campaigns | no | advertiser only, its own ad | OK (shows the change waiting and any hold) |
+| 459 | `POST /v1/ads/campaigns/:id/links` (changed) | campaigns | no | advertiser only, its own ad; money: the link fee, once; one change per ad at a time | OK (079; checked before charging; the old link stays live; a person approves) |
 
 ---
 
@@ -878,6 +930,9 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
   porch box's code is readable from the street (N2) needs a look at a printed box (privacy-officer).
 - **Real Postgres for every new race:** the claim limit was shown on Postgres 16 here; the route-buying locks were
   shown by their builder; other new read-then-write steps were read, not raced.
+- **Real websites:** the link checker was tested only against local stubs (never a real site); how real adult,
+  malware and phishing pages, CDNs, bot walls and slow sites answer it needs a look with `FW_LINK_CHECK=network` on a
+  staging server (security-architect), and Google Safe Browsing was not called (no key here).
 - **AI prompts in production:** that no personal data reaches a model was checked against `docs/AI.md` and the
   personalizer's inputs, not by sampling live prompts (privacy-officer).
 

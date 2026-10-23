@@ -28,6 +28,12 @@ export type Area = keyof typeof WEIGHTS;
 export const AREAS = Object.keys(WEIGHTS) as Area[];
 
 /** What the rater looks at, in plain words: shown with every rating. */
+/**
+ * Said wherever a rating, score, meter, tip or benchmark is shown (the founder: "No promises"): the advertiser's
+ * portal, the console, the API's answers and descriptions, the advertiser's own download. Ratings and benchmarks are
+ * guidance, not guarantees (docs/ADVERTISER-TERMS.md; docs/COMPLIANCE.md, L-40).
+ */
+export const NO_PROMISE = 'This rating is our opinion of how well the ad is put together. It isn\'t a promise of results.';
 export const RATER_LOOKS_AT = 'The rating reads the ad’s words, colours, sizes, its scan page and links, and whether it has AR and video. It never sees the pictures, and nothing about the people who get the bottles.';
 
 export type OfferType = 'percent_off' | 'amount_off' | 'bogo' | 'free_item' | 'other_deal' | 'none';

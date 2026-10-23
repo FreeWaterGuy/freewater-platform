@@ -103,6 +103,8 @@ export interface Switch {
    * page or a starting point. Turning it off works from both.
    */
   ownPage?: { on: string; page: string };
+  /** Turned off only by an owner with a written reason (at least 10 characters), never by a starting point; the team is alerted. */
+  offNeedsReason?: string;
   link?: Link;
   /** For kind 'setting': the console page. */
   page?: string;
@@ -159,7 +161,7 @@ export const SWITCHES: Switch[] = [
 
   // ======================= Ads =======================
   sw({ id: 'ads', category: 'ads', parent: null, dependsOn: ['printing'], label: 'Ads on bottles', description: 'Advertisers buy space on the label. Off: nothing is sold; the label is filled from your unsold-space list (or plain, or your own ad if you allow it), and the advertiser portal’s ad pages are closed.',
-    routes: ['GET /v1/campaigns', 'POST /v1/campaigns', 'PATCH /v1/campaigns/:id', 'GET /v1/experiences', 'POST /v1/experiences/preview', 'GET /v1/assets', 'POST /v1/assets', 'GET /v1/ads/overview', 'GET /v1/ads/campaigns/:id/links', 'POST /v1/ads/campaigns/:id/links'], pages: ['ads'], plugins: ['offer'] }),
+    routes: ['GET /v1/campaigns', 'POST /v1/campaigns', 'PATCH /v1/campaigns/:id', 'GET /v1/experiences', 'POST /v1/experiences/preview', 'GET /v1/assets', 'POST /v1/assets', 'GET /v1/ads/overview', 'GET /v1/ads/campaigns/:id/links', 'POST /v1/ads/campaigns/:id/links', 'POST /v1/ads/link-changes/:id/appeal', 'GET /v1/review/link-changes', 'POST /v1/review/link-changes/:id', 'GET /v1/review/link-holds', 'POST /v1/review/link-holds/:campaignId/release'], pages: ['ads'], plugins: ['offer'] }),
   // The code's look on an ad designed by the advertiser (src/modules/artwork): always our own code, one per bottle.
   sw({ id: 'qr_styles', category: 'ads', group: 'What the code shows', since: 6, label: 'QR colours and styles', description: 'Advertisers choose their QR code’s colour and put their logo in it (where logos in codes are allowed). Only a look a phone can scan: dark enough on its white square, the quiet zone kept, and read back at the smallest size it prints. The code is always ours, one per bottle. Off: plain black codes.',
     routes: ['POST /v1/ads/drafts/:id/qr'] }),
@@ -212,6 +214,13 @@ export const SWITCHES: Switch[] = [
     ownPage: { on: 'On the AI agents page (AI reviewer of paid ads): an owner signed in with the second step, only once the AI’s record meets your bar.', page: 'agents' },
     label: 'AI makes the final call on paid ads',
     description: 'The AI reviewer’s rejection of a paid ad is final without a person, with its written reason kept. The advertiser can always appeal to a person; a random sample of its rejections (10% unless set, never under 5%) still goes to your team to audit; an AI pass still waits for a person before it prints; the refund after any rejection is still approved by a person. Turned on only when its record meets your bar (100 decisions and 95% agreeing with your team unless set); anyone on your team turns it off at once, and the governor turns it off by itself if its agreement drops below the bar.' }),
+  // Link safety (src/modules/ads/linkSafety.ts; docs/SWITCHES.md, "Link safety"). The founder: every link is approved
+  // before it goes live, "what if they changed it to porn or malware". On for every company (`since: 1`: companies that
+  // already exist get it too); only an owner turns it off, with a written reason, and never a starting point.
+  sw({ id: 'link_safety', category: 'ads', group: 'Review', label: 'Link safety',
+    offNeedsReason: 'Every link an ad leads to is checked before a person reviews it and every day while it runs; turning that off is an owner’s decision, written down.',
+    description: 'Every link an ad leads to (a new ad, a changed link, a QR code’s destination) is checked automatically before a person reviews it: https only, no passwords, no private or numeric addresses, not on the list of adult, malware and phishing sites and link shorteners (plus your own), every redirect followed from our server, the last page’s type and title, and Google Safe Browsing where the host set a key. Unsafe links are refused before anything is paid; doubtful ones go to your team with the reasons. Every live link is checked again each day: one that turned bad sends its ad’s code to a holding page (“this link is being checked”) and alerts your team. Off (an owner, with a reason): only the basic checks run, and people still review every link.',
+    jobs: ['link-safety'] }),
   // Rating every ad version 1–10 before it prints, and showing the score to advertisers (src/modules/ads/ratings.ts;
   // docs/SWITCHES.md, "Ad ratings"; docs/AI.md, "Ad rater"). The founder: rating on for every company (a white-label
   // company may turn it off), showing it to advertisers off. `since: 1`: on for companies that already exist, as asked.
@@ -270,7 +279,7 @@ export const SWITCHES: Switch[] = [
   sw({ id: 'template_downloads', category: 'studio', group: 'Design it yourself', parent: 'design_yourself', since: 6, label: 'Template downloads', description: 'A template for every size and shape of piece on each product (PDF, SVG and a 300-dpi PNG guide): the bleed, the image-safe and text-safe areas and the QR box, in inches and pixels, from the same numbers the printer uses.',
     routes: ['GET /v1/ads/templates', 'GET /v1/ads/templates/:id'] }),
   sw({ id: 'artwork_upload', category: 'studio', group: 'Design it yourself', parent: 'design_yourself', since: 6, label: 'Upload your own artwork', description: 'PDF, SVG, PNG or JPG, in the ad chat or on the upload page, one file per size, matched to its size by its dimensions. Each is checked (size, 300 dpi, bleed, safe areas, the QR box, small or faint words, fonts, see-through parts) with a plain Pass or Fix these, and one-tap fixes where safe.',
-    routes: ['POST /v1/ads/drafts/:id/artwork', 'POST /v1/ads/drafts/:id/artwork/:fileId/size', 'POST /v1/ads/drafts/:id/artwork/:fileId/fix', 'DELETE /v1/ads/drafts/:id/artwork/:fileId'] }),
+    routes: ['POST /v1/ads/drafts/:id/artwork', 'POST /v1/ads/drafts/:id/artwork/:fileId/size', 'POST /v1/ads/drafts/:id/artwork/:fileId/fix', 'DELETE /v1/ads/drafts/:id/artwork/:fileId', 'POST /v1/ads/drafts/:id/artwork/as-is'] }),
   sw({ id: 'studio_to_ads', category: 'studio', group: 'Using designs', dependsOn: ['ads', 'ad_chat'], label: 'Use a design in an ad', description: 'Send a studio design straight into an ad being made.', routes: ['POST /v1/studio/use'] }),
   sw({ id: 'bottle_designer', category: 'studio', group: 'People’s own bottles', label: 'Design your own bottle', description: 'People describe their bottle (“Maya’s 30th, pink and gold”) and add photos; the chat makes the design and a proof of exactly what will print.',
     routes: ['POST /v1/me/designs', 'GET /v1/me/designs', 'GET /v1/me/designs/:id', 'POST /v1/me/designs/:id/messages', 'GET /v1/me/designs/:id/scan-preview', 'POST /v1/me/designs/:id/proof', 'POST /v1/me/proofs', 'POST /v1/me/assets', 'GET /v1/public/products/:productId'], plugins: ['custom-experience'] }),

@@ -2,6 +2,7 @@ import type { App } from '../app';
 import type { ApiKey } from '../db/store';
 import { INDUSTRY_IDS } from '../modules/ads/categories';
 import type { Horizon, Person } from '../modules/ads/ratings';
+import { NO_PROMISE } from '../modules/ads/rating';
 import { ApiError, obj, type RouteDef } from './http';
 
 /**
@@ -30,7 +31,7 @@ export function ratingsRoutes(app: App, route: (r: RouteDef) => void) {
   };
   const horizon = { type: 'string', enum: ['d7', 'd30', 'd90', 'latest'] };
 
-  route({ method: 'GET', url: '/v1/ratings', scope: 'campaigns', query: { horizon }, summary: 'Every rated version of your ads (score, parts, reasons, rater and rubric, late or not, industry, results so far), how well the rating predicts results, and the industries with your own subcategories.', handler: async (req, key) => {
+  route({ method: 'GET', url: '/v1/ratings', scope: 'campaigns', query: { horizon }, summary: `Every rated version of your ads (score, parts, reasons, rater and rubric, late or not, industry, results so far), how well the rating predicts results, and the industries with your own subcategories. ${NO_PROMISE}`, handler: async (req, key) => {
     const k = team(key);
     return { body: await svc.list(k.companyId, ((req.query as any).horizon ?? 'd30') as Horizon) };
   } });
@@ -42,7 +43,7 @@ export function ratingsRoutes(app: App, route: (r: RouteDef) => void) {
     const who = await person(key, 'Changing your subcategories');
     return { status: 201, body: { subcategories: await svc.editSubcategory(key!.companyId, who, req.body as any) } };
   } });
-  route({ method: 'GET', url: '/v1/benchmarks', scope: 'campaigns', query: { horizon }, summary: 'Your ads’ averages by industry, channel and offer type beside the network’s (pooled, anonymous, each shown only when enough ads from enough advertisers stand behind it), and the network’s month-by-month history.', handler: async (req, key) => {
+  route({ method: 'GET', url: '/v1/benchmarks', scope: 'campaigns', query: { horizon }, summary: `Your ads’ averages by industry, channel and offer type beside the network’s (released once a month, anonymous: with noise, rounded, and held back where too few ads or advertisers stand behind it), and the network’s month-by-month history. Benchmarks are guidance, not a guarantee. ${NO_PROMISE}`, handler: async (req, key) => {
     const k = team(key);
     return { body: await svc.benchmarks(k.companyId, ((req.query as any).horizon ?? 'd30') as Horizon) };
   } });
@@ -50,11 +51,11 @@ export function ratingsRoutes(app: App, route: (r: RouteDef) => void) {
     const who = await person(key, 'Changing the benchmark thresholds');
     return { body: await svc.changeBenchmarkSettings(key!.companyId, who, req.body as any) };
   } });
-  route({ method: 'GET', url: '/v1/ads/drafts/:id/rating', scope: 'campaigns', summary: 'Your ad’s score (1–10), a meter and up to three tips to improve it, where the company shows them. A guide only: it never stops you paying or your ad printing.', handler: async (req, key) => {
+  route({ method: 'GET', url: '/v1/ads/drafts/:id/rating', scope: 'campaigns', summary: `Your ad’s score (1–10), a meter and up to three tips to improve it, where the company shows them. A guide only: it never stops you paying or your ad printing. ${NO_PROMISE}`, handler: async (req, key) => {
     const adv = advertiser(key);
     return { body: await svc.draftRating(key!.companyId, adv, (req.params as any).id) };
   } });
-  route({ method: 'GET', url: '/v1/ads/ratings', scope: 'campaigns', summary: 'Your ads’ scores, meters and tips, where the company shows them.', handler: async (_req, key) => {
+  route({ method: 'GET', url: '/v1/ads/ratings', scope: 'campaigns', summary: `Your ads’ scores, meters and tips, where the company shows them. ${NO_PROMISE}`, handler: async (_req, key) => {
     const adv = advertiser(key);
     return { body: await svc.advertiserRatings(key!.companyId, adv) };
   } });

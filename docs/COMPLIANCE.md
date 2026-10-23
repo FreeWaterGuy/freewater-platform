@@ -438,6 +438,18 @@ Status: **Code** = done and tested; **Partly** = done with a gap noted; **Lawyer
   and advertiser contracts allow their results to be pooled, and is "anonymous aggregates, never sold" the right
   promise for them?
 - **L-37** Using advertisers' content and results to improve the rating (training): covered by the advertiser terms?
+- **L-38** Link safety (docs/SWITCHES.md, "Link safety"): may we fetch every page an ad links to (and each redirect)
+  from our server, refuse or flag links by our own list (adult, malware, phishing, shorteners), and put a live ad's code
+  on a holding page while its link is checked, without breaching the advertiser's contract? Is keeping the $50 link fee
+  when a change is rejected fair and clearly disclosed (docs/ADVERTISER-TERMS.md §8)? Does "I understand — use it as it
+  is" (paying with quality issues left) need terms on refunds for poor prints (§6)?
+- **L-39** Google Safe Browsing: the v4 Lookup API is for non-commercial use; a commercial service may need Google's
+  Web Risk API (paid) instead. Which do we use, under which terms, and may advertisers' URLs be sent to Google?
+- **L-40** **No promises** (the founder): every rating, score, meter, tip and benchmark now says "This rating is our
+  opinion of how well the ad is put together. It isn't a promise of results." Is that wording, with the draft terms
+  section "Ratings and benchmarks are guidance, not guarantees" (docs/ADVERTISER-TERMS.md §1–5), enough under the FTC
+  Act s. 5 and state consumer-protection law, including for benchmarks with deliberate noise (docs/AI.md)? Should the
+  noise be disclosed in the terms as well as on the page? Replaces the portal's earlier "a guide …" wording in L-35.
 
 ### Before the Austin pilot: what the lawyer must answer (for the founder)
 

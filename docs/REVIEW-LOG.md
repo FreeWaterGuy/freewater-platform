@@ -430,3 +430,35 @@ wasn't rebuilt here).
 Not checked here: a real Claude answering the rating prompt (stand-in and mocked API used), real phones showing the
 advertiser's meter, the law (L-34 to L-37 in docs/COMPLIANCE.md: automated assessments, showing scores, pooling
 competitors' results under antitrust, training on advertisers' content). Founder's decisions in the report.
+## Rules table: links, uploads and ratings (security architect, 2026-10-23, branch `k-link`)
+
+The founder's four decisions. Each rule's test was shown failing with the rule's code removed (a mutation per rule, 39
+in all, every one killed; the script was a scratch file).
+
+| Rule | Code | Test | Status |
+|---|---|---|---|
+| Every link checked before review, by every route: https (http upgraded), no credentials, no numeric/local/private hosts, the list (adult, malware, phishing, shorteners; per company), redirects followed (5, 4 s, 256 KB) with every resolved address checked and the connection pinned, the last page's type and title, Safe Browsing with a key (stand-in without) | `linkSafety.ts` (`faceCheck`, `isPrivateAddress`, `LinkChecker.check`, `netTransport`, `screen`, `screenChange`), `link-blocklist.txt` | `test/link-safety.test.ts` (local stubs only), "the automatic check" (9 tests) | new |
+| A change to a live ad's link: the old link stays live, paid once, the AI looks, a person decides (checked again at approval); one change per ad at a time | `ArtworkService.changeLinks` (`oneAtATime`), `decideLinkChange`, `applyApproved`, `ad_link_changes` (079) | "changing a live ad’s link…", "approving checks the link again…" | new (finishes the interrupted WIP) |
+| The daily re-check: a link that turned bad → holding page, `/go` refused, our own code on new bottles, alert, recorded; released by a person once safe; an approved change ends it only if nothing is still unsafe | `LinkSafetyService.recheck/hold/release`, `ExperienceService.open`, `AttributionService.click`, `qrMode`, job `link-safety` | "the daily re-check…", "a held ad whose advertiser changes the link…" | new |
+| *Link safety* on for every company; off only by an owner signed in with a reason, never by a starting point, recorded, team alerted | registry `link_safety` (`offNeedsReason`), `FeatureService.plan/change` | "the switch…" | new |
+| Pay anyway: the issues shown, the tick by a person, recorded with the ad and its version; files that can't print, unsafe links and review still block | `artwork/asIs.ts`, `ArtworkService.acceptAsIs/list/art/printFiles`, `missing()`, `AdsService.submit`, `ad_versions.as_is` (079), `ads.js` upload page | `test/design-yourself.test.ts`, "paying anyway" (2 tests) | new |
+| Benchmarks: monthly releases only; thresholds without any one company; complementary suppression; Laplace noise drawn once per release (ε = 5 per cell) and kept; rounded; no count of companies; non-contributors refused | `benchmarkRelease.ts`, `AdRatingService.snapshotDue/benchmarks` | `test/ad-ratings.test.ts`, "benchmarks: monthly releases…" (6) and "releasing benchmarks" (3, one a property test over random tables) | changed (was live and exact) |
+| No promises: the founder's words with every rating, score, meter, tip and benchmark (portal, console, API answers and descriptions, the advertiser's download) | `NO_PROMISE` (`rating.ts`), `ratings.ts`, `src/api/ratings.ts`, `data/service.ts`, `console.js` | "says “no promise” wherever…", "turned on: the score…", "the advertiser’s own download…" | new |
+
+| Date | Role | Severity | Pattern | Where | Finding | Fix / test |
+|---|---|---|---|---|---|---|
+| 2026-10-23 | Security architect | HIGH | P2 | `ArtworkService.changeLinks` (WIP) | Two different link changes pressed at once each paid the $50 fee; one waited and the other's payment was orphaned (the waiting-change index refused it after the charge). CONFIRMED: with the per-ad serialization removed, "changing a live ad’s link" fails (2 orders) | One change per ad at a time (`oneAtATime`), checked before charging; the unique index stays the last word |
+| 2026-10-23 | Security architect | HIGH | P3 | `POST /v1/campaigns`, `PATCH /v1/campaigns/:id`, `PATCH …/codes` | The link check ran on the draft and *Change a link* paths only: the campaign's own routes could set any link (a shortener, an internal address) for review unchecked. CONFIRMED by three sibling mutants | `LinkSafetyService.screenChange` on each, before anything changes; flags go to review; "every other way an ad’s links change…" |
+| 2026-10-23 | Security architect | MEDIUM | P3 | `/go/:token` (`AttributionService.click`) | A held ad's scan page hid its links, but a signed link handed out earlier still redirected to the bad site. CONFIRMED (click-refused mutant) | Refused (409, a "being checked" page) while the ad is held |
+| 2026-10-23 | Security architect | MEDIUM | — | `decideLinkChange` (WIP) | A link checked when asked could be swapped (the site changed) before a person approved it days later. CONFIRMED (approve-recheck mutant) | Checked again at approval; refused if now unsafe |
+| 2026-10-23 | Security architect | MEDIUM | — | `applyApproved` (WIP) | Any approved change ended a hold, even one to another unsafe page. CONFIRMED (hold-ends-safe mutant) | The hold ends only if no link of the ad is still hold-worthy |
+| 2026-10-23 | Security architect | LOW | — | `isPrivateAddress` (WIP) | IPv4-compatible IPv6 (`::7f00:1`) and Teredo/site-local ranges weren't private; `localhost.` (trailing dot) passed the face check offline. CONFIRMED (mapped-v4 mutant; test list) | Embedded IPv4 read in every form; `2001::/32`, `fec0::/10` added; trailing dots stripped |
+| 2026-10-23 | Security architect | LOW | — | `LinkSafetyService.check` (WIP) | Links past the 50th were silently not checked. CONFIRMED by test | Refused whole (`too_many_links`) |
+| 2026-10-23 | Security architect | MEDIUM | P5 (privacy) | `AdRatingService.benchmarks` | Network figures were computed exactly for each request, so repeated or differently-filtered questions could be differenced. PLAUSIBLE before (no exploit shown); now closed by design | Monthly releases with suppression and noise (founder decision 3) |
+| 2026-10-23 | Security architect | LOW | lint | `checkSettings` (WIP) | The domain pattern for a company's own list was an unsafe regular expression (nested repeat) | Plain label checks |
+
+Siblings searched: every route that sets `experienceConfig`, `variants` or `qr.staticUrl` (`src/api/server.ts`,
+`codesAr.ts`, `ads.ts`, `artwork.ts`, the chat via submit); every place a campaign's link is followed (scan page, `/go`,
+static codes); every place a score is shown (`ratings.ts`, `api/ratings.ts`, `data/service.ts`, `console.js`, `ads.js`;
+no email shows one). Not checked: real websites and CDNs (stubs only; never a real site), Google Safe Browsing itself (no
+key), a real phone scanning a held code, the law (COMPLIANCE L-38 to L-40). Founder's decisions in the report.

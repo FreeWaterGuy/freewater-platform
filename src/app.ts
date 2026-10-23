@@ -106,6 +106,7 @@ import { UnsoldSpace } from './modules/fillers/unsold';
 import { NewsService, newsPlugin } from './modules/news/service';
 import { builtinNewsWriter, ClaudeNewsWriter, type NewsWriter } from './modules/news/writer';
 import { AiReviewService, ClaudeAdReviewer, standInReviewer, type AdReviewer } from './modules/ads/aiReview';
+import { checkerFromEnv, LinkSafetyService, type LinkChecker } from './modules/ads/linkSafety';
 import { AdRatingService } from './modules/ads/ratings';
 import { ClaudeAdRater, rulesRater, type AdRater } from './modules/ads/rating';
 import { HouseholdService } from './modules/households/service';
@@ -205,6 +206,12 @@ export interface AppOptions {
   fleet?: { claimTimeoutMs?: number; finishTimeoutMs?: number; offlineAfterMs?: number; bufferHours?: number; offlineGraceHours?: number };
   /** Writes FreeWater News stories (Claude with a key, else the stand-in that only points to the reporting). */
   newsWriter?: NewsWriter;
+  /**
+   * How links are checked (src/modules/ads/linkSafety.ts). Default: the real network in production (and with
+   * FW_LINK_CHECK=network), else the offline stand-in, which checks links on their face and against the list but
+   * fetches nothing. Tests pass a checker pointed at a local stub, never real sites.
+   */
+  linkChecker?: LinkChecker;
   /** The AI reviewer of paid ads (tests pass a fake; with no AI key, the stand-in: no verdicts, a person reviews). */
   adReviewer?: AdReviewer;
   /** Rates each ad version before it prints (src/modules/ads/ratings.ts); without one, Claude where there's an AI, else the built-in rules. */
@@ -631,6 +638,7 @@ export async function createApp(opts: AppOptions) {
   // Each company's switches (its Features page, src/runtime/registry.ts): routes, jobs, screens and the engine read them.
   // The host's settings (FW_FEATURES) stay the outer limit: a company can't turn on what the host has off.
   const companyFeatures = new FeatureService(db, () => platform.companies, features, consoleSvc, opts.clock);
+  companyFeatures.alert = (key, title, detail) => void runtime.alerts.alert(key, 'warning', title, detail);
   companyFeatures.paidWaiting = (companyId) => [...platform.campaigns.values()].filter((c) => c.companyId === companyId && c.prepaid).map((c) => ({ share: c.prepaid!.share, left: prepaidLeft(c) }));
   await companyFeatures.load();
   const featureOn = (companyId: string, id: string) => companyFeatures.on(companyId, id);
@@ -737,6 +745,13 @@ export async function createApp(opts: AppOptions) {
   aiReview.alert = (key, title, detail) => void runtime.alerts.alert(key, 'warning', title, detail);
   ads.afterPaidSubmit = (c) => aiReview.onSubmitted(c);
   ads.onDecided = (c, decision, personId) => aiReview.onDecided(c, decision, personId);
+  // Link safety (src/modules/ads/linkSafety.ts): every link an ad leads to is checked before review and again each
+  // day; a change to a live ad's link waits for the AI reviewer and a person while the old link stays live.
+  const linkSafety = new LinkSafetyService(db, platform, featureOn, opts.linkChecker ?? checkerFromEnv());
+  linkSafety.alert = (key, title, detail) => void runtime.alerts.alert(key, 'warning', title, detail);
+  ads.links = linkSafety;
+  artwork.links = linkSafety;
+  artwork.reviewLink = (c, links) => aiReview.linkVerdict(c, links);
   // Ad ratings (src/modules/ads/ratings.ts): every ad version rated once before its first print, in the background
   // (printing never waits), followed to its results; benchmarks pooled from the companies that contribute.
   const ratings = new AdRatingService(db, platform, featureOn, opts.adRater ?? (aiOn ? new ClaudeAdRater({ apiKey: anthropicKey, model: process.env.ANTHROPIC_MODEL }) : rulesRater));
@@ -800,7 +815,7 @@ export async function createApp(opts: AppOptions) {
   // The demo's former advertisers ran paid before it starts (src/demo/history.ts): their past bottles, printed once.
   if (empty && opts.seedDemo && opts.demoUnsold) await printFormerAdvertisersPast({ platform, persistence }, demoFormerCampaignIds);
 
-  return { ...made, aiReview, ratings, fillers, unsold, news, households, routeBuys, features, companyFeatures, db, persistence, runtime, demoKeys, accounts, payments, credit, prepaid, artwork, messenger, experiences, assets, ads, designs, delivery, houses, dropPhotos, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
+  return { ...made, aiReview, linkSafety, ratings, fillers, unsold, news, households, routeBuys, features, companyFeatures, db, persistence, runtime, demoKeys, accounts, payments, credit, prepaid, artwork, messenger, experiences, assets, ads, designs, delivery, houses, dropPhotos, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

@@ -52,6 +52,8 @@ const PRINTS_PAID = (id: string) => id === 'printing' || id === 'ads' || id.star
 const PLATFORM = () => process.env.PLATFORM_COMPANY ?? 'freewater';
 
 export class FeatureService {
+  /** Set by the app: tells the team (a switch that's never turned off silently went off). */
+  alert: (key: string, title: string, detail: string) => void = () => {};
   /** Each company's own choices for 'feature' switches (loaded from the database at start: P6). */
   private rows = new Map<string, Map<string, boolean>>();
   private baselines = new Map<string, number>();
@@ -250,7 +252,7 @@ export class FeatureService {
   // ---------- planning and changing ----------
 
   /** What a change (or a starting point) would do, before anything is saved. */
-  plan(companyId: string, asked: Record<string, boolean>, opts: { startingPoint?: string } = {}): Plan {
+  plan(companyId: string, asked: Record<string, boolean>, opts: { startingPoint?: string; reason?: string } = {}): Plan {
     const c = this.config(companyId);
     if (!c) throw new FeatureError('not_found', 'Company not found.', 404);
     const refused: Plan['refused'] = [], yourself: Plan['yourself'] = [];
@@ -270,6 +272,11 @@ export class FeatureService {
       const s = byId.get(id)!;
       if (s.locked) { refused.push({ id, label: s.label, reason: `Always on: ${s.locked}` }); continue; }
       if (s.kind === 'setting') continue;
+      // Off only by an owner who says why, and never by a starting point (it stays as it is; turn it off yourself).
+      if (s.offNeedsReason && own(id)) {
+        if (opts.startingPoint) { yourself.push({ id, label: s.label, how: `Left on: turning it off is an owner’s own decision, with a reason. ${s.offNeedsReason}` }); continue; }
+        if (String(opts.reason ?? '').trim().length < 10) { refused.push({ id, label: s.label, reason: `Say why it’s turned off (at least 10 characters), for the record. ${s.offNeedsReason}` }); continue; }
+      }
       if (own(id)) target.set(id, to);
       for (const d of dependantsOf(id)) { const ds = byId.get(d)!; if (!ds.locked && ds.kind !== 'setting' && own(d)) target.set(d, false); }
     }
@@ -327,7 +334,7 @@ export class FeatureService {
   }
 
   /** The plan, with the warnings that need the database too (route pieces that could no longer share a label). */
-  async preview(companyId: string, asked: Record<string, boolean>, opts: { startingPoint?: string } = {}): Promise<Plan> {
+  async preview(companyId: string, asked: Record<string, boolean>, opts: { startingPoint?: string; reason?: string } = {}): Promise<Plan> {
     const plan = this.plan(companyId, asked, opts);
     if (plan.changes.length && this.layouts) plan.warnings.push(...await this.layouts.switchRouteWarnings(companyId, this.onAfter(companyId, plan.changes)));
     return plan;
@@ -403,6 +410,8 @@ export class FeatureService {
         await this.db.transaction(writeStored);
       }
       for (const x of stored) this.mine(companyId).set(x.id, x.to);
+      // A switch that's never off silently: the team hears when it goes off, with who and why.
+      for (const x of plan.changes) if (!x.to && byId.get(x.id)!.offNeedsReason) this.alert(`switch-off:${companyId}:${x.id}`, `“${x.label}” was turned off for ${companyId}`, `By ${actor.name}: ${opts.reason ?? x.why}.`);
       return { ...plan, saved: plan.changes.length };
     });
   }

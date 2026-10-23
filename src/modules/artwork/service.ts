@@ -17,7 +17,12 @@ import { templateFileName, templatePdf, templatePng, templateSvg } from './templ
 import { ArtworkError, applyFix, fixWords, matchShape, preflight, printMarkup, readSource, type ArtKind, type FixId, type Report, type Source } from './preflight';
 import { isLive, linkChangeFee, linkChangeKey, linksChanged, linksOf, withLink, LINK_FEE_SWITCH } from './links';
 import { pdfToolsAvailable } from './pdf';
+import { reasonWords, type LinkSafetyService } from '../ads/linkSafety';
+import { artworkReady, cantPrint, currentAsIs, fineToPrint, mustCodes } from './asIs';
 import { productWords, sizeRefusal } from '../ads/layoutChoice';
+
+/** The words of the tick (the advertiser's portal shows these; kept with the choice). */
+export const AS_IS_WORDS = 'I understand — use it as it is';
 
 // "I'll design it myself" (README, "Design it yourself"; docs/SWITCHES.md). Templates for every piece, uploads in the
 // ad chat or on the upload page matched to their size and checked (preflight.ts), one-tap fixes, the QR code's colour
@@ -259,11 +264,16 @@ export class ArtworkService {
     const shapes = this.shapes(companyId);
     const files = d.artwork ?? [];
     const std = this.platform.standardProduct(companyId);
-    const ready = files.length > 0 && files.every((f) => f.shapeId && f.report.verdict === 'pass');
+    const ready = artworkReady(files, d.asIs);
+    const asIs = currentAsIs(files, d.asIs);
+    const fixable = files.filter((f) => f.report.verdict !== 'pass');
     return {
       mode: d.mode ?? 'assistant', ready,
-      verdict: !files.length ? 'empty' : ready ? 'pass' : 'fix',
+      verdict: !files.length ? 'empty' : !fixable.length ? 'pass' : ready ? 'as_is' : 'fix',
       files,
+      // "I understand — use it as it is": offered when every file can print and only quality issues are left; ticked,
+      // it's kept with the ad (and its version, for ratings and outcomes). A file that can't print at all must be fixed.
+      asIs: { chosen: asIs, offered: !!fixable.length && !ready && files.every((f) => !cantPrint(f)), cantPrint: files.filter(cantPrint).map((f) => f.name), words: AS_IS_WORDS },
       // Which piece shapes have a file: a size with two shapes on a product may have one file (the other shape gets it fitted).
       coverage: shapes.filter((s) => s.productId === std.id).map((s) => ({ shapeId: s.id, share: s.share, name: s.name, fileId: files.find((f) => f.shapeId === s.id)?.id ?? files.find((f) => f.share === s.share && f.shapeId)?.id ?? null })),
       links: d.experienceId ? linksOf({ experienceConfig: d.experienceConfig }) : [],
@@ -308,7 +318,7 @@ export class ArtworkService {
   async printFiles(companyId: string, advertiserId: string, d: AdDraft, opts: { preview?: boolean } = {}): Promise<ArtworkPrintFile[]> {
     const out: ArtworkPrintFile[] = [];
     for (const f of d.artwork ?? []) {
-      if (!f.shapeId || !f.placement || (!opts.preview && f.report.verdict !== 'pass')) continue;
+      if (!f.shapeId || !f.placement || (!opts.preview && !fineToPrint(f, d.asIs))) continue;
       const shape = this.shape(companyId, f.shapeId);
       if (!shape) continue;
       let hit = this.cache.get(f.id);
@@ -330,10 +340,30 @@ export class ArtworkService {
     this.gate(companyId, SWITCH.upload);
     const files = d.artwork ?? [];
     if (!files.length) throw new AdsError(422, 'not_ready', 'Upload your artwork first (PDF, SVG, PNG or JPG), one file per size.');
-    const bad = files.filter((f) => !f.shapeId || f.report.verdict !== 'pass');
-    if (bad.length) throw new AdsError(422, 'artwork_not_ready', `Fix your artwork first: ${bad.map((f) => `“${f.name}”: ${f.report.summary}`).join(' ')}`);
+    const bad = files.filter((f) => !fineToPrint(f, d.asIs));
+    if (bad.length) throw new AdsError(422, 'artwork_not_ready', `Fix your artwork first${bad.every((f) => !cantPrint(f)) ? ', or tick “I understand — use it as it is”' : ''}: ${bad.map((f) => `“${f.name}”: ${f.report.summary}`).join(' ')}`);
     const printFiles = await this.printFiles(companyId, advertiserId, d);
     return { creative: artworkCreative(printFiles), creativeRef: { kind: 'artwork', files: printFiles } };
+  }
+
+  /**
+   * "I understand — use it as it is": the advertiser (a person signed in) accepts the quality issues the check found and
+   * may pay. Kept on the draft with who and when and each file's issues; the ad submitted from it carries it, and so does
+   * its version (ratings and outcomes know). Refused while any file can't print at all. Never a safety problem: the
+   * link check and review still decide.
+   */
+  async acceptAsIs(o: { companyId: string; advertiserId: string; draftId: string; by: string }) {
+    this.gate(o.companyId, SWITCH.upload);
+    await this.withDraft(o.companyId, o.advertiserId, o.draftId, (d) => {
+      const files = d.artwork ?? [];
+      if (!files.length) throw new AdsError(422, 'not_ready', 'Upload your artwork first (PDF, SVG, PNG or JPG), one file per size.');
+      const cant = files.filter(cantPrint);
+      if (cant.length) throw new AdsError(422, 'cant_print', `These can’t print at all, so they have to be fixed first: ${cant.map((f) => `“${f.name}”: ${f.report.summary}`).join(' ')}`);
+      const issues = files.filter((f) => f.report.verdict !== 'pass');
+      if (!issues.length) throw new AdsError(409, 'nothing_to_accept', 'Every file passes its check: there’s nothing to accept.');
+      d.asIs = { at: this.platform.bus.now().toISOString(), by: o.by, files: issues.map((f) => ({ fileId: f.id, name: f.name, codes: mustCodes(f) })) };
+    });
+    return this.list(o.companyId, o.advertiserId, o.draftId);
   }
 
   // ---------- the code: its links and its look ----------
@@ -342,7 +372,10 @@ export class ArtworkService {
   async setLink(o: { companyId: string; advertiserId: string; draftId: string; url: string; label?: string; headline?: string }) {
     this.gate(o.companyId);
     const adv = await this.ads.advertiser(o.companyId, o.advertiserId);
+    o = { ...o, url: upgradeHttp(o.url) };
     if (!/^https:\/\/[^\s]+$/i.test(o.url)) throw new AdsError(422, 'bad_link', 'A link starts with https:// (like https://yourshop.com/offer).');
+    // Checked now, so an unsafe link is said at once (it's checked again, with any others, when the ad is submitted).
+    await this.links?.screen(o.companyId, [o.url], { purpose: 'draft', advertiserId: o.advertiserId });
     await this.withDraft(o.companyId, o.advertiserId, o.draftId, (d) => {
       const id = d.experienceId && this.host.has(d.experienceId) && linksOf({ experienceConfig: d.experienceConfig }).length ? d.experienceId : 'offer';
       const current = linksOf({ experienceConfig: d.experienceConfig });
@@ -378,12 +411,14 @@ export class ArtworkService {
     return this.list(o.companyId, o.advertiserId, o.draftId);
   }
 
-  /** A live ad's links and what changing one costs. */
-  linkTerms(companyId: string, advertiserId: string, campaignId: string) {
+  /** A live ad's links, what changing one costs, and the change waiting for review (the old links stay live meanwhile). */
+  async linkTerms(companyId: string, advertiserId: string, campaignId: string) {
     const c = this.campaign(companyId, advertiserId, campaignId);
     const company = this.company(companyId);
     const live = isLive(c);
-    return { campaignId: c.id, links: linksOf(c), live, feeCents: live ? linkChangeFee(company, this.platform.featureOn) : 0, changes: c.linkChanges ?? 0 };
+    const last = (await this.db.query<any>(`select * from ad_link_changes where company_id = $1 and campaign_id = $2 order by number desc limit 1`, [companyId, c.id])).rows[0];
+    return { campaignId: c.id, links: linksOf(c), live, feeCents: live ? linkChangeFee(company, this.platform.featureOn) : 0, changes: c.linkChanges ?? 0,
+      pending: last && last.status === 'waiting' ? linkChangeView(last) : null, last: last ? linkChangeView(last) : null, hold: c.linkHold ?? null };
   }
 
   private campaign(companyId: string, advertiserId: string, id: string) {
@@ -392,12 +427,35 @@ export class ArtworkService {
     return c;
   }
 
+  /** Set by the app: link safety (src/modules/ads/linkSafety.ts). */
+  links: LinkSafetyService | null = null;
+  /** Set by the app: the AI reviewer's view of a link change, and whether its rejection is final here (AiReviewService.linkVerdict). */
+  reviewLink: (c: Campaign, links: { path: string; url: string; label?: string }[]) => Promise<{ verdict: 'pass' | 'flag'; category: string; reasons: string[]; final: boolean } | null> = async () => null;
+
   /**
-   * Change where a live ad's code leads. Its fee (the company's, FreeWater $50, while "Change a link (fee)" is on) is
-   * paid first, once per change whatever the retries; then the new links are saved and the ad goes back to review (a
-   * person checks where it now sends people) before it prints again. Before it's live, a link changes for free.
+   * Change where an ad's code leads. Every new link is checked automatically first (refused: nothing is charged or
+   * changed). On an approved ad (it's printing) the old links STAY LIVE: the change waits, paid once (the company's
+   * link fee, FreeWater $50, while "Change a link (fee)" is on), the AI reviewer looks at it, and a person approves it
+   * (or the AI rejects it, where the company let it make the final call; the advertiser can appeal to a person). Only
+   * then do the new links go live. Printing never pauses for it. Before an ad is approved, a link changes for free and
+   * is reviewed with the ad.
    */
   async changeLinks(o: { companyId: string; advertiserId: string; campaignId: string; changes: { path: string; url: string }[]; expectedFeeCents?: number }) {
+    // An http link is taken as its https address (the check reads it so, and so does the page people open).
+    const changes = (o.changes ?? []).map((ch) => ({ path: String(ch.path), url: upgradeHttp(String(ch.url)) }));
+    // One change to an ad's links at a time (two different changes pressed at once would each pay, and only one could
+    // wait for review: P2). The database's one-waiting-change index stays the last word.
+    return this.oneAtATime(`links:${o.campaignId}`, () => this.changeLinksNow({ ...o, changes }));
+  }
+  private locks = new Map<string, Promise<unknown>>();
+  private async oneAtATime<T>(key: string, run: () => Promise<T>): Promise<T> {
+    const prev = this.locks.get(key) ?? Promise.resolve();
+    const next = prev.catch(() => undefined).then(run);
+    const tail = next.catch(() => undefined);
+    this.locks.set(key, tail);
+    try { return await next; } finally { if (this.locks.get(key) === tail) this.locks.delete(key); }
+  }
+  private async changeLinksNow(o: { companyId: string; advertiserId: string; campaignId: string; changes: { path: string; url: string }[]; expectedFeeCents?: number }) {
     const c = this.campaign(o.companyId, o.advertiserId, o.campaignId);
     if (c.prepaid?.stoppedAt) throw new AdsError(409, 'stopped', 'This ad was stopped and paid back.');
     const before = linksOf(c);
@@ -406,18 +464,117 @@ export class ArtworkService {
       if (!before.some((l) => l.path === ch.path)) throw new AdsError(422, 'unknown_link', `This ad has no link at “${ch.path}”.`);
       if (!/^https:\/\/[^\s]+$/i.test(ch.url) || ch.url.length > 2000) throw new AdsError(422, 'bad_link', 'A link starts with https:// (like https://yourshop.com/offer).');
     }
+    const live = c.review?.status === 'approved';
+    const waiting = live ? (await this.db.query<any>(`select * from ad_link_changes where company_id = $1 and campaign_id = $2 and status = 'waiting'`, [o.companyId, c.id])).rows[0] : null;
+    // The same change asked again (a second press, a retry): it's already waiting, nothing more is charged.
+    if (waiting) {
+      if (sameChanges(parse(waiting.changes), o.changes)) return { campaignId: c.id, links: before, feeCents: 0, status: 'link_in_review' as const, pending: linkChangeView(waiting) };
+      throw new AdsError(409, 'change_waiting', 'A change to this ad’s links is already waiting for review. It’s decided first; then you can change it again.');
+    }
     const next = this.applyChanges(c, o.changes);
     if (!linksChanged(before, linksOf(next))) throw new AdsError(409, 'no_change', 'It already leads there. Nothing was charged.');
     const bad = this.host.checkConfig(next.experienceId, next.experienceConfig ?? {}) ?? (next.variants ?? []).map((v: any) => (v?.experienceConfig ? this.host.checkConfig(v.experienceId ?? next.experienceId, v.experienceConfig) : null)).find(Boolean) ?? null;
     if (bad) throw new AdsError(422, 'bad_link', `That link can’t be used: ${bad}.`);
+    // The automatic check, before anything is charged: refused links stop here.
+    const checked = this.links ? await this.links.screen(o.companyId, o.changes.map((ch) => ch.url), { purpose: 'change', campaignId: c.id, advertiserId: c.advertiserId }) : { verdict: 'pass' as const, results: [] };
     const company = this.company(o.companyId);
     const fee = isLive(c) ? linkChangeFee(company, this.platform.featureOn) : 0;
+    const key = linkChangeKey(c, o.changes);
     let feeCents = 0;
-    if (fee > 0) feeCents = (await this.prepaid.payLinkFee({ companyId: o.companyId, advertiserId: o.advertiserId, campaignId: c.id, key: linkChangeKey(c, o.changes), feeCents: fee, expectedFeeCents: o.expectedFeeCents, changes: o.changes }))?.feeCents ?? 0;
-    this.save(c, o.changes);
-    if (c.prepaid) await this.ads.afterPaidSubmit(c).catch(() => {});
+    if (fee > 0) feeCents = (await this.prepaid.payLinkFee({ companyId: o.companyId, advertiserId: o.advertiserId, campaignId: c.id, key, feeCents: fee, expectedFeeCents: o.expectedFeeCents, changes: o.changes }))?.feeCents ?? 0;
+    if (!live) {
+      // Not approved yet: the ad is being made or reviewed; the new link is reviewed with it.
+      this.save(c, o.changes);
+      const flags = this.links?.flagLines(checked) ?? [];
+      if (flags.length && c.review?.status !== 'rejected') await this.ads.flag({ companyId: c.companyId, campaignId: c.id, reasons: flags, by: { kind: 'automated', id: 'link-safety' } });
+      if (c.prepaid) await this.ads.afterPaidSubmit(c).catch(() => {});
+      await this.flush();
+      return { campaignId: c.id, links: linksOf(c), feeCents, status: 'in_review' as const };
+    }
+    const row = await this.recordChange(c, o.changes, before, { key: feeCents ? key : null, feeCents, safety: checked.verdict === 'flag' ? 'flag' : 'pass', safetyReasons: checked.verdict === 'flag' ? reasonWords(checked.results, 'flag') : null });
+    const decided = await this.aiLooks(c, row);
     await this.flush();
-    return { campaignId: c.id, links: linksOf(c), feeCents, status: 'in_review' as const };
+    return { campaignId: c.id, links: before, feeCents, status: decided?.status === 'rejected' ? 'link_rejected' as const : 'link_in_review' as const, pending: linkChangeView(decided ?? row) };
+  }
+
+  /** Keep a waiting link change (one per ad; its number moves the ad's count on, so the next change has a key of its own). */
+  private async recordChange(c: Campaign, changes: { path: string; url: string }[], before: { path: string; url: string }[], o: { key: string | null; feeCents: number; safety: 'pass' | 'flag'; safetyReasons: string | null; number?: number }) {
+    const number = o.number ?? (c.linkChanges ?? 0) + 1;
+    const row = (await this.db.query<any>(`insert into ad_link_changes (id, company_id, campaign_id, advertiser_id, number, order_key, changes, before, fee_cents, safety, safety_reasons, status, created_at)
+      values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'waiting',$12) on conflict do nothing returning *`,
+      [newId('alc'), c.companyId, c.id, c.advertiserId, number, o.key, JSON.stringify(changes), JSON.stringify(before.map(({ path, url }) => ({ path, url }))), o.feeCents, o.safety, o.safetyReasons, this.platform.bus.now().toISOString()])).rows[0]
+      ?? (await this.db.query<any>(`select * from ad_link_changes where campaign_id = $1 and (number = $2 or status = 'waiting') order by number desc limit 1`, [c.id, number])).rows[0];
+    if ((c.linkChanges ?? 0) < number) { c.linkChanges = number; this.platform.persist.campaign(c); }
+    return row;
+  }
+
+  /** The AI reviewer looks at the new links; its flag is kept for the person deciding, its rejection is final only where the company let it be. */
+  private async aiLooks(c: Campaign, row: any) {
+    const changes = parse<{ path: string; url: string }[]>(row.changes);
+    let v: Awaited<ReturnType<ArtworkService['reviewLink']>> = null;
+    try { v = await this.reviewLink(c, changes.map((ch) => ({ ...ch, label: linksOf(c).find((l) => l.path === ch.path)?.label }))); } catch { v = null; }
+    if (!v) return null;
+    const reasons = v.reasons.join(' ').slice(0, 2000);
+    if (v.verdict === 'flag' && v.final) {
+      return (await this.db.query<any>(`update ad_link_changes set ai_verdict = 'flag', ai_category = $2, ai_reasons = $3, ai_final = true, status = 'rejected', decided_by = 'ai:ad-reviewer', decided_at = $4, note = $5 where id = $1 and status = 'waiting' returning *`,
+        [row.id, v.category, reasons, this.platform.bus.now().toISOString(), `Rejected by the AI reviewer: ${reasons}`.slice(0, 1000)])).rows[0] ?? null;
+    }
+    return (await this.db.query<any>(`update ad_link_changes set ai_verdict = $2, ai_category = $3, ai_reasons = $4 where id = $1 and status = 'waiting' returning *`, [row.id, v.verdict, v.category, reasons || null])).rows[0] ?? null;
+  }
+
+  /** Link changes waiting for a person, for the team's review page. */
+  async linkChangeQueue(companyId: string) {
+    return (await this.db.query<any>(`select * from ad_link_changes where company_id = $1 and status = 'waiting' order by created_at limit 200`, [companyId])).rows.map((r) => ({ ...linkChangeView(r), advertiser: this.platform.campaigns.get(r.campaign_id)?.advertiserName ?? null, name: this.platform.campaigns.get(r.campaign_id)?.name ?? null }));
+  }
+
+  /**
+   * A person on the team decides a waiting link change (never a key: the route asks for a person). Approved: the new
+   * links go live now (a new version of the ad, rated before it prints; a hold on the old links ends). Rejected, with a
+   * reason the advertiser sees: the old links stay. Decided once, whoever presses first.
+   */
+  async decideLinkChange(o: { companyId: string; changeId: string; decision: 'approve' | 'reject'; note?: string; personId: string }) {
+    const note = String(o.note ?? '').trim();
+    if (o.decision === 'reject' && note.length < 10) throw new AdsError(422, 'reason_required', 'Write why it’s rejected, in plain words (at least 10 characters): the advertiser sees it.');
+    if (o.decision === 'approve') {
+      const w = (await this.db.query<any>(`select * from ad_link_changes where id = $1 and company_id = $2 and status = 'waiting'`, [o.changeId, o.companyId])).rows[0];
+      if (!w) throw new AdsError(409, 'not_waiting', 'That link change isn’t waiting (someone already decided it, or it doesn’t exist).');
+      const c = this.platform.campaigns.get(w.campaign_id);
+      // The ad changed shape since (a full change of the ad): this link change no longer fits it.
+      try { if (!c) throw new Error('gone'); this.applyChanges(c, parse(w.changes)); } catch { throw new AdsError(409, 'ad_changed', 'The ad changed since this link change was asked for, so it no longer fits: reject it, and the advertiser asks again.'); }
+      // Checked again now: where a link leads can change between asking and approving (it must still be safe).
+      const again = this.links ? await this.links.check(o.companyId, parse<{ url: string }[]>(w.changes).map((x) => x.url), { purpose: 'change', campaignId: w.campaign_id, advertiserId: w.advertiser_id }) : null;
+      if (again?.verdict === 'refuse') throw new AdsError(409, 'link_unsafe', `Checked again, that link can’t be used now: ${reasonWords(again.results, 'refuse')} Reject it with that reason.`);
+    }
+    const at = this.platform.bus.now().toISOString();
+    const row = (await this.db.query<any>(`update ad_link_changes set status = $3, decided_by = $4, decided_at = $5, note = $6 where id = $1 and company_id = $2 and status = 'waiting' returning *`,
+      [o.changeId, o.companyId, o.decision === 'approve' ? 'approved' : 'rejected', `user:${o.personId}`, at, note || null])).rows[0];
+    if (!row) throw new AdsError(409, 'not_waiting', 'That link change isn’t waiting (someone already decided it, or it doesn’t exist).');
+    if (o.decision === 'approve') await this.applyApproved(row);
+    await this.flush();
+    return linkChangeView((await this.db.query<any>(`select * from ad_link_changes where id = $1`, [row.id])).rows[0]);
+  }
+
+  /** An approved change's links go live (once: a restart between the decision and this finishes it, recoverLinkChanges). */
+  private async applyApproved(row: any) {
+    const c = this.platform.campaigns.get(row.campaign_id);
+    if (!c || c.companyId !== row.company_id) return;
+    const changes = parse<{ path: string; url: string }[]>(row.changes);
+    try { this.save(c, changes, { keepLive: true }); } catch { return; /* the ad's page changed shape since: the reconciliation shows it */ }
+    // A hold ends only when none of the ad's links (the new ones and any it kept) is still unsafe.
+    if (c.linkHold && this.links) {
+      const now = await this.links.check(c.companyId, linksOf(c).map((l) => l.url), { purpose: 'release', campaignId: c.id, advertiserId: c.advertiserId });
+      if (!now.results.some((r) => r.reasons.some((x) => x.hold))) await this.links.endHoldByChange(c, String(row.decided_by ?? 'review'));
+    }
+    this.platform.persist.campaign(c);
+    await this.db.query(`update ad_link_changes set applied_at = $2 where id = $1 and applied_at is null`, [row.id, this.platform.bus.now().toISOString()]);
+  }
+
+  /** The advertiser appeals the AI reviewer's rejection of a link change: back to a person, once. */
+  async appealLinkChange(o: { companyId: string; advertiserId: string; changeId: string }) {
+    const row = (await this.db.query<any>(`update ad_link_changes set status = 'waiting', appealed_at = $4, decided_by = null, decided_at = null where id = $1 and company_id = $2 and advertiser_id = $3 and status = 'rejected' and ai_final and appealed_at is null returning *`,
+      [o.changeId, o.companyId, o.advertiserId, this.platform.bus.now().toISOString()])).rows[0];
+    if (!row) throw new AdsError(409, 'not_appealable', 'Only a link change the AI reviewer rejected on its own can be appealed, once.');
+    return linkChangeView(row);
   }
 
   private applyChanges(c: Campaign, changes: { path: string; url: string }[]) {
@@ -425,33 +582,62 @@ export class ArtworkService {
     for (const ch of changes) next = withLink(next, ch.path, ch.url);
     return next;
   }
-  private save(c: Campaign, changes: { path: string; url: string }[]) {
+  private save(c: Campaign, changes: { path: string; url: string }[], o: { keepLive?: boolean } = {}) {
     const next = this.applyChanges(c, changes);
-    const live = isLive(c);
     c.experienceConfig = next.experienceConfig;
     c.variants = next.variants;
     c.qr = next.qr;
-    if (live) c.linkChanges = (c.linkChanges ?? 0) + 1;
-    // Where people are sent changed: a person checks it before it prints again (as any change to what people see).
-    c.active = false;
-    c.review = { status: 'submitted', at: this.platform.bus.now().toISOString() };
+    // Not approved yet: where people are sent changed, so a person checks it with the ad before it prints. An approved
+    // change (keepLive) was checked by a person already: it goes live as it is.
+    if (!o.keepLive) {
+      c.active = false;
+      c.review = { status: 'submitted', at: this.platform.bus.now().toISOString() };
+    }
     this.platform.persist.campaign(c);
     // Where the code leads is part of the ad: a new version, rated before it first prints (src/modules/ads/ratings.ts).
     this.ads.onVersion(c);
   }
 
-  /** Link changes paid for but not saved (a crash between): saved now, from what was kept with the payment. */
+  /**
+   * After a restart: a link fee paid but its change never recorded (a crash between) becomes a waiting change for a
+   * person (its links weren't checked then, so it's marked for a closer look); an approved change whose links never
+   * went live goes live now. Nothing is charged again.
+   */
   async recoverLinkChanges() {
-    const rows = (await this.db.query<any>(`select campaign_id, advertiser_id, company_id, draft_id, extras from ad_orders where kind = 'change' and status = 'paid' and draft_id like 'link:%'`)).rows;
-    for (const r of rows) {
+    const paid = (await this.db.query<any>(`select o.campaign_id, o.company_id, o.draft_id, o.total_cents, o.extras from ad_orders o where o.kind = 'change' and o.status = 'paid' and o.draft_id like 'link:%'
+      and not exists (select 1 from ad_link_changes l where l.order_key = o.draft_id)`)).rows;
+    for (const r of paid) {
       const c = this.platform.campaigns.get(r.campaign_id);
       const n = Number(String(r.draft_id).split(':')[2]);
-      if (!c || c.companyId !== r.company_id || (c.linkChanges ?? 0) >= n) continue;
-      const changes = (typeof r.extras === 'string' ? JSON.parse(r.extras) : r.extras)?.links;
+      if (!c || c.companyId !== r.company_id || !Number.isInteger(n)) continue;
+      const changes = parse<any>(r.extras)?.links;
       if (!Array.isArray(changes)) continue;
-      try { this.save(c, changes); } catch { /* the reconciliation shows it */ }
+      // Already recorded (or, before link changes waited for review, already saved): nothing to do.
+      if ((c.linkChanges ?? 0) >= n) continue;
+      try { this.applyChanges(c, changes); } catch { continue; }
+      await this.recordChange(c, changes, linksOf(c), { key: r.draft_id, feeCents: Number(r.total_cents), safety: 'flag', safetyReasons: 'Recorded after a restart, before its links were checked: look at where it leads.', number: n });
     }
+    const approved = (await this.db.query<any>(`select * from ad_link_changes where status = 'approved' and applied_at is null`)).rows;
+    for (const r of approved) await this.applyApproved(r);
   }
+}
+
+const parse = <T>(v: unknown): T => (typeof v === 'string' ? JSON.parse(v) : v) as T;
+/** http://… is taken as https://… (never the other way). */
+export const upgradeHttp = (url: string) => String(url ?? '').trim().replace(/^http:\/\//i, 'https://');
+const sameChanges = (a: { path: string; url: string }[], b: { path: string; url: string }[]) => {
+  const k = (l: { path: string; url: string }[]) => l.map((x) => `${x.path}=${x.url}`).sort().join('\n');
+  return k(a) === k(b);
+};
+/** A link change as the advertiser and the team see it. */
+export function linkChangeView(r: any) {
+  return {
+    id: r.id as string, campaignId: r.campaign_id as string, number: Number(r.number), changes: parse<{ path: string; url: string }[]>(r.changes), before: parse<{ path: string; url: string }[]>(r.before),
+    feeCents: Number(r.fee_cents), status: r.status as 'waiting' | 'approved' | 'rejected', safety: { verdict: r.safety as 'pass' | 'flag', reasons: r.safety_reasons ?? null },
+    ai: r.ai_verdict ? { verdict: r.ai_verdict as 'pass' | 'flag', category: r.ai_category ?? null, reasons: r.ai_reasons ?? null, final: !!r.ai_final } : null,
+    appealedAt: r.appealed_at ? new Date(r.appealed_at).toISOString() : null, decided: r.decided_at ? { by: r.decided_by as string, at: new Date(r.decided_at).toISOString(), note: r.note ?? null } : null,
+    live: !!r.applied_at, at: new Date(r.created_at).toISOString(),
+  };
 }
 
 const asAds = (e: unknown) => (e instanceof ArtworkError ? new AdsError(e.status, e.code, e.message) : e);

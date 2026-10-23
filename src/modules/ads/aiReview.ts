@@ -196,6 +196,21 @@ export class AiReviewService {
   }
 
   /**
+   * A change to where a live paid ad's code leads (src/modules/artwork/service.ts, changeLinks): the AI looks at the
+   * new links with the ad. Its flag goes to the person deciding; its rejection is final only where the company let it
+   * make the final call (the advertiser can appeal to a person). A pass never puts a link live: a person approves it.
+   */
+  async linkVerdict(c: Campaign, links: { path: string; url: string; label?: string }[]) {
+    if (!c.prepaid || !this.features.on(c.companyId, AI_USE)) return null;
+    const ad = this.adFor(c);
+    const words = ['A change to where this ad’s code leads. The new links:', ...links.map((l) => `${l.label ? `${l.label}: ` : ''}${l.url}`), 'The ad as it is now:', ...ad.words].slice(0, 80);
+    let v: ReviewVerdict | null;
+    try { v = await withCompany(c.companyId, () => this.reviewer.review({ ...ad, words }, c.companyId), AI_USE); v = v && cleanVerdict(v); } catch { v = null; }
+    if (!v) return null;
+    return { ...v, final: v.verdict === 'flag' && this.finalCallOn(c.companyId) };
+  }
+
+  /**
    * A person finally decided a paid ad (approved it, or rejected it). If the AI looked at it, that's its record: agreed
    * or not. A pass a person approved and later rejected becomes a miss. Then the governor reads the record.
    */

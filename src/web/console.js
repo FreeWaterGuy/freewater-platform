@@ -912,6 +912,7 @@
       return h('div', { class: 'row', style: 'display:flex;gap:8px;flex-wrap:wrap;align-items:center' }, cat, label, add);
     })();
     shell('ratings', head('Ad ratings', 'Every version of every ad is rated 1 to 10 once, before it first prints: the offer, the design at print size, the scan page, AR and video. Printing never waits for it. Each version is then followed to what its bottles did, so you can see how well the rating predicts results.'),
+      h('div', { class: 'notice', text: R.promise }),
       h('p', { class: 'muted', text: `${R.counts.rated} rated (${R.counts.byAi} by the AI, ${R.counts.byRules} by the built-in rules), ${R.counts.waiting} waiting, ${R.counts.ratedLate} of ${R.counts.printed} printed versions rated after their first print. ${R.looksAt}` }),
       section('How well the rating predicts results', cal.summary,
         horizonLinks('/console/ratings', horizon),
@@ -943,17 +944,18 @@
     const save = h('button', { class: 'btn secondary', type: 'button' }, 'Save');
     save.onclick = async () => { try { await api('POST', '/v1/benchmarks/settings', { minAds: Number(minAds.value), minAdvertisers: Number(minAdv.value), ...(why.value.trim() ? { reason: why.value.trim() } : {}) }); toast('Saved.'); render(); } catch (x) { toast(x.message); } };
     shell('benchmarks', head('Benchmarks', B.method),
+      h('div', { class: 'notice', text: `Benchmarks are guidance, not a guarantee. ${B.promise}` }),
       B.contributes ? null : h('div', { class: 'notice', text: 'Your company doesn’t contribute its ads’ results to the network’s benchmarks, so you see only your own. Turn on “Contribute to the network’s benchmarks” on the Features page (Data & targeting) to join.' }),
       horizonLinks('/console/benchmarks', horizon),
       ...DIMS.map(([d, title]) => {
         const gs = B.groups.filter((g) => g.dimension === d);
         return gs.length ? section(title, null, h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['', 'Yours', 'The network'].map((x) => h('th', { text: x })))),
           h('tbody', {}, gs.map((g) => h('tr', {}, h('td', { text: g.label }), h('td', { text: figs(g.yours) }),
-            h('td', { class: g.network?.shown ? '' : 'muted', text: !g.network ? '—' : g.network.shown ? `${figs(g.network)} (${g.network.advertisers} advertisers)` : g.network.why }))))))) : null;
+            h('td', { class: g.network?.shown ? '' : 'muted', text: !g.network ? '—' : g.network.shown ? `${figs(g.network)} (about ${g.network.advertisers} advertisers, ${g.network.period})` : g.network.why }))))))) : null;
       }),
-      section('History', 'The network, month by month: ads first printed that month, their first 30 days.', B.history.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Month', 'Group', 'Ads', 'Scan rate', 'Sales per bottle'].map((x) => h('th', { text: x })))),
+      section('History', 'The network, month by month: ads first printed that month, their first 30 days (with noise, rounded; small groups held back).', B.history.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Month', 'Group', 'Ads', 'Scan rate', 'Sales per bottle'].map((x) => h('th', { text: x })))),
         h('tbody', {}, B.history.slice(0, 120).map((r) => h('tr', {}, h('td', { text: r.period }), h('td', { text: `${r.dimension.replace(/_/g, ' ')}: ${r.label}` }), h('td', { text: String(r.ads) }), h('td', { text: pct(r.scanRate) }), h('td', { text: pct(r.conversionRate) })))))) : h('p', { class: 'muted', style: 'margin:0', text: 'Nothing settled yet.' })),
-      section('When an average is shown', `At least this many ads from this many advertisers (never under ${B.floors.minAds} and ${B.floors.minAdvertisers}), no advertiser with more than half of them, and enough without your own ads. Anyone on the team can raise these; lowering them is an owner’s, with a reason.`,
+      section('When an average is shown', `At least this many ads from this many advertisers (never under ${B.floors.minAds} and ${B.floors.minAdvertisers}), no advertiser with more than half of them, and enough without any one company’s ads. Anyone on the team can raise these; lowering them is an owner’s, with a reason.`,
         h('div', { class: 'form' }, field('Ads needed', minAds), field('Advertisers needed', minAdv), field('Why', why, { full: true })), h('div', { class: 'toolbar' }, save)));
   }
 

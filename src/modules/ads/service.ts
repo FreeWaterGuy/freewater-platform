@@ -16,6 +16,8 @@ import { themeFor } from '../experiences/host';
 import { givingLine, pieceOf, slotQr, withLabel } from '../print/renderer';
 import { wordsUnderCode } from '../print/svgCreative';
 import { artworkCreative } from '../artwork/creative';
+import { linksOf } from '../artwork/links';
+import { currentAsIs } from '../artwork/asIs';
 import { qrSvg } from '../print/qr';
 import { companyQrStyle } from '../codes/style';
 import { boxFaceQr, boxFaceSizes, stopCodeBox } from '../packs/boxRenderer';
@@ -135,6 +137,8 @@ export class AdsService {
   routeBuys?: RouteBuyService;
   /** Set by the app: "I'll design it myself", their own artwork (modules/artwork). */
   artwork?: import('../artwork/service').ArtworkService;
+  /** Link safety (src/modules/ads/linkSafety.ts), set by the app. */
+  links?: import('./linkSafety').LinkSafetyService;
 
   /**
    * What submitting this draft will charge, for a company where ads are paid up front: the bottles (a new ad) or the
@@ -524,6 +528,9 @@ export class AdsService {
     const now = this.platform.bus.now().toISOString();
     const existing = r.campaignId ? this.platform.campaigns.get(r.campaignId) : undefined;
 
+    // Every link the ad leads to is checked before anything is paid: an unsafe one stops here (src/modules/ads/linkSafety.ts).
+    const linkCheck = this.links ? await this.links.screen(r.companyId, linksOf({ experienceConfig: d.experienceConfig }).map((l) => l.url), { purpose: 'submit', campaignId: existing?.id ?? null, advertiserId: r.advertiserId }) : null;
+
     // Paid up front: a new ad pays for its bottles, a change to a paid ad pays the change fee. Then it's reviewed.
     let paid: { campaignId: string; prepaid: import('../../core/types').PrepaidBottles | null; totalCents: number } | null = null;
     let routePaid: Awaited<ReturnType<RouteBuyService['pay']>> | null = null;
@@ -566,6 +573,8 @@ export class AdsService {
       ...(prepaid ? { prepaid } : {}),
       // Their own artwork: the code is always ours (dynamic), in the colour and with the logo they chose, if allowed.
       ...(d.mode === 'own' ? { qr: { mode: 'dynamic' as const, ...(d.qr && this.artwork?.on(r.companyId, 'qr_styles') ? d.qr : {}) } } : {}),
+      // "I understand — use it as it is" (src/modules/artwork/asIs.ts): kept with this version of the ad, or cleared.
+      asIs: d.mode === 'own' ? currentAsIs(d.artwork, d.asIs) ?? undefined : undefined,
       active: false, review: existing?.prepaid && existing.review?.status === 'flagged' ? { ...existing.review, at: now, resubmittedAt: now } : { status: 'submitted', at: now }, createdAt: existing?.createdAt ?? now,
     };
     const resubmitted = c.review?.status === 'flagged';
@@ -589,6 +598,9 @@ export class AdsService {
       const objections = (await this.db.query<any>(`select agent, reason from ai_objections where company_id = $1 and subject = $2 order by at`, [c.companyId, `draft:${r.id}`])).rows;
       if (objections.length) await this.flag({ companyId: c.companyId, campaignId: c.id, reasons: objections.map((o) => `${o.agent}: ${o.reason}`), by: { kind: 'automated', id: 'ai-objection' } });
     }
+    // A link the automatic check flagged goes to the team with its reasons (a person decides whether it runs).
+    const linkFlags = linkCheck && this.links ? this.links.flagLines(linkCheck) : [];
+    if (linkFlags.length) await this.flag({ companyId: c.companyId, campaignId: c.id, reasons: linkFlags, by: { kind: 'automated', id: 'link-safety' } });
     // The AI reviewer looks at every paid ad as it comes in (src/modules/ads/aiReview.ts).
     if (c.prepaid) await this.afterPaidSubmit(c).catch(() => {});
     // Every version is rated once before it first prints, in the background (src/modules/ads/ratings.ts).

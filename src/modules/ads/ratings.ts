@@ -7,8 +7,9 @@ import type { Platform } from '../../platform';
 import { GovernorDeclined } from '../ai/anthropic';
 import { AiUnavailable, withCompany } from '../ai/routing';
 import { guessIndustry, INDUSTRIES, industryLabel, isIndustry, TAXONOMY } from './categories';
-import { adForRating, meterOf, RATER_LOOKS_AT, RATER_USE, rulesRater, RUBRIC_VERSION, type AdContent, type AdRater, type RaterAnswer } from './rating';
+import { adForRating, meterOf, NO_PROMISE, RATER_LOOKS_AT, RATER_USE, rulesRater, RUBRIC_VERSION, type AdContent, type AdRater, type RaterAnswer } from './rating';
 import { AdsError } from './service';
+import { EPSILON_PER_CELL, releaseCell, ROUND_COUNT, ROUND_RATE, suppress, type Released } from './benchmarkRelease';
 
 /**
  * Ad ratings, categories, outcomes and benchmarks (docs/AI.md, "Ad rater"; docs/SWITCHES.md, "Ad ratings" and
@@ -170,8 +171,9 @@ export class AdRatingService {
       const byPerson = last && String(last.category_by).startsWith('user:');
       const guess = guessIndustry(c.category, input.words);
       const id = newId('adv_v');
-      await tx.query(`insert into ad_versions (id, company_id, campaign_id, advertiser_id, content_hash, seen_at, category, secondary_category, subcategory_id, category_by, features) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-        [id, c.companyId, c.id, c.advertiserId, digest, at.toISOString(), byPerson ? last.category : guess.primary, byPerson ? last.secondary_category : guess.secondary, byPerson ? last.subcategory_id : null, byPerson ? last.category_by : 'rules', JSON.stringify(input.features)]);
+      // "I understand — use it as it is" (src/modules/artwork/asIs.ts) is kept with the version: its outcomes are read knowing it.
+      await tx.query(`insert into ad_versions (id, company_id, campaign_id, advertiser_id, content_hash, seen_at, category, secondary_category, subcategory_id, category_by, features, as_is) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [id, c.companyId, c.id, c.advertiserId, digest, at.toISOString(), byPerson ? last.category : guess.primary, byPerson ? last.secondary_category : guess.secondary, byPerson ? last.subcategory_id : null, byPerson ? last.category_by : 'rules', JSON.stringify(input.features), c.asIs ? JSON.stringify(c.asIs) : null]);
       return { id };
     });
   }
@@ -243,7 +245,7 @@ export class AdRatingService {
   /** What the advertiser may see: the score, the meter and up to three tips, nothing else (the parts stay the company's). */
   private forAdvertiser(r: any) {
     const v = this.view(r);
-    return v.ready ? { ready: true, score: v.score, meter: v.meter, tips: v.tips.slice(0, 3), by: v.rater === 'rules' ? 'Built-in rules' : 'AI', note: 'A guide to how ads like this tend to do. It never stops your ad.' } : { ready: false, pending: v.pending };
+    return v.ready ? { ready: true, score: v.score, meter: v.meter, tips: v.tips.slice(0, 3), by: v.rater === 'rules' ? 'Built-in rules' : 'AI', note: `${NO_PROMISE} It never stops your ad.`, promise: NO_PROMISE } : { ready: false, pending: v.pending, promise: NO_PROMISE };
   }
 
   /**
@@ -255,10 +257,10 @@ export class AdRatingService {
     const r = (await this.db.query<any>(`select data from ad_drafts where id = $1 and company_id = $2 and advertiser_id = $3`, [draftId, companyId, advertiserId])).rows[0];
     if (!r) throw new AdsError(404, 'not_found', 'Draft not found.');
     const d = parse<any>(r.data);
-    if (!this.on(companyId, RATINGS_SWITCH)) return { ready: false, pending: false, message: 'Ratings are off here.' };
+    if (!this.on(companyId, RATINGS_SWITCH)) return { ready: false, pending: false, message: 'Ratings are off here.', promise: NO_PROMISE };
     // Designed by the advertiser (src/modules/artwork): its files, as the ad submitted from it will carry them.
     const own = d.mode === 'own' && d.experienceId ? await this.ownArt(companyId, advertiserId, d).catch(() => null) : null;
-    if ((!d.studio && !d.poster && !own) || !d.experienceId) return { ready: false, pending: false, message: d.mode === 'own' ? 'The score comes once every file passes its check and the ad has its link.' : 'The score comes once the ad has its artwork and its scan page.' };
+    if ((!d.studio && !d.poster && !own) || !d.experienceId) return { ready: false, pending: false, promise: NO_PROMISE, message: d.mode === 'own' ? 'The score comes once every file passes its check and the ad has its link.' : 'The score comes once the ad has its artwork and its scan page.' };
     const adv = (await this.db.query<any>(`select name, category from advertisers where id = $1 and company_id = $2`, [advertiserId, companyId])).rows[0];
     const content: AdContent = {
       creativeRef: own ? own.creativeRef : d.studio ? { kind: 'studio', spec: d.studio } : { kind: 'poster', spec: d.poster }, ...(own?.qr ? { qr: own.qr } : {}), experienceId: d.experienceId, experienceConfig: d.experienceConfig ?? {},
@@ -282,12 +284,12 @@ export class AdRatingService {
       if (c.companyId !== companyId || c.advertiserId !== advertiserId || c.isHouse) continue;
       out.push({ campaignId: c.id, rating: this.forAdvertiser(await this.ratingOf(companyId, this.hashOf(c))) });
     }
-    return { ratings: out };
+    return { ratings: out, promise: NO_PROMISE };
   }
 
   /** The company's console: every rated version, how the rating predicts results, the industries and its subcategories. */
   async list(companyId: string, horizon: Horizon = 'd30') {
-    const rows = (await this.db.query<any>(`select v.id as version_id, v.campaign_id, v.seen_at, v.first_printed_at, v.rated_before_print, v.category as v_category, v.secondary_category as v_secondary, v.subcategory_id, v.category_by, v.features, r.*
+    const rows = (await this.db.query<any>(`select v.id as version_id, v.campaign_id, v.seen_at, v.first_printed_at, v.rated_before_print, v.category as v_category, v.secondary_category as v_secondary, v.subcategory_id, v.category_by, v.features, v.as_is, r.*
       from ad_versions v left join ad_ratings r on r.company_id = v.company_id and r.content_hash = v.content_hash and r.rubric_version = $2
       where v.company_id = $1 order by v.seen_at desc, v.seq desc limit 200`, [companyId, RUBRIC_VERSION])).rows;
     const outcomes = await this.outcomesOf(companyId, rows.map((r) => r.version_id), 'latest');
@@ -297,13 +299,13 @@ export class AdRatingService {
       taxonomy: { ...TAXONOMY, industries: INDUSTRIES.map(({ id, label }) => ({ id, label })) },
       subcategories: await this.subcategories(companyId),
       counts: { rated: Number(counts.done), waiting: Number(counts.waiting), byRules: Number(counts.by_rules), byAi: Number(counts.by_ai), printed: Number(late.printed), ratedLate: Number(late.late) },
-      looksAt: RATER_LOOKS_AT,
+      looksAt: RATER_LOOKS_AT, promise: NO_PROMISE,
       versions: rows.map((r) => {
         const c = this.platform.campaigns.get(r.campaign_id);
         return {
           id: r.version_id as string, campaignId: r.campaign_id as string, advertiser: c?.advertiserName ?? null, name: c?.name ?? null, seenAt: iso(r.seen_at), firstPrintedAt: iso(r.first_printed_at),
           late: r.rated_before_print === false, category: r.v_category as string, categoryLabel: industryLabel(r.v_category), secondary: r.v_secondary ?? null, subcategoryId: r.subcategory_id ?? null, categoryBy: r.category_by as string,
-          features: parse(r.features), rating: this.view(r.status ? r : null), outcomes: outcomes.get(r.version_id) ?? null,
+          features: parse(r.features), asIs: r.as_is ? parse(r.as_is) : null, rating: this.view(r.status ? r : null), outcomes: outcomes.get(r.version_id) ?? null,
         };
       }),
       calibration: await this.calibration(companyId, horizon),
@@ -575,51 +577,58 @@ export class AdRatingService {
   }
 
   /**
-   * The Benchmarks page: the network's averages (pooled from the companies that contribute, each shown only when
-   * enough ads stand behind it) beside this company's own. A company that doesn't contribute sees only its own (give
-   * to get). Never a single ad, advertiser or company in the network's figures.
+   * The Benchmarks page: this company's own figures beside the network's, as last released (monthly only, with noise,
+   * rounded, small cells held back: benchmarkRelease.ts). A company that doesn't contribute sees only its own (give to
+   * get). Never a single ad, advertiser or company in the network's figures, and never a count of companies.
    */
   async benchmarks(companyId: string, horizon: Horizon = 'd30') {
     const settings = await this.benchmarkSettings(companyId);
     const contributes = this.contributes(companyId);
-    const contributors = [...this.platform.companies.keys()].filter((id) => this.contributes(id));
-    const rows = await this.results([...new Set([companyId, ...(contributes ? contributors : [])])], horizon);
-    const own = this.groups(rows.filter((r) => r.company_id === companyId), true);
-    const pooled = contributes ? this.groups(rows.filter((r) => contributors.includes(r.company_id)), false) : [];
+    const own = this.groups(await this.results([companyId], horizon), true);
+    const released = contributes ? (await this.db.query<any>(`select period, dimension, key, published, suppressed from ad_benchmark_snapshots where horizon = 'd30' and epsilon is not null order by period desc, dimension, key limit 2000`)).rows : [];
+    const latest = released[0]?.period as string | undefined;
+    // Each figure as last released (its most recent month with one): every month's cells were held back on their own.
+    const cells = new Map<string, any>();
+    for (const r of released) if (r.published && r.dimension !== 'all' && r.dimension !== 'score' && !cells.has(`${r.dimension}|${r.key}`)) cells.set(`${r.dimension}|${r.key}`, r);
     const keys = new Map<string, { dimension: string; key: string }>();
-    for (const g of [...own, ...pooled]) keys.set(`${g.dimension}|${g.key}`, { dimension: g.dimension, key: g.key });
+    for (const g of own) keys.set(`${g.dimension}|${g.key}`, { dimension: g.dimension, key: g.key });
+    for (const r of cells.values()) if (r.published) keys.set(`${r.dimension}|${r.key}`, { dimension: r.dimension, key: r.key });
     const subs = new Map((await this.subcategories(companyId)).map((s) => [s.id, s.label]));
     const label = (dimension: string, key: string) => dimension === 'category' ? industryLabel(key) : dimension === 'subcategory' ? subs.get(key) ?? key
       : dimension === 'category_channel' ? `${industryLabel(key.split('|')[0])} · ${key.split('|')[1]}` : key.replace(/_/g, ' ');
+    const network = (dimension: string, key: string) => {
+      if (!contributes) return { shown: false, why: 'Your company doesn’t contribute to the benchmarks, so it doesn’t see the network’s.' };
+      if (dimension === 'subcategory') return null;
+      if (!latest) return { shown: false, why: 'No monthly release yet: the network’s figures are released once a month, after the month has settled.' };
+      const r = cells.get(`${dimension}|${key}`);
+      const p = r?.published ? parse<Released>(r.published) : null;
+      if (!p) return { shown: false, why: 'Held back in every monthly release so far: too few ads behind it, or held back so another held-back figure can’t be worked out from it.' };
+      if (p.ads < settings.minAds || p.advertisers < settings.minAdvertisers) return { shown: false, period: r.period as string, why: `Under your company’s own thresholds (${settings.minAds} ads, ${settings.minAdvertisers} advertisers).` };
+      return { shown: true, period: r.period as string, ...p };
+    };
     const groups = [...keys.values()].map(({ dimension, key }) => {
       const mine = own.find((g) => g.dimension === dimension && g.key === key)?.ads ?? [];
-      const net = pooled.find((g) => g.dimension === dimension && g.key === key)?.ads ?? [];
-      const enough = AdRatingService.enough(net, settings, [companyId]);
-      return {
-        dimension, key, label: label(dimension, key),
-        yours: mine.length ? AdRatingService.figures(mine) : null,
-        network: !contributes ? { shown: false, why: 'Your company doesn’t contribute to the benchmarks, so it doesn’t see the network’s.' }
-          : dimension === 'subcategory' ? null
-          : enough.ok ? { shown: true, ...AdRatingService.figures(net), advertisers: new Set(net.map((a) => a.advertiser)).size, companies: new Set(net.map((a) => a.company)).size }
-          : { shown: false, why: `Not enough ads behind it yet (${enough.why}).` },
-      };
+      return { dimension, key, label: label(dimension, key), yours: mine.length ? AdRatingService.figures(mine) : null, network: network(dimension, key) };
     }).sort((a, b) => a.dimension.localeCompare(b.dimension) || (b.yours?.ads ?? 0) - (a.yours?.ads ?? 0) || a.label!.localeCompare(b.label!));
-    const history = contributes ? (await this.db.query<any>(`select period, dimension, key, n_ads, n_advertisers, scan_rate, conversion_rate from ad_benchmark_snapshots where horizon = $1 and n_ads > 0 order by period desc, dimension, key limit 500`, [horizon])).rows
-      .map((r) => ({ period: r.period as string, dimension: r.dimension as string, key: r.key as string, label: label(r.dimension, r.key), ads: Number(r.n_ads), advertisers: Number(r.n_advertisers), scanRate: r.scan_rate, conversionRate: r.conversion_rate })) : [];
+    const history = released.filter((r) => r.published).slice(0, 500).map((r) => ({ period: r.period as string, dimension: r.dimension as string, key: r.key as string, label: r.dimension === 'all' ? 'All ads' : r.dimension === 'score' ? `Score ${r.key}` : label(r.dimension, r.key), ...parse<Released>(r.published) }));
     return {
       horizon, contributes, settings, floors: BENCHMARK_FLOORS, maxAdvertiserShare: MAX_ADVERTISER_SHARE, minBottles: AdRatingService.minBottles,
-      method: `Each ad counts once: its rates over the bottles of its first ${horizon === 'latest' ? 'days so far' : `${HORIZONS[horizon as keyof typeof HORIZONS]} days`} (and what they did in the ${SETTLE_DAYS} days after), once it has ${AdRatingService.minBottles}+ bottles. A network average needs ${settings.minAds}+ ads from ${settings.minAdvertisers}+ advertisers, no advertiser over half, and the same without your own ads.`,
+      release: { period: latest ?? null, horizon: 'd30', epsilonPerCell: EPSILON_PER_CELL, roundCount: ROUND_COUNT, roundRate: ROUND_RATE },
+      method: `Each ad counts once: its rates over the bottles of its first ${horizon === 'latest' ? 'days so far' : `${HORIZONS[horizon as keyof typeof HORIZONS]} days`} (and what they did in the ${SETTLE_DAYS} days after), once it has ${AdRatingService.minBottles}+ bottles. The network’s figures are released once a month (ads first printed that month, at 30 days): each needs ${settings.minAds}+ ads from ${settings.minAdvertisers}+ advertisers, no advertiser over half, and the same without any one company; they carry random noise drawn once per release (so asking again gives the same figures) and are rounded (counts to ${ROUND_COUNT}, rates to half a point); small figures, and any that would let a small one be worked out, are held back. No ad, advertiser or company is ever shown.`,
+      promise: NO_PROMISE,
       groups, history,
     };
   }
 
   /**
    * The network's benchmarks, month by month (ads first printed in that month, at 30 days), kept for decades. A month is
-   * computed once it's settled (45 days after it ends), with the platform's thresholds (never under the floors), and only
-   * groups that would still meet them without any one company. A month with nothing that meets them is recorded too
-   * (with no figures), so it isn't computed again.
+   * released once it's settled (45 days after it ends), with the platform's thresholds (never under the floors) and only
+   * cells that would still meet them without any one company; then held back where needed so none can be worked out
+   * from the others (complementary suppression), and the rest released with noise drawn once and kept, rounded
+   * (benchmarkRelease.ts). The true figures of a released cell are kept beside it for the platform's own audit and are
+   * never shown; a held-back cell keeps none.
    */
-  async snapshotDue(platformCompanyId = 'freewater') {
+  async snapshotDue(platformCompanyId = 'freewater', rand?: () => number) {
     const now = this.now();
     const first = (await this.db.query<any>(`select min(first_printed_at) as at from ad_versions where first_printed_at is not null`)).rows[0]?.at;
     if (!first) return [];
@@ -637,14 +646,18 @@ export class AdRatingService {
     for (const period of todo) {
       const these = rows.filter((r) => month.get(r.version_id) === period);
       const groups = [{ dimension: 'all', key: 'all', ads: this.perAd(these) }, ...this.groups(these, false),
-        ...Array.from({ length: 10 }, (_, i) => ({ dimension: 'score', key: String(i + 1), ads: this.perAd(these.filter((r) => r.overall === i + 1)) }))];
-      for (const g of groups) {
-        const ok = AdRatingService.enough(g.ads, min, contributors).ok;
-        if (!ok && g.dimension !== 'all') continue;
-        const f = ok ? AdRatingService.figures(g.ads) : null;
-        await this.db.query(`insert into ad_benchmark_snapshots (period, horizon, dimension, key, n_ads, n_advertisers, n_companies, bottles, scan_rate, median_scan_rate, ar_rate, click_rate, conversion_rate, min_ads, min_advertisers, computed_at)
-          values ($1,'d30',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) on conflict do nothing`,
-          [period, g.dimension, g.key, f ? f.ads : 0, f ? new Set(g.ads.map((a) => a.advertiser)).size : 0, f ? new Set(g.ads.map((a) => a.company)).size : 0, f ? f.bottles : 0, f?.scanRate ?? null, f?.medianScanRate ?? null, f?.arRate ?? null, f?.clickRate ?? null, f?.conversionRate ?? null, min.minAds, min.minAdvertisers, at]);
+        ...Array.from({ length: 10 }, (_, i) => ({ dimension: 'score', key: String(i + 1), ads: this.perAd(these.filter((r) => r.overall === i + 1)) }))].filter((g) => g.dimension === 'all' || g.ads.length);
+      const cells = suppress(groups.map((g) => ({ dimension: g.dimension, key: g.key, ok: AdRatingService.enough(g.ads, min, contributors).ok, ads: g.ads.length, suppressed: null as string | null })));
+      for (const [i, g] of groups.entries()) {
+        const cell = cells[i]!;
+        // Held back for being too small: not kept at all (only the month's total row, so the month isn't released again).
+        if (cell.suppressed === 'threshold' && g.dimension !== 'all') continue;
+        const f = cell.suppressed ? null : AdRatingService.figures(g.ads);
+        const published = f ? releaseCell({ ads: g.ads.length, advertisers: new Set(g.ads.map((a) => a.advertiser)).size, rates: { scanRate: g.ads.map((a) => a.scanRate), arRate: g.ads.map((a) => a.arRate), clickRate: g.ads.map((a) => a.clickRate), conversionRate: g.ads.map((a) => a.conversionRate) } }, min, rand) : null;
+        await this.db.query(`insert into ad_benchmark_snapshots (period, horizon, dimension, key, n_ads, n_advertisers, n_companies, bottles, scan_rate, median_scan_rate, ar_rate, click_rate, conversion_rate, min_ads, min_advertisers, computed_at, published, suppressed, epsilon)
+          values ($1,'d30',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) on conflict do nothing`,
+          [period, g.dimension, g.key, f ? f.ads : 0, f ? new Set(g.ads.map((a) => a.advertiser)).size : 0, f ? new Set(g.ads.map((a) => a.company)).size : 0, f ? f.bottles : 0, f?.scanRate ?? null, f?.medianScanRate ?? null, f?.arRate ?? null, f?.clickRate ?? null, f?.conversionRate ?? null, min.minAds, min.minAdvertisers, at,
+            published ? JSON.stringify(published) : null, cell.suppressed, EPSILON_PER_CELL]);
       }
     }
     return todo;
