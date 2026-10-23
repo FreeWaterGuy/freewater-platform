@@ -20,6 +20,7 @@ import { pdfToolsAvailable } from './pdf';
 import { reasonWords, type LinkSafetyService } from '../ads/linkSafety';
 import { artworkReady, cantPrint, currentAsIs, fineToPrint, mustCodes } from './asIs';
 import { productWords, sizeRefusal } from '../ads/layoutChoice';
+import { shareName } from '../ads/layouts';
 
 /** The words of the tick (the advertiser's portal shows these; kept with the choice). */
 export const AS_IS_WORDS = 'I understand — use it as it is';
@@ -80,9 +81,33 @@ export class ArtworkService {
     const company = this.company(companyId);
     return new AdsError(422, 'size_not_printable', sizeRefusal(share, [...new Set(shapes.map((s) => s.share))], productWords(this.products(companyId)), company.name));
   }
-  /** Plain words for each size a message names that can't print here (the chat says them; nothing is dropped silently). */
-  sizeNotes(companyId: string, text: string): string[] {
-    return sizesNamed(text).map((s) => this.unprintable(companyId, s)?.message).filter((m): m is string => !!m);
+  /**
+   * Plain words for each size a message names (the chat says them; nothing is dropped silently): one that can't print
+   * here is refused; one with its file is in (or its file needs fixing); one without a file asks for that file. With
+   * the draft, sizes an assistant proposed in other words ("make it small") get the same answer: the files decide.
+   */
+  sizeNotes(companyId: string, text: string, d?: AdDraft, proposed?: number[], said = ''): string[] {
+    const named = sizesNamed(text);
+    const out = named.map((s) => this.unprintable(companyId, s)?.message).filter((m): m is string => !!m);
+    if (!d) return out;
+    const prints = new Set(this.shapes(companyId).map((s) => s.share));
+    const files = d.artwork ?? [];
+    const has = (s: Share) => files.find((f) => f.shapeId && f.share === s);
+    const cap = (s: Share) => `${shareName[s][0]!.toUpperCase()}${shareName[s].slice(1)}`;
+    for (const s of named.filter((x) => prints.has(x))) {
+      const f = has(s);
+      if (f && said.includes(`“${f.name}”`)) continue; // its check was just said, with its size
+      out.push(!f ? `To print at ${shareName[s]}, upload a file for it: download ${shareName[s]}’s template on the upload page, design it, then attach it here.`
+        : f.report.verdict === 'pass' ? `${cap(s)} is in: “${f.name}” is for it.`
+        : `${cap(s)} has “${f.name}”, which needs fixing first (see the upload page).`);
+    }
+    // Sizes asked for in other words: the ad prints at the sizes it has files for, said once.
+    const wanted = (proposed ?? []).filter((x): x is Share => (SHARES as number[]).includes(x) && !named.includes(x as Share));
+    if (!named.length && wanted.some((s) => !has(s))) {
+      const now = SHARES.filter((s) => has(s));
+      out.push(`Your ad prints at the sizes you upload files for${now.length ? ` (now ${now.map((s) => shareName[s]).join(', ')})` : ''}. To add ${wanted.filter((s) => !has(s) && prints.has(s)).map((s) => shareName[s]).join(' or ') || 'a size'}, upload a file made from its template.`);
+    }
+    return out;
   }
   private shape(companyId: string, id: string | null | undefined) { return id ? this.shapes(companyId).find((s) => s.id === id) ?? null : null; }
 

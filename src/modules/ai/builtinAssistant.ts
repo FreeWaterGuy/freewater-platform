@@ -50,6 +50,8 @@ export class BuiltinAdAssistant implements AdAssistant {
     const low = text.toLowerCase();
     const patch: DraftPatch = {};
     const did: string[] = [];
+    // Designed themselves: the ad is their finished artwork, so there's no wording, picture or look to ask about.
+    const own = !!ctx.own || draft.mode === 'own';
 
     // What kind of business, and a starting look.
     const cat = CATEGORIES.find(([re]) => re.test(low) || re.test(ctx.business.name.toLowerCase()));
@@ -65,7 +67,7 @@ export class BuiltinAdAssistant implements AdAssistant {
     const headlineCmd = /\b(?:headline|big words|say|title)\b\s*(?:to|:|should be|=)?\s*["“]?([^"”\n]{3,60})/i.exec(text)?.[1];
     const offer = OFFER.exec(text)?.[0];
     const headline = quoted ?? (headlineCmd ? trimEnd(headlineCmd) : offer ? cap(trimEnd(offer)) : undefined);
-    if (headline) { poster.headline = headline; did.push(`the headline “${headline}”`); }
+    if (headline && !own) { poster.headline = headline; did.push(`the headline “${headline}”`); }
     const subCmd = /\b(?:small (?:line|words)|subline|underneath)\b\s*(?:to|:|should be)?\s*["“]?([^"”\n]{3,80})/i.exec(text)?.[1];
     const when = /\b((?:every|on|this) (?:mon|tue|wed|thu|fri|sat|sun)[a-z]*(?: night| morning)?|(?:before|after|until) \d{1,2}(?::\d\d)? ?(?:am|pm)|weekdays|weekends|all week)\b/i.exec(text)?.[0];
     if (subCmd) poster.sub = trimEnd(subCmd);
@@ -78,15 +80,15 @@ export class BuiltinAdAssistant implements AdAssistant {
     const inHeadline = (headline ?? '').toLowerCase();
     if (colors.length && !named.length ? true : colors.length && ![...low.matchAll(/\b(red|orange|yellow|gold|green|teal|blue|navy|purple|pink|brown|black|white|cream|gr[ae]y)\b/g)].every((m) => inHeadline.includes(m[1]!))) {
       poster.colors = { bg: colors[0], ...(colors[1] ? { accent: colors[1] } : {}) };
-      did.push('your colors');
+      if (!own) did.push('your colors');
     }
     if (/\b(serif|classic|elegant)\b/.test(low)) poster.font = 'classic';
     else if (/\b(bold|loud|strong)\b/.test(low)) poster.font = 'bold';
     else if (/\b(clean|simple|modern)\b/.test(low)) poster.font = 'clean';
-    if (Object.keys(poster).length) patch.poster = poster;
+    if (Object.keys(poster).length && !own) patch.poster = poster;
 
     // A picture they attached.
-    if (input.attachments.length) {
+    if (input.attachments.length && !own) {
       patch.useImage = { attachment: 0, role: /\blogo\b/.test(low) || /logo/i.test(input.attachments[0]!.name ?? '') ? 'logo' : 'photo' };
       did.push(patch.useImage.role === 'logo' ? 'your logo' : 'your photo');
     }
@@ -133,24 +135,25 @@ export class BuiltinAdAssistant implements AdAssistant {
     // What opens when people scan it.
     const url = /https:\/\/[^\s"'<>]+/.exec(text)?.[0];
     const code = /\b(?:code|promo)\s*[:=]?\s*([A-Z0-9]{3,20})\b/.exec(text)?.[1];
-    const exp = this.experience(low, category, draft, { headline: headline ?? draft.poster?.headline ?? poster.headline, url, code, sub: poster.sub ?? draft.poster?.sub, slots: [...text.matchAll(/\b((?:mon|tue|wed|thu|fri|sat|sun)[a-z]* \d{1,2}(?::\d\d)? ?(?:am|pm))\b/gi)].map((m) => m[1]!) });
+    const exp = this.experience(low, category, draft, { own: own ? ctx.business.name : undefined, headline: headline ?? draft.poster?.headline ?? poster.headline, url, code, sub: poster.sub ?? draft.poster?.sub, slots: [...text.matchAll(/\b((?:mon|tue|wed|thu|fri|sat|sun)[a-z]* \d{1,2}(?::\d\d)? ?(?:am|pm))\b/gi)].map((m) => m[1]!) });
     if (exp) { patch.experienceId = exp.id; patch.experienceConfig = exp.config; did.push(exp.said); }
 
     // What's still missing after this change.
+    // Their own artwork and its sizes are their files: only an upload (never a word here) changes those.
     const after = new Set<Missing>(ctx.missing);
-    if (patch.poster?.headline || draft.poster?.headline) after.delete('artwork');
+    if (!own && (patch.poster?.headline || draft.poster?.headline)) after.delete('artwork');
     if (patch.category) after.delete('category');
-    if (patch.sizes) after.delete('sizes');
+    if (patch.sizes && !own) after.delete('sizes');
     if (patch.locations) after.delete('where');
     if (patch.buy) after.delete('budget');
     if (exp?.complete) after.delete('scanPage');
-    if (!headline && !draft.poster?.headline) after.add('artwork');
+    if (!own && !headline && !draft.poster?.headline) after.add('artwork');
 
-    const reply = this.reply(did, [...after], ctx.business.name, !draft.poster, !!pre, category, ctx.sizes);
-    return { reply, patch, suggestions: this.suggestions([...after], category, !!pre, ctx.boxes !== false) };
+    const reply = this.reply(did, [...after], { business: ctx.business.name, company: ctx.company.name, first: !draft.poster && !own && !ctx.changing, prepaid: !!pre, category, sizes: ctx.sizes, own, ownFiles: ctx.own?.files.length ?? 0, changing: ctx.changing });
+    return { reply, patch, suggestions: this.suggestions([...after], category, !!pre, ctx.boxes !== false, own) };
   }
 
-  private experience(low: string, category: string, draft: AdAssistantInput['draft'], f: { headline?: string; url?: string; code?: string; sub?: string; slots: string[] }) {
+  private experience(low: string, category: string, draft: AdAssistantInput['draft'], f: { own?: string; headline?: string; url?: string; code?: string; sub?: string; slots: string[] }) {
     const link = f.url ?? (draft.experienceConfig as any)?.orderUrl ?? (draft.experienceConfig as any)?.bookUrl;
     if (/\b(3d|ar|on (the|your) table|menu)\b/.test(low) && category === 'food') {
       if (!link) return { id: 'ar-3d-menu', config: undefined, said: 'a 3D menu people can put on their table (send me your ordering link)', complete: false };
@@ -165,6 +168,8 @@ export class BuiltinAdAssistant implements AdAssistant {
       return { id: 'booking', config: { title: f.headline ?? 'Book a time', slots: f.slots.length ? f.slots : ['Mon 9:00 am', 'Wed 12:00 pm', 'Fri 5:00 pm'], bookUrl: link }, said: 'a booking page', complete: true };
     }
     if (f.code) return { id: 'coupon', config: { headline: f.headline ?? 'A deal for you', code: f.code }, said: `a coupon with code ${f.code}`, complete: true };
+    // Designed themselves, a link alone is where the code leads: the business's page, its name shown once (no offer).
+    if (f.own && !draft.experienceId && !f.headline && f.url) return { id: 'offer', config: { headline: f.own, link: { label: 'Visit us', url: f.url } }, said: 'where your code leads', complete: true };
     if (!draft.experienceId && f.headline) return { id: 'offer', config: { headline: f.headline, ...(f.sub ? { details: f.sub } : {}), ...(link ? { link: { label: 'Learn more', url: link } } : {}) }, said: 'an offer people can save', complete: true };
     if (link && draft.experienceId) {
       const c = { ...(draft.experienceConfig ?? {}) } as any;
@@ -174,10 +179,18 @@ export class BuiltinAdAssistant implements AdAssistant {
     return null;
   }
 
-  private reply(did: string[], left: Missing[], business: string, first: boolean, prepaid = false, category = '', sizes: number[] = []): string {
-    const start = did.length ? `${first ? `Here's a first version for ${business}` : 'Done'}: I set ${did.join(', ').replace(/, ([^,]*)$/, ' and $1')}.` : first ? `Let's make an ad for ${business}.` : 'Got it.';
+  private reply(did: string[], left: Missing[], o: { business: string; company: string; first: boolean; prepaid: boolean; category: string; sizes: number[]; own: boolean; ownFiles?: number; changing?: { feeCents: number | null } }): string {
+    const { business, first, prepaid, category, sizes } = o;
+    const start = did.length ? `${first ? `Here's a first version for ${business}` : o.changing ? 'Changed' : 'Done'}: I set ${did.join(', ').replace(/, ([^,]*)$/, ' and $1')}.` : first ? `Let's make an ad for ${business}.` : 'Got it.';
+    // A change to a running ad: what's next is its review (and its fee, where changes are paid for), not a new ad.
+    if (!left.length && o.changing) return `${start} That’s your change. Next: look over the preview, then tap “Review and submit”. ${o.company} reviews the change before it prints${o.changing.feeCents ? `; it costs $${(o.changing.feeCents / 100).toFixed(2)}, paid when you submit` : ''}.`;
     if (!left.length) return `${start} Everything's ready. Look over the preview, then tap “Review and submit”${prepaid ? ': you’ll see the exact total before you pay' : ''}.`;
     const next = left[0]!;
+    if (o.own && (next === 'artwork' || next === 'sizes' || next === 'scanPage')) return `${start} ${{
+      artwork: o.ownFiles ? 'Fix what the check found in your file (the upload page has one-tap fixes for some of it), or attach a new one made from its size’s template.' : 'Upload your artwork: one file per size (PDF, SVG, PNG or JPG), each made from that size’s template. I’ll check every file.',
+      sizes: 'Which sizes do you want? Upload a file for each, made from that size’s template.',
+      scanPage: 'Where should your QR code lead? Send me the link, like https://yourshop.com/offer.',
+    }[next]}`;
     const q: Record<Missing, string> = {
       artwork: `What should the ad say? A short offer works best, like “${offerFor(category)}”.`,
       category: 'What kind of business is it?',
@@ -189,8 +202,9 @@ export class BuiltinAdAssistant implements AdAssistant {
     return `${start} ${q[next]}`;
   }
 
-  private suggestions(left: Missing[], category: string, prepaid = false, boxes = true): string[] {
+  private suggestions(left: Missing[], category: string, prepaid = false, boxes = true, own = false): string[] {
     const next = left[0];
+    if (own && next !== 'budget' && next !== 'where') return next ? [] : ['Review and submit'];
     if (next === 'budget') return prepaid ? ['500 bottles', '2,000 bottles', '10,000 bottles'] : ['$20 a day', '$50 a day', '2,000 bottles'];
     if (next === 'where') return ['Everywhere', 'Only ATX-014'];
     if (next === 'sizes') return ['Small', 'Half the label', 'Full wrap'];
@@ -217,7 +231,9 @@ export const offerFor = (category?: string) => OFFERS[category ?? ''] ?? '20% of
  * What the chat suggests before anything is said: from the advertiser's own business and kind of business, or plain
  * changes when it's an ad being changed.
  */
-export function starterSuggestions(business: { name: string; category?: string }, changing: boolean): string[] {
+export function starterSuggestions(business: { name: string; category?: string }, changing: boolean, own = false): string[] {
+  // Their own artwork changes by uploading a new file; its words and colors aren't the chat's to change.
+  if (changing && own) return [];
   if (changing) return ['Make the headline shorter', 'Change the colors', 'Use a bolder font'];
   const offer = offerFor(business.category);
   return [`We’re ${business.name}. ${offer}.`, offer === '20% off your first visit' ? 'Free gift with your first order' : '20% off your first visit'];

@@ -462,3 +462,18 @@ Siblings searched: every route that sets `experienceConfig`, `variants` or `qr.s
 static codes); every place a score is shown (`ratings.ts`, `api/ratings.ts`, `data/service.ts`, `console.js`, `ads.js`;
 no email shows one). Not checked: real websites and CDNs (stubs only; never a real site), Google Safe Browsing itself (no
 key), a real phone scanning a held code, the law (COMPLIANCE L-38 to L-40). Founder's decisions in the report.
+
+## Advertiser walkthrough: five bugs from the video (test engineer, 2026-10-23, branch `k-fix`)
+
+| Date | Role | Severity | Pattern | Where | Finding | Fix / test |
+|---|---|---|---|---|---|---|
+| 2026-10-23 | Test engineer | MEDIUM | P3 | `ArtworkService.sizeNotes`, `AdsService.chat` | Designing it yourself, a printable size asked for in the chat ("a tenth") was dropped silently: the service deletes the assistant's `sizes` patch and only unprintable sizes were said. CONFIRMED | Every size named is answered (it's in, upload its file, or the plain refusal); rough words ("small") get "your ad prints at the sizes you upload files for". `test/advertiser-walkthrough.test.ts` §1 (fails on main) |
+| 2026-10-23 | Test engineer | HIGH | P3 / P16 | `BuiltinAdAssistant`, `ClaudeAdAssistant` prompt, `missingLabel` | With finished artwork the chat asked "What should the ad say?" (it counted a missing poster headline as missing artwork). CONFIRMED | Assistants get `context.own` (files and their checks); the built-in skips wording, poster, colours and pictures, asks for the file fix, the link, bottles, where; Claude is told the ad is finished artwork; missing labels speak of files and the link. §2 (3 tests, fail on main) |
+| 2026-10-23 | Test engineer | MEDIUM | P3 | `BuiltinAdAssistant.reply`, `starterSuggestions`, Claude prompt | "Change your ad": after the new file passed, the chat began "Let's make an ad… What should the ad say?". CONFIRMED | `context.changing` (with the change fee): "That's your change. Next: … FreeWater reviews the change before it prints; it costs $X"; no headline suggestions for an own-artwork change. §3 (fails on main) |
+| 2026-10-23 | Test engineer | MEDIUM | P3 | `offerPlugin` (and `couponPlugin` sibling) | A design-it-yourself ad's scan page showed the business name as the title and as the "offer" (setLink's default headline is the name). CONFIRMED | A headline that is the business's name: the name once, a default line naming the advertiser's site, its link button, "Save for later"; a coupon headed with the name drops the title. §4 (fails on main) |
+| 2026-10-23 | Test engineer | HIGH | P16 (preview ≠ print) | `AdsService.render` / `preview` / `campaignPreview` | The label preview drew every code with the company's style, so a saved QR colour showed black (the printed label used the ad's colour). CONFIRMED in the browser and in unit tests | Previews draw `campaignQrStyle` of the draft's saved style (own artwork) or the live ad's; the reviewer's preview too. §5 and browser journey "label preview draws the QR code in the colour just saved" (fails on main; now self-contained) |
+
+Siblings checked: studio drafts (the assistant sees the studio design as done artwork: unchanged), studio and chat-made
+changes (same "That's your change" reply; their headline suggestions kept), box faces in the preview (same style fix),
+the printed label (already used the ad's style; the preview's sample label goes through it). Not checked: a real Claude
+answering the new prompt (mocked API), real phones.

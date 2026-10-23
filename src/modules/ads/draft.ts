@@ -73,6 +73,14 @@ export const missingLabels = {
   scanPage: 'what opens when people scan it',
 } as const;
 export type Missing = keyof typeof missingLabels;
+/** Designed themselves, the artwork is their files and the scan page is where the code leads: never wording to ask for. */
+const ownLabels: Partial<Record<Missing, string>> = {
+  artwork: 'your artwork files (one per size, each passing the check)',
+  sizes: 'which sizes (a file for each)',
+  scanPage: 'the link your QR code leads to',
+};
+/** What's missing, in the words for how this ad is made. */
+export const missingLabel = (m: Missing, d: Pick<AdDraft, 'mode'>) => (d.mode === 'own' ? ownLabels[m] : undefined) ?? missingLabels[m];
 
 export function missing(d: AdDraft, host: ExperienceHost): Missing[] {
   const out: Missing[] = [];

@@ -13,6 +13,10 @@ function model(m: ModelSetting, tools: PluginTools, alt: string): ModelRef {
   return 'builtin' in m ? { glbUrl: tools.builtinModel(m.builtin), alt: m.alt ?? alt } : { glbUrl: m.glbUrl, alt: m.alt };
 }
 
+/** The same words, whatever the case, spacing or end punctuation ("Rise Bakery" and "rise bakery!"). */
+const sameWords = (a: string, b: string) => { const n = (x: string) => x.toLowerCase().replace(/[\s.!]+/g, ' ').trim(); return n(a) === n(b); };
+const hostOf = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return null; } };
+
 // ---------- offer ----------
 interface OfferConfig { headline: string; details?: string; code?: string; expires?: string; firstTimeHeadline?: string; imageUrl?: string; link?: { label: string; url: string } }
 export const offerPlugin: ExperiencePlugin<OfferConfig> = {
@@ -23,6 +27,15 @@ export const offerPlugin: ExperiencePlugin<OfferConfig> = {
   resolve({ config, scan }) {
     const headline = scan.viewer.firstTimeWithAdvertiser && config.firstTimeHeadline ? config.firstTimeHeadline : config.headline;
     const blocks: Block[] = [{ type: 'hero', title: scan.owner.name, ...(config.imageUrl ? { imageUrl: config.imageUrl } : {}) }];
+    // No offer, only the business (a design-it-yourself ad's link: its headline is the business's name): the name once,
+    // then what it's about and where to go. Never the name again as an "offer" or a "Save this offer" with none.
+    if (sameWords(headline, scan.owner.name)) {
+      const site = config.link ? hostOf(config.link.url) : null;
+      blocks.push({ type: 'text', text: config.details ?? `Thanks for scanning! This bottle of water is on them.${site ? ` See what they do at ${site}.` : ''}` });
+      if (config.link) blocks.push({ type: 'button', label: config.link.label, action: { kind: 'link', url: config.link.url }, style: 'primary' });
+      blocks.push({ type: 'button', label: 'Save for later', action: { kind: 'save' }, style: config.link ? 'secondary' : 'primary' });
+      return blocks;
+    }
     blocks.push({ type: 'offer', headline, ...(config.details ? { details: config.details } : {}), ...(config.code ? { code: config.code } : {}), ...(config.expires ? { expires: config.expires } : {}) });
     blocks.push({ type: 'button', label: 'Save this offer', action: { kind: 'save' }, style: config.link ? 'secondary' : 'primary' });
     if (config.link) blocks.push({ type: 'button', label: config.link.label, action: { kind: 'link', url: config.link.url }, style: 'primary' });
@@ -38,7 +51,8 @@ export const couponPlugin: ExperiencePlugin<CouponConfig> = {
   configSchema: obj({ headline: s(120), code: s(40), details: s(500) }, ['headline', 'code']),
   example: { headline: 'Double stack Tuesdays', code: 'BOTTLE2X', details: 'Show this code at the register.' },
   resolve: ({ config, scan }) => [
-    { type: 'hero', title: scan.owner.name },
+    // The business's name once: a coupon headed with it shows no title above it as well.
+    ...(sameWords(config.headline, scan.owner.name) ? [] : [{ type: 'hero' as const, title: scan.owner.name }]),
     { type: 'offer', headline: config.headline, code: config.code, ...(config.details ? { details: config.details } : {}) },
     { type: 'button', label: 'Save this coupon', action: { kind: 'save' } },
   ],
