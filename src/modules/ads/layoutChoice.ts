@@ -1,6 +1,6 @@
 import { SHARES, type Campaign, type CompanyConfig, type Product, type Share } from '../../core/types';
 import { SIZE_SWITCHES } from '../../runtime/registry';
-import { layoutSwitch, layoutsFor, templateFit, templateShares, TEMPLATES, type Layout } from './layouts';
+import { layoutSwitch, layoutsFor, shareName, templateFit, templateShares, TEMPLATES, type Layout } from './layouts';
 import { prepaidLeft } from './budget';
 import { companyLabel } from '../print/geometry';
 
@@ -61,6 +61,23 @@ export function companyLayouts(company: CompanyConfig, product: Product, on: On 
 /** The sizes this company can sell on this product (some allowed layout has a piece that size). */
 export function companySizes(company: CompanyConfig, product: Product, on: On = everything): Share[] {
   return [...new Set(companyLayouts(company, product, on).flatMap((l) => l.shares))].sort((a, b) => a - b);
+}
+
+/** The products, in words: "the 16 oz aluminum bottle", "the 16 oz aluminum bottle or the 12 oz can". */
+export const productWords = (products: Pick<Product, 'name'>[]) => products.map((p) => `the ${p.name}`).join(' or ') || 'its bottles';
+
+/**
+ * Why a size can't print, in plain words, naming the nearest one that can (never dropped silently: the chat, the API,
+ * the review page and the studio say this). `offered`: the sizes that print on these products. `whose`: the company.
+ */
+export function sizeRefusal(s: Share, offered: Share[], where: string, whose: string): string {
+  const name = shareName[s] ?? `1/${s} of the label`;
+  const head = `${name[0]!.toUpperCase()}${name.slice(1)} can’t print on ${where} with ${whose}’s label layouts`;
+  const o = [...offered].sort((a, b) => a - b);
+  if (!o.length) return `${head}, and no other size can either.`;
+  if (s > o.at(-1)!) return `${head}; the smallest is ${shareName[o.at(-1)!]}.`;
+  if (s < o[0]!) return `${head}; the biggest is ${shareName[o[0]!]}.`;
+  return `${head}; it prints at ${o.map((x) => shareName[x]).join(', ').replace(/, ([^,]*)$/, ' or $1')}.`;
 }
 
 /** Plain words for why a template can't be used on a product (null when it can). */

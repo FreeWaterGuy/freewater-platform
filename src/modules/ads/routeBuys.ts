@@ -21,6 +21,7 @@ import type { PaymentsService } from '../payments/service';
 import { PaymentError } from '../payments/service';
 import { scrubText } from '../../runtime/errors';
 import { companyBox } from '../packs/boxSettings';
+import { sizeRefusal } from './layoutChoice';
 
 // Buying on delivery routes (docs/SWITCHES.md, "Buying on delivery routes"; docs/OVERVIEW.md).
 //
@@ -50,7 +51,7 @@ export const KIND_WORDS: Record<RouteKind, string> = {
   houses: 'Chosen houses',
 };
 /** A kind of buy in words, as this company sells it: where ads on boxes are off, a whole box is its bottles only. */
-export const routeKindWords = (kind: RouteKind, boxes: boolean) => (kind === 'box' && !boxes ? 'A whole box: every bottle in it (the box itself is plain)' : KIND_WORDS[kind]);
+export const routeKindWords = (kind: RouteKind, boxes: boolean) => (boxes ? KIND_WORDS[kind] : kind === 'box' ? 'A whole box: every bottle in it (the box itself is plain)' : kind === 'blanket' ? 'One bottle in every house’s pack' : KIND_WORDS[kind]);
 
 export interface RouteWhere {
   /** Delivery areas (all their houses). */
@@ -390,6 +391,8 @@ export class RouteBuyService {
     const printable = new Set(this.platform.layoutsOf(company, product).flatMap((l) => l.shares));
     const sizes = (allowed?.length ? allowed : SHARES).filter((s) => printable.has(s)).sort((a, b) => a - b);
     const share = (input.kind === 'box' && input.share === undefined ? (sizes.includes(1) ? 1 : sizes[0]) : input.share ?? sizes[0]) as Share | undefined;
+    // A size the layouts can't hold on this product is named, with the nearest that can (never dropped silently).
+    if (share && !printable.has(share)) throw new AdsError(422, 'size_not_printable', `${sizeRefusal(share, [...printable].sort((x, y) => x - y), `the ${product.name}`, company.name)} Pick one size that prints there.`);
     if (!share || !sizes.includes(share)) throw new AdsError(422, 'size_not_printable', `Pick one size this ad has artwork for that prints on the ${product.name}: ${sizes.map(shareLabel).join(', ') || 'none do'}.`);
     const weeksN = input.weeks ?? 1;
     const maxWeeks = adLimits(company).maxRouteWeeks;

@@ -13,6 +13,7 @@ import { withCompany } from '../ai/routing';
 import { PX_PER_IN, pieceOf, slotQr, withLabel } from '../print/renderer';
 import { layoutsFor, shareLabel } from '../ads/layouts';
 import type { Share } from '../../core/types';
+import { sizeRefusal } from '../ads/layoutChoice';
 
 /**
  * The ad studio: a brand sets up its kit once (name, colors, logo, photos), says what an ad is for, and gets finished
@@ -211,9 +212,12 @@ export class StudioService {
       const share = opts.share ?? 1;
       const product = this.platform.standardProduct(companyId);
       const company = this.platform.companies.get(companyId)!;
-      // The piece's shape as the company prints it (its allowed layouts); with ads off, as the label could be cut.
+      // The piece's shape as the company prints it (its allowed layouts); with ads off, as the label could be cut. With
+      // ads on, a size its layouts can't hold is refused in plain words (a file of a piece that never prints helps no one).
       const find = (p: typeof product) => layoutsFor(p, { maxAds: company.adRules.maxAdsPerUnit, minAds: 1 }).find((l) => l.shares.includes(share));
-      const layout = find(this.platform.productFor(company, product)) ?? find(product);
+      const adsOn = !this.platform.featureOn || this.platform.featureOn(companyId, 'ads');
+      const layout = find(this.platform.productFor(company, product)) ?? (adsOn ? undefined : find(product));
+      if (!layout && adsOn) throw new StudioError(422, 'bad_size', `${sizeRefusal(share, [...new Set(this.platform.layoutsOf(company, product).flatMap((l) => l.shares))], `the ${product.name}`, company.name)} Pick another size, or give a width and a height.`);
       if (!layout) throw new StudioError(422, 'bad_size', `${shareLabel(share)} doesn’t fit on ${product.name}. Pick another size, or give a width and a height.`);
       ({ w, h } = pieceOf(withLabel(product, company), layout.rects[layout.shares.indexOf(share)]!));
     }

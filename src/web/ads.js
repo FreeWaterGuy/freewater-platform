@@ -26,6 +26,8 @@
   const cents = (c) => (c < 100 ? `${c}¢` : dollars(c));
   const num = (n) => n.toLocaleString();
   const sizeName = (s) => (String(s) === '1' ? 'the whole label' : `1/${s} of the label`);
+  /** The smallest piece sold, in words: "a tenth of one label". */
+  const pieceWord = (s) => ({ 1: 'one whole label', 2: 'half of one label', 3: 'a third of one label', 4: 'a quarter of one label', 6: 'a sixth of one label', 8: 'an eighth of one label' })[s] ?? 'a tenth of one label';
   const svgSrc = (s) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(s)}`;
   // Every shape the ad prints at, size by size, then each box side: what's approved is what prints.
   const everyShape = (p) => h('div', { class: 'stack' },
@@ -866,7 +868,8 @@
         h('section', { class: 'chat', 'aria-label': 'Chat' }, msgs, sugg, attached,
           h('form', { class: 'composer', onsubmit: (e) => { e.preventDefault(); say(); } }, file, h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Attach a logo or photo', onclick: () => file.click() }, icon(I.clip)), ta, send)),
         h('section', { class: 'panel', 'aria-label': 'Preview' }, checklist, tabs, stage, submitBtn)));
-    if (d.messages.length <= 1) suggestions = ['We’re a taco truck. Two tacos for $5 on Tuesdays.', 'Free coffee for first-time customers'];
+    // Before anything is said: suggestions from this advertiser's own business (the server's), never another kind.
+    if (d.messages.length <= 1) suggestions = d.suggestions || [];
     drawMsgs(); drawSide(); refreshPreview(); ta.focus();
   }
 
@@ -881,7 +884,10 @@
     // Paid up front: pick the size (and any extras), see the exact total, then pay and submit in one step.
     const pay = d.payment;
     let quote = pay?.kind === 'bottles' ? pay.quote : null;
-    const sizePick = pay?.kind === 'bottles' && quote ? h('select', { class: 'input', id: 'pay-size' }, (dr.sizes || []).map((s) => h('option', { value: String(s), text: sizeName(s), ...(String(s) === String(quote.share) ? { selected: true } : {}) }))) : null;
+    // Only the sizes that print where it goes; any other size it has is named, with why (never dropped silently).
+    const sizesOk = (dr.sizes || []).filter((s) => !d.printableSizes || d.printableSizes.includes(s));
+    const sizeNotes = d.sizeNotes?.length ? h('div', { class: 'notice warn', id: 'size-notes', text: d.sizeNotes.join(' ') }) : null;
+    const sizePick = pay?.kind === 'bottles' && quote ? h('select', { class: 'input', id: 'pay-size' }, sizesOk.map((s) => h('option', { value: String(s), text: sizeName(s), ...(String(s) === String(quote.share) ? { selected: true } : {}) }))) : null;
     const terms = pay ? (await api('GET', '/v1/ads/billing').catch(() => null)) : null;
     const extraInputs = pay?.kind === 'bottles' && terms?.extras?.length ? terms.extras.map((x) => ({ x, input: h('input', { class: 'input', type: 'number', min: 0, max: 1000, value: 0, style: 'max-width:100px', 'aria-label': x.label }) })) : [];
     const totalEl = h('b', { text: quote ? dollars(quote.totalCents) : '' });
@@ -898,7 +904,7 @@
     const submitLabel = pay?.kind === 'bottles' ? (quote ? `Pay ${dollars(quote.totalCents)} and submit for review` : 'Submit for review') : pay?.kind === 'change' && pay.feeCents ? `Pay the ${dollars(pay.feeCents)} change fee and submit` : 'Submit for review';
     // Where it goes: anywhere (a number of bottles), or on the delivery routes (areas, streets, a shape, or houses).
     let routeQuote = null, routeInput = null, submit = null;
-    const routes = pay?.kind === 'bottles' && on('route_buying') ? routePicker({ quoteUrl: `/v1/ads/drafts/${id}/route-quote`, sizes: dr.sizes || [], onQuote: (q, input) => { routeQuote = q; routeInput = input; if (submit && routeMode()) submit.textContent = q ? `Pay ${dollars(q.cardCents)}${q.creditCents ? ` (+ ${dollars(q.creditCents)} credit)` : ''} and submit for review` : 'See the price first'; } }) : null;
+    const routes = pay?.kind === 'bottles' && on('route_buying') ? routePicker({ quoteUrl: `/v1/ads/drafts/${id}/route-quote`, sizes: sizesOk, smallest: d.printableSizes?.length ? Math.max(...d.printableSizes) : 10, onQuote: (q, input) => { routeQuote = q; routeInput = input; if (submit && routeMode()) submit.textContent = q ? `Pay ${dollars(q.cardCents)}${q.creditCents ? ` (+ ${dollars(q.creditCents)} credit)` : ''} and submit for review` : 'See the price first'; } }) : null;
     const whereMode = routes ? h('div', { class: 'seg', role: 'radiogroup', 'aria-label': 'Where your ad goes' },
       ...[['anywhere', 'Anywhere we hand out bottles'], ['routes', 'On our delivery routes']].map(([v, t]) => h('label', { class: 'chip-check' }, h('input', { type: 'radio', name: 'where-mode', value: v, ...(v === 'anywhere' ? { checked: true } : {}), onchange: () => { routes.el.hidden = v !== 'routes'; submit.textContent = v === 'routes' ? (routeQuote ? `Pay ${dollars(routeQuote.cardCents)} and submit for review` : 'See the price first') : submitLabel; } }), t))) : null;
     function routeMode() { return !!routes && !routes.el.hidden; }
@@ -919,7 +925,7 @@
     shell('new', h('div', { class: 'review' },
       h('div', { class: 'page-head', style: 'margin:0' }, h('div', {}, link(`/ads/drafts/${id}`, {}, '← Back to the chat'), h('h1', { style: 'margin-top:8px', text: 'Review your ad' }), h('p', { text: 'This is exactly what prints and what opens. Look it over before you submit.' }))),
       h('div', { class: 'stage' }, h('img', { class: 'label-img', src: svgSrc(p.labelSvg), alt: 'A sample label with your ad' }), p.labelCaption ? h('p', { class: 'caption', text: p.labelCaption }) : null),
-      h('div', { class: 'stage' }, everyShape(p)),
+      h('div', { class: 'stage' }, everyShape(p)), sizeNotes,
       h('div', { class: 'stage' }, frame),
       h('div', { class: 'facts' },
         h('div', {}, h('span', { text: 'Where' }), dr.locations === 'all' ? 'Every machine' : (dr.locations || []).join(', ')),
@@ -937,8 +943,9 @@
 
   // ---------- buying on delivery routes ----------
   const ROUTE_KINDS = { spread: 'Bottles spread over an area', blanket: 'One bottle in every box, at every house', box: 'A whole box (every bottle, and its sides)', houses: 'Chosen houses' };
-  // Where ads on boxes are off the box is plain: a whole box is its bottles only, and its sides aren't offered.
-  const routeKind = (k) => (k === 'box' && !boxesOn() ? 'A whole box (every bottle in it; the box itself is plain)' : ROUTE_KINDS[k]);
+  // Where ads on boxes are off the box is plain: the words are about each house's pack of bottles, a whole box is its
+  // bottles only, and its sides aren't offered.
+  const routeKind = (k) => (!boxesOn() && k === 'box' ? 'A whole box (every bottle in it; the box itself is plain)' : !boxesOn() && k === 'blanket' ? 'One bottle in every house’s pack' : ROUTE_KINDS[k]);
   const ROUTE_SWITCH = { spread: 'route_buy_spread', blanket: 'route_buy_blanket', box: 'route_buy_box', houses: 'route_buy_houses' };
   /**
    * Choose where on the routes: the kind of buy, the size, the weeks, and areas, streets, a shape drawn on the map, or
@@ -1030,7 +1037,9 @@
     for (const c of [kind, size, weeks, start, bottles, perHouse, sides, addresses]) c.addEventListener('change', () => o.onQuote(null));
     kind.addEventListener('change', show);
     el.append(h('h2', { class: 'section', text: 'On our delivery routes' }),
-      h('p', { text: 'Every house on these streets gets a free box of water each week. Your ad goes on the bottles going to the houses you choose: as little as a tenth of one label at one house, or every bottle in every box.' }),
+      h('p', { text: boxesOn()
+        ? `Every house on these streets gets a free box of water each week. Your ad goes on the bottles going to the houses you choose: as little as ${pieceWord(o.smallest)} at one house, or every bottle in every box, and on a whole box, its sides too.`
+        : `Every house on these streets gets free water each week, a pack of bottles. Your ad goes on the bottles in each house’s pack, at the houses you choose: as little as ${pieceWord(o.smallest)} at one house, or every bottle in the pack. Nothing is printed on the boxes.` }),
       h('div', { class: 'facts' }, h('div', {}, field('Kind of buy', kind)), h('div', {}, field('Size on each bottle', size)), h('div', {}, field('Weeks', weeks)), h('div', {}, field('Starting the week of (a Monday; next week if empty)', start))),
       bottlesField, perHouseField, sidesField, addressField, areaBox, ask, err, out);
     show();

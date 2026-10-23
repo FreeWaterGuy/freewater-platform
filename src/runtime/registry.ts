@@ -26,7 +26,7 @@ import { unsoldSettings } from '../modules/fillers/unsold';
 export const SIZE_SWITCHES: Record<number, string> = { 1: 'size_whole', 2: 'size_half', 3: 'size_third', 4: 'size_quarter', 6: 'size_sixth', 8: 'size_eighth', 10: 'size_tenth' };
 
 /** Raise this when adding switches (and give them `since: CATALOGUE`). */
-export const CATALOGUE = 5;
+export const CATALOGUE = 6;
 
 export const categoryIds = ['printing', 'ads', 'ar_video', 'studio', 'delivery', 'machines', 'rewards', 'games', 'news', 'data', 'ai', 'money', 'transparency', 'giving', 'partners', 'blockchain', 'safety', 'core'] as const;
 export type CategoryId = (typeof categoryIds)[number];
@@ -285,7 +285,12 @@ export const SWITCHES: Switch[] = [
     routes: ['GET /v1/public/experience/box/:packId/:face', 'POST /v1/public/box-scans', 'POST /v1/public/box-ar-launches'] }),
   ...(['top', 'front', 'back', 'right'] as const).map((face) => sw({ id: `box_${face}`, category: 'delivery', group: 'Boxes', parent: 'box_ads', label: `Box ${face}`, description: `Sell the ${face} of each box to an advertiser.` })),
   sw({ id: 'box_settings', category: 'delivery', group: 'Boxes', kind: 'setting', page: 'company', label: 'Box sizes and colours',
-    description: 'For each pack size (6, 12, 24): the box’s outside length, width and height in inches (unset: the platform’s standard box), its inside and bottom colours (black unless you choose), and which side carries your info strip and how wide it is. Set under Company → Delivery boxes; used when ads on boxes are on.' }),
+    description: 'For each pack size (6, 12, 24): the box’s outside length, width and height in inches (unset: the platform’s standard box), its inside and bottom colours (black unless you choose), and which side carries your info strip and how wide it is; and the box-code sticker’s size, side, spot and colours. Set under Company → Delivery boxes; the box is drawn with them when ads on boxes are on, the sticker when they’re off.' }),
+  // A plain box (ads on boxes off) carries nothing printed: its code goes on a small sticker printed with the pack's
+  // bottles (src/modules/packs/sticker.ts), so drivers and households can scan it. On for FreeWater and in the pilot.
+  sw({ id: 'box_code_sticker', category: 'delivery', group: 'Boxes', since: 6, label: 'Box code sticker',
+    description: 'With ads on boxes off (plain boxes), each pack gets one small sticker, printed with its bottles: the pack’s QR code (the driver’s scan at the door, a household saying which house is theirs, the pack’s receipt) and “Box code: …” to type in, with the drivers’ stop code. The packing check says to put it on the box (2 × 2 in on the front, top-right, black on white, unless set per pack size under Company → Delivery boxes). With ads on boxes on, the code is on the box’s info strip and there’s no sticker. Off: plain boxes carry no code; drivers type the box number from the run sheet, and a household can’t claim its house from the box.',
+    routes: ['GET /v1/packs/:id/sticker.svg'] }),
 
   // ======================= Machines =======================
   sw({ id: 'machines', category: 'machines', parent: null, dependsOn: ['printing'], host: 'machines', label: 'Vending machines', description: 'Machines that print and drop a bottle: their screens, faults, the fleet page and machine keys.',

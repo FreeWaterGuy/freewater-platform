@@ -51,6 +51,8 @@ import { findApiKey, type ApiKey, type Scope , PersistencePaused } from '../db/s
 import { LeaseLostError } from '../db/leaseChecked';
 import { OrderConflictError, ReprintError } from '../platform';
 import type { Campaign, Share } from '../core/types';
+import { productWords, sizeRefusal } from '../modules/ads/layoutChoice';
+import { stickerPlace } from '../modules/packs/boxSettings';
 import { checkSvgPictures, svgCreative } from '../modules/print/svgCreative';
 import { newId } from '../core/ids';
 import { AccountsError, roleScopes, type Role } from '../modules/accounts/service';
@@ -178,7 +180,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   };
   const packView = (id: string) => {
     const p = packs.packs.get(id)!;
-    return { id: p.id, status: p.status, size: p.box.bottles, boxId: p.box.id, routeId: p.routeId, stop: p.stop, address: p.address, customerId: p.customerId, loadPosition: p.loadPosition ?? null, unitIds: p.unitIds, faces: p.faces.map((f) => ({ face: f.face, advertiser: f.advertiserName, campaignId: f.campaignId, isHouse: f.isHouse })), boxSvgUrl: `/v1/packs/${p.id}/box.svg`, packUrl: p.rendered?.packUrl ?? p.boxCode ?? null, plainBox: !p.rendered };
+    return { id: p.id, status: p.status, size: p.box.bottles, boxId: p.box.id, routeId: p.routeId, stop: p.stop, address: p.address, customerId: p.customerId, loadPosition: p.loadPosition ?? null, unitIds: p.unitIds, faces: p.faces.map((f) => ({ face: f.face, advertiser: f.advertiserName, campaignId: f.campaignId, isHouse: f.isHouse })), boxSvgUrl: `/v1/packs/${p.id}/box.svg`, packUrl: p.rendered?.packUrl ?? p.boxCode ?? null, plainBox: !p.rendered,
+      // A plain box's code sticker: where it goes on the box (the packing check puts it there) and its print file.
+      sticker: p.sticker ? { widthIn: p.sticker.widthIn, heightIn: p.sticker.heightIn, side: p.sticker.side, spot: p.sticker.spot, printed: !!p.sticker.printedAt, put: `Put the box-code sticker ${stickerPlace(p.sticker)}.`, svgUrl: `/v1/packs/${p.id}/sticker.svg` } : null };
   };
   const receiptView = (unitId: string) => {
     const u = platform.units.get(unitId);
@@ -479,8 +483,12 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     if ((b.formats as string[] | undefined)?.includes('box-face') && !app.companyFeatures.on(company.id, 'box_ads')) throw new ApiError(422, 'boxes_off', `${company.name}’s delivery boxes are plain: ads print on bottles only. Leave out "box-face".`);
     checkExperience(b.experienceId, b.experienceConfig ?? {}, b.theme, company.id);
     // The same rule as a submitted draft: an ad whose sizes no layout the company allows can hold would never print.
-    const prints = app.ads.printableSizes(company);
-    if (!(b.sizes as number[]).some((s) => (prints as number[]).includes(s))) throw new ApiError(422, 'sizes_never_print', `None of those sizes fit on ${company.name}'s bottles, so the ad would never print. Pick from: ${prints.join(', ')} (shares of the label).`);
+    // On the products it's aimed at (every product if none): each size it asks for, never dropped silently.
+    const onProducts = app.ads.adProducts(company.id, { targeting: b.targeting ?? {} }, false);
+    const prints = app.ads.printableSizes(company, onProducts);
+    if (!(b.sizes as number[]).some((s) => (prints as number[]).includes(s))) throw new ApiError(422, 'sizes_never_print', `None of those sizes fit on ${productWords(onProducts)} in ${company.name}'s label layouts, so the ad would never print. Pick from: ${prints.join(', ')} (shares of the label).`);
+    const cant = [...new Set(b.sizes as Share[])].filter((s) => !prints.includes(s));
+    if (cant.length) throw new ApiError(422, 'size_not_printable', `${cant.map((s) => sizeRefusal(s, prints, productWords(onProducts), company.name)).join(' ')} Leave ${cant.length === 1 ? 'it' : 'them'} out of "sizes".`);
     const c: Campaign = {
       // An advertiser's own key prints under the name the business signed up with, never a name it sends.
       id: newId('cmp'), companyId: key!.companyId, advertiserId, advertiserName: key!.advertiserId ? (await app.ads.advertiser(key!.companyId, key!.advertiserId).catch(() => null))?.name ?? b.advertiserName : b.advertiserName, category: b.category, competitorGroup: b.competitorGroup,
@@ -590,10 +598,17 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     if (!p.rendered) throw new ApiError(404, 'plain_box', 'This box is plain: ads on boxes are off, so nothing is printed on it.');
     return { type: 'image/svg+xml', raw: p.rendered.svg };
   } });
-
-  route({ method: 'POST', url: '/v1/packs/:id/verify', scope: 'packs', summary: 'The packing line reports every bottle it scanned. Returns what is missing or does not belong.', body: obj({ scannedUnitIds: { type: 'array', items: S.str, maxItems: 48 } }, ['scannedUnitIds']), handler: async (req, key) => {
+  route({ method: 'GET', url: '/v1/packs/:id/sticker.svg', scope: 'packs', summary: 'A plain box’s code sticker, as it printed (SVG, real size), to print it again by hand if it was lost or torn.', handler: async (req, key) => {
     const p = packFor(key!, (req.params as any).id);
-    try { return { body: packs.verify(p.id, (req.body as any).scannedUnitIds) }; } catch (e: any) { if (e instanceof PackStateError) throw new ApiError(409, 'wrong_stage', e.message); throw e; }
+    const sticker = packs.stickerOf(p);
+    if (!sticker) throw new ApiError(404, 'no_sticker', p.rendered ? 'This box is printed: its code is on its info strip, so it has no sticker.' : 'This pack has no box-code sticker (Features → Delivery → Box code sticker is off, or it hasn’t printed yet).');
+    return { type: 'image/svg+xml', raw: await platform.forPrint(sticker.svg) };
+  } });
+
+  route({ method: 'POST', url: '/v1/packs/:id/verify', scope: 'packs', summary: 'The packing line reports every bottle it scanned. Returns what is missing or does not belong, and, for a plain box, where its box-code sticker goes.', body: obj({ scannedUnitIds: { type: 'array', items: S.str, maxItems: 48 } }, ['scannedUnitIds']), handler: async (req, key) => {
+    const p = packFor(key!, (req.params as any).id);
+    // A plain box's code sticker goes on before it's sealed: the line is told where.
+    try { return { body: { ...packs.verify(p.id, (req.body as any).scannedUnitIds), ...(p.sticker ? { sticker: `Put the box-code sticker ${stickerPlace(p.sticker)}.` } : {}) } }; } catch (e: any) { if (e instanceof PackStateError) throw new ApiError(409, 'wrong_stage', e.message); throw e; }
   } });
 
   route({ method: 'POST', url: '/v1/packs/:id/replace', scope: 'packs', summary: 'Reprint bottles the packing check found wrong (a torn, smudged or missing label the line couldn’t read): each is printed again with exactly the same ads and takes its place in the pack; the bad one is voided and never billed to anyone. productId is ignored (a reprint is always the same product).', body: obj({ missingUnitIds: { type: 'array', items: S.str, maxItems: 48 }, productId: S.str }, ['missingUnitIds']), handler: async (req, key) => {

@@ -158,7 +158,7 @@
   // ---------- blocks ----------
   function block(b, ctx) {
     switch (b.type) {
-      case 'hero': return h('div', { class: 'hero' }, h('h1', { text: b.title }), b.subtitle && h('p', { text: b.subtitle }), b.imageUrl && h('img', { src: b.imageUrl, alt: '' }), b.model && modelStage(b.model, [], ctx, 'See it in your space'));
+      case 'hero': return h('div', { class: 'hero' }, h('h1', { text: b.title }), b.subtitle && h('p', { text: b.subtitle }), b.imageUrl && h('img', { src: b.imageUrl, alt: '' }), b.model && modelStage(b.model, [], ctx, 'See it in your space', undefined, b.imageUrl));
       case 'text': return h('p', { class: 'text', text: b.text });
       case 'offer': {
         const el = h('div', { class: 'offer', style: `color:var(--accent-ink)` }, h('h2', { text: b.headline }), b.details && h('p', { text: b.details }), b.expires && h('div', { class: 'expires', text: b.expires }));
@@ -294,10 +294,17 @@
     return `intent://arvr.google.com/scene-viewer/1.0?${q.toString()}#Intent;scheme=https;package=com.google.android.googlequicksearchbox;action=android.intent.action.VIEW;S.browser_fallback_url=${encodeURIComponent(location.origin + location.pathname)};end;`;
   }
 
-  function modelStage(model, addOns, ctx, arLabel, buy) {
+  function modelStage(model, addOns, ctx, arLabel, buy, poster) {
     const items = [{ id: 'main', label: model.alt, model }, ...addOns];
+    // Until the model is ready (its script and its file can take a moment on a phone), the box is never blank: the
+    // product's photo if the page has one, else a light skeleton, with "Loading 3D…". A model that fails says so.
+    const waitWords = h('span', { text: 'Loading 3D…' });
+    const wait = h('div', { class: 'model-wait', role: 'status' }, poster ? h('img', { src: poster, alt: '' }) : h('div', { class: 'model-skel', 'aria-hidden': 'true' }), waitWords);
+    const waiting = (on, words = 'Loading 3D…') => { wait.hidden = !on; waitWords.textContent = words; };
     const mv = h('model-viewer', { src: model.glbUrl, alt: model.alt, 'camera-controls': true, 'auto-rotate': true, 'auto-rotate-delay': '0', 'rotation-per-second': '24deg', 'shadow-intensity': '1', 'shadow-softness': '0.9', exposure: '1.05', 'environment-image': 'neutral', 'camera-orbit': '30deg 70deg auto', ar: true, 'ar-modes': 'webxr scene-viewer quick-look', 'ar-scale': 'fixed', 'interaction-prompt': 'none', 'touch-action': 'pan-y' });
-    const stage = h('div', { class: 'stage' }, mv, h('div', { class: 'hint', text: 'Drag to spin' }));
+    const stage = h('div', { class: 'stage' }, mv, wait, h('div', { class: 'hint', text: 'Drag to spin' }));
+    mv.addEventListener('load', () => waiting(false));
+    mv.addEventListener('error', () => waiting(true, 'The 3D model couldn’t load here. Try again in a moment.'));
     let current = model;
     if (buy) {
       if (isIOS) mv.setAttribute('ios-src', quickLookSrc(model, buy));
@@ -329,7 +336,7 @@
     if (items.length > 1) {
       const pills = items.map((it, i) => h('button', { type: 'button', class: 'pill', 'aria-pressed': i === 0 ? 'true' : 'false', onclick: (e) => {
         pills.forEach((p) => p.setAttribute('aria-pressed', 'false')); e.currentTarget.setAttribute('aria-pressed', 'true');
-        mv.src = it.model.glbUrl; mv.alt = it.model.alt; current = it.model;
+        waiting(true); mv.src = it.model.glbUrl; mv.alt = it.model.alt; current = it.model;
         if (buy && isIOS) mv.setAttribute('ios-src', quickLookSrc(it.model, buy));
         if (it.id !== 'main') engage(ctx, 'addon', it.id);
       } }, i === 0 ? 'The main event' : it.label));

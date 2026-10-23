@@ -393,7 +393,7 @@ scan token), `GET /v/:code`, `/V/:code` (coupon check redirect), `GET /go/:token
 the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/console`, `/developers`, `/books`,
 `/play`, `/preview/scan`), `/static/*`, `/models/builtin/*`, `/assets/*`.
 
-**Every route (438):**
+**Every route (439):**
 
 | # | Route | Scope | Person | Other check | Docs |
 |---|---|---|---|---|---|
@@ -841,6 +841,7 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 430 | `POST /v1/console/advertisers/:id/bonus` | admin | yes | a person on the team, signed in (not a key); only the company's own advertisers; a reason to refuse | OK (refusing only stops free bonus printing; nothing billed or refunded) |
 | 431 | `GET /v1/ads/bonus` | campaigns | no | advertiser only (its own) | OK (whether its past ads may print free, and how many bonus bottles) |
 | 432 | `POST /v1/ads/bonus` | campaigns | yes | the advertiser's own person, signed in (not a key) | OK (allows or stops free bonus printing of its own past ads; never billed) |
+| 433 | `GET /v1/packs/:id/sticker.svg` | packs | no | the pack must be the caller’s company’s (`packFor`) | OK (a plain box’s code sticker, to print again by hand: its QR, box code and stop code, never the address) |
 
 ---
 

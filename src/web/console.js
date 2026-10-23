@@ -411,7 +411,7 @@
       const id = `f${++fid}`; input.id = id;
       return h('div', { class: 'field' }, h('label', { for: id, text: label }), h('div', { class: 'suffix' }, input, h('span', { text: 'in' })), h('div', { class: 'hint', text: std == null ? 'Blank: not set.' : `Blank: the standard ${std} in.` }));
     };
-    const paint = (path, label) => {
+    const paint = (path, label, hint = 'Black unless you choose.') => {
       const v = getP(ctx.draft, path) ?? o.defaults[path.split('.').pop()];
       const pick = h('input', { type: 'color', value: v, 'aria-label': `${label} picker` });
       const hex = h('input', { class: 'input', maxlength: 7, value: v, spellcheck: 'false' });
@@ -419,7 +419,13 @@
       pick.addEventListener('input', () => { hex.value = pick.value.toUpperCase(); put(pick.value); });
       hex.addEventListener('input', () => { const val = hex.value.trim(); if (/^#[0-9a-fA-F]{6}$/.test(val)) { pick.value = val; put(val); } });
       const id = `f${++fid}`; hex.id = id;
-      return h('div', { class: 'field' }, h('label', { for: id, text: label }), h('div', { class: 'color' }, pick, hex), h('div', { class: 'hint', text: 'Black unless you choose.' }));
+      return h('div', { class: 'field' }, h('label', { for: id, text: label }), h('div', { class: 'color' }, pick, hex), h('div', { class: 'hint', text: hint }));
+    };
+    const pickOne = (path, label, values, dflt) => {
+      const sel = h('select', { class: 'input' }, values.map((v) => h('option', { value: v, text: v[0].toUpperCase() + v.slice(1).replace('-', ' ') })));
+      sel.value = getP(ctx.draft, path) ?? dflt;
+      sel.addEventListener('change', () => { setP(ctx.draft, path, sel.value); ctx.changed(); });
+      return field(label, sel);
     };
     const one = (size) => {
       const std = o.standard.find((b) => String(b.bottles) === size) ?? {};
@@ -431,9 +437,14 @@
         inch(p('lengthIn'), 'Length (outside)', std.lengthIn, o.inches), inch(p('widthIn'), 'Width (outside)', std.widthIn, o.inches), inch(p('heightIn'), 'Height (outside)', std.heightIn, o.inches),
         paint(p('insideColor'), 'Inside colour'), paint(p('bottomColor'), 'Bottom colour'),
         field('Side with your info strip', side, { hint: 'Your logo, giving line, the pack’s code and its facts. That side is never sold.' }),
-        inch(p('stripWidthIn'), 'Info strip width', null, o.stripInches)));
+        inch(p('stripWidthIn'), 'Info strip width', null, o.stripInches),
+        // The box-code sticker, for plain boxes (ads on boxes off): printed with the pack's bottles, put on at the packing check.
+        ...(o.stickerInches ? [
+          inch(p('stickerWidthIn'), 'Box-code sticker width', o.defaults.stickerWidthIn, o.stickerInches), inch(p('stickerHeightIn'), 'Box-code sticker height', o.defaults.stickerHeightIn, o.stickerInches),
+          pickOne(p('stickerSide'), 'Sticker goes on the', o.stickerSides, o.defaults.stickerSide), pickOne(p('stickerSpot'), 'Where on that side', o.stickerSpots, o.defaults.stickerSpot),
+          paint(p('stickerColor'), 'Sticker colour', 'White unless you choose.'), paint(p('stickerInk'), 'Sticker words colour', 'Black unless you choose. Dark on light, so the code reads.')] : [])));
     };
-    return section('Delivery boxes', `Each pack size’s box. Measure your boxes and enter them (blank uses the standard size shown). The inside and bottom are black unless you choose. Ads on boxes are ${on('box_ads') ? 'on: boxes print with these settings' : 'off (Features → Delivery): nothing is printed on your boxes; these settings wait until you turn them on'}.`,
+    return section('Delivery boxes', `Each pack size’s box. Measure your boxes and enter them (blank uses the standard size shown). The inside and bottom are black unless you choose. Ads on boxes are ${on('box_ads') ? 'on: boxes print with these settings, and each box’s code is on its info strip' : `off (Features → Delivery): nothing is printed on your boxes; the measurements, colours and strip wait until you turn them on${on('box_code_sticker') ? ', and each pack’s code prints on a box-code sticker set here' : ''}`}.`,
       h('div', { class: 'stack' }, ...['6', '12', '24'].map(one)));
   }
 

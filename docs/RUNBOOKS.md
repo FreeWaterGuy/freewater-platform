@@ -328,6 +328,18 @@ minutes** on the server alone (likely less on a dedicated one; time your first n
 passed (*Routes* → the run → *Packing check*). A bottle it can't read: see "A bottle's label came out wrong". A run
 goes from *packing* to *ready* when every box is sealed.
 
+**Put the sticker on the box (plain boxes):** with ads on boxes off, each pack's bottles come off the printer with one
+small **box-code sticker** (2 × 2 in unless set): a QR code, "Box code: …" and the stop code (`R3 · 14`) with the box
+number. Before the box is sealed, stick it where the routes page says, under the box number ("Put the box-code
+sticker on the front, top-right corner"; the packing line's check says the same). Check its stop code and box
+number match the box. Without it the driver can't scan the box at the door (they can type the box number instead) and
+the household can't say the house is theirs from the box.
+- A sticker lost, torn or smudged: print it again from `GET /v1/packs/<pack>/sticker.svg` (any printer, at its real
+  size), or type the box number in the driver app.
+- A sticker that didn't print (the printer jammed twice): the pack stays in *printing* with its bottles done. Fix the
+  printer and press *Plan and print this night* again: it prints only the sticker, once.
+- With ads on boxes on, the code is on the box's printed info strip: there is no sticker to put on.
+
 **Load the vans (each driver):** sign in on the phone at `https://<site>/driver`, take the van's run, and scan the
 boxes into the van in the order the app asks (last stop first, so the first stop comes out on top). The run is *out*
 once every box is in.

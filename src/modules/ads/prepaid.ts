@@ -11,6 +11,7 @@ import { PaymentError, PaymentsService } from '../payments/service';
 import { prepaidAccount } from '../ledger/ledger';
 import type { CreditService } from './credit';
 import type { ReconCheck } from '../books/reconciliation';
+import { sizeRefusal } from './layoutChoice';
 
 // Advertisers pay up front (docs/SWITCHES.md, "How advertisers pay"):
 //   quote → pay (the card is charged) → review → only paid bottles print → "N of M bottles out".
@@ -63,6 +64,8 @@ export class PrepaidService {
     const printable = new Set(this.platform.layoutsOf(company, product).flatMap((l) => l.shares));
     const sizes = (allowed?.length ? allowed : SHARES).filter((s) => printable.has(s)).sort((x, y) => x - y);
     const share = (input.share ?? sizes[0]) as Share | undefined;
+    // A size the layouts can't hold on this product is named, with the nearest that can (never dropped silently).
+    if (share && !printable.has(share)) throw new AdsError(422, 'size_not_printable', `${sizeRefusal(share, [...printable].sort((x, y) => x - y), `the ${product.name}`, company.name)} Pick one size that prints there.`);
     if (!share || !sizes.includes(share)) throw new AdsError(422, 'size_not_printable', `Pick one size this ad has artwork for that prints on the ${product.name}: ${sizes.map(shareLabel).join(', ') || 'none do'}.`);
     const perBottleCents = Math.round(company.prices.perPrintByShare[share] * (product.priceFactor ?? 1));
     const extras: Quote['extras'] = [];

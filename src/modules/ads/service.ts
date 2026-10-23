@@ -1,4 +1,5 @@
-import type { BoxProduct, Campaign, CompanyConfig, Share, Unit } from '../../core/types';
+import type { BoxProduct, Campaign, CompanyConfig, Product, Share, Unit } from '../../core/types';
+import { productWords, sizeRefusal } from './layoutChoice';
 import { whereOnLabel } from '../fillers/unsold';
 import { adArea, shareLabel } from './layouts';
 import { outlineText } from '../print/outline';
@@ -18,11 +19,15 @@ import { qrSvg } from '../print/qr';
 import { companyQrStyle } from '../codes/style';
 import { boxFaceQr, boxFaceSizes, stopCodeBox } from '../packs/boxRenderer';
 import type { AdAssistant, ChatMessage } from '../ai/contract';
+import { starterSuggestions } from '../ai/builtinAssistant';
 import { allowedSizes, applyPatch, draftTargeting, estimate, missing, missingLabels, themeFromPoster, type AdDraft } from './draft';
 import { withCompany } from '../ai/routing';
 import { adBilling, extraPrice, feesOnWords, prepaidModel } from './billing';
 import type { PrepaidService, Quote } from './prepaid';
 import { adWords, KIND_SWITCH, ROUTE_KINDS, routeKindWords, type RouteBuyService, type RouteQuoteInput } from './routeBuys';
+
+/** A draft with nothing in it: only the assistant's greeting (nothing said, no design or scan page added from the studio). */
+const EMPTY_DRAFT = `jsonb_array_length(messages) <= 1`;
 
 export class AdsError extends Error {
   constructor(public status: number, public code: string, message: string) {
@@ -101,11 +106,14 @@ export class AdsService {
   view(r: DraftRow) {
     const company = this.platform.companies.get(r.companyId)!;
     const left = missing(r.draft, this.host);
+    const fit = this.draftSizes(r);
     const { poster, ...rest } = r.draft;
     return {
       id: r.id, status: r.status, campaignId: r.campaignId, updatedAt: r.updatedAt, boxes: this.boxesOn(r.companyId),
       draft: { ...rest, ...(rest.formats ? { formats: this.formatsFor(r.companyId, rest.formats) } : {}), poster: poster ? { ...poster, image: poster.image ? { role: poster.image.role, attached: true } : undefined } : undefined },
       messages: r.messages, missing: left.map((m) => ({ id: m, label: missingLabels[m] })), ready: left.length === 0,
+      // The sizes that print where this ad goes, and why any size it has can't (the review page shows both).
+      printableSizes: fit.sizes, sizeNotes: fit.notes,
       estimate: estimate(r.draft, company, this.maxFactor(company.id), r.campaignId ? this.platform.campaigns.get(r.campaignId) : undefined, this.platform.featureOn), assistant: this.assistant.name,
       payment: this.paymentFor(r),
     };
@@ -165,17 +173,25 @@ export class AdsService {
         ? `What would you like to change? The bottles not printed yet will carry the new ad once it’s reviewed. Changing it costs $${(fee / 100).toFixed(2)}, paid when you submit; the size and the bottles you paid for stay as they are.`
         : 'What would you like to change? Changes go back to review before they print.';
     }
+    // An empty draft for the same thing (nothing said, nothing added: only the greeting) is used again, not doubled:
+    // "New ad", then the studio's "Make an ad with this design", is one ad, not an empty one left behind.
+    const empty = (await this.db.query<any>(`select id from ad_drafts where company_id = $1 and advertiser_id = $2 and status = 'open' and campaign_id is not distinct from $3 and ${EMPTY_DRAFT} order by updated_at desc limit 1`,
+      [input.companyId, input.advertiserId, input.fromCampaignId ?? null])).rows[0];
+    if (empty) return this.getDraft(empty.id, input.companyId, input.advertiserId);
     const r: DraftRow = { id: newId('dr'), companyId: input.companyId, advertiserId: input.advertiserId, status: 'open', draft, messages: [{ role: 'assistant', text: greeting, at: this.platform.bus.now().toISOString() }], campaignId: input.fromCampaignId ?? null, updatedAt: this.platform.bus.now().toISOString() };
     await this.db.query(`insert into ad_drafts (id, company_id, advertiser_id, created_by, status, data, messages, campaign_id) values ($1,$2,$3,$4,'open',$5,$6,$7)`, [r.id, r.companyId, r.advertiserId, input.userId ?? null, JSON.stringify(r.draft), JSON.stringify(r.messages), r.campaignId]);
-    return this.view(r);
+    return { ...this.view(r), suggestions: starterSuggestions(adv, !!r.campaignId) };
   }
 
   async getDraft(id: string, companyId: string, advertiserId: string) {
-    return this.view(await this.row(id, companyId, advertiserId));
+    const r = await this.row(id, companyId, advertiserId);
+    // Before anything is said, the chat's suggestions come from this advertiser's own business (never another kind).
+    return { ...this.view(r), ...(r.messages.length <= 1 ? { suggestions: starterSuggestions(await this.advertiser(companyId, advertiserId), !!r.campaignId) } : {}) };
   }
 
+  /** Unfinished ads: never an empty one (nothing said or added in it). */
   async listDrafts(companyId: string, advertiserId: string) {
-    const rows = (await this.db.query<any>(`select id, status, data, campaign_id, updated_at from ad_drafts where company_id = $1 and advertiser_id = $2 and status = 'open' order by updated_at desc limit 20`, [companyId, advertiserId])).rows;
+    const rows = (await this.db.query<any>(`select id, status, data, campaign_id, updated_at from ad_drafts where company_id = $1 and advertiser_id = $2 and status = 'open' and not ${EMPTY_DRAFT} order by updated_at desc limit 20`, [companyId, advertiserId])).rows;
     return rows.map((r) => { const d = parse<AdDraft>(r.data); return { id: r.id, campaignId: r.campaign_id, headline: d.studio?.headline ?? d.poster?.headline ?? null, updatedAt: new Date(r.updated_at).toISOString() }; });
   }
 
@@ -195,6 +211,7 @@ export class AdsService {
     // doesn't fill in a poster of its own.
     const st = r.draft.studio;
     const seen: AdDraft = st ? { ...r.draft, poster: { brand: st.brand, headline: st.headline, ...(st.sub ? { sub: st.sub } : {}), colors: { bg: st.colors.paper, fg: st.colors.ink, accent: st.colors.accent } } } : r.draft;
+    const fit = this.draftSizes(r);
     const out = await withCompany(r.companyId, async () => this.assistant.respond({
       draft: seen,
       history: r.messages.map(({ role, text, attachments }) => ({ role, text, attachments })),
@@ -205,7 +222,7 @@ export class AdsService {
         company: { name: company.name, blockedCategories: company.adRules.blockedCategories, giving: givingLine(company, locations[0]?.id ?? '') },
         machines: locations.map((l) => ({ id: l.id, name: l.name, kind: l.kind })),
         plugins: this.host.list().filter((p) => p.id !== 'custom-experience' && p.id !== 'house-promo' && p.id !== 'news').map(({ id, name, description, example, configSchema }) => ({ id, name, description, example, configSchema })),
-        icons: posterIcons, fonts: Object.keys(posterFonts), sizes: this.printableSizes(company),
+        icons: posterIcons, fonts: Object.keys(posterFonts), sizes: fit.sizes, sizesOn: fit.on,
         prices: { perPrintByShare: company.prices.perPrintByShare as any, bidStartsAt: bidFloor(company), perScan: company.prices.perScan, perArLaunch: company.prices.perArLaunch, commissionPercent: company.prices.commissionPercent, ...(prepaidModel(company) ? { prepaid: this.prepaidTerms(company.id) } : {}) },
         missing: missing(r.draft, this.host),
         boxes: this.boxesOn(r.companyId),
@@ -215,7 +232,7 @@ export class AdsService {
     // the scan page isn't a new headline).
     const patch = { ...(out.patch ?? {}) };
     if (st && patch.poster && !/\b(headline|title|big words|say|small line|subline|underneath|wording|colou?rs?|background|brand name)\b|["“]/i.test(input.text)) delete patch.poster;
-    const { draft, problems } = applyPatch(r.draft, patch, { company, locations, host: this.host, attachments: input.attachments, sizes: this.printableSizes(company), boxes: this.boxesOn(r.companyId) });
+    const { draft, problems } = applyPatch(r.draft, patch, { company, locations, host: this.host, attachments: input.attachments, sizes: fit.sizes, sizesOn: fit.on, boxes: this.boxesOn(r.companyId) });
     const now = this.platform.bus.now().toISOString();
     const left = missing(draft, this.host);
     let reply = out.reply;
@@ -229,12 +246,35 @@ export class AdsService {
   }
 
   /**
-   * The sizes an advertiser can choose here: those some label layout the company allows can hold, on any of its
-   * products (its Label layouts and size switches, its choice for each product, its most ads on a bottle).
+   * The sizes an advertiser can choose here: those some label layout the company allows can hold on the products the
+   * ad prints on (`adProducts`; its Label layouts and size switches, its choice for each product, its most ads on a bottle).
    */
-  printableSizes(company: CompanyConfig): Share[] {
-    const products = [...this.platform.products.values()].filter((p) => !p.companyId || p.companyId === company.id);
+  printableSizes(company: CompanyConfig, products = this.adProducts(company.id)): Share[] {
     return [...new Set(products.flatMap((p) => this.platform.layoutsOf(company, p).flatMap((l) => l.shares)))].sort((a, b) => a - b);
+  }
+
+  /**
+   * The products an ad prints on, so it's offered only sizes that print there: the product its bottles are paid for
+   * (an ad being made where ads are paid up front: the standard one, as the review page quotes it and route bottles
+   * print), else the products it's aimed at, else every product the company hands out.
+   */
+  adProducts(companyId: string, c?: Pick<Campaign, 'prepaid' | 'targeting'>, paidUpFront = prepaidModel(this.platform.companies.get(companyId)!)): Product[] {
+    const mine = (p: Product | undefined): p is Product => !!p && (!p.companyId || p.companyId === companyId);
+    const paidOn = c?.prepaid ? this.platform.products.get(c.prepaid.productId) : undefined;
+    if (mine(paidOn)) return [paidOn];
+    const aimed = (c?.targeting?.products ?? []).map((id) => this.platform.products.get(id)).filter(mine);
+    if (aimed.length) return aimed;
+    if (paidUpFront) return [this.platform.standardProduct(companyId)];
+    return [...this.platform.products.values()].filter(mine);
+  }
+
+  /** The sizes a draft can print at, and plain words for any size it has that can't (never dropped silently). */
+  private draftSizes(r: DraftRow) {
+    const company = this.platform.companies.get(r.companyId)!;
+    const products = this.adProducts(r.companyId, r.campaignId ? this.platform.campaigns.get(r.campaignId) : undefined);
+    const sizes = this.printableSizes(company, products), on = productWords(products);
+    const notes = (r.draft.sizes ?? []).filter((s) => !sizes.includes(s)).map((s) => sizeRefusal(s, sizes, on, company.name));
+    return { sizes, on, notes };
   }
 
   /** How ads are paid for here, in the terms the assistant and the portal use. */
@@ -425,8 +465,12 @@ export class AdsService {
     if (left.length) throw new AdsError(422, 'not_ready', `Before submitting, add ${left.map((m) => missingLabels[m]).join(', ')}.`);
     const company = this.platform.companies.get(r.companyId)!;
     // An ad whose sizes fit on none of the company's bottles (in the layouts it allows) would be approved and never print.
-    const prints = new Set(this.printableSizes(company));
-    if (!(r.draft.sizes ?? []).some((s) => prints.has(s))) throw new AdsError(422, 'sizes_never_print', `None of those sizes fit on ${company.name}'s bottles, so the ad would never print. Pick from: ${[...prints].sort((a, b) => a - b).map(shareLabel).join(', ')}.`);
+    const fit = this.draftSizes(r);
+    const prints = new Set(fit.sizes);
+    if (!(r.draft.sizes ?? []).some((s) => prints.has(s))) throw new AdsError(422, 'sizes_never_print', `None of those sizes fit on ${fit.on} in ${company.name}'s label layouts, so the ad would never print. Pick from: ${[...prints].sort((a, b) => a - b).map(shareLabel).join(', ')}.`);
+    // Billed after, an ad keeps every size it has: one that can't print would be approved and never print (paid up front,
+    // the size paid for is chosen from the ones that print, and checked by its quote).
+    if (!prepaidModel(company) && fit.notes.length) throw new AdsError(422, 'size_not_printable', `${fit.notes.join(' ')} Choose sizes that print in the chat.`);
     const adv = await this.advertiser(r.companyId, r.advertiserId);
     const d = r.draft as Required<Pick<AdDraft, 'sizes' | 'buy' | 'experienceId' | 'locations' | 'category'>> & AdDraft;
     if (d.buy?.type === 'bid' && this.platform.featureOn && !this.platform.featureOn(r.companyId, 'bidding')) throw new AdsError(422, 'bidding_off', `${company.name} doesn’t sell space by bidding: buy a set number of bottles instead.`);
@@ -488,6 +532,10 @@ export class AdsService {
       : paid ? `Paid $${(paid.totalCents / 100).toFixed(2)} for ${(c.prepaid?.paid ?? 0).toLocaleString('en-US')} bottles. ` : feeCents ? `Paid the $${(feeCents / 100).toFixed(2)} change fee. ` : '';
     r.messages.push({ role: 'assistant', text: resubmitted ? `Sent again, at no fee. ${company.name}’s team will look at the change in the notes on this ad; nothing prints until it’s approved.` : `${money}Submitted. ${company.name} reviews new ads, usually within a day. You'll see it running in your campaigns once it's approved.`, at: now });
     await this.save(r);
+    // The ad is made: an empty draft left open for it ("New ad" pressed, then the ad made from the studio or another
+    // tab) is closed, so it never sits under "Unfinished ads". Only drafts with nothing in them, never paid for.
+    await this.db.query(`delete from ad_drafts where company_id = $1 and advertiser_id = $2 and status = 'open' and id <> $3 and (campaign_id is null or campaign_id = $4) and ${EMPTY_DRAFT}
+      and not exists (select 1 from ad_orders o where o.draft_id = ad_drafts.id)`, [r.companyId, r.advertiserId, r.id, c.id]);
     if (resubmitted) await this.addReviewNote({ companyId: c.companyId, campaignId: c.id, kind: 'resubmitted', authorKind: 'advertiser', authorId: r.advertiserId, text: 'The advertiser changed the ad and sent it again (no fee while it’s being discussed).' });
     // A paid ad an AI objected to while it was being made goes to the team flagged, with the AI's reasons: an AI can only flag.
     else if (c.prepaid) {

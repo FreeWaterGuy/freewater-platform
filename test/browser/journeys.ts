@@ -135,6 +135,25 @@ await journey('a free bottle’s scan page opens on a phone', async (page) => {
   await page.waitForFunction(() => (document.body.innerText || '').trim().length > 40, null, { timeout: 30_000, polling: 250 });
 }, { viewport: { width: 390, height: 844 }, isMobile: true });
 
+await journey('the scan page’s 3D model is never a blank box while it loads (a “Loading 3D…” placeholder)', async (page) => {
+  await db.query(`insert into advertisers (id, company_id, name, category) values ('adv-ar-wait','freewater','Wait Burgers','food') on conflict do nothing`);
+  const d: any = await app.ads.createDraft({ companyId: 'freewater', advertiserId: 'adv-ar-wait' });
+  await db.query(`update ad_drafts set data = $2 where id = $1`, [d.id, JSON.stringify({ category: 'food', poster: { brand: 'Wait Burgers', headline: 'Smash burgers', colors: { bg: '#FFFFFF', fg: '#0B0B0B', accent: '#1E7DB8' } }, sizes: [4], experienceId: 'ar-3d-menu', experienceConfig: { title: 'Our menu', model: { builtin: 'burger' }, orderUrl: 'https://wait.example/order' } })]);
+  const pv: any = await app.ads.preview(d.id, 'freewater', 'adv-ar-wait');
+  expect(!!pv.scan?.doc, 'a scan page with a 3D model');
+  // The model's file is slow on this phone: it doesn't arrive while we look.
+  await page.route('**/*.glb*', () => new Promise(() => {}));
+  await page.goto(`${base}/preview/scan`);
+  await page.evaluate((scan: any) => window.postMessage({ type: 'fw-preview', ...scan }, location.origin), pv.scan);
+  await page.waitForSelector('model-viewer', { state: 'attached', timeout: 15_000 });
+  const wait = await page.evaluate(() => {
+    const w = document.querySelector('.stage .model-wait') as HTMLElement | null;
+    const r = w?.getBoundingClientRect();
+    return { shown: !!w && !w.hidden && !!r && r.width > 100 && r.height > 100, text: w?.textContent ?? '' };
+  });
+  expect(wait.shown && /Loading 3D…/.test(wait.text), `placeholder over the model while it loads: ${JSON.stringify(wait)}`);
+}, { viewport: { width: 390, height: 844 }, isMobile: true });
+
 await journey('the open books show numbers without signing in', async (page) => {
   await page.goto(`${base}/books`);
   await page.waitForFunction(() => /\$\d/.test(document.body.innerText || ''), null, { timeout: 15_000 });
@@ -195,6 +214,9 @@ await journey('an advertiser buys bottles on a delivery area and pays for them',
   await page.keyboard.press('Enter');
   await page.waitForSelector('input[name="where-mode"][value="routes"]', { timeout: 30_000 });
   await page.check('input[name="where-mode"][value="routes"]');
+  // Ads on boxes are off: the words are about the bottles in each house's pack, never a box printed with ads.
+  const routeWords = (await page.textContent('.route-pick')) ?? '';
+  expect(/each house’s pack/.test(routeWords) && !/box of water|every bottle in every box/.test(routeWords), `route words: ${routeWords.slice(0, 400)}`);
   await page.selectOption('#route-kind', 'spread');
   await page.fill('#route-bottles', '4');
   await page.getByText(/Journey Oak and Elm: 6 houses/).click();
@@ -226,6 +248,9 @@ await journey('the ad chat’s “Every size” tab keeps every piece inside its
   await signedIn(page, 'fw_ads_token', await pilot.accounts.createSession(baker));
   await page.goto(`${pBase}/ads/drafts/${draftId}`);
   await page.waitForSelector('[role="tab"]', { timeout: 30_000 });
+  // The suggestions before anything is said are the bakery's own, never another kind of business.
+  const chips = await page.$$eval('.sugg button', (els: Element[]) => els.map((e) => e.textContent ?? ''));
+  expect(chips.length > 0 && chips.some((c: string) => /Journey Bakery/.test(c)) && !chips.some((c: string) => /taco/i.test(c)), `suggestions: ${chips.join(' | ')}`);
   // The sample bottle: other pieces are marked “Sample ad”, and the words say where this ad is.
   await page.waitForSelector('.stage .caption', { timeout: 30_000 });
   const caption = (await page.textContent('.stage .caption'))!;
@@ -263,6 +288,11 @@ await journey('ops plans and prints a night for a delivery area', async (page) =
   // The paid pieces are on bottles going to that area's houses.
   const carried = packs.flatMap((p) => p.unitIds.map((id) => pilot.platform.units.get(id)!)).filter((u) => u.placements.some((x) => x.advertiserId === 'adv-journey'));
   expect(carried.length === 4, `bottles with the paid piece: ${carried.length}`);
+  // Plain boxes: each got its box-code sticker, and the packing check says to put it on.
+  await page.goto(`${pBase}/ops/routes?date=${NIGHT}`);
+  await page.waitForSelector('.sticker-step', { timeout: 30_000 });
+  const steps = await page.$$eval('.sticker-step', (els: Element[]) => els.map((e) => e.textContent));
+  expect(steps.length >= 6 && steps.every((t: string | null) => /Put the box-code sticker on the front, top-right corner/.test(t ?? '')), `sticker steps: ${steps.join(' | ')}`);
 });
 
 let dropped: any = null;
