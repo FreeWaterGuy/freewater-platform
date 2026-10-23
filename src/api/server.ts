@@ -178,7 +178,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   };
   const packView = (id: string) => {
     const p = packs.packs.get(id)!;
-    return { id: p.id, status: p.status, size: p.box.bottles, boxId: p.box.id, routeId: p.routeId, stop: p.stop, address: p.address, customerId: p.customerId, loadPosition: p.loadPosition ?? null, unitIds: p.unitIds, faces: p.faces.map((f) => ({ face: f.face, advertiser: f.advertiserName, campaignId: f.campaignId, isHouse: f.isHouse })), boxSvgUrl: `/v1/packs/${p.id}/box.svg`, packUrl: p.rendered?.packUrl };
+    return { id: p.id, status: p.status, size: p.box.bottles, boxId: p.box.id, routeId: p.routeId, stop: p.stop, address: p.address, customerId: p.customerId, loadPosition: p.loadPosition ?? null, unitIds: p.unitIds, faces: p.faces.map((f) => ({ face: f.face, advertiser: f.advertiserName, campaignId: f.campaignId, isHouse: f.isHouse })), boxSvgUrl: `/v1/packs/${p.id}/box.svg`, packUrl: p.rendered?.packUrl ?? p.boxCode ?? null, plainBox: !p.rendered };
   };
   const receiptView = (unitId: string) => {
     const u = platform.units.get(unitId);
@@ -312,7 +312,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   route({ method: 'GET', url: '/v1/public/packs/:packId', scope: 'public', summary: "What's in a pack: how many bottles, whose ads, what it gave. Never the address.", handler: async (req) => {
     const p = packs.packs.get((req.params as any).packId);
-    if (!p || !p.rendered) throw notFound('Pack');
+    // A plain box (ads on boxes off) has its code and its receipt too, though nothing was printed on it.
+    if (!p || (!p.rendered && !p.boxCode)) throw notFound('Pack');
     const company = platform.companies.get(p.companyId)!;
     const bottles = p.unitIds.map((id) => platform.units.get(id)).filter((u) => !!u);
     const donated = bottles.reduce((sum, u) => sum + platform.ledger.receipt(u!.id).donatedCents, 0);
@@ -474,6 +475,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const company = platform.companies.get(key!.companyId)!;
     if (company.adRules.blockedCategories.includes(b.category)) throw new ApiError(422, 'category_blocked', `${company.name} doesn't print ${b.category} ads.`);
     if (b.buy.type === 'bid' && !app.companyFeatures.on(company.id, 'bidding')) throw new ApiError(422, 'bidding_off', `${company.name} doesn’t sell space by bidding: buy a set number of bottles instead.`);
+    // The same rule as the chat and the portal: where ads on boxes are off, the boxes are plain and nothing prints there.
+    if ((b.formats as string[] | undefined)?.includes('box-face') && !app.companyFeatures.on(company.id, 'box_ads')) throw new ApiError(422, 'boxes_off', `${company.name}’s delivery boxes are plain: ads print on bottles only. Leave out "box-face".`);
     checkExperience(b.experienceId, b.experienceConfig ?? {}, b.theme, company.id);
     // The same rule as a submitted draft: an ad whose sizes no layout the company allows can hold would never print.
     const prints = app.ads.printableSizes(company);
@@ -581,7 +584,12 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   } });
 
   route({ method: 'GET', url: '/v1/packs/:id', scope: 'packs', summary: 'One pack.', handler: async (req, key) => ({ body: packView(packFor(key!, (req.params as any).id).id) }) });
-  route({ method: 'GET', url: '/v1/packs/:id/box.svg', scope: 'packs', summary: 'The print-ready box, laid flat (SVG, real size).', handler: async (req, key) => ({ type: 'image/svg+xml', raw: packFor(key!, (req.params as any).id).rendered!.svg }) });
+  route({ method: 'GET', url: '/v1/packs/:id/box.svg', scope: 'packs', summary: 'The print-ready box, laid flat (SVG, real size).', handler: async (req, key) => {
+    const p = packFor(key!, (req.params as any).id);
+    // Ads on boxes off: the box is plain, so there's no print file for it.
+    if (!p.rendered) throw new ApiError(404, 'plain_box', 'This box is plain: ads on boxes are off, so nothing is printed on it.');
+    return { type: 'image/svg+xml', raw: p.rendered.svg };
+  } });
 
   route({ method: 'POST', url: '/v1/packs/:id/verify', scope: 'packs', summary: 'The packing line reports every bottle it scanned. Returns what is missing or does not belong.', body: obj({ scannedUnitIds: { type: 'array', items: S.str, maxItems: 48 } }, ['scannedUnitIds']), handler: async (req, key) => {
     const p = packFor(key!, (req.params as any).id);

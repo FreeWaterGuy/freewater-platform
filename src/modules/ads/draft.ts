@@ -45,6 +45,8 @@ export interface DraftContext {
   attachments: { dataUrl: string; name?: string }[];
   /** The sizes this company sells (some label layout it allows holds them). Every size if not given. */
   sizes?: Share[];
+  /** Ads on boxes are on here ("box_ads"). False: an ad prints on bottles only, whatever is proposed. On if not given. */
+  boxes?: boolean;
 }
 
 export const missingLabels = {
@@ -140,7 +142,9 @@ export function applyPatch(d: AdDraft, patch: DraftPatch, ctx: DraftContext): { 
     if (sizes.length && sizes.length < asked.length) problems.push(`${ctx.company.name} prints only these sizes: ${words}.`);
   }
   if (p.formats !== undefined) {
-    const f = (p.formats ?? []).filter((x) => x === 'label' || x === 'box-face');
+    let f = (p.formats ?? []).filter((x) => x === 'label' || x === 'box-face');
+    // Boxes are plain where ads on boxes are off: never printed on, whatever an assistant proposes.
+    if (ctx.boxes === false && f.includes('box-face')) { f = f.filter((x) => x !== 'box-face'); problems.push(`${ctx.company.name}’s delivery boxes are plain: ads print on bottles only.`); }
     next.formats = f.length ? [...new Set(f)] : ['label'];
   }
   if (p.locations !== undefined) {

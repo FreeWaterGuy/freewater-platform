@@ -637,6 +637,7 @@ export async function createApp(opts: AppOptions) {
     switchRouteWarnings: (companyId, onAfter) => layoutGuard.switchRouteWarnings(companyId, onAfter),
     view: (companyId) => layoutGuard.view(companyId),
   };
+  consoleSvc.boxProducts = () => [...state.boxes];
   consoleSvc.layoutCheck = (companyId, cur, next) => layoutGuard.settingsCheck(companyId, cur, next);
   platform.ledger.featureOn = featureOn;
   delivery.featureOn = featureOn;

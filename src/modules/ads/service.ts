@@ -22,7 +22,7 @@ import { allowedSizes, applyPatch, draftTargeting, estimate, missing, missingLab
 import { withCompany } from '../ai/routing';
 import { adBilling, extraPrice, feesOnWords, prepaidModel } from './billing';
 import type { PrepaidService, Quote } from './prepaid';
-import { adWords, KIND_SWITCH, KIND_WORDS, ROUTE_KINDS, type RouteBuyService, type RouteQuoteInput } from './routeBuys';
+import { adWords, KIND_SWITCH, ROUTE_KINDS, routeKindWords, type RouteBuyService, type RouteQuoteInput } from './routeBuys';
 
 export class AdsError extends Error {
   constructor(public status: number, public code: string, message: string) {
@@ -87,13 +87,24 @@ export class AdsService {
     await this.db.query(`update ad_drafts set data = $2, messages = $3, status = $4, campaign_id = $5, updated_at = now() where id = $1`, [r.id, JSON.stringify(r.draft), JSON.stringify(r.messages), r.status, r.campaignId]);
   }
 
+  /**
+   * Ads on boxes are on for this company ("box_ads"; off for FreeWater, whose boxes are plain). Off: nothing offers,
+   * previews, records or shows boxes (an ad prints on bottles only).
+   */
+  boxesOn(companyId: string) { return !this.platform.featureOn || this.platform.featureOn(companyId, 'box_ads'); }
+  /** Where an ad prints, as this company can print it: never on boxes while ads on boxes are off. */
+  private formatsFor(companyId: string, formats: AdDraft['formats'] | Campaign['formats']): ('label' | 'box-face')[] {
+    const f = (formats ?? ['label']).filter((x): x is 'label' | 'box-face' => x === 'label' || (x === 'box-face' && this.boxesOn(companyId)));
+    return f.length ? f : ['label'];
+  }
+
   view(r: DraftRow) {
     const company = this.platform.companies.get(r.companyId)!;
     const left = missing(r.draft, this.host);
     const { poster, ...rest } = r.draft;
     return {
-      id: r.id, status: r.status, campaignId: r.campaignId, updatedAt: r.updatedAt,
-      draft: { ...rest, poster: poster ? { ...poster, image: poster.image ? { role: poster.image.role, attached: true } : undefined } : undefined },
+      id: r.id, status: r.status, campaignId: r.campaignId, updatedAt: r.updatedAt, boxes: this.boxesOn(r.companyId),
+      draft: { ...rest, ...(rest.formats ? { formats: this.formatsFor(r.companyId, rest.formats) } : {}), poster: poster ? { ...poster, image: poster.image ? { role: poster.image.role, attached: true } : undefined } : undefined },
       messages: r.messages, missing: left.map((m) => ({ id: m, label: missingLabels[m] })), ready: left.length === 0,
       estimate: estimate(r.draft, company, this.maxFactor(company.id), r.campaignId ? this.platform.campaigns.get(r.campaignId) : undefined, this.platform.featureOn), assistant: this.assistant.name,
       payment: this.paymentFor(r),
@@ -140,7 +151,7 @@ export class AdsService {
       if (!c || c.companyId !== input.companyId || c.advertiserId !== input.advertiserId) throw new AdsError(404, 'not_found', 'Campaign not found.');
       if (c.creativeRef?.kind !== 'poster' && c.creativeRef?.kind !== 'studio') throw new AdsError(422, 'not_editable_here', 'This ad’s artwork was uploaded as a file. Upload a new file to change it.');
       draft = {
-        name: c.name, category: c.category, ...(c.creativeRef.kind === 'studio' ? { studio: c.creativeRef.spec } : { poster: c.creativeRef.spec }), sizes: c.sizes, formats: c.formats ?? ['label'], locations: c.targeting.locations ?? 'all',
+        name: c.name, category: c.category, ...(c.creativeRef.kind === 'studio' ? { studio: c.creativeRef.spec } : { poster: c.creativeRef.spec }), sizes: c.sizes, formats: this.formatsFor(input.companyId, c.formats), locations: c.targeting.locations ?? 'all',
         buy: c.buy.type === 'guaranteed' ? { type: 'guaranteed', prints: c.buy.remainingPrints, unchanged: true } : { type: 'bid', dailyCapCents: c.buy.dailyCapCents, maxCentsPerLabel: c.buy.maxCentsPerLabel, unchanged: true },
         experienceId: c.experienceId, experienceConfig: c.experienceConfig, theme: c.theme,
       };
@@ -197,13 +208,14 @@ export class AdsService {
         icons: posterIcons, fonts: Object.keys(posterFonts), sizes: this.printableSizes(company),
         prices: { perPrintByShare: company.prices.perPrintByShare as any, bidStartsAt: bidFloor(company), perScan: company.prices.perScan, perArLaunch: company.prices.perArLaunch, commissionPercent: company.prices.commissionPercent, ...(prepaidModel(company) ? { prepaid: this.prepaidTerms(company.id) } : {}) },
         missing: missing(r.draft, this.host),
+        boxes: this.boxesOn(r.companyId),
       },
     }), 'ai_ad_assistant');
     // With a studio design, its words and colors change only when the message asks about them (an offer named for
     // the scan page isn't a new headline).
     const patch = { ...(out.patch ?? {}) };
     if (st && patch.poster && !/\b(headline|title|big words|say|small line|subline|underneath|wording|colou?rs?|background|brand name)\b|["“]/i.test(input.text)) delete patch.poster;
-    const { draft, problems } = applyPatch(r.draft, patch, { company, locations, host: this.host, attachments: input.attachments, sizes: this.printableSizes(company) });
+    const { draft, problems } = applyPatch(r.draft, patch, { company, locations, host: this.host, attachments: input.attachments, sizes: this.printableSizes(company), boxes: this.boxesOn(r.companyId) });
     const now = this.platform.bus.now().toISOString();
     const left = missing(draft, this.host);
     let reply = out.reply;
@@ -234,7 +246,8 @@ export class AdsService {
       feesOn: feesOnWords(company, this.platform.featureOn),
       extras: Object.entries(b.extras.perUse).map(([id, x]) => ({ id, label: x.label, perUseCents: extraPrice(company, id)! })),
       // Buying on the delivery routes, where it's on (the review page has the picker; the chat explains it).
-      ...(this.routeBuys && (!this.platform.featureOn || this.platform.featureOn(companyId, 'route_buying')) ? { routes: { kinds: ROUTE_KINDS.filter((k) => !this.platform.featureOn || this.platform.featureOn(companyId, KIND_SWITCH[k])).map((k) => KIND_WORDS[k]), smallAudienceHouses: this.routeBuys.smallAudienceHouses(company) } } : {}),
+      ...(this.routeBuys && (!this.platform.featureOn || this.platform.featureOn(companyId, 'route_buying')) ? { routes: { kinds: ROUTE_KINDS.filter((k) => !this.platform.featureOn || this.platform.featureOn(companyId, KIND_SWITCH[k]))
+        .map((k) => routeKindWords(k, this.boxesOn(companyId))), smallAudienceHouses: this.routeBuys.smallAudienceHouses(company) } } : {}),
     };
   }
 
@@ -319,6 +332,8 @@ export class AdsService {
 
   private async render(o: { companyId: string; advertiserId: string; advertiserName: string; category: string; draw: (w: number, h: number, ctx?: import('../../core/types').CreativeContext) => string; sizes: Share[]; formats: string[]; experience: { id: string; config: unknown } | null; theme: Partial<import('../experiences/blocks').Theme> }) {
     const company = this.platform.companies.get(o.companyId)!;
+    // No box sides to preview where ads on boxes are off: the boxes are plain.
+    if (!this.boxesOn(o.companyId)) o = { ...o, formats: o.formats.filter((f) => f !== 'box-face') };
     const product = this.platform.standardProduct(o.companyId);
     // Only the layouts this company allows (its switches, its choice for each product, its most ads on a bottle).
     const layouts = this.platform.layoutsOf(company, product);
@@ -372,7 +387,7 @@ export class AdsService {
 
     // Box sides, each as it prints (its own size, the code in its corner). The 12-pack's front is the one shown first.
     const faceSeen = new Map<string, { w: number; h: number; boxes: string[] }>();
-    if (o.formats.includes('box-face')) for (const b of this.boxProducts()) for (const f of boxFaceSizes(b)) {
+    if (o.formats.includes('box-face')) for (const b of this.boxProducts()) for (const f of boxFaceSizes(b, company)) {
       const key = `${f.w}x${f.h}`, had = faceSeen.get(key);
       if (had) { if (!had.boxes.includes(b.id)) had.boxes.push(b.id); } else faceSeen.set(key, { w: f.w, h: f.h, boxes: [b.id] });
     }
@@ -455,7 +470,7 @@ export class AdsService {
       ...(existing ?? {}),
       id: existing?.id ?? paid?.campaignId ?? newId('cmp'), companyId: r.companyId, advertiserId: r.advertiserId, advertiserName: adv.name,
       // A paid ad prints at the one size it was paid for, whatever the change says.
-      name: d.name ?? (d.studio?.headline ?? spec.headline), category: d.category, sizes: prepaid ? [prepaid.share] : d.sizes, formats: d.formats ?? ['label'],
+      name: d.name ?? (d.studio?.headline ?? spec.headline), category: d.category, sizes: prepaid ? [prepaid.share] : d.sizes, formats: this.formatsFor(r.companyId, d.formats),
       ...art,
       experienceId: d.experienceId, experienceConfig: d.experienceConfig ?? {}, theme: themeFromPoster(d),
       targeting: draftTargeting(d, existing), buy: prepaid ? (existing?.buy ?? buy) : buy,
@@ -564,7 +579,7 @@ export class AdsService {
       .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '') || a.id.localeCompare(b.id))
       .map((c) => ({
         id: c.id, name: c.name ?? (c.creativeRef?.kind === 'poster' || c.creativeRef?.kind === 'studio' ? c.creativeRef.spec.headline : c.advertiserName), status: this.status(c), review: c.review ?? null, creditHold: c.creditHold ?? null,
-        sizes: c.sizes, formats: c.formats ?? ['label'], where: c.routeBuy ? 'routes' : c.targeting.locations ?? 'all', experienceId: c.experienceId, ...(c.routeBuy ? { route: c.routeBuy } : {}),
+        sizes: c.sizes, formats: this.formatsFor(input.companyId, c.formats), where: c.routeBuy ? 'routes' : c.targeting.locations ?? 'all', experienceId: c.experienceId, ...(c.routeBuy ? { route: c.routeBuy } : {}),
         budget: c.prepaid ? { type: 'prepaid', ...this.prepaid!.progress(c)! } : c.buy.type === 'guaranteed' ? { type: 'guaranteed', bottlesLeft: c.buy.remainingPrints } : { type: 'bid', dailyCapCents: c.buy.dailyCapCents, spentTodayCents: c.buy.spentTodayCents },
         editable: c.creativeRef?.kind === 'poster' || c.creativeRef?.kind === 'studio',
         thumbSvg: `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(thumbW)}" height="450" viewBox="0 0 ${thumbW.toFixed(1)} 450">${c.creative.svg(thumbW, 450)}</svg>`,

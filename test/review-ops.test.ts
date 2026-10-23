@@ -54,6 +54,8 @@ describe('with the API (one company, a controllable clock)', () => {
     db = await createPgliteClient();
     app = await createApp({ db, seedDemo: true, seed: 11, clock });
     keys = app.demoKeys!;
+    // A box that won't print is tested here: ads on boxes are on, explicitly (FreeWater's own choice is off).
+    await app.companyFeatures.change('freewater', { box_ads: true }, { userId: 'usr_test', name: 'Test owner', approverProblem: async () => null });
     server = await buildServer(app);
   });
   afterAll(async () => { await server.close(); await db.close(); });

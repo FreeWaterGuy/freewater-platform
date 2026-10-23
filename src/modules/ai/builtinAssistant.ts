@@ -105,7 +105,8 @@ export class BuiltinAdAssistant implements AdAssistant {
     else if (/\b(small|smallest|cheap(est)?)\b/.test(low)) patch.sizes = [6, 8, 10];
     else if (/\b(big|large|biggest)\b/.test(low)) patch.sizes = [2, 3];
     else if (!draft.sizes) patch.sizes = [4, 6, 8];
-    if (/\b(box|boxes|delivery|packs?)\b/.test(low)) patch.formats = ['label', 'box-face'];
+    // Boxes only where ads on boxes are on (FreeWater's boxes are plain: never offered there).
+    if (ctx.boxes !== false && /\b(box|boxes|delivery|packs?)\b/.test(low)) patch.formats = ['label', 'box-face'];
     else if (!draft.formats) patch.formats = ['label'];
 
     // Where.
@@ -142,7 +143,7 @@ export class BuiltinAdAssistant implements AdAssistant {
     if (!headline && !draft.poster?.headline) after.add('artwork');
 
     const reply = this.reply(did, [...after], ctx.business.name, !draft.poster, !!pre);
-    return { reply, patch, suggestions: this.suggestions([...after], category, !!pre) };
+    return { reply, patch, suggestions: this.suggestions([...after], category, !!pre, ctx.boxes !== false) };
   }
 
   private experience(low: string, category: string, draft: AdAssistantInput['draft'], f: { headline?: string; url?: string; code?: string; sub?: string; slots: string[] }) {
@@ -184,14 +185,14 @@ export class BuiltinAdAssistant implements AdAssistant {
     return `${start} ${q[next]}`;
   }
 
-  private suggestions(left: Missing[], category: string, prepaid = false): string[] {
+  private suggestions(left: Missing[], category: string, prepaid = false, boxes = true): string[] {
     const next = left[0];
     if (next === 'budget') return prepaid ? ['500 bottles', '2,000 bottles', '10,000 bottles'] : ['$20 a day', '$50 a day', '2,000 bottles'];
     if (next === 'where') return ['Everywhere', 'Only ATX-014'];
     if (next === 'sizes') return ['Small', 'Half the label', 'Full wrap'];
     if (next === 'scanPage') return category === 'food' ? ['A 3D menu in AR', 'A coupon: code SAVE5'] : ['An offer to save', 'A coupon: code SAVE5', 'A booking page'];
     if (next === 'artwork') return ['“20% off your first visit”', 'Free delivery this week'];
-    return ['Make it blue', 'Use a bolder font', 'Also print on delivery boxes'];
+    return ['Make it blue', 'Use a bolder font', boxes ? 'Also print on delivery boxes' : 'Make the headline shorter'];
   }
 }
 export { missingLabels };

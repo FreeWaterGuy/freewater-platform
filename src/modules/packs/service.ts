@@ -5,6 +5,7 @@ import type { Platform } from '../../platform';
 import { fillBoxFaces } from './boxFaces';
 import { labelSignature } from '../ads/engine';
 import { renderBox, stopCode, type RenderedBox } from './boxRenderer';
+import { companyBox } from './boxSettings';
 
 export interface PackOrder {
   companyId: string;
@@ -33,6 +34,12 @@ export interface Pack {
   unitIds: string[];
   faces: BoxFacePlacement[];
   rendered?: RenderedBox;
+  /**
+   * A plain box ("Ads on boxes" off for its company): nothing was printed on it, but it still has its box code (the
+   * address its QR would hold), for the driver's scan and a house's claim. How the code reaches a plain box (a sticker?)
+   * is still being decided.
+   */
+  boxCode?: string;
   status: 'composed' | 'box_printed' | 'mismatch' | 'verified' | 'sealed' | 'loaded' | 'delivered' | 'returned';
   loadPosition?: number;
   runId?: string;
@@ -122,7 +129,8 @@ export class PackService {
     if (!company) throw new Error(`Unknown company ${order.companyId}`);
     if (!box) throw new Error(`Unknown box ${order.boxId}`);
 
-    const pack: Pack = { id: newId('pk'), companyId: company.id, customerId: order.customerId, address: order.address, routeId: order.routeId, stop: order.stop, box, unitIds: [], faces: [], status: 'composed', ...(order.runId ? { runId: order.runId } : {}), ...(order.houseId ? { houseId: order.houseId, areaId: order.areaId, packNo: order.packNo ?? 1 } : {}) };
+    // The box as this company has it: its own measurements and colours, and its info strip on the side it chose.
+    const pack: Pack = { id: newId('pk'), companyId: company.id, customerId: order.customerId, address: order.address, routeId: order.routeId, stop: order.stop, box: companyBox(company, box), unitIds: [], faces: [], status: 'composed', ...(order.runId ? { runId: order.runId } : {}), ...(order.houseId ? { houseId: order.houseId, areaId: order.areaId, packNo: order.packNo ?? 1 } : {}) };
     this.packs.set(pack.id, pack);
     this.index(pack);
     this.save(pack);
@@ -163,7 +171,18 @@ export class PackService {
       p.bus.publish('pack.composed', company.id, { packId: pack.id, size: box.bottles, routeId: pack.routeId, stop: pack.stop, unitIds: [...pack.unitIds] }, pack.id);
     }
 
-    // 2. The box itself.
+    // 2. The box itself. With ads on boxes off for the company (FreeWater's choice: its boxes are plain black), nothing
+    // is printed on it: no print job, no panel. It still gets its box code, which the driver's scan and a house's claim
+    // use; it's then ready for its check like any printed box.
+    // (A box drawn before they were turned off, that never printed, isn't printed either: its code is kept.)
+    if (p.featureOn && !p.featureOn(company.id, 'box_ads')) {
+      pack.boxCode ??= pack.rendered?.packUrl ?? (p.codes ? p.codes.pack(company, pack.id) : `${company.receiptBaseUrl.replace(/\/$/, '')}/p/${pack.id}`);
+      pack.faces = [];
+      delete pack.rendered;
+      pack.status = 'box_printed';
+      this.save(pack);
+      return pack;
+    }
     if (!pack.rendered) {
       const route = await this.routeFor?.(pack) ?? null;
       const routeAt = p.locations.get(pack.routeId);

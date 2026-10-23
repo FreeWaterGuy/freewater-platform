@@ -26,6 +26,8 @@ export interface AdAssistantInput {
         routes?: { kinds: string[]; smallAudienceHouses: number } };
     };
     missing: Missing[];
+    /** Ads on boxes are on here. False (FreeWater: its boxes are plain): never offer or set printing on boxes. */
+    boxes?: boolean;
   };
 }
 

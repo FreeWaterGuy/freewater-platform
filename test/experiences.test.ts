@@ -56,6 +56,8 @@ beforeAll(async () => {
   db = await createPgliteClient();
   // Scans and box sides are billed here (billing afterwards); paying up front includes them (prepaid.test.ts).
   app = await createApp({ db, seedDemo: true, demoBilling: 'billed_after', seed: 7, clock });
+  // Box sides are scanned here: ads on boxes are on, explicitly (FreeWater's own choice is off).
+  await app.companyFeatures.change('freewater', { box_ads: true }, { userId: 'usr_test', name: 'Test owner', approverProblem: async () => null });
   keys = app.demoKeys!;
   server = await buildServer(app);
 });

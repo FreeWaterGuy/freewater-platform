@@ -31,7 +31,7 @@
   const everyShape = (p) => h('div', { class: 'stack' },
     ...p.sizes.map((s) => ({ ...s, shapes: s.shapes ?? [{ svg: s.svg, w: 0, h: 0 }] })).map((s) => h('div', {}, h('h3', { text: `${s.label}${s.shapes.length > 1 ? ` · ${plural(s.shapes.length, 'shape', 'shapes')}` : ''}` }),
       s.shapes.length ? h('div', { class: 'sizes' }, s.shapes.map((x) => h('figure', {}, h('img', { src: svgSrc(x.svg), alt: `Your ad at ${s.label}, ${Math.round(x.w)} by ${Math.round(x.h)}` }), h('figcaption', { text: x.w ? `${(x.w / 100).toFixed(1)} × ${(x.h / 100).toFixed(1)} in` : s.label })))) : h('p', { class: 'muted', text: 'This size doesn’t fit on the bottles here, so it won’t print. Pick another size.' }))),
-    ...(p.boxFaces?.length ? [h('div', {}, h('h3', { text: 'Box sides' }), h('div', { class: 'sizes' }, p.boxFaces.map((f) => h('figure', {}, h('img', { class: 'box-img', src: svgSrc(f.svg), alt: 'Your ad on a box side' }), h('figcaption', { text: `${(f.w / 40).toFixed(1)} × ${(f.h / 40).toFixed(1)} in` })))))] : []));
+    ...(boxesOn() && p.boxFaces?.length ? [h('div', {}, h('h3', { text: 'Box sides' }), h('div', { class: 'sizes' }, p.boxFaces.map((f) => h('figure', {}, h('img', { class: 'box-img', src: svgSrc(f.svg), alt: 'Your ad on a box side' }), h('figcaption', { text: `${(f.w / 40).toFixed(1)} × ${(f.h / 40).toFixed(1)} in` })))))] : []));
   const toastEl = h('div', { class: 'toast', role: 'status' }); document.body.append(toastEl);
   let tt; const toast = (m) => { toastEl.textContent = m; toastEl.classList.add('show'); clearTimeout(tt); tt = setTimeout(() => toastEl.classList.remove('show'), 2600); };
 
@@ -92,6 +92,9 @@
     go('/ads', true);
   }
   const on = (feature) => !(state.features?.off ?? []).includes(feature);
+  // Ads on boxes (off for FreeWater: its boxes are plain). Off: no box tab, no box option, "Prints on: Bottles".
+  const boxesOn = () => on('box_ads');
+  const onBoxes = (formats) => boxesOn() && !!formats?.includes('box-face');
   function shell(active, ...content) {
     const me = state.me;
     root.replaceChildren(h('div', { class: 'shell' },
@@ -188,7 +191,7 @@
             } catch (x) { toast(x.message); e.target.disabled = false; }
           };
           cards.push(h('article', { class: 'design card' }, h('div', { class: 'design-sizes' }, pv.sizes.slice(0, 4).map((s) => h('figure', {}, inline(s.svg), h('figcaption', { text: s.label })))),
-            h('details', {}, h('summary', { text: 'On a bottle, and on a box' }), inline(pv.labelSvg), pv.boxFaceSvg ? inline(pv.boxFaceSvg) : null),
+            h('details', {}, h('summary', { text: boxesOn() && pv.boxFaceSvg ? 'On a bottle, and on a box' : 'On a bottle' }), inline(pv.labelSvg), boxesOn() && pv.boxFaceSvg ? inline(pv.boxFaceSvg) : null),
             h('button', { class: 'btn', type: 'button', onclick: use }, draftId ? 'Use this design in my ad' : 'Make an ad with this design')));
         }
         gallery.replaceChildren(...cards);
@@ -729,7 +732,7 @@
       h('div', {},
         h('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:4px' }, h('span', { class: `status ${c.status}`, text: statusText[c.status] })),
         h('h3', { text: c.name }),
-        h('div', { class: 'meta', text: `${c.route ? `On delivery routes: ${ROUTE_KINDS[c.route.kind] ?? c.route.kind}, ${plural(num(c.route.houses), 'house', 'houses')}` : c.where === 'all' ? 'Every machine' : c.where.join(', ')} · ${budget} · ${c.formats.includes('box-face') ? 'bottles and boxes' : 'bottles'}` }),
+        h('div', { class: 'meta', text: `${c.route ? `On delivery routes: ${routeKind(c.route.kind) ?? c.route.kind}, ${plural(num(c.route.houses), 'house', 'houses')}` : c.where === 'all' ? 'Every machine' : c.where.join(', ')} · ${budget} · ${onBoxes(c.formats) ? 'bottles and boxes' : 'bottles'}` }),
         h('div', { class: 'nums' }, [['Bottles', num(r.prints)], ['Scans', num(r.scans)], ['AR', num(r.arLaunches)], ['Spent', dollars(r.spendCents)]].map(([k, v]) => h('div', {}, h('b', { text: v }), k))),
         c.status === 'not_approved' && c.review?.note && !paid ? h('div', { class: 'note' }, h('b', { text: 'What to change: ' }), c.review.note) : null,
         paid && (c.status === 'being_discussed' || c.status === 'not_approved') ? reviewNotes(c) : null,
@@ -803,7 +806,7 @@
       const left = new Set(d.missing.map((m) => m.id));
       checklist.replaceChildren(...all.map((k) => h('span', { class: left.has(k) ? '' : 'done', text: `${left.has(k) ? '○' : '✓'} ${names[k]}` })));
       submitBtn.toggleAttribute('aria-disabled', !d.ready); submitBtn.style.pointerEvents = d.ready ? '' : 'none'; submitBtn.style.opacity = d.ready ? '' : '.4';
-      const t = [['bottle', 'On the bottle'], ['sizes', 'Every size'], ...(d.draft.formats?.includes('box-face') ? [['box', 'On a box']] : []), ['scan', 'Scan page'], ['cost', 'Cost']];
+      const t = [['bottle', 'On the bottle'], ['sizes', 'Every size'], ...(onBoxes(d.draft.formats) && d.boxes !== false ? [['box', 'On a box']] : []), ['scan', 'Scan page'], ['cost', 'Cost']];
       if (!t.some(([k]) => k === tab)) tab = 'bottle';
       tabs.replaceChildren(...t.map(([k, label]) => h('button', { type: 'button', role: 'tab', 'aria-selected': String(tab === k), onclick: () => { tab = k; drawSide(); } }, label)));
       drawStage();
@@ -833,7 +836,7 @@
       } else if (tab === 'cost') {
         const e = d.estimate;
         const rows = [...Object.entries(e.perPrintCents).map(([s, c]) => [`Each bottle printed with your ad on ${sizeName(s)} (starting price)`, cents(c)]), ['Each scan that loads', cents(e.perScanCents)], ['Each AR launch', cents(e.perArLaunchCents)], ['Sales from the bottle', `${e.commissionPercent}%`]];
-        if (d.draft.formats?.includes('box-face')) rows.push(['Each delivery box side', cents(e.perBoxFaceCents)]);
+        if (onBoxes(d.draft.formats)) rows.push(['Each delivery box side', cents(e.perBoxFaceCents)]);
         const sum = e.printsCostCents ? `${plural(num(d.draft.buy.prints), 'bottle', 'bottles')} cost ${dollars(e.printsCostCents[0])}${e.printsCostCents[1] !== e.printsCostCents[0] ? ` to ${dollars(e.printsCostCents[1])}, depending on size` : ''}, plus scans and sales.` : e.bottlesPerDay ? `${dollars(d.draft.buy.dailyCapCents)} a day buys about ${num(e.bottlesPerDay[0])}${e.bottlesPerDay[1] !== e.bottlesPerDay[0] ? `–${num(e.bottlesPerDay[1])}` : ''} bottles a day. You never pay more than your daily budget for prints.` : 'Tell the assistant your budget to see what it buys.';
         stage.replaceChildren(h('table', { class: 'cost' }, h('tbody', {}, rows.map(([a, b]) => h('tr', {}, h('td', { text: a }), h('td', { text: b }))))), h('p', { class: 'caption', style: 'text-align:left', text: sum }));
       }
@@ -921,7 +924,7 @@
       h('div', { class: 'facts' },
         h('div', {}, h('span', { text: 'Where' }), dr.locations === 'all' ? 'Every machine' : (dr.locations || []).join(', ')),
         h('div', {}, h('span', { text: 'Budget' }), budget),
-        h('div', {}, h('span', { text: 'Prints on' }), dr.formats?.includes('box-face') ? 'Bottles and delivery boxes' : 'Bottles'),
+        h('div', {}, h('span', { text: 'Prints on' }), onBoxes(dr.formats) ? 'Bottles and delivery boxes' : 'Bottles'),
         pay?.kind === 'bottles' && quote ? h('div', {}, h('label', { for: 'pay-size', text: 'Size you pay for' }), sizePick) : null,
         ...extraInputs.map(({ x, input }) => h('div', {}, h('span', { text: `${x.label} (${dollars(x.perUseCents)} each, paid now)` }), input)),
         pay?.kind === 'bottles' ? h('div', {}, h('span', { text: 'You pay now' }), totalEl, ' ', payLine, h('br'), h('small', { text: terms ? prepaidTerms(terms) : 'AR, video and scans included.' }))
@@ -934,6 +937,8 @@
 
   // ---------- buying on delivery routes ----------
   const ROUTE_KINDS = { spread: 'Bottles spread over an area', blanket: 'One bottle in every box, at every house', box: 'A whole box (every bottle, and its sides)', houses: 'Chosen houses' };
+  // Where ads on boxes are off the box is plain: a whole box is its bottles only, and its sides aren't offered.
+  const routeKind = (k) => (k === 'box' && !boxesOn() ? 'A whole box (every bottle in it; the box itself is plain)' : ROUTE_KINDS[k]);
   const ROUTE_SWITCH = { spread: 'route_buy_spread', blanket: 'route_buy_blanket', box: 'route_buy_box', houses: 'route_buy_houses' };
   /**
    * Choose where on the routes: the kind of buy, the size, the weeks, and areas, streets, a shape drawn on the map, or
@@ -944,7 +949,7 @@
     const err = h('div', { class: 'notice err', hidden: true });
     const out = h('div', { class: 'route-quote' });
     const kinds = Object.keys(ROUTE_KINDS).filter((k) => on(ROUTE_SWITCH[k]));
-    const kind = h('select', { class: 'input', id: 'route-kind' }, kinds.map((k) => h('option', { value: k, text: ROUTE_KINDS[k] })));
+    const kind = h('select', { class: 'input', id: 'route-kind' }, kinds.map((k) => h('option', { value: k, text: routeKind(k) })));
     const size = h('select', { class: 'input', id: 'route-size' }, o.sizes.map((sz) => h('option', { value: String(sz), text: sizeName(sz) })));
     const weeks = h('input', { class: 'input', id: 'route-weeks', type: 'number', min: 1, max: 52, value: 1 });
     const start = h('input', { class: 'input', id: 'route-start', type: 'date', 'aria-describedby': 'route-start-hint' });
@@ -958,7 +963,7 @@
     const field = (label, control, hint) => h('div', { class: 'field' }, h('label', { for: control.id, text: label }), control, hint ? h('div', { class: 'hint', id: `${control.id}-hint`, text: hint }) : null);
     const show = () => {
       const k = kind.value;
-      for (const [f, ks] of [[bottlesField, ['spread']], [perHouseField, ['houses']], [sidesField, ['box']], [addressField, ['houses', 'box']]]) f.hidden = !ks.includes(k);
+      for (const [f, ks] of [[bottlesField, ['spread']], [perHouseField, ['houses']], [sidesField, boxesOn() ? ['box'] : []], [addressField, ['houses', 'box']]]) f.hidden = !ks.includes(k);
       areaBox.hidden = k === 'houses';
       o.onQuote(null);
     };
@@ -1003,7 +1008,7 @@
         ? { addresses: addresses.value.split('\n').map((x) => x.trim()).filter(Boolean) }
         : { ...(picked.size ? { areaIds: [...picked] } : {}), ...(streets.size ? { streets: [...streets].map((x) => JSON.parse(x)) } : {}), ...(polygon.length >= 3 ? { polygon } : {}) };
       return { kind: k, share: Number(size.value), weeks: Math.max(1, Math.min(26, Math.floor(Number(weeks.value) || 1))), ...(start.value ? { startWeek: start.value } : {}), where,
-        ...(k === 'spread' ? { bottles: Math.max(1, Math.floor(Number(bottles.value) || 1)) } : {}), ...(k === 'houses' ? { perHouse: Math.max(1, Math.floor(Number(perHouse.value) || 1)) } : {}), ...(k === 'box' && sides.checked ? { boxSides: true } : {}) };
+        ...(k === 'spread' ? { bottles: Math.max(1, Math.floor(Number(bottles.value) || 1)) } : {}), ...(k === 'houses' ? { perHouse: Math.max(1, Math.floor(Number(perHouse.value) || 1)) } : {}), ...(k === 'box' && boxesOn() && sides.checked ? { boxSides: true } : {}) };
     };
     const ask = h('button', { class: 'btn', type: 'button', onclick: async () => {
       err.hidden = true; out.replaceChildren();
@@ -1015,6 +1020,7 @@
           h('div', {}, h('span', { text: 'Houses' }), `${num(q.housesReached)} of the ${num(q.houses)} chosen get it${q.noRoom ? ` (${num(q.noRoom)} were already full those weeks; not charged)` : ''}`),
           h('div', {}, h('span', { text: 'Bottles' }), `${num(q.bottles)} × ${cents(q.perBottleCents)} (${q.size}) = ${dollars(q.bottlesCents)}`),
           q.faces ? h('div', {}, h('span', { text: 'Box sides' }), `${num(q.faces)} × ${cents(q.perFaceCents)} = ${dollars(q.facesCents)}`) : null,
+          q.plainBox ? h('div', {}, h('span', { text: 'The box' }), q.plainBox) : null,
           h('div', {}, h('span', { text: 'Weeks' }), q.perWeek.map((w) => `${new Date(`${w.week}T12:00:00Z`).toLocaleDateString([], { month: 'short', day: 'numeric' })}: ${plural(num(w.bottles), 'bottle', 'bottles')} at ${plural(num(w.houses), 'house', 'houses')}`).join(' · ')),
           h('div', {}, h('span', { text: 'Streets' }), q.streets.map((x) => `${x.street} (${x.houses})`).join(', ')),
           h('div', {}, h('span', { text: 'You pay now' }), h('b', { text: dollars(q.cardCents) }), q.creditCents ? ` + ${dollars(q.creditCents)} from your credit` : '', h('br'), h('small', { text: `${q.included} Every piece paid for goes out; there's nothing to cancel. ${q.ifAHouseStops}` }))),

@@ -293,6 +293,12 @@ export interface CompanyConfig {
    * own ads may come after the list (off; FreeWater never), and holding delivery bottles for paid ads. Unset: defaults.
    */
   unsold?: Partial<import('../modules/fillers/unsold').UnsoldSettings>;
+  /**
+   * Delivery boxes, per pack size (src/modules/packs/boxSettings.ts): outside measurements (unset: the platform's
+   * standard box), inside and bottom colours (black unless set), the side with the info strip and its width. Used to
+   * draw a box only where "Ads on boxes" is on; otherwise nothing is printed on boxes.
+   */
+  boxes?: import('../modules/packs/boxSettings').BoxSettings;
   /** Which registered implementation each module slot uses. Swapping one never touches the others. */
   modules: {
     ads: string;

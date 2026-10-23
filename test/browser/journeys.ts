@@ -8,7 +8,7 @@
  * (Without PLAYWRIGHT_MODULE it imports `playwright`; without CHROMIUM_PATH it uses Playwright's own browser.)
  * Exits non-zero if any journey fails. Journeys:
  *   1. An owner signs in to the console with an emailed code and adds a team member from the Team page.
- *   2. An owner changes a setting (the company name) in the console and saves it.
+ *   2. An owner changes a setting (the company name, then a delivery box's length and bottom colour) and saves it.
  *   3. A team member who isn't an owner signs in and is kept out of the console.
  *   4. A free bottle: printed at a machine, its scan page opens in a phone-sized browser and shows the ad.
  *   5. The open books show the company's numbers without signing in.
@@ -28,7 +28,7 @@
  *  16. The scan page in the pilot: no "free water near me", "printed fresh for home delivery", and the data question
  *      is an inline banner that covers nothing.
  * (And on the pilot's server, after 6: the ad chat's "Every size" keeps every piece inside its panel, and the sample
- * bottle says where the ad is, with the other pieces marked "Sample ad".)
+ * bottle says where the ad is, with the other pieces marked "Sample ad"; with ads on boxes off, no "On a box" tab.)
  */
 import { createRequire } from 'node:module';
 import { createApp } from '../../src/app';
@@ -107,6 +107,15 @@ await journey('owner changes a setting in the console and it is saved', async (p
   await page.click('button.btn.blue:has-text("Save")');
   await page.waitForSelector('.toast.show');
   expect(app.platform.companies.get('freewater')!.name === `${before} Test`, `name is ${app.platform.companies.get('freewater')!.name}; toast: ${await page.textContent('.toast')}`);
+  // Delivery boxes, per pack size: the 24-pack's real length (none assumed) and a bottom colour, saved with the page.
+  await page.waitForSelector('h2:has-text("Delivery boxes")', { timeout: 15_000 });
+  expect(/Ads on boxes are off/.test(await page.textContent('section:has(h2:has-text("Delivery boxes"))')), 'says ads on boxes are off');
+  await page.getByLabel('Length (outside)').nth(2).fill('16.5');
+  await page.getByLabel('Bottom colour', { exact: true }).nth(2).fill('#1E7DB8');
+  await page.click('button.btn.blue:has-text("Save")');
+  await page.waitForFunction(() => /Saved as version/.test(document.querySelector('.toast')?.textContent ?? ''), null, { timeout: 15_000 });
+  const boxes = app.platform.companies.get('freewater')!.boxes;
+  expect(boxes?.['24']?.lengthIn === 16.5 && boxes?.['24']?.bottomColor === '#1E7DB8', `boxes: ${JSON.stringify(boxes)}`);
 });
 
 await journey('a team member who isn’t an owner is kept out of the console', async (page) => {
@@ -213,7 +222,7 @@ await journey('the ad chat’s “Every size” tab keeps every piece inside its
   const baker = (await pDb.query<any>(`select id from users where email = 'baker@journey.example'`)).rows[0].id as string;
   const d = await pilot.ads.createDraft({ companyId: 'freewater', advertiserId: 'adv-journey' });
   const draftId = (d as any).id;
-  await pDb.query(`update ad_drafts set data = $2 where id = $1`, [draftId, JSON.stringify({ category: 'food-drink', poster: { brand: 'Journey Bakery', headline: 'Fresh bread daily', colors: { bg: '#FFFFFF', fg: '#0B0B0B', accent: '#1E7DB8' } }, sizes: [1, 2, 3, 4, 6, 8, 10], experienceId: 'offer', experienceConfig: { headline: 'Fresh bread daily' } })]);
+  await pDb.query(`update ad_drafts set data = $2 where id = $1`, [draftId, JSON.stringify({ category: 'food-drink', poster: { brand: 'Journey Bakery', headline: 'Fresh bread daily', colors: { bg: '#FFFFFF', fg: '#0B0B0B', accent: '#1E7DB8' } }, sizes: [1, 2, 3, 4, 6, 8, 10], formats: ['label', 'box-face'], experienceId: 'offer', experienceConfig: { headline: 'Fresh bread daily' } })]);
   await signedIn(page, 'fw_ads_token', await pilot.accounts.createSession(baker));
   await page.goto(`${pBase}/ads/drafts/${draftId}`);
   await page.waitForSelector('[role="tab"]', { timeout: 30_000 });
@@ -221,6 +230,9 @@ await journey('the ad chat’s “Every size” tab keeps every piece inside its
   await page.waitForSelector('.stage .caption', { timeout: 30_000 });
   const caption = (await page.textContent('.stage .caption'))!;
   expect(/^A sample label\. Your ad (is|takes)/.test(caption) && !/on the left; the other slots/.test(caption), `caption: ${caption}`);
+  // FreeWater's boxes are plain (ads on boxes off): no "On a box" tab, even for an ad that once asked for boxes.
+  const tabs = await page.$$eval('[role="tab"]', (els: Element[]) => els.map((e) => e.textContent));
+  expect(!tabs.some((t: string | null) => /box/i.test(t ?? '')), `tabs: ${tabs.join(', ')}`);
   await page.click('[role="tab"]:has-text("Every size")');
   await page.waitForSelector('.stage .sizes img', { timeout: 30_000 });
   await page.waitForLoadState('networkidle');
@@ -296,7 +308,9 @@ await journey('a resident says which house is theirs and stops deliveries', asyn
   await signedIn(page, 'fw_token', token);
   await page.goto(`${pBase}/app/house`);
   // The whole box code from the box's side panel (the short number in the corner isn't enough).
-  await page.fill('#hs-box', dropped.pack.rendered!.packUrl.split('/').pop()!.replace(/(.{4})(?=.)/g, '$1 '), { timeout: 30_000 });
+  // (FreeWater's boxes are plain, ads on boxes off: nothing is printed on them, but each still has its box code.)
+  expect(!dropped.pack.rendered && !!dropped.pack.boxCode, 'a plain box with its box code');
+  await page.fill('#hs-box', (dropped.pack.rendered?.packUrl ?? dropped.pack.boxCode)!.split('/').pop()!.replace(/(.{4})(?=.)/g, '$1 '), { timeout: 30_000 });
   await page.click('button:has-text("This is my house")');
   await toast(page, /This is your house/);
   expect((await one(`select count(*)::int as n from house_claims where house_id = $1`, [dropped.house.id])).n === 1, 'no claim saved');

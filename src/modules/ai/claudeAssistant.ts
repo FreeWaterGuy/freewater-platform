@@ -35,6 +35,9 @@ export class ClaudeAdAssistant implements AdAssistant {
       pre
         ? `Sizes are shares of the label: ${ctx.sizes.join(', ')} (1 is the whole label, 2 is half, 10 is a tenth; each piece is cut as close to square as possible). Prices per bottle by size in cents: ${JSON.stringify(ctx.prices.perPrintByShare)}. The advertiser pays up front for a number of bottles at one size, and exactly that many go out: no end date, no cancelling; pausing only delays. ${pre.included}, every size the same. ${pre.feesOn.length ? `On top: ${pre.feesOn.join(', ')}, charged to their card daily.` : 'Nothing is charged on top: no fee per scan, AR launch or sale.'} Changing the ad later costs $${(pre.changeFeeCents / 100).toFixed(2)}, paid up front, and the new ad is reviewed before it prints.${pre.extras.length ? ` Costly extras, paid up front with the bottles: ${pre.extras.map((x) => `${x.label} at ${x.perUseCents}¢ each`).join('; ')}.` : ''} They see the exact total and pay when they submit.`
         : `Sizes are shares of the label: ${ctx.sizes.join(', ')} (1 is the whole label, 2 is half, 10 is a tenth; each piece is cut as close to square as possible). Starting prices per print by size in cents: ${JSON.stringify(ctx.prices.perPrintByShare)}; bids start at ${ctx.prices.bidStartsAt}¢ for the whole label and go up. Each scan that loads costs ${ctx.prices.perScan}¢ and each AR launch ${ctx.prices.perArLaunch}¢ before targeting (choosing machines, products, interests or new or returning customers adds a premium; the cost tab shows this ad's exact price), and sales from the bottle pay ${ctx.prices.commissionPercent}% commission. Taps on links are never billed: there is no charge per click.`,
+      ctx.boxes === false
+        ? `Ads print on bottles only: ${ctx.company.name}'s delivery boxes are plain. Never offer, suggest or set printing on boxes or box sides (formats is always ["label"]).`
+        : `Ads can also print on the sides of delivery boxes (formats ["label","box-face"]) if they ask.`,
       `Where it can run (machines and delivery routes): ${ctx.machines.map((m) => `${m.id} (${m.name}, ${m.kind})`).join('; ')}. Or "all".`,
       ...(pre?.routes ? [`They can also buy it on ${ctx.company.name}'s delivery routes instead, where every house on chosen streets gets a free box of water each week: ${pre.routes.kinds.join('; ')}; as little as a tenth of one label at one house, aimed by area, street, a shape on the map or chosen houses, for chosen weeks. They pick that on the review page ("On our delivery routes") and see the exact price there before paying. Buys aimed at fewer than ${pre.routes.smallAudienceHouses} houses are checked more closely, need a verified business, and may not carry names, addresses or personal messages. If a house stops deliveries, what wasn't delivered there comes back as credit. Never promise a particular house will get it before they see the quote.`] : []),
       pre
@@ -68,7 +71,7 @@ export class ClaudeAdAssistant implements AdAssistant {
           useImage: { type: 'object', properties: { attachment: { type: 'integer' }, role: { type: 'string', enum: ['photo', 'logo'] } }, required: ['attachment', 'role'] },
           removeImage: { type: 'boolean' },
           sizes: { type: 'array', items: { type: 'integer', enum: ctx.sizes } },
-          formats: { type: 'array', items: { type: 'string', enum: ['label', 'box-face'] } },
+          formats: { type: 'array', items: { type: 'string', enum: ctx.boxes === false ? ['label'] : ['label', 'box-face'] } },
           locations: { oneOf: [{ type: 'string', enum: ['all'] }, { type: 'array', items: { type: 'string' } }] },
           buy: { type: 'object' },
           experienceId: { type: 'string', enum: ctx.plugins.map((p) => p.id) },

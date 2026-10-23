@@ -392,7 +392,49 @@
           ctx.draft.machines ? null : (ctx.draft.machines = { offlineWalkUp: true, offlinePerHour: 20, bufferSize: 12 }, null),
           toggle(ctx, 'machines.offlineWalkUp', 'Give free bottles at the screen while offline', 'No app needed then: people tap the screen. Without the internet the machine can’t check anyone’s daily limit.', { full: true }),
           num(ctx, 'machines.offlinePerHour', 'At most this many an hour, per machine', { min: 0, max: 120 }),
-          num(ctx, 'machines.bufferSize', 'Labels each machine keeps ready', { min: 0, max: 50, hint: 'Their ads are held, never billed unless printed. Unused ones are let go after a day.' }))))]);
+          num(ctx, 'machines.bufferSize', 'Labels each machine keeps ready', { min: 0, max: 50, hint: 'Their ads are held, never billed unless printed. Unused ones are let go after a day.' }))),
+        boxesSection(ctx))]);
+  }
+
+  // ---------- delivery boxes (src/modules/packs/boxSettings.ts) ----------
+  // Per pack size: the outside measurements (blank: the standard box), inside and bottom colours (black unless chosen),
+  // and the side with the info strip and its width. A blank or cleared value is saved as "not set" (null).
+  function boxesSection(ctx) {
+    const o = S.ov.options.boxes;
+    if (!o || !on('delivery')) return null;
+    const sides = [['left', 'Left'], ['right', 'Right'], ['front', 'Front'], ['back', 'Back']];
+    const inch = (path, label, std, r) => {
+      const input = h('input', { class: 'input', type: 'number', inputmode: 'decimal', min: r.min, max: r.max, step: 0.1, placeholder: std == null ? 'Not set' : String(std) });
+      const v = getP(ctx.draft, path);
+      input.value = v == null ? '' : String(v);
+      input.addEventListener('input', () => { const n = Number(input.value); if (input.value === '') setP(ctx.draft, path, null); else if (Number.isFinite(n)) setP(ctx.draft, path, n); else return; ctx.changed(); });
+      const id = `f${++fid}`; input.id = id;
+      return h('div', { class: 'field' }, h('label', { for: id, text: label }), h('div', { class: 'suffix' }, input, h('span', { text: 'in' })), h('div', { class: 'hint', text: std == null ? 'Blank: not set.' : `Blank: the standard ${std} in.` }));
+    };
+    const paint = (path, label) => {
+      const v = getP(ctx.draft, path) ?? o.defaults[path.split('.').pop()];
+      const pick = h('input', { type: 'color', value: v, 'aria-label': `${label} picker` });
+      const hex = h('input', { class: 'input', maxlength: 7, value: v, spellcheck: 'false' });
+      const put = (val) => { setP(ctx.draft, path, val.toUpperCase()); ctx.changed(); };
+      pick.addEventListener('input', () => { hex.value = pick.value.toUpperCase(); put(pick.value); });
+      hex.addEventListener('input', () => { const val = hex.value.trim(); if (/^#[0-9a-fA-F]{6}$/.test(val)) { pick.value = val; put(val); } });
+      const id = `f${++fid}`; hex.id = id;
+      return h('div', { class: 'field' }, h('label', { for: id, text: label }), h('div', { class: 'color' }, pick, hex), h('div', { class: 'hint', text: 'Black unless you choose.' }));
+    };
+    const one = (size) => {
+      const std = o.standard.find((b) => String(b.bottles) === size) ?? {};
+      const p = (k) => `boxes.${size}.${k}`;
+      const side = h('select', { class: 'input' }, sides.map(([v, l]) => h('option', { value: v, text: l })));
+      side.value = getP(ctx.draft, p('stripSide')) ?? o.defaults.stripSide;
+      side.addEventListener('change', () => { setP(ctx.draft, p('stripSide'), side.value); ctx.changed(); });
+      return h('div', { class: 'panel-box stack' }, h('b', { text: `${size}-pack box` }), h('div', { class: 'form' },
+        inch(p('lengthIn'), 'Length (outside)', std.lengthIn, o.inches), inch(p('widthIn'), 'Width (outside)', std.widthIn, o.inches), inch(p('heightIn'), 'Height (outside)', std.heightIn, o.inches),
+        paint(p('insideColor'), 'Inside colour'), paint(p('bottomColor'), 'Bottom colour'),
+        field('Side with your info strip', side, { hint: 'Your logo, giving line, the pack’s code and its facts. That side is never sold.' }),
+        inch(p('stripWidthIn'), 'Info strip width', null, o.stripInches)));
+    };
+    return section('Delivery boxes', `Each pack size’s box. Measure your boxes and enter them (blank uses the standard size shown). The inside and bottom are black unless you choose. Ads on boxes are ${on('box_ads') ? 'on: boxes print with these settings' : 'off (Features → Delivery): nothing is printed on your boxes; these settings wait until you turn them on'}.`,
+      h('div', { class: 'stack' }, ...['6', '12', '24'].map(one)));
   }
 
   // ---------- brand ----------

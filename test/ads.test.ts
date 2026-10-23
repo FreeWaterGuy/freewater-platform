@@ -36,6 +36,8 @@ beforeAll(async () => {
   // Making an ad by chatting at a company that bills afterwards (daily amounts, credit); paying up front, with its own
   // chat, quote and pay step, is tested in prepaid.test.ts.
   app = await createApp({ db, seedDemo: true, demoBilling: 'billed_after', seed: 9, clock });
+  // These ads also print on delivery boxes: ads on boxes are on here, explicitly (FreeWater's own choice is off).
+  await app.companyFeatures.change('freewater', { box_ads: true }, { userId: 'usr_test', name: 'Test owner', approverProblem: async () => null });
   keys = app.demoKeys!;
   server = await buildServer(app);
 });

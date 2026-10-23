@@ -100,6 +100,8 @@ beforeAll(async () => {
   db = await freshDb('pglite');
   provider = new TestPaymentProvider();
   app = await createApp({ db, seedDemo: true, seed: 64, clock, payments: provider, productLookup: null, anchorPublishers: [] } as any);
+  // Whole boxes with their sides are bought here: ads on boxes are on, explicitly (FreeWater's own choice is off).
+  await app.companyFeatures.change('freewater', { box_ads: true }, { userId: 'usr_test', name: 'Test owner', approverProblem: async () => null });
   server = await buildServer(app);
   admin = app.demoKeys!['freewater-admin']!;
   opsId = (await app.accounts.invite({ companyId: 'freewater', email: 'ops-rb@freewater.io', role: 'ops' })).id;
@@ -141,6 +143,18 @@ describe('quotes are exact before paying', () => {
     const whole = await newAd(1);
     const box = await app.routeBuys.quote('freewater', whole.advertiserId, { kind: 'box', weeks: 1, startWeek: '2026-11-23', boxSides: true, where: { streets: [{ areaId, street: 'Testoak St' }] } }, whole.sizes);
     expect(box).toMatchObject({ share: 1, houses: 3, bottles: 36, perBottleCents: 100, faces: 12, perFaceCents: 40, totalCents: 36 * 100 + 12 * 40 });
+    expect(box.plainBox).toBeNull();
+    // Where ads on boxes are off (FreeWater's own choice: plain boxes), no side is sold: asked for, they're refused; a
+    // whole box is its bottles only, and the quote says so.
+    const owner = { userId: 'usr_test', name: 'Test owner', approverProblem: async () => null };
+    await app.companyFeatures.change('freewater', { box_ads: false }, owner);
+    try {
+      const where = { streets: [{ areaId, street: 'Testoak St' }] };
+      await expect(app.routeBuys.quote('freewater', whole.advertiserId, { kind: 'box', weeks: 1, startWeek: '2026-11-23', boxSides: true, where }, whole.sizes)).rejects.toMatchObject({ code: 'box_sides_off' });
+      const plain = await app.routeBuys.quote('freewater', whole.advertiserId, { kind: 'box', weeks: 1, startWeek: '2026-11-23', where }, whole.sizes);
+      expect(plain).toMatchObject({ houses: 3, bottles: 36, faces: 0, facesCents: 0, totalCents: 36 * 100, kindWords: 'A whole box: every bottle in it (the box itself is plain)' });
+      expect(plain.plainBox).toMatch(/boxes are plain: nothing is printed on them, so a whole box covers its bottles only/);
+    } finally { await app.companyFeatures.change('freewater', { box_ads: true, box_top: true, box_front: true, box_back: true, box_right: true }, owner); }
     const spread = await app.routeBuys.quote('freewater', c.advertiserId, { kind: 'spread', share: 4, bottles: 10, weeks: 2, startWeek: '2026-11-23', where: { areaIds: [areaId] } }, c.sizes);
     expect(spread).toMatchObject({ bottles: 10, totalCents: 420 });
     expect(spread.perWeek.map((w) => w.bottles)).toEqual([5, 5]);
