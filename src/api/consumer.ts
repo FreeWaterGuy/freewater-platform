@@ -12,6 +12,7 @@ import { givingLine, PX_PER_IN } from '../modules/print/renderer';
 import { MachinePresence } from '../modules/machines/presence';
 import { DesignService } from '../modules/custom/service';
 import { ApiError, notFound, obj, S, type RouteDef } from './http';
+import { printedFresh } from '../modules/books/bottleReceipt';
 
 /**
  * What the FreeWater app uses: machines near you, one-tap free water, the countdown, your bottles,
@@ -51,7 +52,7 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     const r = platform.ledger.receipt(u.id);
     return {
       id: u.id, kind: u.kind, status: u.status, createdAt: u.createdAt,
-      place: loc ? `${loc.id}, ${loc.name}` : u.locationId,
+      place: loc ? `${loc.id}, ${loc.name}` : u.locationId, printedFresh: printedFresh(u, loc),
       labelUrl: `/v1/me/bottles/${u.id}/label.svg`,
       receiptUrl: `/r/${u.id}`,
       earnedCents: r.earned.total, donatedCents: r.donatedCents, giving: givingLine(company, u.locationId),

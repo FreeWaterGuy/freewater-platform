@@ -10,7 +10,7 @@ import { buildBooksWorld } from './booksWorld';
 
 let now = Date.now();
 const db = await createPgliteClient();
-const app = await createApp({ db, seedDemo: true, messenger: new TestOutbox(false), clock: () => new Date(now) });
+const app = await createApp({ db, seedDemo: true, demoUnsold: true, messenger: new TestOutbox(false), clock: () => new Date(now) });
 console.log('Writing six months of sample books (a minute or two)…');
 await buildBooksWorld(app, (ms) => (now = ms));
 const server = await buildServer(app);

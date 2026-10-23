@@ -11,7 +11,7 @@ import { qrSvg } from '../modules/print/qr';
 const port = Number(process.env.PORT ?? 8787);
 const base = process.env.PUBLIC_URL ?? `http://localhost:${port}`;
 const db = await createPgliteClient();
-const app = await createApp({ db, seedDemo: true, messenger: new TestOutbox(true) });
+const app = await createApp({ db, seedDemo: true, demoUnsold: true, messenger: new TestOutbox(true) });
 // Point QR codes at this computer instead of go.freewater.io.
 for (const c of app.platform.companies.values()) c.receiptBaseUrl = base;
 const server = await buildServer(app);

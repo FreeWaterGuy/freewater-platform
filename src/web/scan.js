@@ -21,7 +21,6 @@
   };
   /** "1 bottle", "2 bottles": a count with its noun, singular for exactly one. */
   /** "for home delivery in Austin" for a delivery bottle, "at ATX-014, Congress Ave" for a machine's. */
-  const printedWhere = (place) => (/^home delivery/i.test(place || '') ? `for ${place.charAt(0).toLowerCase()}${place.slice(1)}` : `at ${place}`);
   const plural = (n, one, many) => `${n} ${String(n).replace(/[^0-9.-]/g, '') === '1' ? one : many}`;
   const store = {
     get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -751,7 +750,7 @@
     if (f.story) {
       const m = f.story.minutesSincePrint;
       const ago = m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${plural(Math.round(m / 1440), 'day', 'days')} ago`;
-      facts.push(h('div', { class: 'story', text: `Genuine. Printed fresh ${printedWhere(f.story.place)}, ${ago}.${f.story.passedOn ? ` It’s been passed along: ${plural(f.story.people, 'person', 'people')} have scanned it.` : ''}` }));
+      facts.push(h('div', { class: 'story', text: `Genuine. ${f.story.printedFresh}, ${ago}.${f.story.passedOn ? ` It’s been passed along: ${plural(f.story.people, 'person', 'people')} have scanned it.` : ''}` }));
     }
     const links = [];
     if (f.receiptUrl) links.push(h('a', { href: fixture ? '#' : f.receiptUrl, text: 'See this bottle’s receipt' }));
@@ -778,6 +777,8 @@
         h('div', { class: 'big', text: money(e.total) }),
         r.givingOn ? h('p', { style: 'margin:0;font-weight:700', text: `and gave ${money(r.donatedCents)} to charity.` }) : null,
         h('div', { class: 'rows' }, rows.map(([k, v]) => h('div', {}, h('span', { text: k }), h('span', { text: money(v) }))), h('div', {}, h('span', { text: 'Printed' }), h('span', { text: new Date(r.printedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) })), h('div', {}, h('span', { text: 'Where' }), h('span', { text: r.place })), h('div', {}, h('span', { text: 'Ads on it' }), h('span', { text: String(r.ads) }))),
+        h('p', { class: 'printed-fresh', style: 'margin:0;font-weight:700', text: `${r.printedFresh}.` }),
+        r.costLines ? h('div', { class: 'rows', 'aria-label': 'What it cost (standard cost)' }, r.costLines.map((c) => h('div', {}, h('span', { text: c.label }), h('span', { text: money(c.cents) })))) : null,
         h('p', { style: 'color:var(--muted);font-size:14px', text: 'Every cent comes from the books and can’t be edited after the fact. Scans that didn’t load, and repeat scans, are never billed.' })),
     );
   }

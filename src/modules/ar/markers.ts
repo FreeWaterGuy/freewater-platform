@@ -174,3 +174,12 @@ function readMarker(gray: Uint8Array | Uint8ClampedArray, W: number, H: number, 
   }
   return null;
 }
+
+/**
+ * The pieces of a bottle that carry the tracking strip: only those whose ad's AR follows the bottle. Never another
+ * advertiser's piece, whatever the company's "strip along every ad" setting says: there the strip covered words that
+ * advertiser paid to print (seen on a walkthrough label, Roastery 9's AR strip over the bottom-right ad's words).
+ */
+export function stripSlots(placements: { slotIndex: number; campaignId: string }[], followsBottle: (campaignId: string) => boolean): number[] {
+  return placements.filter((p) => followsBottle(p.campaignId)).map((p) => p.slotIndex);
+}

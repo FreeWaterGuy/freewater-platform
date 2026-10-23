@@ -19,7 +19,7 @@ import { startScreen } from '../machine/screen';
 const port = Number(process.env.PORT ?? 8787);
 const outbox = new TestOutbox(false);
 const db = await createPgliteClient();
-const app = await createApp({ db, seedDemo: true, messenger: outbox, publicUrl: `http://localhost:${port}` });
+const app = await createApp({ db, seedDemo: true, demoUnsold: true, messenger: outbox, publicUrl: `http://localhost:${port}` });
 for (const id of ['ATX-014', 'ATX-022']) await app.console.updateMachine('freewater', id, { hardware: 'model6' });
 await app.console.save('freewater', { modules: { ...app.platform.companies.get('freewater')!.modules, printer: 'model6-fleet' } }, 'Josh');
 await app.accounts.invite({ companyId: 'freewater', email: 'ops@freewater.io', role: 'ops', displayName: 'Sam' });

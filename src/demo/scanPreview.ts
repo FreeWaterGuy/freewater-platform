@@ -12,7 +12,7 @@ import { lotteryDefaults } from '../modules/lottery/service';
 // npm run demo:scan-preview
 
 const db = await createPgliteClient();
-const app = await createApp({ db, seedDemo: true, seed: 11, clock: () => new Date('2026-10-20T20:00:00Z') }); // a weekday afternoon in Austin
+const app = await createApp({ db, seedDemo: true, demoUnsold: true, seed: 11, clock: () => new Date('2026-10-20T20:00:00Z') }); // a weekday afternoon in Austin
 const server = await buildServer(app);
 const get = async (url: string) => (await server.inject({ method: 'GET', url })).json();
 

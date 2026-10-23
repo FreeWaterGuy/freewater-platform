@@ -646,7 +646,7 @@
           toggle(ctx, 'qr.allowStatic', 'Advertisers can choose a static code', 'Dynamic codes are the default: every scan reaches you first, gets counted, can show each person a different call to action, and can be changed after printing. A static code goes straight to the advertiser’s website: no scan count, no changing it later. It still carries the bottle’s own reference so sales can be matched.', { full: true }))),
         section('AR on the bottle', 'For ads whose AR follows the bottle (a 3D model on it, or a living label), a thin strip of small tracking squares is printed along the bottom of the label so the phone can follow the bottle all the way round.', h('div', { class: 'form' },
           toggle(ctx, 'ar.trackingCodes', 'Print the tracking strip on bottles that need it', 'Without it, AR on the bottle only works when one of the QR codes faces the camera.', { full: true }),
-          toggle(ctx, 'ar.stripEverywhere', 'Run the strip along every ad on those bottles', 'So tracking holds all the way round. Turn off to keep it to the AR advertiser’s own part of the label.', { full: true }))),
+          toggle(ctx, 'ar.stripEverywhere', 'Run the strip along every ad on those bottles (retired)', 'Changes nothing now: the strip prints only on the AR advertiser’s own piece, since on other ads it covered their words.', { full: true }))),
         section('Standard product', null, h('div', { class: 'form' }, productSel)))];
     }, { onChange: (d, ch) => refresh(d, ch) });
   }

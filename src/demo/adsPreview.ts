@@ -14,7 +14,7 @@ import { serverOnly } from './serverOnly';
 let now = Date.now();
 const end = now;
 const db = await createPgliteClient();
-const app = await createApp({ db, seedDemo: true, seed: 4, clock: () => new Date(now) });
+const app = await createApp({ db, seedDemo: true, demoUnsold: true, seed: 4, clock: () => new Date(now) });
 await app.accounts.invite({ companyId: 'freewater', email: 'joe@joesburgers.example', role: 'advertiser', advertiserId: 'adv-joes', displayName: 'Joe' });
 await simulateHistory(app, (ms) => (now = ms), { endMs: end - 7 * 86_400_000, days: 7 });
 const server = await buildServer(app);

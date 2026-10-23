@@ -8,7 +8,7 @@ import { qrSvg } from '../modules/print/qr';
 // npm run demo:machine-preview
 
 const db = await createPgliteClient();
-const app = await createApp({ db, seedDemo: true, seed: 9 });
+const app = await createApp({ db, seedDemo: true, demoUnsold: true, seed: 9 });
 await app.console.updateMachine('freewater', 'ATX-014', { hardware: 'model6' });
 const screen = app.fleet.screen('ATX-014').config;
 // A few bottles' worth of countdown ads, the way real jobs carry them.

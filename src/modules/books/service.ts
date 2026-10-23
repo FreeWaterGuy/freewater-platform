@@ -7,7 +7,7 @@ import type { Messenger } from '../../adapters/messaging/contract';
 import type { PayoutProvider } from '../../adapters/payouts/contract';
 import type { PackService } from '../packs/service';
 import { withCharityLock } from './charityLock';
-import { publicPlace } from '../experiences/service';
+import { bottleCostLines, distributedBy, printedFresh, publicPlace } from './bottleReceipt';
 
 export class BooksError extends Error {
   constructor(public status: number, public code: string, message: string) {
@@ -402,9 +402,9 @@ export class BooksService {
     }
     const ads = u.placements.filter((p) => !p.isHouse);
     return {
-      unitId, company: company.name, companyId: company.id, printedAt: u.createdAt, place: publicPlace(loc, u.locationId), kind: u.kind,
+      unitId, company: company.name, companyId: company.id, printedAt: u.createdAt, place: publicPlace(loc, u.locationId), printedFresh: printedFresh(u, loc), distributedBy: distributedBy(u, loc), kind: u.kind,
       ads: ads.length, earned: receipt.earned, earnedLines: receipt.lines.filter((l) => l.kind !== 'donation').map((l) => ({ kind: l.kind, memo: l.memo, amountCents: l.amountCents, at: l.at.toISOString() })),
-      standardCosts: company.unitCosts ?? null, giving: donation && to.length ? { cents: to.reduce((a, [, c]) => a + c, 0), charity: to.map(([k]) => k).join(' & '), transfer } : null, givingOn: company.giving.mode !== 'none',
+      standardCosts: company.unitCosts ?? null, costLines: bottleCostLines(company, distributedBy(u, loc)), giving: donation && to.length ? { cents: to.reduce((a, [, c]) => a + c, 0), charity: to.map(([k]) => k).join(' & '), transfer } : null, givingOn: company.giving.mode !== 'none',
     };
   }
 

@@ -32,6 +32,7 @@ export const svgLabelRenderer: LabelRenderer = {
     const k = labelScale(product);
 
     const parts: string[] = [];
+    let markers: ReturnType<typeof markerStrip>['markers'] = [];
     const slots: RenderedSlot[] = [];
     const codes: PrintedCode[] = [];
     const draw = (text: string, x: number, y: number, size: number, style: QrStyle, role: PrintedCode['role'], slotIndex?: number) => {
@@ -60,20 +61,30 @@ export const svgLabelRenderer: LabelRenderer = {
       draw(url, ad.x + ad.w - q - 12 * k, ad.y + ad.h - q - 12 * k, q, companyQrStyle(company), 'slot', 0);
       slots.push({ slotIndex: 0, xIn: ad.x / PX_PER_IN, yIn: ad.y / PX_PER_IN, widthIn: ad.w / PX_PER_IN, heightIn: ad.h / PX_PER_IN, advertiserName: 'Custom design', qrUrl: url, qrMode: 'dynamic' });
     } else {
+      // The tracking strip goes only on the pieces of ads whose AR follows the bottle, inside each one's own piece
+      // (never on another advertiser's: it covered their words), and each such ad is told where it goes, as it is
+      // told where its QR code goes, so its own words keep clear of it too.
+      const tracked = req.tracking ? unit.placements.map((p) => p.slotIndex).filter((i) => req.trackSlots?.includes(i) ?? true) : [];
+      const strips = markerStrip(product, unit.placements.filter((p) => tracked.includes(p.slotIndex)).map((p) => {
+        const r = pieceOf(product, placementRect(p, unit.placements));
+        return { slotIndex: p.slotIndex, ...r, qr: slotQr(product, r.w, r.h) };
+      }));
       for (const p of unit.placements) {
         // Each ad has its own piece of the label, as close to square as the layout allows.
         const { x, y, w, h } = pieceOf(product, placementRect(p, unit.placements));
         const campaign = campaigns.get(p.campaignId);
         if (!campaign) throw new Error(`Unit ${unit.id} slot ${p.slotIndex} points at unknown campaign ${p.campaignId}.`);
         const qr = slotQr(product, w, h), q = qr.size;
-        // The artwork is told where its QR code goes, so it can keep words out of that corner.
-        piece(String(p.slotIndex), x, y, w, h, campaign.creative.svg(w, h, { qr }));
+        const strip = strips.boxes.get(p.slotIndex);
+        // The artwork is told where its QR code (and any tracking strip) goes, so it can keep words out of them.
+        piece(String(p.slotIndex), x, y, w, h, campaign.creative.svg(w, h, { qr, ...(strip ? { reserved: [{ x: strip.x - x, y: strip.y - y, w: strip.w, h: strip.h }] } : {}) }));
         const mode = qrMode(company, campaign);
         const smart = req.codes ? req.codes.slot(company, unit.id, p.slotIndex) : `${base}/s/${unit.id}/${p.slotIndex}`;
         const url = mode === 'static' ? staticTarget(campaign, req.codes ? smart : null) : smart;
         draw(url, x + qr.x, y + qr.y, q, campaignQrStyle(company, campaign), 'slot', p.slotIndex);
         slots.push({ slotIndex: p.slotIndex, xIn: x / PX_PER_IN, yIn: y / PX_PER_IN, widthIn: w / PX_PER_IN, heightIn: h / PX_PER_IN, advertiserName: p.advertiserName, qrUrl: url, qrMode: mode });
       }
+      markers = strips.markers;
     }
 
     const receiptUrl = req.codes ? req.codes.receipt(company, unit.id) : `${base}/r/${unit.id}`;
@@ -89,12 +100,9 @@ export const svgLabelRenderer: LabelRenderer = {
       codes.push({ text: receiptUrl, role: 'receipt', xIn: r3((pan.qr.x + inset) / U), yIn: r3((pan.qr.y + inset) / U), sizeIn: r3((pan.qr.size - inset * 2) / U), modules: pan.qr.modules });
     }
 
-    if (req.tracking && unit.kind !== 'custom') {
-      const allowed = unit.placements.map((p) => p.slotIndex).filter((i) => req.trackSlots?.includes(i) ?? true);
-      for (const m of markerStrip(product, slots, allowed, codes)) {
-        parts.push(markerSvg(m.id, m.x, m.y, m.size));
-        codes.push({ text: `marker:${m.id}`, role: 'marker', markerId: m.id, slotIndex: m.slotIndex, xIn: r3(m.x / PX_PER_IN), yIn: r3(m.y / PX_PER_IN), sizeIn: r3(m.size / PX_PER_IN), modules: MARKER_CELLS });
-      }
+    for (const m of markers) {
+      parts.push(markerSvg(m.id, m.x, m.y, m.size));
+      codes.push({ text: `marker:${m.id}`, role: 'marker', markerId: m.id, slotIndex: m.slotIndex, xIn: r3(m.x / PX_PER_IN), yIn: r3(m.y / PX_PER_IN), sizeIn: r3(m.size / PX_PER_IN), modules: MARKER_CELLS });
     }
 
     // The trimmed label (what a screen shows), drawn with its bleed round it: printFile() shows the bleed too.
@@ -183,30 +191,36 @@ export function slotQr(product: Product, w: number, h: number) {
 }
 
 /**
- * The tracking strip: small numbered squares along the bottom of the slots whose owners use AR on the bottle, beside
- * each slot's QR code, about every 20 degrees around. Any one of them seen by the camera, even far round the curve,
- * tells the phone exactly how the bottle is turned (see modules/ar).
+ * The tracking strip: small numbered squares along the bottom of the pieces whose owners use AR on the bottle, beside
+ * each piece's QR code, about every 20 degrees around. Any one of them seen by the camera, even far round the curve,
+ * tells the phone exactly how the bottle is turned (see modules/ar). Every square, with its white margin, stays inside
+ * its own piece (drawing units), clear of the piece's QR code and that code's white margin; `boxes` is each piece's
+ * strip, for its artwork to keep its words out of.
  */
-export function markerStrip(product: Product, slots: RenderedSlot[], allowed: number[], codes: PrintedCode[]) {
+export function markerStrip(product: Product, pieces: { slotIndex: number; x: number; y: number; w: number; h: number; qr: { x: number; y: number; size: number } }[]) {
   const k = Math.max(0.8, Math.min(1.4, product.label.heightIn / 4.5));
-  const size = 28 * k;
+  const size = 28 * k, cell = size / MARKER_CELLS;
   const H = product.label.heightIn * PX_PER_IN;
   const C = (product.label.widthIn - product.label.seamIn) * PX_PER_IN;
   const spacing = Math.max(size * 1.6, C / 18);
-  const out: { id: number; x: number; y: number; size: number; slotIndex: number }[] = [];
+  const markers: { id: number; x: number; y: number; size: number; slotIndex: number }[] = [];
+  const boxes = new Map<number, { x: number; y: number; w: number; h: number }>();
   let id = 0;
-  for (const s of [...slots].sort((a, b) => a.xIn - b.xIn)) {
-    if (!allowed.includes(s.slotIndex)) continue;
-    if (s.yIn !== undefined && s.heightIn !== undefined && Math.abs(s.yIn + s.heightIn - product.label.heightIn) > 0.01) continue; // the strip runs along the bottom of the label
-    const qr = codes.find((c) => c.role === 'slot' && c.slotIndex === s.slotIndex);
-    const x0 = s.xIn * PX_PER_IN + 8 * k;
-    const x1 = (qr ? (qr.xIn - 0.12) * PX_PER_IN : (s.xIn + s.widthIn) * PX_PER_IN) - 8 * k; // stop short of the QR's white margin
+  for (const s of [...pieces].sort((a, b) => a.x - b.x)) {
+    if (Math.abs(s.y + s.h - H) > 1) continue; // the strip runs along the bottom of the label
+    const y = H - 14 * k - size;
+    if (y - cell < s.y + 4 * k || y + size + cell > s.y + s.h) continue;
+    const x0 = s.x + 8 * k + cell; // its white margin inside the piece
+    const x1 = Math.min(s.x + s.qr.x, s.x + s.w) - 8 * k - cell; // and short of the QR code's white margin
     if (x1 - x0 < size) continue;
     const count = Math.floor((x1 - x0 - size) / spacing) + 1;
     const used = (count - 1) * spacing + size;
-    for (let i = 0; i < count && id < MARKER_CODES.length; i++) out.push({ id: id++, x: x0 + (x1 - x0 - used) / 2 + i * spacing, y: H - 14 * k - size, size, slotIndex: s.slotIndex });
+    const first = x0 + (x1 - x0 - used) / 2;
+    let n = 0;
+    for (let i = 0; i < count && id < MARKER_CODES.length; i++, n++) markers.push({ id: id++, x: first + i * spacing, y, size, slotIndex: s.slotIndex });
+    if (n) boxes.set(s.slotIndex, { x: first - cell, y: y - cell, w: (n - 1) * spacing + size + 2 * cell, h: size + 2 * cell });
   }
-  return out;
+  return { markers, boxes };
 }
 
 const r3 = (v: number) => Math.round(v * 1000) / 1000;

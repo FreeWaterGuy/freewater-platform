@@ -23,7 +23,7 @@ export interface ScanContext {
   moment?: { daypart: 'morning' | 'afternoon' | 'evening' | 'night'; firstScanner: boolean; passedOn: boolean };
 }
 
-export interface BottleStory { printedAt: string; place: string; minutesSincePrint: number; scans: number; people: number; passedOn: boolean }
+export interface BottleStory { printedAt: string; place: string; /** "Printed fresh for home delivery in Austin" (src/modules/books/bottleReceipt.ts). */ printedFresh: string; minutesSincePrint: number; scans: number; people: number; passedOn: boolean }
 
 export interface PluginTools {
   /** URL of a built-in 3D model, such as "burger". */

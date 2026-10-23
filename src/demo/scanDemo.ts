@@ -8,7 +8,7 @@ import { mayaDesign } from './seed';
 
 const port = Number(process.env.PORT ?? 8787);
 const db = await createPgliteClient();
-const app = await createApp({ db, seedDemo: true, seed: 11 });
+const app = await createApp({ db, seedDemo: true, demoUnsold: true, seed: 11 });
 const server = await buildServer(app);
 
 const want = new Map<string, string>();

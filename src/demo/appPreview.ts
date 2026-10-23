@@ -10,7 +10,7 @@ import { serverOnly } from './serverOnly';
 // so it can be clicked through anywhere with no server. npm run demo:app-preview
 
 const db = await createPgliteClient();
-const app = await createApp({ db, seedDemo: true, seed: 21 });
+const app = await createApp({ db, seedDemo: true, demoUnsold: true, seed: 21 });
 const server = await buildServer(app);
 const call = async (method: string, url: string, token?: string, payload?: unknown) => {
   const r = await server.inject({ method: method as any, url, payload: payload as any, headers: token ? { authorization: `Bearer ${token}` } : {} });
