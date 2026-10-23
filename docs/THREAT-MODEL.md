@@ -836,6 +836,11 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 425 | `POST /v1/review/campaigns/:id/ai` | campaigns | yes | a person on the team, signed in (not a key); only paid ads; at most 60 messages an ad | OK (through the company's AI routing, metered, the governor first; the stand-in without AI; the AI can't approve, reject or refund) |
 | 426 | `POST /v1/ads/campaigns/:id/appeal` | campaigns | no | the ad's own advertiser; only an AI's final rejection, once, not after it was paid back | OK (back to a person, flagged: money held, nothing prints) |
 | 427 | `POST /v1/me/wallet/keep` | me | yes | the signed-in person; never a phone joined to someone else or another account's own key | OK (moves only what that phone holds, under the points lock, once; no points made; today's part within the account's daily limit) |
+| 428 | `GET /v1/console/bottles/:code` | admin | no | team only (no advertiser/machine key); only the company's own bottles (`bottle_codes` by company) | OK: turns a printed bottle code ("B-7F3K29", made from the bottle's random id, nothing personal) into the bottle; a code of another company's bottle is 404 |
+| 429 | `GET /v1/console/unsold` | admin | no | team only (no advertiser/machine key); *Ads on bottles* | OK (read-only: the list, former advertisers and why each is or isn't used, blank pieces; the list is saved through the settings, a person) |
+| 430 | `POST /v1/console/advertisers/:id/bonus` | admin | yes | a person on the team, signed in (not a key); only the company's own advertisers; a reason to refuse | OK (refusing only stops free bonus printing; nothing billed or refunded) |
+| 431 | `GET /v1/ads/bonus` | campaigns | no | advertiser only (its own) | OK (whether its past ads may print free, and how many bonus bottles) |
+| 432 | `POST /v1/ads/bonus` | campaigns | yes | the advertiser's own person, signed in (not a key) | OK (allows or stops free bonus printing of its own past ads; never billed) |
 
 ---
 

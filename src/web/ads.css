@@ -109,11 +109,15 @@ h2.section { font-size: 17px; margin: 0 0 12px; display: flex; justify-content: 
 .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
 .tabs button { border: 0; border-radius: 999px; padding: 8px 14px; background: var(--soft); font-weight: 700; cursor: pointer; }
 .tabs button[aria-selected="true"] { background: var(--black); color: #fff; }
-.stage { border-radius: var(--r); background: linear-gradient(180deg, var(--ice), #fff 70%); padding: 18px; min-height: 380px; display: flex; flex-direction: column; gap: 12px; align-items: center; justify-content: center; }
+.stage { border-radius: var(--r); background: linear-gradient(180deg, var(--ice), #fff 70%); padding: 18px; min-height: 380px; display: flex; flex-direction: column; gap: 12px; align-items: center; justify-content: center; min-width: 0; max-width: 100%; overflow: hidden; }
+/* Every size: each piece scales down to fit the panel, so a wide one never spills over the chat or scrolls the page. */
+.stage > * { max-width: 100%; }
+.stage .stack { width: 100%; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
 .stage .label-img { width: 100%; border-radius: 8px; box-shadow: 0 10px 30px -18px rgb(0 0 0 / .45), 0 0 0 1px var(--line); background: #fff; }
 .stage .sizes { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; justify-content: center; }
-.stage .sizes figure { margin: 0; text-align: center; font-size: 12px; color: var(--muted); }
-.stage .sizes img { height: 260px; display: block; border-radius: 6px; box-shadow: 0 0 0 1px var(--line); }
+.stage .sizes { max-width: 100%; }
+.stage .sizes figure { margin: 0; text-align: center; font-size: 12px; color: var(--muted); min-width: 0; max-width: 100%; }
+.stage .sizes img { height: 260px; width: auto; max-width: 100%; object-fit: contain; display: block; margin: 0 auto; border-radius: 6px; }
 .stage iframe { width: 360px; max-width: 100%; height: 640px; border: 0; border-radius: 26px; box-shadow: 0 0 0 10px #000, 0 20px 40px -20px rgb(0 0 0 / .5); background: #fff; }
 .stage .box-img { max-width: 100%; width: 424px; border-radius: 6px; box-shadow: 0 10px 30px -18px rgb(0 0 0 / .45); }
 .caption { color: var(--muted); font-size: 13px; text-align: center; max-width: 60ch; }

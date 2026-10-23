@@ -2,6 +2,7 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { SqlClient } from '../../db/client';
 import type { Persistence } from '../../core/persistence';
 import type { CompanyConfig } from '../../core/types';
+import { bottleCodeOf, normalizeBottleCode } from '../print/bottleCode';
 
 // Smart codes: what every QR on a bottle, box or receipt holds. Each is short, random and signed:
 //   HTTPS://GO.FREEWATER.IO/Q/7KX2M9QPA4ZR1C
@@ -30,6 +31,8 @@ export interface CodeMinter {
   receipt(company: CompanyConfig, unitId: string): string;
   box(company: CompanyConfig, packId: string, face: string): string;
   pack(company: CompanyConfig, packId: string): string;
+  /** The short code printed on the bottle's panel ("B-7F3K29"), recorded so it stays unique in the company. */
+  bottleCode?(company: CompanyConfig, unitId: string): Promise<string>;
 }
 
 const b32 = (buf: Buffer, len: number) => {
@@ -116,6 +119,32 @@ export class CodeService implements CodeMinter {
   receipt(company: CompanyConfig, unitId: string) { return this.mint(company, { kind: 'receipt', unitId }); }
   box(company: CompanyConfig, packId: string, face: string) { return this.mint(company, { kind: 'box', packId, face }); }
   pack(company: CompanyConfig, packId: string) { return this.mint(company, { kind: 'pack', packId }); }
+
+  private bottles = new Map<string, string>(); // unit → its bottle code (this run)
+  /**
+   * The bottle code for a bottle (print/bottleCode.ts): its first choice, or the next free one when another bottle of
+   * the company already has that. Recorded once (bottle_codes, unique per company and per bottle); asking again gives
+   * the same code.
+   */
+  async bottleCode(company: CompanyConfig, unitId: string): Promise<string> {
+    const known = this.bottles.get(unitId);
+    if (known) return known;
+    const mine = async () => (await this.db.query<{ code: string }>(`select code from bottle_codes where unit_id = $1`, [unitId])).rows[0]?.code;
+    for (let attempt = 0; attempt < 32; attempt++) {
+      const code = bottleCodeOf(unitId, attempt);
+      const r = await this.db.query(`insert into bottle_codes (company_id, code, unit_id, created_at) values ($1,$2,$3,$4) on conflict do nothing returning code`, [company.id, code, unitId, this.clock().toISOString()]);
+      const got = r.rows.length ? code : await mine(); // taken: by this bottle already (asked twice at once), or by another
+      if (got) { if (this.bottles.size > 100_000) this.bottles.clear(); this.bottles.set(unitId, got); return got; }
+    }
+    throw new Error(`No free bottle code for ${unitId} after 32 tries.`);
+  }
+  /** The bottle a code belongs to in this company (typed as read: case, dashes and O/0, I/1 mix-ups don't matter). */
+  async findBottle(companyId: string, typed: string): Promise<{ unitId: string; code: string } | null> {
+    const code = normalizeBottleCode(typed);
+    if (!code) return null;
+    const r = (await this.db.query<{ unit_id: string }>(`select unit_id from bottle_codes where company_id = $1 and code = $2`, [companyId, code])).rows[0];
+    return r ? { unitId: r.unit_id, code } : null;
+  }
 
   async find(code: string): Promise<CodeRow | null> {
     const c = code.toUpperCase();

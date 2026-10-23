@@ -83,14 +83,16 @@ export function renderKeepsake(s: KeepsakeSpec, w: number, h: number, name?: str
     ty0 = h * 0.45;
   }
   // The biggest size at which the words fit.
-  // Measured in the widest font a printer may fall back to (./text.ts); a word too long for a line is broken.
+  // Measured in the font it prints in (print/fonts: words print as outlines); a word too long for a line is broken.
+  const headFont = { family: font, weight: 700 };
   let size = 64, lines: string[] | null = null;
-  for (; size > 18 && !lines; size -= 2) lines = balance(headline, tw / size, 3);
+  for (; size > 18 && !lines; size -= 2) lines = balance(headline, tw / size, 3, 0, headFont);
   if (lines) size += 2;
-  else lines = balance(breakLong(headline, tw / size), tw / size, 99) ?? [headline];
+  else lines = balance(breakLong(headline, tw / size, 0, headFont), tw / size, 99, 0, headFont) ?? [headline];
   // A name on its own is set big, so each person finds their bottle.
   const subSize = s.sub?.trim() === '{name}' ? Math.min(40, size * 0.75) : 21;
-  const subLines = sub ? (balance(breakLong(sub, tw / subSize), tw / subSize, 99) ?? [sub]).slice(0, 3) : [];
+  const subFont = subSize > 21 ? headFont : { family: "'DM Sans', Arial, sans-serif", weight: 400 };
+  const subLines = sub ? (balance(breakLong(sub, tw / subSize, 0, subFont), tw / subSize, 99, 0, subFont) ?? [sub]).slice(0, 3) : [];
   const block = lines.length * size * 1.08 + (subLines.length ? 14 + subLines.length * subSize * 1.25 : 0);
   let y = s.layout === 'photo-full' ? h - pad - block + size * 0.85 : ty0 + (ty1 - ty0 - block) / 2 + size * 0.85;
   if (s.layout !== 'photo-full') parts.push(decoration(s.decoration, w, h, s.colors, headline, { x: tx, y: y - size, w: tw, h: block + 10 }));

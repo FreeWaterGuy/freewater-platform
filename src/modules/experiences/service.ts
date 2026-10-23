@@ -3,7 +3,7 @@ import type { SqlClient } from '../../db/client';
 import type { Platform } from '../../platform';
 import type { AccountsService, User } from '../accounts/service';
 import type { PackService } from '../packs/service';
-import { givingLine } from '../print/renderer';
+import { givingLine, withLabel } from '../print/renderer';
 import type { ExperienceDoc } from './blocks';
 import type { ScanContext } from './contract';
 import { fallbackCard, themeFor, type ExperienceHost } from './host';
@@ -273,8 +273,10 @@ export class ExperienceService {
     const unit = p.units.get(unitId);
     if (!unit || (unit.status !== 'dispensed' && unit.status !== 'printed')) throw new ExperienceError(404, 'not_found', 'Bottle not found.');
     const label = p.labels.get(unit.id);
-    const product = p.products.get(unit.productId);
-    if (!label || !product) throw new ExperienceError(404, 'not_found', 'Label not found.');
+    const known = p.products.get(unit.productId);
+    if (!label || !known) throw new ExperienceError(404, 'not_found', 'Label not found.');
+    // The label as this company prints it (its own numbers over the product's, print/geometry.ts), like the slots.
+    const product = withLabel(known, p.companies.get(unit.companyId));
     return {
       unitId: unit.id,
       label: { widthIn: product.label.widthIn, heightIn: product.label.heightIn, seamIn: product.label.seamIn, panelWidthIn: product.label.panelWidthIn },
@@ -283,7 +285,7 @@ export class ExperienceService {
       slots: label.slots.map((s) => {
         const pl = unit.placements.find((x) => x.slotIndex === s.slotIndex);
         let c = pl ? p.campaigns.get(pl.campaignId) : undefined;
-        if (c && !c.active && !c.isHouse && c.afterEnd !== 'keep') c = this.current(unit.companyId, c.advertiserId, 'label') ?? c;
+        if (c && ((!c.active && !c.isHouse && c.afterEnd !== 'keep') || pl?.unsold === 'former_advertiser')) c = this.current(unit.companyId, c.advertiserId, 'label') ?? c;
         const wrap = c && c.experienceId === 'ar-living-label' && (!c.review || c.review.status === 'approved') ? pickWrap(c.experienceConfig) : null;
         return { slotIndex: s.slotIndex, xIn: s.xIn, widthIn: s.widthIn, advertiser: s.advertiserName, wrap };
       }),
@@ -346,8 +348,9 @@ export class ExperienceService {
       const pl = unit.placements.find((x) => x.slotIndex === target.slot);
       if (!pl) throw new ExperienceError(404, 'not_found', 'Slot not found.');
       let campaign = p.campaigns.get(pl.campaignId);
-      // Codes don't die: a bottle printed by a campaign that has ended opens the advertiser's current one.
-      if (campaign && !campaign.active && !campaign.isHouse && campaign.afterEnd !== 'keep') campaign = this.current(unit.companyId, campaign.advertiserId, 'label') ?? campaign;
+      // Codes don't die: a bottle printed by a campaign that has ended opens the advertiser's current one. A bonus piece
+      // (a former advertiser's past ad on space nobody bought) always opens the advertiser's current page.
+      if (campaign && ((!campaign.active && !campaign.isHouse && campaign.afterEnd !== 'keep') || pl.unsold === 'former_advertiser')) campaign = this.current(unit.companyId, campaign.advertiserId, 'label') ?? campaign;
       return { companyId: unit.companyId, locationId: unit.locationId, ownerName: pl.advertiserName, advertiserId: pl.isHouse ? undefined : pl.advertiserId, campaign, pluginId: campaign?.experienceId ?? pl.experienceId, config: campaign?.experienceConfig, footer };
     }
     const pack = this.packs.packs.get(target.packId);
@@ -356,7 +359,7 @@ export class ExperienceService {
     if (!f) throw new ExperienceError(404, 'not_found', 'That side of the box has no ad.');
     const company = p.companies.get(pack.companyId)!;
     let campaign = p.campaigns.get(f.campaignId);
-    if (campaign && !campaign.active && !campaign.isHouse && campaign.afterEnd !== 'keep') campaign = this.current(pack.companyId, campaign.advertiserId, 'box-face') ?? campaign;
+    if (campaign && ((!campaign.active && !campaign.isHouse && campaign.afterEnd !== 'keep') || f.unsold === 'former_advertiser')) campaign = this.current(pack.companyId, campaign.advertiserId, 'box-face') ?? campaign;
     const footer: ScanFooter = { company: company.name, brand: company.brand, receiptUrl: null, packUrl: `/p/${pack.id}`, ads: pack.faces.filter((x) => !x.isHouse).length, giving: givingLine(company, pack.routeId) };
     return { companyId: pack.companyId, locationId: pack.routeId, ownerName: f.advertiserName, advertiserId: f.isHouse ? undefined : f.advertiserId, campaign, pluginId: campaign?.experienceId ?? f.experienceId, config: campaign?.experienceConfig, footer };
   }

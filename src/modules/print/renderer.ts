@@ -1,27 +1,32 @@
-import type { CompanyConfig } from '../../core/types';
+import type { CompanyConfig, Product } from '../../core/types';
 import { campaignQrStyle, companyQrStyle, qrMode, staticTarget } from '../codes/style';
 import type { LabelRenderer, PrintedCode, RenderRequest, RenderedLabel, RenderedSlot } from './contract';
 import { qrDraw, type QrStyle } from './qr';
 import { MARKER_CELLS, MARKER_CODES, markerSvg } from '../ar/markers';
 import { placementRect } from '../ads/layouts';
+import { checkLabelGeometry, companyLabel, labelGeometry } from './geometry';
+import { layoutPanel, panelOf } from './panel';
+import { bottleCodeOf } from './bottleCode';
+import { outlineText, picturesForPrint } from './outline';
 
 export const PX_PER_IN = 100; // drawing units; the SVG's width/height are set in real inches
 
 /**
- * FreeWater's default label renderer.
- * Left to right: the seam overlap (left blank), the ad area split into slots, the locked company panel.
- * Each slot gets its own QR, owned by whoever bought that slot. The panel QR opens the unit's receipt.
+ * FreeWater's default label renderer (README, "The label"; print/geometry.ts for where everything goes).
+ * The ad area (the image-safe area) is split into slots, each its own third-party ad with its own QR, owned by whoever
+ * bought that slot; beside it the locked company panel (print/panel.ts), whose QR opens the bottle's receipt. Every
+ * word is drawn as outlines, backgrounds run into the bleed, and `printFile` gives the file a printer gets.
  */
 export const svgLabelRenderer: LabelRenderer = {
   name: 'svg-label',
   async render(req: RenderRequest): Promise<RenderedLabel> {
-    const { unit, product, company, campaigns } = req;
-    const W = product.label.widthIn * PX_PER_IN;
-    const H = product.label.heightIn * PX_PER_IN;
-    const seam = product.label.seamIn * PX_PER_IN;
-    const panelW = product.label.panelWidthIn * PX_PER_IN;
-    const adX = seam;
-    const adW = W - seam - panelW;
+    const { unit, company, campaigns } = req;
+    // The company's own label numbers over the product's (print/geometry.ts).
+    const product = withLabel(req.product, company);
+    const g = labelGeometry(product.label);
+    const U = PX_PER_IN;
+    const W = g.width * U, H = g.height * U, B = g.bleed * U;
+    const ad = { x: g.ad.x * U, y: g.ad.y * U, w: g.ad.w * U, h: g.ad.h * U };
     const base = company.receiptBaseUrl.replace(/\/$/, '');
     // Everything scales with the label, so the same layout works on a short can sleeve or a tall bottle.
     const k = labelScale(product);
@@ -35,14 +40,25 @@ export const svgLabelRenderer: LabelRenderer = {
       const inset = (size * q.quiet) / (q.modules + q.quiet * 2);
       codes.push({ text, role, ...(slotIndex !== undefined ? { slotIndex } : {}), xIn: r3((x + inset) / PX_PER_IN), yIn: r3((y + inset) / PX_PER_IN), sizeIn: r3((size - inset * 2) / PX_PER_IN), modules: q.modules });
     };
+    /**
+     * A piece of artwork. Where it meets the cut, the same artwork stretched over the bleed is drawn under it (a <use>
+     * of it, so its pictures are in the file once): backgrounds run past the cut as the printer's guide asks.
+     */
+    const piece = (id: string, x: number, y: number, w: number, h: number, art: string) => {
+      const ext = { l: x <= 0.01 ? B : 0, t: y <= 0.01 ? B : 0, r: x + w >= W - 0.01 ? B : 0, b: y + h >= H - 0.01 ? B : 0 };
+      if (!B || !(ext.l || ext.t || ext.r || ext.b)) { parts.push(nested(x, y, w, h, art)); return; }
+      const ref = `fw-piece-${id}`;
+      parts.push(`<svg x="${f2(x - ext.l)}" y="${f2(y - ext.t)}" width="${f2(w + ext.l + ext.r)}" height="${f2(h + ext.t + ext.b)}" viewBox="0 0 ${f2(w)} ${f2(h)}" preserveAspectRatio="none" overflow="hidden" data-fw-bleed-copy="1"><use href="#${ref}"/></svg>`);
+      parts.push(nested(x, y, w, h, `<g id="${ref}">${art}</g>`));
+    };
 
     if (unit.kind === 'custom') {
-      const art = req.customArt?.svg(adW, H) ?? '';
-      parts.push(nested(adX, 0, adW, H, art));
+      const art = req.customArt?.svg(ad.w, ad.h) ?? '';
+      piece('custom', ad.x, ad.y, ad.w, ad.h, art);
       const url = req.codes ? req.codes.slot(company, unit.id, 0) : `${base}/s/${unit.id}/0`;
       const q = 80 * k;
-      draw(url, adX + adW - q - 12 * k, H - q - 12 * k, q, companyQrStyle(company), 'slot', 0);
-      slots.push({ slotIndex: 0, xIn: adX / PX_PER_IN, yIn: 0, widthIn: adW / PX_PER_IN, heightIn: H / PX_PER_IN, advertiserName: 'Custom design', qrUrl: url, qrMode: 'dynamic' });
+      draw(url, ad.x + ad.w - q - 12 * k, ad.y + ad.h - q - 12 * k, q, companyQrStyle(company), 'slot', 0);
+      slots.push({ slotIndex: 0, xIn: ad.x / PX_PER_IN, yIn: ad.y / PX_PER_IN, widthIn: ad.w / PX_PER_IN, heightIn: ad.h / PX_PER_IN, advertiserName: 'Custom design', qrUrl: url, qrMode: 'dynamic' });
     } else {
       for (const p of unit.placements) {
         // Each ad has its own piece of the label, as close to square as the layout allows.
@@ -51,7 +67,7 @@ export const svgLabelRenderer: LabelRenderer = {
         if (!campaign) throw new Error(`Unit ${unit.id} slot ${p.slotIndex} points at unknown campaign ${p.campaignId}.`);
         const qr = slotQr(product, w, h), q = qr.size;
         // The artwork is told where its QR code goes, so it can keep words out of that corner.
-        parts.push(nested(x, y, w, h, campaign.creative.svg(w, h, { qr })));
+        piece(String(p.slotIndex), x, y, w, h, campaign.creative.svg(w, h, { qr }));
         const mode = qrMode(company, campaign);
         const smart = req.codes ? req.codes.slot(company, unit.id, p.slotIndex) : `${base}/s/${unit.id}/${p.slotIndex}`;
         const url = mode === 'static' ? staticTarget(campaign, req.codes ? smart : null) : smart;
@@ -61,9 +77,17 @@ export const svgLabelRenderer: LabelRenderer = {
     }
 
     const receiptUrl = req.codes ? req.codes.receipt(company, unit.id) : `${base}/r/${unit.id}`;
-    const pan = panel(company, W - panelW, panelW, H, receiptUrl, unit.locationId, product.facts);
+    const bottleCode = req.codes?.bottleCode ? await req.codes.bottleCode(company, unit.id) : bottleCodeOf(unit.id);
+    const px = g.panel.x * U, pw = g.panel.w * U;
+    const pan = layoutPanel({ company, product, x: px, w: pw, h: H, marginY: (g.text.y) * U, receiptUrl, qrStyle: companyQrStyle(company), bottleCode, givingLine: givingLine(company, unit.locationId) });
+    // The panel's background runs into the bleed on its three outer sides.
+    const panelColor = panelOf(company, null).colors.background;
+    parts.push(`<rect x="${f2(g.panel.side === 'right' ? px : -B)}" y="${f2(-B)}" width="${f2(pw + B)}" height="${f2(H + 2 * B)}" fill="${panelColor}"/>`);
     parts.push(pan.svg);
-    codes.push({ text: receiptUrl, role: 'receipt', ...pan.code });
+    if (pan.qr) {
+      const inset = (pan.qr.size * pan.qr.quiet) / (pan.qr.modules + pan.qr.quiet * 2);
+      codes.push({ text: receiptUrl, role: 'receipt', xIn: r3((pan.qr.x + inset) / U), yIn: r3((pan.qr.y + inset) / U), sizeIn: r3((pan.qr.size - inset * 2) / U), modules: pan.qr.modules });
+    }
 
     if (req.tracking && unit.kind !== 'custom') {
       const allowed = unit.placements.map((p) => p.slotIndex).filter((i) => req.trackSlots?.includes(i) ?? true);
@@ -73,32 +97,84 @@ export const svgLabelRenderer: LabelRenderer = {
       }
     }
 
-    const svg =
-      `<svg xmlns="http://www.w3.org/2000/svg" width="${product.label.widthIn}in" height="${product.label.heightIn}in" viewBox="0 0 ${W} ${H}">` +
-      `<rect width="${W}" height="${H}" fill="#ffffff"/>` +
-      `<rect x="0" y="0" width="${seam}" height="${H}" fill="#ffffff"/>` +
+    // The trimmed label (what a screen shows), drawn with its bleed round it: printFile() shows the bleed too.
+    // Every word is an outline (print/outline.ts), so the preview and the print are the same drawing.
+    const svg = outlineText(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${g.width}in" height="${g.height}in" viewBox="0 0 ${W} ${H}" data-fw-bleed="${f2(B)}">` +
+      `<rect x="${f2(-B)}" y="${f2(-B)}" width="${f2(W + 2 * B)}" height="${f2(H + 2 * B)}" fill="#ffffff"/>` +
       parts.join('') +
-      `</svg>`;
+      `</svg>`);
 
-    return { unitId: unit.id, svg, widthIn: product.label.widthIn, heightIn: product.label.heightIn, slots, receiptUrl, codes };
+    return { unitId: unit.id, svg, widthIn: g.width, heightIn: g.height, bleedIn: g.bleed, bottleCode, slots, receiptUrl, codes };
   },
 };
 
-/** Where a piece of the ad area (fractions of it) sits on this product's label, in drawing units. Previews use it too. */
-export function pieceOf(product: import('../../core/types').Product, r: { x: number; y: number; w: number; h: number }) {
-  const W = product.label.widthIn * PX_PER_IN, H = product.label.heightIn * PX_PER_IN;
-  const adX = product.label.seamIn * PX_PER_IN, adW = W - adX - product.label.panelWidthIn * PX_PER_IN;
-  return { x: adX + r.x * adW, y: r.y * H, w: r.w * adW, h: r.h * H };
+/** The product with this company's label numbers (print/geometry.ts). The same object when the company has none. */
+export function withLabel(product: Product, company?: CompanyConfig): Product {
+  const label = companyLabel(company, product);
+  return label === product.label ? product : { ...product, label };
 }
 
-/** How much bigger than the standard 4.5 in tall label this one is drawn (a can sleeve is smaller, a tall bottle bigger). */
-const labelScale = (product: import('../../core/types').Product) => Math.max(0.7, Math.min(1.4, (product.label.heightIn * PX_PER_IN) / 450));
+/**
+ * The first reason this company's labels can't print on one of these products, in plain words naming the product
+ * and the line, or null: its label numbers (print/geometry.ts) and every line of its panel at its smallest size.
+ */
+export function labelFitProblem(company: CompanyConfig, products: Product[]): string | null {
+  for (const p of products) {
+    const product = withLabel(p, company);
+    const bad = checkLabelGeometry(product.label);
+    if (bad.length) return `On the ${p.name}: ${bad[0]}`;
+    const g = labelGeometry(product.label);
+    const U = PX_PER_IN;
+    const lay = layoutPanel({ company, product, x: g.panel.x * U, w: g.panel.w * U, h: g.height * U, marginY: g.text.y * U, receiptUrl: `${company.receiptBaseUrl}/Q/WWWWWWWWWWWWWW`, qrStyle: companyQrStyle(company), bottleCode: 'B-WWWWWW', givingLine: givingLine(company, '') });
+    if (lay.problems.length) return `The label panel doesn’t fit on the ${p.name}: ${lay.problems[0]}`;
+  }
+  return null;
+}
+
+/**
+ * The print file: the same drawing as the label, with its bleed showing round it (8.125 × 4.125 in for the standard
+ * 8 × 4 in label). Every printer and machine gets this, and the label download is this.
+ */
+export function printFile(svg: string): string {
+  const m = /^<svg\b[^>]*>/.exec(svg);
+  const b = m ? Number(/data-fw-bleed="([\d.]+)"/.exec(m[0])?.[1] ?? 0) : 0;
+  if (!m || !b) return svg;
+  const vb = /viewBox="([-\d.]+) ([-\d.]+) ([\d.]+) ([\d.]+)"/.exec(m[0]);
+  const wIn = /width="([\d.]+)in"/.exec(m[0]), hIn = /height="([\d.]+)in"/.exec(m[0]);
+  if (!vb || !wIn || !hIn) return svg;
+  const [x, y, w, h] = vb.slice(1).map(Number) as [number, number, number, number];
+  const open = m[0]
+    .replace(vb[0], `viewBox="${f2(x - b)} ${f2(y - b)} ${f2(w + 2 * b)} ${f2(h + 2 * b)}"`)
+    .replace(wIn[0], `width="${f4(Number(wIn[1]) + (2 * b) / PX_PER_IN)}in"`)
+    .replace(hIn[0], `height="${f4(Number(hIn[1]) + (2 * b) / PX_PER_IN)}in"`)
+    .replace(/data-fw-bleed="[^"]*"/, `data-fw-print="bleed"`);
+  return open + svg.slice(m[0].length);
+}
+
+/**
+ * Any drawing as a printer gets it (a label, a box side, a studio file): every word outlines, emoji drawn as pictures at
+ * print resolution, and a label's bleed showing. Pictures the artwork links to are put in by the app first (app.ts).
+ */
+export async function printReady(svg: string): Promise<string> {
+  return picturesForPrint(printFile(outlineText(svg)));
+}
+
+/** Where a piece of the ad area (fractions of it) sits on this product's label, in drawing units. Previews use it too. */
+export function pieceOf(product: Product, r: { x: number; y: number; w: number; h: number }) {
+  const a = labelGeometry(product.label).ad;
+  const ax = a.x * PX_PER_IN, ay = a.y * PX_PER_IN, aw = a.w * PX_PER_IN, ah = a.h * PX_PER_IN;
+  return { x: ax + r.x * aw, y: ay + r.y * ah, w: r.w * aw, h: r.h * ah };
+}
+
+/** How much bigger than a 4.5 in tall label this one is drawn (the standard 4 in bottle a little smaller; a tall bottle bigger). */
+const labelScale = (product: Product) => Math.max(0.7, Math.min(1.4, (product.label.heightIn * PX_PER_IN) / 450));
 
 /**
  * Where an ad's QR code goes on its piece of this product's label (w by h drawing units), relative to the piece.
  * The label renderer and every preview use this, so what an advertiser sees is where the code prints.
  */
-export function slotQr(product: import('../../core/types').Product, w: number, h: number) {
+export function slotQr(product: Product, w: number, h: number) {
   const k = labelScale(product);
   const minQr = (product.label.minQrIn ?? 0.6) * PX_PER_IN;
   const m = Math.min(w, h * 1.4);
@@ -111,7 +187,7 @@ export function slotQr(product: import('../../core/types').Product, w: number, h
  * each slot's QR code, about every 20 degrees around. Any one of them seen by the camera, even far round the curve,
  * tells the phone exactly how the bottle is turned (see modules/ar).
  */
-export function markerStrip(product: import('../../core/types').Product, slots: RenderedSlot[], allowed: number[], codes: PrintedCode[]) {
+export function markerStrip(product: Product, slots: RenderedSlot[], allowed: number[], codes: PrintedCode[]) {
   const k = Math.max(0.8, Math.min(1.4, product.label.heightIn / 4.5));
   const size = 28 * k;
   const H = product.label.heightIn * PX_PER_IN;
@@ -139,49 +215,6 @@ function nested(x: number, y: number, w: number, h: number, inner: string): stri
   return `<svg x="${x}" y="${y}" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" overflow="hidden">${inner}</svg>`;
 }
 
-/** The locked company panel. Advertisers and custom designs can never cover it. */
-export function panel(company: CompanyConfig, x: number, w: number, h: number, receiptUrl: string, locationId: string, productFacts?: string[]): { svg: string; code: Omit<PrintedCode, 'text' | 'role'> } {
-  const b = company.brand;
-  const cx = x + w / 2;
-  const k = Math.max(0.6, Math.min(1.6, Math.min(h / 450, w / 95))); // the panel was drawn for a 4.5 in tall, 0.95 in wide label
-  const font = `font-family="${esc(b.fontFamily)}"`;
-  const out: string[] = [];
-  out.push(`<rect x="${x}" y="0" width="${w}" height="${h}" fill="${b.panelColor}"/>`);
-  out.push(`<text x="${cx}" y="${34 * k}" text-anchor="middle" ${font} font-weight="300" font-size="${27 * k}" fill="${b.textColor}">${esc(b.logoTop)}</text>`);
-  out.push(`<text x="${cx}" y="${58 * k}" text-anchor="middle" ${font} font-weight="700" font-size="${22 * k}" fill="${b.accentColor}">${esc(b.logoBottom)}</text>`);
-  let y = 80 * k;
-  if (b.tagline) {
-    for (const line of wrap(b.tagline.toUpperCase(), 13)) {
-      out.push(`<text x="${cx}" y="${y}" text-anchor="middle" ${font} font-weight="700" font-style="italic" font-size="${8.5 * k}" fill="${b.textColor}">${esc(line)}</text>`);
-      y += 10 * k;
-    }
-  }
-  y += 6 * k;
-  const q = Math.min(64 * k, w - 16);
-  const drawn = qrDraw(receiptUrl, cx - q / 2, y, q, 'H', companyQrStyle(company));
-  out.push(drawn.svg);
-  const inset = (q * drawn.quiet) / (drawn.modules + drawn.quiet * 2);
-  const code = { xIn: r3((cx - q / 2 + inset) / PX_PER_IN), yIn: r3((y + inset) / PX_PER_IN), sizeIn: r3((q - inset * 2) / PX_PER_IN), modules: drawn.modules };
-  y += q + 11 * k;
-  out.push(`<text x="${cx}" y="${y}" text-anchor="middle" ${font} font-size="${7.5 * k}" fill="${b.textColor}">Scan for receipt</text>`);
-  y += 16 * k;
-  const giving = givingLine(company, locationId);
-  if (giving) {
-    for (const line of wrap(giving, 17)) {
-      out.push(`<text x="${cx}" y="${y}" text-anchor="middle" ${font} font-weight="700" font-style="italic" font-size="${7.5 * k}" fill="${b.accentColor}">${esc(line)}</text>`);
-      y += 9 * k;
-    }
-    y += 6 * k;
-  }
-  const facts = (productFacts ?? company.productFacts).flatMap((l) => wrap(l, 20));
-  let fy = h - 10 * k - (facts.length - 1) * 8 * k;
-  for (const line of facts) {
-    out.push(`<text x="${x + 7 * k}" y="${fy}" ${font} font-size="${6.4 * k}" fill="${b.textColor}">${esc(line)}</text>`);
-    fy += 8 * k;
-  }
-  return { svg: out.join(''), code };
-}
-
 /** The donation line follows the company's giving setting, and disappears entirely when giving is off. */
 export function givingLine(company: CompanyConfig, locationId: string): string | null {
   const g = company.giving;
@@ -194,20 +227,5 @@ export function givingLine(company: CompanyConfig, locationId: string): string |
   return null;
 }
 
-function wrap(text: string, max: number): string[] {
-  const words = text.split(/\s+/);
-  const lines: string[] = [];
-  let cur = '';
-  for (const w of words) {
-    if ((cur + ' ' + w).trim().length > max && cur) {
-      lines.push(cur);
-      cur = w;
-    } else cur = (cur + ' ' + w).trim();
-  }
-  if (cur) lines.push(cur);
-  return lines;
-}
-
-function esc(s: string): string {
-  return s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
+const f2 = (n: number) => (Math.round(n * 100) / 100).toString();
+const f4 = (n: number) => (Math.round(n * 10000) / 10000).toString();

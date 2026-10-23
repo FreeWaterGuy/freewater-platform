@@ -4,6 +4,8 @@ import { bottle16oz, boxes, freewater as paidUpFront, locations, peakSpring, sam
 import { labelSignature } from '../src/modules/ads/engine';
 import type { CompanyConfig } from '../src/core/types';
 import { billedAfter as billedAfterSetting } from '../src/modules/ads/billing';
+import { FillerService } from '../src/modules/fillers/service';
+import { UnsoldSpace } from '../src/modules/fillers/unsold';
 // The sample ads print here without paying first: FreeWater's settings billing afterwards (paying up front, where
 // only paid bottles print, is tested in prepaid.test.ts).
 const freewater: typeof paidUpFront = { ...paidUpFront, adBilling: billedAfterSetting() };
@@ -19,6 +21,12 @@ describe('packs', () => {
   it('prints a different label on every bottle in the pack', async () => {
     for (const boxId of ['box-6', 'box-12', 'box-24']) {
       const s = setup();
+      // Unsold pieces filled from the list (a charity partner's approved pieces), as the app does: variety never costs a
+      // blank piece, so without a list labels repeat rather than print blank.
+      const fillers = new FillerService(s.platform, async () => {});
+      const unsold = new UnsoldSpace(s.platform, fillers);
+      s.platform.unsoldFor = (ctx) => unsold.fillerFor(ctx);
+      for (const name of ['Well Aware', 'Food Bank', 'Parks Fund']) { const f = await fillers.propose('freewater', { kind: 'charity', name, headline: `${name} thanks you`, text: 'Thank you.' }, 'test'); await fillers.approve('freewater', f.id, 'test'); }
       const pack = await s.compose(1, boxId);
       const sigs = pack.unitIds.map((id) => labelSignature(s.platform.units.get(id)!.placements));
       expect(pack.unitIds).toHaveLength(pack.box.bottles);
@@ -114,6 +122,7 @@ describe('packs', () => {
     expect(pack.rendered!.svg).not.toContain('goes to');
     const t = setup();
     const p2 = await t.compose(1, 'box-6');
-    expect(p2.rendered!.svg).toMatch(/Well\s*(<[^>]*>\s*)*Aware/);
+    // Words print as outlines; each line's words are kept beside its shapes.
+    expect([...p2.rendered!.svg.matchAll(/data-fw-text="([^"]*)"/g)].map((m) => m[1]).join(' ')).toMatch(/Well\s+Aware/);
   });
 });

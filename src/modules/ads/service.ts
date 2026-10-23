@@ -1,6 +1,7 @@
 import type { BoxProduct, Campaign, CompanyConfig, Share, Unit } from '../../core/types';
-import { houseAd } from '../fillers/house';
-import { shareLabel } from './layouts';
+import { whereOnLabel } from '../fillers/unsold';
+import { adArea, shareLabel } from './layouts';
+import { outlineText } from '../print/outline';
 import { bidFloor, prepaidLeft } from './budget';
 import { newId } from '../../core/ids';
 import type { SqlClient } from '../../db/client';
@@ -11,7 +12,7 @@ import { overPixelLimit, pixelsText } from '../studio/photos';
 import { posterCreative, posterFonts, posterIcons, renderPoster, type PosterSpec } from '../creative/poster';
 import type { ExperienceHost } from '../experiences/host';
 import { themeFor } from '../experiences/host';
-import { givingLine, pieceOf, slotQr } from '../print/renderer';
+import { givingLine, pieceOf, slotQr, withLabel } from '../print/renderer';
 import { wordsUnderCode } from '../print/svgCreative';
 import { qrSvg } from '../print/qr';
 import { companyQrStyle } from '../codes/style';
@@ -305,10 +306,12 @@ export class AdsService {
     const shapes: { where: string; w: number; h: number; qr: { x: number; y: number; size: number } }[] = [];
     for (const p of this.platform.products.values()) {
       if (p.companyId && p.companyId !== companyId) continue;
+      // The pieces as this company prints them: its own label numbers over the product's (print/geometry.ts).
+      const printed = withLabel(p, company);
       for (const l of this.platform.layoutsOf(company, p)) l.shares.forEach((share, i) => {
         if (!sizes.includes(share)) return;
-        const { w, h } = pieceOf(p, l.rects[i]!);
-        if (!shapes.some((x) => Math.abs(x.w - w) < 1 && Math.abs(x.h - h) < 1)) shapes.push({ where: `${shareLabel(share)} on the ${p.name}`, w, h, qr: slotQr(p, w, h) });
+        const { w, h } = pieceOf(printed, l.rects[i]!);
+        if (!shapes.some((x) => Math.abs(x.w - w) < 1 && Math.abs(x.h - h) < 1)) shapes.push({ where: `${shareLabel(share)} on the ${p.name}`, w, h, qr: slotQr(printed, w, h) });
       });
     }
     return wordsUnderCode(markup, shapes);
@@ -322,17 +325,19 @@ export class AdsService {
     const sampleQr = `${company.receiptBaseUrl.replace(/\/$/, '')}/s/preview/0`;
     // A piece drawn exactly as it prints: the artwork told where its code goes, and the code drawn there.
     // (A box side is drawn keeping clear of the drivers' stop code too, as the front and top print.)
-    const piece = (w: number, h: number, qr: { x: number; y: number; size: number }, code: string, reserved?: { x: number; y: number; w: number; h: number }[]) =>
-      `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(w)}" height="${Math.round(h)}" viewBox="0 0 ${w} ${h}"><svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" overflow="hidden">${o.draw(w, h, reserved?.length ? { qr, reserved } : { qr })}</svg>${code}</svg>`;
+    // Its words as outlines, exactly as they print (print/outline.ts).
+    const piece = (w: number, h: number, qr: { x: number; y: number; size: number }, code: string, reserved?: { x: number; y: number; w: number; h: number }[]) => outlineText(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(w)}" height="${Math.round(h)}" viewBox="0 0 ${w} ${h}"><svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" overflow="hidden">${o.draw(w, h, reserved?.length ? { qr, reserved } : { qr })}</svg>${code}</svg>`);
     // Each size, at every shape it can print at: a sixth can be a wide strip on one bottle and a tall column on the
     // next, and the design lays itself out differently for each. On every product the company's ads go on.
     const products = [product, ...[...this.platform.products.values()].filter((p) => p.id !== product.id && (!p.companyId || p.companyId === o.companyId))];
     const sizes = o.sizes.map((s) => {
       const seen = new Map<string, { productId: string; products: string[]; w: number; h: number; count: number; qr: { x: number; y: number; size: number } }>();
       for (const p of products) {
+        const printed = withLabel(p, company);
         for (const l of this.platform.layoutsOf(company, p)) l.shares.forEach((share, i) => {
           if (share !== s) return;
-          const { w, h } = pieceOf(p, l.rects[i]!), qr = slotQr(p, w, h);
+          const { w, h } = pieceOf(printed, l.rects[i]!), qr = slotQr(printed, w, h);
           const key = `${w.toFixed(1)}x${h.toFixed(1)}:${qr.size.toFixed(1)}`;
           const had = seen.get(key);
           if (had) { had.count++; if (!had.products.includes(p.id)) had.products.push(p.id); } else seen.set(key, { productId: p.id, products: [p.id], w, h, count: 1, qr });
@@ -344,20 +349,26 @@ export class AdsService {
       return { share: s, label: shareLabel(s), printable: shapes.length > 0, svg: shapes[0]?.svg ?? '', shapes };
     });
 
-    // A sample label: this ad at its biggest size, the rest filled with the company's own ad.
+    // A sample label: this ad at its biggest size, the other pieces neutral placeholders marked "Sample ad" (other
+    // businesses' ads go there; never the company's own), and where on the label this ad is, in words.
     const biggest = Math.min(...o.sizes) as Share;
-    const house = houseAd(this.platform.campaigns.values(), o.companyId);
     const temp: Campaign = { id: 'preview', companyId: o.companyId, advertiserId: o.advertiserId, advertiserName: o.advertiserName, category: o.category, sizes: [biggest], creative: { svg: o.draw }, experienceId: 'offer', targeting: {}, buy: { type: 'guaranteed', remainingPrints: 1 }, active: false };
     const campaigns = new Map(this.platform.campaigns);
     campaigns.set('preview', temp);
     const sample = [...layouts].filter((l) => l.shares.includes(biggest)).sort((a, b) => a.shares.length - b.shares.length)[0] ?? { shares: [1 as Share], rects: [{ x: 0, y: 0, w: 1, h: 1 }] };
     const mine = sample.shares.indexOf(biggest);
     const layout = sample.shares;
-    const placements = layout.map((s, i) => (i === mine
-      ? { slotIndex: i, share: s, rect: sample.rects[i]!, campaignId: 'preview', advertiserId: o.advertiserId, advertiserName: o.advertiserName, experienceId: 'offer', priceCents: 0, isHouse: false }
-      : { slotIndex: i, share: s, rect: sample.rects[i]!, campaignId: house!.id, advertiserId: house!.advertiserId, advertiserName: house!.advertiserName, experienceId: house!.experienceId, priceCents: 0, isHouse: true }));
+    const placements = layout.map((s, i) => {
+      if (i === mine) return { slotIndex: i, share: s, rect: sample.rects[i]!, campaignId: 'preview', advertiserId: o.advertiserId, advertiserName: o.advertiserName, experienceId: 'offer', priceCents: 0, isHouse: false };
+      const other = sampleAd(o.companyId, i);
+      campaigns.set(other.id, other);
+      return { slotIndex: i, share: s, rect: sample.rects[i]!, campaignId: other.id, advertiserId: other.advertiserId, advertiserName: other.advertiserName, experienceId: other.experienceId, priceCents: 0, isHouse: true };
+    });
     const unit: Unit = { id: 'preview', companyId: o.companyId, productId: product.id, locationId: 'preview', kind: 'ad_supported', placements, layout, status: 'rendered', createdAt: this.platform.bus.now().toISOString() };
     const label = await this.registry.rendererFor(company).render({ unit, product, company, campaigns });
+    const where = sample.rects[mine] ? whereOnLabel(sample.rects[mine]!) : 'across the whole label';
+    const caption = layout.length === 1 ? 'A sample label. Your ad takes the whole label. The black panel is the same on every bottle.'
+      : `A sample label. Your ad is ${where}; the pieces marked “Sample ad” go to other businesses. The black panel is the same on every bottle.`;
 
     // Box sides, each as it prints (its own size, the code in its corner). The 12-pack's front is the one shown first.
     const faceSeen = new Map<string, { w: number; h: number; boxes: string[] }>();
@@ -379,7 +390,7 @@ export class AdsService {
     // The main picture of each size at full preview quality; the other shapes smaller, so the whole preview stays light.
     return {
       sizes: await Promise.all(sizes.map(async (s) => ({ ...s, svg: await inline(s.svg), shapes: await Promise.all(s.shapes.map(async (x) => ({ ...x, svg: await inline(x.svg, 240) }))) }))),
-      labelSvg: await inline(label.svg), boxFaceSvg: boxFace ? await inline(boxFace) : null,
+      labelSvg: await inline(label.svg), labelCaption: caption, where, boxFaceSvg: boxFace ? await inline(boxFace) : null,
       boxFaces: await Promise.all(boxFaces.map(async (f) => ({ ...f, svg: await inline(f.svg, 240) }))),
       scan: scan ? { doc: scan, footer } : null,
     };
@@ -548,7 +559,7 @@ export class AdsService {
       if (e.action === 'link' || e.action === 'call') { t.linkTaps += Number(e.n); total.linkTaps += Number(e.n); }
     }
     const product = this.platform.standardProduct(input.companyId);
-    const thumbW = ((product.label.widthIn - product.label.seamIn - product.label.panelWidthIn) * 100) / 6 * 2;
+    const thumbW = (adArea(product).w * 100) / 6 * 2;
     const campaigns = [...this.platform.campaigns.values()].filter((c) => c.companyId === input.companyId && c.advertiserId === input.advertiserId && !c.isHouse)
       .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '') || a.id.localeCompare(b.id))
       .map((c) => ({
@@ -707,4 +718,11 @@ export class AdsService {
   private async addReviewNote(n: { companyId: string; campaignId: string; kind: 'flag' | 'note' | 'resubmitted' | 'approved' | 'rejected' | 'appeal'; authorKind: 'team' | 'advertiser' | 'automated' | 'ai'; authorId: string | null; text: string }) {
     await this.db.query(`insert into ad_review_notes (id, company_id, campaign_id, kind, author_kind, author_id, text, at) values ($1,$2,$3,$4,$5,$6,$7,$8)`, [newId('arn'), n.companyId, n.campaignId, n.kind, n.authorKind, n.authorId, n.text.slice(0, 2000), this.platform.bus.now().toISOString()]);
   }
+}
+
+const SAMPLE_ICONS = ['coffee', 'pizza', 'star', 'bag', 'music', 'paw'] as const;
+/** A neutral placeholder for another business's ad in a preview: plainly marked "Sample ad", never the company's own. */
+export function sampleAd(companyId: string, i: number): Campaign {
+  const spec = { brand: 'Sample ad', headline: 'Another local business', sub: 'Their ad goes here', colors: { bg: '#EEF1F4', fg: '#5B6670', accent: '#8A96A0' }, icon: SAMPLE_ICONS[i % SAMPLE_ICONS.length] };
+  return { id: `sample-ad-${i}`, companyId, advertiserId: `sample-${i}`, advertiserName: 'Sample ad', category: 'sample', sizes: [1, 2, 3, 4, 6, 8, 10] as Share[], creative: posterCreative(spec), creativeRef: { kind: 'poster', spec }, experienceId: 'offer', targeting: {}, buy: { type: 'guaranteed', remainingPrints: 0 }, active: false, isHouse: true };
 }

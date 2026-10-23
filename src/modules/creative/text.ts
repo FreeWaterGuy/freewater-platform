@@ -1,4 +1,7 @@
 import type { CreativeContext } from '../../core/types';
+import { measure, type FontSpec } from '../print/fonts';
+
+export type { FontSpec };
 
 /**
  * Measuring and placing words on a label, shared by every template that draws words (the studio, the poster used by
@@ -44,8 +47,13 @@ export function charEm(c: string): number {
   return /\p{Lu}/u.test(c) ? 0.95 : 0.8;
 }
 
-/** How wide a line of text is, in ems (multiply by the font size), with `tracking` ems of letter-spacing per letter. */
-export function textEm(text: string, tracking = 0): number {
+/**
+ * How wide a line of text is, in ems (multiply by the font size), with `tracking` ems of letter-spacing per letter.
+ * With the font it is drawn in: exactly as it prints, from the very fonts the print file's outlines come from
+ * (print/fonts). Without one: in the widest likely font (`WIDTH`), for words that don't say what they're drawn in.
+ */
+export function textEm(text: string, tracking = 0, font?: FontSpec): number {
+  if (font) return measure(text, font, tracking);
   let n = 0, count = 0;
   for (const c of text) { n += charEm(c); count++; }
   return n + Math.max(0, tracking) * count; // tighter tracking is ignored: a font without kerning prints it loose
@@ -60,12 +68,12 @@ export const BASELINE = 0.86;
  * A word too long for a line is broken with a hyphen, so all of it prints instead of being cut off; never leaving
  * fewer than three letters on the last line of it ("sourdoug-h," reads badly).
  */
-export function breakLong(text: string, maxEm: number, tracking = 0) {
+export function breakLong(text: string, maxEm: number, tracking = 0, font?: FontSpec) {
   const letters = (s: string) => s.replace(/[^\p{L}\p{N}]/gu, '').length;
   return text.split(/\s+/).filter(Boolean).flatMap((w) => {
-    if (textEm(w, tracking) <= maxEm) return [w];
+    if (textEm(w, tracking, font) <= maxEm) return [w];
     const parts: string[] = []; let cur = '';
-    for (const c of w) { if (cur && textEm(`${cur}${c}-`, tracking) > maxEm) { parts.push(`${cur}-`); cur = c; } else cur += c; }
+    for (const c of w) { if (cur && textEm(`${cur}${c}-`, tracking, font) > maxEm) { parts.push(`${cur}-`); cur = c; } else cur += c; }
     if (parts.length && letters(cur) < 3) {
       const prev = [...parts.pop()!.slice(0, -1)];
       while (prev.length > 3 && letters(cur) < 3) cur = prev.pop()! + cur;
@@ -76,9 +84,9 @@ export function breakLong(text: string, maxEm: number, tracking = 0) {
 }
 
 /** Break words into lines no wider than `maxEm`: as few lines as fit, then as even as those lines allow. */
-export function balance(text: string, maxEm: number, maxLines: number, tracking = 0): string[] | null {
+export function balance(text: string, maxEm: number, maxLines: number, tracking = 0, font?: FontSpec): string[] | null {
   const words = text.split(/\s+/).filter(Boolean);
-  const em = (s: string) => textEm(s, tracking);
+  const em = (s: string) => textEm(s, tracking, font);
   if (!words.length || words.some((w) => em(w) > maxEm)) return null;
   const greedy = (target: number) => { const out: string[] = []; let cur = ''; for (const w of words) { const t = cur ? `${cur} ${w}` : w; if (em(t) > target && cur) { out.push(cur); cur = w; } else cur = t; } if (cur) out.push(cur); return out; };
   let lines = greedy(maxEm);
@@ -110,8 +118,8 @@ export interface Fitted { size: number; lines: string[]; height: number; width: 
  * reaching into any of `avoid` (the QR code's corner, a logo, a badge) or past `right`. Long words are broken with a
  * hyphen at the smallest size. Null if it can't fit even so: the caller leaves something out.
  */
-export function fitText(text: string, o: { x: number; top: number; bottom: number; right: number; avoid?: Box[]; gap?: number; maxLines: number; max: number; min: number; lead?: number; tracking?: number; anchor?: 'top' | 'bottom' }): Fitted | null {
-  const lead = o.lead ?? 1.06, gap = o.gap ?? 4, tr = o.tracking ?? 0;
+export function fitText(text: string, o: { x: number; top: number; bottom: number; right: number; avoid?: Box[]; gap?: number; maxLines: number; max: number; min: number; lead?: number; tracking?: number; anchor?: 'top' | 'bottom'; font?: FontSpec }): Fitted | null {
+  const lead = o.lead ?? 1.06, gap = o.gap ?? 4, tr = o.tracking ?? 0, font = o.font;
   if (!text.trim() || o.bottom <= o.top || o.right <= o.x) return null;
   // How far right a block spanning y0..y1 may reach.
   const edge = (y0: number, y1: number) => {
@@ -128,8 +136,8 @@ export function fitText(text: string, o: { x: number; top: number; bottom: numbe
       if (y < o.top - 1e-6 || y + height > bottom + 1e-6) break;
       const width = edge(y, y + height) - o.x;
       if (width <= size) continue;
-      const lines = balance(hyphenate ? breakLong(words, width / size, tr) : words, width / size, n, tr);
-      if (lines && lines.length <= n) return { size, lines, height, width: Math.max(...lines.map((l) => textEm(l, tr))) * size, y };
+      const lines = balance(hyphenate ? breakLong(words, width / size, tr, font) : words, width / size, n, tr, font);
+      if (lines && lines.length <= n) return { size, lines, height, width: Math.max(...lines.map((l) => textEm(l, tr, font))) * size, y };
     }
     return null;
   };
@@ -153,7 +161,7 @@ export function fitText(text: string, o: { x: number; top: number; bottom: numbe
 export function fitOrCut(text: string, o: Parameters<typeof fitText>[1]): Fitted {
   const f = fitText(text, o);
   if (f) return f;
-  const lead = o.lead ?? 1.06, gap = o.gap ?? 4, tr = o.tracking ?? 0;
+  const lead = o.lead ?? 1.06, gap = o.gap ?? 4, tr = o.tracking ?? 0, font = o.font;
   const size = Math.max(MIN_TEXT, o.min);
   const n = Math.max(1, Math.floor(((o.bottom - o.top) / size - 1.12) / lead) + 1);
   const height = blockHeight(n, size, lead);
@@ -161,14 +169,14 @@ export function fitOrCut(text: string, o: Parameters<typeof fitText>[1]): Fitted
   let right = o.right;
   for (const b of o.avoid ?? []) if (y + height > b.y - gap && y < b.y + b.h + gap && b.x + b.w > o.x) right = Math.min(right, b.x - gap);
   const maxEm = Math.max(1, (right - o.x) / size);
-  const all = balance(breakLong(text, maxEm, tr), maxEm, 99, tr) ?? [text];
+  const all = balance(breakLong(text, maxEm, tr, font), maxEm, 99, tr, font) ?? [text];
   const lines = all.slice(0, n);
-  if (all.length > n || textEm(lines[n - 1] ?? '', tr) > maxEm) {
+  if (all.length > n || textEm(lines[n - 1] ?? '', tr, font) > maxEm) {
     let last = lines[lines.length - 1] ?? '';
-    while (last && textEm(`${last}…`, tr) > maxEm) last = [...last].slice(0, -1).join('');
+    while (last && textEm(`${last}…`, tr, font) > maxEm) last = [...last].slice(0, -1).join('');
     lines[lines.length - 1] = `${last.trimEnd()}…`;
   }
-  return { size, lines, height, width: Math.max(...lines.map((l) => textEm(l, tr))) * size, y };
+  return { size, lines, height, width: Math.max(...lines.map((l) => textEm(l, tr, font))) * size, y };
 }
 
 /**

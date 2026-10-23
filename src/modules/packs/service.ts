@@ -166,7 +166,9 @@ export class PackService {
     // 2. The box itself.
     if (!pack.rendered) {
       const route = await this.routeFor?.(pack) ?? null;
-      pack.faces = fillBoxFaces({ company, box, routeId: pack.routeId, campaigns: [...p.campaigns.values()], random: p.random, faceOn: (face) => !p.featureOn || (p.featureOn(company.id, 'box_ads') && p.featureOn(company.id, FACE_SWITCHES[face] ?? 'box_ads')), reserved: route?.faces, blockedAdvertisers: route?.blocked });
+      const routeAt = p.locations.get(pack.routeId);
+      const unsold = routeAt ? p.unsoldFiller({ company, product: p.standardProduct(company.id), location: routeAt, audience: null, blockedAdvertisers: route?.blocked, format: 'box-face' }) : undefined;
+      pack.faces = fillBoxFaces({ company, box, routeId: pack.routeId, campaigns: [...p.campaigns.values()], random: p.random, faceOn: (face) => !p.featureOn || (p.featureOn(company.id, 'box_ads') && p.featureOn(company.id, FACE_SWITCHES[face] ?? 'box_ads')), reserved: route?.faces, blockedAdvertisers: route?.blocked, ...(unsold ? { unsold } : {}) });
       pack.rendered = renderBox({ packId: pack.id, box, company, faces: pack.faces, campaigns: p.campaigns, routeId: pack.routeId, stop: pack.stop, codes: p.codes });
       this.save(pack);
     }

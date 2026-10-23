@@ -1,5 +1,6 @@
 // Sample data for the demo and tests. All advertisers here are made-up brands; prices are placeholders.
 import { posterCreative, type PosterIcon } from '../modules/creative/poster';
+import { freewaterPanel } from '../modules/print/panel';
 import { defaultAdBilling } from '../modules/ads/billing';
 import { SHARES, type BoxProduct, type Campaign, type CompanyConfig, type Creative, type Location, type Product, type Share } from '../core/types';
 
@@ -7,8 +8,11 @@ export const bottle16oz: Product = {
   id: 'bottle-16oz',
   name: '16 oz aluminum bottle',
   category: 'water',
-  container: { shape: 'bottle', diameterIn: 2.66, heightIn: 7.5 },
-  label: { widthIn: 8.6, heightIn: 4.5, seamIn: 0.25, panelWidthIn: 0.95 },
+  container: { shape: 'bottle', diameterIn: 2.55, heightIn: 7.5 },
+  // The standard bottle, from the printer's guide (README, "The label"): 8 × 4 in, the ads in 7.15 × 4 in at the
+  // left, words inside 7.1 × 3.8 in, FreeWater's panel the last 0.85 in, 1/16 in of bleed (a 8.125 × 4.125 in file).
+  label: { widthIn: 8, heightIn: 4, seamIn: 0, panelWidthIn: 0.85, panelSide: 'right', bleedIn: 0.0625, imageSafe: { widthIn: 7.15, heightIn: 4 }, textSafe: { widthIn: 7.1, heightIn: 3.8 } },
+  panelInfo: { contents: 'SPRING WATER', volume: '16floz (473ml)', source: ['Source:', 'Natural Spring Water, Tiger, GA'] },
 };
 
 /** Other sizes and drinks, to show the platform isn't tied to one bottle. Sample dimensions. */
@@ -17,7 +21,10 @@ export const bottle25oz: Product = {
   name: '25 oz aluminum bottle (750 ml)',
   category: 'water',
   container: { shape: 'bottle', diameterIn: 3.0, heightIn: 9.6 },
-  label: { widthIn: 9.67, heightIn: 5.5, seamIn: 0.25, panelWidthIn: 1.1 },
+  // Sample numbers: the same model as the standard bottle (bleed 1/16 in; words 0.025 in in from the ad area's sides
+  // and 0.1 in from its top and bottom), with a seam overlap where the wrap closes.
+  label: { widthIn: 9.67, heightIn: 5.5, seamIn: 0.25, panelWidthIn: 1.1, bleedIn: 0.0625 },
+  panelInfo: { contents: 'SPRING WATER', volume: '25floz (750ml)', source: ['Source:', 'Natural Spring Water, Tiger, GA'] },
   priceFactor: 1.25,
   facts: ['SPRING WATER', '25 fl oz (750 ml)', 'Source: Natural Spring Water, Tiger, GA', 'Bottled for FreeWater Inc, Austin, TX'],
 };
@@ -26,7 +33,8 @@ export const can12oz: Product = {
   name: '12 oz sparkling water can',
   category: 'sparkling water',
   container: { shape: 'can', diameterIn: 2.6, heightIn: 4.83 },
-  label: { widthIn: 8.37, heightIn: 3.9, seamIn: 0.2, panelWidthIn: 0.9 },
+  label: { widthIn: 8.37, heightIn: 3.9, seamIn: 0.2, panelWidthIn: 0.9, bleedIn: 0.0625 },
+  panelInfo: { contents: 'SPARKLING WATER', volume: '12floz (355ml)' },
   facts: ['SPARKLING SPRING WATER', '12 fl oz (355 ml)', 'Canned for FreeWater Inc, Austin, TX'],
 };
 export const products: Product[] = [bottle16oz, bottle25oz, can12oz];
@@ -70,6 +78,8 @@ export const freewater: CompanyConfig = {
   receiptBaseUrl: 'https://go.freewater.io',
   brand: { logoTop: 'free', logoBottom: 'water', tagline: "Put your brand in everyone's hand!", panelColor: '#000000', accentColor: '#7FC6EA', textColor: '#FFFFFF', fontFamily: "Comfortaa, 'DM Sans', Arial, sans-serif" },
   productFacts: ['SPRING WATER', '16 fl oz (473 ml)', 'Source: Natural Spring Water, Tiger, GA', 'Manufactured by RAIN Bottling Co for FreeWater Inc, Austin, TX', 'Processed by ozonation'],
+  // The panel on the real label (README, "The company panel"). Social icons print once FreeWater uploads them.
+  labelPanel: freewaterPanel(),
   // 10¢ a bottle (covering the first $1 of ads on it, where bids start), plus 10% of every dollar beyond that:
   // higher bids, more ads, scans, AR launches, box sides, custom bottles and sales commissions. All to Well Aware,
   // the Austin nonprofit that builds water wells in Africa, unless a machine or route names another charity.

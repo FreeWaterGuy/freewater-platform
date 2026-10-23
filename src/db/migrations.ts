@@ -2515,6 +2515,36 @@ create index route_credit_expiries_advertiser on route_credit_expiries(company_i
 create trigger route_credit_expiries_append_only before update or delete on route_credit_expiries for each row execute function forbid_change();
 `,
   },
+  {
+    id: '073_bottle_codes',
+    sql: `
+-- The short code printed at the bottom of each label's company panel ("Bottle code: B-7F3K29", src/modules/print/
+-- bottleCode.ts): made from the bottle's random id, unique within its company, so the team can find the bottle from
+-- it. Recorded once, when the label is drawn for printing, and never changed or deleted (a bottle's code is what was
+-- printed on it). Nothing personal: a code, a company and a bottle id.
+create table bottle_codes (
+  company_id text not null,
+  code text not null check (code ~ '^B-[0-9A-HJKMNP-TV-Z]{6}$'),
+  unit_id text not null unique,
+  created_at timestamptz not null,
+  primary key (company_id, code)
+);
+create trigger bottle_codes_append_only before update or delete on bottle_codes for each row execute function forbid_change();
+`,
+  },
+  {
+    id: '074_unsold_space',
+    sql: `
+-- Space nobody bought (src/modules/fillers/unsold.ts): a former advertiser's past ad may print free, as a bonus.
+-- The advertiser can say no in its portal (allowed unless it does), and the company's team can refuse an advertiser
+-- for bonus printing, with who and why.
+alter table advertisers add column if not exists bonus_opt_out boolean not null default false;
+alter table advertisers add column if not exists bonus_refused_at timestamptz;
+alter table advertisers add column if not exists bonus_refused_by text;
+alter table advertisers add column if not exists bonus_refused_reason text;
+alter table advertisers add constraint advertisers_bonus_refused_whole check ((bonus_refused_at is null) = (bonus_refused_by is null));
+`,
+  },
 ];
 
 /** Runs every migration not yet run (or, for tests that start from an older schema, those in `list`). */

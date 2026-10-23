@@ -229,8 +229,8 @@ describe('the pilot preset switches whole areas off', () => {
     expect(names.length).toBeGreaterThan(10);
     expect(Object.keys(JOB_FEATURES).filter((n) => !names.includes(n))).toEqual([]); // every gated job exists
     const scheduled = pilot.jobs(names.map((name) => ({ name }))).map((j) => j.name);
-    for (const gone of ['chain-check', 'videos', 'offers']) expect(scheduled).not.toContain(gone);
-    for (const kept of ['webhooks', 'fleet-sweep', 'books-and-agents', 'wallet-seals', 'reconciliation', 'fingerprints', 'data-purge', 'game-photos']) expect(scheduled).toContain(kept);
+    for (const gone of ['chain-check', 'videos', 'offers', 'fleet-sweep']) expect(scheduled).not.toContain(gone); // machines come later
+    for (const kept of ['webhooks', 'books-and-agents', 'wallet-seals', 'reconciliation', 'fingerprints', 'data-purge', 'game-photos']) expect(scheduled).toContain(kept);
     expect(featuresFrom({}).features.jobs(names.map((name) => ({ name }))).length).toBe(names.length); // default: all
     expect(main).toMatch(/new JobRunner\(app!\.db, app!\.features\.jobs\(jobs\)/);
   });

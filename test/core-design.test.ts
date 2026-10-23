@@ -52,10 +52,13 @@ async function business(to: string, name: string) {
 async function readCode(svg: string, widthIn: number, code: PrintedCode) {
   // sharp (librsvg) applies the density twice to a drawing sized in inches: this one comes out near 300 dpi.
   const { data, info } = await sharp(Buffer.from(svg), { density: 147 }).flatten({ background: '#ffffff' }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-  const dpi = info.width / widthIn;
+  // A print file has its bleed round the label (src/modules/print/renderer.ts printFile): the code sits that much in.
+  const vb = /^<svg\b[^>]*viewBox="(-?[\d.]+) (-?[\d.]+)/.exec(svg);
+  const bleed = vb && Number(vb[1]) < 0 ? -Number(vb[1]) / 100 : 0;
+  const dpi = info.width / (widthIn + 2 * bleed);
   expect(dpi).toBeGreaterThan(280);
   const pad = 0.12; // the code's white margin, in inches
-  const x0 = Math.max(0, Math.floor((code.xIn - pad) * dpi)), y0 = Math.max(0, Math.floor((code.yIn - pad) * dpi));
+  const x0 = Math.max(0, Math.floor((code.xIn + bleed - pad) * dpi)), y0 = Math.max(0, Math.floor((code.yIn + bleed - pad) * dpi));
   const side = Math.min(Math.ceil((code.sizeIn + pad * 2) * dpi), info.width - x0, info.height - y0);
   const crop = new Uint8ClampedArray(side * side * 4);
   for (let y = 0; y < side; y++) crop.set(data.subarray(((y0 + y) * info.width + x0) * 4, ((y0 + y) * info.width + x0 + side) * 4), y * side * 4);
@@ -64,7 +67,8 @@ async function readCode(svg: string, widthIn: number, code: PrintedCode) {
 
 /** The artwork drawn into each piece of a label: everything but picture data and drawing ids, which differ per file. */
 const artOf = (svg: string) => svg.replace(/href="data:[^"]+"/g, 'href="(photo)"').replace(/\b(id|filter|fill)="(?:url\(#)?st[0-9a-z]+([a-z]?)\)?"/g, '$1="$2"').replace(/<image data-fw-photo="1" href="\/assets\/[^"]+"/g, '<image href="(photo)"');
-const textsOf = (svg: string) => [...svg.matchAll(/<text\b[^>]*>([^<]*)<\/text>/g)].map((m) => m[0]);
+/** Every line of words: as text, or as outlines (each letter's shape and exactly where it goes, src/modules/print/outline.ts). */
+const textsOf = (svg: string) => [...svg.matchAll(/<text\b[^>]*>([^<]*)<\/text>|<g data-fw-words="1"[^>]*>(?:(?!<\/g>)[\s\S])*<\/g>/g)].map((m) => m[0]);
 
 describe('a new advertiser, from sign-up to a live ad on a printed label', () => {
   it('signs up, sets up a brand kit with real files, designs, previews every piece, gets approved, and prints a label that scans to their ad', async () => {
@@ -145,12 +149,14 @@ describe('a new advertiser, from sign-up to a live ad on a printed label', () =>
     expect(unit, 'the ad printed within 120 bottles').toBeTruthy();
     expect(svg).toContain('data:image/jpeg;base64,');
     expect(svg).not.toContain('/assets/as_');
-    const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/'/g, '&#39;');
-    for (const word of spec.headline.split(' ')) expect(svg).toContain(esc(word));
+    // Its words, as outlines (each line's words kept beside its shapes).
+    const printedWords = [...svg.matchAll(/data-fw-text="([^"]*)"/g)].map((m) => m[1]).join(' ').replace(/&amp;/g, '&');
+    expect(svg).not.toMatch(/<text\b/);
+    for (const word of spec.headline.split(' ')) expect(printedWords).toContain(word);
     const placement = unit.placements.find((p: any) => p.campaignId === id);
     const codes: PrintedCode[] = app.platform.labels.get(unit.id)!.codes ?? [];
     const mine = codes.find((c) => c.role === 'slot' && c.slotIndex === placement.slotIndex)!;
-    const read = await readCode(svg, 8.6, mine);
+    const read = await readCode(svg, 8, mine);
     expect(read, 'the printed code reads').toBeTruthy();
 
     // 9. The code opens this ad: the right bottle and piece, this advertiser, their AR.
@@ -177,7 +183,8 @@ describe('a new advertiser, from sign-up to a live ad on a printed label', () =>
     const at = svg.indexOf(`<svg x="${x}" y="${y}" width="${w}" height="${h}"`);
     expect(at, 'the piece is on the label').toBeGreaterThan(0);
     const printedArt = svg.slice(at, svg.indexOf('<path', at));
-    const shownArt = shape.svg.slice(shape.svg.indexOf('<svg width='), shape.svg.indexOf('<path'));
+    const from = shape.svg.indexOf('<svg width=');
+    const shownArt = shape.svg.slice(from, shape.svg.indexOf('<path', from));
     expect(textsOf(artOf(shownArt))).toEqual(textsOf(artOf(printedArt)));
     expect(textsOf(shownArt).length).toBeGreaterThan(0);
     // And the code sits in the same corner of the piece: the preview's code reads where the printed one is.

@@ -36,6 +36,24 @@ export function consoleRoutes(app: App, route: (r: RouteDef) => void) {
     // A label-layout change that would strand paid pieces is saved only with their count confirmed (the preview shows it).
     return { body: await cons.save(staff(key).companyId, b.changes, by(key!), b.version, { person: !!key!.userId, confirmStranded: b.confirmStranded }) };
   } });
+  // Space nobody bought (src/modules/fillers/unsold.ts): the list, the former advertisers and why each is or isn't
+  // used, the picks to choose from, the delivery areas to hold, blank pieces so far. The list itself is saved as the
+  // `unsold` setting (PATCH above, a person signed in).
+  route({ method: 'GET', url: '/v1/console/unsold', scope: 'admin', summary: 'Unsold space: what fills it in order, former advertisers (and why each is or isn’t used), ads to pick from, delivery areas to hold, and blank pieces so far.', handler: async (_req, key) => {
+    const companyId = staff(key).companyId;
+    const areas = (await app.houses.areas(companyId).catch(() => [])).map((a: any) => ({ id: a.id, name: a.name }));
+    return { body: { ...app.unsold.overview(companyId), areas } };
+  } });
+  route({ method: 'POST', url: '/v1/console/advertisers/:id/bonus', scope: 'admin', summary: 'Refuse an advertiser for bonus printing in unsold space (or take that back), with a reason. A person signed in decides.', body: obj({ refused: S.bool, reason: { type: 'string', maxLength: 300 } }, ['refused']), handler: async (req, key) => {
+    const k = staff(key);
+    if (!k.userId) throw new ApiError(403, 'person_needed', 'A person signed in decides who is refused, never a service key.');
+    const id = (req.params as any).id as string;
+    const known = (await app.db.query(`select 1 from advertisers where id = $1 and company_id = $2`, [id, k.companyId])).rows.length;
+    if (!known) throw new ApiError(404, 'not_found', 'No such advertiser.');
+    const b = req.body as any;
+    if (b.refused && !String(b.reason ?? '').trim()) throw new ApiError(422, 'reason_needed', 'Say why this advertiser is refused.');
+    return { body: await app.unsold.setRefused(k.companyId, id, b.refused, by(k), b.reason?.trim()) };
+  } });
   route({ method: 'POST', url: '/v1/console/preview-label', scope: 'admin', summary: 'A sample bottle label with these settings, before saving. Problems are listed instead of saving anything.', body: obj({ changes: changesProp }), handler: async (req, key) => ({ body: await cons.previewLabel(staff(key).companyId, (req.body as any).changes ?? {}) }) });
   route({ method: 'GET', url: '/v1/console/history', scope: 'admin', summary: 'Every saved change to your settings, newest first: who, when and what.', handler: async (_req, key) => ({ body: await cons.history(staff(key).companyId) }) });
   route({ method: 'GET', url: '/v1/console/history/:version', params: { version: Q.count }, scope: 'admin', summary: 'Your settings as they were at one version.', handler: async (req, key) => ({ body: await cons.version(staff(key).companyId, Number((req.params as any).version)) }) });
@@ -44,6 +62,17 @@ export function consoleRoutes(app: App, route: (r: RouteDef) => void) {
     // Putting back a version that differs in any approval setting is that same approval: the second step (R4).
     approval: async (changed) => { if (approvalSettings.some((k) => changed.includes(k))) await approverStep(key!); },
   }) }) });
+
+  // ---------- bottle codes ----------
+  // The short code at the bottom of each label's panel ("Bottle code: B-7F3K29", print/bottleCode.ts): the team finds
+  // the bottle from it (a customer reading it out, a returned bottle). Only the company's own bottles; nothing personal.
+  route({ method: 'GET', url: '/v1/console/bottles/:code', params: { code: { type: 'string', minLength: 6, maxLength: 12, pattern: '^[A-Za-z0-9 -]+$' } }, scope: 'admin', summary: 'The bottle a printed bottle code belongs to (“B-7F3K29”; case, dashes and O/0, I/1 mix-ups don’t matter).', handler: async (req, key) => {
+    const companyId = staff(key).companyId;
+    const found = await app.codes.findBottle(companyId, (req.params as any).code);
+    const unit = found ? app.platform.units.get(found.unitId) : undefined;
+    if (!found) throw new ApiError(404, 'not_found', 'No bottle of yours has that code.');
+    return { body: { code: found.code, unitId: found.unitId, ...(unit ? { status: unit.status, productId: unit.productId, locationId: unit.locationId, createdAt: unit.createdAt } : {}) } };
+  } });
 
   // ---------- machines ----------
   const machineProps = { name: { type: 'string', minLength: 1, maxLength: 60 }, city: { type: 'string', minLength: 1, maxLength: 60 }, address: { type: 'string', maxLength: 200 }, lat: { type: 'number', minimum: -90, maximum: 90 }, lng: { type: 'number', minimum: -180, maximum: 180 }, printSeconds: { type: 'integer', minimum: 5, maximum: 300 }, hardware: { type: 'string', enum: ['model6', 'virtual'] }, products: { type: 'array', minItems: 1, maxItems: 12, items: { type: 'string', maxLength: 60 } } };

@@ -24,6 +24,11 @@
  *  12. The bottom bar shows only areas that are on; a switched-off screen's address goes Home.
  *  13. Every tile and link on Home, Wallet and Me goes where it says (the wallet's "Play for points" opens Play).
  *  14. Points earned on the phone before signing in show as "on this phone" and are kept in the account with one tap.
+ *  15. Play's points counter shows what the wallet holds.
+ *  16. The scan page in the pilot: no "free water near me", "printed fresh for home delivery", and the data question
+ *      is an inline banner that covers nothing.
+ * (And on the pilot's server, after 6: the ad chat's "Every size" keeps every piece inside its panel, and the sample
+ * bottle says where the ad is, with the other pieces marked "Sample ad".)
  */
 import { createRequire } from 'node:module';
 import { createApp } from '../../src/app';
@@ -203,6 +208,34 @@ await journey('an advertiser buys bottles on a delivery area and pays for them',
   const c = await one(`select campaign_id from route_buys where advertiser_id = 'adv-journey'`);
   await pilot.ads.review({ companyId: 'freewater', campaignId: c.campaign_id, decision: 'approve', by: { userId: pOwner.id, role: 'owner' } } as any);
 });
+
+await journey('the ad chat’s “Every size” tab keeps every piece inside its panel (no sideways scroll)', async (page) => {
+  const baker = (await pDb.query<any>(`select id from users where email = 'baker@journey.example'`)).rows[0].id as string;
+  const d = await pilot.ads.createDraft({ companyId: 'freewater', advertiserId: 'adv-journey' });
+  const draftId = (d as any).id;
+  await pDb.query(`update ad_drafts set data = $2 where id = $1`, [draftId, JSON.stringify({ category: 'food-drink', poster: { brand: 'Journey Bakery', headline: 'Fresh bread daily', colors: { bg: '#FFFFFF', fg: '#0B0B0B', accent: '#1E7DB8' } }, sizes: [1, 2, 3, 4, 6, 8, 10], experienceId: 'offer', experienceConfig: { headline: 'Fresh bread daily' } })]);
+  await signedIn(page, 'fw_ads_token', await pilot.accounts.createSession(baker));
+  await page.goto(`${pBase}/ads/drafts/${draftId}`);
+  await page.waitForSelector('[role="tab"]', { timeout: 30_000 });
+  // The sample bottle: other pieces are marked “Sample ad”, and the words say where this ad is.
+  await page.waitForSelector('.stage .caption', { timeout: 30_000 });
+  const caption = (await page.textContent('.stage .caption'))!;
+  expect(/^A sample label\. Your ad (is|takes)/.test(caption) && !/on the left; the other slots/.test(caption), `caption: ${caption}`);
+  await page.click('[role="tab"]:has-text("Every size")');
+  await page.waitForSelector('.stage .sizes img', { timeout: 30_000 });
+  await page.waitForLoadState('networkidle');
+  // At a laptop's width, a small laptop's and a phone's: every piece stays inside the panel, and the page never scrolls sideways.
+  for (const [width, height] of [[1280, 800], [1024, 700], [390, 844]] as const) {
+    await page.setViewportSize({ width, height });
+    await page.waitForTimeout(150);
+    const fit = await page.evaluate(() => {
+      const stage = document.querySelector('.stage')!.getBoundingClientRect();
+      const out = [...document.querySelectorAll('.stage .sizes img')].map((i) => i.getBoundingClientRect()).filter((r) => r.right > stage.right + 1 || r.left < stage.left - 1).map((r) => Math.round(r.width));
+      return { out, pageWide: document.documentElement.scrollWidth > window.innerWidth + 1, n: document.querySelectorAll('.stage .sizes img').length };
+    });
+    expect(fit.n > 0 && fit.out.length === 0 && !fit.pageWide, `every size at ${width} px: ${JSON.stringify(fit)}`);
+  }
+}, { viewport: { width: 1280, height: 800 } });
 
 await journey('ops plans and prints a night for a delivery area', async (page) => {
   now = new Date(`${NIGHT}T15:00:00Z`).getTime();
@@ -408,6 +441,38 @@ await journey('points earned on the phone before signing in are kept in the acco
   const w = (await aCall('GET', `/v1/me/wallet?viewer=${PHONE}`, aToken)).body;
   expect(w.points.balance === earnedOnPhone && w.phone === null, `wallet: ${JSON.stringify({ balance: w.points.balance, phone: w.phone })}`);
 }, phone);
+
+await journey('Play’s points counter shows what the wallet holds (not 0 once the points are in the account)', async (page) => {
+  await signedIn(page, 'fw_token', aToken, { fw_viewer: PHONE });
+  await page.goto(`${aBase}/play?c=freewater`);
+  await page.waitForSelector('#app .pts', { timeout: 20_000 });
+  const w = (await aCall('GET', `/v1/me/wallet?viewer=${PHONE}`, aToken)).body;
+  const want = w.points.balance + (w.phone?.points ?? 0);
+  expect(want > 0, 'the wallet holds no points');
+  await page.waitForFunction((n: string) => (document.querySelector('#app .pts')?.textContent ?? '').replace(/pts/, '').trim() === n, want.toLocaleString('en-US'), { timeout: 10_000 }).catch(() => {});
+  const shown = (await page.textContent('#app .pts'))!.replace(/pts/, '').trim();
+  expect(shown === want.toLocaleString('en-US'), `Play shows ${shown}; the wallet holds ${want}`);
+}, phone);
+
+await journey('the scan page in the pilot: no machine doors, and the data question never covers the page', async (page) => {
+  const route = [...aApp.platform.locations.values()].find((l) => l.kind === 'route' && l.companyId === 'freewater')!;
+  const r = await aApp.platform.order({ companyId: 'freewater', orderId: 'journey-scan-pilot', locationId: route.id, productId: 'bottle-16oz' });
+  await aApp.persistence.flush();
+  await page.goto(`${aBase}/s/${r.unit.id}/0`);
+  await page.waitForFunction(() => (document.body.innerText || '').trim().length > 40, null, { timeout: 30_000, polling: 250 });
+  const text = await page.evaluate(() => document.body.innerText);
+  expect(!/free water near me/i.test(text), 'the scan page offers “free water near me” with machines off');
+  expect(!/Printed fresh at Home delivery/i.test(text), 'the bottle says “Printed fresh at Home delivery”');
+  // Germany asks first: the question is there, inline, and covers nothing (the AR view and the page stay usable).
+  const consent = await page.$('.consent');
+  expect(!!consent, 'no data question (Germany asks first)');
+  const cover = await page.evaluate(() => {
+    const c = document.querySelector('.consent')!, pos = getComputedStyle(c).position, box = c.getBoundingClientRect();
+    const covered = [...document.querySelectorAll('.blocks, .stage, header.topbar')].filter((e) => { const b = e.getBoundingClientRect(); return b.top < box.bottom && box.top < b.bottom && b.left < box.right && box.left < b.right; }).length;
+    return { pos, covered };
+  });
+  expect(cover.pos === 'static' && cover.covered === 0, `consent: ${JSON.stringify(cover)}`);
+}, { ...phone, isMobile: true });
 
 await aServer.close();
 await aDb.close();

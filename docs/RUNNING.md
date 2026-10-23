@@ -83,10 +83,10 @@ be proposed or run, and the console, app, ads portal and ops console hide them (
 The server logs what's off when it starts. It's a deploy setting: to switch an area back on, change the setting and
 restart. Nothing stored is deleted.
 
-**On in the pilot:** bottles, ads and printing; scans, AR, attribution (tracked sales and coupons); the app (free
-bottle, points in the wallet, data levels); delivery, packs and the driver app; the advertiser portal and studio; the
+**On in the pilot:** bottles, ads and printing; scans, AR, attribution (tracked sales and coupons); the app (points in
+the wallet, data levels); delivery, packs and the driver app; the advertiser portal and studio; the
 ops console, the owner console and the open books; giving; accounts, team and keys (and webhooks); data and privacy
-rights; transparency; machines; the games; the AI governor and the AI assistants; and launch up to **live with
+rights; transparency; the games; the AI governor and the AI assistants; and launch up to **live with
 points** (testing, bots, reset, going live with points, the pause switch, the hourly seals of the wallet books).
 
 **Off in the pilot**, and why:
@@ -103,6 +103,7 @@ points** (testing, bots, reset, going live with points, the pause switch, the ho
 | `lottery` | The prize game (chances on scan pages, claims, fairness, redeeming) | Off until a lawyer approves its rules. |
 | `video_generation` | Veo footage for "Show me more" and its `videos` job | Costs money per clip. Motion videos, made on the spot, stay. |
 | `offers` | Brand offers, receipts, barcode lookup, value-back tests on offers, and the `offers` job | They pay people real money from brand reserves and need receipt checking; not needed to give free water. |
+| `machines` | Vending machines: their screens and keys, the fleet pages and the `fleet-sweep` job, the free bottle from the app at a machine, choosing what you get there, machines near you | The Austin pilot is door-to-door delivery; machines come later. The app offers no machine and the scan page no "free water near me". |
 
 **Kept on, by judgment:** points and going live with points, because the app's wallet shows points, the full data
 level earns them, the games pay them, and only going live ends the test stage (where points are marked as test and
@@ -346,3 +347,15 @@ Without keys, each uses a stand-in that says it's a stand-in, so everything can 
 
 Photos are kept once, shrunk to print size, and stripped of hidden data. Labels point at them; a label sent to a
 printer or machine carries its photos inside it, so it prints whole even offline.
+
+## Print files
+
+What a printer or machine gets (and `GET /v1/units/:id/label.svg`) follows the printer's design guide: the label with
+its bleed (8.125 × 4.125 in for the standard 8 × 4 in bottle; backgrounds run into the bleed), every picture inside the
+file, every word converted to outlines so no printer can swap a font, QR codes as vector squares, and each part its own
+element. The outlines come from fonts that ship in the code (`src/modules/print/fonts/files`); nothing has to be
+installed for them. Emoji and Chinese, Japanese or Korean letters in an ad, which those fonts don't have, are drawn as
+pictures at 600 dpi with the fonts of the machine making the file: the container image has none, so add a font package
+(for example `fonts-noto-color-emoji`, `fonts-noto-cjk`) to the image if ads use them, or they print blank (never a
+wrong letter). To change the fonts, run `python3 -I scripts/fonts/build-fonts.py <font folder>` (needs fontTools) and
+commit the result.

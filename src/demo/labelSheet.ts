@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import sharp from 'sharp';
 import type { Campaign, Placement, Unit } from '../core/types';
-import { layoutsFor } from '../modules/ads/layouts';
+import { adArea, layoutsFor } from '../modules/ads/layouts';
 import { pieceOf, svgLabelRenderer } from '../modules/print/renderer';
 import { renderBox } from '../modules/packs/boxRenderer';
 import { setStudioAssetUrl } from '../modules/studio/layout';
@@ -53,7 +53,7 @@ for (const product of products) {
     const meta = await sharp(png).metadata();
     tiles.push({ png, w: meta.width!, h: meta.height!, title: `${l.template}  (${sizes(l.shares)})` });
   }
-  await sheet(`${product.id}.png`, `${product.name}: every label template (ad area ${(product.label.widthIn - product.label.seamIn - product.label.panelWidthIn).toFixed(2)}″ × ${product.label.heightIn}″)`, tiles, 3);
+  await sheet(`${product.id}.png`, `${product.name}: every label template (ad area ${adArea(product).w.toFixed(2)}″ × ${adArea(product).h.toFixed(2)}″)`, tiles, 3);
 }
 
 // Box sides: each side is one whole piece for one ad.

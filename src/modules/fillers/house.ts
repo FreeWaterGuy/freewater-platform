@@ -6,6 +6,7 @@ import type { Campaign } from '../../core/types';
  * asks here: a filler or a news piece must never be taken for it, whatever order the campaigns were loaded in.
  */
 export function houseAd(campaigns: Iterable<Campaign>, companyId: string): Campaign | undefined {
-  for (const c of campaigns) if (c.isHouse && !c.filler && c.companyId === companyId) return c;
+  // Not the plain blank piece (src/modules/fillers/unsold.ts), which is nobody's ad.
+  for (const c of campaigns) if (c.isHouse && !c.filler && c.companyId === companyId && c.id !== `cmp-${companyId}-blank`) return c;
   return undefined;
 }

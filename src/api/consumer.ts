@@ -1,4 +1,5 @@
-import { placementShare } from '../modules/ads/layouts';
+import { adArea, placementShare } from '../modules/ads/layouts';
+import { outlineText } from '../modules/print/outline';
 import { houseAd } from '../modules/fillers/house';
 import { createHash } from 'node:crypto';
 import type { App } from '../app';
@@ -72,7 +73,7 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     const pick = own ? platform.campaigns.get(own.campaignId) : eligible[Math.floor(platform.random() * eligible.length)];
     const c = pick ?? houseAd(platform.campaigns.values(), company.id);
     if (!c) return null;
-    return { advertiser: c.advertiserName, campaignId: c.id, art: `<svg xmlns="http://www.w3.org/2000/svg" width="360" height="440" viewBox="0 0 360 440">${c.creative.svg(360, 440)}</svg>`, onThisBottle: !!own, url: own ? `/s/${u.id}/${own.slotIndex}` : null, target: own ? `s:${u.id}:${own.slotIndex}` : null };
+    return { advertiser: c.advertiserName, campaignId: c.id, art: outlineText(`<svg xmlns="http://www.w3.org/2000/svg" width="360" height="440" viewBox="0 0 360 440">${c.creative.svg(360, 440)}</svg>`), onThisBottle: !!own, url: own ? `/s/${u.id}/${own.slotIndex}` : null, target: own ? `s:${u.id}:${own.slotIndex}` : null };
   };
 
   // Per-person queue (the platform runs as one process): taps from the same person run one after another.
@@ -120,7 +121,8 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     if (hit && platform.bus.now().getTime() - hit.at < 5 * 60_000) return { type: 'image/svg+xml', raw: hit.svg };
     const company = platform.companies.get(companyId)!;
     const product = platform.standardProduct(companyId);
-    const fill = registry.adsFor(company).fill({ company, product: platform.productFor(company, product), location, campaigns: [...platform.campaigns.values()], random: platform.random });
+    const narrowed = platform.productFor(company, product);
+    const fill = registry.adsFor(company).fill({ company, product: narrowed, location, campaigns: [...platform.campaigns.values()], random: platform.random, unsold: platform.unsoldFiller({ company, product: narrowed, location, audience: null }) });
     const unit: Unit = { id: 'sample', companyId, productId: product.id, locationId: location.id, kind: 'ad_supported', placements: fill.placements, layout: fill.layout, status: 'rendered', createdAt: platform.bus.now().toISOString() };
     const label = await registry.rendererFor(company).render({ unit, product, company, campaigns: platform.campaigns });
     const shown = await platform.forView(label.svg);
@@ -131,7 +133,8 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
   route({ method: 'GET', url: '/v1/public/products/:productId', scope: 'public', summary: 'A product and the size of the area a custom design fills.', handler: async (req) => {
     const p = platform.products.get((req.params as any).productId);
     if (!p) throw notFound('Product');
-    const art = { widthIn: +(p.label.widthIn - p.label.seamIn - p.label.panelWidthIn).toFixed(3), heightIn: p.label.heightIn };
+    const area = adArea(p);
+    const art = { widthIn: +area.w.toFixed(3), heightIn: +area.h.toFixed(3) };
     return { body: { id: p.id, name: p.name, label: { widthIn: p.label.widthIn, heightIn: p.label.heightIn }, designArea: { ...art, widthPx: Math.round(art.widthIn * PX_PER_IN), heightPx: Math.round(art.heightIn * PX_PER_IN) } } };
   } });
 

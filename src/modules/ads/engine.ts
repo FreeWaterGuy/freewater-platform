@@ -1,11 +1,11 @@
 import type { Campaign, CompanyConfig, Placement, Product, Share, SlotRect } from '../../core/types';
 import { layoutsFor, type Layout } from './layouts';
 import { fairTurnBottles, placementRule } from './layoutChoice';
-import type { AdEngine, FillRequest, FillResult, PrintAudience } from './contract';
+import type { AdEngine, FillRequest, FillResult, OpenPiece, PrintAudience, UnsoldFiller } from './contract';
 import { canAfford, floorPrice, priceFor } from './budget';
 import { flatPricing, prepaidModel } from './billing';
 import { AuctionStats, momentAt, nextRival, paced, piecePrice, rankBidders, rollDay, secondPrice, type AuctionMoment, type Bidder } from './auction';
-import { houseAd } from '../fillers/house';
+import { noUnsold } from '../fillers/unsold';
 
 /**
  * FreeWater's default ad engine.
@@ -17,14 +17,17 @@ import { houseAd } from '../fillers/house';
  *      "Every paid ad gets its turn" (the default): the best-earning label among those carrying the ad first in line;
  *      "Most revenue per bottle": the best-earning label, except that a paid ad left off `fairTurnBottles` bottles in a
  *      row where it fits (req.waits) goes first, the longest-waiting first, so no paid ad waits forever.
- *    Leftover pieces get fillers or the house ad, in their own cells.
+ *    Pieces nobody bought are filled from the company's unsold-space list (req.unsold: former advertisers' ads as a
+ *    bonus, approved fillers, charity partners, its picks), never with the company's own ads unless it chose to allow
+ *    them. Among labels that earn the same, the one leaving fewest pieces blank wins, so a tidier template with fewer
+ *    pieces is used when the list can't fill a piece; a plain blank piece is the last resort (the caller tells the team).
  */
 export const freewaterAdEngine: AdEngine = {
   name: 'freewater-ads',
   fill(req: FillRequest): FillResult {
     const { company, product, location, random } = req;
     const factor = product.priceFactor ?? 1;
-    const house = houseAd(req.campaigns, company.id);
+    const unsold = req.unsold ?? noUnsold(company.id);
     const moment = momentFor(req);
     const capped = (c: Campaign) => !!req.frequency && (req.frequency.counts.get(c.id) ?? 0) >= req.frequency.max;
     const tooOften = (c: Campaign) => c.buy.type === 'bid' && !!c.buy.frequencyCap && (req.audience?.campaignsToday?.get(c.id) ?? 0) >= c.buy.frequencyCap;
@@ -70,7 +73,7 @@ export const freewaterAdEngine: AdEngine = {
 
     // Try each layout, and when a pack asks for variety, a few different line-ups of the same campaigns.
     // Keep the best-earning label that doesn't repeat one already in this pack.
-    type Option = { layout: Share[]; placements: Placement[]; revenue: number; pieces: number; aspect: number; lead: boolean };
+    type Option = { layout: Share[]; placements: Placement[]; revenue: number; pieces: number; aspect: number; lead: boolean; blanks: number };
     let best: Option | null = null;
     let bestNew: Option | null = null;
     // With route pieces on the bottle, equal earnings go to the label with fewer, bigger pieces (a tenth bought on its
@@ -79,46 +82,57 @@ export const freewaterAdEngine: AdEngine = {
     // template can hold it: labels are cut only into tidy templates (layouts.ts), and without this an ad whose size
     // mixes into fewer of them (a quarter beside a third's sixths) could lose every label to the same better-earning mix.
     // With "Most revenue per bottle", only an ad at its fair-turn bound is first in line; otherwise earnings alone decide.
-    const better = (o: Option, than: Option | null) => !than || (o.lead !== than.lead ? o.lead : o.revenue > than.revenue || (fixed.length > 0 && o.revenue === than.revenue && (o.pieces < than.pieces || (o.pieces === than.pieces && o.aspect < than.aspect))));
+    // Earning the same, the label with fewer blank pieces wins (paid pieces first, then no piece left blank).
+    const better = (o: Option, than: Option | null) => !than || (o.lead !== than.lead ? o.lead : o.revenue !== than.revenue ? o.revenue > than.revenue : o.blanks !== than.blanks ? o.blanks < than.blanks : fixed.length > 0 && (o.pieces < than.pieces || (o.pieces === than.pieces && o.aspect < than.aspect)));
     const owed = overdue.find((c) => chosen.includes(c));
     const lineups = req.avoidSignatures ? [chosen, ...Array.from({ length: 30 }, () => shuffle(chosen, random))] : [chosen];
     for (const [k, pool] of lineups.entries()) {
       for (const layout of shuffle(layouts, random)) {
         const pinned = fixed.length ? pin(layout, fixed) : new Map<number, Placement>();
         if (!pinned) continue;
-        const placements = assign(layout, pool, house, company, factor, why, priceOf, labelPrice, pinned, k > 0 ? random : undefined);
-        if (!placements) continue;
+        const filled = assign(layout, pool, unsold, company, factor, why, priceOf, labelPrice, pinned, random, k > 0 ? random : undefined);
+        if (!filled) continue;
+        const { placements, blanks } = filled;
         const first = revenueRule ? owed : pool[0];
         const lead = !first || placements.some((p) => p.campaignId === first.id);
-        const option = { layout: layout.shares, placements, revenue: placements.reduce((s, p) => s + p.priceCents, 0), pieces: layout.shares.length, aspect: layout.worstAspect, lead };
+        const option = { layout: layout.shares, placements, revenue: placements.reduce((s, p) => s + p.priceCents, 0), pieces: layout.shares.length, aspect: layout.worstAspect, lead, blanks };
         if (better(option, best)) best = option;
         if (req.avoidSignatures && !req.avoidSignatures.has(labelSignature(placements)) && better(option, bestNew)) bestNew = option;
       }
     }
-    if (bestNew) best = bestNew;
+    // Variety never costs a piece: a new-looking label is taken only if it leaves no more pieces blank.
+    if (bestNew && (!best || bestNew.blanks <= best.blanks)) best = bestNew;
 
     // The paid ads that could have gone on this bottle and didn't: the caller counts their wait (the fair-turn bound).
     const left = (placed: Placement[]) => eligible.filter((c) => fitsHere(c) && !placed.some((p) => p.campaignId === c.id)).map((c) => c.id);
     if (!best) {
-      if (!house) throw new Error(`Company ${company.id} has no house ad to fill an empty label.`);
-      const placements = [housePlacement(0, 1, FULL, house)];
+      const placements = wholeLabel(unsold, random);
       return { layout: [1], placements, waited: left(placements) };
     }
     return { layout: best.layout, placements: best.placements, waited: left(best.placements) };
   },
 };
 
-/** A second engine that only prints the company's own house ad. Exists to show a module can be swapped per company. */
+/**
+ * A second engine that sells nothing: used when a company has ads switched off (or no layout it can cut), and to show a
+ * module can be swapped per company. Its own house ad across the label only where the company allows its own ads in
+ * the ad area (never FreeWater); otherwise the label is filled from its unsold-space list, or left plain.
+ */
 export const houseOnlyAdEngine: AdEngine = {
   name: 'house-only',
-  fill({ company, campaigns }) {
-    const house = houseAd(campaigns, company.id);
-    if (!house) throw new Error(`Company ${company.id} has no house ad.`);
-    return { layout: [1], placements: [housePlacement(0, 1, FULL, house)] };
+  fill({ company, unsold, random }) {
+    const u = unsold ?? noUnsold(company.id);
+    if (u.house) return { layout: [1], placements: [housePlacement(0, 1, FULL, u.house)] };
+    return { layout: [1], placements: wholeLabel(u, random) };
   },
 };
 
 const FULL: SlotRect = { x: 0, y: 0, w: 1, h: 1 };
+/** The whole label as one piece nobody bought: from the list, or plain. */
+function wholeLabel(u: UnsoldFiller, random: () => number): Placement[] {
+  const open: OpenPiece = { slotIndex: 0, share: 1, rect: FULL };
+  return [u.fill([open], [], random)[0] ?? u.blank(open)];
+}
 
 /** Two labels with the same signature look the same: same campaigns, same sizes, same order. */
 export function labelSignature(placements: Placement[]): string {
@@ -215,12 +229,16 @@ function pin(layout: Layout, fixed: Fixed[]): Map<number, Placement> | null {
   return out;
 }
 
-/** Fill the biggest slots first with the best-paying campaign that has artwork that size. */
-function assign(layout: Layout, chosen: Campaign[], house: Campaign | undefined, company: CompanyConfig, factor = 1, why = new Map<string, string[]>(), priceOf?: (c: Campaign, share: Share) => number, auction?: Map<string, { paid: number; bidder: Bidder }>, pinned = new Map<number, Placement>(), varied?: () => number): Placement[] | null {
+/**
+ * Fill the biggest slots first with the best-paying campaign that has artwork that size; then the pieces nobody bought
+ * from the unsold-space list, and a blank piece for any it can't fill (counted, so a tidier label wins).
+ */
+function assign(layout: Layout, chosen: Campaign[], unsold: UnsoldFiller, company: CompanyConfig, factor = 1, why = new Map<string, string[]>(), priceOf?: (c: Campaign, share: Share) => number, auction?: Map<string, { paid: number; bidder: Bidder }>, pinned = new Map<number, Placement>(), random: () => number = Math.random, varied?: () => number): { placements: Placement[]; blanks: number } | null {
   // Biggest pieces first; for a pack's variety, the pieces of one size in a varied order (same earnings, a new label).
   const order = layout.shares.map((share, slotIndex) => ({ share, slotIndex, r: varied ? varied() : slotIndex })).sort((a, b) => a.share - b.share || a.r - b.r);
   const pool = [...chosen];
   const out: Placement[] = [...pinned.values()];
+  const open: OpenPiece[] = [];
   for (const { share, slotIndex } of order) {
     if (pinned.has(slotIndex)) continue;
     const rect = layout.rects[slotIndex]!;
@@ -242,15 +260,15 @@ function assign(layout: Layout, chosen: Campaign[], house: Campaign | undefined,
         ...(why.has(c.id) ? { audienceMatch: why.get(c.id) } : {}),
         ...(auction?.has(c.id) ? { auction: (({ paid, bidder }) => ({ bidCents: bidder.adjustedBid, paidLabelCents: paid, rankCents: Math.round(bidder.rank % 1e6), adjustments: bidder.applied }))(auction.get(c.id)!) } : {}),
       });
-    } else if (house) {
-      out.push(housePlacement(slotIndex, share, rect, house));
     } else {
-      return null;
+      open.push({ slotIndex, share, rect });
     }
   }
-  // A layout that is only house ads is worse than the full-wrap house ad.
-  if (out.every((p) => p.isHouse) && layout.shares.length > 1) return null;
-  return out.sort((a, b) => a.slotIndex - b.slotIndex);
+  const filled = open.length ? unsold.fill(open, out, random) : [];
+  out.push(...filled);
+  let blanks = 0;
+  for (const o of open) if (!filled.some((p) => p.slotIndex === o.slotIndex)) { out.push(unsold.blank(o)); blanks++; }
+  return { placements: out.sort((a, b) => a.slotIndex - b.slotIndex), blanks };
 }
 
 function housePlacement(slotIndex: number, share: Share, rect: SlotRect, house: Campaign): Placement {
@@ -264,6 +282,7 @@ function housePlacement(slotIndex: number, share: Share, rect: SlotRect, house: 
     experienceId: house.experienceId,
     priceCents: 0,
     isHouse: true,
+    unsold: 'own',
   };
 }
 

@@ -116,7 +116,7 @@ function wordmark(s: StudioSpec, x: number, y: number, maxW: number, size: numbe
     return { svg: `<g data-fw-keep="logo">${back}${img}</g>`, box: plate ? { x: x - 6, y: y - 5, w: lw + 12, h: lh + 10 } : { x, y, w: lw, h: lh } };
   }
   const t = studioTypes[s.type];
-  const o = { x, top: y, bottom: y + blockHeight(2, size, 1.04), right: x + maxW, maxLines: 2, max: size, min: 9, lead: 1.04, tracking: 0.02 };
+  const o = { x, top: y, bottom: y + blockHeight(2, size, 1.04), right: x + maxW, maxLines: 2, max: size, min: 9, lead: 1.04, tracking: 0.02, font: { family: t.display, weight: t.weight } };
   const f = fitText(s.brand, o) ?? fitOrCut(s.brand, o);
   return { svg: textLines(f.lines, x, y, f.size, { font: t.display, weight: t.weight, fill, lead: 1.04, tracking: 0.02 }), box: { x, y, w: f.width, h: f.height } };
 }
@@ -125,7 +125,7 @@ function wordmark(s: StudioSpec, x: number, y: number, maxW: number, size: numbe
 function kickerText(s: StudioSpec, x: number, y: number, right: number, avoid: Box[], size: number, fill: string): Drawn | null {
   if (!s.kicker) return null;
   const k = s.kicker.toUpperCase();
-  const f = fitText(k, { x, top: y, bottom: y + blockHeight(1, size, 1), right, avoid, maxLines: 1, max: size, min: MIN_TEXT, tracking: 0.14 });
+  const f = fitText(k, { x, top: y, bottom: y + blockHeight(1, size, 1), right, avoid, maxLines: 1, max: size, min: MIN_TEXT, tracking: 0.14, font: { family: studioTypes[s.type].text, weight: 700 } });
   if (!f) return null;
   return { svg: textLines(f.lines, x, y, f.size, { font: studioTypes[s.type].text, weight: 700, fill, tracking: 0.14 }), box: { x, y, w: f.width, h: f.height } };
 }
@@ -143,7 +143,7 @@ function badge(s: StudioSpec, cx: number, cy: number, r: number, avoid: Box[]): 
   if (r < 22) return null;
   const inner = 1.3 * (r - 3); // the square inside the ring, turned or not
   for (let size = Math.min(r * 0.34, 16); size >= MIN_TEXT; size -= 0.5) for (let n = 1; n <= 4; n++) {
-    const words = balance(s.offer, inner / size, n);
+    const words = balance(s.offer, inner / size, n, 0, { family: studioTypes[s.type].text, weight: 800 });
     if (!words || blockHeight(words.length, size, 1.02) > inner) continue;
     const ink = readableOn(s.colors.accent);
     const top = cy - blockHeight(words.length, size, 1.02) / 2;
@@ -155,9 +155,10 @@ function badge(s: StudioSpec, cx: number, cy: number, r: number, avoid: Box[]): 
 /** A short offer as a pill under the words; left out when it doesn't fit or would reach the code. */
 function pill(s: StudioSpec, x: number, y: number, maxW: number, bottom: number, avoid: Box[]): Drawn | null {
   if (!s.offer || y + 24 > bottom) return null;
-  const os = Math.min(11, (maxW - 22) / textEm(s.offer));
+  const font = { family: studioTypes[s.type].text, weight: 800 };
+  const os = Math.min(11, (maxW - 22) / textEm(s.offer, 0, font));
   if (os < MIN_TEXT) return null;
-  const box = { x, y, w: textEm(s.offer) * os + 22, h: 24 };
+  const box = { x, y, w: textEm(s.offer, 0, font) * os + 22, h: 24 };
   if (avoid.some((b) => box.x + box.w > b.x - 4 && box.y + box.h > b.y - 4 && box.x < b.x + b.w && box.y < b.y + b.h)) return null;
   const t = studioTypes[s.type];
   return { svg: `<rect x="${f1(x)}" y="${f1(y)}" width="${f1(box.w)}" height="24" rx="12" fill="${s.colors.accent}"/><text x="${f1(x + 11)}" y="${f1(y + 12 + os * 0.35)}" font-family="${esc(t.text)}" font-weight="800" font-size="${f1(os)}" fill="${readableOn(s.colors.accent)}">${esc(s.offer)}</text>`, box };
@@ -206,6 +207,8 @@ const pad0 = (w: number, h: number) => Math.max(10, Math.min(26, Math.min(w, h) 
 
 function drawLook(look: Exclude<StudioLook, 'auto'>, s: StudioSpec, w: number, h: number, ctx: CreativeContext | undefined, id: string, d: Drop): { svg: string; head: Fitted | null; good: number } {
   const t = studioTypes[s.type];
+  // Measured in the fonts they print in (print/fonts): the headline's display face, the detail line's text face.
+  const headFont = { family: t.display, weight: t.weight }, subFont = { family: t.text, weight: 500 };
   const qr = qrBox(w, h, ctx);
   // The code's corner, and anything else the printer draws over this piece (a box's stop code).
   const keep: Box[] = [qr, ...reservedBoxes(ctx)];
@@ -238,17 +241,17 @@ function drawLook(look: Exclude<StudioLook, 'auto'>, s: StudioSpec, w: number, h
     // line above that.
     const top = Math.max((wm ? wm.box.y + wm.box.h : pad) + 10, h * 0.3);
     let bottom = h - pad;
-    const sub = s.sub && !small && !d.sub ? fitText(s.sub, { x: pad, top, bottom, right: w - pad, avoid, maxLines: 2, max: 12, min: 8.5, lead: 1.25, anchor: 'bottom' }) : null;
+    const sub = s.sub && !small && !d.sub ? fitText(s.sub, { x: pad, top, bottom, right: w - pad, avoid, maxLines: 2, max: 12, min: 8.5, lead: 1.25, font: subFont, anchor: 'bottom' }) : null;
     if (sub) { parts.push(detail(sub, pad, light, 1.25)); bottom = sub.y - 6; }
     const wantKick = !!s.kicker && !small && !d.kicker;
     max = small ? 24 : Math.min(48, h * 0.17);
-    const o = { x: pad, top: top + (wantKick ? 22 : 0), bottom, right: w - pad, avoid, maxLines: small ? 4 : 3, max, min: 10, anchor: 'bottom' as const };
+    const o = { x: pad, top: top + (wantKick ? 22 : 0), bottom, right: w - pad, avoid, maxLines: small ? 4 : 3, max, min: 10, font: headFont, anchor: 'bottom' as const };
     head = fitText(s.headline, o);
     const hd = head ?? fitOrCut(s.headline, o);
     parts.push(display(hd, pad, light));
     if (wantKick) {
       // On a photo, the small line sits on its own accent strip so it reads on anything.
-      const k = fitText(s.kicker!.toUpperCase(), { x: pad + 6, top, bottom: hd.y - 10, right: w - pad - 6, avoid, maxLines: 1, max: 9.5, min: MIN_TEXT, tracking: 0.12, anchor: 'bottom' });
+      const k = fitText(s.kicker!.toUpperCase(), { x: pad + 6, top, bottom: hd.y - 10, right: w - pad - 6, avoid, maxLines: 1, max: 9.5, min: MIN_TEXT, tracking: 0.12, anchor: 'bottom', font: { family: t.text, weight: 700 } });
       if (k) parts.push(`<rect x="${f1(pad)}" y="${f1(k.y - 4)}" width="${f1(k.width + 12)}" height="${f1(k.height + 6)}" fill="${s.colors.accent}"/>${textLines(k.lines, pad + 6, k.y, k.size, { font: t.text, weight: 700, fill: readableOn(s.colors.accent), tracking: 0.12 })}`);
     }
     const from = Math.max(0, Math.min(h * 0.38, (wantKick ? hd.y - 30 : hd.y) - h * 0.12));
@@ -266,10 +269,10 @@ function drawLook(look: Exclude<StudioLook, 'auto'>, s: StudioSpec, w: number, h
     const kick = !d.kicker ? kickerText(s, pad, y, right, avoid, 10.5, accentOnPaper) : null;
     if (kick) { parts.push(kick.svg); y += kick.box.h + 8; }
     const offerRoom = s.offer && !d.offer ? 34 : 0;
-    const subAt = (top: number, bottom: number) => (s.sub && !d.sub ? fitText(s.sub, { x: pad, top, bottom, right, avoid, maxLines: 3, max: 12.5, min: 8.5, lead: 1.28 }) : null);
+    const subAt = (top: number, bottom: number) => (s.sub && !d.sub ? fitText(s.sub, { x: pad, top, bottom, right, avoid, maxLines: 3, max: 12.5, min: 8.5, lead: 1.28, font: subFont }) : null);
     const subRoom = subAt(y, h - pad - offerRoom);
     max = Math.min(56, h * 0.2);
-    const o = { x: pad, top: y, bottom: h - pad - offerRoom - (subRoom ? subRoom.height + 10 : 0), right, avoid, maxLines: 4, max, min: 10 };
+    const o = { x: pad, top: y, bottom: h - pad - offerRoom - (subRoom ? subRoom.height + 10 : 0), right, avoid, maxLines: 4, max, min: 10, font: headFont };
     head = fitText(s.headline, o);
     const hd = head ?? fitOrCut(s.headline, o);
     parts.push(display(hd, pad, ink));
@@ -293,12 +296,12 @@ function drawLook(look: Exclude<StudioLook, 'auto'>, s: StudioSpec, w: number, h
     const wm = wordmark(s, pad, y, roomRight(pad, w - pad, avoid, y, y + size * 2.2) - pad, size, accentOnPaper);
     if (wm) { parts.push(wm.svg); y = wm.box.y + wm.box.h + 6; }
     max = small ? 20 : 30;
-    const o = { x: pad, top: y, bottom: h - pad, right: w - pad, avoid, maxLines: 5, max, min: 10 };
+    const o = { x: pad, top: y, bottom: h - pad, right: w - pad, avoid, maxLines: 5, max, min: 10, font: headFont };
     head = fitText(s.headline, o);
     const hd = head ?? fitOrCut(s.headline, o);
     parts.push(display(hd, pad, ink));
     y = hd.y + hd.height + 4;
-    const sub = s.sub && !small && !d.sub ? fitText(s.sub, { x: pad, top: y, bottom: h - pad, right: w - pad, avoid, maxLines: 3, max: 11, min: 8.5, lead: 1.25 }) : null;
+    const sub = s.sub && !small && !d.sub ? fitText(s.sub, { x: pad, top: y, bottom: h - pad, right: w - pad, avoid, maxLines: 3, max: 11, min: 8.5, lead: 1.25, font: subFont }) : null;
     if (sub) parts.push(detail(sub, pad, ink, 1.25));
     if (b) parts.push(b.svg);
   } else if (look === 'frame') {
@@ -315,7 +318,7 @@ function drawLook(look: Exclude<StudioLook, 'auto'>, s: StudioSpec, w: number, h
     const avoid = [...keep, ...(b ? [b.box] : [])];
     const brandRoom = s.logo ? 22 : 18;
     max = 34;
-    const o = { x: pad, top: y, bottom: h - pad - brandRoom, right: w - pad, avoid, maxLines: 3, max, min: 10 };
+    const o = { x: pad, top: y, bottom: h - pad - brandRoom, right: w - pad, avoid, maxLines: 3, max, min: 10, font: headFont };
     head = fitText(s.headline, o);
     const hd = head ?? fitOrCut(s.headline, o);
     parts.push(display(hd, pad, ink));
@@ -341,12 +344,12 @@ function drawLook(look: Exclude<StudioLook, 'auto'>, s: StudioSpec, w: number, h
     const kick = !d.kicker ? kickerText(s, pad, y, w - pad, avoid, 10.5, accentOnPaper) : null;
     if (kick) { parts.push(kick.svg); y += kick.box.h + 8; }
     max = small ? 28 : Math.min(120, h * 0.3);
-    const o = { x: pad, top: y, bottom: h - pad, right: w - pad, avoid, maxLines: small ? 5 : 4, max, min: 10, lead: 1.0 };
+    const o = { x: pad, top: y, bottom: h - pad, right: w - pad, avoid, maxLines: small ? 5 : 4, max, min: 10, font: headFont, lead: 1.0 };
     head = fitText(s.headline, o);
     const hd = head ?? fitOrCut(s.headline, o);
     parts.push(display(hd, pad, ink, 1.0));
     y = hd.y + hd.height + 8;
-    const sub = s.sub && !small && !d.sub ? fitText(s.sub, { x: pad, top: y, bottom: h - pad, right: w - pad, avoid, maxLines: 3, max: 12, min: 8.5, lead: 1.25 }) : null;
+    const sub = s.sub && !small && !d.sub ? fitText(s.sub, { x: pad, top: y, bottom: h - pad, right: w - pad, avoid, maxLines: 3, max: 12, min: 8.5, lead: 1.25, font: subFont }) : null;
     if (sub) parts.push(detail(sub, pad, ink, 1.25));
     if (b) parts.push(b.svg);
   }

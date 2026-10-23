@@ -131,7 +131,7 @@ function drawPoster(s: PosterSpec, w: number, h: number, ctx: CreativeContext | 
     top = box.y + box.h + 8;
   } else {
     const size = narrow ? 16 : photo && !wide ? 16 : Math.min(30, Math.max(14, h * 0.1));
-    const o = { x: pad, top, bottom: top + blockHeight(narrow ? 3 : 2, size, 1.1), right: roomRight(pad, right, avoid, top, top + size * 2.3), maxLines: narrow ? 3 : 2, max: size, min: 9, lead: 1.1 };
+    const o = { x: pad, top, bottom: top + blockHeight(narrow ? 3 : 2, size, 1.1), right: roomRight(pad, right, avoid, top, top + size * 2.3), maxLines: narrow ? 3 : 2, max: size, min: 9, lead: 1.1, font: { family: font, weight: 700 } };
     const b = fitText(s.brand, o) ?? fitOrCut(s.brand, o);
     parts.push(lines(b, pad, font, 700, s.colors.accent, 1.1));
     top = b.y + b.height + (narrow ? 8 : 10);
@@ -145,18 +145,19 @@ function drawPoster(s: PosterSpec, w: number, h: number, ctx: CreativeContext | 
 
   // The headline, as big as it fits; the small line under it when there's room.
   const max = narrow ? 20 : wide ? Math.min(h * 0.16, 52) : Math.min(46, w * 0.13);
-  const subFit = (y: number) => (s.sub && !narrow && !d.sub ? fitText(s.sub, { x: pad, top: y, bottom: h - pad, right, avoid, maxLines: 2, max: 12, min: 8.5, lead: 1.25 }) : null);
+  const subFit = (y: number) => (s.sub && !narrow && !d.sub ? fitText(s.sub, { x: pad, top: y, bottom: h - pad, right, avoid, maxLines: 2, max: 12, min: 8.5, lead: 1.25, font: { family: SUB_FONT, weight: 400 } }) : null);
   const subRoom = subFit(top);
-  const o = { x: pad, top, bottom: h - pad - (subRoom ? subRoom.height + 6 : 0), right, avoid, maxLines: narrow ? 5 : wide ? 3 : 4, max, min: 10, lead: 1.1 };
+  const o = { x: pad, top, bottom: h - pad - (subRoom ? subRoom.height + 6 : 0), right, avoid, maxLines: narrow ? 5 : wide ? 3 : 4, max, min: 10, lead: 1.1, font: { family: font, weight: 700 } };
   const head = fitText(s.headline, o);
   const hd = head ?? fitOrCut(s.headline, o);
   parts.push(lines(hd, pad, font, 700, s.colors.fg, 1.1));
   const sub = subFit(hd.y + hd.height + 6);
-  if (sub) parts.push(lines(sub, pad, "'DM Sans', Arial, sans-serif", 400, s.colors.fg, 1.25, ' opacity=".85"'));
+  if (sub) parts.push(lines(sub, pad, SUB_FONT, 400, s.colors.fg, 1.25, ' opacity=".85"'));
   return { svg: parts.join(''), head, good: Math.min(14, max * 0.55) };
 }
 
 const f1 = (n: number) => (Math.round(n * 10) / 10).toString();
+const SUB_FONT = "'DM Sans', Arial, sans-serif";
 function lines(f: Fitted, x: number, font: string, weight: number, fill: string, lead: number, extra = '') {
   return f.lines.map((l, i) => `<text x="${f1(x)}" y="${f1(f.y + f.size * BASELINE + i * f.size * lead)}" font-family="${esc(font)}" font-weight="${weight}" font-size="${f1(f.size)}" fill="${fill}"${extra}>${esc(l)}</text>`).join('');
 }

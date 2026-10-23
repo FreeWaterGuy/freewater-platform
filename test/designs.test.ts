@@ -89,7 +89,7 @@ describe('designing a bottle by chatting', () => {
     // The proof shows bottle 1 exactly as it prints; paying prints all three, each with its own name.
     const proof = (await call('POST', `/v1/me/designs/${d.id}/proof`, t)).json();
     expect(proof).toMatchObject({ quantity: 3, names: ['Maya', 'Ana', 'Ben'], totalCents: 900 });
-    expect(proof.labelSvg).toContain('>Maya<');
+    expect(proof.labelSvg).toContain('data-fw-text="Maya"'); // the name, printed as outlines
     await call('POST', '/v1/me/cards', t, { token: 'tok_visa' });
     const order = await call('POST', '/v1/me/custom-orders', t, { orderId: 'party', proofId: proof.proofId, locationId: 'ATX-014', presenceCode: await presence() });
     expect(order.statusCode).toBe(201);
@@ -98,8 +98,8 @@ describe('designing a bottle by chatting', () => {
     expect(o.payment).toMatchObject({ status: 'captured', amountCents: 900 });
     expect(o.countdown.seconds).toBe(72);
     const labels = await Promise.all(o.bottles.map((b: any) => app.platform.labelSvg(b.id)));
-    expect(labels[1]).toContain('>Ana<');
-    expect(labels[2]).toContain('>Ben<');
+    expect(labels[1]).toContain('data-fw-text="Ana"');
+    expect(labels[2]).toContain('data-fw-text="Ben"');
     const page = (await call('GET', `/v1/public/experience/${o.bottles[2].id}/0?viewer=friend-phone-99`)).json();
     expect(page.doc.blocks[0]).toEqual({ type: 'message', from: 'Jordan', text: 'Happy 30th, Maya! We love you.' });
     expect((await call('GET', `/v1/me/designs/${d.id}`, t)).json().status).toBe('ordered');

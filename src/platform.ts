@@ -8,7 +8,10 @@ import { targetingPremium } from './modules/ads/targeting';
 import { AuctionStats, momentAt } from './modules/ads/auction';
 import { Ledger } from './modules/ledger/ledger';
 import type { RenderedLabel } from './modules/print/contract';
+import { printReady } from './modules/print/renderer';
 import { houseOnlyAdEngine } from './modules/ads/engine';
+import { blankCampaign, blankCampaignId, keepOwnOut, noUnsold, type UnsoldContext } from './modules/fillers/unsold';
+import type { UnsoldFiller } from './modules/ads/contract';
 import { companyLayouts, productFor as narrowProduct } from './modules/ads/layoutChoice';
 
 export interface OrderOptions {
@@ -78,8 +81,13 @@ export class Platform {
   codes?: import('./modules/codes/service').CodeMinter;
   /** Each ad's results so far, so the auction can predict how it will do. */
   readonly auctionStats = new AuctionStats();
-  /** Fills spots nobody bought with approved filler (src/modules/fillers). Set at start-up; without it, the house ad stays. */
-  unsold?: (req: { company: CompanyConfig; product: Product; location: Location; audience: import('./modules/ads/contract').PrintAudience | null; placements: Placement[]; random: () => number }) => Placement[];
+  /**
+   * Space nobody bought (src/modules/fillers/unsold.ts): what fills it on one bottle, from the company's list. Set at
+   * start-up; without it, a piece nobody bought prints plain. Never the company's own ads unless it chose to allow them.
+   */
+  unsoldFor?: (ctx: UnsoldContext) => UnsoldFiller;
+  /** A bottle's label was filled with this many blank pieces (nothing on the list fit): the team is told. Set at start-up. */
+  onBlank?: (companyId: string, n: number, why: string) => void;
   /** Which slots on a bottle use AR that follows the bottle, so its label gets the tracking strip there. Set at start-up. */
   arTracking?: (unit: Unit) => number[];
   /**
@@ -178,6 +186,22 @@ export class Platform {
     for (const p of fill.placements) if (!p.isHouse) this.adWaits.delete(p.campaignId);
     for (const id of fill.waited ?? []) this.adWaits.set(id, (this.adWaits.get(id) ?? 0) + 1);
     if (this.adWaits.size > Platform.MAX_WAITS) for (const id of this.adWaits.keys()) if (!this.campaigns.get(id)?.active) this.adWaits.delete(id);
+  }
+
+  /** What fills space nobody bought on one bottle (src/modules/fillers/unsold.ts); plain pieces when the app didn't set it. */
+  unsoldFiller(ctx: UnsoldContext): UnsoldFiller {
+    if (this.unsoldFor) return this.unsoldFor(ctx);
+    const plain = noUnsold(ctx.company.id);
+    return { ...plain, blank: (o) => { this.ensureBlank(ctx.company.id); return plain.blank(o); } };
+  }
+  /** The plain piece's campaign, kept with the company's campaigns so its bottles draw and open after a restart. */
+  ensureBlank(companyId: string): Campaign {
+    const had = this.campaigns.get(blankCampaignId(companyId));
+    if (had) return had;
+    const c = blankCampaign(companyId);
+    this.campaigns.set(c.id, c);
+    this.persist.campaign(c);
+    return c;
   }
 
   /** The product as this company may cut it: the sizes and label layouts it switched off left out (modules/ads/layoutChoice). */
@@ -293,14 +317,16 @@ export class Platform {
     const audience = this.audienceFor(opts.audience ?? null, on);
     const without = new Set<string>();
     const usable = () => [...this.campaigns.values()].filter((c) => !without.has(c.id) && (on('bidding') || c.buy.type !== 'bid'));
-    // Spots nobody bought (no paid ad, or a paid ad the database refused): approved filler (the company's own messages,
-    // charity, advertisers' offered ads, news) before the generic house ad. Fillers are house placements: never billed,
-    // never claimed from a prepaid ad, and only where the company has fillers on (they need ads on).
+    // Space nobody bought (no paid ad, or a paid ad the database refused) is filled from the company's unsold-space list
+    // (former advertisers' ads as a bonus, approved fillers, charity partners, its picks): never billed, never claimed
+    // from a prepaid ad, and never the company's own ads unless it chose to allow them (keepOwnOut also holds for any
+    // engine a company plugs in). A piece nothing fits prints plain, and the team is told.
+    const unsold = this.unsoldFiller({ company, product: allowed, location, audience, blockedAdvertisers: opts.blockedAdvertisers });
     const fillNow = (): import('./modules/ads/contract').FillResult => {
       if (opts.custom) return { layout: [1 as const], placements: [] };
       const reserved = (opts.reserved ?? []).filter((r) => !without.has(r.campaignId));
-      const f = engine.fill({ company, product: allowed, waits: this.adWaits, location, campaigns: usable(), random: this.random, frequency: opts.frequency, avoidSignatures: opts.avoidSignatures, audience: this.withToday(audience, company.timezone), moment: momentAt(this.bus.now(), company.timezone ?? 'UTC'), house: opts.house ?? null, stats: this.auctionStats, reserved, blockedAdvertisers: opts.blockedAdvertisers });
-      if (this.unsold && on('fillers')) f.placements = this.unsold({ company, product, location, audience, placements: f.placements, random: this.random });
+      const f = engine.fill({ company, product: allowed, waits: this.adWaits, location, campaigns: usable(), random: this.random, frequency: opts.frequency, avoidSignatures: opts.avoidSignatures, audience: this.withToday(audience, company.timezone), moment: momentAt(this.bus.now(), company.timezone ?? 'UTC'), house: opts.house ?? null, stats: this.auctionStats, reserved, blockedAdvertisers: opts.blockedAdvertisers, unsold });
+      f.placements = keepOwnOut(company.id, f.placements, unsold, this.campaigns, this.random);
       return f;
     };
     let fill = fillNow();
@@ -320,6 +346,8 @@ export class Platform {
     }
     this.persistCampaigns(fill.placements);
     this.noteWaits(fill);
+    const blanks = fill.placements.filter((p) => p.unsold === 'neutral').length;
+    if (blanks && !unsold.quiet) this.onBlank?.(company.id, blanks, `${location.id}, ${product.id}`);
 
     const unit: Unit = {
       id: newId('u'),
@@ -593,7 +621,7 @@ export class Platform {
    * A label as a printer gets it: photos the artwork points at (from the ad studio) put inside the file, at print
    * size, so a machine prints it whole even offline. Set by the app; labels without photos are unchanged.
    */
-  forPrint: (svg: string) => Promise<string> = async (svg) => svg;
+  forPrint: (svg: string) => Promise<string> = (svg) => printReady(svg);
   /** The same for a label shown on a screen (an <img> can't fetch the photos it points at): preview-sized photos. */
   forView: (svg: string) => Promise<string> = async (svg) => svg;
   /** Packs live in the pack service; it tells the core which company each belongs to. */

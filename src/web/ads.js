@@ -694,11 +694,22 @@
         h('div', { class: 'kpi' }, h('span', { text: 'Sales from bottles' }), h('b', { text: dollars(p.salesCents) }), h('small', { text: `${plural(num(p.sales), 'order', 'orders')}` }))),
       chart(o.daily),
       o.drafts.length ? h('div', {}, h('h2', { class: 'section', text: 'Unfinished ads' }), h('div', { class: 'drafts' }, o.drafts.map((d) => link(`/ads/drafts/${d.id}`, {}, h('span', { text: d.headline || 'New ad' }), h('span', { style: 'color:var(--muted)', text: `${d.campaignId ? 'Change to a live ad · ' : ''}Continue` }))))) : null,
+      bonusBox(),
       h('h2', { class: 'section', text: 'Your ads' }),
       o.campaigns.length ? h('div', { class: 'cards' }, o.campaigns.map(campaignCard)) : h('div', { class: 'empty' }, 'No ads yet. ', link('/ads/new', {}, 'Make your first one'), ' — it takes a few minutes.'),
       h('p', { style: 'color:var(--muted);font-size:13px;margin-top:22px', text: o.billing?.model === 'prepaid'
         ? `Price per bottle: ${Object.entries(o.prices.perPrintCents).map(([s, c]) => `${cents(c)} for ${sizeName(s)}`).join(', ')}. ${prepaidTerms(o.billing)}`
         : `Starting prices per bottle printed: ${Object.entries(o.prices.perPrintCents).map(([s, c]) => `${cents(c)} for ${sizeName(s)}`).join(', ')}. Bids start at ${cents(o.prices.bidStartsAtCents)} for the whole label and go up from there. Then ${cents(o.prices.perScanCents)} per scan that loads, ${cents(o.prices.perArLaunchCents)} per AR launch, and ${o.prices.commissionPercent}% of sales. The more an ad targets (places, products, interests, new or returning customers), the more each scan and AR launch costs. Repeat scans and failed prints are free.` }));
+  }
+  /** Bonus bottles: one of your past ads, still current, printed free on space nobody bought. Allowed unless you say no. */
+  function bonusBox() {
+    const wrap = h('section', { class: 'bonus', 'aria-label': 'Bonus bottles' });
+    api('GET', '/v1/ads/bonus').then((b) => {
+      const box = h('input', { type: 'checkbox' }); box.checked = b.allowed;
+      box.addEventListener('change', async () => { try { await api('POST', '/v1/ads/bonus', { allowed: box.checked }); toast(box.checked ? 'Bonus bottles allowed.' : 'No more bonus bottles.'); } catch (x) { box.checked = !box.checked; toast(x.message); } });
+      wrap.replaceChildren(h('label', { class: 'switch' }, box, h('div', {}, h('b', { text: `Bonus bottles: ${plural(num(b.bonusBottles), 'bottle', 'bottles')} so far, free` }), h('span', { text: b.about }))));
+    }).catch(() => wrap.remove());
+    return wrap;
   }
   function campaignCard(c) {
     const r = c.results;
@@ -804,7 +815,7 @@
     cleanup = () => window.removeEventListener('message', onMsg);
     function drawStage() {
       if (!preview) { stage.replaceChildren(h('p', { class: 'caption', text: 'Your ad appears here as you chat.' })); return; }
-      if (tab === 'bottle') stage.replaceChildren(h('img', { class: 'label-img', src: svgSrc(preview.labelSvg), alt: 'A sample label with your ad on it' }), h('p', { class: 'caption', text: 'A sample label. Your ad is on the left; the other slots go to other advertisers. The black panel is the same on every bottle.' }));
+      if (tab === 'bottle') stage.replaceChildren(h('img', { class: 'label-img', src: svgSrc(preview.labelSvg), alt: 'A sample label with your ad on it' }), h('p', { class: 'caption', text: preview.labelCaption || 'A sample label. The pieces marked “Sample ad” go to other businesses. The black panel is the same on every bottle.' }));
       if (tab === 'sizes') stage.replaceChildren(everyShape(preview), h('p', { class: 'caption', text: 'Your ad exactly as it prints, at every shape each size comes in (a piece can be wide on one bottle and tall on the next), with its QR code where it prints.' }));
       if (tab === 'box') stage.replaceChildren(h('img', { class: 'box-img', src: svgSrc(preview.boxFaceSvg), alt: 'Your ad on the side of a delivery box' }), h('p', { class: 'caption', text: 'One side of a delivery box. Each side has its own QR code.' }));
       if (tab === 'scan') {
@@ -904,7 +915,7 @@
     frame = fixture?.scanFrame ? fixture.scanFrame() : h('iframe', { src: '/preview/scan', title: 'Your scan page' });
     shell('new', h('div', { class: 'review' },
       h('div', { class: 'page-head', style: 'margin:0' }, h('div', {}, link(`/ads/drafts/${id}`, {}, '← Back to the chat'), h('h1', { style: 'margin-top:8px', text: 'Review your ad' }), h('p', { text: 'This is exactly what prints and what opens. Look it over before you submit.' }))),
-      h('div', { class: 'stage' }, h('img', { class: 'label-img', src: svgSrc(p.labelSvg), alt: 'A sample label with your ad' })),
+      h('div', { class: 'stage' }, h('img', { class: 'label-img', src: svgSrc(p.labelSvg), alt: 'A sample label with your ad' }), p.labelCaption ? h('p', { class: 'caption', text: p.labelCaption }) : null),
       h('div', { class: 'stage' }, everyShape(p)),
       h('div', { class: 'stage' }, frame),
       h('div', { class: 'facts' },

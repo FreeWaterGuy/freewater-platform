@@ -7,12 +7,17 @@ import { bottle16oz, bottle25oz, boxes, can12oz, sampleCampaigns } from '../src/
 import { labelSamples, studioSamples } from '../src/demo/labelSamples';
 import { renderStudio } from '../src/modules/studio/layout';
 import { describe, inkProblems, splitArt } from './label-ink';
+import { outlineText } from '../src/modules/print/outline';
+import { TEXT_INSET } from '../src/modules/print/geometry';
+
+const TEXT_MARGIN = TEXT_INSET.yIn * 100; // drawing units
 
 // The visual check of the core product: individual ads printed on pieces of a label. Every hard ad (long words, all
 // capitals, long headlines, logos, offers, emoji, Arabic and Hebrew, and the three ads from the founder's walkthrough)
 // is drawn at every piece of every template on every product, and on every box side, and its words are found in
 // pixels: none may run off its piece, onto the QR code or its white margin, or onto a logo, drawing or badge, and none
-// may be smaller than prints readably. Twice: in the fonts this machine has, and in a wide fallback font.
+// may be smaller than prints readably. Checked as it prints: every word outlined in the label's own fonts
+// (src/modules/print/outline.ts), measured from those same fonts, so no printer or phone can draw it wider.
 
 type Shape = { where: string; w: number; h: number; qr: { x: number; y: number; size: number }; reserved?: { x: number; y: number; w: number; h: number }[] };
 const products = [bottle16oz, bottle25oz, can12oz];
@@ -27,15 +32,18 @@ function shapes(): Shape[] {
 }
 
 group('every word on every printed label (visual check)', () => {
-  it('no word runs off its piece, onto the QR code, or onto a logo or badge, and none prints too small: every template × product × hard ad, in two fonts', async () => {
+  it('no word runs off its piece, onto the QR code, or onto a logo or badge, and none prints too small: every template × product × hard ad, as printed (outlines)', async () => {
     const problems: string[] = [];
     const all = shapes();
     expect(all.length).toBeGreaterThan(20);
-    const jobs = labelSamples().flatMap((s) => all.flatMap((sh) => [false, true].map((wide) => async () => {
-      const art = s.creative.svg(sh.w, sh.h, { qr: sh.qr, ...(sh.reserved ? { reserved: sh.reserved } : {}) });
-      const found = describe(await inkProblems(art, sh.w, sh.h, sh.qr, { wide, ...(sh.reserved ? { reserved: sh.reserved } : {}) }));
-      if (found.length) problems.push(`${s.name} at ${sh.where} ${sh.w.toFixed(0)}×${sh.h.toFixed(0)}${wide ? ' (wide font)' : ''}: ${found.join('; ')}`);
-    })));
+    const jobs = labelSamples().flatMap((s) => all.map((sh) => async () => {
+      const art = outlineText(s.creative.svg(sh.w, sh.h, { qr: sh.qr, ...(sh.reserved ? { reserved: sh.reserved } : {}) }), { defs: false });
+      expect(art).not.toMatch(/<text\b(?![^>]*>[^<]*<\/text><\/svg>)/); // every word an outline (emoji keep their own room)
+      // On a label, words stay in the text-safe area: 0.1 in from the label's top and bottom, and pieces keep that
+      // margin on every side (src/modules/print/geometry.ts). Checked with a dot to spare for anti-aliasing.
+      const found = describe(await inkProblems(art, sh.w, sh.h, sh.qr, { ...(sh.reserved ? { reserved: sh.reserved } : { edge: TEXT_MARGIN - 1 }) }));
+      if (found.length) problems.push(`${s.name} at ${sh.where} ${sh.w.toFixed(0)}×${sh.h.toFixed(0)}: ${found.join('; ')}`);
+    }));
     // A few at a time: the drawing happens on sharp's own threads.
     for (let i = 0; i < jobs.length; i += 6) await Promise.all(jobs.slice(i, i + 6).map((j) => j()));
     expect(problems.sort()).toEqual([]);
@@ -46,14 +54,12 @@ group('the three ads from the walkthrough videos', () => {
   const all = () => shapes().filter((s) => !s.where.includes('side'));
   const words = (svg: string) => [...svg.matchAll(/<text[^>]*>([^<]*)<\/text>/g)].map((m) => m[1]).join(' ');
 
-  it('A: “Fresh sourdough, baked every morning” prints whole at every piece, in any font: no letter clipped, no word cut', async () => {
+  it('A: “Fresh sourdough, baked every morning” prints whole at every piece, as outlines: no letter clipped, no word cut', async () => {
     const problems: string[] = [];
     for (const { name, spec } of studioSamples.filter((x) => x.name.startsWith('Maria'))) for (const sh of all()) {
       const art = renderStudio(spec, sh.w, sh.h, { qr: sh.qr });
-      for (const wide of [false, true]) {
-        const p = await inkProblems(art, sh.w, sh.h, sh.qr, { wide });
-        if (p.outside > 4 || p.onQr > 4) problems.push(`${name} at ${sh.where}${wide ? ' (wide font)' : ''}: ${describe(p).join('; ')}`);
-      }
+      const p = await inkProblems(outlineText(art, { defs: false }), sh.w, sh.h, sh.qr);
+      if (p.outside > 4 || p.onQr > 4) problems.push(`${name} at ${sh.where}: ${describe(p).join('; ')}`);
       const said = words(art).replace(/&#39;/g, "'").replace(/-\s/g, '').replace(/\s+/g, ' ');
       if (!said.includes('Fresh sourdough, baked every morning')) problems.push(`${name} at ${sh.where}: printed “${said}”`);
     }
@@ -62,7 +68,7 @@ group('the three ads from the walkthrough videos', () => {
 
   /** Pixels of the artwork's drawings (everything but its words) that differ from its background. */
   async function drawingMask(art: string, w: number, h: number, bg: string) {
-    const bare = art.replace(/<text\b[^>]*>[^<]*<\/text>/g, '');
+    const bare = art.replace(/<text\b[^>]*>[^<]*<\/text>/g, '').replace(/<g data-fw-words="1"[^>]*>(?:(?!<g\b)[\s\S])*?<\/g>/g, '');
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.ceil(w) * 2}" height="${Math.ceil(h) * 2}" viewBox="0 0 ${Math.ceil(w)} ${Math.ceil(h)}"><rect width="100%" height="100%" fill="${bg}"/>${bare}</svg>`;
     const { data, info } = await sharp(Buffer.from(svg)).removeAlpha().raw().toBuffer({ resolveWithObject: true });
     const n = parseInt(bg.slice(1), 16), c = [n >> 16, (n >> 8) & 255, n & 255];
@@ -78,7 +84,7 @@ group('the three ads from the walkthrough videos', () => {
     const luma = sampleCampaigns().find((c) => c.id === 'cmp-luma')!;
     const problems: string[] = [];
     for (const sh of all()) {
-      const art = luma.creative.svg(sh.w, sh.h, { qr: sh.qr });
+      const art = outlineText(luma.creative.svg(sh.w, sh.h, { qr: sh.qr }), { defs: false });
       const [d, wd] = [await drawingMask(art, sh.w, sh.h, '#3A1D10'), await wordsMask(art, sh.w, sh.h)];
       let over = 0;
       for (let y = 0; y < d.info.height; y++) for (let x = 0; x < d.info.width; x++) if (wd(x, y) && d.on(x, y)) over++;
@@ -91,7 +97,7 @@ group('the three ads from the walkthrough videos', () => {
     const daily = sampleCampaigns().find((c) => c.id === 'cmp-daily')!;
     const problems: string[] = [];
     for (const sh of all()) {
-      const p = await inkProblems(daily.creative.svg(sh.w, sh.h, { qr: sh.qr }), sh.w, sh.h, sh.qr);
+      const p = await inkProblems(outlineText(daily.creative.svg(sh.w, sh.h, { qr: sh.qr }), { defs: false }), sh.w, sh.h, sh.qr);
       if (p.onQr > 4 || p.outside > 4) problems.push(`${sh.where} ${sh.w.toFixed(0)}×${sh.h.toFixed(0)}: ${describe(p).join('; ')}`);
     }
     expect(problems).toEqual([]);

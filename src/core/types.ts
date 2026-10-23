@@ -50,14 +50,29 @@ export interface Product {
   sponsor?: { advertiserId: string; name?: string };
   /** The container's shape and size. Round containers (bottles, cans, cups) can have AR that follows the label. */
   container?: { shape: 'bottle' | 'can' | 'cup' | 'jar' | 'pouch' | 'box'; diameterIn?: number; heightIn?: number };
+  /**
+   * The label's size and where everything goes on it (modules/print/geometry.ts; README, "The label"). The standard
+   * bottle: 8 × 4 in, the ads in a 7.15 × 4 in image-safe area at the left, words inside 7.1 × 3.8 in, the company's
+   * panel the last 0.85 in on the right, and 1/16 in of bleed round the print file.
+   */
   label: {
-    widthIn: number; // full printed width, including the panel and seam
+    widthIn: number; // the trimmed label, including the panel and seam
     heightIn: number;
-    seamIn: number; // overlap at the end of the wrap where nothing is printed
+    seamIn: number; // overlap at the end of the wrap where nothing is printed (0 on the standard bottle)
     panelWidthIn: number; // locked company panel
+    /** Which end the company panel is at. Right by default. */
+    panelSide?: 'right' | 'left';
+    /** How far backgrounds run past the cut on every side of the print file. 1/16 in (0.0625) by default. */
+    bleedIn?: number;
+    /** Where pictures may go: the ad area. By default everything beside the panel (and seam), full height. */
+    imageSafe?: { widthIn: number; heightIn: number };
+    /** Where words may go, centred in the ad area. By default 0.025 in in from its sides and 0.1 in from top and bottom. */
+    textSafe?: { widthIn: number; heightIn: number };
     /** The smallest QR this label may carry (inches). 0.6 by default. */
     minQrIn?: number;
   };
+  /** What's in it, for the company panel (from the product, not the company): "SPRING WATER", "16floz (473ml)", where it comes from. */
+  panelInfo?: { contents?: string; volume?: string; source?: string[] };
   /**
    * The ad sizes this product offers (shares of the ad area). Missing means every size whose pieces fit a readable
    * QR code. The platform divides the label into pieces as close to square as it can (see modules/ads/layouts).
@@ -96,6 +111,13 @@ export interface CompanyConfig {
     fontFamily: string;
   };
   productFacts: string[]; // lines printed on the locked panel
+  /**
+   * The company's panel on every label (modules/print/panel.ts; console → Label panel): its logo, lines, colours and
+   * icons, top to bottom. Missing: one made from `brand`, `productFacts` and the giving line.
+   */
+  labelPanel?: LabelPanelSettings;
+  /** The company's own label numbers over each product's (by product id, or "*" for every product): modules/print/geometry.ts. */
+  labelGeometry?: Record<string, import('../modules/print/geometry').LabelGeometryChange>;
   /**
    * Measurement settings. `noAdsControlShare`: the share of known households (0 to 0.05) whose bottles carry only the
    * company's own message some weeks, so how much ads move choices can be measured. Off (0) unless set: it costs ad money.
@@ -266,6 +288,11 @@ export interface CompanyConfig {
   news?: { on: boolean; sources?: { id: string; name: string; url: string }[] };
   /** Home delivery: how many days a photo of a drop is kept before it's deleted (1 to 365; 90 unless set). */
   delivery?: Partial<import('../modules/delivery/settings').DeliverySettings>;
+  /**
+   * Space nobody bought (src/modules/fillers/unsold.ts): the list that fills it, in order, the team's picks, whether its
+   * own ads may come after the list (off; FreeWater never), and holding delivery bottles for paid ads. Unset: defaults.
+   */
+  unsold?: Partial<import('../modules/fillers/unsold').UnsoldSettings>;
   /** Which registered implementation each module slot uses. Swapping one never touches the others. */
   modules: {
     ads: string;
@@ -483,11 +510,19 @@ export interface Placement {
   /** For a bid: the campaign's spend day (its own time zone) the price was held against. */
   spentDay?: string;
   isHouse: boolean;
+  /**
+   * Space nobody bought, and what filled it (src/modules/fillers/unsold.ts): always `isHouse` too (never billed, never
+   * counted against a paid ad). 'former_advertiser' is a past advertiser's ad printed free as a bonus.
+   */
+  unsold?: UnsoldKind;
   /** Why this ad was chosen for this person ("likes coffee", "new customer"), when it targets people. */
   audienceMatch?: string[];
   /** How it won: its bid for the whole label after adjustments, what it paid for the whole label, its rank. */
   auction?: { bidCents: number; paidLabelCents: number; rankCents: number; adjustments: string[] };
 }
+
+/** What filled a piece nobody bought: a former advertiser's ad (a bonus), a filler ad, a charity partner's piece, the team's pick, the company's own (only where it allows that), or a plain blank piece. */
+export type UnsoldKind = 'former_advertiser' | 'filler' | 'charity' | 'picked' | 'own' | 'neutral';
 
 export type BoxFace = 'top' | 'front' | 'back' | 'right' | 'left' | 'bottom';
 
@@ -499,6 +534,8 @@ export interface BoxFacePlacement {
   experienceId: string;
   priceCents: Cents; // billed only when the box print is confirmed
   isHouse: boolean;
+  /** A side nobody bought, and what filled it (as on labels). */
+  unsold?: UnsoldKind;
   /** A box side bought on a delivery route and paid up front (route_spots): booked from the advertiser's prepaid money. */
   routeSpotId?: string;
 }
@@ -633,4 +670,34 @@ export interface RouteHouseContext {
   householdSize: number | null;
   /** Someone in the app has said this is their house. */
   claimed: boolean;
+}
+
+/** An uploaded picture for the label panel: a PNG, JPEG or WebP (base64 data URL) or an SVG file, embedded in every label. */
+export type PanelImage = string;
+
+/**
+ * The company panel, top to bottom (README, "The company panel"). Every line is the company's own words; an empty list
+ * or string leaves that part out. The product supplies what's inside it (`Product.panelInfo`).
+ */
+export interface LabelPanelSettings {
+  colors: { background: string; text: string; accent: string };
+  /** Words in two lines ("free" light, "water" bold in the accent colour), or an uploaded logo. */
+  logo: { kind: 'text'; top: string; bottom: string } | { kind: 'image'; image: PanelImage };
+  /** The giving line, one entry a line ("10 CENTS+", "PER WATER" …); the first in the accent colour if `accentFirst`. */
+  charity: string[];
+  accentFirst?: boolean;
+  /** Printed under the QR code ("@freewater.io"). */
+  handle: string;
+  /** Social icons the company uploads, in order (TikTok, YouTube, Instagram …). None are drawn until uploaded. */
+  icons: { name: string; image: PanelImage }[];
+  /** In the accent colour ("PLEASE REFILL", "AND RECYCLE"). */
+  refill: string[];
+  /** Who makes it and how to reach them ("Manufactured by:", "RAIN Bottling Co", … phone, email). */
+  maker: string[];
+  /** In italics ("Processed by ozonation"). */
+  process: string;
+  /** The recycling mark: a plain one drawn by the platform, an uploaded one, or none. */
+  recycle: { show: boolean; image?: PanelImage };
+  /** The words before the bottle's code at the very bottom ("Bottle code"). */
+  codeLabel: string;
 }

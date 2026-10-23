@@ -186,8 +186,11 @@ video { width: 100%; border-radius: var(--radius); background: #000; display: bl
 @media (prefers-reduced-motion: reduce){.m-rise,.m-slide,.m-pop,.m-img,.m-cta{animation:none!important}}
 
 /* Asking first, where the law says to */
-.consent{position:sticky;bottom:0;z-index:20;margin:0;padding:14px 16px calc(14px + env(safe-area-inset-bottom));background:var(--bg);border-top:1px solid color-mix(in srgb,var(--text) 15%,transparent);box-shadow:0 -10px 30px rgba(0,0,0,.12)}
-.consent p{margin:0 0 10px;font-size:14px;line-height:1.4}
+/* The data question is an inline banner under the main content: it never covers the AR view or the page. */
+.consent{position:static;margin:12px 16px;padding:12px 14px;background:var(--card, var(--bg));border:1px solid color-mix(in srgb,var(--text) 15%,transparent);border-radius:14px}
+.consent p{margin:0 0 8px;font-size:14px;line-height:1.4}
+.consent details{margin:0 0 10px;font-size:13px}
+.consent details p{margin:6px 0 0}
 .consent .row{display:flex;gap:8px}
 .consent .row .btn{flex:1}
 

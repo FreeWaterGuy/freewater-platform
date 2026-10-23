@@ -9,6 +9,7 @@ import { describeConditions } from '../modules/experiences/dynamic';
 import { themeFor } from '../modules/experiences/host';
 import { checkQrColor, checkQrLogo, monogramLogo, qrPlan, qrSvg } from '../modules/print/qr';
 import { checkProduct } from '../modules/products/check';
+import { labelFitProblem } from '../modules/print/renderer';
 import { targetingPremium } from '../modules/ads/targeting';
 import { engagementFee } from '../modules/ads/billing';
 import { ExperienceError } from '../modules/experiences/service';
@@ -131,7 +132,8 @@ export function codesArRoutes(app: App, server: FastifyInstance, route: (r: Rout
     const company = platform.companies.get(companyId)!;
     const location = [...platform.locations.values()].find((l) => l.companyId === companyId);
     if (!location) throw new ApiError(422, 'no_machines', 'Add a machine first, so the sample label can be filled the way a real one would be.');
-    const fill = platform.registry.adsFor(company).fill({ company, product: platform.productFor(company, p), location, campaigns: [...platform.campaigns.values()], random: platform.random });
+    const narrowed = platform.productFor(company, p);
+    const fill = platform.registry.adsFor(company).fill({ company, product: narrowed, location, campaigns: [...platform.campaigns.values()], random: platform.random, unsold: platform.unsoldFiller({ company, product: narrowed, location, audience: null }) });
     const unit: Unit = { id: 'sample', companyId, productId: p.id, locationId: location.id, kind: 'ad_supported', placements: fill.placements, layout: fill.layout, status: 'rendered', createdAt: platform.bus.now().toISOString() };
     return (await platform.registry.rendererFor(company).render({ unit, product: p, company, campaigns: platform.campaigns })).svg;
   };
@@ -139,13 +141,16 @@ export function codesArRoutes(app: App, server: FastifyInstance, route: (r: Rout
   route({ method: 'POST', url: '/v1/console/products/check', scope: 'admin', summary: 'Check a product before saving, with a sample label printed at its size.', body: productBody, handler: async (req, key) => {
     const p = (req.body as any).product as Product;
     const check = checkProduct(p);
+    // The company's panel must fit this label too (every line at its smallest print size).
+    const panel = check.problems.length ? null : labelFitProblem(platform.companies.get(staff(key).companyId)!, [p]);
+    if (panel) check.problems.push(panel);
     return { body: { check, svg: check.problems.length ? null : await sampleLabel(staff(key).companyId, p) } };
   } });
   route({ method: 'POST', url: '/v1/console/products', scope: 'admin', summary: 'Add or change one of your products: a bottle, can, cup or jar of any size, with its label size and the ad sizes it offers. Shared products can only be changed by the platform team.', body: productBody, handler: async (req, key) => {
     const k = staff(key);
     const raw = (req.body as any).product as Product;
     // Only the fields a product has are kept.
-    const p = Object.fromEntries(Object.entries(raw).filter(([k]) => ['id', 'name', 'category', 'container', 'label', 'sizes', 'priceFactor', 'blockedAdCategories', 'facts'].includes(k))) as unknown as Product;
+    const p = Object.fromEntries(Object.entries(raw).filter(([k]) => ['id', 'name', 'category', 'container', 'label', 'sizes', 'priceFactor', 'blockedAdCategories', 'facts', 'panelInfo'].includes(k))) as unknown as Product;
     const existing = platform.products.get(p.id);
     const platformTeam = k.scopes.includes('platform');
     // Your own products are yours alone. Shared products (used by every company) are the platform team's.
@@ -154,6 +159,8 @@ export function codesArRoutes(app: App, server: FastifyInstance, route: (r: Rout
     if (shared && !platformTeam) throw new ApiError(403, 'not_yours', 'That’s a shared product; only the platform team can change it. Save yours under a new id.');
     if (shared) delete p.companyId; else p.companyId = k.companyId;
     const check = checkProduct(p);
+    const panel = check.problems.length ? null : labelFitProblem(platform.companies.get(k.companyId)!, [p]);
+    if (panel) check.problems.push(panel);
     if (check.problems.length) throw new ApiError(422, 'product_invalid', check.problems.join(' '));
     await saveCatalog(app.db, { products: [p] });
     platform.products.set(p.id, p);

@@ -246,6 +246,8 @@ GitHub (and the chain when it's on). Anyone can check their own entry at
 | **Transparency** | Per company | *Transparency* | |
 | **Owners' second sign-in step** | Off | *Security* | Recommended on before going live. |
 | **API keys** | — | *API keys* | Turn off a key at once if it might be lost. |
+| **Label panel** | FreeWater: its real label; others: made from their brand | *Label panel* (`labelPanel`) | Every word, colour, logo, icon (uploaded, in order) and line of the company's panel. Refused if any line doesn't fit the panel of a product at its smallest print size; the message names the line. `null` puts back the one made from the brand. Not money: a key may change it. |
+| **Label size and areas** | Each product's own (the 16 oz bottle: 8 × 4 in, panel 0.85 in on the right, bleed 1/16 in) | Products page per product; `labelGeometry` per company (by product id, or `*`) | Width, height, seam, panel width and side, bleed, image-safe and text-safe areas. Checked: the panel 0.6 in to a third of the label, the safe areas inside the label, and the panel's lines still fitting. Changing the ad area can change which layout templates fit (README, *The label*). |
 
 ### Delivery areas (ops console, *Areas*)
 
@@ -338,7 +340,7 @@ README, "Buying on delivery routes"). Paid up front like every ad here; every si
 | **The price** | Exact before paying: pieces × the size's price (*Ads and prices*: whole label $1 … 1/10 20¢) × the product's factor, plus box sides at the box side price (40¢), less any credit. The card is charged that or nothing. One charge is at most the company's `adBilling.limits.maxChargeCents` ($10,000 unless set; bottles paid up front too): above it the advertiser is told plainly to buy less or contact the team (splitting into weekly or monthly charges isn't built). AR, video and scans are included. |
 | **Room** | A bottle is one label: what's sold on it never passes the whole label or ten pieces, only in mixes the bottle can print, never an ad twice, never two competitors (the database refuses more than a whole label). Blanket and whole-box buys skip a house whose box is already taken that week and don't charge for it; a buy that can't fit is refused with what's left. |
 | **First paid wins** | Paying reserves each piece on a bottle under a lock on each house and week, checked against what's committed then. Of two payments for the last space, the second is charged nothing and shown the new price. A declined card lets its space go at once. No bidding for houses while pricing is flat. |
-| **At print time** | Each bottle of a house's pack carries exactly the pieces reserved for it, each printed once; the rest of the label gets other paid ads, approved fillers, then the house ad. A route ad never prints anywhere else. |
+| **At print time** | Each bottle of a house's pack carries exactly the pieces reserved for it, each printed once; the rest of the label gets other paid ads, then the unsold-space list (never the house ad). A route ad never prints anywhere else. |
 | **When a house stops** | Pieces that can't go out (the house stopped or was skipped, blocked the business or every ad aimed at it alone, the week went by before they printed, the box came back) come back: a buy aimed at **one house** gets a **refund** of that part to the card, approved by an owner or finance person with the second step (`POST /v1/ops/route-refunds/:id/approve`; the list is `GET /v1/ops/route-refunds`, no console page yet); any other buy gets **credit for other houses**, used first on the advertiser's next route buy (not on a one-house buy, so a refund never exceeds what the card paid). Credit is part of the money the advertiser paid up front: listed per advertiser in the books (*reconciliation*, `route_credit`: got, used, expired, left) and in their portal. It lasts `adBilling.limits.creditExpiryDays` (none unless set, 30 to 3,650); expired credit is recorded once and booked out of the advertiser's money as income (`revenue:expired_credit`). A house **skipped for a while** (an access skip) keeps its pieces: those in the weeks it's skipped move to its first delivery after, within the buy, where there's room on a bottle (the same rules as buying); what can't move comes back as credit. Nobody pays for a house that stopped. Runs daily (job `route-buys`), at once when a house stops or blocks, and on `POST /v1/ops/route-settle`. |
 | **Fewer than 50 houses** | A **small-audience** buy (the company's number, 50 or more: the setting `adRules.smallAudienceHouses` through `PATCH /v1/console/settings`, no console field yet; it can be raised, never lowered below 50): only with the switch below on; only a business the company verified (`POST /v1/advertisers/:id/verify`, an owner or reviewer signed in); no names, street addresses, phone numbers, emails or personal messages in the ad (checked when paying and again when approved, on everything the ad says: its artwork's words with character references decoded and letters set apart read together, invisible and full-width characters folded, and where its links and code go, the path and query read as words); approved by an owner or reviewer signed in, never an API key (the review queue marks it); never a house that blocked ads aimed at it alone or said no to targeted ads, and only houses on a route known to be in the US (its `country`/`state`; unknown gets the strictest rules). A buy that **names** houses, however many, also leaves out every house that said no to targeted ads. The report shows the day only and no scans or saves, and what came back reads "the house is no longer on the route for this ad" (never that it stopped or blocked). Sensitive kinds of data are never targetable (household data refuses them). |
 | **Proof** | *Where it went*: streets and houses reached (streets with fewer than 5 houses shown together), each drop's time and rough place from the driver's scan (to about 100 m), scans by area, what came back. Never which house or who lives there, and never a photo of a drop. |
@@ -389,9 +391,10 @@ sets `FW_FEATURES_ON=news` (below).
 | **It's the outer limit of each company's switches.** | A company can't turn on on its Features page (section 8) what the host has off. |
 
 The pilot keeps bottles, ads, scans, AR, attribution, the app (points included), delivery, the portals and consoles,
-giving, the open books, accounts, data rights, transparency, machines, the games and launch up to *live with points*.
+giving, the open books, accounts, data rights, transparency, the games and launch up to *live with points*.
 It switches off the token, conversion, withdrawals, gift cards, money partners, the AI agents' fund, the operator
-network, the prize game, Veo footage and brand offers. The full table, with the reason for each, is in
+network, the prize game, Veo footage, brand offers and **machines** (the Austin pilot is door-to-door delivery; machines
+come later: the app offers no machine, the scan page no "free water near me"). The full table, with the reason for each, is in
 `docs/RUNNING.md` (*The pilot*); the areas and their routes are in `src/runtime/features.ts`.
 
 ### News (built, off until it's rolled out)
@@ -416,18 +419,49 @@ reporting when there's no AI. Readers choose favourite sources (the first sets t
 version; never guessed). Every story has *Report an error* and its corrections; corrections are logged and make a new
 version. Advertisers can keep an ad off bottles with news (`POST /v1/campaigns/:id/news-adjacency`).
 
-### Filler for unsold spots (each piece approved by a person)
+### Unsold space (Ads → *Unsold space*)
 
-Two switches on the Features page (category Ads, *Unsold spots*): **Approved fillers for unsold spots** (`fillers`,
-on for FreeWater; "new", so off until it decides, for a company that existed before it) and under it **Advertisers
-offer ads for unsold spots** (`filler_offers`). Off: the plain house ad. Works with news off.
+The founder: "every piece of real estate on these labels needs to be a third-party ad and never the FreeWater stuff,
+other than all the way to the right in the tiny black area." So the ad area **never** carries the company's own ads:
+not its house ad, not "your ad here", not its own messages, not its news. That holds in the engine, in every
+preview, on delivery packs and box sides, on machine prints and around route pieces; a guard after the engine
+(`keepOwnOut`) holds it for any engine a company plugs in. The black panel on the right is the company's own.
 
-Spots nobody bought get an approved filler before the generic house ad: the company's own messages, charity
-messages (Well Aware), advertisers' ads offered free for unsold spots (`POST /v1/campaigns/:id/filler-offer`), and,
-only while news is on, news topics. Every piece is pending until a person approves it (`POST /v1/fillers/:id/approve`,
-signed in); retiring is immediate. Never billed. Never on a bottle in the no-ads control; an advertiser's filler
-follows its own ad's rules (categories, competitors, the person's "never show me") and stops when its ad stops. A
-label nobody bought at all is one full-wrap piece, which only the company's own, charity and news pieces fit.
+A piece nobody bought is filled from the company's **list**, in its order (console: Ads and prices → *Unsold space*:
+add, remove, reorder; saved as the `unsold` setting by a person signed in, never a key). FreeWater's order, which every
+company starts with:
+
+| # | Kind | What prints | Rules |
+|---|---|---|---|
+| 1 | **Former advertisers** | One of their past approved ads, free, as a **bonus** | Only an advertiser that paid before and isn't running an ad now, only an ad that's over (an ad paused with paid bottles left isn't). Only ads **still current**: approved, never stopped by the company or held for unpaid bills; no offer end that passed or can't be read ("ends Sunday"), no date on it that passed; an ad showing a price or a discount with no date only within 90 days of last printing paid (prices go stale). Its code opens the advertiser's **current** page. Never billed, never drawn from or counted against a paid ad, shown to the advertiser as **bonus bottles** (`GET /v1/ads/bonus`). The advertiser can say no in its portal (`POST /v1/ads/bonus`, allowed unless it does); the team can refuse an advertiser, with a reason (`POST /v1/console/advertisers/:id/bonus`). Advertisers take turns (the one with the fewest bonus pieces goes next). |
+| 2 | **Approved filler ads** | An advertiser's ad it offered free for unsold spots | `fillers` and `filler_offers` on; a person approved it; it stops when its ad stops. |
+| 3 | **Charity partners** | A charity's piece (Well Aware) | `unsold_charity` on; a person approved it. |
+| 4 | **Ads you picked** | Approved third-party ads the team chose | Never the company's own; the same "still current" and say-no rules. |
+
+Every piece still fits the bottle: never two competitors, never one advertiser twice (nor beside its own paid ad), the
+categories the company, the product and the person ruled out, where and on what the ad may print, the house's blocks,
+never on a bottle in the no-ads control. When nothing on the list fits a piece, the engine uses a **tidier template
+with fewer pieces** (paid pieces first: among labels that earn the same, the one with fewest blank pieces wins); only
+if that's impossible does a **plain, blank-coloured piece** print, and the team gets an alert (`unsold-blank:<company>`,
+at most every 30 minutes) and a count on the console. The no-ads control's plain label alerts nobody.
+
+| Switch (Features page) | FreeWater | What it does |
+|---|---|---|
+| **What fills unsold space, in order** (`unsold_order`, a setting) | the four above | The list (console: Ads and prices). |
+| **Approved filler ads** (`fillers`), **Advertisers offer ads for unsold spots** (`filler_offers`), **Charity partners' pieces** (`unsold_charity`) | on | Those kinds on the list. |
+| **Your own ads in unsold space** (`own_house_ads`, `unsold.ownAds`) | **off, and can't be turned on** | A white-label company may allow its own pieces (its messages, news, then its house ad) after its list. Off for every company unless it turns it on. |
+| **Hold delivery bottles for paid ads** (`unsold_hold`, `unsold.hold.on`) | off | See below. |
+| **Days bottles are held** (`unsold_hold_days`, `unsold.hold.days`) | 7 (1 to 30) | For the company, and per delivery area (`unsold.hold.areas`). |
+
+**Holding for paid ads (delivery only).** Machines print on the spot, so there's nothing to hold. For delivery, hold
+means: **a night more than the hold's days away isn't planned or printed yet** (so paid route pieces can still be bought
+on its bottles); once the night is within the days, it is planned and printed in full, and the list fills what's
+unsold. Nothing is taken or marked while held, and the night before delivery is always within (the days are at least
+1), so a hold never costs a house its delivery. Per area, `unsold.hold.areas[<area>]` can hold or not hold, with its
+own days. What the last planning held back is in `app.delivery.held`.
+
+These switches replace the house ad that used to fill unsold space, so they count as part of the first catalogue:
+every company, white-label too, starts with FreeWater's choices (`src/modules/fillers/unsold.ts`, `test/unsold-space.test.ts`).
 
 ### Houses that haven't signed up (all off until a person turns them on)
 
@@ -498,7 +532,8 @@ starting point never turns on a money, chain or one-way switch; those are listed
 what sits under them (for *Delivery + printed ads*: *Money and payments*, *Advertiser invoices and cards*, *Advertisers
 pay up front*, then *Buying on delivery routes*; and *Giving*, set on its own page). With those on, a new company has
 the Austin pilot's setup: house-after-house delivery with photo proof, printed ads at every size on bottles and boxes,
-route buying, fillers, AR and scans; no machines, fees, bidding or news (`test/spec-pilot-setup.test.ts`).
+route buying, fillers, AR and scans; no machines, fees, bidding or news (`test/spec-pilot-setup.test.ts`). Unsold space
+starts with FreeWater's list (former advertisers, fillers, charity, picks) and never the company's own ads.
 
 **The page:** the main switches as cards, the starting points, *Every switch* (categories → groups → switches) with a
 search box and filters (on, off, different from FreeWater, locked, new); each switch shows what it does, what it

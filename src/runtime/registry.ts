@@ -20,6 +20,7 @@ import type { Feature } from './features';
 import { defaultWallet } from '../modules/wallet/assets';
 import { adBilling } from '../modules/ads/billing';
 import { TEMPLATES, templateShares } from '../modules/ads/layouts';
+import { unsoldSettings } from '../modules/fillers/unsold';
 
 /** Ad sizes (shares of the label) and their switches. */
 export const SIZE_SWITCHES: Record<number, string> = { 1: 'size_whole', 2: 'size_half', 3: 'size_third', 4: 'size_quarter', 6: 'size_sixth', 8: 'size_eighth', 10: 'size_tenth' };
@@ -157,7 +158,7 @@ export const SWITCHES: Switch[] = [
     link: flag('qr.advertiserLogos', { base: () => ({ logo: 'none', advertiserLogos: false, allowStatic: false }) }) }),
 
   // ======================= Ads =======================
-  sw({ id: 'ads', category: 'ads', parent: null, dependsOn: ['printing'], label: 'Ads on bottles', description: 'Advertisers buy space on the label. Off: bottles carry only your own house ad, and the advertiser portal’s ad pages are closed.',
+  sw({ id: 'ads', category: 'ads', parent: null, dependsOn: ['printing'], label: 'Ads on bottles', description: 'Advertisers buy space on the label. Off: nothing is sold; the label is filled from your unsold-space list (or plain, or your own ad if you allow it), and the advertiser portal’s ad pages are closed.',
     routes: ['GET /v1/campaigns', 'POST /v1/campaigns', 'PATCH /v1/campaigns/:id', 'GET /v1/experiences', 'POST /v1/experiences/preview', 'GET /v1/assets', 'POST /v1/assets', 'GET /v1/ads/overview'], pages: ['ads'], plugins: ['offer'] }),
   sw({ id: 'ad_chat', category: 'ads', group: 'Making ads', label: 'Make an ad by chatting', description: 'Advertisers describe the ad and attach pictures; the assistant fills in the draft, they preview it at every size, then submit.',
     routes: ['POST /v1/ads/drafts', 'GET /v1/ads/drafts/:id', 'POST /v1/ads/drafts/:id/messages', 'GET /v1/ads/drafts/:id/preview', 'POST /v1/ads/drafts/:id/submit'] }),
@@ -168,10 +169,25 @@ export const SWITCHES: Switch[] = [
   sw({ id: 'booking', category: 'ads', group: 'What the code shows', label: 'Book a time', description: 'A code can open a booking page.', plugins: ['booking'] }),
   sw({ id: 'ad_videos', category: 'ads', group: 'What the code shows', label: 'The advertiser’s own video', description: 'A code can open the advertiser’s uploaded video first.', plugins: ['video'] }),
   sw({ id: 'ad_stories', category: 'ads', group: 'What the code shows', label: 'An advertiser’s story', description: 'A code can open an advertiser’s own short story with a link to the rest (a paper’s or a blog’s). Not FreeWater News.', plugins: ['news-card'] }),
-  sw({ id: 'fillers', category: 'ads', group: 'Unsold spots', label: 'Approved fillers for unsold spots', description: 'Spots nobody bought get a piece your team approved (your own messages, a charity’s) before the plain house ad. Never billed. Off: the house ad.',
+  // Space nobody bought (src/modules/fillers/unsold.ts; docs/SWITCHES.md, "Unsold space"): third-party ads only, in the
+  // company's order. They replace the house ad that used to fill it, so they count as part of the first catalogue
+  // (`since: 1`): every company, white-label too, starts with FreeWater's choices rather than an empty list.
+  sw({ id: 'unsold_order', category: 'ads', group: 'Unsold space', kind: 'setting', page: 'ads', label: 'What fills unsold space, in order',
+    description: 'A list you add to, take from and reorder (Ads and prices → Unsold space). FreeWater: 1. former advertisers: one of their past approved ads, still current, printed free as a bonus (never billed, never counted against a paid ad, shown to them as bonus bottles, taking turns fairly; they can say no in their portal); 2. approved filler ads; 3. charity partners; 4. ads you picked. Never your own ads, “your ad here” or your news. If nothing fits a piece, a tidier layout with fewer pieces is used (paid ones first); a plain blank piece only as a last resort, and your team is told.',
+    routes: ['GET /v1/console/unsold', 'POST /v1/console/advertisers/:id/bonus', 'GET /v1/ads/bonus', 'POST /v1/ads/bonus'] }),
+  sw({ id: 'fillers', category: 'ads', group: 'Unsold space', label: 'Approved filler ads', description: 'Third-party pieces your team approved for space nobody bought: an advertiser’s ad it offered free, a charity partner’s. Each prints only once a person approves it, and only where the list says. Never billed. Off: the rest of the list fills it.',
     routes: ['GET /v1/fillers', 'POST /v1/fillers', 'POST /v1/fillers/:id/approve', 'POST /v1/fillers/:id/retire'], since: 2 }),
-  sw({ id: 'filler_offers', category: 'ads', group: 'Unsold spots', parent: 'fillers', label: 'Advertisers offer ads for unsold spots', description: 'An advertiser may offer one of its approved ads, free, for spots nobody bought; your team approves each one first.',
+  sw({ id: 'filler_offers', category: 'ads', group: 'Unsold space', parent: 'fillers', label: 'Advertisers offer ads for unsold spots', description: 'An advertiser may offer one of its approved ads, free, for spots nobody bought; your team approves each one first.',
     routes: ['POST /v1/campaigns/:id/filler-offer'], since: 2 }),
+  sw({ id: 'unsold_charity', category: 'ads', group: 'Unsold space', parent: 'fillers', label: 'Charity partners’ pieces', description: 'A charity partner’s piece (Well Aware), approved by a person on your team, fills space nobody bought where the list puts charity. Off: charity pieces aren’t used.' }),
+  sw({ id: 'own_house_ads', category: 'ads', group: 'Unsold space', kind: 'linked', default: false, label: 'Your own ads in unsold space',
+    description: 'Off (FreeWater, and every company unless it turns it on): the ad area only ever carries other businesses’ ads; your own ads, “your ad here” and your news stay off the label (your panel on the right is yours). On (a white-label company’s choice; FreeWater can’t): your own pieces fill what the list can’t, before a blank piece.',
+    link: { get: (c) => unsoldSettings(c).ownAds, set: (c, on) => ({ unsold: { ...unsoldSettings(c), ownAds: on } }) } }),
+  sw({ id: 'unsold_hold', category: 'ads', group: 'Unsold space', kind: 'linked', default: false, dependsOn: ['delivery'], label: 'Hold delivery bottles for paid ads',
+    description: 'Off (FreeWater). On: a delivery night more than the days below away isn’t printed yet, so paid route pieces can still be bought on its bottles; once it’s within those days it prints in full and the list fills what’s unsold. The night before delivery is always within, so no house ever misses its pack. Set per delivery area too. Machines print on the spot, so this is for delivery only.',
+    link: { get: (c) => unsoldSettings(c).hold.on, set: (c, on) => { const u = unsoldSettings(c); return { unsold: { ...u, hold: { ...u.hold, on } } }; } } }),
+  sw({ id: 'unsold_hold_days', category: 'ads', group: 'Unsold space', kind: 'setting', page: 'ads', label: 'Days bottles are held for paid ads',
+    description: '1 to 30 (FreeWater: 7), for the company and for each delivery area (Ads and prices → Unsold space).' }),
   // Buying on delivery routes (src/modules/ads/routeBuys.ts; docs/SWITCHES.md, "Buying on delivery routes").
   sw({ id: 'route_buying', category: 'ads', group: 'Buying on delivery routes', dependsOn: ['prepaid_ads', 'delivery_areas'], risk: 'money', since: 3, label: 'Buying on delivery routes',
     description: 'Advertisers buy pieces of the labels on bottles going to houses in your delivery areas, by area, street, a shape on the map or chosen houses, for chosen weeks, paid up front at an exact price. Each piece is reserved on a bottle when paid (first paid wins, never more than exists) and printed on that house’s box that week. Off: nothing new can be bought on routes; pieces already bought still print, and what can’t go out comes back as credit or a refund.',
@@ -262,12 +278,12 @@ export const SWITCHES: Switch[] = [
     description: 'A box is delivered only once the driver has a photo of it where it was left, as well as the scan at the door; the scan alone isn’t enough, unless a person on your team (ops or an owner, signed in, not the driver) vouches for it with a reason. Delivered with its photo means delivered: what happens on the porch afterwards isn’t a failed delivery. Off: the scan at the right door is enough.',
     routes: ['POST /v1/ops/runs/:id/stops/:stop/deliver-without-photo'] }),
   sw({ id: 'check_by_hand', category: 'delivery', group: 'Packing', label: 'Count a box by hand', description: 'Where there’s no packing line, a person counts a box and the check is recorded with who and when.', routes: ['POST /v1/ops/runs/:id/stops/:stop/check-by-hand'] }),
-  sw({ id: 'box_ads', category: 'delivery', group: 'Boxes', dependsOn: ['ads'], label: 'Ads on boxes', description: 'The top, front, back and right of each box are sold to advertisers, each with its own code. Off: your own house ad on every side.',
+  sw({ id: 'box_ads', category: 'delivery', group: 'Boxes', dependsOn: ['ads'], label: 'Ads on boxes', description: 'The top, front, back and right of each box are sold to advertisers, each with its own code. A side nobody bought is filled from your unsold-space list (box artwork only), else left plain. Off: the sides stay plain (your own ad only if you allow your own ads).',
     routes: ['GET /v1/public/experience/box/:packId/:face', 'POST /v1/public/box-scans', 'POST /v1/public/box-ar-launches'] }),
   ...(['top', 'front', 'back', 'right'] as const).map((face) => sw({ id: `box_${face}`, category: 'delivery', group: 'Boxes', parent: 'box_ads', label: `Box ${face}`, description: `Sell the ${face} of each box to an advertiser.` })),
 
   // ======================= Machines =======================
-  sw({ id: 'machines', category: 'machines', parent: null, dependsOn: ['printing'], label: 'Vending machines', description: 'Machines that print and drop a bottle: their screens, faults, the fleet page and machine keys.',
+  sw({ id: 'machines', category: 'machines', parent: null, dependsOn: ['printing'], host: 'machines', label: 'Vending machines', description: 'Machines that print and drop a bottle: their screens, faults, the fleet page and machine keys.',
     routes: ['POST /v1/machine/heartbeat', 'GET /v1/machine/jobs/next', 'POST /v1/machine/jobs/:id/result', 'GET /v1/machine/presence', 'POST /v1/machine/buffer', 'POST /v1/machine/offline-report', 'POST /v1/machine/commands/:id/result',
       'GET /v1/ops/fleet', 'GET /v1/ops/fleet/:id', 'POST /v1/ops/fleet/:id/commands', 'GET /v1/ops/machines', 'POST /v1/console/machines', 'PATCH /v1/console/machines/:id', 'GET /v1/machines/:locationId/presence', 'GET /v1/public/machines/:locationId', 'GET /v1/public/machines/:locationId/sample.svg', 'GET /v1/public/companies/:companyId/machines'],
     jobs: ['fleet-sweep'], pages: ['machines'] }),
@@ -471,10 +487,10 @@ export const SWITCHES: Switch[] = [
   sw({ id: 'core_platform', category: 'core', parent: null, locked: 'Needed to run anything: without it nothing else works.', label: 'Accounts, team, keys and settings', description: 'Signing in with a code, people’s accounts, the team, API keys, every setting and its history, health checks.',
     routes: ['GET /v1/public/features', 'GET /v1/public/app-config', 'POST /v1/auth/start', 'POST /v1/auth/verify', 'POST /v1/auth/second-step', 'POST /v1/auth/sign-out', 'GET /v1/me', 'PATCH /v1/me',
       'GET /v1/me/second-step', 'POST /v1/me/second-step/start', 'POST /v1/me/second-step/confirm', 'POST /v1/me/second-step/recovery-codes', 'POST /v1/me/second-step/off', 'POST /v1/team', 'GET /v1/team', 'DELETE /v1/team/:userId', 'POST /v1/advertisers', 'GET /v1/ads/advertiser',
-      'GET /v1/keys', 'POST /v1/keys', 'DELETE /v1/keys/:id', 'GET /v1/console', 'PATCH /v1/console/settings', 'POST /v1/console/preview-label', 'GET /v1/console/history', 'GET /v1/console/history/:version', 'POST /v1/console/history/:version/restore',
+      'GET /v1/keys', 'POST /v1/keys', 'DELETE /v1/keys/:id', 'GET /v1/console', 'PATCH /v1/console/settings', 'POST /v1/console/preview-label', 'GET /v1/console/history', 'GET /v1/console/history/:version', 'POST /v1/console/history/:version/restore', 'GET /v1/console/bottles/:code',
       'GET /v1/console/features', 'POST /v1/console/features/preview', 'POST /v1/console/features', 'GET /v1/console/features/history',
       'GET /health/deep', 'GET /v1/platform/status', 'POST /v1/platform/persistence/skip-stuck', 'POST /v1/platform/jobs/:name/run', 'GET /v1/ops/overview', 'GET /v1/ops/plugin-failures'],
-    jobs: ['memory', 'spool', 'capacity', 'backup', 'restore-check'], pages: ['start', 'company', 'brand', 'modules', 'team', 'history', 'keys', 'features'], plugins: ['house-promo'] }),
+    jobs: ['memory', 'spool', 'capacity', 'backup', 'restore-check'], pages: ['start', 'company', 'brand', 'label-panel', 'modules', 'team', 'history', 'keys', 'features'], plugins: ['house-promo'] }),
 ];
 for (const s of SWITCHES) if ((s.parent as unknown) === undefined) s.parent = CATEGORIES.find((c) => c.id === s.category)!.main;
 // A category's main switch has no parent of its own.

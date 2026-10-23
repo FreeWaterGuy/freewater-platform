@@ -1,3 +1,4 @@
+import { outlineText } from '../print/outline';
 import type { BoxFace, BoxFacePlacement, BoxProduct, Campaign, CompanyConfig } from '../../core/types';
 import { givingLine } from '../print/renderer';
 import { qrSvg } from '../print/qr';
@@ -83,7 +84,8 @@ export function renderBox(input: {
   const folds: string[] = [];
   for (const r of Object.values(rects)) folds.push(`<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" fill="none" stroke="#9aa6b2" stroke-width="1" stroke-dasharray="6 4"/>`);
 
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${(totalW / PX).toFixed(2)}in" height="${(totalH / PX).toFixed(2)}in" viewBox="0 0 ${totalW} ${totalH}">${parts.join('')}${folds.join('')}</svg>`;
+  // Every word an outline, as on bottle labels (print/outline.ts): the preview is the print.
+  const svg = outlineText(`<svg xmlns="http://www.w3.org/2000/svg" width="${(totalW / PX).toFixed(2)}in" height="${(totalH / PX).toFixed(2)}in" viewBox="0 0 ${totalW} ${totalH}">${parts.join('')}${folds.join('')}</svg>`);
   return { packId, svg, widthIn: totalW / PX, heightIn: totalH / PX, faceUrls, packUrl };
 }
 

@@ -304,7 +304,9 @@ describe('the white-label console', () => {
     const machine = (await call('POST', '/v1/console/machines', ana, { id: 'LW-001', name: 'Pier 4', city: 'Chicago' })).body;
     const bottle = await call('POST', '/v1/orders', machine.apiKey, { orderId: 'lw-1', locationId: 'LW-001', productId: 'bottle-16oz' });
     expect(bottle.status).toBe(201);
-    expect(bottle.body.slots.every((s: any) => s.isHouse && s.advertiser === 'Lake Water Co')).toBe(true);
+    // Nothing sold and nothing on its unsold-space list yet: plain pieces, never its own house ad in the ad area
+    // (src/modules/fillers/unsold.ts; a licensee may allow its own ads, off until it does).
+    expect(bottle.body.slots.every((s: any) => s.isHouse && s.advertiser === 'Open space')).toBe(true);
     expect(bottle.body.receiptUrl).toMatch(/^HTTPS:\/\/LAKE-WATER\.GO\.FREEWATER\.IO\/Q\/[0-9A-Z]{14}$/);
     const after = (await call('GET', '/v1/console', ana)).body.checklist;
     expect(after.find((c: any) => c.id === 'bottle').done).toBe(true);
