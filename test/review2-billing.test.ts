@@ -38,6 +38,8 @@ beforeAll(async () => {
   db = await createPgliteClient();
   // Commission refunds and billed scans: a company that bills afterwards (paying up front: prepaid.test.ts).
   app = await createApp({ db, seedDemo: true, demoBilling: 'billed_after', seed: 31, clock });
+  // Box sides are opened from the pack page here: ads on boxes are on, explicitly (FreeWater's own choice is off).
+  await app.companyFeatures.change('freewater', { box_ads: true }, { userId: 'usr_test', name: 'Test owner', approverProblem: async () => null });
   keys = app.demoKeys!;
   server = await buildServer(app);
 });

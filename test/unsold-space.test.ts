@@ -162,6 +162,8 @@ describe('A. the company’s own ads never go in the ad area', () => {
   });
 
   it('box sides nobody bought: from the list or plain, never the house ad', async () => {
+    // Box sides print only where ads on boxes are on: on here, explicitly (FreeWater's own choice is off).
+    await app.companyFeatures.change('freewater', { box_ads: true }, { userId: 'usr_test', name: 'Test owner', approverProblem: async () => null });
     const c = await former('cmp-box-former', { headline: 'Fresh bread daily' });
     formers.push(c.id);
     const area = await app.houses.createArea(FW, ops, { name: 'Box street', routeId: 'route-3', polygon: POLY, packSize: 12, vanPacks: 10 });
@@ -178,6 +180,7 @@ describe('A. the company’s own ads never go in the ad area', () => {
     expect(faces.some((f) => f.campaignId === c.id && f.unsold === 'former_advertiser' && f.priceCents === 0)).toBe(true);
     await app.houses.updateArea(area.id, FW, ops, { active: false });
     retireFormers();
+    await app.companyFeatures.change('freewater', { box_ads: false }, { userId: 'usr_test', name: 'Test owner', approverProblem: async () => null });
   });
 });
 

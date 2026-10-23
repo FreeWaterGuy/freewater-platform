@@ -16,6 +16,8 @@ import { doorPhoto } from './door-photo';
 // street order with no sign-up, and the only ways a house stops are someone there saying so in the app, or a driver's
 // skip a person agrees with.
 
+/** The code a box carries: on its printed side panel, or, for a plain box (ads on boxes off), its own box code. */
+const codeOf = (p: { rendered?: { packUrl: string }; boxCode?: string }) => (p.rendered?.packUrl ?? p.boxCode)!;
 let db: SqlClient;
 let app: App;
 let server: FastifyInstance;
@@ -244,10 +246,10 @@ describe('an area of houses, from the map to the door', () => {
     // The same box's code, from someone at another company: not a box that company delivered. (Through the service:
     // the other company has delivery areas off, so its route would refuse before the company check is reached.)
     const elsewhere = await app.accounts.invite({ companyId: 'peak-spring', email: 'ana.elsewhere@example.com', role: 'ops' });
-    await expect(app.houses.claim(elsewhere.id, 'peak-spring', { code: pack.rendered!.packUrl })).rejects.toMatchObject({ code: 'no_match' });
+    await expect(app.houses.claim(elsewhere.id, 'peak-spring', { code: codeOf(pack) })).rejects.toMatchObject({ code: 'no_match' });
     expect((await db.query<any>(`select count(*)::int as n from house_claims where company_id = 'peak-spring'`)).rows[0].n).toBe(0);
     // The QR on the side of the box (what the app's camera reads).
-    const claimed = await call('POST', '/v1/me/house/claim', ana, { code: pack.rendered!.packUrl });
+    const claimed = await call('POST', '/v1/me/house/claim', ana, { code: codeOf(pack) });
     expect(claimed.statusCode, claimed.body).toBe(201);
     expect(claimed.json()).toMatchObject({ id: home.houseId, address: home.address, status: 'active', areaName: 'Ravey and Sunny', nextDate: '2026-11-10', householdSize: null });
     // The data download has it.
@@ -259,8 +261,10 @@ describe('an area of houses, from the map to the door', () => {
   it('a person can type the whole box code from the side panel instead; five wrong tries a day at most', async () => {
     const ben = await signIn('ben@example.com');
     const pack = app.packs.packs.get(next.packId)!;
-    const typed = pack.rendered!.packUrl.split('/').pop()!.replace(/(.{4})(?=.)/g, '$1 ').toLowerCase(); // as printed, typed loosely
-    expect(pack.rendered!.svg).toContain(`Box code ${pack.rendered!.packUrl.split('/').pop()!.replace(/(.{4})(?=.)/g, '$1 ')}`);
+    const typed = codeOf(pack).split('/').pop()!.replace(/(.{4})(?=.)/g, '$1 ').toLowerCase(); // as printed, typed loosely
+    // FreeWater's boxes are plain (ads on boxes off): nothing is printed, yet the box has its code all the same (where a
+    // printed box's side panel shows it: box-ads-off.test.ts).
+    expect(pack.rendered).toBeUndefined();
     for (let i = 0; i < 5; i++) expect((await call('POST', '/v1/me/house/claim', ben, { code: 'ZZZZ ZZZZ ZZZZ ZZ' })).statusCode).toBe(404);
     expect((await call('POST', '/v1/me/house/claim', ben, { code: typed })).json().error.code).toBe('too_many_tries');
     at('2026-11-04T16:00:00Z'); // the next day
@@ -272,8 +276,8 @@ describe('an area of houses, from the map to the door', () => {
   it('one house per person, proved by a box from the last two months; a real household size; the street known to ads only while its switch is on', async () => {
     const dan = await app.accounts.invite({ companyId: 'freewater', email: 'dan@example.com', role: 'ops' });
     const homePack = app.packs.packs.get(home.packId)!, nextPack = app.packs.packs.get(next.packId)!;
-    await app.houses.claim(dan.id, 'freewater', { code: homePack.rendered!.packUrl });
-    await app.houses.claim(dan.id, 'freewater', { code: nextPack.rendered!.packUrl });
+    await app.houses.claim(dan.id, 'freewater', { code: codeOf(homePack) });
+    await app.houses.claim(dan.id, 'freewater', { code: codeOf(nextPack) });
     expect((await db.query<any>(`select house_id from house_claims where user_id = $1`, [dan.id])).rows).toEqual([{ house_id: next.houseId }]);
     await expect(app.houses.change(dan.id, 'freewater', { action: 'household', householdSize: 21 })).rejects.toMatchObject({ code: 'bad_size' });
     await app.houses.unclaim(dan.id, 'freewater');
@@ -281,7 +285,7 @@ describe('an area of houses, from the map to the door', () => {
     const was = now;
     try {
       at('2027-01-05T16:00:00Z');
-      await expect(app.houses.claim(dan.id, 'freewater', { code: homePack.rendered!.packUrl })).rejects.toMatchObject({ code: 'no_match' });
+      await expect(app.houses.claim(dan.id, 'freewater', { code: codeOf(homePack) })).rejects.toMatchObject({ code: 'no_match' });
     } finally { now = was; }
     // What ads may know about a house (its street and area) is there only while that switch is on.
     expect(await app.houses.contextFor(next.houseId, 'freewater')).not.toBeNull();
@@ -309,7 +313,7 @@ describe('an area of houses, from the map to the door', () => {
     expect(app.platform.units.get(bensPack.unitIds[0]!)!.intendedFor).toBeTruthy();
     // A box printed but not yet left at the house proves nothing (someone at the micro-factory could scan it).
     const cy = await signIn('cy@example.com');
-    expect((await call('POST', '/v1/me/house/claim', cy, { code: bensPack.rendered!.packUrl })).json().error.code).toBe('no_match');
+    expect((await call('POST', '/v1/me/house/claim', cy, { code: codeOf(bensPack) })).json().error.code).toBe('no_match');
     for (const r of runs) { await packAndLoad(r.id); for (const s of r.stops) expect((await drop(r.id, s)).statusCode).toBe(200); }
   });
 
@@ -459,6 +463,8 @@ describe('nobody delivered twice, and a restart mid-plan', () => {
 
   it('a printer that fails mid-plan leaves the run printing; after a restart, planning again finishes it without a second box or house', async () => {
     at('2027-01-18T16:00:00Z');
+    // A box printer that jams: boxes print only where ads on boxes are on, so on here, explicitly (FreeWater's is off).
+    await app.companyFeatures.change('freewater', { box_ads: true }, { userId: 'usr_test', name: 'Test owner', approverProblem: async () => null });
     const printer = app.platform.registry.printerFor(app.platform.companies.get('freewater')!);
     const real = printer.print.bind(printer);
     let boxes = 0;
@@ -485,6 +491,7 @@ describe('nobody delivered twice, and a restart mid-plan', () => {
     expect(packs.every((p) => p.status === 'box_printed' && p.unitIds.length === 12)).toBe(true);
     expect(uniq(packs.map((p) => p.houseId))).toHaveLength(6);
     expect(resumed.flatMap((r) => r.stops.map((s: any) => s.packId)).sort()).toEqual(runs.flatMap((r) => r.stops.map((s: any) => s.packId)).sort());
+    await again.companyFeatures.change('freewater', { box_ads: false }, { userId: 'usr_test', name: 'Test owner', approverProblem: async () => null });
     await again.persistence.flush();
   });
 });

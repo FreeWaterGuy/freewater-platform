@@ -28,6 +28,8 @@ async function world(engine: string) {
   const db: SqlClient = await freshDb(engine);
   const provider = new TestPaymentProvider();
   const app: App = await createApp({ db, seedDemo: true, seed: 7, clock, payments: provider, productLookup: null, anchorPublishers: [] } as any);
+  // Whole boxes sometimes take their sides here: ads on boxes are on, explicitly (FreeWater's own choice is off).
+  await app.companyFeatures.change('freewater', { box_ads: true }, { userId: 'usr_test', name: 'Test owner', approverProblem: async () => null });
   const server: FastifyInstance = await buildServer(app);
   const call = (method: string, url: string, token?: string, payload?: unknown) => server.inject({ method: method as any, url, payload: payload as any, headers: token ? { authorization: `Bearer ${token}` } : {} });
   const signIn = async (to: string) => {

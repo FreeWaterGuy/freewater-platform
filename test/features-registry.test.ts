@@ -191,6 +191,8 @@ beforeAll(async () => {
   fw = await owner('freewater', 'owner@freewater.io');
   fwNoStep = await owner('freewater', 'second@freewater.io', { secondStep: false });
   peak = await owner('peak-spring', 'owner@peakspring.example');
+  // These tests sell and print box sides: ads on boxes are on here, explicitly (FreeWater's own choice is off).
+  await app.companyFeatures.change('freewater', { box_ads: true }, actor('box sides for these tests'));
 }, 120_000);
 afterAll(async () => { await server?.close(); await db?.close(); });
 

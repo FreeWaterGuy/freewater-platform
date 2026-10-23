@@ -88,6 +88,12 @@ paid to take them), paid for by advertisers, with part of every bottle going to 
   person reviews it, and the van goes on to the next house.
 - **A photo of the box at the door means delivered.** What happens on the porch afterwards isn't a failed delivery.
 - **A bottle with a bad label is reprinted with the same ads** and never counts against the advertiser.
+- **Boxes are plain for now** (the founder, 2026-10-23: "The boxes have not been printed on to date. They are black at
+  this time. But we will ultimately want to have ads on those"). *Ads on boxes* is off for FreeWater, the pilot and new
+  companies: nothing is printed on a box, no box side is sold, and the assistant and portal never offer boxes; each
+  pack keeps its box code. Each company sets its boxes per pack size: outside size (not yet known: "keep that fluid
+  and adjustable"), inside and bottom colours (black unless a white-label company chooses), and its info strip's side
+  and width (docs/SWITCHES.md, "Delivery boxes").
 
 ## Every feature is a switch
 

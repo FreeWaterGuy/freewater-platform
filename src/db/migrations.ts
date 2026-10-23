@@ -2545,6 +2545,22 @@ alter table advertisers add column if not exists bonus_refused_reason text;
 alter table advertisers add constraint advertisers_bonus_refused_whole check ((bonus_refused_at is null) = (bonus_refused_by is null));
 `,
   },
+  {
+    id: '076_box_ads_off',
+    sql: `
+-- Ads on boxes start off (src/runtime/registry.ts, box_ads). The founder: "The boxes have not been printed on to date.
+-- They are black at this time." FreeWater (the platform company) had it on only as the starting choice the system wrote
+-- for it, never a person's: that row is turned off, and the change is logged like any other (the log is only added
+-- to). A choice a person made, and every other company's, is left as it is. New companies copy FreeWater's choice.
+with fixed as (
+  update company_features set is_on = false, set_at = now()
+  where company_id = 'freewater' and feature_id = 'box_ads' and is_on and set_by = 'system'
+  returning company_id
+)
+insert into company_feature_log (company_id, feature_id, was_on, is_on, by, reason, via, at)
+select company_id, 'box_ads', true, false, 'system', 'FreeWater’s boxes are plain: ads on boxes start off (the founder, 2026-10-23).', 'catalogue correction', now() from fixed;
+`,
+  },
 ];
 
 /** Runs every migration not yet run (or, for tests that start from an older schema, those in `list`). */

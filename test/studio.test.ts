@@ -114,6 +114,8 @@ describe('the studio, as a brand uses it', () => {
   beforeAll(async () => {
     db = await createPgliteClient();
     app = await createApp({ db, seedDemo: true, seed: 3 });
+    // The studio's previews show a box side too: ads on boxes are on here, explicitly (FreeWater's own choice is off).
+    await app.companyFeatures.change('freewater', { box_ads: true }, { userId: 'usr_test', name: 'Test owner', approverProblem: async () => null });
     joes = app.demoKeys!['advertiser-joes']!;
     admin = app.demoKeys!['freewater-admin']!;
     server = await buildServer(app);

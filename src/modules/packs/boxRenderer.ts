@@ -3,6 +3,7 @@ import type { BoxFace, BoxFacePlacement, BoxProduct, Campaign, CompanyConfig } f
 import { givingLine } from '../print/renderer';
 import { qrSvg } from '../print/qr';
 import { campaignQrStyle, companyQrStyle, qrMode, staticTarget } from '../codes/style';
+import { companyBox } from './boxSettings';
 
 const PX = 40; // drawing units per inch; the SVG's width and height are in real inches
 
@@ -13,6 +14,10 @@ export interface RenderedBox {
   heightIn: number;
   faceUrls: Partial<Record<BoxFace, string>>;
   packUrl: string; // the panel QR: the drivers scan it at the door, and it opens the pack's receipt
+  /** The inside of the box (printed separately from the outside, laid flat here): black unless the company chose. */
+  insideColor: string;
+  /** The bottom of the box: black unless the company chose. */
+  bottomColor: string;
 }
 
 /**
@@ -20,8 +25,11 @@ export interface RenderedBox {
  *            [ top  ]
  *   [ left ][ front ][ right ][ back ]
  *            [bottom]
- * Ad faces carry the advertiser's art and its own QR. The left face is the locked company panel.
- * The bottom stays blank. A small stop code sits in the corner of the front and top for drivers.
+ * Ad faces carry the advertiser's art and its own QR. The company's info strip (its locked panel) is on the side it
+ * chose (the left unless set), as wide as it chose (the whole side unless set). The bottom is the company's bottom
+ * colour (black unless set), and the inside colour goes with the file. Measurements are the company's own for that pack
+ * size where it set them (src/modules/packs/boxSettings.ts). A small stop code sits in the corner of the front and top
+ * for drivers. Only drawn where the company has ads on boxes on.
  */
 export function renderBox(input: {
   packId: string;
@@ -33,7 +41,8 @@ export function renderBox(input: {
   stop: number;
   codes?: import('../codes/service').CodeMinter;
 }): RenderedBox {
-  const { box, company, faces, campaigns, packId } = input;
+  const { company, faces, campaigns, packId } = input;
+  const box = companyBox(company, input.box);
   const L = box.lengthIn * PX, Wd = box.widthIn * PX, H = box.heightIn * PX;
   const totalW = 2 * Wd + 2 * L, totalH = H + 2 * Wd;
   const base = company.receiptBaseUrl.replace(/\/$/, '');
@@ -62,14 +71,15 @@ export function renderBox(input: {
     parts.push(qrSvg(url, r.x + qr.x, r.y + qr.y, q, 'H', campaignQrStyle(company, c)));
   }
 
-  // Locked company panel.
+  // Locked company panel: the info strip, on its side, as wide as the company chose.
   const pr = rects[box.panelFace];
   const packUrl = input.codes ? input.codes.pack(company, packId) : `${base}/p/${packId}`;
-  parts.push(boxPanel(company, pr.x, pr.y, pr.w, pr.h, packUrl, input.routeId, box));
+  parts.push(boxPanel(company, pr.x, pr.y, Math.min(pr.w, box.stripWidthIn * PX), pr.h, packUrl, input.routeId, box));
 
-  // Blank faces.
+  // Blank faces. The bottom is the company's bottom colour.
   for (const face of box.blankFaces) {
     const r = rects[face];
+    if (face === 'bottom') { parts.push(`<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" fill="${box.bottomColor}"/>`); continue; }
     parts.push(`<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" fill="#ffffff"/><text x="${r.x + r.w / 2}" y="${r.y + r.h / 2 + 4}" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#b6c0cc">${face}, left blank</text>`);
   }
 
@@ -85,8 +95,8 @@ export function renderBox(input: {
   for (const r of Object.values(rects)) folds.push(`<rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" fill="none" stroke="#9aa6b2" stroke-width="1" stroke-dasharray="6 4"/>`);
 
   // Every word an outline, as on bottle labels (print/outline.ts): the preview is the print.
-  const svg = outlineText(`<svg xmlns="http://www.w3.org/2000/svg" width="${(totalW / PX).toFixed(2)}in" height="${(totalH / PX).toFixed(2)}in" viewBox="0 0 ${totalW} ${totalH}">${parts.join('')}${folds.join('')}</svg>`);
-  return { packId, svg, widthIn: totalW / PX, heightIn: totalH / PX, faceUrls, packUrl };
+  const svg = outlineText(`<svg xmlns="http://www.w3.org/2000/svg" width="${(totalW / PX).toFixed(2)}in" height="${(totalH / PX).toFixed(2)}in" viewBox="0 0 ${totalW} ${totalH}" data-inside-color="${box.insideColor}" data-bottom-color="${box.bottomColor}">${parts.join('')}${folds.join('')}</svg>`);
+  return { packId, svg, widthIn: totalW / PX, heightIn: totalH / PX, faceUrls, packUrl, insideColor: box.insideColor, bottomColor: box.bottomColor };
 }
 
 const STOP_FACES: BoxFace[] = ['front', 'top'];
@@ -102,7 +112,8 @@ export function boxFaceQr(w: number, h: number) {
 }
 
 /** The ad sides of a box, as drawn: each one's size in drawing units. */
-export function boxFaceSizes(box: BoxProduct): { face: BoxFace; w: number; h: number }[] {
+export function boxFaceSizes(box: BoxProduct, company?: Pick<CompanyConfig, 'boxes'>): { face: BoxFace; w: number; h: number }[] {
+  if (company) box = companyBox(company, box);
   const L = box.lengthIn * PX, Wd = box.widthIn * PX, H = box.heightIn * PX;
   const size: Record<BoxFace, { w: number; h: number }> = { top: { w: L, h: Wd }, bottom: { w: L, h: Wd }, front: { w: L, h: H }, back: { w: L, h: H }, left: { w: Wd, h: H }, right: { w: Wd, h: H } };
   return box.adFaces.map((face) => ({ face, ...size[face] }));

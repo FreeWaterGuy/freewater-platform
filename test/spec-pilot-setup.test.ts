@@ -28,9 +28,10 @@ beforeAll(async () => {
 afterAll(async () => { await db?.close(); });
 
 const PILOT = ['printing', 'scan_pages', 'ads', 'ad_chat', 'fillers', 'ar_video', 'delivery', 'delivery_areas', 'driver_app', 'driver_house_skip', 'door_photos', 'drop_photo_proof',
-  'house_ad_blocks', 'box_ads', 'route_proof', 'ai_ad_reviewer', 'open_books', ...['whole', 'half', 'third', 'quarter', 'sixth', 'eighth', 'tenth'].map((s) => `size_${s}`)];
+  'house_ad_blocks', 'route_proof', 'ai_ad_reviewer', 'open_books', ...['whole', 'half', 'third', 'quarter', 'sixth', 'eighth', 'tenth'].map((s) => `size_${s}`)];
 const MONEY_FOR_PILOT = ['money', 'advertiser_billing', 'prepaid_ads', 'route_buying'];
-const STAYS_OFF = ['machines', 'news', 'news_cards', 'bidding', 'billed_after', 'fee_scan', 'fee_ar_launch', 'fee_box_face', 'fee_commission', 'ai_ad_final_call', 'route_small_audience', 'house_targeting', 'lottery', 'token', 'people_choose'];
+// Ads on boxes too: FreeWater's boxes are plain (the founder, 2026-10-23), so the starting point leaves them off.
+const STAYS_OFF = ['box_ads', 'machines', 'news', 'news_cards', 'bidding', 'billed_after', 'fee_scan', 'fee_ar_launch', 'fee_box_face', 'fee_commission', 'ai_ad_final_call', 'route_small_audience', 'house_targeting', 'lottery', 'token', 'people_choose'];
 
 describe('“Delivery + printed ads” on a new company is a working pilot setup', () => {
   it('turns on the pilot’s switches, leaves machines and news off, and lists the money steps for a person', async () => {

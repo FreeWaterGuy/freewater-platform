@@ -152,7 +152,9 @@ describe('packs over the API', () => {
     const p1 = (await mk(41)).json();
     const p2 = (await mk(42)).json();
     expect(p1.unitIds).toHaveLength(6);
-    expect((await call('GET', `/v1/packs/${p1.id}/box.svg`, admin)).headers['content-type']).toContain('image/svg+xml');
+    // FreeWater's boxes are plain (ads on boxes off): there's no print file, and the pack still goes to the right door.
+    expect((await call('GET', `/v1/packs/${p1.id}/box.svg`, admin)).json().error.code).toBe('plain_box');
+    expect(p1.packUrl).toMatch(/\/Q\/[A-Za-z0-9]+$/);
     expect((await call('POST', `/v1/packs/${p1.id}/seal`, admin)).statusCode).toBe(409);
     for (const p of [p1, p2]) {
       expect((await call('POST', `/v1/packs/${p.id}/verify`, admin, { scannedUnitIds: p.unitIds })).json().ok).toBe(true);

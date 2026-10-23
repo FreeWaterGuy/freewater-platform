@@ -43,7 +43,7 @@ describe('packs', () => {
     expect(Math.max(...counts.values())).toBeLessThanOrEqual(max);
   });
 
-  it('sells four box faces to four different advertisers, keeps the panel and leaves the bottom blank', async () => {
+  it('sells four box faces to four different advertisers, keeps the panel and colours the bottom black', async () => {
     const s = setup();
     const pack = await s.compose(1);
     expect(pack.faces.map((f) => f.face)).toEqual(['top', 'front', 'back', 'right']);
@@ -51,7 +51,8 @@ describe('packs', () => {
     expect(new Set(paid.map((f) => f.advertiserId)).size).toBe(paid.length);
     const burgers = pack.faces.filter((f) => f.campaignId === 'cmp-joes' || f.campaignId === 'cmp-patty');
     expect(burgers.length).toBeLessThanOrEqual(1);
-    expect(pack.rendered!.svg).toContain('bottom, left blank');
+    // (A bare platform has every switch on, ads on boxes too.) The bottom is black unless the company chose a colour.
+    expect(pack.rendered!.svg).toContain('<rect x="320" y="632" width="424" height="320" fill="#000000"/>');
     expect(pack.rendered!.svg).toContain('R3 · 1');
   });
 

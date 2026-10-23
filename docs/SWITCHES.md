@@ -301,7 +301,8 @@ stays until a person changes it. "No soliciting" signs are ignored (the founder'
 done in the app. Houses are addresses, never people.
 
 **Claiming a house** (the app's *Your house*): scanning the code on the side of a box delivered there in the last 60
-days, or typing the whole box code printed under it on the side panel (14 letters and numbers). The short number in
+days, or typing the whole box code printed under it on the side panel (14 letters and numbers). A plain box (ads on
+boxes off) has the same code; how it reaches the box is still being decided. The short number in
 the box's corner is never enough: anyone passing the porch can read it. Several people can claim one house; a new
 claim of a house someone already claimed is shown to them in the app and told to the team. A claimant sees door
 photos only from their claim on, never before (another household's). Stopping deliveries always works at once (the
@@ -329,6 +330,19 @@ person signed in changes it through `PATCH /v1/console/settings`, no console fie
 
 Companies that existed before these switches see them as **New** and off until their own people decide.
 
+### Delivery boxes (Features → Delivery → *Ads on boxes*; Company → *Delivery boxes*)
+
+The founder (2026-10-23): "The boxes have not been printed on to date. They are black at this time. But we will
+ultimately want to have ads on those as time goes on. The inside of the box will be black, at least for now, but if
+someone who white-labels wanted to, they should be able to adjust that... and the same for the bottom of the box. I
+don't have the exact 24-pack dimensions; keep that fluid and adjustable."
+
+| Switch / setting | FreeWater | Off means / range |
+|---|---|---|
+| **Ads on boxes** (`box_ads`) | **Off** (also off in *Delivery + printed ads*, in the pilot, and for every new company, which copies FreeWater) | Boxes are plain: no box print job and no panel; no box side is quoted or sold (`box_sides_off`), and a whole-box route buy covers its bottles only and says so (`plainBox` on the quote); the ad assistant never offers or sets boxes (its tool can't); drafts, previews and ads print on bottles only ("Prints on: Bottles"); the portal has no *On a box* tab and no box-sides option. Each pack still gets its **box code** (`pack.boxCode`): the driver's scan, a house's claim and the pack's receipt page work as before. How the code reaches a plain box (a sticker?) is still being decided. On: the four sides (less the info strip's side) are sold, each with its own code. Migration 076 turned FreeWater's starting choice off on existing servers (a person's choice is left alone). |
+| **Box top / front / back / right** | On (under *Ads on boxes*) | That side isn't sold. |
+| **Box sizes and colours** (`boxes`, per pack size 6, 12, 24) | Nothing set | Outside length, width and height, 1–60 in each (unset: the platform's standard box of that size; no real size is assumed). Inside and bottom colours, `#RRGGBB` (black unless set; ads there may come later). The side with the info strip (left, right, front or back; left unless set; that side is never sold) and its width, 0.5–60 in and no wider than its side (the whole side unless set). Saved field by field; `null` clears one. Used to draw a box only while *Ads on boxes* is on (`src/modules/packs/boxSettings.ts`). |
+
 ### Buying on delivery routes
 
 Advertisers buy pieces of the labels on bottles going to houses in the delivery areas (`src/modules/ads/routeBuys.ts`;
@@ -336,7 +350,7 @@ README, "Buying on delivery routes"). Paid up front like every ad here; every si
 
 | What | How it works |
 |---|---|
-| **Kinds** | *Spread*: N bottles shared over an area, streets or a shape on the map. *Blanket*: one piece on one bottle in every box at every house there. *Whole box*: every bottle in a house's box (and its sides, if chosen). *Chosen houses*: named by address, a number of bottles at each. Each for 1 to 26 weeks (Monday to Sunday; the company's `adBilling.limits.maxRouteWeeks`, 1 to 52), from next week. Only weekly areas that are on. One buy holds at most 50,000 pieces, reserved in pieces of 5,000 rows inside one transaction (all of it or none). |
+| **Kinds** | *Spread*: N bottles shared over an area, streets or a shape on the map. *Blanket*: one piece on one bottle in every box at every house there. *Whole box*: every bottle in a house's box (and its sides, if chosen, only where ads on boxes are on; otherwise the box is plain and the buy covers its bottles only). *Chosen houses*: named by address, a number of bottles at each. Each for 1 to 26 weeks (Monday to Sunday; the company's `adBilling.limits.maxRouteWeeks`, 1 to 52), from next week. Only weekly areas that are on. One buy holds at most 50,000 pieces, reserved in pieces of 5,000 rows inside one transaction (all of it or none). |
 | **The price** | Exact before paying: pieces × the size's price (*Ads and prices*: whole label $1 … 1/10 20¢) × the product's factor, plus box sides at the box side price (40¢), less any credit. The card is charged that or nothing. One charge is at most the company's `adBilling.limits.maxChargeCents` ($10,000 unless set; bottles paid up front too): above it the advertiser is told plainly to buy less or contact the team (splitting into weekly or monthly charges isn't built). AR, video and scans are included. |
 | **Room** | A bottle is one label: what's sold on it never passes the whole label or ten pieces, only in mixes the bottle can print, never an ad twice, never two competitors (the database refuses more than a whole label). Blanket and whole-box buys skip a house whose box is already taken that week and don't charge for it; a buy that can't fit is refused with what's left. |
 | **First paid wins** | Paying reserves each piece on a bottle under a lock on each house and week, checked against what's committed then. Of two payments for the last space, the second is charged nothing and shown the new price. A declined card lets its space go at once. No bidding for houses while pricing is flat. |
@@ -531,7 +545,7 @@ files: `POST /v1/studio/export`, an SVG at real size in inches), *Delivery + pri
 starting point never turns on a money, chain or one-way switch; those are listed for a person to turn on, with
 what sits under them (for *Delivery + printed ads*: *Money and payments*, *Advertiser invoices and cards*, *Advertisers
 pay up front*, then *Buying on delivery routes*; and *Giving*, set on its own page). With those on, a new company has
-the Austin pilot's setup: house-after-house delivery with photo proof, printed ads at every size on bottles and boxes,
+the Austin pilot's setup: house-after-house delivery with photo proof, printed ads at every size on bottles (boxes plain, as FreeWater's),
 route buying, fillers, AR and scans; no machines, fees, bidding or news (`test/spec-pilot-setup.test.ts`). Unsold space
 starts with FreeWater's list (former advertisers, fillers, charity, picks) and never the company's own ads.
 

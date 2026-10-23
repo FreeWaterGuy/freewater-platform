@@ -20,6 +20,7 @@ import type { Pack } from '../packs/service';
 import type { PaymentsService } from '../payments/service';
 import { PaymentError } from '../payments/service';
 import { scrubText } from '../../runtime/errors';
+import { companyBox } from '../packs/boxSettings';
 
 // Buying on delivery routes (docs/SWITCHES.md, "Buying on delivery routes"; docs/OVERVIEW.md).
 //
@@ -48,6 +49,8 @@ export const KIND_WORDS: Record<RouteKind, string> = {
   box: 'A whole box: every bottle (and its sides)',
   houses: 'Chosen houses',
 };
+/** A kind of buy in words, as this company sells it: where ads on boxes are off, a whole box is its bottles only. */
+export const routeKindWords = (kind: RouteKind, boxes: boolean) => (kind === 'box' && !boxes ? 'A whole box: every bottle in it (the box itself is plain)' : KIND_WORDS[kind]);
 
 export interface RouteWhere {
   /** Delivery areas (all their houses). */
@@ -107,6 +110,8 @@ export interface RouteQuote {
   small: boolean; smallAudienceHouses: number; guardrails: string[];
   ifAHouseStops: string;
   included: string;
+  /** For a whole box where ads on boxes are off: that the box is plain, so the buy covers its bottles only. */
+  plainBox: string | null;
 }
 
 const U = (s: Share) => 120 / s;
@@ -317,7 +322,7 @@ export class RouteBuyService {
         for (let p = 1; p <= h.packs; p++) { const b = best(hw, (p - 1) * h.packSize + 1, p * h.packSize); if (b) take(h, week, b); else noRoom++; }
       }
     } else if (input.kind === 'box') {
-      const box = this.boxFor(h0(houses));
+      const box = this.boxFor(company, h0(houses));
       for (const week of weeks) for (const h of houses) {
         const hw = slot(occ, h.id, week);
         let done = false;
@@ -362,9 +367,13 @@ export class RouteBuyService {
     return { spots, noRoom, short };
   }
 
-  private boxFor(h?: HouseRow) {
-    return h ? [...this.boxes().values()].find((b) => b.bottles === h.packSize) : undefined;
+  /** The box a house gets, as the company has it (its info strip's side is never sold). */
+  private boxFor(company: CompanyConfig, h?: HouseRow) {
+    const b = h ? [...this.boxes().values()].find((x) => x.bottles === h.packSize) : undefined;
+    return b ? companyBox(company, b) : undefined;
   }
+  /** Ads on boxes are on for the company (off for FreeWater: its boxes are plain, so no side is ever sold). */
+  private boxesOn(companyId: string) { return this.on(companyId, 'box_ads'); }
   /** Set by the app: the box products (their sides sold to advertisers). */
   boxes: () => Map<string, import('../../core/types').BoxProduct> = () => new Map();
 
@@ -394,7 +403,8 @@ export class RouteBuyService {
     if (input.kind === 'houses' && input.perHouse !== undefined && !(Number.isInteger(input.perHouse) && input.perHouse >= 1 && input.perHouse <= 72)) throw new AdsError(422, 'bad_per_house', 'Bottles at each house each week: 1 to 72.');
     if (input.kind === 'houses' && !(input.where?.addresses?.length || input.where?.houseIds?.length)) throw new AdsError(422, 'houses_needed', 'Name the houses: their street addresses.');
     if (input.boxSides && input.kind !== 'box') throw new AdsError(422, 'sides_with_box', 'Box sides come with a whole box.');
-    if (input.boxSides) this.need(companyId, 'box_ads', 'Ads on boxes');
+    // Boxes are plain where ads on boxes are off: their sides are never sold, and a whole box is its bottles only.
+    if (input.boxSides && !this.boxesOn(companyId)) throw new AdsError(422, 'box_sides_off', `${this.company(companyId).name}’s delivery boxes are plain: nothing is printed on them, so their sides can’t be bought. A whole box covers its bottles only. Nothing was charged.`);
     return { company, product, share, weeks: Array.from({ length: weeksN }, (_, i) => addDays(start, 7 * i)) };
   }
 
@@ -525,7 +535,7 @@ export class RouteBuyService {
     let streets = [...byStreet.values()];
     if (t.byData) streets = groupSmall(streets);
     const quote: RouteQuote = {
-      kind: input.kind, kindWords: KIND_WORDS[input.kind], share, size: shareLabel(share), productId: product.id, product: product.name,
+      kind: input.kind, kindWords: routeKindWords(input.kind, this.boxesOn(companyId)), share, size: shareLabel(share), productId: product.id, product: product.name,
       startWeek: weeks[0]!, weeks: weeks.length, weekList: weeks,
       houses: targeted.length, housesReached: reached.size, streets,
       perWeek: weeks.map((w) => ({ week: w, houses: new Set(spots.filter((x) => x.week === w).map((x) => x.houseId)).size, bottles: spots.filter((x) => x.week === w && x.bottle).length })),
@@ -542,6 +552,7 @@ export class RouteBuyService {
         ? 'If the house stops deliveries or blocks your ads, the part not delivered is paid back to your card (a person at the company approves it).'
         : 'If a house stops deliveries or blocks your ads, the pieces not delivered there come back to you as credit for other houses, used on your next route buy.',
       included: 'AR, video and scans are included, at every size.',
+      plainBox: input.kind === 'box' && !this.boxesOn(companyId) ? `${company.name}’s delivery boxes are plain: nothing is printed on them, so a whole box covers its bottles only.` : null,
     };
     return { ...quote, plan: spots, targeted };
   }
@@ -625,7 +636,7 @@ export class RouteBuyService {
     if (row.status !== 'paid') {
       const b = await this.db.query<any>(`select kind, houses, weeks from route_buys where order_id = $1`, [row.id]);
       const rb = b.rows[0];
-      await this.prepaid.charge(row, 'ad_order', `${n(row.bottles).toLocaleString('en-US')} pieces on delivery routes${rb ? ` (${KIND_WORDS[rb.kind as RouteKind].toLowerCase()}, ${n(rb.houses)} houses, ${n(rb.weeks)} week${n(rb.weeks) === 1 ? '' : 's'})` : ''}, paid in advance`);
+      await this.prepaid.charge(row, 'ad_order', `${n(row.bottles).toLocaleString('en-US')} pieces on delivery routes${rb ? ` (${routeKindWords(rb.kind as RouteKind, this.boxesOn(row.company_id)).toLowerCase()}, ${n(rb.houses)} houses, ${n(rb.weeks)} week${n(rb.weeks) === 1 ? '' : 's'})` : ''}, paid in advance`);
     }
     return this.paidView((await this.db.query<any>(`select * from ad_orders where id = $1`, [row.id])).rows[0]);
   }
@@ -1053,7 +1064,7 @@ export class RouteBuyService {
     }
     const settlements = (await this.db.query<any>(`select * from route_settlements where campaign_id = $1 order by created_at`, [campaignId])).rows.map((r) => this.settlementView(r, 'advertiser'));
     return {
-      campaignId, kind: rb.kind as RouteKind, kindWords: KIND_WORDS[rb.kind as RouteKind], size: shareLabel(n(rb.share) as Share), startWeek: day(rb.start_week), weeks: n(rb.weeks),
+      campaignId, kind: rb.kind as RouteKind, kindWords: routeKindWords(rb.kind as RouteKind, n(rb.faces) > 0 || this.boxesOn(rb.company_id)), size: shareLabel(n(rb.share) as Share), startWeek: day(rb.start_week), weeks: n(rb.weeks),
       bought: { houses: n(rb.houses), bottles: n(rb.bottles), boxSides: n(rb.faces) },
       progress: { waiting: status('open'), printing: status('held'), printed: placed.length, delivered: delivered.length, credited: status('credited'), refunded: status('refunded') + status('refunding') },
       housesReached: new Set(delivered.map((s) => s.house_id)).size,
@@ -1072,7 +1083,7 @@ export class RouteBuyService {
     const settlements = (await this.db.query<any>(`select * from route_settlements where company_id = $1 and advertiser_id = $2 order by created_at desc limit 100`, [companyId, advertiserId])).rows.map((r) => this.settlementView(r, 'advertiser'));
     return {
       creditCents: await this.creditBalance(companyId, advertiserId), credit: (await this.creditAccounts(companyId, this.db, advertiserId))[0] ?? { advertiserId, gotCents: 0, usedCents: 0, expiredCents: 0, leftCents: 0, expiresAfterDays: adLimits(this.company(companyId)).creditExpiryDays, expiring: [] }, verified: await this.verified(companyId, advertiserId),
-      buys: buys.map((r) => ({ campaignId: r.campaign_id as string, name: this.platform.campaigns.get(r.campaign_id)?.name ?? null, kind: r.kind as RouteKind, kindWords: KIND_WORDS[r.kind as RouteKind], size: shareLabel(n(r.share) as Share), startWeek: day(r.start_week), weeks: n(r.weeks), houses: n(r.houses), bottles: n(r.bottles), boxSides: n(r.faces), small: !!r.small, totalCents: n(r.total_cents), creditCents: n(r.credit_cents), paid: r.order_status === 'paid' })),
+      buys: buys.map((r) => ({ campaignId: r.campaign_id as string, name: this.platform.campaigns.get(r.campaign_id)?.name ?? null, kind: r.kind as RouteKind, kindWords: routeKindWords(r.kind as RouteKind, n(r.faces) > 0 || this.boxesOn(companyId)), size: shareLabel(n(r.share) as Share), startWeek: day(r.start_week), weeks: n(r.weeks), houses: n(r.houses), bottles: n(r.bottles), boxSides: n(r.faces), small: !!r.small, totalCents: n(r.total_cents), creditCents: n(r.credit_cents), paid: r.order_status === 'paid' })),
       givenBack: settlements,
     };
   }

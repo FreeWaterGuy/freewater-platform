@@ -71,6 +71,8 @@ beforeAll(async () => {
   db = await createPgliteClient();
   // Scans and AR launches are billed here (billing afterwards); paying up front includes them (prepaid.test.ts).
   app = await createApp({ db, seedDemo: true, demoBilling: 'billed_after', seed: 11, clock, features: featuresFrom({ FW_FEATURES: 'pilot' }).features, footage });
+  // Box sides are scanned here: ads on boxes are on, explicitly (FreeWater's own choice, and the pilot's, is off).
+  await app.companyFeatures.change('freewater', { box_ads: true }, { userId: 'usr_test', name: 'Test owner', approverProblem: async () => null });
   keys = app.demoKeys!;
   server = await buildServer(app);
   saved = { ...joes() }; // its artwork draws with functions: a shallow copy, its fields are replaced, never changed in place
