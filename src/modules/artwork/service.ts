@@ -131,7 +131,7 @@ export class ArtworkService {
     return {
       id: s.id, name: s.name, share: s.share, size: shareShort(s.share), layouts: s.layouts,
       piece: { wIn: s.wIn, hIn: s.hIn, px: { w: px300(s.wIn), h: px300(s.hIn) } },
-      withBleed: { wIn: C.wIn, hIn: C.hIn, px: { w: px300(C.wIn), h: px300(C.hIn) } }, bleedIn: s.bleedIn,
+      withBleed: { wIn: C.wIn, hIn: C.hIn, px: { w: px300(C.wIn), h: px300(C.hIn) } }, bleedIn: s.bleedIn, cutEdges: s.cutEdges,
       textSafe: { wIn: Math.round((s.wIn - 2 * s.textInset.xIn) * 1000) / 1000, hIn: Math.round((s.hIn - 2 * s.textInset.yIn) * 1000) / 1000, insetIn: s.textInset },
       qrBox: s.qr,
       files: Object.fromEntries((['pdf', 'svg', 'png'] as const).map((f) => [f, { url: `/v1/ads/templates/${encodeURIComponent(s.id)}?format=${f}`, name: templateFileName(s, company.name, f) }])),

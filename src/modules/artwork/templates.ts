@@ -1,12 +1,18 @@
 import sharp from 'sharp';
 import { outlineText } from '../print/outline';
-import { canvasOf, inches, px300, type PieceShape } from './shapes';
+import { canvasOf, cutEdgeWords, inches, px300, type PieceShape } from './shapes';
 
 // Templates for "I'll design it myself": one per piece shape (shapes.ts), as SVG, PDF and a 300-dpi PNG guide. Each is
 // exactly the size of the file to upload (the piece plus its bleed), coloured like the printer's design guide
 // (.ref/guidelines.png): RED is cut off (the bleed: extend the background to it), DARK BLUE is the piece itself (the
 // image-safe area), LIGHT BLUE is where words go (text-safe), and the white box is where we print the bottle's own QR
 // code (leave it empty). The measurements are written on it in inches and in pixels at 300 dpi.
+//
+// BLEED ON EVERY SIDE. A piece of one size can meet the label's cut on one side in one layout and sit beside another
+// ad on that side in another (a quarter at the top left, or bottom right). So the template has bleed on all four sides,
+// and says which of them can meet the cut (`PieceShape.cutEdges`). The renderer lines the file's trim up with the
+// piece's cut (artwork/creative.ts): where the piece meets the cut, the file's own bleed fills the bleed; on an inner
+// side the file's bleed is cropped away, so nothing runs onto the neighbouring ad.
 
 export const GUIDE = { cut: '#BE1E2D', image: '#1B75BB', text: '#29ABE2', qr: '#FFFFFF', ink: '#0B0B0B' } as const;
 
@@ -37,6 +43,7 @@ export function templateDrawing(s: PieceShape, companyName: string): { wIn: numb
     { text: s.name, bold: true },
     { text: `DARK BLUE: the piece as cut (image-safe), ${inches(s.wIn)} × ${inches(s.hIn)} in · ${px300(s.wIn)} × ${px300(s.hIn)} px` },
     { text: `RED: will be cut (bleed). Extend your background to the edge of this file: ${inches(C.wIn)} × ${inches(C.hIn)} in · ${px300(C.wIn)} × ${px300(C.hIn)} px at 300 dpi` },
+    { text: cutEdgeWords(s) ? `Bleed on every side: ${cutEdgeWords(s)} can meet the bottle’s cut; where this piece sits beside another ad, its bleed is trimmed away.` : 'Bleed on every side: where this piece sits beside another ad, its bleed is trimmed away.' },
     { text: `LIGHT BLUE: text-safe, ${inches(S.w)} × ${inches(S.h)} in. Keep every word inside it.` },
     { text: `WHITE: we print your bottle’s own QR code here, ${inches(Q.s)} in square (${px300(Q.s)} px). Leave it empty.` },
     { text: 'Pictures 300 dpi or more · outline or embed fonts · words 6 pt or bigger.' },

@@ -300,6 +300,17 @@ await journey('design it yourself: the label preview draws the QR code in the co
   // Every size's picture too, and the printed label (src/modules/print/renderer.ts) draws the same (test/advertiser-walkthrough.test.ts).
   const sizes = await page.$$eval('.art-preview .sizes img', (els: HTMLImageElement[]) => els.map((i) => decodeURIComponent(i.src)));
   expect(sizes.length > 0 && sizes.every((x: string) => /1A3D6B/i.test(x)), `every size: ${sizes.length}`);
+  // Two views of the label (src/web/labelviews.js): "On the bottle" first, as cut (no bleed, no cut line); "Print file"
+  // with its bleed round it, the cut line drawn and the legend saying what is trimmed.
+  const views = page.locator('.art-preview .label-views');
+  expect(await views.locator('button[aria-pressed="true"]').textContent() === 'On the bottle', 'opens on the bottle');
+  const bottle = await codeColour();
+  expect(/viewBox="0 0 800 400"/.test(bottle) && !/data-fw-cut-line/.test(bottle), 'on the bottle: the finished 8 × 4 label');
+  expect(!(await views.locator('.label-views-legend').isVisible()), 'no legend on the bottle');
+  await views.locator('button:has-text("Print file")').click();
+  const print = await codeColour();
+  expect(/viewBox="-6.25 -6.25 812.5 412.5"/.test(print) && /data-fw-cut-line="1"/.test(print), 'print file: the bleed round it and the cut line');
+  expect(/Outside the line is trimmed/.test(await views.locator('.label-views-legend').textContent() ?? '') && await views.locator('.label-views-legend').isVisible(), 'the legend says what is trimmed');
 }, { viewport: { width: 1280, height: 800 } });
 
 await journey('ops plans and prints a night for a delivery area', async (page) => {

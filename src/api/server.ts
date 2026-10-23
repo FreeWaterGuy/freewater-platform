@@ -1115,6 +1115,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     'books.css': { type: 'text/css', path: join(webDir, 'books.css') },
     'console.js': { type: 'text/javascript', path: join(webDir, 'console.js') },
     'console.css': { type: 'text/css', path: join(webDir, 'console.css') },
+    'labelviews.js': { type: 'text/javascript', path: join(webDir, 'labelviews.js') },
     'jsqr.js': { type: 'text/javascript', path: createRequire(import.meta.url).resolve('jsqr/dist/jsQR.js') },
   };
   const cache = new Map<string, Buffer>();

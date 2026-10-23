@@ -477,3 +477,22 @@ Siblings checked: studio drafts (the assistant sees the studio design as done ar
 changes (same "That's your change" reply; their headline suggestions kept), box faces in the preview (same style fix),
 the printed label (already used the ad's style; the preview's sample label goes through it). Not checked: a real Claude
 answering the new prompt (mocked API), real phones.
+
+## Label bleed and uniform pieces (test engineer, 2026-10-23, branch `l-bleed`)
+
+From the founder's print file (one 8 × 4 bottle, 8 ads): Maria's Bakery's uploaded design looked "double printed" along
+its top and left edges, and ads of one size should be one size.
+
+| Date | Role | Severity | Pattern | Where | Finding | Fix / test |
+|---|---|---|---|---|---|---|
+| 2026-10-23 | Test engineer | HIGH | — | `print/renderer.ts` `piece` | Every piece meeting the cut had its whole artwork drawn again under itself, stretched to the piece plus its bleed (`preserveAspectRatio="none"`). Its edges sat B·(1−x/w) off the real ones, so a colour boundary reaching the cut (Maria's brown panel) showed in the bleed as a sliver of another colour, which a drifting cutter puts on the bottle. Uploaded files' own bleed was thrown away (cropped to the trim) and replaced by that copy. CONFIRMED: `test/label-bleed.test.ts` Maria regression, old-upload and platform-art pixel tests fail on the old code | Uploads made from the template draw their own bleed, trim lined up with the cut (`Creative.bleeds`, `artwork/creative.ts`), cropped on inner sides; all other art is carried out by its own 0.005 in edge, stretched only outward (`print/bleed.ts` `edgeBleed`) |
+| 2026-10-23 | Test engineer | MEDIUM | P3 | `artwork/preflight.ts` `applyFix('extend_bleed')` | The one-tap "extend the background into the bleed" fix for a vector design used the same stretched copy. CONFIRMED (fix test fails on the old code) | Same `edgeBleed` |
+| 2026-10-23 | Test engineer | MEDIUM | — | `print/renderer.ts` `pieceOf` | Layout fractions are stored to 4 decimals: thirds and sixths left a hairline gap/overlap (0.0007 in, 0.003 in² of the ad area) between pieces. Same-size pieces were equal to 1/1000 in already. CONFIRMED (tiling test fails on the old code) | Start and size put on the template's grid lines (`onGrid`, denominators ≤ 20, within the 4-decimal rounding); every template × product × company geometry tested for equal sizes and exact tiling |
+| 2026-10-23 | Test engineer | MEDIUM | P16 | previews (`ads.js`, `ops.js` review, `console.js`) | People saw one view of the label; the print file (with bleed) made the edge pieces look wider than their neighbours. | `src/web/labelviews.js`: "On the bottle" (default, as cut) and "Print file" (bleed, cut line, "Outside the line is trimmed"); browser journey checks both (fails without it) |
+| 2026-10-23 | Test engineer | LOW | — | templates (`artwork/shapes.ts`, `templates.ts`) | Templates didn't say which of their sides meet the cut. | `PieceShape.cutEdges` (any layout), written on the template and in `GET /v1/ads/templates`; bleed kept on all four sides, cropped on inner ones |
+
+Siblings searched: every `preserveAspectRatio="none"` (studio photo crop and upload placement scale to a matched
+size, not bleed copies; the fixed `extend_bleed`); box faces have no bleed; the custom whole-label design goes through the
+same `piece`. Mutants caught: inner-edge crop removed, edge strips drawn on every side, own-bleed box widened. Not
+checked: a real printer and cutter (the drift tolerance), real phones showing the two views; the printer should confirm
+that a 0.005 in edge extension is acceptable for photographic edges.

@@ -319,12 +319,20 @@ export type CreativeRef = { kind: 'svg'; markup: string } | { kind: 'builtin'; i
 export interface Creative {
   /** Artwork as SVG markup sized to any box; the renderer scales it to the slot. A real system stores an asset URL. */
   svg: (widthPx: number, heightPx: number, ctx?: CreativeContext) => string;
+  /**
+   * The artwork has real bleed of its own (an upload made from our template, with the background past the cut): asked
+   * with `ctx.bleed`, it draws past the piece's edges that meet the cut by that much (and crops its bleed away on the
+   * inner edges). Artwork without it is carried into the bleed by its own edge (print/bleed.ts), never stretched.
+   */
+  bleeds?: boolean;
 }
 /** What the renderer tells artwork about its slot: where the QR code will print, in the slot's own coordinates. */
 export interface CreativeContext {
   qr?: { x: number; y: number; size: number };
   /** Other corners the printer draws over (a box's stop code for drivers): words, logos and badges keep out of them. */
   reserved?: { x: number; y: number; w: number; h: number }[];
+  /** How far past each edge of the piece the cut's bleed runs (0 on an inner edge), for artwork that `bleeds`. */
+  bleed?: { l: number; t: number; r: number; b: number };
 }
 
 export type Buy =

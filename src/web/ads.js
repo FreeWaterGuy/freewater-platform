@@ -195,7 +195,7 @@
             } catch (x) { toast(x.message); e.target.disabled = false; }
           };
           cards.push(h('article', { class: 'design card' }, h('div', { class: 'design-sizes' }, pv.sizes.slice(0, 4).map((s) => h('figure', {}, inline(s.svg), h('figcaption', { text: s.label })))),
-            h('details', {}, h('summary', { text: boxesOn() && pv.boxFaceSvg ? 'On a bottle, and on a box' : 'On a bottle' }), inline(pv.labelSvg), boxesOn() && pv.boxFaceSvg ? inline(pv.boxFaceSvg) : null),
+            h('details', {}, h('summary', { text: boxesOn() && pv.boxFaceSvg ? 'On a bottle, and on a box' : 'On a bottle' }), window.fwLabel.views(pv.labelSvg, { show: inline }).el, boxesOn() && pv.boxFaceSvg ? inline(pv.boxFaceSvg) : null),
             h('button', { class: 'btn', type: 'button', onclick: use }, draftId ? 'Use this design in my ad' : 'Make an ad with this design')));
         }
         gallery.replaceChildren(...cards);
@@ -870,7 +870,7 @@
       if (!art.files.some((f) => f.shapeId)) { previewEl.replaceChildren(); return; }
       try {
         const p = await api('GET', `/v1/ads/drafts/${id}/preview`);
-        previewEl.replaceChildren(h('h2', { class: 'section', text: 'On a real label' }), h('img', { class: 'label-img', src: svgSrc(p.labelSvg), alt: 'Your artwork on a sample label beside other businesses’ sample ads' }), h('p', { class: 'caption', text: p.labelCaption }), everyShape(p));
+        previewEl.replaceChildren(h('h2', { class: 'section', text: 'On a real label' }), window.fwLabel.views(p.labelSvg, { alt: 'Your artwork on a sample label beside other businesses’ sample ads' }).el, h('p', { class: 'caption', text: p.labelCaption }), everyShape(p));
       } catch { previewEl.replaceChildren(); }
     }
     pick.addEventListener('change', async () => {
@@ -962,7 +962,7 @@
     cleanup = () => window.removeEventListener('message', onMsg);
     function drawStage() {
       if (!preview) { stage.replaceChildren(h('p', { class: 'caption', text: 'Your ad appears here as you chat.' })); return; }
-      if (tab === 'bottle') stage.replaceChildren(h('img', { class: 'label-img', src: svgSrc(preview.labelSvg), alt: 'A sample label with your ad on it' }), h('p', { class: 'caption', text: preview.labelCaption || 'A sample label. The pieces marked “Sample ad” go to other businesses. The black panel is the same on every bottle.' }));
+      if (tab === 'bottle') stage.replaceChildren(window.fwLabel.views(preview.labelSvg, { alt: 'A sample label with your ad on it' }).el, h('p', { class: 'caption', text: preview.labelCaption || 'A sample label. The pieces marked “Sample ad” go to other businesses. The black panel is the same on every bottle.' }));
       if (tab === 'sizes') stage.replaceChildren(everyShape(preview), h('p', { class: 'caption', text: 'Your ad exactly as it prints, at every shape each size comes in (a piece can be wide on one bottle and tall on the next), with its QR code where it prints.' }));
       if (tab === 'box') stage.replaceChildren(h('img', { class: 'box-img', src: svgSrc(preview.boxFaceSvg), alt: 'Your ad on the side of a delivery box' }), h('p', { class: 'caption', text: 'One side of a delivery box. Each side has its own QR code.' }));
       if (tab === 'scan') {
@@ -1073,7 +1073,7 @@
     frame = fixture?.scanFrame ? fixture.scanFrame() : h('iframe', { src: '/preview/scan', title: 'Your scan page' });
     shell('new', h('div', { class: 'review' },
       h('div', { class: 'page-head', style: 'margin:0' }, h('div', {}, link(`/ads/drafts/${id}`, {}, '← Back to the chat'), h('h1', { style: 'margin-top:8px', text: 'Review your ad' }), h('p', { text: 'This is exactly what prints and what opens. Look it over before you submit.' }))),
-      h('div', { class: 'stage' }, h('img', { class: 'label-img', src: svgSrc(p.labelSvg), alt: 'A sample label with your ad' }), p.labelCaption ? h('p', { class: 'caption', text: p.labelCaption }) : null),
+      h('div', { class: 'stage' }, window.fwLabel.views(p.labelSvg, { alt: 'A sample label with your ad' }).el, p.labelCaption ? h('p', { class: 'caption', text: p.labelCaption }) : null),
       h('div', { class: 'stage' }, everyShape(p)), sizeNotes,
       h('div', { class: 'stage' }, frame),
       h('div', { class: 'facts' },

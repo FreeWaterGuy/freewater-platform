@@ -133,7 +133,7 @@ const html = readFileSync('src/demo/consolePreview.html', 'utf8')
   .replace('/*CSS*/', () => readFileSync('src/web/ads.css', 'utf8') + readFileSync('src/web/ops.css', 'utf8') + readFileSync('src/web/console.css', 'utf8'))
   .replace('/*REC*/', () => safe(JSON.stringify(rec)))
   .replace('/*LOCAL*/', () => safe(bundle.outputFiles[0]!.text))
-  .replace('/*APP_JS*/', () => safe(readFileSync('src/web/console.js', 'utf8')));
+  .replace('/*APP_JS*/', () => safe(readFileSync('src/web/labelviews.js', 'utf8') + readFileSync('src/web/console.js', 'utf8')));
 writeFileSync(`${out}/index.html`, html);
 console.log(`Wrote ${out}/index.html (${Math.round(html.length / 1024)} KB)`);
 process.exit(0);

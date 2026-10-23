@@ -682,8 +682,11 @@ describe('print: uploaded drawings sit safely inside a label', () => {
     const s = shape16(2);
     const body = '<rect width="370" height="412.5" fill="#123456"/>';
     const art = artworkCreative([{ fileId: 'f1', share: 2, shapeId: s.id, wIn: s.wIn, hIn: s.hIn, bleedIn: s.bleedIn, body, bg: '#123456' }]);
-    expect(art.svg(357.5, 400)).toMatch(/viewBox="6\.25 6\.25 357\.5 400" preserveAspectRatio="xMidYMid slice"/);
-    expect(art.svg(400, 200)).toMatch(/<rect width="400" height="200" fill="#123456"\/>.*meet/);
+    // Its own shape: the file's trim on the piece exactly (its bleed outside, shown only past the cut).
+    expect(art.svg(357.5, 400)).toMatch(/viewBox="0 0 357\.5 400" overflow="hidden"><g transform="translate\(-6\.25 -6\.25\) scale\(1\)">/);
+    expect(art.svg(357.5, 400, { bleed: { l: 6.25, t: 6.25, r: 0, b: 6.25 } })).toMatch(/viewBox="-6\.25 -6\.25 363\.75 412\.5"/);
+    // Another shape: whole inside it, on its own background colour.
+    expect(art.svg(400, 200)).toMatch(/<rect x="0" y="0" width="400" height="200" fill="#123456"\/>.*scale\(0\.5\)/);
     expect(() => artworkCreative([{ fileId: 'f1', share: 2, shapeId: s.id, wIn: s.wIn, hIn: s.hIn, bleedIn: s.bleedIn, body: '<script>x</script>', bg: '#123456' }])).toThrow(/scripts/);
   });
 });

@@ -87,5 +87,5 @@ writeFileSync(`${out}/index.html`, readFileSync('src/demo/adsPreview.html', 'utf
   .replace('/*LOCAL*/', () => safe(bundle.outputFiles[0]!.text))
   .replace('/*SCAN_CSS*/', () => safe(JSON.stringify(readFileSync('src/web/scan.css', 'utf8'))))
   .replace('/*SCAN_JS*/', () => safe(JSON.stringify(readFileSync('src/web/scan.js', 'utf8'))))
-  .replace('/*ADS_JS*/', () => safe(readFileSync('src/web/ads.js', 'utf8'))));
+  .replace('/*ADS_JS*/', () => safe(readFileSync('src/web/labelviews.js', 'utf8') + readFileSync('src/web/ads.js', 'utf8'))));
 console.log(`Wrote ${out}/index.html`);

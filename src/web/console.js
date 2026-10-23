@@ -363,7 +363,7 @@
   async function startPage() {
     const list = S.ov.checklist;
     const done = list.filter((c) => c.done).length;
-    const preview = h('div', { class: 'label' }, h('img', { alt: 'Your bottle label', src: svgSrc((await api('POST', '/v1/console/preview-label', { changes: {} })).svg) }));
+    const preview = h('div', { class: 'label' }, window.fwLabel.views((await api('POST', '/v1/console/preview-label', { changes: {} })).svg, { alt: 'Your bottle label' }).el);
     shell('start', head(done === list.length ? `${S.config.name} is all set` : `Welcome to ${S.config.name}`, done === list.length ? 'Everything is set up. Change anything any time; every change is saved as a version you can put back.' : 'A few things to set up before your first bottle. Each one takes a minute or two.'),
       h('div', { class: 'grid2' },
         h('section', { class: 'panel-box' }, h('h2', {}, 'Getting started', h('span', { class: 'pill', text: `${done} of ${list.length}` })), h('div', { class: 'progress', role: 'progressbar', 'aria-valuenow': done, 'aria-valuemax': list.length, 'aria-label': 'Setup progress' }, h('i', { style: `width:${(done / list.length) * 100}%` })),
@@ -451,7 +451,9 @@
 
   // ---------- brand ----------
   function brandPage() {
-    const img = h('img', { alt: 'Sample label with your brand' });
+    // On the bottle, or as the print file with its bleed and cut line (labelviews.js).
+    const view = window.fwLabel.views('', { alt: 'Sample label with your brand' });
+    let shown = false;
     const problem = h('div', { class: 'notice err', hidden: true });
     let timer = null, seq = 0;
     const refresh = (ch) => {
@@ -461,7 +463,7 @@
         try {
           const r = await api('POST', '/v1/console/preview-label', { changes: ch });
           if (mine !== seq) return;
-          if (r.svg && (!r.problem || !img.src)) img.src = svgSrc(r.svg);
+          if (r.svg && (!r.problem || !shown)) { view.set(r.svg); shown = true; }
           problem.hidden = !r.problem; problem.textContent = r.problem ? `${r.problem} The preview keeps the last colors that worked, and this can’t be saved until it’s fixed.` : '';
         } catch (e) { problem.hidden = false; problem.textContent = e.message; }
       }, 220);
@@ -469,7 +471,7 @@
     cleanup = () => clearTimeout(timer);
     settingsPage('brand', 'Brand', 'Your panel on every bottle, the app and the scan pages. The preview updates as you type.', (ctx) => [
       h('div', { class: 'stack' },
-        h('div', { class: 'preview' }, h('div', { class: 'cap' }, h('b', { text: 'Preview' }), h('span', { text: 'Your most recent bottle with these settings. The panel on the right is always yours.' })), h('div', { class: 'label' }, img), problem),
+        h('div', { class: 'preview' }, h('div', { class: 'cap' }, h('b', { text: 'Preview' }), h('span', { text: 'Your most recent bottle with these settings. The panel on the right is always yours.' })), h('div', { class: 'label' }, view.el), problem),
         section('Logo and lettering', null, h('div', { class: 'form' },
           text(ctx, 'brand.logoTop', 'Logo, top line', { max: 12 }), text(ctx, 'brand.logoBottom', 'Logo, bottom line', { max: 12, hint: 'Printed in your accent color.' }),
           text(ctx, 'brand.tagline', 'Tagline', { max: 60, full: true, placeholder: 'Optional' }),
@@ -660,7 +662,8 @@
     const products = await api('GET', '/v1/console/products');
     const qrImg = h('img', { alt: 'Your QR code', style: 'width:200px;height:200px;display:block' });
     const qrNote = h('p', { class: 'hint', style: 'margin:0' });
-    const label = h('img', { alt: 'Sample label with these code settings' });
+    const labelView = window.fwLabel.views('', { alt: 'Sample label with these code settings' });
+    const label = labelView.el;
     let timer = null;
     const refresh = (d, ch) => {
       clearTimeout(timer);
@@ -671,7 +674,7 @@
           qrImg.src = svgSrc(r.svg);
           qrNote.textContent = r.note ?? `No logo. The code still reads with ${r.damageTolerance.plain}% of it damaged.`;
         } catch (x) { qrNote.textContent = x.message; }
-        try { const l = await api('POST', '/v1/console/preview-label', { changes: ch }); if (l.svg) label.src = svgSrc(l.svg); } catch {}
+        try { const l = await api('POST', '/v1/console/preview-label', { changes: ch }); if (l.svg) labelView.set(l.svg); } catch {}
       }, 220);
     };
     cleanup = () => clearTimeout(timer);
@@ -742,7 +745,7 @@
         const r = await api('POST', '/v1/console/products/check', { product: fromForm() });
         result.replaceChildren(
           r.check.problems.length ? h('div', { class: 'notice err' }, h('b', { text: 'Fix these first: ' }), r.check.problems.join(' ')) : h('div', { class: 'notice' }, h('b', { text: 'Ready. ' }), [...r.check.notes, r.check.ar.why].join(' ')),
-          r.svg ? h('div', { class: 'label' }, h('img', { alt: 'Sample label at this size', src: svgSrc(r.svg) })) : '');
+          r.svg ? h('div', { class: 'label' }, window.fwLabel.views(r.svg, { alt: 'Sample label at this size' }).el) : '');
         return !r.check.problems.length;
       } catch (x) { toast(x.message); return false; }
     };

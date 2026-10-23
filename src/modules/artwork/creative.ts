@@ -4,9 +4,11 @@ import { checkSvg } from '../print/svgCreative';
 /**
  * An ad the advertiser designed themselves: one file per piece shape they uploaded (artwork/preflight.ts), each ready
  * to print (an SVG body the size of the piece plus its bleed, 100 units to the inch). Each piece of a label draws the
- * file made for its shape: the piece itself (the bleed is the printer's, as for every ad). A piece of a shape no file
- * was made for (a size cut differently on another product) gets the closest file, fitted whole inside it on its own
- * background colour, never stretched or cropped; the preview shows every shape before paying.
+ * file made for its shape, its trim lined up with the piece's cut; where the piece meets the label's cut the file's own
+ * bleed fills the bleed (Creative.bleeds), and on an inner edge (beside another ad) the file's bleed is cropped away.
+ * That is why every template has bleed on all four sides: the same size may meet the cut on any side in some layout.
+ * A piece of a shape no file was made for (a size cut differently on another product) gets the closest file, fitted
+ * whole inside it on its own background colour, never stretched or cropped; the preview shows every shape before paying.
  */
 export interface ArtworkPrintFile {
   /** The uploaded file (ad_artwork) it was made from. */
@@ -23,6 +25,7 @@ export interface ArtworkPrintFile {
 
 const U = 100;
 const n3 = (v: number) => String(Math.round(v * 1000) / 1000);
+const n6 = (v: number) => String(Math.round(v * 1e6) / 1e6);
 export const MAX_ARTWORK_MARKUP = 16_000_000;
 
 export function artworkCreative(files: ArtworkPrintFile[]): Creative {
@@ -33,14 +36,24 @@ export function artworkCreative(files: ArtworkPrintFile[]): Creative {
     if (!/^#[0-9A-Fa-f]{6}$/.test(f.bg)) throw new Error('Artwork refused: its background colour must look like #1A1A1A');
   }
   return {
-    svg: (w, h) => {
+    bleeds: true,
+    svg: (w, h, ctx) => {
       const want = w / h;
       const best = [...files].sort((a, b) => Math.abs(Math.log(a.wIn / a.hIn / want)) - Math.abs(Math.log(b.wIn / b.hIn / want)))[0]!;
-      const view = `${n3(best.bleedIn * U)} ${n3(best.bleedIn * U)} ${n3(best.wIn * U)} ${n3(best.hIn * U)}`;
       const same = Math.abs(Math.log(best.wIn / best.hIn / want)) < 0.03;
-      return same
-        ? `<svg width="${n3(w)}" height="${n3(h)}" viewBox="${view}" preserveAspectRatio="xMidYMid slice">${best.body}</svg>`
-        : `<rect width="${n3(w)}" height="${n3(h)}" fill="${best.bg}"/><svg width="${n3(w)}" height="${n3(h)}" viewBox="${view}" preserveAspectRatio="xMidYMid meet">${best.body}</svg>`;
+      // The file's piece (its trim, inside its own bleed) on this piece: filling it (a hair cropped, centred) when it
+      // is this shape, else whole inside it on the file's own background colour.
+      const tw = best.wIn * U, th = best.hIn * U;
+      const s = same ? Math.max(w / tw, h / th) : Math.min(w / tw, h / th);
+      const ox = (w - tw * s) / 2, oy = (h - th * s) / 2;
+      // What shows: the piece, and past each edge that meets the cut, the file's own bleed (its background as the
+      // advertiser drew it, lined up with the trim). On an inner edge the bleed is cropped away.
+      const e = ctx?.bleed ?? { l: 0, t: 0, r: 0, b: 0 };
+      const x0 = ox <= 0.01 ? -e.l : ox, y0 = oy <= 0.01 ? -e.t : oy;
+      const x1 = ox + tw * s >= w - 0.01 ? w + e.r : ox + tw * s, y1 = oy + th * s >= h - 0.01 ? h + e.b : oy + th * s;
+      const bg = same ? '' : `<rect x="${n3(-e.l)}" y="${n3(-e.t)}" width="${n3(w + e.l + e.r)}" height="${n3(h + e.t + e.b)}" fill="${best.bg}"/>`;
+      return `${bg}<svg x="${n3(x0)}" y="${n3(y0)}" width="${n3(x1 - x0)}" height="${n3(y1 - y0)}" viewBox="${n3(x0)} ${n3(y0)} ${n3(x1 - x0)} ${n3(y1 - y0)}" overflow="hidden">`
+        + `<g transform="translate(${n6(ox - best.bleedIn * U * s)} ${n6(oy - best.bleedIn * U * s)}) scale(${n6(s)})">${best.body}</g></svg>`;
     },
   };
 }

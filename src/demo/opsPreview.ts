@@ -73,6 +73,6 @@ const scanCss = safe(JSON.stringify(readFileSync('src/web/scan.css', 'utf8'))), 
 const tpl = readFileSync('src/demo/opsPreview.html', 'utf8').replace('/*REC*/', () => safe(JSON.stringify(rec))).replace('/*SCAN_CSS*/', () => scanCss).replace('/*SCAN_JS*/', () => scanJs);
 mkdirSync('out/ops-preview', { recursive: true });
 mkdirSync('out/driver-preview', { recursive: true });
-writeFileSync('out/ops-preview/index.html', tpl.replace('/*TITLE*/', 'FreeWater Ops').replace('/*CSS*/', () => readFileSync('src/web/ads.css', 'utf8') + readFileSync('src/web/ops.css', 'utf8')).replace('/*START*/', 'ops').replace('/*APP_JS*/', () => safe(readFileSync('src/web/ops.js', 'utf8'))));
+writeFileSync('out/ops-preview/index.html', tpl.replace('/*TITLE*/', 'FreeWater Ops').replace('/*CSS*/', () => readFileSync('src/web/ads.css', 'utf8') + readFileSync('src/web/ops.css', 'utf8')).replace('/*START*/', 'ops').replace('/*APP_JS*/', () => safe(readFileSync('src/web/labelviews.js', 'utf8') + readFileSync('src/web/ops.js', 'utf8'))));
 writeFileSync('out/driver-preview/index.html', tpl.replace('/*TITLE*/', 'FreeWater Driver').replace('/*CSS*/', () => readFileSync('src/web/app.css', 'utf8') + readFileSync('src/web/driver.css', 'utf8')).replace('/*START*/', 'driver').replace('/*APP_JS*/', () => safe(readFileSync('src/web/driver.js', 'utf8'))));
 console.log('Wrote out/ops-preview/index.html and out/driver-preview/index.html');
