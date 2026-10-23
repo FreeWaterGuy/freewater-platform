@@ -35,6 +35,11 @@ export interface AdBilling {
   };
   /** What changing a running ad costs, paid up front (the new ad is reviewed before it prints). */
   changeFeeCents: number;
+  /**
+   * What changing a link the ad's code leads to costs once the ad is live, paid up front (src/modules/artwork/links.ts),
+   * when "Change a link (fee)" is on. Missing: $50.
+   */
+  linkChangeFeeCents?: number;
   /** Costly extras (AI video footage and the like): cost plus this markup, paid up front with the bottles. */
   extras: { markupPercent: number; perUse: Record<string, AdExtra> };
   /**
@@ -54,6 +59,7 @@ export function defaultAdBilling(): AdBilling {
     requirePrepay: true,
     fees: { scan: { on: false, cents: 25 }, arLaunch: { on: false, cents: 40 }, boxFace: { on: false }, commission: { on: false, percent: 3 } },
     changeFeeCents: 10_000,
+    linkChangeFeeCents: 5_000,
     extras: { markupPercent: 50, perUse: { aiVideoClip: { label: 'AI video clip (live action or animated, made by Veo)', costCents: 300 } } },
   };
 }
@@ -77,6 +83,7 @@ export function adBilling(company: Pick<CompanyConfig, 'adBilling'>): AdBilling 
       commission: { ...d.fees.commission, ...(b.fees?.commission ?? {}) },
     },
     changeFeeCents: b.changeFeeCents ?? d.changeFeeCents,
+    linkChangeFeeCents: b.linkChangeFeeCents ?? d.linkChangeFeeCents,
     extras: { markupPercent: b.extras?.markupPercent ?? d.extras.markupPercent, perUse: b.extras?.perUse ?? d.extras.perUse },
     ...(b.limits ? { limits: adLimits(company) } : {}),
   };
@@ -163,6 +170,7 @@ export function checkAdBilling(b: CompanyConfig['adBilling']): string | null {
   if (!f.boxFace || typeof f.boxFace.on !== 'boolean') return 'The box side fee is on or off (its price is the box side price).';
   if (!f.commission || typeof f.commission.on !== 'boolean' || !isNum(f.commission.percent, 0, 50)) return 'The commission on sales is on or off, at 0% to 50%.';
   if (!isInt(b.changeFeeCents, 0, 100_000)) return 'The fee for changing an ad must be $0 to $1,000.';
+  if (b.linkChangeFeeCents !== undefined && !isInt(b.linkChangeFeeCents, 0, 100_000)) return 'The fee for changing a link must be $0 to $1,000.';
   const x = b.extras;
   if (!x || !isNum(x.markupPercent, 0, 500) || typeof x.perUse !== 'object' || !x.perUse) return 'Extras need a markup of 0% to 500% and a list of what each costs.';
   const items = Object.entries(x.perUse);

@@ -36,6 +36,7 @@ import { DeliveryService } from './modules/delivery/service';
 import { HouseService } from './modules/delivery/houses';
 import { pilotHouses } from './demo/pilotArea';
 import { CreditService } from './modules/ads/credit';
+import { ArtworkService } from './modules/artwork/service';
 import { PrepaidService } from './modules/ads/prepaid';
 import { RouteBuyService } from './modules/ads/routeBuys';
 import { seedRouteBuys } from './demo/routeBuys';
@@ -404,8 +405,12 @@ export async function createApp(opts: AppOptions) {
   prepaid.credit = credit;
   ads.prepaid = prepaid;
   ads.beforeLive = (c) => prepaid.beforeLive(c);
+  // "I'll design it myself" (src/modules/artwork): templates, uploads checked before paying, the code's look and links.
+  const artwork = new ArtworkService(db, platform, ads, prepaid, host, () => persistence.flush());
+  ads.artwork = artwork;
   platform.claimPrepaid = (companyId, ids, spots) => prepaid.claim(companyId, ids, spots);
   await prepaid.restore();
+  await artwork.recoverLinkChanges();
   // The demo's made-up advertisers have paid for their sample ads (the test card, no real money), so they print: a set
   // number of bottles as the sample says, or 2,000 for a sample written as a bid, and five AI video clips each (a
   // costly extra, paid up front). Ads in a blocked category, or switched off in the sample, stay unpaid.
@@ -771,7 +776,7 @@ export async function createApp(opts: AppOptions) {
   // The demo's former advertisers ran paid before it starts (src/demo/history.ts): their past bottles, printed once.
   if (empty && opts.seedDemo && opts.demoUnsold) await printFormerAdvertisersPast({ platform, persistence }, demoFormerCampaignIds);
 
-  return { ...made, aiReview, fillers, unsold, news, households, routeBuys, features, companyFeatures, db, persistence, runtime, demoKeys, accounts, payments, credit, prepaid, messenger, experiences, assets, ads, designs, delivery, houses, dropPhotos, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
+  return { ...made, aiReview, fillers, unsold, news, households, routeBuys, features, companyFeatures, db, persistence, runtime, demoKeys, accounts, payments, credit, prepaid, artwork, messenger, experiences, assets, ads, designs, delivery, houses, dropPhotos, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

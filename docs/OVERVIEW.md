@@ -20,6 +20,11 @@ platform is the software that runs all of it. Other companies can also run it un
   of each), per product too, the most ads on one bottle (1 to 10), and whether each paid ad takes its turn or the
   best-earning layout wins (with a fair turn for any ad left waiting).
 - It works for any drink and any size. There are samples for a 16 oz bottle, a 25 oz bottle and a 12 oz can.
+- Advertisers make an ad three ways: with the assistant, in the studio, or **designing it themselves**: a template
+  for every size (PDF, SVG, PNG, from the printer's own numbers), their own files uploaded in the chat or on an upload
+  page, each matched to its size and checked with a plain Pass or Fix these (and one-tap fixes), then shown on a real
+  label before paying. The QR code is always ours; they choose where it leads and its colour (only if it scans), and
+  changing a link on a live ad costs a fee ($50 for FreeWater).
 - Every piece of the label is another business's ad, never FreeWater's own (only the black panel on the right is
   ours). Spots nobody buys are filled from a list in the order we choose: former advertisers' past ads (still current,
   free, as a bonus they can say no to), approved filler ads, Well Aware and other charity partners, ads we pick. If

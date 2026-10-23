@@ -1,3 +1,4 @@
+import { linkFeeProblem } from '../modules/artwork/links';
 import type { FastifyInstance } from 'fastify';
 import type { App } from '../app';
 import type { Campaign, Product, Unit } from '../core/types';
@@ -90,6 +91,12 @@ export function codesArRoutes(app: App, server: FastifyInstance, route: (r: Rout
       const u = await teamPersonOf(app.accounts, key);
       if (!u) throw new ApiError(403, 'person_review', 'What a paid ad shows is changed by a person on the team signed in, not with an API key.');
       if (c.routeBuy?.small) await app.routeBuys.beforeApprove({ ...c, ...(x.variants !== undefined ? { variants: x.variants as Campaign['variants'] } : {}) }, { userId: u.id, role: u.role });
+    }
+    // Where a live paid ad's code leads changes only through Change a link, which takes its fee (P3): tried on a copy first.
+    if (!reviewer) {
+      const { creative: _art, ...rest } = c;
+      const trial = { ...structuredClone(rest), creative: c.creative } as Campaign;
+      if (!applyExtras(company, trial, x, experiences.host)) { const why = linkFeeProblem(company, c, trial, platform.featureOn); if (why) throw new ApiError(402, 'link_fee', why); }
     }
     const bad = applyExtras(company, c, x, experiences.host);
     if (bad) throw new ApiError(422, 'campaign_invalid', bad);

@@ -78,6 +78,8 @@
     // eslint-disable-next-line security/detect-unsafe-regex -- route patterns, anchored and linear; the input is this page's own path
     [/^\/ads\/campaigns\/([\w-]+)\/change$/, changeAd], [/^\/ads\/campaigns\/([\w-]+)\/code$/, codePage], [/^\/ads\/billing$/, billing], [/^\/ads\/studio(?:\?.*)?$/, studioPage], [/^\/ads\/tracking$/, tracking], [/^\/ads\/redeem(?:\/([\w-]+))?$/, redeem], [/^\/ads\/statement$/, statementPage], [/^\/ads\/offers$/, offersPage], [/^\/ads\/campaigns\/([\w-]+)\/report$/, routeReport],
   ];
+  // "I'll design it myself": the upload page, and changing where a live ad's code leads.
+  routes.push([/^\/ads\/drafts\/([\w-]+)\/artwork$/, uploadPage], [/^\/ads\/campaigns\/([\w-]+)\/links$/, linksPage]);
   let cleanup = null;
   function go(path, replace) { state.path = path; if (!fixture) history[replace ? 'replaceState' : 'pushState'](null, '', path); render(); }
   window.addEventListener('popstate', () => { state.path = location.pathname; render(); });
@@ -722,6 +724,7 @@
     const paid = c.budget.type === 'prepaid' ? c.budget : null;
     if (c.editable && c.status !== 'in_review' && c.status !== 'stopped' && c.status !== 'finished') actions.push(link(`/ads/campaigns/${c.id}/change`, { class: 'btn small secondary' }, c.status === 'being_discussed' ? 'Change it (free while it’s discussed)' : paid ? `Change it (${dollars(state.changeFeeCents ?? 0)})` : 'Change it'));
     actions.push(link(`/ads/campaigns/${c.id}/code`, { class: 'btn small secondary' }, 'Code, versions and AI'));
+    if (paid && c.status !== 'stopped' && c.status !== 'finished') actions.push(link(`/ads/campaigns/${c.id}/links`, { class: 'btn small secondary' }, 'Change a link'));
     if (c.route && on('route_proof')) actions.push(link(`/ads/campaigns/${c.id}/report`, { class: 'btn small secondary' }, 'Where it went'));
     // Paid up front: how many of the bottles paid for are out. No end date and no cancelling: it runs until they are.
     const budget = paid ? (paid.stopped ? `stopped by ${state.config.name}: ${num(paid.printed)} of ${plural(num(paid.paid), 'bottle', 'bottles')} went out, ${num(paid.refunded)} paid back`
@@ -761,7 +764,23 @@
   }
 
   // ---------- making an ad ----------
-  async function newAd() { const d = await api('POST', '/v1/ads/drafts', {}); go(`/ads/drafts/${d.id}`, true); }
+  /** Very first: how to make it. With the assistant, in the studio, or "I'll design it myself". */
+  async function newAd() {
+    const start = async (mode) => {
+      try {
+        const d = await api('POST', '/v1/ads/drafts', mode === 'assistant' ? {} : { mode });
+        go(mode === 'own' ? `/ads/drafts/${d.id}/artwork` : mode === 'studio' ? `/ads/studio?draft=${d.id}` : `/ads/drafts/${d.id}`, true);
+      } catch (x) { toast(x.message); }
+    };
+    const choices = [
+      on('ad_chat') && ['assistant', 'Design it with the assistant', 'Tell it about your offer and attach your logo or a photo; it lays the ad out at every size.'],
+      on('studio') && on('studio_to_ads') && ['studio', 'Design it in the studio', 'Pick photos, words and a layout yourself, and see every size as you go.'],
+      on('design_yourself') && ['own', 'I’ll design it myself', `Download a template for each size, design it in your own tools, and upload it (PDF, SVG, PNG or JPG). We check every file before you pay.`],
+    ].filter(Boolean);
+    if (choices.length === 1) return start(choices[0][0]);
+    shell('new', h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Make an ad' }), h('p', { text: `How would you like to make it? Nothing prints until you’ve seen it on a real label and ${state.config.name} approves it.` }))),
+      h('div', { class: 'cards choose-how' }, choices.map(([mode, title, about]) => h('button', { type: 'button', class: 'how-card', onclick: () => start(mode) }, h('b', { text: title }), h('span', { text: about })))));
+  }
   async function changeAd(id) { const d = await api('POST', '/v1/ads/drafts', { fromCampaignId: id }); go(`/ads/drafts/${d.id}`, true); }
 
   async function shrink(file) {
@@ -779,6 +798,103 @@
     } finally { URL.revokeObjectURL(url); }
   }
 
+  // ---------- "I'll design it myself": templates, uploads checked before paying, the code's link and colour ----------
+  const ART_TYPES = { pdf: 'application/pdf', svg: 'image/svg+xml', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg' };
+  const artType = (f) => f.type || ART_TYPES[(f.name.split('.').pop() || '').toLowerCase()] || 'application/octet-stream';
+  const artDataUrl = (f) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(`data:${artType(f)};base64,${String(r.result).split(',')[1] ?? ''}`); r.onerror = rej; r.readAsDataURL(f); });
+  /** One file of artwork, sent as it is (up to 25 MB). */
+  async function uploadArtwork(id, f, query = '') {
+    if (fixture) return fixture.api('POST', `/v1/ads/drafts/${id}/artwork`, { name: f.name });
+    const res = await fetch(`/v1/ads/drafts/${id}/artwork?name=${encodeURIComponent(f.name)}${query}`, { method: 'POST', headers: { 'content-type': artType(f), ...(state.token ? { authorization: `Bearer ${state.token}` } : {}) }, body: f });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(data?.error?.message || `${f.name} didn’t upload.`);
+    return data;
+  }
+  /** A template file, downloaded with your sign-in. */
+  async function download(url, name) {
+    const res = await fetch(url, { headers: state.token ? { authorization: `Bearer ${state.token}` } : {} });
+    if (!res.ok) { toast('That template didn’t download. Try again.'); return; }
+    const a = h('a', { href: URL.createObjectURL(await res.blob()), download: name }); document.body.append(a); a.click(); a.remove();
+  }
+  async function uploadPage(id) {
+    let d = await api('GET', `/v1/ads/drafts/${id}`);
+    if (d.status !== 'open') { go('/ads', true); return; }
+    const [tpl, start] = await Promise.all([on('template_downloads') ? api('GET', '/v1/ads/templates').catch(() => null) : null, api('GET', `/v1/ads/drafts/${id}/artwork`)]);
+    let art = start;
+    const filesEl = h('div', { class: 'art-files', 'aria-live': 'polite' });
+    const coverEl = h('div', { class: 'art-cover' });
+    const previewEl = h('div', { class: 'art-preview' });
+    const err = h('div', { class: 'notice err', hidden: true });
+    const pick = h('input', { type: 'file', multiple: true, accept: Object.keys(ART_TYPES).filter((x) => art.pdf || x !== 'pdf').map((x) => `.${x}`).join(','), id: 'art-pick', class: 'visually-hidden' });
+    const fail = (x) => { err.textContent = x.message; err.hidden = false; };
+    const refresh = async () => { art = await api('GET', `/v1/ads/drafts/${id}/artwork`); drawFiles(); drawPreview(); };
+    const verdict = (f) => f.report.verdict === 'pass' ? h('span', { class: 'status running', text: 'Pass' }) : h('span', { class: 'status not_approved', text: 'Fix these' });
+    function drawFiles() {
+      filesEl.replaceChildren(...(art.files.length ? art.files.map((f) => h('article', { class: 'art-file' },
+        h('div', { class: 'art-head' }, verdict(f), h('b', { text: f.name })),
+        h('p', { text: f.report.summary }),
+        h('ul', {}, f.report.issues.map((i) => h('li', { class: i.level === 'must' ? 'must' : 'muted', text: i.words }))),
+        f.candidates?.length && !f.shapeId ? h('label', {}, 'Which size is it for? ', h('select', { class: 'input', onchange: async (e) => { try { await api('POST', `/v1/ads/drafts/${id}/artwork/${f.id}/size`, { shapeId: e.target.value }); await refresh(); } catch (x) { fail(x); } } }, h('option', { value: '', text: 'Choose…' }), f.candidates.map((c) => h('option', { value: c, text: shapeName(c) })))) : null,
+        h('div', { class: 'actions' },
+          ...f.report.fixes.map((x) => h('button', { type: 'button', class: 'btn small', onclick: async (e) => { e.target.disabled = true; try { await api('POST', `/v1/ads/drafts/${id}/artwork/${f.id}/fix`, { fix: x }); toast('Fixed. Checked again.'); await refresh(); } catch (y) { fail(y); e.target.disabled = false; } } }, art.fixWords[x])),
+          h('button', { type: 'button', class: 'btn small secondary', onclick: async () => { try { await api('DELETE', `/v1/ads/drafts/${id}/artwork/${f.id}`); await refresh(); } catch (x) { fail(x); } } }, 'Remove')))) : [h('p', { class: 'muted', text: 'No artwork yet. Upload one file for each size you want to buy.' })]));
+      coverEl.replaceChildren(...art.coverage.map((c) => h('span', { class: `chip-check${c.fileId ? ' done' : ''}`, text: `${c.fileId ? '✓' : '○'} ${c.name}` })));
+      next.toggleAttribute('aria-disabled', !art.ready);
+    }
+    const shapeName = (sid) => { for (const p of tpl?.products ?? []) for (const x of p.shapes) if (x.id === sid) return `${x.name} (${p.name})`; return sid; };
+    async function drawPreview() {
+      if (!art.files.some((f) => f.shapeId)) { previewEl.replaceChildren(); return; }
+      try {
+        const p = await api('GET', `/v1/ads/drafts/${id}/preview`);
+        previewEl.replaceChildren(h('h2', { class: 'section', text: 'On a real label' }), h('img', { class: 'label-img', src: svgSrc(p.labelSvg), alt: 'Your artwork on a sample label beside other businesses’ sample ads' }), h('p', { class: 'caption', text: p.labelCaption }), everyShape(p));
+      } catch { previewEl.replaceChildren(); }
+    }
+    pick.addEventListener('change', async () => {
+      err.hidden = true;
+      for (const f of [...pick.files]) { try { const out = await uploadArtwork(id, f); toast(out.said.slice(0, 120)); } catch (x) { fail(x); } }
+      pick.value = ''; await refresh();
+    });
+    // Where the code leads, and its colour (always our own code, one per bottle).
+    const linkUrl = h('input', { class: 'input', id: 'art-link', type: 'url', placeholder: 'https://yourshop.com/offer', value: art.links[0]?.url ?? '' });
+    const linkLabel = h('input', { class: 'input', id: 'art-link-label', placeholder: 'Button words, like “Order now”', value: art.links[0]?.label ?? '' });
+    const colour = h('input', { type: 'color', id: 'art-qr', value: art.qr?.color ?? '#000000', 'aria-label': 'QR code colour' });
+    const next = link(`/ads/drafts/${id}`, { class: 'btn wide' }, 'Next: bottles and where, then review and pay');
+    const templates = tpl ? h('section', { class: 'card' }, h('h2', { class: 'section', text: '1. Download a template for each size' }),
+      h('p', { class: 'muted', text: 'Red is cut off: extend your background to the edge. Dark blue is the piece. Keep words inside the light blue. Leave the white QR box empty: we print your bottle’s own code there.' }),
+      ...tpl.products.map((p) => h('div', { class: 'scroll-x' }, h('h3', { text: p.name }), h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Size', 'Piece', 'File with bleed (300 dpi)', 'Template'].map((x) => h('th', { text: x })))),
+        h('tbody', {}, p.shapes.map((x) => h('tr', {}, h('td', { text: x.name }), h('td', { text: `${x.piece.wIn} × ${x.piece.hIn} in` }), h('td', { text: `${x.withBleed.wIn} × ${x.withBleed.hIn} in · ${x.withBleed.px.w} × ${x.withBleed.px.h} px` }),
+          h('td', {}, ...['pdf', 'svg', 'png'].map((f) => h('button', { type: 'button', class: 'btn small secondary', onclick: () => download(x.files[f].url, x.files[f].name) }, f.toUpperCase())))))))))) : null;
+    shell('new', h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Design it yourself' }), h('p', { text: `Use your own tools. We check every file (size, 300 dpi, bleed, safe areas, the QR box, small or faint words) and show it on a real label before you pay. ${state.config.name} reviews every ad before it prints.` })), link(`/ads/drafts/${id}`, { class: 'btn secondary' }, 'Chat instead')),
+      err, templates,
+      on('artwork_upload') ? h('section', { class: 'card' }, h('h2', { class: 'section', text: '2. Upload your artwork' }), h('p', { class: 'muted', text: `${art.pdf ? 'PDF, SVG, PNG or JPG' : 'SVG, PNG or JPG'}, up to 25 MB each. One file per size: we match each to its size by its dimensions.` }),
+        h('label', { class: 'btn', for: 'art-pick' }, 'Choose files'), pick, coverEl, filesEl) : null,
+      h('section', { class: 'card' }, h('h2', { class: 'section', text: '3. Your QR code' }), h('p', { class: 'muted', text: 'Every bottle gets its own secure code from us, printed in the QR box. Where should it lead?' }),
+        h('div', { class: 'form' }, h('label', { for: 'art-link' }, 'Link'), linkUrl, h('label', { for: 'art-link-label' }, 'Button words'), linkLabel,
+          h('button', { type: 'button', class: 'btn small', onclick: async () => { err.hidden = true; try { art = await api('POST', `/v1/ads/drafts/${id}/link`, { url: linkUrl.value.trim(), ...(linkLabel.value.trim() ? { label: linkLabel.value.trim() } : {}) }); toast('Saved: your code leads there.'); } catch (x) { fail(x); } } }, 'Save the link')),
+        on('qr_styles') ? h('div', { class: 'form' }, h('label', { for: 'art-qr' }, 'Code colour (it must stay dark enough to scan)'), colour,
+          h('button', { type: 'button', class: 'btn small secondary', onclick: async () => { err.hidden = true; try { art = await api('POST', `/v1/ads/drafts/${id}/qr`, { color: colour.value.toUpperCase() }); toast('Saved: it scans.'); drawPreview(); } catch (x) { fail(x); } } }, 'Use this colour')) : null),
+      previewEl, next);
+    drawFiles(); drawPreview();
+  }
+
+  /** Change where a live ad's code leads: the link fee, shown first, paid once. */
+  async function linksPage(cid) {
+    const t = await api('GET', `/v1/ads/campaigns/${cid}/links`);
+    const err = h('div', { class: 'notice err', hidden: true });
+    const inputs = t.links.map((l) => ({ l, input: h('input', { class: 'input', type: 'url', value: l.url, 'aria-label': l.label || l.path }) }));
+    const fee = t.live && on('link_change_fee') ? t.feeCents : 0;
+    const go2 = h('button', { type: 'button', class: 'btn wide', onclick: async () => {
+      err.hidden = true;
+      const changes = inputs.filter(({ l, input }) => input.value.trim() !== l.url).map(({ l, input }) => ({ path: l.path, url: input.value.trim() }));
+      if (!changes.length) { err.textContent = 'Change a link first.'; err.hidden = false; return; }
+      go2.disabled = true;
+      try { const out = await api('POST', `/v1/ads/campaigns/${cid}/links`, { changes, ...(fee ? { expectedFeeCents: fee } : {}) }); toast(out.feeCents ? `Paid ${dollars(out.feeCents)}. Sent to review with the new link.` : 'Sent to review with the new link.'); go('/ads'); }
+      catch (x) { err.textContent = x.message; err.hidden = false; go2.disabled = false; }
+    } }, fee ? `Pay ${dollars(fee)} and change the link` : 'Change the link');
+    shell('overview', h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Change a link' }), h('p', { text: `Your QR code stays the same on every bottle; this changes where it leads. ${fee ? `Once an ad is live this costs ${dollars(fee)}, paid now. ` : ''}${state.config.name} checks the new link before your ad prints again.` }))),
+      err, t.links.length ? h('div', { class: 'form' }, inputs.map(({ l, input }) => [h('label', { text: l.label || l.path }), input])) : h('p', { class: 'muted', text: 'This ad’s code doesn’t lead to a link of yours.' }), t.links.length ? go2 : null);
+  }
+
   async function builder(id) {
     let d = await api('GET', `/v1/ads/drafts/${id}`);
     if (d.status !== 'open') { go('/ads', true); return; }
@@ -787,7 +903,10 @@
     const sugg = h('div', { class: 'sugg' });
     const attached = h('div', { class: 'attached' });
     const ta = h('textarea', { rows: 1, id: 'ask', placeholder: 'Describe your ad, or ask for a change', 'aria-label': 'Message' });
-    const file = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp', multiple: true, hidden: true });
+    // Designing it yourself: the files attached are your artwork (PDF, SVG, PNG or JPG), each matched to its size and checked.
+    const own = d.draft.mode === 'own';
+    let ownFiles = [];
+    const file = h('input', { type: 'file', accept: own ? '.pdf,.svg,.png,.jpg,.jpeg,application/pdf,image/svg+xml,image/png,image/jpeg' : 'image/png,image/jpeg,image/webp', multiple: true, hidden: true });
     const send = h('button', { class: 'icon-btn send', type: 'submit', 'aria-label': 'Send' }, icon(I.send));
     const checklist = h('div', { class: 'checklist' });
     const tabs = h('div', { class: 'tabs', role: 'tablist' });
@@ -797,7 +916,8 @@
       msgs.replaceChildren(...d.messages.map((m) => h('div', { class: `msg ${m.role}` }, m.text, m.attachments?.length ? h('div', { class: 'att', text: `📎 ${m.attachments.join(', ')}` }) : null)));
       if (busy) msgs.append(h('div', { class: 'msg assistant thinking', 'aria-label': 'Thinking' }, h('i'), h('i'), h('i')));
       sugg.replaceChildren(...(busy ? [] : suggestions).map((s) => h('button', { type: 'button', onclick: () => say(s) }, s)));
-      attached.replaceChildren(...attachments.map((a, i) => h('span', {}, h('img', { src: a.dataUrl, alt: '' }), a.name, h('button', { type: 'button', 'aria-label': `Remove ${a.name}`, onclick: () => { attachments.splice(i, 1); drawMsgs(); } }, '×'))));
+      attached.replaceChildren(...attachments.map((a, i) => h('span', {}, h('img', { src: a.dataUrl, alt: '' }), a.name, h('button', { type: 'button', 'aria-label': `Remove ${a.name}`, onclick: () => { attachments.splice(i, 1); drawMsgs(); } }, '×'))),
+        ...ownFiles.map((f, i) => h('span', {}, `📄 ${f.name}`, h('button', { type: 'button', 'aria-label': `Remove ${f.name}`, onclick: () => { ownFiles.splice(i, 1); drawMsgs(); } }, '×'))));
       requestAnimationFrame(() => { msgs.scrollTop = msgs.scrollHeight; });
     };
     const all = ['artwork', 'category', 'sizes', 'where', 'budget', 'scanPage'];
@@ -846,22 +966,29 @@
     async function say(text) {
       if (busy) return;
       text = (text ?? ta.value).trim();
-      if (!text && !attachments.length) return;
+      if (!text && !attachments.length && !ownFiles.length) return;
       busy = true; ta.value = ''; send.disabled = true;
-      d.messages.push({ role: 'user', text, attachments: attachments.map((a) => a.name) });
+      d.messages.push({ role: 'user', text, attachments: [...attachments, ...ownFiles].map((a) => a.name) });
       drawMsgs();
       try {
-        const r = await api('POST', `/v1/ads/drafts/${id}/messages`, { text, attachments: attachments.map(({ dataUrl, name }) => ({ dataUrl, name })) });
+        // Small files go with the message; big ones are uploaded on their own first (the message has a size limit).
+        const files = [];
+        if (ownFiles.length) {
+          if (ownFiles.reduce((t, f) => t + f.size, 0) < 2_000_000) for (const f of ownFiles) files.push({ dataUrl: await artDataUrl(f), name: f.name });
+          else for (const f of ownFiles) { const out = await uploadArtwork(id, f); d.messages.push({ role: 'assistant', text: out.said }); }
+          ownFiles = [];
+        }
+        const r = await api('POST', `/v1/ads/drafts/${id}/messages`, { text: text || 'Here’s my artwork.', attachments: attachments.map(({ dataUrl, name }) => ({ dataUrl, name })), ...(files.length ? { files } : {}) });
         d = r; suggestions = r.suggestions || []; attachments = [];
         await refreshPreview();
       } catch (x) { d.messages.push({ role: 'assistant', text: x.message }); }
       busy = false; send.disabled = false; drawMsgs(); drawSide(); ta.focus();
     }
-    file.addEventListener('change', async () => { for (const f of [...file.files].slice(0, 4 - attachments.length)) { try { attachments.push({ dataUrl: await shrink(f), name: f.name }); } catch { toast(`Couldn’t read ${f.name}`); } } file.value = ''; drawMsgs(); });
+    file.addEventListener('change', async () => { if (own) { ownFiles.push(...[...file.files].slice(0, 6 - ownFiles.length)); file.value = ''; drawMsgs(); return; } for (const f of [...file.files].slice(0, 4 - attachments.length)) { try { attachments.push({ dataUrl: await shrink(f), name: f.name }); } catch { toast(`Couldn’t read ${f.name}`); } } file.value = ''; drawMsgs(); });
     ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); say(); } });
     ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = `${Math.min(140, ta.scrollHeight)}px`; });
     shell('new',
-      h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: d.campaignId ? 'Change your ad' : 'Make an ad' }), h('p', { text: `Chat with the assistant (${d.assistant}). Nothing prints until you review it and ${state.config.name} approves it.` })), link(`/ads/studio?draft=${id}`, { class: 'btn secondary' }, 'Design it with photos')),
+      h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: d.campaignId ? 'Change your ad' : 'Make an ad' }), h('p', { text: `Chat with the assistant (${d.assistant}). Nothing prints until you review it and ${state.config.name} approves it.` })), own ? link(`/ads/drafts/${id}/artwork`, { class: 'btn secondary' }, 'Your artwork and templates') : link(`/ads/studio?draft=${id}`, { class: 'btn secondary' }, 'Design it with photos')),
       h('div', { class: 'builder' },
         h('section', { class: 'chat', 'aria-label': 'Chat' }, msgs, sugg, attached,
           h('form', { class: 'composer', onsubmit: (e) => { e.preventDefault(); say(); } }, file, h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Attach a logo or photo', onclick: () => file.click() }, icon(I.clip)), ta, send)),

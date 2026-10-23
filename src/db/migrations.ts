@@ -2561,6 +2561,31 @@ insert into company_feature_log (company_id, feature_id, was_on, is_on, by, reas
 select company_id, 'box_ads', true, false, 'system', 'FreeWater’s boxes are plain: ads on boxes start off (the founder, 2026-10-23).', 'catalogue correction', now() from fixed;
 `,
   },
+  {
+    id: '077_ad_artwork',
+    sql: `
+-- "I'll design it myself" (src/modules/artwork): each file an advertiser uploads for an ad (PDF, SVG, PNG or JPG), as
+-- it came. A one-tap fix makes a new file from the old one (fixed_from, fix); a file is never changed after it's stored.
+-- Which file is on which draft, and its check, are in the draft (ad_drafts.data.artwork).
+create table ad_artwork (
+  id text primary key,
+  company_id text not null,
+  advertiser_id text not null,
+  draft_id text not null,
+  name text,
+  kind text not null check (kind in ('pdf', 'svg', 'png', 'jpeg')),
+  bytes bytea not null,
+  size_bytes integer not null check (size_bytes > 0 and size_bytes <= 26214400),
+  sha256 text not null,
+  fixed_from text references ad_artwork(id),
+  fix text check (fix in ('extend_bleed', 'scale_fit', 'clear_qr')),
+  created_at timestamptz not null,
+  check ((fixed_from is null) = (fix is null))
+);
+create index ad_artwork_draft on ad_artwork(company_id, advertiser_id, draft_id);
+create trigger ad_artwork_kept before update on ad_artwork for each row execute function forbid_change();
+`,
+  },
 ];
 
 /** Runs every migration not yet run (or, for tests that start from an older schema, those in `list`). */
