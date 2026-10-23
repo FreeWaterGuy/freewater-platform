@@ -7,12 +7,12 @@
 # TODO(digest): pin it by digest too (a tag can be re-pointed). On a machine with Docker:
 #   docker buildx imagetools inspect node:22.22.0-bookworm-slim --format '{{json .Manifest.Digest}}'
 # then write both FROM lines as node:22.22.0-bookworm-slim@sha256:<digest>. Dependabot (docker) keeps it current.
-FROM node:22.22.0-bookworm-slim AS deps
+FROM node:26.11.1-bookworm-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json .npmrc ./
 RUN npm ci --omit=dev && npm cache clean --force
 
-FROM node:22.22.0-bookworm-slim
+FROM node:26.11.1-bookworm-slim
 # poppler-utils: pdftocairo, pdfinfo, pdffonts, pdfimages and pdftotext read advertisers' PDF artwork (src/modules/artwork/pdf.ts),
 # each as its own process with a time limit; without them PDFs are refused in plain words and SVG, PNG and JPG still work.
 # pg_dump and psql (version 17, from PostgreSQL's own packages: it can back up any database from 13 to 17), for the
