@@ -560,6 +560,9 @@ export class DataService {
       asAdvertiser: advertiserIds.length ? {
         campaigns: [...this.platform.campaigns.values()].filter((c) => c.companyId === companyId && advertiserIds.includes(c.advertiserId)).map((c) => ({ id: c.id, name: c.advertiserName, category: c.category, offering: c.offering ?? null, active: c.active })),
         drafts: await q(`select id, status, data, messages, created_by, updated_at from ad_drafts where company_id = $2 and advertiser_id = any($1) order by updated_at desc limit 50`, [advertiserIds, companyId]).catch(() => []),
+        // The automated assessments of their ads (src/modules/ads/ratings.ts): each score, its parts, reasons and tips,
+        // and who or what made it (GDPR art. 15(1)(h) and 22, docs/COMPLIANCE.md).
+        adRatings: await q(`select content_hash, rubric_version, status, rater, model, overall, offer, design, landing, ar, video, reasons, tips, category, fallback_reason, requested_at, rated_at from ad_ratings where company_id = $2 and advertiser_id = any($1) order by seq desc limit 200`, [advertiserIds, companyId]).catch(() => []),
       } : null,
       // What they did: under their person, and anything logged under their phones (by fingerprint) or accounts before
       // (or without) linking, as erasing covers.

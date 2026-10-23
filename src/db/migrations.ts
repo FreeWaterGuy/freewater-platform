@@ -2561,6 +2561,195 @@ insert into company_feature_log (company_id, feature_id, was_on, is_on, by, reas
 select company_id, 'box_ads', true, false, 'system', 'FreeWater’s boxes are plain: ads on boxes start off (the founder, 2026-10-23).', 'catalogue correction', now() from fixed;
 `,
   },
+  {
+    id: '078_ad_ratings',
+    sql: `
+-- Ad ratings, categories, outcomes and benchmarks (src/modules/ads/ratings.ts; docs/AI.md, "Ad rater"; docs/SWITCHES.md,
+-- "Ad ratings" and "Benchmarks"). The founder: "Even with the switch turned off, I want the AI to rate each ad 1–10
+-- before it gets physically printed, so it can learn over time." Nothing here is about a person: ads, their scores,
+-- and counts of what their bottles did. Aggregates only; never sold.
+
+-- One rating per ad content (its hash) and rubric version: a version of an ad is rated once, whichever way it was
+-- reached (a draft at quote time, a submitted ad, its first print). What the rater saw is kept with it. A finished
+-- rating never changes; a new rubric rates again as a new row.
+create table ad_ratings (
+  seq bigint generated always as identity,
+  id text primary key,
+  company_id text not null,
+  advertiser_id text not null,
+  content_hash text not null check (content_hash ~ '^[0-9a-f]{64}$'),
+  rubric_version text not null,
+  status text not null check (status in ('pending', 'rating', 'done')),
+  attempts integer not null default 0 check (attempts between 0 and 100),
+  next_try_at timestamptz,
+  claimed_at timestamptz,
+  requested_at timestamptz not null,
+  input jsonb not null,
+  rater text check (rater in ('claude', 'rules')),
+  model text,
+  overall smallint check (overall between 1 and 10),
+  offer smallint check (offer between 1 and 10),
+  design smallint check (design between 1 and 10),
+  landing smallint check (landing between 1 and 10),
+  ar smallint check (ar between 1 and 10),
+  video smallint check (video between 1 and 10),
+  reasons jsonb,
+  tips jsonb,
+  category text,
+  secondary_category text,
+  fallback_reason text,
+  rated_at timestamptz,
+  unique (company_id, content_hash, rubric_version),
+  check ((status = 'done') = (rated_at is not null) and (status = 'done') = (overall is not null) and (status = 'done') = (rater is not null)),
+  check (status <> 'rating' or claimed_at is not null)
+);
+create index ad_ratings_waiting on ad_ratings(company_id, next_try_at) where status <> 'done';
+create function ad_ratings_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then perform fw_refuse('ad_ratings', 'ratings are kept: they are what the rating learns from.'); end if;
+  if old.status = 'done' then perform fw_refuse('ad_ratings', 'a finished rating never changes (a new rubric rates again, as a new row).'); end if;
+  if not fw_only_changed(to_jsonb(old), to_jsonb(new), array['status', 'attempts', 'next_try_at', 'claimed_at', 'rater', 'model', 'overall', 'offer', 'design', 'landing', 'ar', 'video', 'reasons', 'tips', 'category', 'secondary_category', 'fallback_reason', 'rated_at']) then
+    perform fw_refuse('ad_ratings', 'what was rated never changes.');
+  end if;
+  return new;
+end $$;
+create trigger ad_ratings_guard before update or delete on ad_ratings for each row execute function ad_ratings_guard();
+
+-- Each version of each ad: a new one whenever what it shows changes (its artwork, scan page and links, AR, video).
+-- Its first print is recorded once, with whether its rating was already done (else the rating is "late"). Its
+-- industry is a label people may correct (each change logged below); nothing else about it changes.
+create table ad_versions (
+  seq bigint generated always as identity,
+  id text primary key,
+  company_id text not null,
+  campaign_id text not null,
+  advertiser_id text not null,
+  content_hash text not null check (content_hash ~ '^[0-9a-f]{64}$'),
+  seen_at timestamptz not null,
+  first_printed_at timestamptz,
+  rated_before_print boolean,
+  category text not null,
+  secondary_category text,
+  subcategory_id text,
+  category_by text not null,
+  features jsonb not null,
+  check ((first_printed_at is null) = (rated_before_print is null)),
+  check (secondary_category is null or secondary_category <> category)
+);
+create index ad_versions_campaign on ad_versions(company_id, campaign_id, seen_at);
+create index ad_versions_hash on ad_versions(company_id, content_hash);
+create function ad_versions_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then perform fw_refuse('ad_versions', 'versions are kept: outcomes and benchmarks are counted by them.'); end if;
+  if not fw_only_changed(to_jsonb(old), to_jsonb(new), array['first_printed_at', 'rated_before_print', 'category', 'secondary_category', 'subcategory_id', 'category_by']) then
+    perform fw_refuse('ad_versions', 'a version never changes, only its industry label.');
+  end if;
+  if old.first_printed_at is not null and (new.first_printed_at, new.rated_before_print) is distinct from (old.first_printed_at, old.rated_before_print) then
+    perform fw_refuse('ad_versions', 'a first print is recorded once.');
+  end if;
+  return new;
+end $$;
+create trigger ad_versions_guard before update or delete on ad_versions for each row execute function ad_versions_guard();
+
+-- Each company's own subcategories under the standard industries ("pizza" under restaurants). Archived, never deleted.
+create table ad_subcategories (
+  id text primary key,
+  company_id text not null,
+  category text not null,
+  label text not null check (length(label) between 1 and 60),
+  created_by text not null,
+  created_at timestamptz not null,
+  archived_at timestamptz
+);
+create unique index ad_subcategories_label on ad_subcategories(company_id, category, lower(label));
+-- Every change to a version's industry label: who (a person, the AI's proposal, the rules) and when. Only added to.
+create table ad_category_changes (
+  seq bigint generated always as identity,
+  company_id text not null,
+  version_id text not null,
+  from_category text,
+  to_category text not null,
+  from_secondary text,
+  to_secondary text,
+  from_subcategory text,
+  to_subcategory text,
+  by text not null,
+  at timestamptz not null
+);
+create trigger ad_category_changes_append_only before update or delete on ad_category_changes for each row execute function forbid_change();
+
+-- What each version's bottles did, by how they went out: counts only, never who. 'latest' is refreshed; the fixed
+-- horizons (bottles of its first 7, 30 and 90 days, and what they did in the 14 days after) are written once.
+create table ad_version_outcomes (
+  company_id text not null,
+  version_id text not null,
+  channel text not null check (channel in ('machine', 'delivery', 'event', 'other')),
+  horizon text not null check (horizon in ('d7', 'd30', 'd90', 'latest')),
+  bottles integer not null check (bottles >= 0),
+  scanned_bottles integer not null check (scanned_bottles between 0 and bottles),
+  scans integer not null check (scans >= 0),
+  ar_launches integer not null check (ar_launches >= 0),
+  clicks integer not null check (clicks >= 0),
+  conversions integer not null check (conversions >= 0),
+  sales_cents bigint not null check (sales_cents >= 0),
+  as_of timestamptz not null,
+  primary key (version_id, channel, horizon)
+);
+create index ad_version_outcomes_company on ad_version_outcomes(company_id, horizon);
+create function ad_version_outcomes_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then perform fw_refuse('ad_version_outcomes', 'outcomes are kept.'); end if;
+  if old.horizon <> 'latest' then perform fw_refuse('ad_version_outcomes', 'a fixed horizon is written once.'); end if;
+  return new;
+end $$;
+create trigger ad_version_outcomes_guard before update or delete on ad_version_outcomes for each row execute function ad_version_outcomes_guard();
+
+-- How many ads, from how many advertisers, a pooled average needs before a company sees it. Never under 20 and 5
+-- (raised by a company for itself, never lowered below these, whatever the code says). Every change logged.
+create table benchmark_settings (
+  company_id text primary key,
+  min_ads integer not null check (min_ads between 20 and 100000),
+  min_advertisers integer not null check (min_advertisers between 5 and 10000),
+  updated_by text not null,
+  updated_at timestamptz not null
+);
+create table benchmark_setting_changes (
+  seq bigint generated always as identity,
+  company_id text not null,
+  what text not null,
+  from_value integer,
+  to_value integer not null,
+  by text not null,
+  reason text,
+  at timestamptz not null
+);
+create trigger benchmark_setting_changes_append_only before update or delete on benchmark_setting_changes for each row execute function forbid_change();
+
+-- The network's benchmarks, month by month, for decades: pooled averages that met the thresholds, with no company,
+-- advertiser or ad in them. Only added to.
+create table ad_benchmark_snapshots (
+  seq bigint generated always as identity,
+  period text not null check (period ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'),
+  horizon text not null,
+  dimension text not null,
+  key text not null,
+  n_ads integer not null,
+  n_advertisers integer not null,
+  n_companies integer not null,
+  bottles bigint not null,
+  scan_rate double precision,
+  median_scan_rate double precision,
+  ar_rate double precision,
+  click_rate double precision,
+  conversion_rate double precision,
+  min_ads integer not null,
+  min_advertisers integer not null,
+  computed_at timestamptz not null,
+  unique (period, horizon, dimension, key)
+);
+create trigger ad_benchmark_snapshots_append_only before update or delete on ad_benchmark_snapshots for each row execute function forbid_change();
+`,
+  },
 ];
 
 /** Runs every migration not yet run (or, for tests that start from an older schema, those in `list`). */

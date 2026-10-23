@@ -714,6 +714,21 @@
     }).catch(() => wrap.remove());
     return wrap;
   }
+  // The ad's score, a meter and up to three tips, only where the company shows them ("Show the rating to advertisers").
+  // Loaded on its own, after the page: it never stands between the advertiser and paying.
+  let myRatings = null; // one request for every card on the page (kept 30 seconds)
+  function ratingBox(load) {
+    const box = h('div', { class: 'note rating', 'aria-live': 'polite' });
+    if (!on('ad_rating_feedback')) return null;
+    load().then((r) => {
+      if (!r?.ready) { box.textContent = r?.pending ? 'Your ad’s score is on its way.' : ''; return; }
+      const parts = [h('b', { text: `Score ${r.score}/10 · ${r.meter}` }), h('meter', { min: 1, max: 10, low: 4, high: 7, optimum: 10, value: r.score, style: 'margin:0 8px;vertical-align:middle', 'aria-label': `${r.meter}: ${r.score} out of 10` })];
+      if (r.tips?.length) parts.push(h('ul', { style: 'margin:6px 0 0' }, r.tips.map((t) => h('li', { text: t }))));
+      parts.push(h('small', { class: 'muted', text: `${r.by}. ${r.note}` }));
+      box.replaceChildren(...parts);
+    }).catch(() => { box.hidden = true; });
+    return box;
+  }
   function campaignCard(c) {
     const r = c.results;
     const actions = [];
@@ -736,6 +751,7 @@
         h('div', { class: 'nums' }, [['Bottles', num(r.prints)], ['Scans', num(r.scans)], ['AR', num(r.arLaunches)], ['Spent', dollars(r.spendCents)]].map(([k, v]) => h('div', {}, h('b', { text: v }), k))),
         c.status === 'not_approved' && c.review?.note && !paid ? h('div', { class: 'note' }, h('b', { text: 'What to change: ' }), c.review.note) : null,
         paid && (c.status === 'being_discussed' || c.status === 'not_approved') ? reviewNotes(c) : null,
+        ratingBox(async () => { if (!myRatings || Date.now() - myRatings.at > 30_000) myRatings = { at: Date.now(), p: api('GET', '/v1/ads/ratings') }; return (await myRatings.p).ratings.find((x) => x.campaignId === c.id)?.rating; }),
         actions.length ? h('div', { class: 'actions' }, actions) : null));
   }
   function chart(daily) {
@@ -930,6 +946,7 @@
         pay?.kind === 'bottles' ? h('div', {}, h('span', { text: 'You pay now' }), totalEl, ' ', payLine, h('br'), h('small', { text: terms ? prepaidTerms(terms) : 'AR, video and scans included.' }))
           : pay?.kind === 'change' ? h('div', {}, h('span', { text: 'You pay now' }), `${dollars(pay.feeCents)} to change it. Your bottles stay as they are; the ones not printed yet carry the new ad once it's approved.`)
           : h('div', {}, h('span', { text: 'You pay' }), `${Object.entries(d.estimate.perPrintCents).map(([s, c]) => `from ${cents(c)} per bottle for ${sizeName(s)}`).join(', ')}; ${cents(d.estimate.perScanCents)} per scan; ${cents(d.estimate.perArLaunchCents)} per AR launch; ${d.estimate.commissionPercent}% of sales`)),
+      ratingBox(() => api('GET', `/v1/ads/drafts/${id}/rating`)),
       whereMode, routes ? routes.el : null,
       h('label', { class: 'check', for: 'agree' }, agree, h('span', {}, h('b', { text: 'It looks right. ' }), 'I checked the words, colors, picture and scan page, and I have the right to use them.')),
       err, submit));

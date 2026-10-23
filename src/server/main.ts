@@ -162,6 +162,12 @@ const jobs: Job[] = [
     // The fund is shared out only while the AI agents' fund area is on (FW_FEATURES); the governor runs either way.
     await perCompany('books-and-agents', async (id) => { if (app!.features.on('agents_fund') && app!.platform.companies.get(id)?.agents?.enabled) await app!.agents.settle(id); await app!.agents.securityReview(id); });
   }) },
+  // Each hour: ad ratings a slow or failed AI left waiting are done (late, never holding a print), each ad version's
+  // results are counted, and any settled month of the network's benchmarks is kept (src/modules/ads/ratings.ts).
+  { name: 'ad-ratings', everyMs: 3600_000, timeoutMs: 30 * 60_000, run: async () => {
+    await perCompany('ad-ratings', async (id) => { await app!.ratings.catchUp(id); await app!.ratings.refreshOutcomes(id); });
+    await app!.ratings.snapshotDue();
+  } },
   // Each day: any agent whose model hasn't passed the current test takes it (a new model or a new test version).
   { name: 'agent-exams', everyMs: 24 * 3600_000, timeoutMs: 30 * 60_000, run: async () => { if (app!.agents.examinee) await app!.agents.runExams(); } },
   // Photos of the real products on the games' cards, a few at a time.

@@ -366,3 +366,31 @@ types or scans from the run sheet, and a resident can't claim a house from a pla
 24-pack measurements (none assumed), and whether the inside colour reaches a real printer (it travels with the print
 file as `data-inside-color` and on `RenderedBox`; no printer reads it yet).
 
+
+## Rules table: ad ratings, industries, outcomes and benchmarks (privacy and compliance officer, 2026-10-23, branch `j-rate`)
+
+| Rule | Code | Test (`test/ad-ratings.test.ts`) | Status |
+|---|---|---|---|
+| Every ad version (content hash) rated once, before its first print, in the background | `AdRatingService.noteVersion` (submit, `POST`/`PATCH /v1/campaigns`, `PATCH …/codes`), `onPrinted` backstop; unique `(company, hash, rubric)`; claim in one statement | "rates a submitted ad … once", "a change to what the ad shows is a new version", "two servers at once" (real Postgres) | fixed (new); fails without the print hook (7 tests) and without the version lock (3 versions instead of 1) |
+| Printing never waits; a slow or failed AI catches up later, marked late | nothing awaits the rater; `rated_before_print` written at the first print; retry 2/4 min by the hourly job, rules after 3 tries; stale claims taken over after 5 min (P11) | "a slow AI…", "an ad nobody noted…", "a failing AI…", "a claim left by a crash…" | fixed (new); each fails without its line (late flag, retry) |
+| No AI: the built-in rules rate at once, labelled; with an AI: Claude through routing, metered, governor first, white-label naming | `rulesRater`, `ClaudeAdRater` (`routeAi`, `claudeWithTool` agent `ad-rater`), `cleanRating` holds it to the rubric | "without an AI key…", "Claude rates through the company’s routing…", "the AI rater off…" | fixed (new) |
+| Industries: own list (licence stated) plus company subcategories; a person's choice carries over; changes logged; never a key | `categories.ts`, `setCategory`, `editSubcategory`, `ad_category_changes` | "ships its own list…", "each version gets a primary industry…" | fixed (new) |
+| Outcomes by version window and channel; voided bottles out; sales net of refunds (P8); fixed horizons written once | `compute`, `refreshOutcomes`, `ad_version_outcomes_guard` | "counts bottles, scans, AR, clicks and sales…" | fixed (new); fails without the version window |
+| Calibration: score vs scan and sale rates, rank correlation, by rater and rubric | `calibration`, `spearman` | "holds each score against…" | fixed (new) |
+| Benchmarks pooled only at N ads / M advertisers, no advertiser over half, and enough without the viewer's own (no differencing); never names an ad, advertiser or company; opt-out leaves at once; give to get | `AdRatingService.enough`, `benchmarks`, `snapshotDue` | "shows the network’s average only…", "never names…", "a company that opts out…", "keeps the network’s benchmarks month by month" | fixed (new); fails without each check (min ads, dominance, subtract-own, opt-out) |
+| Thresholds raised by anyone on the team, lowered only by an owner with a reason, never under 20/5 (code and database); a key never (P4) | `changeBenchmarkSettings`; `benchmark_settings` checks | "thresholds: raised by anyone…" | fixed (new) |
+| Shown to advertisers only when the company turns it on (off by default): score, meter, up to 3 tips, never blocking payment | `ad_rating_feedback` routes; `forAdvertiser`; `ads.js` `ratingBox` (its own request) | "is hidden by default…", "turned on: the score…", "never stands between…" | fixed (new); fails with the routes outside the switch |
+| Switches per company; new companies copy FreeWater; existing companies: ratings on (founder), benchmarks their own decision | `registry.ts` (`ad_ratings` since 1, `benchmarks_*` since 6, `CATALOGUE` 6) | "the switches" (3 tests), "switches per company" (2) | fixed (new) |
+| The advertiser's download includes the automated assessments of its ads | `DataService.profile` `asAdvertiser.adRatings` | "the advertiser’s own download…" | fixed (new) |
+
+| Date | Role | Severity | Pattern | Where | Finding | Fix / test |
+|---|---|---|---|---|---|---|
+| 2026-10-23 | Privacy and compliance officer | MEDIUM | P5 (privacy) | pooled benchmarks (design) | A plain "N ads from M advertisers" rule lets a company subtract its own ads from a network figure and read another company's few advertisers. CONFIRMED by the subtract-own mutation (3 tests fail) | Figures need the bar met without the viewer's own ads (live) and without any one company (monthly history) |
+| 2026-10-23 | Privacy and compliance officer | MEDIUM | P2 | `ensureVersion` | Two servers noting the same version at once made 3 versions on real Postgres (CONFIRMED with the lock removed) | Per-campaign advisory lock; test "two servers at once" (FW_TEST_PG_ADMIN_URL) |
+| 2026-10-23 | Privacy and compliance officer | LOW | P11 | `src/app.ts` (database close) | Rating work running in the background when the database closed crashed the in-process database ("memory access out of bounds" in `core-bidding.test.ts`, 4 of 4 runs; never on main). CONFIRMED | Closing waits for rating work (at most 5 s) and yields one turn before closing (4 of 4 pass); the hourly job redoes anything cut off |
+| 2026-10-23 | Privacy and compliance officer | LOW | P16 sibling | `ad_ai_verdicts` (AI reviewer, earlier branch) | The AI reviewer's verdicts on an advertiser's ad are not in the advertiser's download (by design: "never shown to the advertiser"); for a sole trader that may be an art. 15 gap. PLAUSIBLE, proven only by the lawyer's answer | Not changed; added to L-34 |
+| 2026-10-23 | Privacy and compliance officer | LOW | P7/scale | `AdRatingService.compute` | The outcome query re-reads a company's print, scan and AR events for versions printed in the last 400 days, hourly. PLAUSIBLE that it is slow at scale; proven by a production-sized copy | Documented (COMPLIANCE §6); incremental counters if needed |
+
+Not checked here: a real Claude answering the rating prompt (stand-in and mocked API used), real phones showing the
+advertiser's meter, the law (L-34 to L-37 in docs/COMPLIANCE.md: automated assessments, showing scores, pooling
+competitors' results under antitrust, training on advertisers' content). Founder's decisions in the report.

@@ -841,6 +841,13 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 430 | `POST /v1/console/advertisers/:id/bonus` | admin | yes | a person on the team, signed in (not a key); only the company's own advertisers; a reason to refuse | OK (refusing only stops free bonus printing; nothing billed or refunded) |
 | 431 | `GET /v1/ads/bonus` | campaigns | no | advertiser only (its own) | OK (whether its past ads may print free, and how many bonus bottles) |
 | 432 | `POST /v1/ads/bonus` | campaigns | yes | the advertiser's own person, signed in (not a key) | OK (allows or stops free bonus printing of its own past ads; never billed) |
+| 450 | `GET /v1/ratings` | campaigns | no | team only (no advertiser/machine key); *Ad ratings* | OK (078; read-only: the company's own ad versions, scores, results and calibration) |
+| 451 | `POST /v1/ratings/versions/:id/category` | campaigns | yes | team only (no advertiser/machine key); a person on the team, signed in, never a key; only the company's own versions | OK (078; every change logged in `ad_category_changes`, append-only) |
+| 452 | `POST /v1/ratings/subcategories` | campaigns | yes | team only (no advertiser/machine key); a person on the team, signed in, never a key | OK (078; archived, never deleted) |
+| 453 | `GET /v1/benchmarks` | campaigns | no | team only (no advertiser/machine key); *Benchmarks page* | OK (078; the network's figures are aggregates only, shown at 20+ ads from 5+ advertisers, no advertiser over half, and still so without the viewer's own ads; none unless the company contributes) |
+| 454 | `POST /v1/benchmarks/settings` | campaigns | yes | team only (no advertiser/machine key); a person, never a key; raising: anyone on the team; lowering: an owner with a reason; floors 20 ads, 5 advertisers (also in the database) | OK (078; read and written under a row lock; changes logged) |
+| 455 | `GET /v1/ads/drafts/:id/rating` | campaigns | no | advertiser only (its own draft); *Show the rating to advertisers* (off unless the company turns it on) | OK (078; score, meter and up to three tips only; never blocks paying) |
+| 456 | `GET /v1/ads/ratings` | campaigns | no | advertiser only (its own ads); *Show the rating to advertisers* | OK (078; score, meter and tips only) |
 
 ---
 

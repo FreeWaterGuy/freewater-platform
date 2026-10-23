@@ -67,6 +67,24 @@ Keep days are the US preset; EU/UK/Brazil and unknown places get the shorter str
 | `lottery_chances` | phone key, draw key (**now** fingerprint), prize, claim code | The prize game | Not purged by age | Team overview (no keys); public draw list (fingerprints) | Download yes; erase: key replaced |
 | `agent_arms` | phone key | Holdout tests for AI agents | Not purged by age | Agents' reports (counts) | Erase: key replaced |
 
+### Ads, their ratings and benchmarks (branch `j-rate`, migration 078)
+
+Nothing here is about a person who gets a bottle: ads, scores, and counts. The advertiser is usually a business; a sole
+trader's ad and its score can still be about a natural person (GDPR), so the advertiser's own download includes them.
+
+| Table | Personal fields | Why | Kept | Who sees it | Download / erase |
+|---|---|---|---|---|---|
+| `ad_ratings` | none about consumers; the advertiser id, and what the rater saw (the ad's own words, colours, sizes, links as words) | Rating each ad version 1–10 before it prints, so the rating can learn (the founder's decision) | Forever, append-only (a finished rating never changes) | The company's team (*Ad ratings*); the advertiser sees only score, meter and tips, and only if the company turns that on | **Now** in the advertiser's download (`asAdvertiser.adRatings`); kept on erase as a business record of an ad (L-34) |
+| `ad_versions`, `ad_category_changes`, `ad_subcategories` | advertiser id; who changed an industry (`user:` id) | Which ad was which, its industry | Forever (labels changeable, logged) | Team | Business records |
+| `ad_version_outcomes` | none: counts of bottles, scans, AR, clicks, sales per ad version and channel | Whether the score predicts results | Forever | Team (its own ads) | Not personal |
+| `ad_benchmark_snapshots`, `benchmark_settings`, `benchmark_setting_changes` | none: pooled averages with no company, advertiser or ad; who changed a threshold | Benchmarks across the network | Forever | Contributing companies' teams | Not personal |
+
+How the rules are applied: the rater gets the ad, never the people (`src/modules/ads/rating.ts`, `RATER_LOOKS_AT`);
+outcomes are counted from events and click and sale records, never stored with a phone key; a pooled figure is shown
+only at 20+ ads from 5+ advertisers, with no advertiser over half and enough without the viewing company's own (so a
+company can't difference itself out); a company that switches *Contribute* off leaves the pool at once; a company that
+existed before decides for itself (off until it does). Data is never sold (`docs/AI.md`, "What AI is not used for").
+
 ### Money and things people order
 
 | Table | Personal fields | Why | Kept | Who sees it | Download / erase |
@@ -405,6 +423,22 @@ Status: **Code** = done and tested; **Partly** = done with a gap noted; **Lawyer
   outside Texas, confirm that state's rules for aiming ads at a house (for example Maryland's limits on targeted ads
   and data minimisation).
 
+- **L-34** Automated assessments of businesses (ad ratings, `j-rate`): every ad is scored 1–10 by an AI (or rules)
+  and kept for good. It never decides anything about the advertiser (it never stops, flags or prices an ad), so we read
+  it as outside GDPR art. 22 and outside California's automated decision-making rules; confirm. For sole traders: is
+  the score their personal data (we include it in their download), may it be kept after they ask to be erased (we keep
+  it as a record of the ad, with no contact details), and does the privacy notice for advertisers need to say ads are
+  scored by AI?
+- **L-35** Showing the score to advertisers (off by default): wording so a low score or a tip isn't read as a promise
+  of results or as pressure to buy extras (FTC Act s. 5); the portal says "a guide … it never stops your ad".
+- **L-36** Pooling across companies (benchmarks): averages of competing advertisers' and competing licensees' results
+  (scan and sale rates by industry). Is this an exchange of competitively sensitive information (US antitrust; the
+  agencies withdrew their information-exchange safe harbours in 2023)? Are 20 ads / 5 advertisers / no one over half /
+  monthly, aggregated history enough, or should figures be older, coarser or held by a third party? Do the licensee
+  and advertiser contracts allow their results to be pooled, and is "anonymous aggregates, never sold" the right
+  promise for them?
+- **L-37** Using advertisers' content and results to improve the rating (training): covered by the advertiser terms?
+
 ### Before the Austin pilot: what the lawyer must answer (for the founder)
 
 In plain words, the questions that block the pilot (the rest can follow it):
@@ -425,6 +459,11 @@ In plain words, the questions that block the pilot (the rest can follow it):
 What the code already does for each is in the tables above; nothing about houses is switched on until a person does.
 
 ## 6. What this review could not check
+
+Ad ratings (`j-rate`): a real Claude answering the rating prompt (tests use a stand-in and a mocked API call), the law
+(L-34 to L-37), and how the outcome query performs on years of real events (it scans a company's print, scan and AR
+events since the oldest version it refreshes, hourly; PLAUSIBLE that it needs incremental counters at scale, proven by
+running `refreshOutcomes` against a production-sized copy).
 
 Core slice 3: real phones (AR on iPhone Quick Look and Android Scene Viewer, a phone without AR, a slow network, a
 missing model file), real CDN caching behaviour, and Veo itself; see `docs/REVIEW-LOG.md` for what each would prove.

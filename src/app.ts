@@ -105,6 +105,8 @@ import { UnsoldSpace } from './modules/fillers/unsold';
 import { NewsService, newsPlugin } from './modules/news/service';
 import { builtinNewsWriter, ClaudeNewsWriter, type NewsWriter } from './modules/news/writer';
 import { AiReviewService, ClaudeAdReviewer, standInReviewer, type AdReviewer } from './modules/ads/aiReview';
+import { AdRatingService } from './modules/ads/ratings';
+import { ClaudeAdRater, rulesRater, type AdRater } from './modules/ads/rating';
 import { HouseholdService } from './modules/households/service';
 import { sampleAustinAreas } from './modules/households/sampleAustin';
 import { prepaidLeft } from './modules/ads/budget';
@@ -204,6 +206,8 @@ export interface AppOptions {
   newsWriter?: NewsWriter;
   /** The AI reviewer of paid ads (tests pass a fake; with no AI key, the stand-in: no verdicts, a person reviews). */
   adReviewer?: AdReviewer;
+  /** Rates each ad version before it prints (src/modules/ads/ratings.ts); without one, Claude where there's an AI, else the built-in rules. */
+  adRater?: AdRater;
 }
 
 /** Start the platform on a database: migrate, load everything, and keep writing every change back. */
@@ -713,7 +717,7 @@ export async function createApp(opts: AppOptions) {
   if (opts.examModels) agents.examModels = opts.examModels;
   else if (process.env.ANTHROPIC_API_KEY) {
     const m = process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-5-5';
-    agents.examModels = { numberline: m, 'ad-assistant': m, 'ad-reviewer': m, designer: m, 'video-writer': m, 'team-assistant': m, personalizer: process.env.ANTHROPIC_PERSONALIZE_MODEL ?? 'claude-haiku-5-5' };
+    agents.examModels = { numberline: m, 'ad-assistant': m, 'ad-reviewer': m, 'ad-rater': m, designer: m, 'video-writer': m, 'team-assistant': m, personalizer: process.env.ANTHROPIC_PERSONALIZE_MODEL ?? 'claude-haiku-5-5' };
   }
   if (opts.examinee) agents.examinee = opts.examinee;
   else if (process.env.ANTHROPIC_API_KEY) {
@@ -729,6 +733,20 @@ export async function createApp(opts: AppOptions) {
   aiReview.alert = (key, title, detail) => void runtime.alerts.alert(key, 'warning', title, detail);
   ads.afterPaidSubmit = (c) => aiReview.onSubmitted(c);
   ads.onDecided = (c, decision, personId) => aiReview.onDecided(c, decision, personId);
+  // Ad ratings (src/modules/ads/ratings.ts): every ad version rated once before its first print, in the background
+  // (printing never waits), followed to its results; benchmarks pooled from the companies that contribute.
+  const ratings = new AdRatingService(db, platform, featureOn, opts.adRater ?? (aiOn ? new ClaudeAdRater({ apiKey: anthropicKey, model: process.env.ANTHROPIC_MODEL }) : rulesRater));
+  ratings.contributes = (companyId) => companyFeatures.on(companyId, 'benchmarks_contribute');
+  ads.onVersion = (c) => ratings.noteVersion(c);
+  // Rating work runs in the background; closing the database lets what's under way finish first (at most 5 seconds),
+  // and then gives the database a turn to tidy up after its last answer, so a shutdown never cuts it off mid-way (the
+  // in-process database crashes on that). Anything left is redone by the hourly job.
+  const closeDb = db.close.bind(db);
+  db.close = async () => {
+    await Promise.race([ratings.idle(), new Promise((r) => setTimeout(r, 5000).unref())]);
+    await new Promise((r) => setImmediate(r));
+    return closeDb();
+  };
   // AI continuity: when an operator closes or leaves, its agents are archived by the network and asked what's next.
   const continuity = new ContinuityService(db, platform, opts.clock);
   continuity.fundOf = async (companyId, agentId) => { const f = (await agents.ledger(companyId, agentId)).fund; return f.balanceCents + f.heldCents; };
@@ -771,7 +789,7 @@ export async function createApp(opts: AppOptions) {
   // The demo's former advertisers ran paid before it starts (src/demo/history.ts): their past bottles, printed once.
   if (empty && opts.seedDemo && opts.demoUnsold) await printFormerAdvertisersPast({ platform, persistence }, demoFormerCampaignIds);
 
-  return { ...made, aiReview, fillers, unsold, news, households, routeBuys, features, companyFeatures, db, persistence, runtime, demoKeys, accounts, payments, credit, prepaid, messenger, experiences, assets, ads, designs, delivery, houses, dropPhotos, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
+  return { ...made, aiReview, ratings, fillers, unsold, news, households, routeBuys, features, companyFeatures, db, persistence, runtime, demoKeys, accounts, payments, credit, prepaid, messenger, experiences, assets, ads, designs, delivery, houses, dropPhotos, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

@@ -496,6 +496,8 @@ export class AdsService {
     }
     // The AI reviewer looks at every paid ad as it comes in (src/modules/ads/aiReview.ts).
     if (c.prepaid) await this.afterPaidSubmit(c).catch(() => {});
+    // Every version is rated once before it first prints, in the background (src/modules/ads/ratings.ts).
+    this.onVersion(c);
     await this.flush();
     return { campaignId: c.id, status: 'in_review', ...(paid ? { paidCents: paid.totalCents, bottles: c.prepaid?.paid ?? 0 } : {}), ...(routePaid ? { route: { houses: routePaid.houses, weeks: routePaid.weeks, creditCents: routePaid.creditCents, cardCents: routePaid.cardCents, small: routePaid.small } } : {}), ...(feeCents ? { changeFeeCents: feeCents } : {}) };
   }
@@ -610,6 +612,9 @@ export class AdsService {
   afterPaidSubmit: (c: Campaign) => Promise<unknown> = async () => {};
   /** Set by the app: a person finally decided a paid ad; the AI reviewer's record notes it (AiReviewService.onDecided). */
   onDecided: (c: Campaign, decision: 'approved' | 'rejected', personId: string) => Promise<void> = async () => {};
+
+  /** Set by the app: a version of an ad was submitted; it's rated in the background, never waited on (AdRatingService.noteVersion). */
+  onVersion: (c: Campaign) => void = () => {};
 
   /** Set by the app: refuses an ad going live when its advertiser's credit doesn't allow it (CreditService). */
   beforeLive: (c: Campaign) => Promise<void> = async () => {};

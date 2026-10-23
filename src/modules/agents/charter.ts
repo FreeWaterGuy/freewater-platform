@@ -177,6 +177,7 @@ export const agentRegistry = {
   'prompt-helper': { name: 'Prompt helper', role: 'Answers what people ask in the games’ prompt box, about anything, briefly and kindly.', essential: false },
   code: { name: 'Code agent', role: 'Improves the platform’s code as a whole: lower running costs, faster, fewer failures. Its changes go through review.', essential: false },
   'ad-reviewer': { name: 'AI reviewer of paid ads', role: 'Looks at each paid ad when it’s submitted and passes it or flags it with its reasons, and talks it over with the team when they ask. Its rejections are final only where a company let it make the final call, once its record earned it; a person still approves every refund.', essential: false },
+  'ad-rater': { name: 'Ad rater', role: 'Rates each version of each ad 1 to 10 before it first prints (the offer, the design at print size, the scan page, AR and video), so the network learns which ads work. It never stops, flags or delays an ad.', essential: false },
   'news-writer': { name: 'News writer', role: 'Writes FreeWater News stories from what several outlets reported, in its own words, citing them; only while news is switched on.', essential: false },
 } as const;
 export type AgentId = keyof typeof agentRegistry;

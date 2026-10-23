@@ -577,6 +577,58 @@ that fit, with a fair-turn bound: a paid ad left off `adRules.fairTurnBottles` b
 unless set, 2 to 1,000) goes on the next bottle first, the longest-waiting first. The waiting counts live in memory:
 after a restart they start again, so a turn comes at most one bound late.
 
+### Ad ratings (Ads → *Ad ratings*; the AI's own switch under AI)
+
+The founder: "Even with the switch turned off, I want the AI to rate each ad 1–10 before it gets physically printed, so
+it can learn over time." Code: `src/modules/ads/rating.ts` (the rubric and the raters), `ratings.ts` (when, outcomes,
+calibration, benchmarks), `categories.ts` (the industries). Console: *Ad ratings* and *Benchmarks*.
+
+| Switch | FreeWater | New company | Company that already existed | What it does |
+|---|---|---|---|---|
+| **Ad ratings** (`ad_ratings`) | on | copies FreeWater (on) | **on** (as the founder asked; a white-label company may turn it off) | Every ad version rated 1–10 once, in the background, before its first print; followed to its results; filed under an industry. Off: nothing rated or followed for that company. |
+| **Show the rating to advertisers** (`ad_rating_feedback`, under it) | **off** | copies (off) | off | The advertiser sees the score, a meter (Poor 1–3, Average 4–5, Good 6–7, Excellent 8–10) and up to three tips, on the review page before paying and on each ad in the portal. Its own request, after the page: it never stands between the advertiser and paying, and never stops an ad. Off: its two routes are off (404 `feature_off`) and the portal shows nothing. |
+| **AI ad rater** (`ai_ad_rater`, AI category) | on | copies (on) | on | Claude rates (through the company's AI routing). Off, or no AI: the built-in rules rate, labelled so. |
+
+**When a version is rated.** A version is the ad's content: artwork, scan page and its links, AR, video (`contentHash`).
+It's rated once, the first time any of these happens: the ad is submitted (or changed through the API or the codes
+page), the advertiser asks for its score at quote time, or a bottle with it prints. **Printing never waits.** If the AI
+is slow (30 seconds) or fails, the print goes ahead and the hourly job (`ad-ratings`) asks again, 2 then 4 minutes later;
+after the third failure, the rules rate it, with the reason kept. A version first printed before its rating was done is
+marked **rated late**, shown on the *Ad ratings* page. Changing only how many bottles or where is not a new version.
+
+**Industries.** FreeWater's own list of 27 top-level industries (`src/modules/ads/categories.ts`), modelled on the
+IAB Tech Lab Ad Product Taxonomy and Google's product taxonomy but not a copy of either: neither states a licence
+clearly, so we wrote our own. Its ids never change. Each version gets a primary industry (the rules' guess from what the
+advertiser said it is and the ad's words; the AI's choice when it rates), an optional second one, and optionally one
+of the company's **own subcategories** (added and archived by a person on the *Ad ratings* page; never deleted). A
+person's choice carries over to the ad's next versions. Every change is logged (`ad_category_changes`). Features kept
+with each version: offer type and size, AR, video, a link, sizes, and how it goes out (delivery, machines, events).
+
+**Outcomes and calibration.** Each version is followed by the window in which it was the ad's current one: bottles
+printed (voided ones left out), bottles scanned, scans, AR launches, link clicks, sales and their value, by channel
+(machine, delivery, event). *So far* is refreshed hourly; the 7-, 30- and 90-day horizons (bottles of those first days
+and what they did in the 14 days after) are written once and never change. The *Ad ratings* page holds each score
+against its ads' scan and sale rates (ads with 100+ bottles), with the rank correlation, by rater and rubric: "how
+well the rating predicts results".
+
+### Benchmarks (Data & targeting → *Benchmarks*)
+
+| Switch | FreeWater | New company | Company that already existed | What it does |
+|---|---|---|---|---|
+| **Contribute to the network's benchmarks** (`benchmarks_contribute`) | on | copies (on) | **off until it decides** (new: its advertisers' results joining a pool is its own decision) | Its ads' results join the network's averages, as anonymous aggregates. Off: they leave the pool at once, and the company sees only its own figures (give to get). |
+| **Benchmarks page** (`benchmarks_view`) | on | copies (on) | off until it decides | The *Benchmarks* console page and its routes. |
+
+**The method.** Each ad counts once: its rates over the bottles of its first 30 days (7, 90 or so far can be chosen),
+once it has 100+ bottles. Grouped by industry, channel, industry and channel, offer type, and (the company's own only)
+its subcategories. Each figure is the average of the ads' rates (each ad equal), with the median scan rate. **A
+network figure is shown only when** at least **20 ads** from at least **5 advertisers** stand behind it (a company may
+raise these for itself: anyone on its team raises them; an owner lowers them back, with a reason; never under 20 and 5,
+held by the database too), **no advertiser has more than half** of the ads, and the same is still true **without the
+viewing company's own ads** (so nobody can subtract themselves to see someone else's). Never an ad, an advertiser or a
+company by name in the network's figures. **Kept for decades:** each month, once settled (45 days after it ends), the
+network's figures for the ads first printed that month are kept (`ad_benchmark_snapshots`, append-only), only for
+groups that would meet the bar without any one company; nothing else is kept with them. Never sold.
+
 ### How to add a feature
 
 1. Add one `sw({...})` entry to `SWITCHES` in `src/runtime/registry.ts`: id, category and group, plain-words label and
