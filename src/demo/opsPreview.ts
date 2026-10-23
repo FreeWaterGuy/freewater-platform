@@ -12,7 +12,7 @@ import { simulateHistory } from './history';
 let now = Date.now();
 const db = await createPgliteClient();
 const outbox = new TestOutbox(false);
-const app = await createApp({ db, seedDemo: true, messenger: outbox, clock: () => new Date(now), seed: 31 });
+const app = await createApp({ db, seedDemo: true, demoUnsold: true, messenger: outbox, clock: () => new Date(now), seed: 31 });
 const server = await buildServer(app);
 const call = async (method: string, url: string, token?: string, payload?: unknown) => (await server.inject({ method: method as any, url, payload: payload as any, headers: token ? { authorization: `Bearer ${token}` } : {} })).json();
 async function person(email: string) {

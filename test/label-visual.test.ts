@@ -1,14 +1,15 @@
 import { describe as group, expect, it } from 'vitest';
 import sharp from 'sharp';
 import { layoutsFor } from '../src/modules/ads/layouts';
-import { pieceOf, slotQr } from '../src/modules/print/renderer';
+import { pieceOf, PX_PER_IN, slotQr, svgLabelRenderer } from '../src/modules/print/renderer';
+import { MARKER_CELLS, stripSlots } from '../src/modules/ar/markers';
 import { boxFaceQr, boxFaceSizes, stopCodeBox } from '../src/modules/packs/boxRenderer';
-import { bottle16oz, bottle25oz, boxes, can12oz, sampleCampaigns } from '../src/demo/seed';
+import { bottle16oz, bottle25oz, boxes, can12oz, freewater, sampleCampaigns } from '../src/demo/seed';
 import { labelSamples, studioSamples } from '../src/demo/labelSamples';
 import { renderStudio } from '../src/modules/studio/layout';
 import { describe, inkProblems, splitArt } from './label-ink';
 import { outlineText } from '../src/modules/print/outline';
-import { TEXT_INSET } from '../src/modules/print/geometry';
+import { labelGeometry, TEXT_INSET } from '../src/modules/print/geometry';
 
 const TEXT_MARGIN = TEXT_INSET.yIn * 100; // drawing units
 
@@ -102,4 +103,74 @@ group('the three ads from the walkthrough videos', () => {
     }
     expect(problems).toEqual([]);
   }, 120_000);
+});
+
+group('AR tracking markers and other graphics stay on their own piece (walkthrough: Roastery 9’s strip over its neighbour’s words)', () => {
+  // A label with Roastery 9 (AR that follows the bottle) on one piece and ads with words on every other piece, for
+  // every template on every product: the pieces that get the strip are the ones the platform picks (stripSlots, as
+  // ExperienceService.trackSlots does with FreeWater's "strip along every ad" on), drawn by the label renderer.
+  const camps = sampleCampaigns();
+  const roast = camps.find((c) => c.id === 'cmp-roast')!;
+  const wordy = camps.filter((c) => ['cmp-joes', 'cmp-luma', 'cmp-daily', 'cmp-orbit', 'cmp-patty', 'cmp-maple'].includes(c.id));
+  const campaigns = new Map([roast, ...wordy].map((c) => [c.id, c]));
+  const followsBottle = (id: string) => id === roast.id;
+  const inside = (a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }, slack = 0.5) => a.x >= b.x - slack && a.y >= b.y - slack && a.x + a.w <= b.x + b.w + slack && a.y + a.h <= b.y + b.h + slack;
+  const meets = (a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
+  it('every marker, with its white margin, is inside the AR ad’s own piece, clear of every QR code’s white margin and the panel, and covers no word', async () => {
+    const problems: string[] = [];
+    let drawn = 0;
+    for (const p of products) for (const l of layoutsFor(p, { maxAds: 10 })) for (let ar = 0; ar < l.rects.length; ar++) {
+      const placements = l.rects.map((rect, i) => {
+        const c = i === ar ? roast : wordy[i % wordy.length]!;
+        return { slotIndex: i, share: l.shares[i]!, rect, campaignId: c.id, advertiserId: c.advertiserId, advertiserName: c.advertiserName, experienceId: c.experienceId, priceCents: 50, isHouse: false };
+      });
+      const unit = { id: `u-${p.id}-${l.template}-${ar}`, companyId: 'freewater', productId: p.id, locationId: 'ATX-014', kind: 'ad_supported', placements, layout: l.shares, status: 'rendered', createdAt: '2026-10-23T00:00:00Z' } as any;
+      const label = await svgLabelRenderer.render({ unit, product: p, company: freewater, campaigns, tracking: true, trackSlots: stripSlots(placements, followsBottle) });
+      const markers = label.codes!.filter((c) => c.role === 'marker');
+      if (!markers.length) continue;
+      drawn++;
+      const where = `${p.id} ${l.template} (Roastery 9 on piece ${ar})`;
+      const U = PX_PER_IN, g = labelGeometry(p.label);
+      const panel = { x: g.panel.x * U, y: 0, w: g.panel.w * U, h: g.height * U };
+      const qrs = label.codes!.filter((c) => c.role !== 'marker').map((c) => { const m = (c.sizeIn / c.modules) * 4 * U; return { x: c.xIn * U - m, y: c.yIn * U - m, w: c.sizeIn * U + 2 * m, h: c.sizeIn * U + 2 * m }; });
+      for (const m of markers) {
+        const cell = (m.sizeIn * U) / MARKER_CELLS;
+        const box = { x: m.xIn * U - cell, y: m.yIn * U - cell, w: m.sizeIn * U + 2 * cell, h: m.sizeIn * U + 2 * cell };
+        const own = label.slots.find((s) => s.slotIndex === m.slotIndex)!;
+        if (placements[m.slotIndex!]!.campaignId !== roast.id) problems.push(`${where}: a marker on ${own.advertiserName}’s piece`);
+        if (!inside(box, { x: own.xIn * U, y: own.yIn! * U, w: own.widthIn * U, h: own.heightIn! * U })) problems.push(`${where}: marker ${m.markerId} runs off its own piece`);
+        if (qrs.some((q) => meets(box, q))) problems.push(`${where}: marker ${m.markerId} on a QR code’s white margin`);
+        if (meets(box, panel)) problems.push(`${where}: marker ${m.markerId} on the panel`);
+      }
+      // In pixels: the markers (white margins included) against every word on the label, as printed.
+      const W = g.width * U, H = g.height * U, S = 2;
+      const draw = async (inner: string) => (await sharp(Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${W * S}" height="${H * S}" viewBox="0 0 ${W} ${H}"><rect width="${W}" height="${H}" fill="#fff"/>${inner}</svg>`)).removeAlpha().greyscale().raw().toBuffer());
+      const marks = markers.map((m) => { const cell = (m.sizeIn * U) / MARKER_CELLS; return `<rect x="${m.xIn * U - cell}" y="${m.yIn * U - cell}" width="${m.sizeIn * U + 2 * cell}" height="${m.sizeIn * U + 2 * cell}" fill="#000"/>`; }).join('');
+      const inner = /^<svg\b[^>]*>([\s\S]*)<\/svg>$/.exec(label.svg)![1]!;
+      // The words' letter shapes are kept once in the label's <defs> (src/modules/print/outline.ts): drawn with them.
+      const defs = (inner.match(/<defs>[\s\S]*?<\/defs>/g) ?? []).join('');
+      const art = splitArt(inner);
+      const [wd, mk] = await Promise.all([draw(defs + art.words + art.keepWords), draw(marks)]);
+      expect(wd.some((v) => v < 140)).toBe(true); // the words are there to be covered
+      let over = 0;
+      for (let i = 0; i < wd.length; i++) if (wd[i]! < 140 && mk[i]! < 140) over++;
+      if (over > 4) problems.push(`${where}: markers cover ${over} px of words`);
+    }
+    expect(drawn).toBeGreaterThan(20);
+    expect(problems).toEqual([]);
+  }, 600_000);
+
+  it('box sides: the drivers’ stop code and the ad’s QR code stay on their own side and apart', () => {
+    const problems: string[] = [];
+    for (const b of boxes) for (const f of boxFaceSizes(b)) {
+      const q = boxFaceQr(f.w, f.h), qr = { x: q.x, y: q.y, w: q.size, h: q.size };
+      for (const s of stopCodeBox(f.face, f.w)) {
+        if (!inside(s, { x: 0, y: 0, w: f.w, h: f.h }, 0)) problems.push(`${b.id} ${f.face}: the stop code runs off the side`);
+        if (meets(s, qr)) problems.push(`${b.id} ${f.face}: the stop code on the QR code`);
+      }
+      if (!inside(qr, { x: 0, y: 0, w: f.w, h: f.h }, 0)) problems.push(`${b.id} ${f.face}: the QR code runs off the side`);
+    }
+    expect(problems).toEqual([]);
+  });
 });

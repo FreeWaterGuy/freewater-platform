@@ -2,7 +2,7 @@ import type { Creative } from '../core/types';
 import { posterCreative, type PosterSpec } from '../modules/creative/poster';
 import { studioCreative, type StudioSpec } from '../modules/studio/layout';
 import type { PhotoInfo } from '../modules/studio/photos';
-import { sampleCampaigns } from './seed';
+import { demoUnsoldCampaigns, sampleCampaigns } from './seed';
 import { sampleAd } from '../modules/ads/service';
 import { blankCampaign } from '../modules/fillers/unsold';
 
@@ -51,6 +51,8 @@ export function labelSamples(): { name: string; creative: Creative }[] {
     ...posterSamples.map((s) => ({ name: `poster: ${s.name}`, creative: posterCreative(s.spec) })),
     // The demo businesses, the house ad and the fillers as they ship.
     ...sampleCampaigns().map((c) => ({ name: `campaign: ${c.advertiserName}`, creative: c.creative })),
+    // What the demo prints in space nobody bought: the Well Aware piece and the former advertisers' past ads.
+    ...demoUnsoldCampaigns().filter((c) => c.creativeRef?.kind === 'poster').map((c) => ({ name: `unsold demo: ${c.advertiserName}`, creative: c.creative })),
     // Space nobody bought (src/modules/fillers/unsold.ts): the sample bottle's "Sample ad" placeholder and the blank
     // piece of last resort print on the same pieces too.
     { name: 'unsold: Sample ad placeholder', creative: sampleAd('freewater', 0).creative },

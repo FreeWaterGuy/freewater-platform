@@ -27,6 +27,7 @@ import { blankCampaignId, blankPiece, isOwnPiece, notCurrent, UnsoldSpace, unsol
 import { featuresFrom } from '../src/runtime/features';
 import { STARTING_POINTS, byId } from '../src/runtime/registry';
 import { publicPlace } from '../src/modules/experiences/service';
+import { printedFresh } from '../src/modules/books/bottleReceipt';
 import { productFor } from '../src/modules/ads/layoutChoice';
 import { bottle16oz, freewater, locations, sampleCampaigns } from '../src/demo/seed';
 
@@ -515,16 +516,12 @@ describe('D. fixes from the walkthrough videos', () => {
   });
   it('4. a delivery bottle was printed fresh “for home delivery in Austin”, not “at Home delivery”', () => {
     expect(publicPlace({ id: 'route-3', kind: 'route', city: 'Austin', name: 'East' }, 'route-3')).toBe('Home delivery in Austin');
+    // One helper for every page since the third walkthrough (src/modules/books/bottleReceipt.ts; test/walkthrough-v3.test.ts).
+    expect(printedFresh({ locationId: 'route-3' }, { id: 'route-3', kind: 'route', city: 'Austin', name: 'East' } as any)).toBe('Printed fresh for home delivery in Austin');
+    expect(printedFresh({ locationId: 'ATX-014' }, { id: 'ATX-014', kind: 'machine', city: 'Austin', name: 'Congress Ave' } as any)).toBe('Printed fresh at ATX-014, Congress Ave');
     const scan = readFileSync(new URL('../src/web/scan.js', import.meta.url), 'utf8');
-    const books = readFileSync(new URL('../src/web/books.js', import.meta.url), 'utf8');
     expect(scan).not.toMatch(/Printed fresh at \$\{f\.story\.place\}/);
-    expect(scan).toMatch(/Printed fresh \$\{printedWhere\(f\.story\.place\)\}/);
-    // The helper, run as it is in the page:
-    const helper = /const printedWhere = (\(place\) => [^\n]+);/.exec(scan)![1]!;
-    const printedWhere = new Function(`return ${helper}`)() as (p: string) => string;
-    expect(printedWhere('Home delivery in Austin')).toBe('for home delivery in Austin');
-    expect(printedWhere('ATX-014, Congress Ave')).toBe('at ATX-014, Congress Ave');
-    expect(books).toMatch(/\/\^home delivery\/i\.test\(b\.place/);
+    expect(scan).toMatch(/\$\{f\.story\.printedFresh\}/);
   });
   it('5. Play’s points counter starts at what the wallet holds (the account, plus points on this phone)', () => {
     const play = readFileSync(new URL('../src/web/play.js', import.meta.url), 'utf8');

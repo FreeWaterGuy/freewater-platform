@@ -11,7 +11,7 @@ import { simulateHistory } from './history';
 const port = Number(process.env.PORT ?? 8787);
 let now = Date.now();
 const db = await createPgliteClient();
-const app = await createApp({ db, seedDemo: true, messenger: new TestOutbox(true), clock: () => new Date(now) });
+const app = await createApp({ db, seedDemo: true, demoUnsold: true, messenger: new TestOutbox(true), clock: () => new Date(now) });
 await app.accounts.invite({ companyId: 'freewater', email: 'joe@joesburgers.example', role: 'advertiser', advertiserId: 'adv-joes', displayName: 'Joe' });
 console.log('Printing two weeks of sample bottles…');
 const end = now;

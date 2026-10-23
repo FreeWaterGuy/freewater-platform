@@ -95,7 +95,7 @@ const restored = !!(await db.query<{ t: string | null }>(`select to_regclass('re
 const hadSpool = !!spoolFile && existsSync(spoolFile);
 
 // With the lease passed in, every write the app makes straight to the database checks it in its own transaction.
-app = await createApp({ db, alerts, seedDemo: process.env.SEED_DEMO === '1', blobs: blobStoreFromEnv(), spoolFile, epoch: lease.holder, lease });
+app = await createApp({ db, alerts, seedDemo: process.env.SEED_DEMO === '1', demoUnsold: process.env.SEED_DEMO === '1', blobs: blobStoreFromEnv(), spoolFile, epoch: lease.holder, lease });
 app.runtime.reporter = reporter;
 if (restored) {
   await db.query(`drop table if exists restore_target`);

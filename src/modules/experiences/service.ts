@@ -4,6 +4,8 @@ import type { Platform } from '../../platform';
 import type { AccountsService, User } from '../accounts/service';
 import type { PackService } from '../packs/service';
 import { givingLine, withLabel } from '../print/renderer';
+import { stripSlots } from '../ar/markers';
+import { printedFresh, publicPlace } from '../books/bottleReceipt';
 import type { ExperienceDoc } from './blocks';
 import type { ScanContext } from './contract';
 import { fallbackCard, themeFor, type ExperienceHost } from './host';
@@ -47,10 +49,7 @@ export interface OpenedExperience {
  * Where a bottle came from, as anyone who holds it may see it. A machine is a public place; a delivery route is where
  * the person it was made for lives, so it's only ever "home delivery" and the city, never the neighbourhood.
  */
-export function publicPlace(loc: import('../../core/types').Location | undefined, locationId: string): string {
-  if (!loc) return locationId.startsWith('route') ? 'Home delivery' : locationId;
-  return loc.kind === 'route' ? `Home delivery in ${loc.city}` : `${loc.id}, ${loc.name}`;
-}
+export { publicPlace } from '../books/bottleReceipt';
 
 export const targetKey = (t: Target) => (t.kind === 'slot' ? `s:${t.unitId}:${t.slot}` : `b:${t.packId}:${t.face}`);
 
@@ -154,7 +153,7 @@ export class ExperienceService {
     const r = (await this.db.query<any>(`select count(*)::int as scans, count(distinct payload->>'viewerKey')::int as people, count(*) filter (where payload->>'viewerKey' <> $2)::int as others, (array_agg(payload->>'viewerKey' order by seq))[1] as first_viewer from events where type = 'unit.scanned' and payload->>'unitId' = $1`, [unit.id, viewerKey])).rows[0];
     const scans = Number(r?.scans ?? 0), others = Number(r?.others ?? 0);
     return {
-      printedAt: unit.createdAt, place: publicPlace(loc, unit.locationId),
+      printedAt: unit.createdAt, place: publicPlace(loc, unit.locationId), printedFresh: printedFresh(unit, loc),
       minutesSincePrint: Math.max(0, Math.round((this.platform.bus.now().getTime() - Date.parse(unit.createdAt)) / 60000)),
       scans, people: Number(r?.people ?? 0), passedOn: others > 0, mine: scans - others, others, firstViewer: (r?.first_viewer as string | null) ?? null,
     };
@@ -298,13 +297,11 @@ export class ExperienceService {
     const company = this.platform.companies.get(unit.companyId);
     if (!company || company.ar?.trackingCodes === false || unit.kind === 'custom') return [];
     const follows = (id?: string) => { const m = id ? this.host.info(id)?.arMode : undefined; return m === 'bottle' || m === 'label'; };
-    const own = unit.placements.filter((pl) => {
-      const c = this.platform.campaigns.get(pl.campaignId);
-      return follows(c?.experienceId ?? pl.experienceId) || !!c?.variants?.some((v) => follows(v.experienceId));
-    }).map((pl) => pl.slotIndex);
-    // So AR keeps hold of the bottle all the way round, the strip runs along every ad on it (unless the company
-    // keeps it to the AR advertiser's own part of the label).
-    return own.length && company.ar?.stripEverywhere !== false ? unit.placements.map((pl) => pl.slotIndex) : own;
+    return stripSlots(unit.placements, (campaignId) => {
+      const c = this.platform.campaigns.get(campaignId);
+      const pl = unit.placements.find((x) => x.campaignId === campaignId);
+      return follows(c?.experienceId ?? pl?.experienceId) || !!c?.variants?.some((v) => follows(v.experienceId));
+    });
   }
 
   /** The advertiser's campaign running now, for bottles printed by one that has ended. */

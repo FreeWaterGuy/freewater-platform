@@ -1,4 +1,5 @@
 import type { App } from '../app';
+import { billedAfter } from '../modules/ads/billing';
 
 /**
  * Two weeks of made-up activity, so dashboards have something to show: bottles printed at the machines,
@@ -28,4 +29,37 @@ export async function simulateHistory(app: App, setNow: (ms: number) => void, op
   }
   setNow(end);
   await app.persistence.flush();
+}
+
+/**
+ * The demo's former advertisers (src/demo/seed.ts, `formerAdvertiserCampaigns`) ran paid before the demo starts: their
+ * bottles are printed here, through the real pipeline, so the bottles themselves say so (what makes an advertiser
+ * "former" in src/modules/fillers/unsold.ts) and the books carry what each was billed. They ran before the pilot's
+ * pay-up-front model, so they print billed after (each made-up advertiser has a made-up credit limit), one bottle each
+ * with nothing else paid beside it; then each ad is over again. Only for a demo (createApp's `demoUnsold`).
+ */
+export async function printFormerAdvertisersPast(app: Pick<App, 'platform' | 'persistence'>, formerIds: string[]) {
+  const p = app.platform;
+  const company = p.companies.get('freewater');
+  const former = formerIds.map((id) => p.campaigns.get(id)).filter((c): c is NonNullable<typeof c> => !!c);
+  if (!company || !former.length) return 0;
+  // Only these ads run while their past prints: every other paid ad sits out (in memory only; never saved paused).
+  const sittingOut = [...p.campaigns.values()].filter((c) => c.companyId === company.id && !c.isHouse && !c.filler && c.active && !former.includes(c));
+  const billing = company.adBilling;
+  for (const c of sittingOut) c.active = false;
+  for (const c of former) { c.active = true; c.buy = { type: 'guaranteed', remainingPrints: 1 }; }
+  company.adBilling = billedAfter();
+  let printed = 0;
+  try {
+    for (let i = 0; i < 3 * former.length && former.some((c) => c.buy.type === 'guaranteed' && c.buy.remainingPrints > 0); i++) {
+      const r = await p.order({ companyId: company.id, orderId: `demo-former-${i}`, locationId: 'ATX-022', productId: 'bottle-16oz' });
+      if (r.ok) printed++;
+    }
+  } finally {
+    company.adBilling = billing;
+    for (const c of sittingOut) c.active = true;
+    for (const c of former) { c.active = false; c.buy = { type: 'guaranteed', remainingPrints: 0 }; p.persist.campaign(c); }
+    await app.persistence.flush();
+  }
+  return printed;
 }

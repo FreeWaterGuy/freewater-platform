@@ -13,7 +13,7 @@ const port = Number(process.env.PORT ?? 8787);
 let now = Date.now();
 const outbox = new TestOutbox(false);
 const db = await createPgliteClient();
-const app = await createApp({ db, seedDemo: true, messenger: outbox, clock: () => new Date(now), allowPrivateWebhooks: true, publicUrl: `http://localhost:${port}` });
+const app = await createApp({ db, seedDemo: true, demoUnsold: true, messenger: outbox, clock: () => new Date(now), allowPrivateWebhooks: true, publicUrl: `http://localhost:${port}` });
 const setNow = (ms: number) => (now = ms);
 
 await app.accounts.invite({ companyId: 'freewater', email: 'owner@freewater.io', role: 'owner', displayName: 'Josh' });

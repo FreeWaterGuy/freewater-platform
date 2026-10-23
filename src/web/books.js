@@ -166,18 +166,19 @@
     try { b = await api(`/v1/public/bottles/${encodeURIComponent(code)}`); } catch (e) {
       if (notPublic(e)) return page('bottle', h('h1', { class: 'lead', text: 'These books aren’t public' }), h('p', { class: 'sub', text: 'That bottle’s company doesn’t publish its books, so its numbers can’t be shown here.' }), lookupBox());
       return page('bottle', h('h1', { class: 'lead', text: 'No bottle has that code' }), h('p', { class: 'sub', text: 'Check the code under the QR on the black panel and try again.' }), lookupBox()); }
-    const uc = b.standardCosts;
+    // Only the costs of how this bottle was handed out (a delivery's, or a machine's), as the server lists them.
+    const uc = b.costLines;
     const rows = (pairs) => pairs.map(([k, v]) => h('div', { class: 'ledger-row' }, h('span', { text: k }), h('b', { text: v })));
     const earned = [];
     if (b.earned.print) earned.push([`${b.ads} printed ad${b.ads === 1 ? '' : 's'}`, cents1(b.earned.print)]);
     if (b.earned.scans || b.earned.ar) earned.push(['Scans and AR launches', cents1(b.earned.scans + b.earned.ar)]);
     if (b.earned.commission) earned.push(['Commission on sales', cents1(b.earned.commission)]);
     if (b.earned.custom) earned.push(['Custom design, paid by the customer', cents1(b.earned.custom)]);
-    const costTotal = uc ? uc.water + uc.bottle + uc.label + uc.machine : 0;
+    const costTotal = uc ? uc.reduce((a, c) => a + c.cents, 0) : 0;
     page('bottle', h('div', { class: 'receipt' },
-      h('div', {}, h('div', { class: 'eyebrow', text: `Open books · from ${b.company}` }), h('h1', { class: 'lead', style: 'font-size:32px', text: 'This bottle’s receipt' }), h('p', { class: 'sub', text: `${b.unitId} · printed ${new Date(b.printedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ${/^home delivery/i.test(b.place || '') ? `for ${b.place.charAt(0).toLowerCase()}${b.place.slice(1)}` : `at ${b.place}`}` })),
+      h('div', {}, h('div', { class: 'eyebrow', text: `Open books · from ${b.company}` }), h('h1', { class: 'lead', style: 'font-size:32px', text: 'This bottle’s receipt' }), h('p', { class: 'sub', text: `${b.unitId} · ${b.printedFresh}, ${new Date(b.printedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` })),
       h('section', { class: 'card' }, h('div', { class: 'eyebrow', style: 'margin-bottom:6px', text: 'What it earned' }), rows(earned.length ? earned : [['Nothing yet', '0¢']]), h('div', { class: 'ledger-row', style: 'border-top:1.5px solid var(--ink)' }, h('b', { text: 'Total earned' }), h('b', { text: cents1(b.earned.total) }))),
-      uc ? h('section', { class: 'card' }, h('div', { class: 'eyebrow', style: 'margin-bottom:6px', text: 'What it cost (standard cost)' }), rows([['Spring water', `${uc.water}¢`], ['Bottle and cap', `${uc.bottle}¢`], ['Label and ink', `${uc.label}¢`], ['Machine and restock', `${uc.machine}¢`]]), h('div', { class: 'ledger-row', style: 'border-top:1.5px solid var(--ink)' }, h('b', { text: 'Total cost' }), h('b', { text: `${costTotal}¢` }))) : null,
+      uc ? h('section', { class: 'card' }, h('div', { class: 'eyebrow', style: 'margin-bottom:6px', text: 'What it cost (standard cost)' }), rows(b.costLines.map((c) => [c.label, `${c.cents}¢`])), h('div', { class: 'ledger-row', style: 'border-top:1.5px solid var(--ink)' }, h('b', { text: 'Total cost' }), h('b', { text: `${costTotal}¢` }))) : null,
       b.giving ? h('div', { class: 'gift' }, h('b', { text: `${cents1(b.giving.cents)} to ${b.giving.charity}` }), b.giving.transfer ? h('span', {}, `Sent ${day(b.giving.transfer.sentAt)} in transfer ${b.giving.transfer.number}, bank reference ${b.giving.transfer.bankReference}${b.giving.transfer.status === 'confirmed' ? '. The charity confirmed it arrived.' : '.'}`) : h('span', { text: 'Owed now, and sent with the next transfer once the total reaches the minimum.' })) : !b.givingOn ? h('p', { class: 'sub', text: `${b.company} doesn’t donate per bottle.` }) : null,
       h('p', { style: 'font-size:13px;color:var(--muted);margin:0', text: 'Every number above traces back to a logged print, scan or sale. Corrections show as new lines.' }),
       lookupBox()));

@@ -1,5 +1,5 @@
 // Sample data for the demo and tests. All advertisers here are made-up brands; prices are placeholders.
-import { posterCreative, type PosterIcon } from '../modules/creative/poster';
+import { posterCreative, type PosterIcon, type PosterSpec } from '../modules/creative/poster';
 import { freewaterPanel } from '../modules/print/panel';
 import { defaultAdBilling } from '../modules/ads/billing';
 import { SHARES, type BoxProduct, type Campaign, type CompanyConfig, type Creative, type Location, type Product, type Share } from '../core/types';
@@ -193,6 +193,74 @@ export function sampleCampaigns(): Campaign[] {
     { companyId: 'peak-spring', active: true, targeting: {}, creativeRef: { kind: 'builtin', id: 'cmp-peak-house' }, id: 'cmp-peak-house', advertiserId: 'peak-spring', advertiserName: 'Peak Spring', category: 'house', sizes: all, isHouse: true, experienceId: 'house-promo', experienceConfig: { headline: 'Cold mountain water', text: 'Peak Spring, bottled in the Rockies.' }, buy: { type: 'guaranteed', remainingPrints: 1e9 },
       creative: art({ bg: '#123B2A', fg: '#FFFFFF', accent: '#F2C14E', brand: 'peak spring', line: 'Cold mountain water', sub: 'From the Rockies', mark: 'drop' }) },
   ];
+}
+
+// ---------- space nobody bought, in the demo ----------
+// Without these the demo's unsold space printed the blank piece of last resort (480 of them in a walkthrough's
+// demo night). The production rule is unchanged (src/modules/fillers/unsold.ts): the list first, then fewer pieces,
+// a blank piece only as a last resort, and the team told.
+
+const posterCampaign = (c: Omit<CampaignInput, 'creative'> & { spec: PosterSpec }): Campaign => {
+  const { spec, ...rest } = c;
+  return { companyId: 'freewater', active: true, targeting: {}, ...rest, creative: posterCreative(spec), creativeRef: { kind: 'poster', spec } };
+};
+const DEMO_APPROVED = '2026-09-01T00:00:00.000Z';
+
+/**
+ * Well Aware, the charity FreeWater gives to: one piece, approved by a person on the team (the demo seed), with its
+ * own code opening a page about Well Aware. Words only, no copied logo.
+ */
+export function wellAwarePiece(): Campaign {
+  return posterCampaign({
+    id: 'cmp-wellaware', advertiserId: 'freewater', advertiserName: 'Well Aware', category: 'house', sizes: all, formats: ['label', 'box-face'], isHouse: true,
+    spec: { brand: 'Well Aware', headline: 'Clean water for every community', sub: 'FreeWater gives to Well Aware. Scan to learn more.', colors: { bg: '#0B4F6C', fg: '#FFFFFF', accent: '#7FC6EA' }, icon: 'drop', font: 'rounded' },
+    experienceId: 'news-card',
+    experienceConfig: { headline: 'Clean water, one community at a time', byline: 'Well Aware, FreeWater’s charity partner', paragraphs: ['Well Aware is an Austin nonprofit that builds clean water systems with communities in East Africa.', 'Part of every FreeWater bottle goes to Well Aware. This piece of the label was open, so it tells you about them.'], url: 'https://wellawareworld.org' },
+    theme: { background: '#EEF6FB', text: '#0B2A3A', accent: '#0B4F6C', button: '#0B4F6C' },
+    buy: { type: 'guaranteed', remainingPrints: 1e9 }, review: { status: 'approved', at: DEMO_APPROVED, by: 'demo seed' },
+    filler: { kind: 'charity', status: 'approved', proposedBy: 'demo seed', proposedAt: DEMO_APPROVED, approvedBy: 'demo seed', approvedAt: DEMO_APPROVED, weight: 1 },
+    name: 'Well Aware (charity partner)', createdAt: DEMO_APPROVED,
+  });
+}
+
+/** Advertisers who paid before and whose ads are over: printed free as a bonus in space nobody bought. */
+const formerLooks: { id: string; name: string; category: string; headline: string; sub: string; colors: PosterSpec['colors']; icon: PosterIcon }[] = [
+  { id: 'barton', name: 'Barton Creek Bikes', category: 'bikes', headline: 'Tune-ups while you wait', sub: 'Any bike, any brand', colors: { bg: '#F7F7F2', fg: '#1E2B1A', accent: '#3E7D2A' }, icon: 'bolt' },
+  { id: 'eastside', name: 'Eastside Books', category: 'books', headline: 'New and used books, open late', sub: 'East 6th Street', colors: { bg: '#2E2A4F', fg: '#F4EFE6', accent: '#E3B341' }, icon: 'heart' },
+  { id: 'greenleaf', name: 'Green Leaf Market', category: 'grocery', headline: 'Local produce from Texas farms', sub: 'Scan for the market map', colors: { bg: '#E8F3E1', fg: '#173B12', accent: '#4C8C2B' }, icon: 'bag' },
+  { id: 'luckypaws', name: 'Lucky Paws Grooming', category: 'pets', headline: 'Happy dogs, clean dogs', sub: 'Grooming on South Lamar', colors: { bg: '#FFF3D6', fg: '#3B2410', accent: '#C2410C' }, icon: 'paw' },
+  { id: 'solyoga', name: 'Sol Yoga Studio', category: 'wellness', headline: 'Breathe easy, stretch often', sub: 'Classes for every level', colors: { bg: '#FBEFE6', fg: '#4A2416', accent: '#D9822B' }, icon: 'heart' },
+];
+export const demoFormerCampaignIds = formerLooks.map((f) => `cmp-former-${f.id}`);
+
+export function formerAdvertiserCampaigns(): Campaign[] {
+  return formerLooks.map((f) => posterCampaign({
+    id: `cmp-former-${f.id}`, advertiserId: `adv-${f.id}`, advertiserName: f.name, category: f.category, sizes: all, formats: ['label', 'box-face'],
+    spec: { brand: f.name, headline: f.headline, sub: f.sub, colors: f.colors, icon: f.icon, font: 'rounded' },
+    experienceId: 'offer', experienceConfig: { headline: f.headline, details: `${f.name}, Austin. ${f.sub}.` },
+    // Over: its paid bottles printed (src/demo/history.ts prints them when the demo is seeded), nothing left to run.
+    active: false, buy: { type: 'guaranteed', remainingPrints: 0 }, review: { status: 'approved', at: DEMO_APPROVED, by: 'demo seed' }, name: f.headline, createdAt: DEMO_APPROVED,
+  }));
+}
+
+/** Two running advertisers offered an ad of theirs for unsold spots, and the team approved each. */
+export function approvedFillerAds(): Campaign[] {
+  const src = sampleCampaigns();
+  return (['cmp-orbit', 'cmp-joes'] as const).map((id) => {
+    const s = src.find((c) => c.id === id)!;
+    return {
+      id: `fil-demo-${id.slice(4)}`, companyId: 'freewater', advertiserId: s.advertiserId, advertiserName: s.advertiserName, category: s.category, ...(s.competitorGroup ? { competitorGroup: s.competitorGroup } : {}),
+      sizes: [...s.sizes], formats: ['label'], creative: s.creative, creativeRef: { kind: 'builtin', id: s.id }, experienceId: s.experienceId, experienceConfig: s.experienceConfig, ...(s.theme ? { theme: s.theme } : {}),
+      targeting: {}, buy: { type: 'guaranteed', remainingPrints: 1e9 }, active: true, isHouse: true, review: { status: 'approved', at: DEMO_APPROVED, by: 'demo seed' },
+      filler: { kind: 'advertiser', status: 'approved', proposedBy: s.advertiserId, proposedAt: DEMO_APPROVED, approvedBy: 'demo seed', approvedAt: DEMO_APPROVED, sourceCampaignId: s.id, weight: 1 },
+      name: `${s.name ?? s.advertiserName} (unsold spots)`, createdAt: DEMO_APPROVED,
+    } satisfies Campaign;
+  });
+}
+
+/** Everything the demo seeds for space nobody bought. */
+export function demoUnsoldCampaigns(): Campaign[] {
+  return [wellAwarePiece(), ...approvedFillerAds(), ...formerAdvertiserCampaigns()];
 }
 
 export const mayaDesign: Creative = {

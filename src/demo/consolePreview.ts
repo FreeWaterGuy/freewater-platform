@@ -19,7 +19,7 @@ const outbox = new TestOutbox(false);
 const sender = new TestWebhookSender();
 sender.respond = (r) => (r.url.includes('crm.') ? { status: 503, body: 'Down for maintenance' } : { status: 200, body: '{"ok":true}' });
 const db = await createPgliteClient();
-const app = await createApp({ db, seedDemo: true, seed: 21, messenger: outbox, clock: () => new Date(now), webhookSender: sender });
+const app = await createApp({ db, seedDemo: true, demoUnsold: true, seed: 21, messenger: outbox, clock: () => new Date(now), webhookSender: sender });
 const setNow = (ms: number) => (now = ms);
 for (const [email, role, name] of [['owner@freewater.io', 'owner', 'Josh'], ['sam@freewater.io', 'ops', 'Sam'], ['rita@freewater.io', 'finance', 'Rita'], ['lee@freewater.io', 'reviewer', 'Lee']] as const) await app.accounts.invite({ companyId: 'freewater', email, role, displayName: name });
 await app.accounts.invite({ companyId: 'peak-spring', email: 'owner@peakspring.example', role: 'owner', displayName: 'Dana' });

@@ -520,6 +520,7 @@
     screen({ nav: 'home' },
       backBar(b.kind === 'custom' ? 'Your design' : 'Your bottle', `${new Date(b.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} · ${b.place}`),
       h('div', { class: 'sample' }, bottle),
+      h('p', { class: 'printed-fresh small', style: 'margin:0;text-align:center;font-weight:700', text: `${b.printedFresh}.` }),
       h('h2', { class: 'section' }, b.kind === 'custom' ? 'What it opens' : 'Tap an ad to open it'),
       h('div', {}, b.ads.map((a) => h('div', { class: 'ad-row' },
         h('span', { class: 'size', title: `${a.size} of the label`, text: a.size ?? `${a.sixths}/6` }),

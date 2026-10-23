@@ -98,7 +98,8 @@ import type { BlobStore } from './modules/assets/blobs';
 import type { InstanceLease } from './runtime/lease';
 import { leaseCheckedClient } from './db/leaseChecked';
 import type { JobRunner } from './runtime/jobs';
-import { boxes, builtinCreatives, freewater, locations, peakSpring, products, sampleCampaigns } from './demo/seed';
+import { boxes, builtinCreatives, demoFormerCampaignIds, demoUnsoldCampaigns, formerAdvertiserCampaigns, freewater, locations, peakSpring, products, sampleCampaigns } from './demo/seed';
+import { printFormerAdvertisersPast } from './demo/history';
 import { FillerService } from './modules/fillers/service';
 import { UnsoldSpace } from './modules/fillers/unsold';
 import { NewsService, newsPlugin } from './modules/news/service';
@@ -144,6 +145,13 @@ export interface AppOptions {
    * credit limits). Only read when the demo is seeded into an empty database.
    */
   demoBilling?: 'prepaid' | 'billed_after';
+  /**
+   * With the demo seeded: what fills space nobody bought in the demo (src/demo/seed.ts, `demoUnsoldCampaigns`): the
+   * Well Aware piece, approved filler ads, and former advertisers whose past bottles are printed here
+   * (src/demo/history.ts). The server's demo (SEED_DEMO=1) and the demo scripts turn it on, so the demo prints no blank
+   * pieces; tests that count bottles, pieces or money from the plain catalog leave it off.
+   */
+  demoUnsold?: boolean;
   clock?: () => Date;
   seed?: number;
   messenger?: Messenger; // defaults to the test outbox (sends nothing)
@@ -213,7 +221,7 @@ export async function createApp(opts: AppOptions) {
   let demoKeys: Record<string, string> | undefined;
   const empty = Number((await db.query<{ n: string }>(`select count(*)::int as n from companies`)).rows[0]?.n ?? 0) === 0;
   if (empty && opts.seedDemo) {
-    await saveCatalog(db, { companies: [opts.demoBilling === 'billed_after' ? { ...freewater, adBilling: billedAfter() } : freewater, peakSpring], products, boxes, locations, campaigns: sampleCampaigns() });
+    await saveCatalog(db, { companies: [opts.demoBilling === 'billed_after' ? { ...freewater, adBilling: billedAfter() } : freewater, peakSpring], products, boxes, locations, campaigns: [...sampleCampaigns(), ...(opts.demoUnsold ? demoUnsoldCampaigns() : [])] });
     demoKeys = {};
     const make = async (label: string, companyId: string, scopes: Scope[], advertiserId?: string, locationId?: string) => {
       demoKeys![label] = (await createApiKey(db, { companyId, name: label, scopes, advertiserId, locationId })).key;
@@ -221,7 +229,7 @@ export async function createApp(opts: AppOptions) {
     await make('freewater-admin', 'freewater', ['orders', 'packs', 'campaigns', 'purchases', 'ledger', 'events', 'admin', 'platform']);
     await make('machine-ATX-014', 'freewater', ['orders'], undefined, 'ATX-014');
     await make('advertiser-joes', 'freewater', ['campaigns', 'purchases', 'invoices'], 'adv-joes');
-    for (const c of sampleCampaigns().filter((x) => !x.isHouse)) {
+    for (const c of [...sampleCampaigns(), ...(opts.demoUnsold ? formerAdvertiserCampaigns() : [])].filter((x) => !x.isHouse)) {
       await db.query(`insert into advertisers (id, company_id, name, category) values ($1,$2,$3,$4) on conflict do nothing`, [c.advertiserId, c.companyId, c.advertiserName, c.category]);
       // Made-up advertisers get a made-up credit limit, so their sample ads can run (real ones need a card or a person's limit).
       await db.query(`insert into advertiser_credit_limits (id, company_id, advertiser_id, limit_cents, reason, granted_by, granted_at) select $1,$2,$3,500000,'Demo advertiser (sample data)','demo seed',now() where not exists (select 1 from advertiser_credit_limits where company_id = $2 and advertiser_id = $3)`, [`crl_demo_${c.advertiserId}`, c.companyId, c.advertiserId]);
@@ -759,6 +767,8 @@ export async function createApp(opts: AppOptions) {
   await offers.repairCauseGifts();
   await attribution.repairUnrecorded();
   await persistence.flush();
+  // The demo's former advertisers ran paid before it starts (src/demo/history.ts): their past bottles, printed once.
+  if (empty && opts.seedDemo && opts.demoUnsold) await printFormerAdvertisersPast({ platform, persistence }, demoFormerCampaignIds);
 
   return { ...made, aiReview, fillers, unsold, news, households, routeBuys, features, companyFeatures, db, persistence, runtime, demoKeys, accounts, payments, credit, prepaid, messenger, experiences, assets, ads, designs, delivery, houses, dropPhotos, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
 }

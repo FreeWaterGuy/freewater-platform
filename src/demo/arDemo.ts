@@ -9,7 +9,7 @@ import { createPgliteClient } from '../db/pglite';
 
 const port = Number(process.env.PORT ?? 8788);
 const db = await createPgliteClient();
-const app = await createApp({ db, seedDemo: true, seed: 5 });
+const app = await createApp({ db, seedDemo: true, demoUnsold: true, seed: 5 });
 const server = await buildServer(app);
 const { platform } = app;
 const only = (ids: string[]) => { for (const c of platform.campaigns.values()) if (!c.isHouse && c.companyId === 'freewater') c.active = ids.includes(c.id); };

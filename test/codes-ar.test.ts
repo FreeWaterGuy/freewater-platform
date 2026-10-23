@@ -295,11 +295,15 @@ describe('AR that follows the bottle', () => {
     expect(map.body.codes.length).toBe(fizz.label.codes!.length);
     const svg = await server.inject({ method: 'GET', url: map.body.labelSvgUrl });
     expect(svg.headers['content-type']).toMatch(/svg/);
-    // On a bottle with on-bottle AR from one advertiser, the strip runs along every ad so tracking works all the way round.
+    // On a bottle with on-bottle AR from one advertiser, the strip runs only along that advertiser's own piece: on its
+    // neighbours' pieces it covered words they paid to print (the walkthrough: Roastery 9's strip over the bottom-right
+    // ad's words), whatever the company's "strip along every ad" says. test/label-visual.test.ts checks it in pixels.
     const roast = await bottleWith('cmp-roast', { others: ['cmp-joes', 'cmp-daily'] });
     const slotsWithMarkers = new Set(roast.label.codes!.filter((c) => c.role === 'marker').map((c) => c.slotIndex));
-    const bottomRow = roast.unit.placements.filter((p) => Math.abs(p.rect.y + p.rect.h - 1) < 0.001).map((p) => p.slotIndex);
-    expect([...slotsWithMarkers].sort()).toEqual(bottomRow.sort()); // the strip runs along the bottom of the label, under every ad there
+    expect(app.platform.companies.get('freewater')!.ar?.stripEverywhere).toBe(true);
+    const own = roast.unit.placements.find((p) => p.slotIndex === roast.slot)!;
+    expect([...slotsWithMarkers]).toEqual(Math.abs(own.rect.y + own.rect.h - 1) < 0.001 ? [roast.slot] : []); // along the label's bottom
+    expect(app.experiences.trackSlots(roast.unit)).toEqual([roast.slot]);
   });
 
   it('reads the markers in any turn of the picture', () => {
