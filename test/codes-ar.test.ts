@@ -278,7 +278,12 @@ function photograph(K: G.Intrinsics, p: G.Pose, W: number, H: number, g: G.Label
 
 describe('AR that follows the bottle', () => {
   it('prints the tracking strip only on bottles that carry AR on the bottle, and tells the phone where everything is', async () => {
+    // A bottle with no AR on it anywhere: the ads stopped for this test would otherwise come back as former
+    // advertisers' free bonus pieces (src/modules/fillers/unsold.ts), and an AR one among them prints the strip.
+    const ar = [...app.platform.campaigns.values()].filter((c) => c.companyId === 'freewater' && !c.isHouse && c.id !== 'cmp-luma');
+    for (const c of ar) await app.unsold.setBonusAllowed('freewater', c.advertiserId, false);
     const plain = await bottleWith('cmp-luma');
+    for (const c of ar) await app.unsold.setBonusAllowed('freewater', c.advertiserId, true);
     expect(plain.label.codes!.some((c) => c.role === 'marker')).toBe(false);
     const fizz = await bottleWith('cmp-fizz');
     const markers = fizz.label.codes!.filter((c) => c.role === 'marker');

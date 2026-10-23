@@ -132,7 +132,8 @@ export function codesArRoutes(app: App, server: FastifyInstance, route: (r: Rout
     const company = platform.companies.get(companyId)!;
     const location = [...platform.locations.values()].find((l) => l.companyId === companyId);
     if (!location) throw new ApiError(422, 'no_machines', 'Add a machine first, so the sample label can be filled the way a real one would be.');
-    const fill = platform.registry.adsFor(company).fill({ company, product: platform.productFor(company, p), location, campaigns: [...platform.campaigns.values()], random: platform.random });
+    const narrowed = platform.productFor(company, p);
+    const fill = platform.registry.adsFor(company).fill({ company, product: narrowed, location, campaigns: [...platform.campaigns.values()], random: platform.random, unsold: platform.unsoldFiller({ company, product: narrowed, location, audience: null }) });
     const unit: Unit = { id: 'sample', companyId, productId: p.id, locationId: location.id, kind: 'ad_supported', placements: fill.placements, layout: fill.layout, status: 'rendered', createdAt: platform.bus.now().toISOString() };
     return (await platform.registry.rendererFor(company).render({ unit, product: p, company, campaigns: platform.campaigns })).svg;
   };

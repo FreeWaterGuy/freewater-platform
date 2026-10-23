@@ -35,7 +35,7 @@ npm test             # checks every business rule
 One order goes through the print pipeline:
 
 1. **Order**: `order.created`
-2. **Fill slots** (ad engine): picks 1 to as many different ads as the company allows (10 for FreeWater), skips blocked categories, never puts two competitors on one bottle, respects location targeting and budgets, and fills any gap with the house ad.
+2. **Fill slots** (ad engine): picks 1 to as many different ads as the company allows (10 for FreeWater), skips blocked categories, never puts two competitors on one bottle, respects location targeting and budgets, and fills any gap from the company's unsold-space list (former advertisers' past ads as a free bonus, approved fillers, charity partners, its picks; never its own ads), choosing a tidier template with fewer pieces before ever printing a blank piece (docs/SWITCHES.md, "Unsold space").
 3. **Render** (label renderer): the ad area cut into slots, and the locked company panel (see *The label*). Each slot gets its own QR (`/s/<unit>/<slot>`), owned by the advertiser. The panel QR opens the bottle's receipt (`/r/<unit>`); the panel's bottom line is the bottle's own short code.
 4. **Print** (printer adapter): retries a jam once. A sale is confirmed only when the printer confirms.
 5. **Dispense**, then scans, AR launches and purchases come in as events.
@@ -194,7 +194,8 @@ junk mail but free water that gives to charity. Houses don't sign up and aren't 
   counting people who claimed it in the app as residents (their "do not sell", a child at home, and what they allowed
   apply). It is empty while *Ads aimed at houses* is off. A house's bottles carry, in order: the pieces bought for that
   house that week on the routes (below), then other paid ads in the space left (one claimed bottle per printed bottle,
-  as at machines), then approved fillers, then the house ad; never an unpaid ad.
+  as at machines), then the unsold-space list (former advertisers' ads as a bonus, approved fillers, charity, picks;
+  never the company's own ads); never an unpaid ad.
 - **Demo**: an "Austin pilot (sample houses)" area of about 50 made-up houses on four Travis Heights streets, off,
   every house marked as a sample.
 - **Limits and decisions for the founder.** The box code proves a house to anyone who can scan the box, so a
@@ -257,7 +258,7 @@ the scan page and AR). Switches: *Ads → Buying on delivery routes* (docs/SWITC
 - **Printed exactly once, at the right house.** When the night is planned, each bottle of a house's pack carries the
   pieces reserved for it, placed first (the label with the fewest, biggest pieces around them), each claimed open →
   held in the database before the label is drawn and placed when it prints; the rest of the label gets other paid
-  ads, approved fillers, then the house ad. A route ad never prints anywhere else.
+  ads, then the unsold-space list (never the house ad). A route ad never prints anywhere else.
 - **Nobody pays for a house that stopped.** Pieces that can't go out come back: the house stopped deliveries or was
   skipped, blocked the business (or every ad aimed at it alone), the week went by before they printed, or the box
   came back. For a buy aimed at one house: a refund of that part to the card, approved by an owner or finance
@@ -360,6 +361,18 @@ the scan page and AR). Switches: *Ads → Buying on delivery routes* (docs/SWITC
 ## Prices, square pieces, targeting and giving
 
 **Tidy label templates (`src/modules/ads/layouts.ts`).** An ad gets a share of the label: the whole label, 1/2, 1/3, 1/4, 1/6, 1/8 or 1/10. A label is always one of a small, fixed catalogue of templates, never an ad-hoc mix: a **uniform grid** (whole; halves; thirds; quarters 2 × 2; sixths 3 × 2; eighths 4 × 2; tenths 5 × 2 on the 16 oz bottle), or a **nested grid**, where a uniform parent grid (halves, thirds or quarters) has its last cells each cut into the same smaller grid: a half + 2 quarters, a half + 3 sixths, a half + 4 eighths, a half + 5 tenths, 2 thirds + 2 sixths, a third + 4 sixths, 3 quarters + 2 eighths, 2 quarters + 4 eighths, a quarter + 6 eighths. So every piece sits on the grid lines, pieces of one size on a label have one shape, and the bigger pieces come first (left or top). Each grid is turned whichever way gives the squarest pieces on that product; a template is offered only if every piece is no more than 2.6 times as long as wide and big enough for a readable QR code. The engine chooses among these templates only (the one that earns the most, carrying the ad whose turn it is), leftover cells get fillers or the house ad, and route buys sell a piece on a bottle only if a template holds all of that bottle's pieces (a third and a quarter never share a bottle). Prices by share are unchanged. `npm run demo:label-sheet -- <folder>` draws every template of every product, filled with hard sample ads, as contact sheets; the console shows how each product is cut.
+
+**Unsold space (`src/modules/fillers/unsold.ts`).** Every piece of the label is another business's ad, never the
+company's own (only the black panel on the right is FreeWater's): no house ad, "your ad here", own messages or news,
+in the engine, previews, delivery packs and box sides, machine prints and around route pieces, with a guard after any
+engine a company plugs in. A piece nobody bought is filled from the company's list, in its order (console: Ads and
+prices → *Unsold space*): former advertisers' past ads that are still current, free as a bonus (never billed, never
+counted against a paid ad, shown to them as bonus bottles, they can say no, turns taken fairly, competitors apart);
+approved filler ads; charity partners; ads the team picked. If nothing fits, a tidier template with fewer pieces; a
+plain blank piece only as a last resort, and the team is alerted. Delivery bottles can be held for paid ads (off; 7
+days): a night further away isn't printed yet, and the night before is always printed. A white-label company may
+allow its own ads after its list (off; FreeWater never). Machines are off in the pilot preset (`FW_FEATURES=pilot`):
+the pilot is door-to-door delivery. docs/SWITCHES.md, "Unsold space".
 
 **Label layouts, chosen by each company (`src/modules/ads/layoutChoice.ts`, `layoutGuard.ts`).** Every template is a switch on the Features page (*Ads → Label layouts*), shown with a small picture of how it cuts the label. FreeWater has all 16 on; a new white-label company starts with FreeWater's choices at that moment and then makes its own (companies that existed before keep every template). A layout is used only when:
 - its switch is on, and every size it needs is on too (*Ad sizes*: turning a size off turns its layouts off, and turning the size back on doesn't turn them back on by itself);

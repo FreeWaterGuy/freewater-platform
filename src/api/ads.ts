@@ -28,6 +28,18 @@ export function adsRoutes(app: App, route: (r: RouteDef) => void, h: { me: (key:
     return { body: await ads.overview({ companyId: key!.companyId, advertiserId: advertiserOf(key), days }) };
   } });
 
+  // Bonus bottles (src/modules/fillers/unsold.ts): space nobody bought may carry one of the advertiser's past ads,
+  // free. Never billed, never counted against a paid ad; the advertiser can say no (allowed unless it does).
+  route({ method: 'GET', url: '/v1/ads/bonus', scope: 'campaigns', summary: 'Bonus bottles: whether your past ads may print free on space nobody bought, and how many bottles they went on.', handler: async (_req, key) => {
+    const adv = advertiserOf(key);
+    return { body: { allowed: app.unsold.bonusAllowed(key!.companyId, adv), bonusBottles: app.unsold.bonusCount(key!.companyId, adv), about: 'When nobody bought a piece of a label, one of your past approved ads that’s still current may print there free, as a bonus. You’re never billed for it, it never counts against an ad you paid for, and its code opens your current page.' } };
+  } });
+  route({ method: 'POST', url: '/v1/ads/bonus', scope: 'campaigns', summary: 'Allow or stop bonus printing of your past ads on space nobody bought. A person signed in decides.', body: obj({ allowed: S.bool }, ['allowed']), handler: async (req, key) => {
+    if (!key?.userId) throw new ApiError(403, 'person_needed', 'A person signed in decides this, never a service key.');
+    const adv = advertiserOf(key);
+    return { body: await app.unsold.setBonusAllowed(key!.companyId, adv, (req.body as any).allowed) };
+  } });
+
   route({ method: 'POST', url: '/v1/ads/drafts', scope: 'campaigns', summary: 'Start making an ad in the chat, or start changing one of your ads.', body: obj({ fromCampaignId: S.str }), handler: async (req, key) => {
     const b = (req.body ?? {}) as any;
     return { status: 201, body: await ads.createDraft({ companyId: key!.companyId, advertiserId: advertiserOf(key), userId: key!.userId, fromCampaignId: b.fromCampaignId }) };

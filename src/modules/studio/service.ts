@@ -10,7 +10,7 @@ import { ProviderError, type ImageMaker, type ModelMaker, type PhotoLibrary } fr
 import { contrast } from '../creative/poster';
 import { checkSvg, checkSvgPictures } from '../print/svgCreative';
 import { withCompany } from '../ai/routing';
-import { PX_PER_IN, pieceOf, slotQr } from '../print/renderer';
+import { PX_PER_IN, pieceOf, slotQr, withLabel } from '../print/renderer';
 import { layoutsFor, shareLabel } from '../ads/layouts';
 import type { Share } from '../../core/types';
 
@@ -215,9 +215,10 @@ export class StudioService {
       const find = (p: typeof product) => layoutsFor(p, { maxAds: company.adRules.maxAdsPerUnit, minAds: 1 }).find((l) => l.shares.includes(share));
       const layout = find(this.platform.productFor(company, product)) ?? find(product);
       if (!layout) throw new StudioError(422, 'bad_size', `${shareLabel(share)} doesn’t fit on ${product.name}. Pick another size, or give a width and a height.`);
-      ({ w, h } = pieceOf(product, layout.rects[layout.shares.indexOf(share)]!));
+      ({ w, h } = pieceOf(withLabel(product, company), layout.rects[layout.shares.indexOf(share)]!));
     }
-    const ctx = opts.qrCorner ? { qr: slotQr(this.platform.standardProduct(companyId), w, h) } : undefined;
+    const company = this.platform.companies.get(companyId);
+    const ctx = opts.qrCorner ? { qr: slotQr(withLabel(this.platform.standardProduct(companyId), company), w, h) } : undefined;
     const inches = (n: number) => `${Math.round((n / PX_PER_IN) * 1000) / 1000}in`;
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${inches(w)}" height="${inches(h)}" viewBox="0 0 ${w} ${h}">${renderStudio(spec, w, h, ctx)}</svg>`;
     return { svg: await this.platform.forPrint(svg), widthIn: Math.round((w / PX_PER_IN) * 1000) / 1000, heightIn: Math.round((h / PX_PER_IN) * 1000) / 1000 };

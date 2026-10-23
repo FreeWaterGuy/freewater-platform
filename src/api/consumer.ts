@@ -121,7 +121,8 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     if (hit && platform.bus.now().getTime() - hit.at < 5 * 60_000) return { type: 'image/svg+xml', raw: hit.svg };
     const company = platform.companies.get(companyId)!;
     const product = platform.standardProduct(companyId);
-    const fill = registry.adsFor(company).fill({ company, product: platform.productFor(company, product), location, campaigns: [...platform.campaigns.values()], random: platform.random });
+    const narrowed = platform.productFor(company, product);
+    const fill = registry.adsFor(company).fill({ company, product: narrowed, location, campaigns: [...platform.campaigns.values()], random: platform.random, unsold: platform.unsoldFiller({ company, product: narrowed, location, audience: null }) });
     const unit: Unit = { id: 'sample', companyId, productId: product.id, locationId: location.id, kind: 'ad_supported', placements: fill.placements, layout: fill.layout, status: 'rendered', createdAt: platform.bus.now().toISOString() };
     const label = await registry.rendererFor(company).render({ unit, product, company, campaigns: platform.campaigns });
     const shown = await platform.forView(label.svg);

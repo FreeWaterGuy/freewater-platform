@@ -211,7 +211,7 @@
       me && h('h2', { class: 'section' }, 'Your bottles'),
       me && (mine?.bottles.length
         ? h('div', { class: 'rail' }, mine.bottles.slice(0, 8).map((b) => bottleCard(b)))
-        : h('div', { class: 'empty', text: 'Bottles you get from a machine show up here, with their AR and what they gave.' })),
+        : h('div', { class: 'empty', text: on('machines') ? 'Bottles you get from a machine or a delivery show up here, with their AR and what they gave.' : 'Bottles delivered to you show up here, with their AR and what they gave.' })),
       h('h2', { class: 'section' }, 'Saved from your scans', saved.length ? link('/app/saved', {}, 'See all') : null),
       saved.length ? h('div', { class: 'rail' }, saved.slice(0, 10).map(savedCard)) : h('div', { class: 'empty', text: me ? 'Tap “Save” on any ad you scan and it waits for you here.' : 'Sign in, then tap “Save” on any ad you scan. It waits for you here.' }),
     );
@@ -536,7 +536,7 @@
   // ---------- scan ----------
   async function scanScreen() {
     const video = h('video', { playsinline: true, muted: true, autoplay: true });
-    const status = h('p', { class: 'muted center', style: 'margin:0', text: 'Point at the code on a bottle, a box, or a machine’s screen.' });
+    const status = h('p', { class: 'muted center', style: 'margin:0', text: on('machines') ? 'Point at the code on a bottle, a box, or a machine’s screen.' : 'Point at the code on a bottle or a box.' });
     const cam = h('div', { class: 'camera' }, video, h('div', { class: 'frame' }));
     screen({ nav: 'scan' }, h('h1', { class: 'display', style: 'font-size:26px', text: 'Scan' }), cam, status,
       h('p', { class: 'small muted center', text: 'You can also scan with your phone’s own camera. It opens the same page.' }));

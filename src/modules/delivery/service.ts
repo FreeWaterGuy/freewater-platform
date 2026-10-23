@@ -12,6 +12,7 @@ import { boxKg, deliverySettings } from './settings';
 import { packsFor, SKIP_LABELS, SKIP_REASONS, type HouseService, type SkipReason } from './houses';
 
 import { DeliveryError } from './errors';
+import { holdFor } from '../fillers/unsold';
 export { DeliveryError };
 
 export type Frequency = 'weekly' | 'biweekly' | 'every4weeks';
@@ -91,6 +92,9 @@ export class DeliveryService {
     void run.finally(() => { if (this.queues.get(key) === run) this.queues.delete(key); }).catch(() => {});
     return run;
   }
+
+  /** The last night planned for each company, and what was held back for paid ads (printed once it's within the days). */
+  readonly held = new Map<string, { date: string; held: { routeId?: string; areaId?: string; printsFrom: string }[] }>();
 
   /** Today's date where the company is. */
   private dayFormats = new Map<string, Intl.DateTimeFormat>();
@@ -233,8 +237,19 @@ export class DeliveryService {
     )).rows.map((r) => this.sub(r)).filter((s) => s.nextDate === date || (s.nextDate! < today && this.runsOn(s.routeId, date)));
     const out: Run[] = await this.runs(companyId, date); // already planned routes stay as they are
     for (const run of out) if (run.status === 'printing') await this.printRun(run);
+    // Holding bottles for paid ads (Ads → Unsold space; src/modules/fillers/unsold.ts): a night more than the hold's
+    // days away isn't printed yet, so paid route pieces can still be bought on it. Nothing is taken or marked: those
+    // houses and subscribers are planned as usual once the night is within the days, and the night before is always
+    // within (at least 1 day), so a hold never costs anyone a delivery.
+    const ahead = Math.round((Date.parse(`${date}T12:00:00Z`) - Date.parse(`${today}T12:00:00Z`)) / 86_400_000);
+    const company = this.platform.companies.get(companyId);
+    const held: { routeId?: string; areaId?: string; printsFrom: string }[] = [];
+    const holding = (areaId: string | null) => { const h = holdFor(company, areaId); return h.on && ahead > h.days ? addDays(date, -h.days) : null; };
+    this.held.set(companyId, { date, held });
     const byRoute = new Map<string, Subscription[]>();
     for (const s of due) byRoute.set(s.routeId, [...(byRoute.get(s.routeId) ?? []), s]);
+    const subsFrom = holding(null);
+    if (subsFrom) { for (const routeId of byRoute.keys()) held.push({ routeId, printsFrom: subsFrom }); byRoute.clear(); }
     // Stop numbers carry on across every run of a route that night, so no two boxes out that night share a stop code.
     const lastStop = (routeId: string) => Math.max(0, ...out.filter((r) => r.routeId === routeId).flatMap((r) => r.stops.map((s) => s.stop)));
     for (const [routeId, subs] of byRoute) {
@@ -253,6 +268,8 @@ export class DeliveryService {
     if (this.houses && this.on(companyId, 'delivery_areas')) {
       for (const { area, houses } of await this.houses.due(companyId, date, today, (r, d) => this.runsOn(r, d))) {
         if (out.some((r) => r.areaId === area.id)) continue; // planned already: houses due since wait for the next night
+        const from = holding(area.id);
+        if (from) { held.push({ areaId: area.id, printsFrom: from }); continue; } // held for paid ads: planned once within the days
         const made = await this.planArea(companyId, date, area, houses, lastStop(area.routeId), by);
         for (const run of made) { await this.printRun(run); out.push(run); }
       }

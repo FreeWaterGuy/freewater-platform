@@ -1,4 +1,4 @@
-import type { Campaign, CompanyConfig, Location, Placement, Product, Share } from '../../core/types';
+import type { BoxFacePlacement, Campaign, CompanyConfig, Location, Placement, Product, Share, SlotRect } from '../../core/types';
 
 // Contract for the "Ads and slots" module. Decides, at print time, what fills each slot.
 // What a scan shows later is the slot owner's choice, handled by experience plug-ins.
@@ -36,6 +36,27 @@ export interface FillRequest {
    * from `FillResult.waited`). An ad at the company's fair-turn bound goes on first.
    */
   waits?: ReadonlyMap<string, number>;
+  /**
+   * Space nobody bought (src/modules/fillers/unsold.ts): fills each label's open pieces from the company's list. Never
+   * the company's own ads unless it chose to allow them. Without it, an open piece is a plain blank one.
+   */
+  unsold?: UnsoldFiller;
+}
+
+/** A piece of a label nobody bought. */
+export interface OpenPiece { slotIndex: number; share: Share; rect: SlotRect }
+
+export interface UnsoldFiller {
+  /** Pieces for these open slots, from the company's list in its order, each fitting with what's already on the bottle. Slots it can't fill are left out. */
+  fill(open: OpenPiece[], onBottle: Placement[], random: () => number): Placement[];
+  /** A plain, blank-coloured piece: the last resort, never anyone's ad. */
+  blank(open: OpenPiece): Placement;
+  /** A box side nobody bought, from the same list (null: nothing fits). */
+  face?(face: BoxFacePlacement['face'], onBox: BoxFacePlacement[], random: () => number): BoxFacePlacement | null;
+  /** The company's own house ad, only when it chose to allow its own ads in the ad area (never FreeWater). */
+  house?: Campaign;
+  /** A blank piece here is expected (the no-ads control): nobody is told. */
+  quiet?: boolean;
 }
 
 export interface PrintAudience {

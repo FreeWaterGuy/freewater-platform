@@ -1,5 +1,4 @@
 import { defaultWallet } from '../wallet/assets';
-import { houseAd } from '../fillers/house';
 import { defaultGames } from '../games/service';
 import { defaultChain } from '../chain/service';
 import type { SqlClient } from '../../db/client';
@@ -266,14 +265,15 @@ export class ConsoleService {
     return labelFitProblem(next, [...this.platform.products.values()].filter((p) => !p.companyId || p.companyId === companyId));
   }
 
-  /** The company's most recent bottle, or else its house ad across the whole label. */
+  /** The company's most recent bottle, or else a plain label (never its own ad in the ad area: src/modules/fillers/unsold.ts). */
   private sampleUnit(companyId: string): Unit {
     let last: Unit | null = null;
     for (const u of this.platform.units.values()) if (u.companyId === companyId && u.kind === 'ad_supported' && (u.status === 'dispensed' || u.status === 'printed') && u.placements.every((p) => this.platform.campaigns.has(p.campaignId))) last = u;
     if (last) return last;
-    const house = houseAd(this.platform.campaigns.values(), companyId);
     const machine = this.locations(companyId).find((l) => l.kind === 'machine')?.id ?? 'SAMPLE';
-    const placements = house ? [{ slotIndex: 0, share: 1 as Share, rect: { x: 0, y: 0, w: 1, h: 1 }, campaignId: house.id, advertiserId: house.advertiserId, advertiserName: house.advertiserName, experienceId: house.experienceId, priceCents: 0, isHouse: true }] : [];
+    const company = this.platform.companies.get(companyId)!;
+    const filler = this.platform.unsoldFiller({ company, product: this.platform.standardProduct(companyId), location: this.platform.locations.get(machine) ?? { id: machine, kind: 'machine', city: '', name: '' }, audience: null });
+    const placements = [filler.blank({ slotIndex: 0, share: 1 as Share, rect: { x: 0, y: 0, w: 1, h: 1 } })];
     return { id: 'u_sample', companyId, productId: 'bottle-16oz', locationId: machine, kind: 'ad_supported', placements, layout: placements.length ? [1] : [], status: 'printed', createdAt: new Date().toISOString() };
   }
 

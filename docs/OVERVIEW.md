@@ -20,13 +20,17 @@ platform is the software that runs all of it. Other companies can also run it un
   of each), per product too, the most ads on one bottle (1 to 10), and whether each paid ad takes its turn or the
   best-earning layout wins (with a fair turn for any ad left waiting).
 - It works for any drink and any size. There are samples for a 16 oz bottle, a 25 oz bottle and a 12 oz can.
-- Spots nobody buys carry approved filler (our own messages, Well Aware, advertisers' offered ads) before the house ad.
+- Every piece of the label is another business's ad, never FreeWater's own (only the black panel on the right is
+  ours). Spots nobody buys are filled from a list in the order we choose: former advertisers' past ads (still current,
+  free, as a bonus they can say no to), approved filler ads, Well Aware and other charity partners, ads we pick. If
+  nothing fits, a tidier layout with fewer pieces; a blank piece only as a last resort, and we're told. Delivery
+  bottles can be held a few days for paid ads (off by default), never costing anyone their delivery.
   **FreeWater News** (a topic on the bottle, the newest story behind its code) is built but switched off until it's
   rolled out.
 - Ads for houses that haven't signed up can use area statistics and household data from a data company (never
   sensitive kinds, never sold), with what residents chose to share preferred.
 
-**2. The machines (Model 6)**
+**2. The machines (Model 6)** (built; switched off in the pilot, which is door-to-door delivery: machines come later)
 - The software that runs inside the vending machine: its screen, printing, faults and keeping going when the
   internet drops.
 - You have to be standing at the machine to get a bottle, and there's a daily limit per person.

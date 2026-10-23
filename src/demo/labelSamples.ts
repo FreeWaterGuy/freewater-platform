@@ -3,6 +3,8 @@ import { posterCreative, type PosterSpec } from '../modules/creative/poster';
 import { studioCreative, type StudioSpec } from '../modules/studio/layout';
 import type { PhotoInfo } from '../modules/studio/photos';
 import { sampleCampaigns } from './seed';
+import { sampleAd } from '../modules/ads/service';
+import { blankCampaign } from '../modules/fillers/unsold';
 
 /**
  * Hard ads for the label's words: long words, all capitals, long headlines, logos, offers, emoji, Arabic and Hebrew,
@@ -49,5 +51,9 @@ export function labelSamples(): { name: string; creative: Creative }[] {
     ...posterSamples.map((s) => ({ name: `poster: ${s.name}`, creative: posterCreative(s.spec) })),
     // The demo businesses, the house ad and the fillers as they ship.
     ...sampleCampaigns().map((c) => ({ name: `campaign: ${c.advertiserName}`, creative: c.creative })),
+    // Space nobody bought (src/modules/fillers/unsold.ts): the sample bottle's "Sample ad" placeholder and the blank
+    // piece of last resort print on the same pieces too.
+    { name: 'unsold: Sample ad placeholder', creative: sampleAd('freewater', 0).creative },
+    { name: 'unsold: blank piece', creative: blankCampaign('freewater').creative },
   ];
 }

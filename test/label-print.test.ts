@@ -18,6 +18,7 @@ import { checkProduct } from '../src/modules/products/check';
 import { textEm } from '../src/modules/creative/text';
 import { measure } from '../src/modules/print/fonts';
 import { CodeService } from '../src/modules/codes/service';
+import { blankCampaign } from '../src/modules/fillers/unsold';
 import { engines, freshDb } from './db-helpers';
 import type { Campaign, CompanyConfig, Product, Unit } from '../src/core/types';
 
@@ -380,6 +381,66 @@ describe('print files and previews', () => {
     const other = Object.entries(app.demoKeys!).find(([k]) => k.endsWith('-admin') && k !== 'freewater-admin')?.[1];
     if (other) expect((await call('GET', `/v1/console/bottles/${code}`, other)).statusCode).toBe(404);
     expect((await call('GET', '/v1/console/bottles/B-000000', admin)).statusCode).toBe(404);
+  });
+
+  it('pieces filled by the unsold-space rules (bonus, filler, charity, picked, blank) print in the ad area, outlined; the panel is never a piece', async () => {
+    const company = app.platform.companies.get('freewater')!;
+    const product = productFor(company, bottle16oz);
+    const layout = layoutsFor(product, { maxAds: 10 }).find((l) => l.shares.length >= 5)!;
+    const kinds = ['former_advertiser', 'filler', 'charity', 'picked'] as const;
+    const pool = sampleCampaigns().filter((c) => c.companyId === 'freewater' && !c.isHouse);
+    const campaigns = new Map<string, Campaign>(app.platform.campaigns);
+    const blank = blankCampaign('freewater');
+    campaigns.set(blank.id, blank);
+    const placements = layout.rects.map((rect, i) => {
+      const c = i < kinds.length ? pool[i]! : blank;
+      return { slotIndex: i, share: layout.shares[i]!, rect, campaignId: c.id, advertiserId: c.advertiserId, advertiserName: c.advertiserName, experienceId: c.experienceId, priceCents: 0, isHouse: true, unsold: i < kinds.length ? kinds[i] : ('neutral' as const) };
+    });
+    for (const c of pool) campaigns.set(c.id, c);
+    const unit: Unit = { id: 'u_unsold_print', companyId: 'freewater', productId: product.id, locationId: 'ATX-014', kind: 'ad_supported', placements, layout: layout.shares, status: 'rendered', createdAt: '2026-10-22T00:00:00Z' };
+    const r = await svgLabelRenderer.render({ unit, product, company, campaigns });
+    const file = await printReady(r.svg);
+    expect(file).not.toMatch(/<text\b/);
+    expect(wordsOf(file).length).toBeGreaterThan(0);
+    // Every piece is one of the unsold pieces, inside the ad area; the panel (x 715 to 800) is no piece.
+    const g = labelGeometry(product.label);
+    expect(r.slots.map((s) => s.slotIndex)).toEqual(placements.map((p) => p.slotIndex));
+    for (const s of r.slots) expect(s.xIn + s.widthIn).toBeLessThanOrEqual(g.ad.x + g.ad.w + 1e-6);
+    expect(r.slots.every((s) => s.advertiserName !== company.name)).toBe(true);
+    // The last resort, a blank piece, prints as "Open space" (never the company's own ad).
+    const blankSlot = r.slots.find((s) => s.advertiserName === 'Open space')!;
+    expect(blankSlot).toBeDefined();
+  });
+
+  it('the ad preview’s pieces are the shapes a company’s own label numbers print (not the product’s defaults)', async () => {
+    const was = app.platform.companies.get('freewater')!;
+    const company: CompanyConfig = { ...was, labelGeometry: { 'bottle-16oz': { imageSafe: { widthIn: 6.4, heightIn: 3.6 } } } };
+    app.platform.companies.set('freewater', company);
+    try {
+      await db.query(`insert into advertisers (id, company_id, name, category) values ('adv-geo', 'freewater', 'Geo Shop', 'retail') on conflict do nothing`);
+      const d: any = await app.ads.createDraft({ companyId: 'freewater', advertiserId: 'adv-geo' });
+      await db.query(`update ad_drafts set data = $2 where id = $1`, [d.id, JSON.stringify({ category: 'retail', poster: { brand: 'Geo Shop', headline: 'Hello', colors: { bg: '#FFFFFF', fg: '#0B0B0B', accent: '#1E7DB8' } }, sizes: [4], experienceId: 'offer', experienceConfig: { headline: 'Hello' } })]);
+      const p: any = await app.ads.preview(d.id, 'freewater', 'adv-geo');
+      const printed = withLabel(bottle16oz, company);
+      const want = app.platform.layoutsOf(company, bottle16oz).flatMap((l) => l.shares.map((s, i) => ({ s, ...pieceOf(printed, l.rects[i]!) }))).filter((x) => x.s === 4);
+      const shapes = p.sizes[0].shapes.filter((x: any) => x.productId === 'bottle-16oz');
+      expect(shapes.length).toBeGreaterThan(0);
+      for (const sh of shapes) expect(want.some((x) => Math.abs(x.w - sh.w) < 0.01 && Math.abs(x.h - sh.h) < 0.01), `${sh.w}×${sh.h}`).toBe(true);
+      // And the warnings about words under the code look at those same pieces.
+      expect(await app.ads.artworkWarnings('freewater', '<svg/>', [4])).toEqual([]);
+    } finally { app.platform.companies.set('freewater', was); }
+  });
+
+  it('AR that follows the bottle gets the label as the company printed it (its own numbers), like its codes', async () => {
+    const was = app.platform.companies.get('freewater')!;
+    app.platform.companies.set('freewater', { ...was, labelGeometry: { 'bottle-16oz': { widthIn: 8.5 } } });
+    try {
+      const r = await app.platform.order({ companyId: 'freewater', orderId: 'ar-geo-1', locationId: 'ATX-014', productId: 'bottle-16oz' });
+      expect(r.ok).toBe(true);
+      expect(app.platform.labels.get(r.unit.id)!.widthIn).toBe(8.5);
+      const map = (await call('GET', `/v1/public/ar/${r.unit.id}`, undefined)).json();
+      expect(map.label.widthIn).toBe(8.5);
+    } finally { app.platform.companies.set('freewater', was); }
   });
 
   it('every print file a printer gets goes through the same steps (boxes and studio files too)', async () => {

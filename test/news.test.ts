@@ -54,6 +54,18 @@ const sellNothing = (m: Made) => { for (const c of m.app.platform.campaigns.valu
 /** A person on the team (never a key), as the Features page passes one. */
 const person = { userId: 'usr_news_owner', name: 'News owner', approverProblem: async () => null };
 const newsOn = (ps: Placement[], m: Made) => ps.filter((p) => m.app.platform.campaigns.get(p.campaignId)?.filler?.kind === 'news');
+/**
+ * News on labels is the company's own: it prints only where a company allows its own ads in the ad area (src/modules/
+ * fillers/unsold.ts; never FreeWater, which test/unsold-space.test.ts and the first check below hold it to). These
+ * tests print as a white-label company that allows them: the demo company, with another company as the platform.
+ */
+const asWhiteLabel = async <T>(m: Made, fn: () => Promise<T>): Promise<T> => {
+  const was = process.env.PLATFORM_COMPANY, co = m.app.platform.companies.get('freewater')!, unsold = co.unsold;
+  process.env.PLATFORM_COMPANY = 'the-platform';
+  co.unsold = { order: [], ownAds: true };
+  try { return await fn(); } finally { if (was === undefined) delete process.env.PLATFORM_COMPANY; else process.env.PLATFORM_COMPANY = was; co.unsold = unsold; }
+};
+const orderAllowingOwn = (m: Made) => asWhiteLabel(m, () => order(m));
 
 describe('news is off unless switched on', () => {
   it('is an opt-in area: off with no settings, off in the pilot, on only when the host names it (and FW_FEATURES_OFF still wins)', () => {
@@ -181,7 +193,9 @@ describe('news switched on', () => {
   let unitId = '';
   let slot = 0;
   it('then fills unsold spots with the topic and its photo-ready piece: the label carries the topic, not the story', async () => {
-    const u = await order(m);
+    // FreeWater: never its own news in the ad area, approved topic or not.
+    for (let i = 0; i < 6; i++) expect(newsOn((await order(m)).placements, m)).toEqual([]);
+    const u = await orderAllowingOwn(m);
     const n = newsOn(u.placements, m);
     expect(n).toHaveLength(1);
     expect(n[0]!.priceCents).toBe(0);
@@ -209,7 +223,7 @@ describe('news switched on', () => {
     expect(later.basedOn.every((s: any) => s.url.startsWith('https://'))).toBe(true);
     // A retired topic stops printing but its bottles still open the newest story.
     await m.call('POST', `/v1/news/topics/${topicId}/retire`, m.keys['freewater-admin']);
-    expect(newsOn((await order(m)).placements, m)).toEqual([]);
+    expect(newsOn((await orderAllowingOwn(m)).placements, m)).toEqual([]);
     // A restart reads everything back: the same bottle opens version 3.
     await m.app.persistence.flush();
     const again = await make({ FW_FEATURES_ON: 'news' }, m.db);
@@ -273,7 +287,7 @@ describe('news switched on', () => {
     const maple = m.app.platform.campaigns.get('cmp-maple')!;
     const was = maple.targeting;
     maple.active = true; maple.targeting = {}; // one ad on every bottle, the rest unsold
-    const both = async () => { let n = 0, withAd = 0; for (let i = 0; i < 12; i++) { const u = await order(m); const ad = u.placements.some((p) => p.campaignId === 'cmp-maple'); if (ad) withAd++; if (ad && newsOn(u.placements, m).length) n++; } return { n, withAd }; };
+    const both = async () => { let n = 0, withAd = 0; for (let i = 0; i < 12; i++) { const u = await orderAllowingOwn(m); const ad = u.placements.some((p) => p.campaignId === 'cmp-maple'); if (ad) withAd++; if (ad && newsOn(u.placements, m).length) n++; } return { n, withAd }; };
     const before = await both();
     expect(before.withAd).toBeGreaterThan(0);
     expect(before.n).toBeGreaterThan(0); // without the setting, news lands beside it
@@ -314,7 +328,7 @@ describe('news switched on', () => {
     await m.app.companyFeatures.change('freewater', { news: false }, person);
     expect(m.app.platform.companies.get('freewater')!.news?.on).toBe(false);
     sellNothing(m);
-    for (let i = 0; i < 10; i++) expect(newsOn((await order(m)).placements, m)).toEqual([]);
+    for (let i = 0; i < 10; i++) expect(newsOn((await orderAllowingOwn(m)).placements, m)).toEqual([]);
     // Its bottles still open, to a plain card: no story, nothing of news.
     const doc = (await m.call('GET', `/v1/public/experience/${unitId}/${slot}?viewer=reader-one-0001`)).body.doc;
     expect(doc.blocks.some((b: any) => b.type === 'news')).toBe(false);

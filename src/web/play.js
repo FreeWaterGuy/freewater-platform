@@ -39,6 +39,17 @@
   const toast = (msg) => { toastEl.textContent = msg; toastEl.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => toastEl.classList.remove('show'), 1800); };
 
   let balance = 0, pointsName = 'Points', perRound = 0;
+  // Signed in on this phone (the app keeps its sign-in here): the counter shows what the wallet shows, the account's
+  // points plus those on this phone not yet kept in it (docs/REQUIREMENTS.md, "Points on this phone").
+  let onPhoneOnly = 0, signedIn = false;
+  async function walletPoints() {
+    const token = store.get('fw_token');
+    if (!token) return null;
+    const get = (url) => fetch(url, { headers: { authorization: `Bearer ${token}` } }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    const [me, w] = await Promise.all([get('/v1/me'), get(`/v1/me/wallet?viewer=${encodeURIComponent(viewerKey)}`)]);
+    if (!me || !w || (me.companyId && me.companyId !== companyId)) return null;
+    return { account: w.points.balance, phone: w.phone?.points ?? 0 };
+  }
   const ptsEl = h('button', { type: 'button', class: 'pts', 'aria-label': 'Your points', onclick: () => openWallet() });
   const showPoints = (bump) => { ptsEl.replaceChildren(String(balance.toLocaleString('en-US')), h('small', { text: 'pts' })); if (bump) { ptsEl.classList.remove('bump'); void ptsEl.offsetWidth; ptsEl.classList.add('bump'); } };
   const top = () => h('div', { class: 'top' }, h('div', { class: 'logo' }, 'free', h('span', { text: 'water' })), ptsEl);
@@ -47,7 +58,10 @@
   async function start() {
     let st;
     try { st = await api('GET', `${base}/status?viewer=${encodeURIComponent(viewerKey)}`); } catch { return show(h('p', { class: 'msg', text: 'Couldn’t load the game. Try again in a moment.' })); }
-    balance = st.points.balance; pointsName = st.points.name; perRound = st.points.perRound; showPoints();
+    balance = st.points.balance; pointsName = st.points.name; perRound = st.points.perRound;
+    const mine = await walletPoints();
+    if (mine) { signedIn = true; onPhoneOnly = mine.phone; balance = mine.account + mine.phone; }
+    showPoints();
     if (st.cameTrue?.length && st.canPlay) { toast(`Your pick came true: ${st.cameTrue[0].item}! Look in your wallet.`); }
     if (st.canPlay) return next();
     const notice = h('details', { class: 'notice' }, h('summary', { text: 'What you give and what you get' }), h('p', { text: st.notice }), h('p', { text: st.use }));
@@ -221,13 +235,17 @@
   async function openWallet() {
     try {
       const w = await api('GET', `/v1/public/wallet/${encodeURIComponent(companyId)}?viewer=${encodeURIComponent(viewerKey)}`);
+      const mine = await walletPoints();
+      if (mine) { signedIn = true; onPhoneOnly = mine.phone; balance = mine.account + mine.phone; showPoints(); }
       sheet(h('h2', { text: 'Your wallet' }),
-        h('div', { class: 'wallet-row' }, w.points.name, h('b', { text: w.points.balance.toLocaleString('en-US') })),
+        h('div', { class: 'wallet-row' }, w.points.name, h('b', { text: (mine ? balance : w.points.balance).toLocaleString('en-US') })),
         w.credit.enabled || w.credit.balanceCents ? h('div', { class: 'wallet-row' }, 'Credit', h('b', { text: `$${(w.credit.balanceCents / 100).toFixed(2)}` })) : null,
         w.coupons.length ? h('div', { class: 'wallet-row' }, 'Coupons', h('b', { text: String(w.coupons.length) })) : null,
         h('p', { class: 'notice', text: w.points.terms }),
         // Play keeps points with this phone; the app's wallet moves them into an account, when the person chooses.
-        h('p', { class: 'msg' }, 'These points are kept on this phone. ', h('a', { href: '/app/wallet', text: 'Open your wallet' }), ' to keep them in your account.'),
+        signedIn
+          ? (onPhoneOnly ? h('p', { class: 'msg' }, `${plural(onPhoneOnly.toLocaleString('en-US'), 'point is', 'points are')} on this phone, not in your account yet. `, h('a', { href: '/app/wallet', text: 'Keep them in your account' }), '.') : h('p', { class: 'msg', text: 'All in your account.' }))
+          : h('p', { class: 'msg' }, 'These points are kept on this phone. ', h('a', { href: '/app/wallet', text: 'Open your wallet' }), ' to keep them in your account.'),
         await offersBlock());
     } catch (e) { toast(e.message); }
   }

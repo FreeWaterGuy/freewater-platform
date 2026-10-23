@@ -16,7 +16,7 @@
  * It only ever takes things away; every money and blockchain switch inside an area that's on still starts off.
  */
 
-export const featureNames = ['token', 'token_conversion', 'withdrawals', 'gift_cards', 'partners', 'agents_fund', 'network', 'lottery', 'video_generation', 'offers', 'games', 'news'] as const;
+export const featureNames = ['token', 'token_conversion', 'withdrawals', 'gift_cards', 'partners', 'agents_fund', 'network', 'lottery', 'video_generation', 'offers', 'games', 'news', 'machines'] as const;
 export type Feature = (typeof featureNames)[number];
 
 export interface FeatureInfo {
@@ -39,6 +39,7 @@ export const FEATURES: Record<Feature, FeatureInfo> = {
   offers: { what: 'Brand offers (claims, receipts, payouts), barcode lookup for them, and value-back tests on offers.' },
   games: { what: 'The games for points (Play), their catalog, winners and photos.' },
   news: { what: 'FreeWater News on unsold spots: news topics, the stories behind their codes, people’s news sources, error reports. Starts off everywhere; a company also turns it on for itself (news.on).' },
+  machines: { what: 'Vending machines: their screens and keys, the fleet page, the free bottle from the app at a machine, choosing what you get there, and the machines near you. Bottles already printed at a machine still open.' },
 };
 
 /**
@@ -48,16 +49,17 @@ export const FEATURES: Record<Feature, FeatureInfo> = {
 export const OPT_IN: readonly Feature[] = ['news'];
 
 /**
- * The pilot: bottles, ads and printing; scans, AR, attribution and coupons; the app (free bottle, points shown in the
- * wallet, data levels); delivery, packs and drivers; the advertiser portal and studio; the ops, owner and books
- * consoles; giving; accounts, team and keys; data and privacy rights; transparency; machines; the games; and the
- * launch stages up to "live with points" (test stage, bots, reset, going live with points).
+ * The pilot: bottles, ads and printing; scans, AR, attribution and coupons; the app (points shown in the wallet, data
+ * levels); delivery, packs and drivers; the advertiser portal and studio; the ops, owner and books consoles; giving;
+ * accounts, team and keys; data and privacy rights; transparency; the games; and the launch stages up to "live with
+ * points" (test stage, bots, reset, going live with points).
  * Everything else is off: token, conversion, withdrawals, gift cards, partners, the AI agents' fund, the operator
- * network, the prize game, Veo footage and brand offers.
+ * network, the prize game, Veo footage, brand offers and machines (the Austin pilot is door-to-door delivery; machines
+ * come later, so the app offers no machine and the scan page no "free water near me").
  */
 export const PRESETS: Record<string, Feature[]> = {
   all: [],
-  pilot: ['token', 'token_conversion', 'withdrawals', 'gift_cards', 'partners', 'agents_fund', 'network', 'lottery', 'video_generation', 'offers', 'news'],
+  pilot: ['token', 'token_conversion', 'withdrawals', 'gift_cards', 'partners', 'agents_fund', 'network', 'lottery', 'video_generation', 'offers', 'news', 'machines'],
 };
 
 /** Routes that belong to an area, as "METHOD /url" exactly as registered. A route not listed is core: always on. */
@@ -77,6 +79,9 @@ export const ROUTE_FEATURES: Record<Exclude<Feature, 'token_conversion' | 'video
   news: ['GET /v1/news/topics', 'POST /v1/news/topics', 'POST /v1/news/topics/:id/approve', 'POST /v1/news/topics/:id/retire', 'POST /v1/news/topics/:id/reports', 'POST /v1/news/topics/:id/corrections', 'GET /v1/news/errors',
     'GET /v1/public/news/:companyId/topics/:topicId', 'POST /v1/public/news/:companyId/topics/:topicId/errors', 'GET /v1/public/news/:companyId/sources', 'POST /v1/public/news/:companyId/sources', 'GET /v1/me/news-sources', 'POST /v1/me/news-sources',
     'POST /v1/campaigns/:id/news-adjacency'],
+  machines: ['POST /v1/machine/heartbeat', 'GET /v1/machine/jobs/next', 'POST /v1/machine/jobs/:id/result', 'GET /v1/machine/presence', 'POST /v1/machine/buffer', 'POST /v1/machine/offline-report', 'POST /v1/machine/commands/:id/result',
+    'GET /v1/ops/fleet', 'GET /v1/ops/fleet/:id', 'POST /v1/ops/fleet/:id/commands', 'GET /v1/ops/machines', 'POST /v1/console/machines', 'PATCH /v1/console/machines/:id', 'GET /v1/machines/:locationId/presence', 'GET /v1/public/machines/:locationId', 'GET /v1/public/machines/:locationId/sample.svg', 'GET /v1/public/companies/:companyId/machines',
+    'POST /v1/me/vends', 'GET /v1/me/vends/:vendId', 'GET /v1/me/machines/:locationId/choice'],
 };
 
 /** Background jobs that belong to an area (by name, src/server/main.ts). A job not listed is core. */
@@ -85,6 +90,7 @@ export const JOB_FEATURES: Record<string, Feature> = {
   videos: 'video_generation', // checks on Veo footage being made
   offers: 'offers', // expires claims, pays held ones
   'game-photos': 'games',
+  'fleet-sweep': 'machines', // machines that stopped answering
 };
 
 /** The several-people steps (chain actions) that would switch an area on. Pause and unpause always stay. */

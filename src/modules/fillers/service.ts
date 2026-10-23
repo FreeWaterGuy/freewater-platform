@@ -1,19 +1,19 @@
-import type { Campaign, CompanyConfig, FillerInfo, Location, Placement, Product, Share } from '../../core/types';
+import type { Campaign, CompanyConfig, FillerInfo, Location, Product, Share } from '../../core/types';
 import { newId } from '../../core/ids';
 import type { Platform } from '../../platform';
 import type { PrintAudience } from '../ads/contract';
 import { checkPosterSpec, posterCreative, posterIcons, type PosterIcon, type PosterSpec } from '../creative/poster';
-import { houseAd } from './house';
 
 /**
  * Filler for unsold spots (the founder: "spots that nobody buys can be replaced by other ads that we have approved for
  * this situation or things like our own breaking news and more").
  *
- * A company keeps a list of pieces approved for spots nobody bought: its own messages, charity messages (Well Aware),
- * advertisers' ads they offered free for unsold spots, and (only while news is on) news topics. Every piece is a house
- * campaign (`isHouse`, never billed) with `filler` set, and prints only once a person on the company's team approved
- * it. After the auction, each spot that got the generic house ad gets an approved filler instead, when one fits; the
- * house ad stays the last resort. Works with news off.
+ * A company keeps a list of pieces approved for spots nobody bought: advertisers' ads they offered free for unsold
+ * spots, charity partners' pieces (Well Aware), and its own messages and (only while news is on) news topics. Every
+ * piece is a house campaign (`isHouse`, never billed) with `filler` set, and prints only once a person on the company's
+ * team approved it. Which of them fill a piece, and in what order, is the company's unsold-space list
+ * (src/modules/fillers/unsold.ts): third-party pieces only, unless the company chose to allow its own ads (its own
+ * messages and news count as its own; FreeWater never allows them). Works with news off.
  */
 export class FillerError extends Error { constructor(public code: string, message: string, public status = 422) { super(message); } }
 
@@ -159,33 +159,16 @@ export class FillerService {
   }
 
   /**
-   * After the auction: each spot that got the generic house ad gets an approved filler that fits, biggest spots first;
-   * the house ad stays where none does. Never on a bottle in the no-ads control, never two of the same piece on one
-   * bottle, never news on a bottle carrying an ad that asked not to be next to news, and an advertiser's filler only
-   * where its own ad could go (category rules, competitors, the person's "never show me", where it runs).
+   * The approved fillers that may print on this bottle (src/modules/fillers/unsold.ts puts them on, in the company's
+   * order): never news unless news is on here, and an advertiser's filler only where its own ad could go (its ad still
+   * running as approved, category rules, the person's "never show me", where it runs). Never on a bottle in the no-ads
+   * control.
    */
-  fillUnsold(req: { company: CompanyConfig; product: Product; location: Location; audience?: PrintAudience | null; placements: Placement[]; random: () => number }): Placement[] {
-    const { company, product, location, audience, random } = req;
-    if (audience?.noAds) return req.placements;
-    const house = houseAd(this.platform.campaigns.values(), company.id);
-    const open = req.placements.filter((p) => p.isHouse && (!house || p.campaignId === house.id));
-    if (!open.length) return req.placements;
-    const camp = (id: string) => this.platform.campaigns.get(id);
-    const onBottle: Campaign[] = req.placements.filter((p) => !p.isHouse).map((p) => camp(p.campaignId)).filter((c): c is Campaign => !!c);
+  pool(req: { company: CompanyConfig; product: Product; location: Location; audience?: PrintAudience | null }): Campaign[] {
+    const { company, product, location, audience } = req;
+    if (audience?.noAds) return [];
     const newsOk = !!this.news?.printsOn(company);
-    const pool = this.fillers(company.id).filter((c) => c.filler!.status === 'approved' && this.mayPrint(c, company, product, location, audience ?? null, newsOk));
-    if (!pool.length) return req.placements;
-    const used = new Set<string>();
-    const out = new Map<number, Placement>();
-    for (const slot of [...open].sort((a, b) => a.share - b.share)) {
-      const fits = pool.filter((c) => !used.has(c.id) && c.sizes.includes(slot.share) && this.getsAlong(c, onBottle, company));
-      const pick = weighted(fits, random);
-      if (!pick) continue;
-      used.add(pick.id);
-      onBottle.push(pick);
-      out.set(slot.slotIndex, { slotIndex: slot.slotIndex, share: slot.share, rect: slot.rect, campaignId: pick.id, advertiserId: pick.advertiserId, advertiserName: pick.advertiserName, experienceId: pick.experienceId, priceCents: 0, isHouse: true });
-    }
-    return req.placements.map((p) => out.get(p.slotIndex) ?? p);
+    return this.fillers(company.id).filter((c) => c.filler!.status === 'approved' && this.mayPrint(c, company, product, location, audience ?? null, newsOk));
   }
 
   private mayPrint(c: Campaign, company: CompanyConfig, product: Product, location: Location, audience: PrintAudience | null, newsOk: boolean): boolean {
@@ -205,7 +188,7 @@ export class FillerService {
   }
 
   /** Never two competitors or the same advertiser twice, and never news beside an ad that asked not to be. */
-  private getsAlong(c: Campaign, onBottle: Campaign[], company: CompanyConfig): boolean {
+  getsAlong(c: Campaign, onBottle: Campaign[], company: CompanyConfig): boolean {
     const f = c.filler!;
     if (f.kind === 'news') return !onBottle.some((o) => o.avoidNews);
     if (c.avoidNews && onBottle.some((o) => o.filler?.kind === 'news')) return false;
@@ -213,13 +196,4 @@ export class FillerService {
     if (onBottle.some((o) => o.advertiserId === c.advertiserId)) return false;
     return !(company.adRules.competitorSeparation && c.competitorGroup && onBottle.some((o) => o.competitorGroup === c.competitorGroup));
   }
-}
-
-function weighted<T extends Campaign>(items: T[], random: () => number): T | undefined {
-  if (!items.length) return undefined;
-  const sorted = [...items].sort((a, b) => a.id.localeCompare(b.id)); // the same draw gives the same piece, whatever order they loaded in
-  const total = sorted.reduce((s, c) => s + (c.filler?.weight ?? 1), 0);
-  let r = random() * total;
-  for (const c of sorted) { r -= c.filler?.weight ?? 1; if (r < 0) return c; }
-  return sorted[sorted.length - 1];
 }

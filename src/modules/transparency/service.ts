@@ -116,7 +116,7 @@ export class TransparencyService {
 
   private adOf(unitId: string, slot: number) {
     const p = this.platform.units.get(unitId)?.placements.find((x) => x.slotIndex === slot);
-    return p ? (p.isHouse ? 'a bottle’s own message' : `${p.advertiserName}’s ad`) : 'a bottle';
+    return p ? (p.unsold && p.unsold !== 'own' && p.unsold !== 'neutral' ? `${p.advertiserName}’s ad` : p.isHouse ? 'a bottle’s own message' : `${p.advertiserName}’s ad`) : 'a bottle';
   }
 
   private place(companyId: string, locationId: string | undefined) {
