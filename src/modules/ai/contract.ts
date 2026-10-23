@@ -31,6 +31,16 @@ export interface AdAssistantInput {
     missing: Missing[];
     /** Ads on boxes are on here. False (FreeWater: its boxes are plain): never offer or set printing on boxes. */
     boxes?: boolean;
+    /**
+     * Set when the draft changes a running ad: what submitting the change costs (null: billed after, or free while a
+     * question about it is open). The chat says what changed and what's next, never "let's make an ad".
+     */
+    changing?: { feeCents: number | null };
+    /**
+     * "I'll design it myself": the ad is finished artwork, one file per size (src/modules/artwork). The chat never asks
+     * what it should say; its sizes are the files'. `files`: each size with a file and whether it passed its check.
+     */
+    own?: { files: { name: string; share: number | null; pass: boolean }[] };
   };
 }
 

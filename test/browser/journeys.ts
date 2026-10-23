@@ -28,7 +28,8 @@
  *  16. The scan page in the pilot: no "free water near me", "printed fresh for home delivery", and the data question
  *      is an inline banner that covers nothing.
  * (And on the pilot's server, after 6: the ad chat's "Every size" keeps every piece inside its panel, and the sample
- * bottle says where the ad is, with the other pieces marked "Sample ad"; with ads on boxes off, no "On a box" tab.)
+ * bottle says where the ad is, with the other pieces marked "Sample ad"; with ads on boxes off, no "On a box" tab. And
+ * designing it yourself: after a QR colour is saved, the upload page's label preview draws the code in that colour.)
  */
 import { createRequire } from 'node:module';
 import { createApp } from '../../src/app';
@@ -272,6 +273,33 @@ await journey('the ad chat’s “Every size” tab keeps every piece inside its
     });
     expect(fit.n > 0 && fit.out.length === 0 && !fit.pageWide, `every size at ${width} px: ${JSON.stringify(fit)}`);
   }
+}, { viewport: { width: 1280, height: 800 } });
+
+await journey('design it yourself: the label preview draws the QR code in the colour just saved (not black)', async (page) => {
+  // Its own business (it needs no other journey to have run first: JOURNEYS='label preview' runs it alone).
+  await pDb.query(`insert into advertisers (id, company_id, name, category) values ('adv-qr-journey','freewater','Journey Print Shop','retail')`);
+  const baker = (await pilot.accounts.invite({ companyId: 'freewater', email: 'print@journey.example', role: 'advertiser', advertiserId: 'adv-qr-journey' })).id;
+  const d = await pilot.ads.createDraft({ companyId: 'freewater', advertiserId: 'adv-qr-journey', mode: 'own' });
+  const draftId = (d as any).id;
+  // A passing file for the half (a flat design the size of the piece with its bleed, at 300 dpi).
+  const s = pilot.ads.artwork!.shapes('freewater').find((x) => x.productId === 'bottle-16oz' && x.share === 2)!;
+  const w = Math.round((s.wIn + 2 * s.bleedIn) * 300), h = Math.round((s.hIn + 2 * s.bleedIn) * 300);
+  const file = await (await import('sharp')).default({ create: { width: w, height: h, channels: 4, background: '#1E7DB8' } }).png().toBuffer();
+  expect((await pilot.ads.artwork!.upload({ companyId: 'freewater', advertiserId: 'adv-qr-journey', draftId, bytes: file, name: 'half.png' })).report.verdict === 'pass', 'the file passes');
+  await signedIn(page, 'fw_ads_token', await pilot.accounts.createSession(baker));
+  await page.goto(`${pBase}/ads/drafts/${draftId}/artwork`);
+  await page.waitForSelector('.art-preview img.label-img', { timeout: 30_000 });
+  const codeColour = async () => page.$eval('.art-preview img.label-img', (i: HTMLImageElement) => decodeURIComponent(i.src));
+  expect(!/1A3D6B/i.test(await codeColour()), 'no colour before one is saved');
+  await page.$eval('#art-qr', (el: HTMLInputElement) => { el.value = '#1a3d6b'; el.dispatchEvent(new Event('input', { bubbles: true })); });
+  await page.click('button:has-text("Use this colour")');
+  await toast(page, /Saved: it scans/);
+  await page.waitForFunction(() => /1A3D6B/i.test(decodeURIComponent((document.querySelector('.art-preview img.label-img') as HTMLImageElement | null)?.src ?? '')), undefined, { timeout: 30_000 });
+  const src = await codeColour();
+  expect(/fill="#1A3D6B"/i.test(src), 'the sample label draws the code in the saved colour');
+  // Every size's picture too, and the printed label (src/modules/print/renderer.ts) draws the same (test/advertiser-walkthrough.test.ts).
+  const sizes = await page.$$eval('.art-preview .sizes img', (els: HTMLImageElement[]) => els.map((i) => decodeURIComponent(i.src)));
+  expect(sizes.length > 0 && sizes.every((x: string) => /1A3D6B/i.test(x)), `every size: ${sizes.length}`);
 }, { viewport: { width: 1280, height: 800 } });
 
 await journey('ops plans and prints a night for a delivery area', async (page) => {

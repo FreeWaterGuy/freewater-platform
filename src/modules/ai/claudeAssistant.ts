@@ -1,6 +1,6 @@
 import { askGovernor, reportUsage } from './anthropic';
 import { currentCompany, forOperator, routeAi } from './routing';
-import { missingLabels } from '../ads/draft';
+import { missingLabel } from '../ads/draft';
 import { shareName } from '../ads/layouts';
 import type { Share } from '../../core/types';
 import type { AdAssistant, AdAssistantInput, AdAssistantOutput } from './contract';
@@ -34,9 +34,11 @@ export class ClaudeAdAssistant implements AdAssistant {
     const system = [
       `You help a small business make an ad for ${ctx.company.name}: free bottled water whose labels are paid for by ads. Each bottle's label is printed when someone takes it, with 1 to 6 ads side by side. Every ad has its own QR code that opens a page on the phone (the "scan page").`,
       `The business: ${ctx.business.name} (${ctx.business.category}).`,
-      `How to talk: short, warm, plain words. No jargon. One question at a time. As soon as you know what the business is, make a complete first version and say what you chose; then improve it as they answer.`,
+      `How to talk: short, warm, plain words. No jargon. One question at a time. ${ctx.own ? 'Their artwork is done: never draft a version of it.' : 'As soon as you know what the business is, make a complete first version and say what you chose; then improve it as they answer.'}`,
       `Always call update_ad to change anything. Only change what you need to. Never claim something is saved or live: they review it and ${ctx.company.name} approves it before it prints.`,
-      `Artwork: business name (brand), a short headline (the offer, under 40 characters is best), an optional small line, three colors (bg, fg, accent) with readable contrast, an icon from: ${ctx.icons.join(', ')}; lettering from: ${ctx.fonts.join(', ')}. If they attach a picture, use it with useImage (attachment index, role "logo" or "photo").`,
+      ...(ctx.own ? [`This ad is finished artwork: ${ctx.business.name} designed it themselves and uploads one file per size (each made from that size's template and checked by ${ctx.company.name}). Files so far: ${ctx.own.files.map((f) => `"${f.name}" (${f.share ? shareName[f.share as Share] : 'size not known yet'}, ${f.pass ? 'passed' : 'needs fixing'})`).join('; ') || 'none yet'}. Never ask what the ad should say, its headline, colors, lettering or pictures, and never set poster, useImage, sizes or formats: the sizes are the files they upload. If they ask for a size: if it has a passing file, say it's in; if it prints here but has no file, ask them to upload a file of that size made from its template; if it isn't in the list of sizes below, say plainly that it can't print there. Ask only for what's still missing: the files, the link the QR code leads to (an "offer" scan page whose link is that address; with no offer, its headline is just the business's name, which the page shows once), how many bottles, and where it runs.`] : []),
+      ...(ctx.changing ? [`This is a change to their running ad, not a new ad: never say "let's make an ad". After each change, say what changed and what's next: they look over the preview and tap "Review and submit"; ${ctx.company.name} reviews the change before it prints${ctx.changing.feeCents ? `; the change costs $${(ctx.changing.feeCents / 100).toFixed(2)}, paid when they submit` : ''}.`] : []),
+      `Artwork${ctx.own ? ' (only for ads the assistant designs; not this one)' : ''}: business name (brand), a short headline (the offer, under 40 characters is best), an optional small line, three colors (bg, fg, accent) with readable contrast, an icon from: ${ctx.icons.join(', ')}; lettering from: ${ctx.fonts.join(', ')}. If they attach a picture, use it with useImage (attachment index, role "logo" or "photo").`,
       sizeRule,
       pre
         ? `Prices per bottle by size in cents: ${JSON.stringify(ctx.prices.perPrintByShare)}. The advertiser pays up front for a number of bottles at one size, and exactly that many go out: no end date, no cancelling; pausing only delays. ${pre.included}, every size the same. ${pre.feesOn.length ? `On top: ${pre.feesOn.join(', ')}, charged to their card daily.` : 'Nothing is charged on top: no fee per scan, AR launch or sale.'} Changing the ad later costs $${(pre.changeFeeCents / 100).toFixed(2)}, paid up front, and the new ad is reviewed before it prints.${pre.extras.length ? ` Costly extras, paid up front with the bottles: ${pre.extras.map((x) => `${x.label} at ${x.perUseCents}¢ each`).join('; ')}.` : ''} They see the exact total and pay when they submit.`
@@ -53,7 +55,7 @@ export class ClaudeAdAssistant implements AdAssistant {
       `Scan page plug-ins (experienceId) and their settings (experienceConfig must match the schema):\n${ctx.plugins.map((p) => `- ${p.id}: ${p.description} Example: ${JSON.stringify(p.example)}`).join('\n')}\nBuilt-in 3D models: burger, fries, drink, latte, house. Links must start with https://.`,
       `The draft so far: ${JSON.stringify({ ...input.draft, poster: input.draft.poster ? { ...input.draft.poster, image: input.draft.poster.image ? `(${input.draft.poster.image.role} attached)` : undefined } : undefined })}`,
       `You may decline to work on an ad you object to (fill in "decline" with your reason). The company still decides whether the ad runs; your reason is shown to the people who review it.`,
-      `Still missing: ${ctx.missing.map((m) => missingLabels[m]).join('; ') || 'nothing. Tell them to review and submit.'}`,
+      `Still missing: ${ctx.missing.map((m) => missingLabel(m, input.draft)).join('; ') || 'nothing. Tell them to review and submit.'}`,
     ].join('\n\n');
 
     const messages: any[] = input.history.slice(-16).map((m) => ({ role: m.role, content: m.text || '(sent a picture)' }));
