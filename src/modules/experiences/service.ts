@@ -8,7 +8,7 @@ import { stripSlots } from '../ar/markers';
 import { printedFresh, publicPlace } from '../books/bottleReceipt';
 import type { ExperienceDoc } from './blocks';
 import type { ScanContext } from './contract';
-import { fallbackCard, themeFor, type ExperienceHost } from './host';
+import { fallbackCard, holdingCard, themeFor, type ExperienceHost } from './host';
 import { safeUrl } from './blocks';
 import { builtinPersonalizer, type Personalizer } from '../ai/personalizer';
 import { daypart, describeConditions, fittingVariants, type ScanFacts } from './dynamic';
@@ -237,7 +237,11 @@ export class ExperienceService {
     // Only what content review approved reaches a printed bottle. An advertiser's edit (or a rejected one) waiting for
     // review shows the owner's simple card until it's approved: never the unreviewed page, and never nothing.
     const reviewed = !r.campaign?.review || r.campaign.review.status === 'approved';
-    const doc = reviewed
+    // A live link that turned bad on the daily check (src/modules/ads/linkSafety.ts): the holding page, with no links,
+    // until a person clears it or a reviewed link change replaces it.
+    const doc = r.campaign?.linkHold
+      ? { pluginId: pick.pluginId, owner: { name: r.ownerName, theme: themeFor(company.brand) }, blocks: holdingCard(r.ownerName), fallback: true }
+      : reviewed
       ? await this.host.open({ pluginId: pick.pluginId, config: pick.config, scan, theme: themeFor(company.brand, r.campaign?.theme) })
       : { pluginId: pick.pluginId, owner: { name: r.ownerName, theme: themeFor(company.brand) }, blocks: fallbackCard(r.ownerName), fallback: true };
     doc.blocks = await this.track(doc.blocks, target, r, viewerKey);

@@ -21,6 +21,7 @@ import { blobStoreFromEnv } from '../modules/assets/blobs';
 import { backup, backupKey, restore } from '../runtime/backup';
 import { backupStoreFromEnv, backupsConfigured } from '../runtime/backupStore';
 import { checkBooksInChild } from '../runtime/booksCheck';
+import { checkerFromEnv } from '../modules/ads/linkSafety';
 import { checkCapacity, checkSpool } from '../runtime/capacity';
 
 const config = checkConfig();
@@ -95,7 +96,7 @@ const restored = !!(await db.query<{ t: string | null }>(`select to_regclass('re
 const hadSpool = !!spoolFile && existsSync(spoolFile);
 
 // With the lease passed in, every write the app makes straight to the database checks it in its own transaction.
-app = await createApp({ db, alerts, seedDemo: process.env.SEED_DEMO === '1', demoUnsold: process.env.SEED_DEMO === '1', blobs: blobStoreFromEnv(), spoolFile, epoch: lease.holder, lease });
+app = await createApp({ db, alerts, linkChecker: checkerFromEnv(process.env, { network: true }), seedDemo: process.env.SEED_DEMO === '1', demoUnsold: process.env.SEED_DEMO === '1', blobs: blobStoreFromEnv(), spoolFile, epoch: lease.holder, lease });
 app.runtime.reporter = reporter;
 if (restored) {
   await db.query(`drop table if exists restore_target`);
@@ -168,6 +169,9 @@ const jobs: Job[] = [
     await perCompany('ad-ratings', async (id) => { await app!.ratings.catchUp(id); await app!.ratings.refreshOutcomes(id); });
     await app!.ratings.snapshotDue();
   } },
+  // Each day: every live ad's links checked again (src/modules/ads/linkSafety.ts). A link that turned bad puts that
+  // ad's code on the holding page and alerts the team; everything checked is recorded.
+  { name: 'link-safety', everyMs: 24 * 3600_000, timeoutMs: 60 * 60_000, run: saved(() => perCompany('link-safety', (id) => app!.linkSafety.recheck(id))) },
   // Each day: any agent whose model hasn't passed the current test takes it (a new model or a new test version).
   { name: 'agent-exams', everyMs: 24 * 3600_000, timeoutMs: 30 * 60_000, run: async () => { if (app!.agents.examinee) await app!.agents.runExams(); } },
   // Photos of the real products on the games' cards, a few at a time.

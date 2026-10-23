@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 import type { Share } from '../../core/types';
 import { checkSvg, checkSvgPictures, embeddable } from '../print/svgCreative';
+import { edgeBleed } from '../print/bleed';
 import { overPixelLimit, pixelsText } from '../studio/photos';
 import { contrast } from '../creative/poster';
 import { canvasOf, inches, px300, shareShort, type PieceShape } from './shapes';
@@ -426,11 +427,13 @@ export async function applyFix(src: Source, shape: PieceShape, placement: 'bleed
       if (placement === 'bleed') img = sharp(await img.extract({ left: bp, top: bp, width: src.raster.w - 2 * bp, height: src.raster.h - 2 * bp }).toBuffer());
       return asRaster(img.extend({ top: bp, bottom: bp, left: bp, right: bp, extendWith: 'copy' }).withDensity(Math.round(perIn)));
     }
-    // A vector design: the piece's own drawing, stretched a hair under itself to fill the bleed (as the label printer
-    // does for every ad), and drawn exactly over the piece.
+    // A vector design: the piece's own drawing, and past its cut line its own edge carried out to the edge of the file
+    // (print/bleed.ts: stretched only outward, so nothing in the bleed is out of line with the piece).
     const body = printMarkup(src, shape, placement).body;
-    const trimView = `${n3(b * U)} ${n3(b * U)} ${n3(shape.wIn * U)} ${n3(shape.hIn * U)}`;
-    return svgOut(`<defs><g id="fwx-src">${body}</g></defs><svg width="${n3(C.wIn * U)}" height="${n3(C.hIn * U)}" viewBox="${trimView}" preserveAspectRatio="none"><use href="#fwx-src"/></svg><svg x="${n3(b * U)}" y="${n3(b * U)}" width="${n3(shape.wIn * U)}" height="${n3(shape.hIn * U)}" viewBox="${trimView}"><use href="#fwx-src"/></svg>`);
+    const T = { x: b * U, y: b * U, w: shape.wIn * U, h: shape.hIn * U };
+    const trimView = `${n3(T.x)} ${n3(T.y)} ${n3(T.w)} ${n3(T.h)}`;
+    const piece = `<svg width="${n3(T.w)}" height="${n3(T.h)}" viewBox="${trimView}" overflow="hidden">${body}</svg>`;
+    return svgOut(`<defs><g id="fwx-src">${piece}</g></defs>${edgeBleed('fwx-src', T.x, T.y, T.w, T.h, { l: T.x, t: T.y, r: T.x, b: T.y })}<svg x="${n3(T.x)}" y="${n3(T.y)}" width="${n3(T.w)}" height="${n3(T.h)}" viewBox="0 0 ${n3(T.w)} ${n3(T.h)}"><use href="#fwx-src"/></svg>`);
   }
 
   // clear_qr: cover the QR box with the colour around it.

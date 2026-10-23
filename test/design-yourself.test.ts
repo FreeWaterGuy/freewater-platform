@@ -435,14 +435,14 @@ describe('changing a link on a live ad: the company’s fee, paid once', () => {
     const before = feeCents();
     const paid = await call('POST', `/v1/ads/campaigns/${cid}/links`, t, { ...change, expectedFeeCents: 5_000 });
     expect(paid.statusCode).toBe(201);
-    expect(paid.json()).toMatchObject({ feeCents: 5_000, status: 'in_review' });
+    expect(paid.json()).toMatchObject({ feeCents: 5_000, status: 'link_in_review' });
     const c = app.platform.campaigns.get(cid)!;
-    expect(linksOf(c)[0]!.url).toBe('https://diy.example/second');
-    expect(c.review?.status).toBe('submitted'); // a person checks the new link before it prints again
-    expect(c.active).toBe(false);
-    // Pressed again: it already leads there; nothing more charged.
+    // The old link stays live while a person reviews the new one (test/link-safety.test.ts has the rest).
+    expect(linksOf(c)[0]!.url).toBe('https://diy.example/first');
+    expect(c.review?.status).toBe('approved');
+    // Pressed again: the same change is already waiting; nothing more charged.
     const again = await call('POST', `/v1/ads/campaigns/${cid}/links`, t, { ...change, expectedFeeCents: 5_000 });
-    expect(again.json().error.code).toBe('no_change');
+    expect(again.json()).toMatchObject({ feeCents: 0, status: 'link_in_review' });
     expect((await changeOrders(cid)).map((o) => [o.status, Number(o.total_cents)])).toEqual([['paid', 5_000]]);
     // In the books once: $50 to the change-fee revenue.
     await app.persistence.flush();
@@ -458,10 +458,14 @@ describe('changing a link on a live ad: the company’s fee, paid once', () => {
     await app.prepaid.payLinkFee({ companyId: 'freewater', advertiserId: adv, campaignId: cid, key: linkChangeKey(c, changes), feeCents: 5_000, expectedFeeCents: 5_000, changes });
     expect(linksOf(c)[0]!.url).toBe('https://diy.example/first');
     await app.artwork.recoverLinkChanges();
-    expect(linksOf(c)[0]!.url).toBe('https://diy.example/after-crash');
+    await app.artwork.recoverLinkChanges(); // twice: still one
+    // Recorded as a change waiting for a person (marked for a closer look: its link wasn't checked before the crash).
+    expect(linksOf(c)[0]!.url).toBe('https://diy.example/first');
     expect(c.linkChanges).toBe(1);
-    // The retry the advertiser sends after the crash: already there, nothing more charged.
-    expect((await call('POST', `/v1/ads/campaigns/${cid}/links`, t, { changes, expectedFeeCents: 5_000 })).json().error.code).toBe('no_change');
+    const waiting = (await db.query<any>(`select status, safety, fee_cents from ad_link_changes where campaign_id = $1`, [cid])).rows;
+    expect(waiting).toEqual([{ status: 'waiting', safety: 'flag', fee_cents: 5_000 }]);
+    // The retry the advertiser sends after the crash: the same change, already waiting; nothing more charged.
+    expect((await call('POST', `/v1/ads/campaigns/${cid}/links`, t, { changes, expectedFeeCents: 5_000 })).json()).toMatchObject({ feeCents: 0, status: 'link_in_review' });
     expect((await changeOrders(cid)).length).toBe(1);
     // Declined card: refused, nothing changed.
     const declined = await liveAd();
@@ -492,6 +496,80 @@ describe('changing a link on a live ad: the company’s fee, paid once', () => {
       expect(free.statusCode).toBe(201);
       expect(free.json().feeCents).toBe(0);
     } finally { await app.companyFeatures.change('freewater', { link_change_fee: true }, owner); }
+  });
+});
+
+describe('paying anyway: “I understand — use it as it is”', () => {
+  const orders = async (draft: string) => (await db.query<any>(`select status from ad_orders where draft_id = $1`, [draft])).rows;
+  async function lowResDraft() {
+    const b = await business();
+    const id = await ownDraft(b.t);
+    const up = (await upload(b.t, id, await goodPng(shape16(2), { dpi: 150 }), 'image/png')).json();
+    // Quality issues only (it fits its piece): what the tick may cover.
+    const issues = codes(up.file);
+    expect(issues.length).toBeGreaterThan(0);
+    expect(up.file.shapeId).toBeTruthy();
+    expect(issues.filter((x: string) => ['which_size', 'wrong_size', 'too_large'].includes(x))).toEqual([]);
+    await call('POST', `/v1/ads/drafts/${id}/link`, b.t, { url: 'https://diy.example/as-is' });
+    await call('POST', `/v1/ads/drafts/${id}/messages`, b.t, { text: '200 bottles, anywhere' });
+    return { ...b, id, issues: [...issues].sort(), share: up.file.share as number };
+  }
+  const submit = async (t: string, id: string, share: number) => {
+    const d = (await call('GET', `/v1/ads/drafts/${id}`, t)).json();
+    return call('POST', `/v1/ads/drafts/${id}/submit`, t, { approved: true, pay: { share, expectedTotalCents: d.payment?.quote?.totalCents ?? 1 } });
+  };
+
+  it('shows the issues, needs the tick (a person, signed in), records it with the ad and its version, then lets them pay', async () => {
+    const { t, adv, id, issues, share } = await lowResDraft();
+    const art = (await call('GET', `/v1/ads/drafts/${id}/artwork`, t)).json();
+    expect(art).toMatchObject({ verdict: 'fix', ready: false, asIs: { offered: true, chosen: null, words: 'I understand — use it as it is' } });
+    // Without the tick: refused, nothing paid.
+    const before = await submit(t, id, share);
+    expect(before.statusCode).toBe(422);
+    expect(before.json().error.message).toMatch(/artwork/);
+    expect(await orders(id)).toEqual([]);
+    // A service key can't tick it, and "false" isn't a tick.
+    const { createApiKey } = await import('../src/db/store');
+    const key = (await createApiKey(db, { companyId: 'freewater', name: adv, scopes: ['campaigns'], advertiserId: adv })).key;
+    expect((await call('POST', `/v1/ads/drafts/${id}/artwork/as-is`, key, { understood: true })).statusCode).toBe(403);
+    expect((await call('POST', `/v1/ads/drafts/${id}/artwork/as-is`, t, { understood: false })).statusCode).toBe(400);
+    const ticked = await call('POST', `/v1/ads/drafts/${id}/artwork/as-is`, t, { understood: true });
+    expect(ticked.statusCode).toBe(200);
+    expect(ticked.json()).toMatchObject({ verdict: 'as_is', ready: true, asIs: { chosen: { by: expect.stringMatching(/^user:/), files: [{ codes: issues }] } } });
+    const sub = await submit(t, id, share);
+    expect(sub.statusCode).toBe(201);
+    const c = app.platform.campaigns.get(sub.json().campaignId)!;
+    expect(c.asIs).toMatchObject({ by: expect.stringMatching(/^user:/), files: [{ codes: issues }] });
+    expect(c.creativeRef?.kind).toBe('artwork');
+    expect((c.creativeRef as any).files).toHaveLength(1); // the file prints as it is
+    // The reviewer sees it; the ad's version keeps it (ratings and outcomes know).
+    const queue = (await call('GET', '/v1/review/campaigns', app.demoKeys!['freewater-admin'])).json();
+    expect(queue.find((q: any) => q.id === c.id).asIs).toMatchObject({ files: [{ codes: issues }] });
+    await app.ratings.idle();
+    const v = (await db.query<any>(`select as_is from ad_versions where campaign_id = $1`, [c.id])).rows;
+    expect(v.length).toBeGreaterThan(0);
+    expect(typeof v[0].as_is === 'string' ? JSON.parse(v[0].as_is) : v[0].as_is).toMatchObject({ files: [{ codes: issues }] });
+  });
+
+  it('a new file needs the tick again; a file that can’t print at all can’t be ticked; an unsafe link still blocks', async () => {
+    const { t, id } = await lowResDraft();
+    expect((await call('POST', `/v1/ads/drafts/${id}/artwork/as-is`, t, { understood: true })).json().ready).toBe(true);
+    await upload(t, id, await goodPng(shape16(2), { dpi: 150 }), 'image/png'); // a new file for the same piece replaces it
+    expect((await call('GET', `/v1/ads/drafts/${id}/artwork`, t)).json()).toMatchObject({ ready: false, asIs: { chosen: null, offered: true } });
+    // Wrong size: no piece it fits, so it can't print; the tick is refused.
+    const other = await business();
+    const id2 = await ownDraft(other.t);
+    await upload(other.t, id2, await goodPng(shape16(2), { squareIn: 3 }), 'image/png');
+    const refused = await call('POST', `/v1/ads/drafts/${id2}/artwork/as-is`, other.t, { understood: true });
+    expect(refused.statusCode).toBe(422);
+    expect(refused.json().error.code).toBe('cant_print');
+    // Safety is never the advertiser's to accept: ticked, but its link now goes to a shortener.
+    const third = await lowResDraft();
+    await call('POST', `/v1/ads/drafts/${third.id}/artwork/as-is`, third.t, { understood: true });
+    await db.query(`update ad_drafts set data = jsonb_set(data::jsonb, '{experienceConfig,link,url}', '"https://bit.ly/sneaky"') where id = $1`, [third.id]);
+    const sub = await submit(third.t, third.id, third.share);
+    expect(sub.json().error.code).toBe('link_unsafe');
+    expect(await orders(third.id)).toEqual([]);
   });
 });
 
@@ -604,8 +682,11 @@ describe('print: uploaded drawings sit safely inside a label', () => {
     const s = shape16(2);
     const body = '<rect width="370" height="412.5" fill="#123456"/>';
     const art = artworkCreative([{ fileId: 'f1', share: 2, shapeId: s.id, wIn: s.wIn, hIn: s.hIn, bleedIn: s.bleedIn, body, bg: '#123456' }]);
-    expect(art.svg(357.5, 400)).toMatch(/viewBox="6\.25 6\.25 357\.5 400" preserveAspectRatio="xMidYMid slice"/);
-    expect(art.svg(400, 200)).toMatch(/<rect width="400" height="200" fill="#123456"\/>.*meet/);
+    // Its own shape: the file's trim on the piece exactly (its bleed outside, shown only past the cut).
+    expect(art.svg(357.5, 400)).toMatch(/viewBox="0 0 357\.5 400" overflow="hidden"><g transform="translate\(-6\.25 -6\.25\) scale\(1\)">/);
+    expect(art.svg(357.5, 400, { bleed: { l: 6.25, t: 6.25, r: 0, b: 6.25 } })).toMatch(/viewBox="-6\.25 -6\.25 363\.75 412\.5"/);
+    // Another shape: whole inside it, on its own background colour.
+    expect(art.svg(400, 200)).toMatch(/<rect x="0" y="0" width="400" height="200" fill="#123456"\/>.*scale\(0\.5\)/);
     expect(() => artworkCreative([{ fileId: 'f1', share: 2, shapeId: s.id, wIn: s.wIn, hIn: s.hIn, bleedIn: s.bleedIn, body: '<script>x</script>', bg: '#123456' }])).toThrow(/scripts/);
   });
 });

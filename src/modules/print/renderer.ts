@@ -1,4 +1,5 @@
-import type { CompanyConfig, Product } from '../../core/types';
+import type { CompanyConfig, Creative, CreativeContext, Product } from '../../core/types';
+import { edgeBleed, hasBleed, NO_BLEED, type BleedSides } from './bleed';
 import { campaignQrStyle, companyQrStyle, qrMode, staticTarget } from '../codes/style';
 import type { LabelRenderer, PrintedCode, RenderRequest, RenderedLabel, RenderedSlot } from './contract';
 import { qrDraw, type QrStyle } from './qr';
@@ -15,7 +16,8 @@ export const PX_PER_IN = 100; // drawing units; the SVG's width/height are set i
  * FreeWater's default label renderer (README, "The label"; print/geometry.ts for where everything goes).
  * The ad area (the image-safe area) is split into slots, each its own third-party ad with its own QR, owned by whoever
  * bought that slot; beside it the locked company panel (print/panel.ts), whose QR opens the bottle's receipt. Every
- * word is drawn as outlines, backgrounds run into the bleed, and `printFile` gives the file a printer gets.
+ * word is drawn as outlines, backgrounds run into the bleed at the label's cut edges only (print/bleed.ts), and
+ * `printFile` gives the file a printer gets. The drawing's own size is the finished label: the bleed is outside it.
  */
 export const svgLabelRenderer: LabelRenderer = {
   name: 'svg-label',
@@ -42,20 +44,25 @@ export const svgLabelRenderer: LabelRenderer = {
       codes.push({ text, role, ...(slotIndex !== undefined ? { slotIndex } : {}), xIn: r3((x + inset) / PX_PER_IN), yIn: r3((y + inset) / PX_PER_IN), sizeIn: r3((size - inset * 2) / PX_PER_IN), modules: q.modules });
     };
     /**
-     * A piece of artwork. Where it meets the cut, the same artwork stretched over the bleed is drawn under it (a <use>
-     * of it, so its pictures are in the file once): backgrounds run past the cut as the printer's guide asks.
+     * A piece of artwork. Where it meets the cut (and only there: never onto a neighbouring piece) its background runs
+     * into the bleed (print/bleed.ts): artwork with bleed of its own draws it, cropped away on the inner edges; any
+     * other artwork is carried out by its own edge, stretched only outward, so nothing in the bleed is out of line
+     * with the piece. The edge comes from a <use> of the artwork, so its pictures are in the file once.
      */
-    const piece = (id: string, x: number, y: number, w: number, h: number, art: string) => {
-      const ext = { l: x <= 0.01 ? B : 0, t: y <= 0.01 ? B : 0, r: x + w >= W - 0.01 ? B : 0, b: y + h >= H - 0.01 ? B : 0 };
-      if (!B || !(ext.l || ext.t || ext.r || ext.b)) { parts.push(nested(x, y, w, h, art)); return; }
+    const piece = (id: string, x: number, y: number, w: number, h: number, creative: Creative, ctx: CreativeContext = {}) => {
+      const ext = bleedSides(product, { x, y, w, h });
+      if (!hasBleed(ext)) { parts.push(nested(x, y, w, h, creative.svg(w, h, ctx))); return; }
       const ref = `fw-piece-${id}`;
-      parts.push(`<svg x="${f2(x - ext.l)}" y="${f2(y - ext.t)}" width="${f2(w + ext.l + ext.r)}" height="${f2(h + ext.t + ext.b)}" viewBox="0 0 ${f2(w)} ${f2(h)}" preserveAspectRatio="none" overflow="hidden" data-fw-bleed-copy="1"><use href="#${ref}"/></svg>`);
-      parts.push(nested(x, y, w, h, `<g id="${ref}">${art}</g>`));
+      // The edge first (under): artwork with its own bleed covers it wherever its bleed is drawn.
+      parts.push(edgeBleed(ref, x, y, w, h, ext));
+      if (creative.bleeds) {
+        const bw = w + ext.l + ext.r, bh = h + ext.t + ext.b;
+        parts.push(`<svg x="${x - ext.l}" y="${y - ext.t}" width="${bw}" height="${bh}" viewBox="${-ext.l} ${-ext.t} ${bw} ${bh}" overflow="hidden" data-fw-own-bleed="1"><g id="${ref}">${creative.svg(w, h, { ...ctx, bleed: ext })}</g></svg>`);
+      } else parts.push(nested(x, y, w, h, `<g id="${ref}">${creative.svg(w, h, ctx)}</g>`));
     };
 
     if (unit.kind === 'custom') {
-      const art = req.customArt?.svg(ad.w, ad.h) ?? '';
-      piece('custom', ad.x, ad.y, ad.w, ad.h, art);
+      piece('custom', ad.x, ad.y, ad.w, ad.h, req.customArt ?? { svg: () => '' });
       const url = req.codes ? req.codes.slot(company, unit.id, 0) : `${base}/s/${unit.id}/0`;
       const q = 80 * k;
       draw(url, ad.x + ad.w - q - 12 * k, ad.y + ad.h - q - 12 * k, q, companyQrStyle(company), 'slot', 0);
@@ -77,7 +84,7 @@ export const svgLabelRenderer: LabelRenderer = {
         const qr = slotQr(product, w, h), q = qr.size;
         const strip = strips.boxes.get(p.slotIndex);
         // The artwork is told where its QR code (and any tracking strip) goes, so it can keep words out of them.
-        piece(String(p.slotIndex), x, y, w, h, campaign.creative.svg(w, h, { qr, ...(strip ? { reserved: [{ x: strip.x - x, y: strip.y - y, w: strip.w, h: strip.h }] } : {}) }));
+        piece(String(p.slotIndex), x, y, w, h, campaign.creative, { qr, ...(strip ? { reserved: [{ x: strip.x - x, y: strip.y - y, w: strip.w, h: strip.h }] } : {}) });
         const mode = qrMode(company, campaign);
         const smart = req.codes ? req.codes.slot(company, unit.id, p.slotIndex) : `${base}/s/${unit.id}/${p.slotIndex}`;
         const url = mode === 'static' ? staticTarget(campaign, req.codes ? smart : null) : smart;
@@ -168,11 +175,43 @@ export async function printReady(svg: string): Promise<string> {
   return picturesForPrint(printFile(outlineText(svg)));
 }
 
-/** Where a piece of the ad area (fractions of it) sits on this product's label, in drawing units. Previews use it too. */
+/**
+ * Where a piece of the ad area (fractions of it) sits on this product's label, in drawing units. Previews use it too.
+ * Its edges are put on the template's grid lines first (`onGrid`): a stored layout carries its fractions to 4 decimal
+ * places (a third is 0.3333, two thirds 0.6667), so without it a third's pieces left a hairline gap or overlap between
+ * them and pieces of one size differed. On the grid, pieces of one size are exactly the same size and they tile the
+ * ad area edge to edge.
+ */
 export function pieceOf(product: Product, r: { x: number; y: number; w: number; h: number }) {
   const a = labelGeometry(product.label).ad;
   const ax = a.x * PX_PER_IN, ay = a.y * PX_PER_IN, aw = a.w * PX_PER_IN, ah = a.h * PX_PER_IN;
-  return { x: ax + r.x * aw, y: ay + r.y * ah, w: r.w * aw, h: r.h * ah };
+  // Its start and its size each on the grid (not its far edge from their sum: two roundings add up past the window).
+  return { x: ax + onGrid(r.x) * aw, y: ay + onGrid(r.y) * ah, w: onGrid(r.w) * aw, h: onGrid(r.h) * ah };
+}
+
+/**
+ * Which sides of a piece (drawing units, on this product's label) meet the label's cut, each with the bleed past it;
+ * 0 on a side beside another piece or the panel. The renderer and the design-it-yourself templates both use it.
+ */
+export function bleedSides(product: Product, p: { x: number; y: number; w: number; h: number }): BleedSides {
+  const g = labelGeometry(product.label);
+  const B = g.bleed * PX_PER_IN, W = g.width * PX_PER_IN, H = g.height * PX_PER_IN;
+  if (!B) return NO_BLEED;
+  return { l: p.x <= 0.01 ? B : 0, t: p.y <= 0.01 ? B : 0, r: p.x + p.w >= W - 0.01 ? B : 0, b: p.y + p.h >= H - 0.01 ? B : 0 };
+}
+
+/**
+ * A fraction of the ad area put on a template's grid line. Every grid line is a whole number of 1/d of the ad area, d
+ * at most 20 (a grid of up to 10, or a parent grid of up to 4 cut into up to 5), and a stored layout rounds it to 4
+ * decimal places (within 0.00005). Lines with d up to 20 are at least 1/380 apart, so the nearest one within that
+ * rounding is the line meant; anything else (no template makes it) is left as it is.
+ */
+export function onGrid(f: number): number {
+  for (let d = 1; d <= 20; d++) {
+    const k = Math.round(f * d);
+    if (Math.abs(f - k / d) <= 0.000051) return k / d;
+  }
+  return f;
 }
 
 /** How much bigger than a 4.5 in tall label this one is drawn (the standard 4 in bottle a little smaller; a tall bottle bigger). */

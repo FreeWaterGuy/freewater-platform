@@ -58,6 +58,9 @@ export class AttributionService {
     const got = Buffer.from(sig ?? ''), want = Buffer.from(body ? this.sig(body) : '');
     if (!body || !want.length || got.length !== want.length || !timingSafeEqual(got, want)) throw new AttributionError('bad_link', 'That link isn’t one of ours.', 404);
     const t = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as { s: AdSpot; a: string; c: string | null; k: string; u: string };
+    // A live link that turned bad on the daily check (src/modules/ads/linkSafety.ts): a link handed out before is not
+    // followed either, until a person clears it.
+    if (t.c && this.platform.campaigns.get(t.c)?.linkHold) throw new AttributionError('link_on_hold', 'This link is being checked. Please try again later.', 409);
     const clickId = `FWC${randomCode(17)}`;
     const cols = spotCols(t.s);
     await this.db.query(`insert into clicks (id, company_id, advertiser_id, campaign_id, unit_id, slot, pack_id, face, viewer_key, url, created_at, via) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,

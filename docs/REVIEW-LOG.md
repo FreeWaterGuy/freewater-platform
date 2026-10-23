@@ -430,3 +430,69 @@ wasn't rebuilt here).
 Not checked here: a real Claude answering the rating prompt (stand-in and mocked API used), real phones showing the
 advertiser's meter, the law (L-34 to L-37 in docs/COMPLIANCE.md: automated assessments, showing scores, pooling
 competitors' results under antitrust, training on advertisers' content). Founder's decisions in the report.
+## Rules table: links, uploads and ratings (security architect, 2026-10-23, branch `k-link`)
+
+The founder's four decisions. Each rule's test was shown failing with the rule's code removed (a mutation per rule, 39
+in all, every one killed; the script was a scratch file).
+
+| Rule | Code | Test | Status |
+|---|---|---|---|
+| Every link checked before review, by every route: https (http upgraded), no credentials, no numeric/local/private hosts, the list (adult, malware, phishing, shorteners; per company), redirects followed (5, 4 s, 256 KB) with every resolved address checked and the connection pinned, the last page's type and title, Safe Browsing with a key (stand-in without) | `linkSafety.ts` (`faceCheck`, `isPrivateAddress`, `LinkChecker.check`, `netTransport`, `screen`, `screenChange`), `link-blocklist.txt` | `test/link-safety.test.ts` (local stubs only), "the automatic check" (9 tests) | new |
+| A change to a live ad's link: the old link stays live, paid once, the AI looks, a person decides (checked again at approval); one change per ad at a time | `ArtworkService.changeLinks` (`oneAtATime`), `decideLinkChange`, `applyApproved`, `ad_link_changes` (079) | "changing a live ad’s link…", "approving checks the link again…" | new (finishes the interrupted WIP) |
+| The daily re-check: a link that turned bad → holding page, `/go` refused, our own code on new bottles, alert, recorded; released by a person once safe; an approved change ends it only if nothing is still unsafe | `LinkSafetyService.recheck/hold/release`, `ExperienceService.open`, `AttributionService.click`, `qrMode`, job `link-safety` | "the daily re-check…", "a held ad whose advertiser changes the link…" | new |
+| *Link safety* on for every company; off only by an owner signed in with a reason, never by a starting point, recorded, team alerted | registry `link_safety` (`offNeedsReason`), `FeatureService.plan/change` | "the switch…" | new |
+| Pay anyway: the issues shown, the tick by a person, recorded with the ad and its version; files that can't print, unsafe links and review still block | `artwork/asIs.ts`, `ArtworkService.acceptAsIs/list/art/printFiles`, `missing()`, `AdsService.submit`, `ad_versions.as_is` (079), `ads.js` upload page | `test/design-yourself.test.ts`, "paying anyway" (2 tests) | new |
+| Benchmarks: monthly releases only; thresholds without any one company; complementary suppression; Laplace noise drawn once per release (ε = 5 per cell) and kept; rounded; no count of companies; non-contributors refused | `benchmarkRelease.ts`, `AdRatingService.snapshotDue/benchmarks` | `test/ad-ratings.test.ts`, "benchmarks: monthly releases…" (6) and "releasing benchmarks" (3, one a property test over random tables) | changed (was live and exact) |
+| No promises: the founder's words with every rating, score, meter, tip and benchmark (portal, console, API answers and descriptions, the advertiser's download) | `NO_PROMISE` (`rating.ts`), `ratings.ts`, `src/api/ratings.ts`, `data/service.ts`, `console.js` | "says “no promise” wherever…", "turned on: the score…", "the advertiser’s own download…" | new |
+
+| Date | Role | Severity | Pattern | Where | Finding | Fix / test |
+|---|---|---|---|---|---|---|
+| 2026-10-23 | Security architect | HIGH | P2 | `ArtworkService.changeLinks` (WIP) | Two different link changes pressed at once each paid the $50 fee; one waited and the other's payment was orphaned (the waiting-change index refused it after the charge). CONFIRMED: with the per-ad serialization removed, "changing a live ad’s link" fails (2 orders) | One change per ad at a time (`oneAtATime`), checked before charging; the unique index stays the last word |
+| 2026-10-23 | Security architect | HIGH | P3 | `POST /v1/campaigns`, `PATCH /v1/campaigns/:id`, `PATCH …/codes` | The link check ran on the draft and *Change a link* paths only: the campaign's own routes could set any link (a shortener, an internal address) for review unchecked. CONFIRMED by three sibling mutants | `LinkSafetyService.screenChange` on each, before anything changes; flags go to review; "every other way an ad’s links change…" |
+| 2026-10-23 | Security architect | MEDIUM | P3 | `/go/:token` (`AttributionService.click`) | A held ad's scan page hid its links, but a signed link handed out earlier still redirected to the bad site. CONFIRMED (click-refused mutant) | Refused (409, a "being checked" page) while the ad is held |
+| 2026-10-23 | Security architect | MEDIUM | — | `decideLinkChange` (WIP) | A link checked when asked could be swapped (the site changed) before a person approved it days later. CONFIRMED (approve-recheck mutant) | Checked again at approval; refused if now unsafe |
+| 2026-10-23 | Security architect | MEDIUM | — | `applyApproved` (WIP) | Any approved change ended a hold, even one to another unsafe page. CONFIRMED (hold-ends-safe mutant) | The hold ends only if no link of the ad is still hold-worthy |
+| 2026-10-23 | Security architect | LOW | — | `isPrivateAddress` (WIP) | IPv4-compatible IPv6 (`::7f00:1`) and Teredo/site-local ranges weren't private; `localhost.` (trailing dot) passed the face check offline. CONFIRMED (mapped-v4 mutant; test list) | Embedded IPv4 read in every form; `2001::/32`, `fec0::/10` added; trailing dots stripped |
+| 2026-10-23 | Security architect | LOW | — | `LinkSafetyService.check` (WIP) | Links past the 50th were silently not checked. CONFIRMED by test | Refused whole (`too_many_links`) |
+| 2026-10-23 | Security architect | MEDIUM | P5 (privacy) | `AdRatingService.benchmarks` | Network figures were computed exactly for each request, so repeated or differently-filtered questions could be differenced. PLAUSIBLE before (no exploit shown); now closed by design | Monthly releases with suppression and noise (founder decision 3) |
+| 2026-10-23 | Security architect | LOW | lint | `checkSettings` (WIP) | The domain pattern for a company's own list was an unsafe regular expression (nested repeat) | Plain label checks |
+
+Siblings searched: every route that sets `experienceConfig`, `variants` or `qr.staticUrl` (`src/api/server.ts`,
+`codesAr.ts`, `ads.ts`, `artwork.ts`, the chat via submit); every place a campaign's link is followed (scan page, `/go`,
+static codes); every place a score is shown (`ratings.ts`, `api/ratings.ts`, `data/service.ts`, `console.js`, `ads.js`;
+no email shows one). Not checked: real websites and CDNs (stubs only; never a real site), Google Safe Browsing itself (no
+key), a real phone scanning a held code, the law (COMPLIANCE L-38 to L-40). Founder's decisions in the report.
+
+## Advertiser walkthrough: five bugs from the video (test engineer, 2026-10-23, branch `k-fix`)
+
+| Date | Role | Severity | Pattern | Where | Finding | Fix / test |
+|---|---|---|---|---|---|---|
+| 2026-10-23 | Test engineer | MEDIUM | P3 | `ArtworkService.sizeNotes`, `AdsService.chat` | Designing it yourself, a printable size asked for in the chat ("a tenth") was dropped silently: the service deletes the assistant's `sizes` patch and only unprintable sizes were said. CONFIRMED | Every size named is answered (it's in, upload its file, or the plain refusal); rough words ("small") get "your ad prints at the sizes you upload files for". `test/advertiser-walkthrough.test.ts` §1 (fails on main) |
+| 2026-10-23 | Test engineer | HIGH | P3 / P16 | `BuiltinAdAssistant`, `ClaudeAdAssistant` prompt, `missingLabel` | With finished artwork the chat asked "What should the ad say?" (it counted a missing poster headline as missing artwork). CONFIRMED | Assistants get `context.own` (files and their checks); the built-in skips wording, poster, colours and pictures, asks for the file fix, the link, bottles, where; Claude is told the ad is finished artwork; missing labels speak of files and the link. §2 (3 tests, fail on main) |
+| 2026-10-23 | Test engineer | MEDIUM | P3 | `BuiltinAdAssistant.reply`, `starterSuggestions`, Claude prompt | "Change your ad": after the new file passed, the chat began "Let's make an ad… What should the ad say?". CONFIRMED | `context.changing` (with the change fee): "That's your change. Next: … FreeWater reviews the change before it prints; it costs $X"; no headline suggestions for an own-artwork change. §3 (fails on main) |
+| 2026-10-23 | Test engineer | MEDIUM | P3 | `offerPlugin` (and `couponPlugin` sibling) | A design-it-yourself ad's scan page showed the business name as the title and as the "offer" (setLink's default headline is the name). CONFIRMED | A headline that is the business's name: the name once, a default line naming the advertiser's site, its link button, "Save for later"; a coupon headed with the name drops the title. §4 (fails on main) |
+| 2026-10-23 | Test engineer | HIGH | P16 (preview ≠ print) | `AdsService.render` / `preview` / `campaignPreview` | The label preview drew every code with the company's style, so a saved QR colour showed black (the printed label used the ad's colour). CONFIRMED in the browser and in unit tests | Previews draw `campaignQrStyle` of the draft's saved style (own artwork) or the live ad's; the reviewer's preview too. §5 and browser journey "label preview draws the QR code in the colour just saved" (fails on main; now self-contained) |
+
+Siblings checked: studio drafts (the assistant sees the studio design as done artwork: unchanged), studio and chat-made
+changes (same "That's your change" reply; their headline suggestions kept), box faces in the preview (same style fix),
+the printed label (already used the ad's style; the preview's sample label goes through it). Not checked: a real Claude
+answering the new prompt (mocked API), real phones.
+
+## Label bleed and uniform pieces (test engineer, 2026-10-23, branch `l-bleed`)
+
+From the founder's print file (one 8 × 4 bottle, 8 ads): Maria's Bakery's uploaded design looked "double printed" along
+its top and left edges, and ads of one size should be one size.
+
+| Date | Role | Severity | Pattern | Where | Finding | Fix / test |
+|---|---|---|---|---|---|---|
+| 2026-10-23 | Test engineer | HIGH | — | `print/renderer.ts` `piece` | Every piece meeting the cut had its whole artwork drawn again under itself, stretched to the piece plus its bleed (`preserveAspectRatio="none"`). Its edges sat B·(1−x/w) off the real ones, so a colour boundary reaching the cut (Maria's brown panel) showed in the bleed as a sliver of another colour, which a drifting cutter puts on the bottle. Uploaded files' own bleed was thrown away (cropped to the trim) and replaced by that copy. CONFIRMED: `test/label-bleed.test.ts` Maria regression, old-upload and platform-art pixel tests fail on the old code | Uploads made from the template draw their own bleed, trim lined up with the cut (`Creative.bleeds`, `artwork/creative.ts`), cropped on inner sides; all other art is carried out by its own 0.005 in edge, stretched only outward (`print/bleed.ts` `edgeBleed`) |
+| 2026-10-23 | Test engineer | MEDIUM | P3 | `artwork/preflight.ts` `applyFix('extend_bleed')` | The one-tap "extend the background into the bleed" fix for a vector design used the same stretched copy. CONFIRMED (fix test fails on the old code) | Same `edgeBleed` |
+| 2026-10-23 | Test engineer | MEDIUM | — | `print/renderer.ts` `pieceOf` | Layout fractions are stored to 4 decimals: thirds and sixths left a hairline gap/overlap (0.0007 in, 0.003 in² of the ad area) between pieces. Same-size pieces were equal to 1/1000 in already. CONFIRMED (tiling test fails on the old code) | Start and size put on the template's grid lines (`onGrid`, denominators ≤ 20, within the 4-decimal rounding); every template × product × company geometry tested for equal sizes and exact tiling |
+| 2026-10-23 | Test engineer | MEDIUM | P16 | previews (`ads.js`, `ops.js` review, `console.js`) | People saw one view of the label; the print file (with bleed) made the edge pieces look wider than their neighbours. | `src/web/labelviews.js`: "On the bottle" (default, as cut) and "Print file" (bleed, cut line, "Outside the line is trimmed"); browser journey checks both (fails without it) |
+| 2026-10-23 | Test engineer | LOW | — | templates (`artwork/shapes.ts`, `templates.ts`) | Templates didn't say which of their sides meet the cut. | `PieceShape.cutEdges` (any layout), written on the template and in `GET /v1/ads/templates`; bleed kept on all four sides, cropped on inner ones |
+
+Siblings searched: every `preserveAspectRatio="none"` (studio photo crop and upload placement scale to a matched
+size, not bleed copies; the fixed `extend_bleed`); box faces have no bleed; the custom whole-label design goes through the
+same `piece`. Mutants caught: inner-edge crop removed, edge strips drawn on every side, own-bleed box widened. Not
+checked: a real printer and cutter (the drift tolerance), real phones showing the two views; the printer should confirm
+that a 0.005 in edge extension is acceptable for photographic edges.

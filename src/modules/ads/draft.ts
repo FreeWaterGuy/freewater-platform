@@ -7,6 +7,7 @@ import { checkStudioSpec, type StudioSpec } from '../studio/layout';
 import { checkPosterSpec, posterIcons, posterFonts, readableOn, contrast, type PosterSpec } from '../creative/poster';
 import type { Theme } from '../experiences/blocks';
 import type { ExperienceHost } from '../experiences/host';
+import { artworkReady } from '../artwork/asIs';
 
 // An ad being made in the chat. The assistant (AI or not) only ever proposes changes to this;
 // every change is checked here before it is kept, so nothing an AI says can break a rule.
@@ -39,10 +40,12 @@ export interface AdDraft {
   artwork?: import('../artwork/service').ArtworkRef[];
   /** The colour and logo of the ad's QR code (still always our code), checked so it scans (src/modules/artwork). */
   qr?: { color?: string; logo?: string };
+  /** "I understand — use it as it is": the quality issues the advertiser accepted (src/modules/artwork/asIs.ts). Never the chat's. */
+  asIs?: import('../../core/types').AsIsChoice;
 }
 
 /** What an assistant may change. `useImage` picks one of the pictures attached to the message. */
-export type DraftPatch = Omit<AdDraft, 'poster'> & {
+export type DraftPatch = Omit<AdDraft, 'poster' | 'asIs'> & {
   poster?: Partial<Omit<PosterSpec, 'image' | 'colors'>> & { colors?: Partial<PosterSpec['colors']> };
   useImage?: { attachment: number; role: 'photo' | 'logo' };
   removeImage?: boolean;
@@ -70,11 +73,20 @@ export const missingLabels = {
   scanPage: 'what opens when people scan it',
 } as const;
 export type Missing = keyof typeof missingLabels;
+/** Designed themselves, the artwork is their files and the scan page is where the code leads: never wording to ask for. */
+const ownLabels: Partial<Record<Missing, string>> = {
+  artwork: 'your artwork files (one per size, each passing the check)',
+  sizes: 'which sizes (a file for each)',
+  scanPage: 'the link your QR code leads to',
+};
+/** What's missing, in the words for how this ad is made. */
+export const missingLabel = (m: Missing, d: Pick<AdDraft, 'mode'>) => (d.mode === 'own' ? ownLabels[m] : undefined) ?? missingLabels[m];
 
 export function missing(d: AdDraft, host: ExperienceHost): Missing[] {
   const out: Missing[] = [];
-  // Designed themselves: at least one file, each matched to its size and passing the check.
-  if (d.mode === 'own' ? !(d.artwork?.length && d.artwork.every((f) => f.shapeId && f.report.verdict === 'pass')) : d.studio ? checkStudioSpec(d.studio) !== null : (!d.poster || checkPosterSpec(d.poster) !== null)) out.push('artwork');
+  // Designed themselves: at least one file, each matched to its size and passing the check (or its quality issues
+  // accepted with "I understand — use it as it is").
+  if (d.mode === 'own' ? !artworkReady(d.artwork, d.asIs) : d.studio ? checkStudioSpec(d.studio) !== null : (!d.poster || checkPosterSpec(d.poster) !== null)) out.push('artwork');
   if (!d.category) out.push('category');
   if (!d.sizes?.length) out.push('sizes');
   if (!d.locations || (Array.isArray(d.locations) && d.locations.length === 0)) out.push('where');

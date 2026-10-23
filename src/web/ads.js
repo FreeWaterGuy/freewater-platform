@@ -195,7 +195,7 @@
             } catch (x) { toast(x.message); e.target.disabled = false; }
           };
           cards.push(h('article', { class: 'design card' }, h('div', { class: 'design-sizes' }, pv.sizes.slice(0, 4).map((s) => h('figure', {}, inline(s.svg), h('figcaption', { text: s.label })))),
-            h('details', {}, h('summary', { text: boxesOn() && pv.boxFaceSvg ? 'On a bottle, and on a box' : 'On a bottle' }), inline(pv.labelSvg), boxesOn() && pv.boxFaceSvg ? inline(pv.boxFaceSvg) : null),
+            h('details', {}, h('summary', { text: boxesOn() && pv.boxFaceSvg ? 'On a bottle, and on a box' : 'On a bottle' }), window.fwLabel.views(pv.labelSvg, { show: inline }).el, boxesOn() && pv.boxFaceSvg ? inline(pv.boxFaceSvg) : null),
             h('button', { class: 'btn', type: 'button', onclick: use }, draftId ? 'Use this design in my ad' : 'Make an ad with this design')));
         }
         gallery.replaceChildren(...cards);
@@ -858,13 +858,19 @@
           h('button', { type: 'button', class: 'btn small secondary', onclick: async () => { try { await api('DELETE', `/v1/ads/drafts/${id}/artwork/${f.id}`); await refresh(); } catch (x) { fail(x); } } }, 'Remove')))) : [h('p', { class: 'muted', text: 'No artwork yet. Upload one file for each size you want to buy.' })]));
       coverEl.replaceChildren(...art.coverage.map((c) => h('span', { class: `chip-check${c.fileId ? ' done' : ''}`, text: `${c.fileId ? '✓' : '○'} ${c.name}` })));
       next.toggleAttribute('aria-disabled', !art.ready);
+      // Quality issues only: the advertiser may tick "I understand — use it as it is" and pay (kept with the ad).
+      const a = art.asIs ?? {};
+      asIsEl.replaceChildren(...(a.chosen ? [h('p', { class: 'notice', text: `${a.words}: ticked. Your files print as they are.` })]
+        : a.offered ? [h('label', { class: 'switch' }, h('input', { type: 'checkbox', id: 'art-as-is', onchange: async (e) => { if (!e.target.checked) return; try { art = await api('POST', `/v1/ads/drafts/${id}/artwork/as-is`, { understood: true }); drawFiles(); } catch (x) { e.target.checked = false; fail(x); } } }), h('div', {}, h('b', { text: a.words }), h('span', { text: 'The issues above stay as they are on the printed bottle. You can still fix them instead.' })))]
+        : []));
     }
+    const asIsEl = h('div', { class: 'art-as-is' });
     const shapeName = (sid) => { for (const p of tpl?.products ?? []) for (const x of p.shapes) if (x.id === sid) return `${x.name} (${p.name})`; return sid; };
     async function drawPreview() {
       if (!art.files.some((f) => f.shapeId)) { previewEl.replaceChildren(); return; }
       try {
         const p = await api('GET', `/v1/ads/drafts/${id}/preview`);
-        previewEl.replaceChildren(h('h2', { class: 'section', text: 'On a real label' }), h('img', { class: 'label-img', src: svgSrc(p.labelSvg), alt: 'Your artwork on a sample label beside other businesses’ sample ads' }), h('p', { class: 'caption', text: p.labelCaption }), everyShape(p));
+        previewEl.replaceChildren(h('h2', { class: 'section', text: 'On a real label' }), window.fwLabel.views(p.labelSvg, { alt: 'Your artwork on a sample label beside other businesses’ sample ads' }).el, h('p', { class: 'caption', text: p.labelCaption }), everyShape(p));
       } catch { previewEl.replaceChildren(); }
     }
     pick.addEventListener('change', async () => {
@@ -885,7 +891,7 @@
     shell('new', h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Design it yourself' }), h('p', { text: `Use your own tools. We check every file (size, 300 dpi, bleed, safe areas, the QR box, small or faint words) and show it on a real label before you pay. ${state.config.name} reviews every ad before it prints.` })), link(`/ads/drafts/${id}`, { class: 'btn secondary' }, 'Chat instead')),
       err, templates,
       on('artwork_upload') ? h('section', { class: 'card' }, h('h2', { class: 'section', text: '2. Upload your artwork' }), h('p', { class: 'muted', text: `${art.pdf ? 'PDF, SVG, PNG or JPG' : 'SVG, PNG or JPG'}, up to 25 MB each. One file per size: we match each to its size by its dimensions.` }),
-        h('label', { class: 'btn', for: 'art-pick' }, 'Choose files'), pick, coverEl, filesEl) : null,
+        h('label', { class: 'btn', for: 'art-pick' }, 'Choose files'), pick, coverEl, filesEl, asIsEl) : null,
       h('section', { class: 'card' }, h('h2', { class: 'section', text: '3. Your QR code' }), h('p', { class: 'muted', text: 'Every bottle gets its own secure code from us, printed in the QR box. Where should it lead?' }),
         h('div', { class: 'form' }, h('label', { for: 'art-link' }, 'Link'), linkUrl, h('label', { for: 'art-link-label' }, 'Button words'), linkLabel,
           h('button', { type: 'button', class: 'btn small', onclick: async () => { err.hidden = true; try { art = await api('POST', `/v1/ads/drafts/${id}/link`, { url: linkUrl.value.trim(), ...(linkLabel.value.trim() ? { label: linkLabel.value.trim() } : {}) }); toast('Saved: your code leads there.'); } catch (x) { fail(x); } } }, 'Save the link')),
@@ -956,7 +962,7 @@
     cleanup = () => window.removeEventListener('message', onMsg);
     function drawStage() {
       if (!preview) { stage.replaceChildren(h('p', { class: 'caption', text: 'Your ad appears here as you chat.' })); return; }
-      if (tab === 'bottle') stage.replaceChildren(h('img', { class: 'label-img', src: svgSrc(preview.labelSvg), alt: 'A sample label with your ad on it' }), h('p', { class: 'caption', text: preview.labelCaption || 'A sample label. The pieces marked “Sample ad” go to other businesses. The black panel is the same on every bottle.' }));
+      if (tab === 'bottle') stage.replaceChildren(window.fwLabel.views(preview.labelSvg, { alt: 'A sample label with your ad on it' }).el, h('p', { class: 'caption', text: preview.labelCaption || 'A sample label. The pieces marked “Sample ad” go to other businesses. The black panel is the same on every bottle.' }));
       if (tab === 'sizes') stage.replaceChildren(everyShape(preview), h('p', { class: 'caption', text: 'Your ad exactly as it prints, at every shape each size comes in (a piece can be wide on one bottle and tall on the next), with its QR code where it prints.' }));
       if (tab === 'box') stage.replaceChildren(h('img', { class: 'box-img', src: svgSrc(preview.boxFaceSvg), alt: 'Your ad on the side of a delivery box' }), h('p', { class: 'caption', text: 'One side of a delivery box. Each side has its own QR code.' }));
       if (tab === 'scan') {
@@ -1067,7 +1073,7 @@
     frame = fixture?.scanFrame ? fixture.scanFrame() : h('iframe', { src: '/preview/scan', title: 'Your scan page' });
     shell('new', h('div', { class: 'review' },
       h('div', { class: 'page-head', style: 'margin:0' }, h('div', {}, link(`/ads/drafts/${id}`, {}, '← Back to the chat'), h('h1', { style: 'margin-top:8px', text: 'Review your ad' }), h('p', { text: 'This is exactly what prints and what opens. Look it over before you submit.' }))),
-      h('div', { class: 'stage' }, h('img', { class: 'label-img', src: svgSrc(p.labelSvg), alt: 'A sample label with your ad' }), p.labelCaption ? h('p', { class: 'caption', text: p.labelCaption }) : null),
+      h('div', { class: 'stage' }, window.fwLabel.views(p.labelSvg, { alt: 'A sample label with your ad' }).el, p.labelCaption ? h('p', { class: 'caption', text: p.labelCaption }) : null),
       h('div', { class: 'stage' }, everyShape(p)), sizeNotes,
       h('div', { class: 'stage' }, frame),
       h('div', { class: 'facts' },

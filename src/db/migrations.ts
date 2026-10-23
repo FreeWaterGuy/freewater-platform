@@ -2775,6 +2775,123 @@ create table ad_benchmark_snapshots (
 create trigger ad_benchmark_snapshots_append_only before update or delete on ad_benchmark_snapshots for each row execute function forbid_change();
 `,
   },
+  {
+    id: '079_link_safety',
+    sql: `
+-- Link safety, link changes reviewed while the old link stays live, paying with "use it as it is", and benchmarks
+-- released with noise (src/modules/ads/linkSafety.ts, src/modules/artwork/service.ts, src/modules/ads/ratings.ts;
+-- docs/SWITCHES.md, "Link safety"; docs/AI.md, "Benchmarks: how they're kept anonymous").
+
+-- Every automatic check of a link: what it was checked for (a new ad, a change, the daily re-check…), where it ended
+-- up, and why it passed, was flagged or was refused. Only added to.
+create table link_checks (
+  seq bigint generated always as identity,
+  id text primary key,
+  company_id text not null,
+  campaign_id text,
+  advertiser_id text,
+  purpose text not null check (purpose in ('draft', 'submit', 'change', 'campaign', 'recheck', 'release')),
+  url text not null,
+  final_url text,
+  hops jsonb not null,
+  verdict text not null check (verdict in ('pass', 'flag', 'refuse')),
+  reasons jsonb not null,
+  title text,
+  content_type text,
+  fetched text not null,
+  safe_browsing text not null,
+  switch_on boolean not null,
+  at timestamptz not null
+);
+create index link_checks_campaign on link_checks(company_id, campaign_id, at);
+create trigger link_checks_append_only before update or delete on link_checks for each row execute function forbid_change();
+
+-- A live ad whose link turned bad: its code opens the holding page until a person clears it (who, why) or a reviewed
+-- link change replaces it. A hold is ended once, never deleted.
+create table link_holds (
+  seq bigint generated always as identity,
+  id text primary key,
+  company_id text not null,
+  campaign_id text not null,
+  advertiser_id text not null,
+  urls jsonb not null,
+  reasons text not null,
+  held_at timestamptz not null,
+  released_at timestamptz,
+  released_by text,
+  release_reason text,
+  check ((released_at is null) = (released_by is null))
+);
+create unique index link_holds_one_open on link_holds(campaign_id) where released_at is null;
+create function link_holds_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then perform fw_refuse('link_holds', 'holds are kept.'); end if;
+  if old.released_at is not null then perform fw_refuse('link_holds', 'a hold is ended once.'); end if;
+  if not fw_only_changed(to_jsonb(old), to_jsonb(new), array['released_at', 'released_by', 'release_reason']) then perform fw_refuse('link_holds', 'only its end is written.'); end if;
+  return new;
+end $$;
+create trigger link_holds_guard before update or delete on link_holds for each row execute function link_holds_guard();
+
+-- A change to where a live ad's code leads: paid once (its order's key), checked, looked at by the AI reviewer, and
+-- decided by a person (or rejected by the AI where the company let it make the final call; the advertiser can appeal
+-- once). The old links stay live until it's approved. One waiting change per ad.
+create table ad_link_changes (
+  seq bigint generated always as identity,
+  id text primary key,
+  company_id text not null,
+  campaign_id text not null,
+  advertiser_id text not null,
+  number integer not null check (number >= 1),
+  order_key text unique,
+  changes jsonb not null,
+  before jsonb not null,
+  fee_cents integer not null check (fee_cents >= 0),
+  safety text not null check (safety in ('pass', 'flag')),
+  safety_reasons text,
+  ai_verdict text check (ai_verdict in ('pass', 'flag')),
+  ai_category text,
+  ai_reasons text,
+  status text not null check (status in ('waiting', 'approved', 'rejected')),
+  ai_final boolean not null default false,
+  appealed_at timestamptz,
+  decided_by text,
+  decided_at timestamptz,
+  note text,
+  applied_at timestamptz,
+  created_at timestamptz not null,
+  unique (campaign_id, number),
+  check ((status = 'waiting') = (decided_at is null)),
+  check (applied_at is null or status = 'approved')
+);
+create unique index ad_link_changes_one_waiting on ad_link_changes(campaign_id) where status = 'waiting';
+create function ad_link_changes_guard() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then perform fw_refuse('ad_link_changes', 'link changes are kept.'); end if;
+  if not fw_only_changed(to_jsonb(old), to_jsonb(new), array['status', 'ai_verdict', 'ai_category', 'ai_reasons', 'ai_final', 'appealed_at', 'decided_by', 'decided_at', 'note', 'applied_at']) then
+    perform fw_refuse('ad_link_changes', 'what was asked and paid never changes.');
+  end if;
+  if old.status = 'approved' and (new.status <> 'approved' or new.decided_at is distinct from old.decided_at or (old.applied_at is not null and new.applied_at is distinct from old.applied_at)) then
+    perform fw_refuse('ad_link_changes', 'an approved change is final; it is applied once.');
+  end if;
+  if old.status = 'rejected' and not (new.status = 'waiting' and old.ai_final and old.appealed_at is null and new.appealed_at is not null) then
+    perform fw_refuse('ad_link_changes', 'a rejection is final, except the AI''s own, which the advertiser may appeal once.');
+  end if;
+  return new;
+end $$;
+create trigger ad_link_changes_guard before update or delete on ad_link_changes for each row execute function ad_link_changes_guard();
+
+-- Benchmarks: only the monthly release is ever shown, with noise drawn once when it's kept (so asking again returns
+-- the same figures and the noise can't be averaged away) and rounded. 'published' is null when the cell is held back
+-- (too few ads, or held back so a held-back neighbour can't be worked out from a total); 'suppressed' says why.
+alter table ad_benchmark_snapshots add column published jsonb;
+alter table ad_benchmark_snapshots add column suppressed text;
+alter table ad_benchmark_snapshots add column epsilon double precision;
+
+-- "I understand — use it as it is" (src/modules/artwork/asIs.ts): an ad paid for with quality issues left as they are
+-- carries the choice (who, when, which issues) on its version, so ratings and outcomes are read knowing it.
+alter table ad_versions add column as_is jsonb;
+`,
+  },
 ];
 
 /** Runs every migration not yet run (or, for tests that start from an older schema, those in `list`). */

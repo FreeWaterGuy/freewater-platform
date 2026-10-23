@@ -131,6 +131,10 @@ describe('3. an uploaded ad is rated before it first prints, and a link change i
     await app.ads.review({ companyId: 'freewater', campaignId: cid, decision: 'approve', by: { userId: 'usr_test_reviewer', role: 'reviewer' } });
     const ch = await call('POST', `/v1/ads/campaigns/${cid}/links`, t, { changes: [{ path: 'experienceConfig.link.url', url: 'https://seams.example/second' }], expectedFeeCents: 5_000 });
     expect(ch.statusCode).toBe(201);
+    // The new link waits for a person (the old one stays live): a new version once it's approved.
+    await app.ratings.idle();
+    expect((await versions()).length).toBe(1);
+    await app.artwork.decideLinkChange({ companyId: 'freewater', changeId: ch.json().pending.id, decision: 'approve', personId: 'usr_test_reviewer' });
     await app.ratings.idle();
     const after = await versions();
     expect(after.length).toBe(2);

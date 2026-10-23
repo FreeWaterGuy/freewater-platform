@@ -106,6 +106,8 @@ export function adsRoutes(app: App, route: (r: RouteDef) => void, h: { me: (key:
     companyStaff(key);
     // A route buy aimed at a few houses says so, with what the content check found: it gets the stricter review.
     return { body: await Promise.all(ads.reviewQueue(key!.companyId).map(async (c) => ({ id: c.id, advertiser: c.advertiserName, name: c.name ?? null, category: c.category, submittedAt: c.review?.at, experienceId: c.experienceId, sizes: c.sizes, review: c.review ?? null, paid: !!c.prepaid,
+      // Paid with quality issues left as they are ("I understand — use it as it is"): the reviewer sees which.
+      asIs: c.asIs ?? null,
       ...(c.review?.status === 'flagged' ? { flag: { reasons: c.review.note ?? '', flaggedAt: c.review.flaggedAt ?? c.review.at, resubmittedAt: c.review.resubmittedAt ?? null }, notes: (await ads.reviewNotes(key!.companyId, c.id)).length } : {}),
       ...(c.routeBuy ? { routeBuy: await app.routeBuys.reviewInfo(c) } : {}) }))) };
   } });
@@ -116,6 +118,30 @@ export function adsRoutes(app: App, route: (r: RouteDef) => void, h: { me: (key:
     const u = key!.userId ? await app.accounts.get(key!.userId) : null;
     const c = await ads.review({ companyId: key!.companyId, campaignId: (req.params as any).id, decision: b.decision, note: b.note, by: { userId: u && u.companyId === key!.companyId ? u.id : null, role: u && u.companyId === key!.companyId ? u.role : null } });
     return { body: { id: c.id, review: c.review, active: c.active, ...(b.decision === 'reject' && c.review?.status === 'flagged' ? { flaggedInstead: true, message: 'A paid ad is only rejected by a person signed in, with a reason. It was flagged for the team instead.' } : {}) } };
+  } });
+  // Link changes (src/modules/artwork/service.ts): the old link stays live while the new one waits here for a person.
+  const reviewer = async (key: ApiKey | null, what: string) => {
+    companyStaff(key);
+    const u = key!.userId ? await app.accounts.get(key!.userId) : null;
+    if (!u || u.companyId !== key!.companyId) throw new ApiError(403, 'person_required', `${what} is done by a person on the team, signed in, not with an API key.`);
+    return u;
+  };
+  route({ method: 'GET', url: '/v1/review/link-changes', scope: 'campaigns', summary: 'Changes to live ads’ links waiting for a person: the old and new links, the automatic check’s reasons and the AI reviewer’s view. The old links stay live until one is approved.', handler: async (_req, key) => {
+    companyStaff(key);
+    return { body: await app.artwork.linkChangeQueue(key!.companyId) };
+  } });
+  route({ method: 'POST', url: '/v1/review/link-changes/:id', scope: 'campaigns', body: obj({ decision: { type: 'string', enum: ['approve', 'reject'] }, note: { type: 'string', maxLength: 500 } }, ['decision']), summary: 'Approve a link change (the new links go live now) or reject it with a reason the advertiser sees (the old links stay). A person on the team, signed in.', handler: async (req, key) => {
+    const u = await reviewer(key, 'Deciding a link change');
+    const b = req.body as any;
+    return { body: await app.artwork.decideLinkChange({ companyId: key!.companyId, changeId: String((req.params as any).id), decision: b.decision, note: b.note, personId: u.id }) };
+  } });
+  route({ method: 'GET', url: '/v1/review/link-holds', scope: 'campaigns', summary: 'Live ads whose links turned bad on the daily check: their codes open the holding page until a person clears them. With the ones cleared, who and why.', handler: async (_req, key) => {
+    companyStaff(key);
+    return { body: await app.linkSafety.holds(key!.companyId) };
+  } });
+  route({ method: 'POST', url: '/v1/review/link-holds/:campaignId/release', scope: 'campaigns', body: obj({ reason: { type: 'string', minLength: 10, maxLength: 500 } }, ['reason']), summary: 'Clear a hold once you’ve checked the link: it’s checked again first and must pass. A person on the team, signed in, with what they checked.', handler: async (req, key) => {
+    const u = await reviewer(key, 'Clearing a link hold');
+    return { body: await app.linkSafety.release(key!.companyId, String((req.params as any).campaignId), { userId: u.id, name: u.displayName ?? u.email ?? u.id }, (req.body as any).reason) };
   } });
   // The notes on an ad's review: the team and the advertiser talk a flagged paid ad over, in plain words, both see them.
   route({ method: 'GET', url: '/v1/review/campaigns/:id/notes', scope: 'campaigns', summary: 'The notes on an ad’s review: flags with their reasons, and what the team and the advertiser wrote.', handler: async (req, key) => {

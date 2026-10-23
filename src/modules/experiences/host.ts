@@ -122,6 +122,15 @@ export function fallbackCard(ownerName: string): Block[] {
   ];
 }
 
+/** The holding page: a live ad whose link is being checked again (src/modules/ads/linkSafety.ts). No link, nowhere to go. */
+export function holdingCard(ownerName: string): Block[] {
+  return [
+    { type: 'hero', title: ownerName },
+    { type: 'text', text: 'This link is being checked. Thanks for scanning: please try again later.' },
+    { type: 'button', label: 'Save for later', action: { kind: 'save' } },
+  ];
+}
+
 /** Colors for a scan page: the company's brand, with the advertiser's own colors on top. */
 export function themeFor(brand: { panelColor: string; accentColor: string; textColor: string }, own?: Partial<Theme>): Theme {
   return { background: '#FFFFFF', text: '#0B0B0B', accent: brand.accentColor, button: brand.panelColor, buttonText: brand.textColor, ...(own ?? {}) };

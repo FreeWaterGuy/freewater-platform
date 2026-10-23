@@ -253,3 +253,15 @@ details summary{cursor:pointer;font-weight:600}
 .art-cover { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
 .art-cover .done { background: #E7F5EC; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* A printed label's two views (labelviews.js): "On the bottle" (as cut, the default) and "Print file" (with its bleed
+   and the cut line). */
+.label-views { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.label-views-bar { display: inline-flex; align-self: flex-start; gap: 2px; padding: 3px; border-radius: 999px; background: var(--soft); box-shadow: inset 0 0 0 1px var(--line); }
+.label-views-btn { font: 500 13px/1 var(--body); color: var(--muted); background: none; border: 0; border-radius: 999px; padding: 7px 12px; cursor: pointer; }
+.label-views-btn[aria-pressed="true"] { background: #fff; color: var(--ink); box-shadow: 0 1px 2px rgb(0 0 0 / .12); }
+.label-views-btn:focus-visible { outline: 2px solid var(--link); outline-offset: 1px; }
+.label-views-stage img { display: block; width: 100%; height: auto; border-radius: 8px; box-shadow: 0 0 0 1px var(--line); background: #fff; }
+.label-views-legend { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; color: var(--muted); }
+.label-views-legend[hidden] { display: none; }
+.label-views-cut { flex: none; width: 22px; border-top: 2px dashed #E0218A; }

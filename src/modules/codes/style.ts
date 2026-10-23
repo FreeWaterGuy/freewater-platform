@@ -25,6 +25,8 @@ export function campaignQrStyle(company: CompanyConfig, campaign: Campaign | und
 export function qrMode(company: CompanyConfig, campaign: Campaign | undefined): 'dynamic' | 'static' {
   // An ad the advertiser designed themselves always carries our own code, one per bottle (src/modules/artwork).
   if (campaign?.creativeRef?.kind === 'artwork') return 'dynamic';
+  // A link on hold (it turned bad on the daily check): new bottles carry our own code, which opens the holding page.
+  if (campaign?.linkHold) return 'dynamic';
   return campaign?.qr?.mode === 'static' && campaign.qr.staticUrl && company.qr?.allowStatic ? 'static' : 'dynamic';
 }
 

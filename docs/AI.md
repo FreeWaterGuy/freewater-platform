@@ -88,11 +88,48 @@ on: `ANTHROPIC_API_KEY`.
 |---|---|---|---|
 | **Ad rater** (Claude; agent `ad-rater`; switch *AI ad rater*, AI category, under *Ad ratings* in Ads) | The founder: "I want the AI to rate each ad 1–10 before it gets physically printed, so it can learn over time." Every **version** of an ad (a new ad, or a change to its artwork, scan page, links, AR or video; the same content is the same version) is rated **once**, in the background, when it's submitted or changed, at quote time when the advertiser asks for its score, or at its first print if nothing asked earlier. Sub-scores 1–10 for the **offer** (is there one; discount depth; how clear), the **design** (readable at the size it prints, hierarchy, contrast, brand), the **landing** (the scan page and its link), **AR** and **video**, an overall score (rubric `v1`: 30/30/20/10/10), short reasons, up to three tips, and an industry from the standard list. Kept with its rater, model and rubric version, so ratings are compared over the years (`src/modules/ads/rating.ts`, `ratings.ts`). | **Printing never waits for it**, not for a moment: a slow AI (it gives up after 30 seconds) or a failing one is asked again by the hourly job (3 tries, 2 then 4 minutes apart), and the bottles print meanwhile; the rating is then marked **late** (`rated_before_print` false). It sees the ad's words, colours, measured contrast, sizes, scan page and links, as data (never instructions), **never the pictures** and nothing about a person. Through the company's AI routing (white-label naming, its own key or none), metered on its own line, the governor first. Code holds its answer to the rubric: whole scores 1–10, the overall within one point of its weighted parts, at most three tips with no links, an industry from the list. A finished rating never changes (the database refuses); a new rubric rates again as a new row. **It never stops, flags or delays an ad**; it's shown to the advertiser only where the company turns that on (*Show the rating to advertisers*, off). | The **built-in rules** rate it with the same rubric, labelled "Built-in rules (no AI)": at once when there's no AI (no key, the company's AI off, this use off, the governor declining), or after the AI's third failed try, with the reason kept. |
 
+**No promises.** Wherever a score, meter, tip or benchmark is shown it says: *"This rating is our opinion of how well
+the ad is put together. It isn't a promise of results."* (`NO_PROMISE`, `src/modules/ads/rating.ts`; the API's
+answers and descriptions too). An ad paid for with quality issues left as they are ("I understand — use it as it is")
+carries that choice on its version (`ad_versions.as_is`), so its rating and outcomes are read knowing it.
+
+### Benchmarks: how they're kept anonymous
+
+Companies that contribute see the network's averages beside their own; companies that don't, see only their own. The
+network's figures are protected in five layers (`src/modules/ads/benchmarkRelease.ts`, `ratings.ts` `snapshotDue`):
+
+1. **Monthly releases only.** Once a month has settled (45 days after it ends), the network's figures for the ads first
+   printed that month (at 30 days) are computed once and kept (append-only). Every page and API answer reads those
+   kept figures; nothing about the network is computed for the person asking, so asking in different ways can't
+   reveal more.
+2. **Thresholds.** A cell (an industry, a channel, an industry in a channel, an offer type, a score) is released only
+   with 20+ ads from 5+ advertisers (a company may raise its own bar, never lower), no advertiser over half the ads,
+   and the same still true without any one company.
+3. **Suppression, complementary too.** A cell under the thresholds is held back. Then, repeatedly until nothing changes:
+   a held-back total holds back its whole breakdown, and where exactly one part of a shown total is held back, the
+   smallest other part is held back too, so no held-back cell can be worked out as the total minus the rest (and an
+   industry-and-channel cell is a part of both its industry and its channel). A held-back cell keeps no figures at all.
+4. **Noise with a fixed budget.** Each released figure gets Laplace noise drawn once, from the system's secure random
+   source, when the month is released, and is kept with it: the same figure every time it's read, so repeated
+   questions can't average the noise away. The budget per cell per release is ε = 5 (0.5 for the count of ads, 0.5 for
+   the count of advertisers, 1 for each of the four average rates). One ad changes a count by at most 1, so counts get
+   Laplace(1/ε); each ad's rate is held to 0–1, so one ad moves an average of n ads by at most 1/n, and rates get
+   Laplace(1/(n·ε)). The unit protected is one ad; an advertiser with k ads in a cell is protected k times less
+   (no one advertiser has more than half), and a cell appears in one release only.
+5. **Rounding, and never rows.** Counts are rounded to 5 (never shown under the bar they met), rates to half a
+   percentage point. No ad, advertiser or company is ever named, and no count of companies is released.
+
+The true figures of a released cell are kept beside it for the platform's own audit and are never shown. A company
+that stops contributing is left out of every release made after; releases already made stay as they were. The
+choice of ε and of rounding are the founder's to confirm (and L-36 the lawyer's): ε = 5 per cell is a moderate formal
+guarantee; the thresholds and suppression do most of the protecting, and the noise stops exact differencing.
+
 ### Reviewing paid ads
 
 | AI | What it does | Its limits | Without it |
 |---|---|---|---|
 | **AI reviewer of paid ads** (Claude; agent `ad-reviewer`; switch *AI reviewer of paid ads*, AI category) | Looks at each paid ad when it's submitted (or sent again) and **passes** it or **flags** it with a reason category (misleading, not allowed, legal, offensive, personal details, hard to read, other) and plain words. A flag goes to the team's review queue. On the review page a person can **ask it why and push back**; it answers, and may change its view and say so. The talk is kept with the ad (`ad_ai_conversation`), apart from the notes with the advertiser, who never sees it. | It sees the ad's words, where its links and code go (the site, then the path and query as words: an address or a name hidden in a link is read) and the company's rules, never anything about a person; it **never sees the pictures** (the studio's study of a photo is only its subject's place and colors, nothing that describes it), and its prompt, its flags, the review page and its record say so, so nobody takes its pass as a check of the artwork; the ad's words are given to it as data, not instructions. Through the company's AI routing (white-label), metered on its own line, the governor first. It can't approve, reject (unless allowed, below), refund or change anything about itself. **Its record** is every final decision a person makes on an ad it looked at: agreed or not, false flags (it flagged, a person approved) and misses (it passed, a person later rejected); a key's decision never counts, and changing its view in a talk never rewrites what it said first (the database refuses edits). | No verdict: a person reviews every ad, as before. Asked a question, a stand-in says the AI isn't on and repeats what was recorded. |
+| **AI reviewer of link changes** (the same agent) | When an advertiser changes where a live paid ad leads (*Change a link*), it looks at the new links with the ad and passes or flags them; its view goes with the change to the person deciding. | A pass never puts a link live: a person approves each change (the old link stays live meanwhile). Its rejection is final only where it has earned the final call on paid ads (above); the advertiser can appeal to a person once. The automatic link check (*Link safety*) runs first, and again when a person approves. Its link-change verdicts aren't yet in its record or audit sample (a gap to close before it decides link changes alone). | No verdict: a person decides each change. |
 
 **Letting it make the final call** (switch *AI makes the final call on paid ads*, Ads category, an *autonomy* switch,
 off for every company; docs/SWITCHES.md, "Review of a paid ad"):

@@ -20,6 +20,8 @@ import { createPgliteClient } from '../src/db/pglite';
 import { PrepaidService } from '../src/modules/ads/prepaid';
 import { aiMeter } from '../src/modules/ai/anthropic';
 import { AdRatingService, BENCHMARK_FLOORS, contentHash, spearman } from '../src/modules/ads/ratings';
+import { EPSILON_PER_CELL, laplace, parentsOf, releaseCell, ROUND_COUNT, ROUND_RATE, suppress } from '../src/modules/ads/benchmarkRelease';
+import { NO_PROMISE } from '../src/modules/ads/rating';
 import { ClaudeAdRater, rateByRules, rulesRater, type AdForRating, type AdRater, type RaterAnswer } from '../src/modules/ads/rating';
 import { guessIndustry, INDUSTRIES, TAXONOMY } from '../src/modules/ads/categories';
 import { AI_USES, byId, CATALOGUE, startsOffForNew } from '../src/runtime/registry';
@@ -415,7 +417,7 @@ describe('calibration: does the score predict results?', () => {
   });
 });
 
-describe('benchmarks: pooled, thresholded, private per advertiser, opt-out honoured', () => {
+describe('benchmarks: monthly releases, thresholded, with noise, private per advertiser, opt-out honoured', () => {
   beforeAll(async () => {
     await app.companyFeatures.change('peak-spring', { benchmarks_contribute: true, benchmarks_view: true }, actor);
     // Pizza (restaurants): 22 ads from 6 advertisers at Peak Spring, 4 from 2 at FreeWater (on top of the calibration ads).
@@ -424,67 +426,143 @@ describe('benchmarks: pooled, thresholded, private per advertiser, opt-out honou
     for (let i = 0; i < 19; i++) await seedAd({ company: 'peak-spring', advertiser: `peak-ride-${i % 6}`, category: 'transport', bottles: 300, scanned: 15 });
     // Tampons (personal care): 24 ads but one advertiser has 13 of them.
     for (let i = 0; i < 24; i++) await seedAd({ company: 'peak-spring', advertiser: i < 13 ? 'peak-care-big' : `peak-care-${i % 5}`, category: 'personal-care', bottles: 300, scanned: 40 });
+    // Cleaning (home services): 21 ads from 9 advertisers, but only 3 of them from FreeWater: without Peak Spring, too few.
+    for (let i = 0; i < 18; i++) await seedAd({ company: 'peak-spring', advertiser: `peak-clean-${i % 6}`, category: 'services', bottles: 300, scanned: 25 });
+    for (let i = 0; i < 3; i++) await seedAd({ company: 'freewater', advertiser: `fw-clean-${i}`, category: 'services', bottles: 300, scanned: 25 });
   });
   const group = (b: any, dimension: string, key: string) => b.groups.find((g: any) => g.dimension === dimension && g.key === key);
+  /** Noise that's the same every draw (u = 0.4 above the middle): +1.61 × the scale, so the test can see it was added. */
+  const fixedRand = () => 0.9;
 
-  it('shows the network’s average only with enough ads from enough advertisers, none over half, and enough without the viewer’s own', async () => {
+  it('shows nothing of the network before a month is released, and nothing computed on the fly', async () => {
+    const fw = (await call('GET', '/v1/benchmarks', reviewer)).body;
+    expect(group(fw, 'category', 'restaurants').network).toMatchObject({ shown: false, why: expect.stringMatching(/No monthly release yet/) });
+    expect(group(fw, 'category', 'restaurants').yours.ads).toBeGreaterThanOrEqual(20);
+  });
+
+  it('releases a settled month once: thresholds, none over half, enough without any one company; noise drawn once and kept; rounded; no count of companies', async () => {
+    expect(await app.ratings.snapshotDue('freewater', fixedRand)).toContain('2026-08');
+    expect(await app.ratings.snapshotDue('freewater', () => 0.1)).toEqual([]); // released once: never drawn again
     const fw = (await call('GET', '/v1/benchmarks', reviewer)).body;
     expect(fw.settings).toEqual(BENCHMARK_FLOORS);
-    const pizza = group(fw, 'category', 'restaurants');
-    expect(pizza.network).toMatchObject({ shown: true, companies: 2 });
-    expect(pizza.network.ads).toBeGreaterThanOrEqual(42);
-    expect(pizza.yours.ads).toBeGreaterThanOrEqual(20);
-    expect(group(fw, 'category', 'transport').network).toMatchObject({ shown: false, why: expect.stringMatching(/fewer than 20 ads/) });
-    expect(group(fw, 'category', 'personal-care').network).toMatchObject({ shown: false, why: expect.stringMatching(/more than half/) });
-    expect(group(fw, 'offer_type', 'percent_off')).toBeTruthy();
-    expect(group(fw, 'channel', 'machine')).toBeTruthy();
-    // Peak Spring looking: FreeWater's own 20 calibration ads come from 20 advertisers, so without Peak Spring there are still enough.
+    expect(fw.release).toMatchObject({ period: expect.stringMatching(/^2026-/), epsilonPerCell: EPSILON_PER_CELL });
+    const pizza = group(fw, 'category', 'restaurants').network;
+    expect(pizza).toMatchObject({ shown: true, period: '2026-08' });
+    expect(pizza).not.toHaveProperty('companies');
+    expect(pizza.ads % ROUND_COUNT).toBe(0);
+    expect(pizza.ads).toBeGreaterThanOrEqual(45);
+    expect(Math.round(pizza.scanRate / ROUND_RATE) * ROUND_RATE).toBeCloseTo(pizza.scanRate, 9);
+    // The noise is there: the true average, kept beside it for the audit, differs by about 1.61 / n.
+    const raw = (await db.query<any>(`select n_ads, scan_rate, published from ad_benchmark_snapshots where period = '2026-08' and dimension = 'category' and key = 'restaurants'`)).rows[0];
+    expect(pizza.scanRate - Number(raw.scan_rate)).toBeGreaterThan(0.5 / Number(raw.n_ads));
+    expect(Math.abs(pizza.scanRate - Number(raw.scan_rate) - Math.log(5) / Number(raw.n_ads))).toBeLessThanOrEqual(ROUND_RATE);
+    // Asked again (and by another company): the same figures.
+    const again = (await call('GET', '/v1/benchmarks', reviewer)).body;
+    expect(group(again, 'category', 'restaurants').network).toEqual(pizza);
     const peak = (await call('GET', '/v1/benchmarks', app.demoKeys!['peak-spring-admin'])).body;
-    expect(group(peak, 'category', 'restaurants').network.shown).toBe(true);
-    // ...but a group where the others are too few is hidden from it (it can't subtract its own to see someone else's).
-    for (let i = 0; i < 3; i++) await seedAd({ company: 'freewater', advertiser: `fw-ride-${i}`, category: 'transport', bottles: 300, scanned: 15 });
-    const peak2 = (await call('GET', '/v1/benchmarks', app.demoKeys!['peak-spring-admin'])).body;
-    expect(group(peak2, 'category', 'transport').network).toMatchObject({ shown: false, why: expect.stringMatching(/other companies/) });
+    expect(group(peak, 'category', 'restaurants').network).toEqual(pizza);
+    // Held back: too few, one advertiser over half, too few without one company.
+    for (const k of ['transport', 'personal-care', 'services']) expect(group(peak, 'category', k).network, k).toMatchObject({ shown: false, why: expect.stringMatching(/Held back/) });
   });
   it('never names an ad, an advertiser or another company in what it shows', async () => {
     const text = JSON.stringify((await call('GET', '/v1/benchmarks', reviewer)).body);
-    expect(text).not.toMatch(/peak-adv|peak-ride|peak-care|adv_v_seed|cmp-seed|peak-spring/);
-  });
-  it('a company that opts out leaves the pool at once, and then sees only its own', async () => {
-    await app.companyFeatures.change('peak-spring', { benchmarks_contribute: false }, actor);
-    const fw = (await call('GET', '/v1/benchmarks', reviewer)).body;
-    // FreeWater alone is left in the pool: its own figure can't be shown as the network's.
-    expect(group(fw, 'category', 'restaurants').network).toMatchObject({ shown: false, why: expect.stringMatching(/other companies/) });
-    const peak = (await call('GET', '/v1/benchmarks', app.demoKeys!['peak-spring-admin'])).body;
-    expect(peak.contributes).toBe(false);
-    expect(group(peak, 'category', 'restaurants')).toMatchObject({ yours: { ads: 22 }, network: { shown: false, why: expect.stringMatching(/doesn’t contribute/) } });
-    await app.companyFeatures.change('peak-spring', { benchmarks_contribute: true }, actor);
+    expect(text).not.toMatch(/peak-adv|peak-ride|peak-care|peak-clean|adv_v_seed|cmp-seed|peak-spring|n_companies|"companies"/);
   });
   it('thresholds: raised by anyone on the team, lowered only by an owner with a reason, never under 20 and 5; a key never', async () => {
     expect((await call('POST', '/v1/benchmarks/settings', admin, { minAds: 30 })).code).toBe('person_required');
     expect((await call('POST', '/v1/benchmarks/settings', reviewer, { minAds: 50 })).body).toEqual({ minAds: 50, minAdvertisers: 5 });
     const fw = (await call('GET', '/v1/benchmarks', reviewer)).body;
-    expect(group(fw, 'category', 'restaurants').network.shown).toBe(false); // 50 needed now
+    expect(group(fw, 'category', 'restaurants').network).toMatchObject({ shown: false, why: expect.stringMatching(/your company’s own thresholds/) }); // 50 needed now
     expect((await call('POST', '/v1/benchmarks/settings', reviewer, { minAds: 20 })).code).toBe('owner_only');
     expect((await call('POST', '/v1/benchmarks/settings', owner, { minAds: 20 })).code).toBe('reason_required');
     expect((await call('POST', '/v1/benchmarks/settings', owner, { minAds: 19, reason: 'Testing the floor' })).status).toBe(400);
     expect((await call('POST', '/v1/benchmarks/settings', owner, { minAds: 20, reason: 'Back to the network default' })).body.minAds).toBe(20);
     await expect(db.query(`update benchmark_settings set min_ads = 5 where company_id = 'freewater'`)).rejects.toThrow();
   });
-  it('keeps the network’s benchmarks month by month, for decades: aggregates only, settled months once', async () => {
-    now = Math.max(now, new Date('2026-12-01T00:00:00Z').getTime());
-    await signIn();
-    const months = await app.ratings.snapshotDue();
-    expect(months).toContain('2026-08');
-    expect(await app.ratings.snapshotDue()).toEqual([]);
+  it('keeps the network’s benchmarks month by month, for decades: only released cells, never changed', async () => {
     const rows = (await db.query<any>(`select * from ad_benchmark_snapshots where period = '2026-08'`)).rows;
-    expect(rows.find((r) => r.dimension === 'category' && r.key === 'restaurants')).toMatchObject({ horizon: 'd30', n_companies: 2 });
-    expect(rows.find((r) => r.dimension === 'category' && r.key === 'transport')).toBeUndefined(); // didn't meet the bar
+    expect(rows.find((r) => r.dimension === 'category' && r.key === 'restaurants')).toMatchObject({ horizon: 'd30', suppressed: null, epsilon: EPSILON_PER_CELL, published: expect.anything() });
+    expect(rows.find((r) => r.dimension === 'category' && r.key === 'transport')).toBeUndefined(); // didn't meet the bar: nothing kept
     expect(rows.find((r) => r.dimension === 'all')).toBeTruthy();
     expect(Object.keys(rows[0])).not.toEqual(expect.arrayContaining(['company_id']));
+    // A held-back cell keeps no figures.
+    for (const r of rows.filter((x) => x.suppressed)) expect([r.published, Number(r.n_ads), r.scan_rate]).toEqual([null, 0, null]);
     await expect(db.query(`delete from ad_benchmark_snapshots`)).rejects.toThrow();
+    await expect(db.query(`update ad_benchmark_snapshots set published = null`)).rejects.toThrow();
     const hist = (await call('GET', '/v1/benchmarks', reviewer)).body.history;
-    expect(hist.some((h: any) => h.period === '2026-08' && h.key === 'restaurants')).toBe(true);
+    expect(hist.some((h: any) => h.period === '2026-08' && h.key === 'restaurants' && h.ads % ROUND_COUNT === 0)).toBe(true);
+  });
+  it('a company that doesn’t contribute is refused the network’s figures, and is left out of every release made after it stops', async () => {
+    await app.companyFeatures.change('peak-spring', { benchmarks_contribute: false }, actor);
+    try {
+      const peak = (await call('GET', '/v1/benchmarks', app.demoKeys!['peak-spring-admin'])).body;
+      expect(peak.contributes).toBe(false);
+      expect(peak.history).toEqual([]);
+      expect(group(peak, 'category', 'restaurants')).toMatchObject({ yours: { ads: 22 }, network: { shown: false, why: expect.stringMatching(/doesn’t contribute/) } });
+      expect(JSON.stringify(peak)).not.toMatch(/"shown":true/);
+      // A month released after Peak Spring stopped: its 22 ads that month (enough on their own) are left out.
+      const at = new Date(now), month = at.toISOString().slice(0, 7);
+      for (let i = 0; i < 22; i++) await seedAd({ company: 'peak-spring', advertiser: `peak-late-${i % 6}`, category: 'restaurants', bottles: 300, scanned: 30, firstPrinted: at.toISOString() });
+      now += 80 * 86_400_000;
+      await signIn();
+      expect(await app.ratings.snapshotDue('freewater', fixedRand)).toContain(month);
+      expect((await db.query<any>(`select count(*)::int as n from ad_benchmark_snapshots where period = $1 and dimension = 'category' and key = 'restaurants' and published is not null`, [month])).rows[0].n).toBe(0);
+      const fw = (await call('GET', '/v1/benchmarks', reviewer)).body;
+      expect(group(fw, 'category', 'restaurants').network.period).not.toBe(month);
+    } finally { await app.companyFeatures.change('peak-spring', { benchmarks_contribute: true }, actor); }
+  });
+});
+
+describe('releasing benchmarks: the noise and the suppression (benchmarkRelease.ts)', () => {
+  /** A small seeded generator, so a draw can be repeated. */
+  const seeded = (seed: number) => () => { seed = (seed * 1103515245 + 12345) % 2 ** 31; return seed / 2 ** 31; };
+  const truth = { ads: 42, advertisers: 9, rates: { scanRate: Array(42).fill(0.1), arRate: Array(42).fill(0), clickRate: Array(42).fill(0.02), conversionRate: Array(42).fill(0.01) } };
+  it('Laplace noise at the stated scale, drawn from a secure source by default; counts rounded to 5 and never under the bar, rates to half a point', () => {
+    const xs = Array.from({ length: 20_000 }, () => laplace(2));
+    expect(Math.abs(xs.reduce((a, b) => a + b, 0) / xs.length)).toBeLessThan(0.1);
+    expect(xs.reduce((a, b) => a + Math.abs(b), 0) / xs.length).toBeCloseTo(2, 0); // E|X| = scale
+    const r = releaseCell(truth, BENCHMARK_FLOORS);
+    expect(r.ads % ROUND_COUNT).toBe(0);
+    expect(r.ads).toBeGreaterThanOrEqual(20);
+    expect(r.advertisers).toBeGreaterThanOrEqual(5);
+    for (const k of ['scanRate', 'arRate', 'clickRate', 'conversionRate'] as const) { expect(r[k]).toBeGreaterThanOrEqual(0); expect(r[k]).toBeLessThanOrEqual(1); expect(Math.round(r[k] / ROUND_RATE) * ROUND_RATE).toBeCloseTo(r[k], 9); }
+    expect(releaseCell(truth, BENCHMARK_FLOORS, seeded(7))).toEqual(releaseCell(truth, BENCHMARK_FLOORS, seeded(7)));
+    expect(EPSILON_PER_CELL).toBe(5);
+  });
+  it('holds back a cell under the bar, the smallest other part where only one part of a total is held back, and every part of a held-back total', () => {
+    const cell = (dimension: string, key: string, ads: number, ok = true) => ({ dimension, key, ads, ok, suppressed: null as string | null });
+    const cells = suppress([cell('all', 'all', 120), cell('category', 'a', 50), cell('category', 'b', 12, false), cell('category', 'c', 30), cell('category', 'd', 28),
+      cell('channel', 'machine', 80), cell('channel', 'delivery', 40),
+      cell('category_channel', 'a|machine', 30), cell('category_channel', 'a|delivery', 20), cell('category_channel', 'c|machine', 25), cell('category_channel', 'c|delivery', 5, false)]);
+    const s = Object.fromEntries(cells.map((c) => [`${c.dimension}:${c.key}`, c.suppressed]));
+    expect(s['category:b']).toBe('threshold');
+    expect(s['category:d']).toBe('complementary'); // the smallest other industry: b can't be worked out as all − a − c − d
+    expect(s['category:a']).toBeNull();
+    expect(s['category_channel:c|delivery']).toBe('threshold');
+    expect(s['category_channel:c|machine']).toBe('complementary'); // within industry c
+    expect(s['category_channel:a|delivery']).toBe('complementary'); // within delivery: c|delivery is held, so another part is too
+    // A held-back total holds back its whole breakdown.
+    const held = suppress([cell('all', 'all', 40, false), cell('category', 'a', 21), cell('category', 'b', 19, false)]);
+    expect(held.map((c) => c.suppressed)).toEqual(['threshold', 'total_held', 'threshold']);
+  });
+  it('after suppression no total that is shown has exactly one hidden part (random tables)', () => {
+    const rand = seeded(11);
+    for (let t = 0; t < 300; t++) {
+      const cats = ['a', 'b', 'c', 'd', 'e'].slice(0, 2 + Math.floor(rand() * 4)), chans = ['machine', 'delivery', 'event'];
+      const cells = [{ dimension: 'all', key: 'all', ads: 200, ok: rand() > 0.05, suppressed: null as string | null },
+        ...cats.map((k) => ({ dimension: 'category', key: k, ads: Math.floor(rand() * 60), ok: rand() > 0.3, suppressed: null })),
+        ...chans.map((k) => ({ dimension: 'channel', key: k, ads: Math.floor(rand() * 60), ok: rand() > 0.3, suppressed: null })),
+        ...cats.flatMap((a) => chans.map((b) => ({ dimension: 'category_channel', key: `${a}|${b}`, ads: Math.floor(rand() * 30), ok: rand() > 0.4, suppressed: null })))];
+      suppress(cells);
+      const at = new Map(cells.map((c) => [`${c.dimension}|${c.key}`, c]));
+      const fams = new Map<string, typeof cells>();
+      for (const c of cells) for (const p of parentsOf(c)) { const f = `${p.dimension}|${p.key}|${c.dimension}`; fams.set(f, [...(fams.get(f) ?? []), c]); }
+      for (const [f, parts] of fams) {
+        const [pd, pk] = f.split('|');
+        if (at.get(`${pd}|${pk}`)!.suppressed) { expect(parts.every((x) => x.suppressed)).toBe(true); continue; }
+        expect(parts.filter((x) => x.suppressed).length, f).not.toBe(1);
+      }
+    }
   });
 });
 
@@ -508,7 +586,10 @@ describe('showing the rating to the advertiser: off by default, on when the comp
       expect(r.status).toBe(200);
       expect(r.body).toMatchObject({ ready: true, score: expect.any(Number), meter: expect.stringMatching(/^(Poor|Average|Good|Excellent)$/) });
       expect(r.body.tips.length).toBeLessThanOrEqual(3);
-      expect(Object.keys(r.body).sort()).toEqual(['by', 'meter', 'note', 'ready', 'score', 'tips']);
+      expect(Object.keys(r.body).sort()).toEqual(['by', 'meter', 'note', 'promise', 'ready', 'score', 'tips']);
+      // No promises: said with every score (the founder's words).
+      expect(r.body.promise).toBe('This rating is our opinion of how well the ad is put together. It isn\'t a promise of results.');
+      expect(r.body.note).toContain(NO_PROMISE);
       // The ad submitted from this draft (same artwork and scan page) is the same version: no second rating.
       const spec = { brand: 'Feedback Pizza', headline: 'Free slice with any pie', colors: { bg: '#FFFFFF', fg: '#0B0B0B', accent: '#D7262E' } };
       const hash = contentHash({ creativeRef: { kind: 'poster', spec }, experienceId: 'offer', experienceConfig: { headline: 'Free slice with any pie' } });
@@ -531,6 +612,26 @@ describe('showing the rating to the advertiser: off by default, on when the comp
     const p: any = await app.data.profile('freewater', `user:${u.id}`);
     expect(p.asAdvertiser.adRatings.length).toBeGreaterThanOrEqual(1);
     expect(p.asAdvertiser.adRatings[0]).toMatchObject({ status: 'done', overall: expect.any(Number) });
+    expect(p.asAdvertiser.adRatingsNote).toBe(NO_PROMISE);
+  });
+  it('says “no promise” wherever a rating, score, meter, tip or benchmark is shown: portal, console, API answers and descriptions', async () => {
+    await app.companyFeatures.change('freewater', { ad_rating_feedback: true }, actor);
+    try {
+      const mine = (await call('GET', '/v1/ads/ratings', advTok)).body;
+      expect(mine.promise).toBe(NO_PROMISE);
+      for (const r of mine.ratings) expect(r.rating.promise).toBe(NO_PROMISE);
+    } finally { await app.companyFeatures.change('freewater', { ad_rating_feedback: false }, actor); }
+    expect((await call('GET', '/v1/ratings', reviewer)).body.promise).toBe(NO_PROMISE);
+    expect((await call('GET', '/v1/benchmarks', reviewer)).body.promise).toBe(NO_PROMISE);
+    const spec = (await call('GET', '/v1/openapi.json')).body;
+    const summary = (path: string) => JSON.stringify(spec.paths[path]?.get ?? spec.paths[path]);
+    for (const p of ['/v1/ratings', '/v1/benchmarks', '/v1/ads/ratings', '/v1/ads/drafts/{id}/rating']) expect(summary(p), p).toContain('This rating is our opinion of how well the ad is put together.');
+    // The pages that draw a score or a benchmark show the words the server sends with it.
+    const consoleJs = readFileSync(new URL('../src/web/console.js', import.meta.url), 'utf8');
+    expect(consoleJs).toMatch(/text: R\.promise/);
+    expect(consoleJs).toMatch(/B\.promise/);
+    const adsJs = readFileSync(new URL('../src/web/ads.js', import.meta.url), 'utf8');
+    expect(adsJs).toMatch(/r\.note/); // the advertiser's score box shows the note, which carries the words
   });
   it('never stands between the advertiser and paying: submitting doesn’t wait for a rating', () => {
     const svc = readFileSync(new URL('../src/modules/ads/service.ts', import.meta.url), 'utf8');

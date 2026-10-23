@@ -7,6 +7,7 @@ import { checkWallet, defaultWallet } from '../wallet/assets';
 import { checkChain, defaultChain } from '../chain/settings';
 import { extraAboveCents } from '../ledger/ledger';
 import { adBilling, adLimits, checkAdBilling } from '../ads/billing';
+import { blocklist } from '../ads/linkList';
 import { checkDelivery } from '../delivery/settings';
 import { checkNewsSettings } from '../news/sources';
 import { checkUnsold } from '../fillers/unsold';
@@ -155,6 +156,16 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
       if (!/^[a-z0-9][a-z0-9-]{1,40}$/.test(id)) return 'Layouts for each product are listed by product id, like bottle-16oz.';
       if (!Array.isArray(list) || !list.length || new Set(list).size !== list.length || !list.every((t) => typeof t === 'string' && templateById.has(t))) return `Choose at least one layout for ${id}, each once, from the catalogue (or use the company’s layouts).`;
     }
+  }
+  // Link safety (src/modules/ads/linkSafety.ts): the company's own blocked domains, and shorteners it allows.
+  const label = { test: (x: string) => x.length >= 1 && x.length <= 63 && /^[a-z0-9-]+$/.test(x) && !x.startsWith('-') && !x.endsWith('-') };
+  const domain = (d: unknown) => { if (typeof d !== 'string' || d.length < 3 || d.length > 253) return false; const p = d.split('.'); return p.length >= 2 && p.every((x) => label.test(x)) && /^[a-z]{2,63}$/.test(p.at(-1)!); };
+  const domains = (l: unknown) => Array.isArray(l) && l.length <= 500 && l.every(domain);
+  if (a.linkBlocked !== undefined && !domains(a.linkBlocked)) return 'Sites ads may not lead to are listed as plain lowercase domains, like example.com (at most 500).';
+  if (a.linkAllowed !== undefined) {
+    if (!domains(a.linkAllowed)) return 'Allowed link shorteners are listed as plain lowercase domains, like bit.ly (at most 500).';
+    const bad = a.linkAllowed.filter((d) => { const k = blocklist().get(d); return k !== undefined && k !== 'shortener'; });
+    if (bad.length) return `Only link shorteners can be allowed: ${bad.join(', ')} is on the list as an unsafe site.`;
   }
   if (a.smallAudienceHouses !== undefined && !isInt(a.smallAudienceHouses, 50, 1000)) return 'A small-audience route buy is one aimed at fewer than 50 to 1,000 houses (never fewer than 50).';
 

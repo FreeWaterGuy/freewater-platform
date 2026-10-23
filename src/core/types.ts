@@ -259,6 +259,10 @@ export interface CompanyConfig {
      * layouts switches. A product not listed uses every allowed layout, so a new product inherits the company's choice.
      */
     productLayouts?: Record<string, string[]>;
+    /** Domains this company's ads may never lead to, besides the list in the repo (src/modules/ads/link-blocklist.txt). */
+    linkBlocked?: string[];
+    /** Link shorteners from that list this company allows (never an adult, malware or phishing domain). */
+    linkAllowed?: string[];
   };
   prices: {
     /** The starting price of one print, by size. Bids start here and go up. */
@@ -315,12 +319,20 @@ export type CreativeRef = { kind: 'svg'; markup: string } | { kind: 'builtin'; i
 export interface Creative {
   /** Artwork as SVG markup sized to any box; the renderer scales it to the slot. A real system stores an asset URL. */
   svg: (widthPx: number, heightPx: number, ctx?: CreativeContext) => string;
+  /**
+   * The artwork has real bleed of its own (an upload made from our template, with the background past the cut): asked
+   * with `ctx.bleed`, it draws past the piece's edges that meet the cut by that much (and crops its bleed away on the
+   * inner edges). Artwork without it is carried into the bleed by its own edge (print/bleed.ts), never stretched.
+   */
+  bleeds?: boolean;
 }
 /** What the renderer tells artwork about its slot: where the QR code will print, in the slot's own coordinates. */
 export interface CreativeContext {
   qr?: { x: number; y: number; size: number };
   /** Other corners the printer draws over (a box's stop code for drivers): words, logos and badges keep out of them. */
   reserved?: { x: number; y: number; w: number; h: number }[];
+  /** How far past each edge of the piece the cut's bleed runs (0 on an inner edge), for artwork that `bleeds`. */
+  bleed?: { l: number; t: number; r: number; b: number };
 }
 
 export type Buy =
@@ -348,6 +360,9 @@ export interface BidAdjustments {
   newCustomers?: number;
   returningCustomers?: number;
 }
+
+/** "I understand — use it as it is": who ticked it, when, and the issues of each file it covered (by the issues' codes). */
+export interface AsIsChoice { at: string; by: string; files: { fileId: string; name: string; codes: string[] }[] }
 
 export interface Campaign {
   id: string;
@@ -377,8 +392,18 @@ export interface Campaign {
   };
   /** What the QR is. Dynamic (the default): our code, looked up at every scan. Static: straight to a website. */
   qr?: { mode: 'dynamic' | 'static'; staticUrl?: string; bottleRef?: boolean; logo?: string; color?: string };
-  /** How many times the links its code leads to were changed after it went live (each paid for: src/modules/artwork/links.ts). */
+  /** How many times a change to the links its code leads to was asked for after it went live (each paid for: src/modules/artwork/links.ts). */
   linkChanges?: number;
+  /**
+   * A live link turned bad on the daily re-check (src/modules/ads/linkSafety.ts): the code opens a holding page ("this
+   * link is being checked") until a person clears it or a reviewed link change replaces it. Kept in `link_holds`.
+   */
+  linkHold?: { id: string; at: string; reasons: string };
+  /**
+   * The advertiser ticked "I understand — use it as it is" for these quality issues of its own artwork (preflight,
+   * src/modules/artwork/service.ts), and paid anyway. Kept with the ad's version so ratings and outcomes know.
+   */
+  asIs?: AsIsChoice;
   /**
    * Other versions of what the code opens. At each scan the first one whose conditions fit is used (or, with AI
    * personalization on, the AI chooses among the ones that fit). The campaign's own settings are the default.

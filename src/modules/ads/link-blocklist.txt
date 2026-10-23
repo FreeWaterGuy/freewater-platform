@@ -1,0 +1,72 @@
+# Where an ad's code may never lead (src/modules/ads/linkSafety.ts; docs/SWITCHES.md, "Link safety").
+#
+# One domain per line, after its kind: adult, malware, phishing or shortener. A domain covers its subdomains
+# (bit.ly covers www.bit.ly). Lines starting with # are notes. Kinds:
+#   adult      sexual content, escorts, adult dating, cams
+#   malware    sites known to hand out harmful downloads
+#   phishing   sites known to imitate others to take passwords or card numbers
+#   shortener  link shorteners and QR redirect services: they hide where people end up, and the owner can change
+#              where they lead after review. A company can allow one shortener for itself (adRules.linkAllowed);
+#              never an adult, malware or phishing domain.
+#
+# HOW TO UPDATE (anyone on the team, by a reviewed change to this file; the server reads it when it starts):
+#   1. Add or remove a line, keeping the kinds and alphabetical order within each kind.
+#   2. Run: npx vitest run test/link-safety.test.ts
+#   3. Deploy. The daily re-check (the "link-safety" job) then checks every live ad's links against the new list, and
+#      puts any ad that now leads somewhere listed on the holding page, with an alert to the team.
+# A company adds its own domains on Settings → Ads (adRules.linkBlocked); those apply to its ads only.
+# Malware and phishing domains change by the hour: this list holds only long-lived ones and test domains. The live
+# feed is Google Safe Browsing, used when the host sets SAFE_BROWSING_API_KEY (docs/RUNNING.md).
+
+adult adultfriendfinder.com
+adult bongacams.com
+adult brazzers.com
+adult cam4.com
+adult chaturbate.com
+adult eporner.com
+adult fansly.com
+adult livejasmin.com
+adult manyvids.com
+adult myfreecams.com
+adult onlyfans.com
+adult pornhub.com
+adult redtube.com
+adult spankbang.com
+adult stripchat.com
+adult xhamster.com
+adult xnxx.com
+adult xvideos.com
+adult youporn.com
+
+# Google's own test pages for Safe Browsing (harmless, always listed as unsafe), so the check can be tried end to end.
+malware malware.testing.google.test
+malware testsafebrowsing.appspot.com
+
+phishing phishing.testing.google.test
+
+shortener adf.ly
+shortener bc.vc
+shortener bit.do
+shortener bit.ly
+shortener bitly.com
+shortener bl.ink
+shortener buff.ly
+shortener cutt.ly
+shortener goo.gl
+shortener is.gd
+shortener lnkd.in
+shortener ouo.io
+shortener ow.ly
+shortener qr.net
+shortener qrco.de
+shortener rb.gy
+shortener rebrand.ly
+shortener s.id
+shortener shorte.st
+shortener shorturl.at
+shortener t.co
+shortener t.ly
+shortener tiny.cc
+shortener tinyurl.com
+shortener v.gd
+shortener x.co

@@ -310,10 +310,11 @@ describe('print files and previews', () => {
     expect(file).not.toMatch(/href="\/assets\//); // pictures are inside the file
     expect(file).not.toMatch(/<image\b(?![^>]*href="data:)/);
     expect(file).toMatch(/<path id="fwg-/); // letters as shapes
-    // The panel and the white ground run into the bleed; the ads at the edges are drawn over it too.
+    // The panel and the white ground run into the bleed; the ads at the edges run into it too.
     expect(file).toContain('<rect x="-6.25" y="-6.25" width="812.5" height="412.5" fill="#ffffff"/>');
     expect(file).toContain('<rect x="715" y="-6.25" width="91.25" height="412.5" fill="#000000"/>');
-    expect(file).toMatch(/data-fw-bleed-copy="1"/);
+    expect(file).toMatch(/data-fw-edge-bleed="1"/); // each edge piece carried out by its own edge (print/bleed.ts)
+    expect(file).not.toMatch(/data-fw-bleed-copy/);
     // The download is the same file.
     const dl = await call('GET', `/v1/units/${r.unit.id}/label.svg`, app.demoKeys!['machine-ATX-014']);
     expect(dl.body).toMatch(/width="8.125in" height="4.125in"/);

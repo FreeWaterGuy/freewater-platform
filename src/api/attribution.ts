@@ -89,7 +89,10 @@ export function attributionRoutes(app: App, server: FastifyInstance, route: (r: 
       for (const [k, v] of Object.entries(q)) if (k !== 'v' && k !== 'from' && k !== 'fwclid' && typeof v === 'string') out.searchParams.set(k, v);
       await app.persistence.flushUnlessPaused();
       return reply.header('cache-control', 'no-store').header('referrer-policy', 'no-referrer').redirect(out.toString(), 302); // nosemgrep: fw-open-redirect -- the address comes from the signed link's ad (reviewed), not the request; the query only adds parameters
-    } catch (e) { return fail(reply, e); }
+    } catch (e) {
+      if (e instanceof AttributionError && e.code === 'link_on_hold') return reply.code(409).header('cache-control', 'no-store').type('text/html; charset=utf-8').send('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Being checked</title><p style="font:16px system-ui;margin:2em">This link is being checked. Thanks for scanning: please try again later.</p>');
+      return fail(reply, e);
+    }
   });
 
   // ---------- the tag ----------
