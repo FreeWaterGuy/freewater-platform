@@ -4,6 +4,7 @@ import { consumerRoutes } from './consumer';
 import { adsRoutes } from './ads';
 import { artworkRoutes } from './artwork';
 import { aiReviewRoutes } from './aiReview';
+import { ratingsRoutes } from './ratings';
 import { deliveryRoutes } from './delivery';
 import { routeBuyRoutes } from './routeBuys';
 import { booksRoutes } from './books';
@@ -502,6 +503,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     if (extra) throw new ApiError(422, 'campaign_invalid', extra);
     platform.campaigns.set(c.id, c);
     platform.persist.campaign(c);
+    app.ratings.noteVersion(c); // rated in the background before it first prints
     // The QR code prints over the bottom-right corner of each piece: words of the artwork there are said, not refused.
     const warnings = await app.ads.artworkWarnings(company.id, b.svg, c.sizes);
     return { status: 201, body: { ...campaignView(c), ...(warnings.length ? { warnings } : {}) } };
@@ -554,6 +556,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     platform.persist.campaign(c);
     // Sent back to review with a new page: the AI reviewer looks again (its earlier verdict was about the old ad).
     if (changesPage && !reviewer && c.prepaid) await app.aiReview.onSubmitted(c).catch(() => null);
+    if (changesPage) app.ratings.noteVersion(c); // a new version: rated in the background
     return { body: campaignView(c) };
   } });
 
@@ -884,6 +887,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   adsRoutes(app, route, { me });
   artworkRoutes(app, route);
   aiReviewRoutes(app, route);
+  ratingsRoutes(app, route);
   deliveryRoutes(app, route, { me });
   routeBuyRoutes(app, route, { me });
   booksRoutes(app, route);

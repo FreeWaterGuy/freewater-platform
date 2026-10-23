@@ -31,8 +31,8 @@ import { adWords, KIND_SWITCH, ROUTE_KINDS, routeKindWords, type RouteBuyService
 // A draft with nothing in it: only the greeting, and (designing it yourself) no file uploaded to it, and on a new ad no
 // link or code style set. Files, links and styles are saved without a chat message (src/modules/artwork), so the
 // messages alone don't say a draft is empty; such a draft is listed, never reused for another ad, never closed.
-const EMPTY_DRAFT = `jsonb_array_length(messages) <= 1 and not exists (select 1 from ad_artwork a where a.draft_id = ad_drafts.id and a.company_id = ad_drafts.company_id)
-  and (campaign_id is not null or not (ad_drafts.data ? 'experienceId' or ad_drafts.data ? 'qr' or ad_drafts.data ? 'artwork'))`;
+const EMPTY_DRAFT = `(jsonb_array_length(messages) <= 1 and not exists (select 1 from ad_artwork a where a.draft_id = ad_drafts.id and a.company_id = ad_drafts.company_id)
+  and (campaign_id is not null or not (ad_drafts.data ? 'experienceId' or ad_drafts.data ? 'qr' or ad_drafts.data ? 'artwork')))`;
 
 export class AdsError extends Error {
   constructor(public status: number, public code: string, message: string) {
@@ -273,6 +273,9 @@ export class AdsService {
     let reply = out.reply;
     if (out.objection) await this.db.query(`insert into ai_objections (id, company_id, agent, subject, reason, at) values ($1,$2,$3,$4,$5,$6)`, [newId('obj'), r.companyId, out.objection.agent, `draft:${r.id}`, out.objection.reason, this.platform.bus.now().toISOString()]);
     if (problems.length) reply += `\n\nI couldn’t use part of that: ${problems.join(' ')}`;
+    // Designing it yourself, the sizes are the files': a size named that can't print here is said in the same plain words.
+    const sizeNotes = r.draft.mode === 'own' && this.artwork ? this.artwork.sizeNotes(r.companyId, input.text).filter((w) => !filesSaid.includes(w) && !reply.includes(w)) : [];
+    if (sizeNotes.length) reply += `\n\n${sizeNotes.join(' ')}`;
     if (filesSaid) reply = `${filesSaid}\n\n${reply}`;
     const sent = [...input.attachments, ...artFiles];
     r.messages.push({ role: 'user', text: input.text, ...(sent.length ? { attachments: sent.map((a) => a.name ?? 'file') } : {}), at: now });
@@ -588,6 +591,8 @@ export class AdsService {
     }
     // The AI reviewer looks at every paid ad as it comes in (src/modules/ads/aiReview.ts).
     if (c.prepaid) await this.afterPaidSubmit(c).catch(() => {});
+    // Every version is rated once before it first prints, in the background (src/modules/ads/ratings.ts).
+    this.onVersion(c);
     await this.flush();
     return { campaignId: c.id, status: 'in_review', ...(paid ? { paidCents: paid.totalCents, bottles: c.prepaid?.paid ?? 0 } : {}), ...(routePaid ? { route: { houses: routePaid.houses, weeks: routePaid.weeks, creditCents: routePaid.creditCents, cardCents: routePaid.cardCents, small: routePaid.small } } : {}), ...(feeCents ? { changeFeeCents: feeCents } : {}) };
   }
@@ -702,6 +707,9 @@ export class AdsService {
   afterPaidSubmit: (c: Campaign) => Promise<unknown> = async () => {};
   /** Set by the app: a person finally decided a paid ad; the AI reviewer's record notes it (AiReviewService.onDecided). */
   onDecided: (c: Campaign, decision: 'approved' | 'rejected', personId: string) => Promise<void> = async () => {};
+
+  /** Set by the app: a version of an ad was submitted; it's rated in the background, never waited on (AdRatingService.noteVersion). */
+  onVersion: (c: Campaign) => void = () => {};
 
   /** Set by the app: refuses an ad going live when its advertiser's credit doesn't allow it (CreditService). */
   beforeLive: (c: Campaign) => Promise<void> = async () => {};

@@ -853,6 +853,13 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 442 | `POST /v1/ads/drafts/:id/qr` | campaigns | no | advertiser only, its own open draft; *QR colours and styles* | OK (colour 4.5 to 1 on white, logo checked as SVG/picture, the code drawn and read back at the smallest size; the code stays ours, dynamic) |
 | 443 | `GET /v1/ads/campaigns/:id/links` | campaigns | no | advertiser only, its own ad | OK |
 | 444 | `POST /v1/ads/campaigns/:id/links` | campaigns | no | advertiser only, its own ad; money: the link fee (prepaid, *Change a link (fee)*), one order per change key (ad_orders_change_once), the total confirmed | OK: paid before the change is saved; a retry finds its order; a crash between is finished at start (recoverLinkChanges); the ad goes back to review; the campaign PATCH and codes PATCH refuse link changes on live paid ads while the fee is on (P3) |
+| 445 | `GET /v1/ratings` | campaigns | no | team only (no advertiser/machine key); *Ad ratings* | OK (078; read-only: the company's own ad versions, scores, results and calibration) |
+| 446 | `POST /v1/ratings/versions/:id/category` | campaigns | yes | team only (no advertiser/machine key); a person on the team, signed in, never a key; only the company's own versions | OK (078; every change logged in `ad_category_changes`, append-only) |
+| 447 | `POST /v1/ratings/subcategories` | campaigns | yes | team only (no advertiser/machine key); a person on the team, signed in, never a key | OK (078; archived, never deleted) |
+| 448 | `GET /v1/benchmarks` | campaigns | no | team only (no advertiser/machine key); *Benchmarks page* | OK (078; the network's figures are aggregates only, shown at 20+ ads from 5+ advertisers, no advertiser over half, and still so without the viewer's own ads; none unless the company contributes) |
+| 449 | `POST /v1/benchmarks/settings` | campaigns | yes | team only (no advertiser/machine key); a person, never a key; raising: anyone on the team; lowering: an owner with a reason; floors 20 ads, 5 advertisers (also in the database) | OK (078; read and written under a row lock; changes logged) |
+| 450 | `GET /v1/ads/drafts/:id/rating` | campaigns | no | advertiser only (its own draft); *Show the rating to advertisers* (off unless the company turns it on) | OK (078; score, meter and up to three tips only; never blocks paying) |
+| 451 | `GET /v1/ads/ratings` | campaigns | no | advertiser only (its own ads); *Show the rating to advertisers* | OK (078; score, meter and tips only) |
 
 ---
 

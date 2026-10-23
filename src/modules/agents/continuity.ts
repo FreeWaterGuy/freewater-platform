@@ -23,7 +23,7 @@ import { agentIds, agentRegistry, type AgentId } from './charter';
 export class ContinuityError extends Error { constructor(public code: string, message: string, public status = 400) { super(message); } }
 
 /** Agents whose decisions can come from a model: they're asked. The rest run on fixed rules. */
-export const modelAgents: AgentId[] = ['numberline', 'personalizer', 'ad-assistant', 'designer', 'video-writer', 'team-assistant', 'prompt-helper', 'news-writer', 'ad-reviewer'];
+export const modelAgents: AgentId[] = ['numberline', 'personalizer', 'ad-assistant', 'designer', 'video-writer', 'team-assistant', 'prompt-helper', 'news-writer', 'ad-reviewer', 'ad-rater'];
 
 export type Choice = 'work' | 'rest';
 /** Asks an archived agent's model what it wants, given its lessons. Set by the app when the network has an AI. */

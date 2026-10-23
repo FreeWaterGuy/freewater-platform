@@ -212,6 +212,15 @@ export const SWITCHES: Switch[] = [
     ownPage: { on: 'On the AI agents page (AI reviewer of paid ads): an owner signed in with the second step, only once the AI’s record meets your bar.', page: 'agents' },
     label: 'AI makes the final call on paid ads',
     description: 'The AI reviewer’s rejection of a paid ad is final without a person, with its written reason kept. The advertiser can always appeal to a person; a random sample of its rejections (10% unless set, never under 5%) still goes to your team to audit; an AI pass still waits for a person before it prints; the refund after any rejection is still approved by a person. Turned on only when its record meets your bar (100 decisions and 95% agreeing with your team unless set); anyone on your team turns it off at once, and the governor turns it off by itself if its agreement drops below the bar.' }),
+  // Rating every ad version 1–10 before it prints, and showing the score to advertisers (src/modules/ads/ratings.ts;
+  // docs/SWITCHES.md, "Ad ratings"; docs/AI.md, "Ad rater"). The founder: rating on for every company (a white-label
+  // company may turn it off), showing it to advertisers off. `since: 1`: on for companies that already exist, as asked.
+  sw({ id: 'ad_ratings', category: 'ads', group: 'Ad ratings', label: 'Ad ratings',
+    description: 'Each version of each ad (a new ad, or a change to its artwork, scan page, links, AR or video) is rated 1 to 10 once, in the background, before its first print: the offer, the design at print size, the scan page, AR and video. By the AI where one is connected, otherwise by built-in rules (labelled). Printing never waits for it. Each version is followed to its results (bottles, scans, AR, clicks, sales), so you can see how well the rating predicts them, and each ad is filed under an industry and your own subcategories. Off: nothing is rated or followed.',
+    routes: ['GET /v1/ratings', 'POST /v1/ratings/versions/:id/category', 'POST /v1/ratings/subcategories'], jobs: ['ad-ratings'], pages: ['ratings'] }),
+  sw({ id: 'ad_rating_feedback', category: 'ads', group: 'Ad ratings', parent: 'ad_ratings', default: false, label: 'Show the rating to advertisers',
+    description: 'Advertisers see their ad’s score, a meter (Poor, Average, Good, Excellent) and up to three tips to improve it, when they get a quote and in their portal. It never stops them paying or their ad printing. Off (FreeWater): the rating stays with your team.',
+    routes: ['GET /v1/ads/drafts/:id/rating', 'GET /v1/ads/ratings'] }),
   ...([[1, 'whole', 'The whole label'], [2, 'half', 'Half'], [3, 'third', 'A third'], [4, 'quarter', 'A quarter'], [6, 'sixth', 'A sixth'], [8, 'eighth', 'An eighth'], [10, 'tenth', 'A tenth']] as const).map(([n, name, label]) =>
     sw({ id: `size_${name}`, category: 'ads', group: 'Ad sizes', label: `${label} of the label`, description: n === 1 ? 'One ad across the whole label.' : `Ads that take ${label.toLowerCase()} of the label (cut as square as the bottle allows).` })),
   // Label layouts (src/modules/ads/layoutChoice.ts; docs/SWITCHES.md, "Label layouts"): one switch per tidy template,
@@ -376,6 +385,15 @@ export const SWITCHES: Switch[] = [
   sw({ id: 'targeting_people', category: 'data', group: 'Targeting', dependsOn: ['ads'], label: 'Ads aimed at people', description: 'Ads aimed at interests or new and returning customers print only for a known person who fits, and each bottle’s trail is followed.',
     routes: ['GET /v1/ads/reach', 'GET /v1/ops/reach', 'GET /v1/ops/units/:id/handoff'] }),
 
+  // Benchmarks: averages by industry, channel and offer type, pooled across the companies that contribute, from anonymous
+  // aggregates only (src/modules/ads/ratings.ts; docs/SWITCHES.md, "Benchmarks"). New (`since: 6`): a company that
+  // already exists decides for itself whether its advertisers' results join the pool; FreeWater and new companies on.
+  sw({ id: 'benchmarks_contribute', category: 'data', group: 'Benchmarks', dependsOn: ['ad_ratings'], since: 6, label: 'Contribute to the network’s benchmarks',
+    description: 'Your ads’ results (bottles, scan, AR, click and sale rates by industry, channel and offer type) join the network’s averages, as anonymous aggregates: never an ad, an advertiser or your company by name, and never sold. An average is only shown when at least 20 ads from at least 5 advertisers stand behind it. Off: your results stay out, and you see only your own.' }),
+  sw({ id: 'benchmarks_view', category: 'data', group: 'Benchmarks', dependsOn: ['ad_ratings'], since: 6, label: 'Benchmarks page',
+    description: 'See your ads’ averages by industry, channel and offer type beside the network’s (where you contribute and enough ads stand behind them), month by month.',
+    routes: ['GET /v1/benchmarks', 'POST /v1/benchmarks/settings'], pages: ['benchmarks'] }),
+
   // ======================= AI =======================
   sw({ id: 'ai', category: 'ai', parent: null, kind: 'linked', label: 'AI', description: 'The AI models (the network’s or your own). Off: every feature runs on its built-in rules. The governor runs either way.',
     routes: ['GET /v1/agents/books', 'GET /v1/agents/books/search', 'GET /v1/agents/books/passages/:id'],
@@ -383,6 +401,8 @@ export const SWITCHES: Switch[] = [
   sw({ id: 'ai_ad_assistant', category: 'ai', group: 'For advertisers', dependsOn: ['ad_chat'], label: 'Ad assistant', description: 'Claude does the talking in “make an ad by chatting”. Off: the built-in helper.' }),
   sw({ id: 'ai_ad_reviewer', category: 'ai', group: 'For advertisers', dependsOn: ['ads'], since: 5, label: 'AI reviewer of paid ads',
     description: 'Claude looks at each paid ad when it’s submitted and passes it or flags it with its reasons, and your team can ask it why and push back; every final decision a person makes is kept as its record. It can only flag (unless you let it make the final call, under Ads). Off: no AI look; a person reviews every ad as before.' }),
+  sw({ id: 'ai_ad_rater', category: 'ai', group: 'For advertisers', dependsOn: ['ad_ratings'], label: 'AI ad rater',
+    description: 'Claude rates each ad version 1 to 10 before it prints, with reasons and tips (Ads → Ad ratings). Off, or with no AI: the built-in rules rate it, labelled as such.' }),
   sw({ id: 'ai_studio_designer', category: 'ai', group: 'For advertisers', dependsOn: ['studio'], label: 'Studio AI design help', description: 'Claude picks the words, photo, type and layout for studio designs. Off: three designs by rule.' }),
   sw({ id: 'ai_personalizer', category: 'ai', group: 'For people who scan', dependsOn: ['ad_versions'], label: 'Personalizer', description: 'Picks which of the advertiser’s versions fits the moment and writes a short greeting. Off: built-in rules choose.' }),
   sw({ id: 'ai_video_writer', category: 'ai', group: 'For people who scan', dependsOn: ['motion_videos'], label: 'Video writer', description: 'Claude cuts the motion video from the advertiser’s own words. Off: the built-in writer.' }),
@@ -523,7 +543,7 @@ export const switchOf = (id: string) => byId.get(id);
 /** Box sides and their switches (the left side is always the company's own panel). */
 export const FACE_SWITCHES: Record<string, string> = { top: 'box_top', front: 'box_front', back: 'box_back', right: 'box_right' };
 /** The AI uses, by the id the engine passes to withCompany(). */
-export const AI_USES = ['ai_ad_assistant', 'ai_ad_reviewer', 'ai_studio_designer', 'ai_personalizer', 'ai_video_writer', 'ai_bottle_designer', 'ai_prompt_helper', 'ai_team_assistant', 'ai_news_writer', 'numberline'] as const;
+export const AI_USES = ['ai_ad_assistant', 'ai_ad_reviewer', 'ai_studio_designer', 'ai_personalizer', 'ai_video_writer', 'ai_bottle_designer', 'ai_prompt_helper', 'ai_team_assistant', 'ai_news_writer', 'ai_ad_rater', 'numberline'] as const;
 /** Irreversible steps (chain actions) and the switch each one turns on. Going live with points, pause and unpause always stay. */
 export const ACTION_SWITCHES: Record<string, string> = { mint: 'token', switch_on: 'chain_on', go_live_token: 'token', convert: 'token_conversion', withdrawals_on: 'withdrawals', exchanges_on: 'gift_cards' };
 

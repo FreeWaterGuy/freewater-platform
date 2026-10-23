@@ -17,6 +17,7 @@ import { templateFileName, templatePdf, templatePng, templateSvg } from './templ
 import { ArtworkError, applyFix, fixWords, matchShape, preflight, printMarkup, readSource, type ArtKind, type FixId, type Report, type Source } from './preflight';
 import { isLive, linkChangeFee, linkChangeKey, linksChanged, linksOf, withLink, LINK_FEE_SWITCH } from './links';
 import { pdfToolsAvailable } from './pdf';
+import { productWords, sizeRefusal } from '../ads/layoutChoice';
 
 // "I'll design it myself" (README, "Design it yourself"; docs/SWITCHES.md). Templates for every piece, uploads in the
 // ad chat or on the upload page matched to their size and checked (preflight.ts), one-tap fixes, the QR code's colour
@@ -57,7 +58,27 @@ export class ArtworkService {
     for (const id of [SWITCH.own, ...ids]) if (!this.on(companyId, id)) throw new AdsError(404, 'feature_off', `${({ design_yourself: 'Designing it yourself', template_downloads: 'Template downloads', artwork_upload: 'Uploading your own artwork', qr_styles: 'QR colours and styles' } as Record<string, string>)[id] ?? 'This'} is switched off for ${this.company(companyId).name}.`);
   }
 
-  shapes(companyId: string): PieceShape[] { return pieceShapes(this.platform, this.company(companyId)); }
+  /**
+   * The products an advertiser designs for: those the ad prints on (AdsService.adProducts: where ads are paid up front,
+   * the standard bottle), standard first. Templates, matching and checks offer only sizes that bottle can print.
+   */
+  products(companyId: string) {
+    const prints = new Set(this.ads.adProducts(companyId).map((p) => p.id));
+    return adProducts(this.platform, companyId).filter((p) => prints.has(p.id));
+  }
+  shapes(companyId: string): PieceShape[] { return pieceShapes(this.platform, this.company(companyId), this.products(companyId)); }
+  /** A size named for a file that no piece here has: the same plain words as the chat and the quote (layoutChoice.sizeRefusal). */
+  private unprintable(companyId: string, share: Share | undefined): AdsError | null {
+    if (share === undefined) return null;
+    const shapes = this.shapes(companyId);
+    if (shapes.some((s) => s.share === share)) return null;
+    const company = this.company(companyId);
+    return new AdsError(422, 'size_not_printable', sizeRefusal(share, [...new Set(shapes.map((s) => s.share))], productWords(this.products(companyId)), company.name));
+  }
+  /** Plain words for each size a message names that can't print here (the chat says them; nothing is dropped silently). */
+  sizeNotes(companyId: string, text: string): string[] {
+    return sizesNamed(text).map((s) => this.unprintable(companyId, s)?.message).filter((m): m is string => !!m);
+  }
   private shape(companyId: string, id: string | null | undefined) { return id ? this.shapes(companyId).find((s) => s.id === id) ?? null : null; }
 
   // ---------- templates ----------
@@ -72,7 +93,7 @@ export class ArtworkService {
       company: company.name, pdf,
       accepts: pdf ? ['PDF', 'SVG', 'PNG', 'JPG'] : ['SVG', 'PNG', 'JPG'],
       rules: { minDpi: 300, minTextPt: 6, colours: { cut: 'red: the bleed, cut off', image: 'dark blue: the piece (image-safe)', text: 'light blue: text-safe', qr: 'white: the QR box, leave empty' } },
-      products: adProducts(this.platform, companyId).map((p) => ({ id: p.id, name: p.name, shapes: shapes.filter((s) => s.productId === p.id).map((s) => this.templateView(s, company)) })).filter((p) => p.shapes.length),
+      products: this.products(companyId).map((p) => ({ id: p.id, name: p.name, shapes: shapes.filter((s) => s.productId === p.id).map((s) => this.templateView(s, company)) })).filter((p) => p.shapes.length),
     };
   }
   private templateView(s: PieceShape, company: CompanyConfig) {
@@ -155,6 +176,8 @@ export class ArtworkService {
   async upload(o: { companyId: string; advertiserId: string; draftId: string; bytes: Uint8Array; name?: string; share?: Share; shapeId?: string }): Promise<ArtworkRef> {
     this.gate(o.companyId, SWITCH.upload);
     await this.readDraft(o.companyId, o.advertiserId, o.draftId); // the draft is theirs (before any work is done)
+    const cant = this.unprintable(o.companyId, o.share);
+    if (cant) throw cant;
     let src: Source;
     try { src = await readSource(o.bytes); } catch (e) { throw asAds(e); }
     const checked = await this.check(o.companyId, src, { share: o.share, shapeId: o.shapeId });
@@ -168,6 +191,8 @@ export class ArtworkService {
   /** Say which size a file is for (when it fits two, or none): checked again for that size. */
   async assign(o: { companyId: string; advertiserId: string; draftId: string; fileId: string; share?: Share; shapeId?: string }): Promise<ArtworkRef> {
     this.gate(o.companyId, SWITCH.upload);
+    const cant = this.unprintable(o.companyId, o.share);
+    if (cant) throw cant;
     const row = await this.fileRow(o.companyId, o.advertiserId, o.fileId);
     const src = await readSource(row.bytes).catch((e) => { throw asAds(e); });
     const checked = await this.check(o.companyId, src, { share: o.share, shapeId: o.shapeId });
@@ -411,6 +436,8 @@ export class ArtworkService {
     c.active = false;
     c.review = { status: 'submitted', at: this.platform.bus.now().toISOString() };
     this.platform.persist.campaign(c);
+    // Where the code leads is part of the ad: a new version, rated before it first prints (src/modules/ads/ratings.ts).
+    this.ads.onVersion(c);
   }
 
   /** Link changes paid for but not saved (a crash between): saved now, from what was kept with the payment. */

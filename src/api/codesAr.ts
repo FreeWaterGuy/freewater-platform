@@ -105,6 +105,7 @@ export function codesArRoutes(app: App, server: FastifyInstance, route: (r: Rout
     platform.persist.campaign(c);
     // Sent back to review with new words: the AI reviewer looks again (its earlier verdict was about the old ad).
     if (resubmitted && c.prepaid) await app.aiReview.onSubmitted(c).catch(() => null);
+    if (changesWhatPeopleSee(x)) app.ratings.noteVersion(c); // a new version: rated in the background
     return { body: extrasView(c) };
   } });
 
