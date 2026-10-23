@@ -128,7 +128,7 @@ describe('the registry is the whole platform', () => {
   it('tags every use of AI with its switch, so each falls back to rules when it’s off', () => {
     for (const use of AI_USES) {
       expect(byId.has(use), use).toBe(true);
-      const tagged = new RegExp(`'${use}'`).test(['src/modules/experiences/service.ts', 'src/modules/custom/service.ts', 'src/modules/ads/service.ts', 'src/modules/team/service.ts', 'src/modules/numberline/service.ts', 'src/modules/video/service.ts', 'src/modules/studio/service.ts', 'src/modules/games/prompter.ts', 'src/modules/news/service.ts', 'src/modules/ads/aiReview.ts'].map(src).join('\n'));
+      const tagged = new RegExp(`'${use}'`).test(['src/modules/experiences/service.ts', 'src/modules/custom/service.ts', 'src/modules/ads/service.ts', 'src/modules/team/service.ts', 'src/modules/numberline/service.ts', 'src/modules/video/service.ts', 'src/modules/studio/service.ts', 'src/modules/games/prompter.ts', 'src/modules/news/service.ts', 'src/modules/ads/aiReview.ts', 'src/modules/ads/rating.ts'].map(src).join('\n'));
       expect(tagged, use).toBe(true);
     }
     expect(src('src/modules/ai/routing.ts')).toMatch(/useOn\(companyId, use\)/);

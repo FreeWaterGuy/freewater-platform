@@ -1,4 +1,5 @@
-import type { BoxProduct, Campaign, CompanyConfig, Share, Unit } from '../../core/types';
+import type { BoxProduct, Campaign, CompanyConfig, Product, Share, Unit } from '../../core/types';
+import { productWords, sizeRefusal } from './layoutChoice';
 import { whereOnLabel } from '../fillers/unsold';
 import { adArea, shareLabel } from './layouts';
 import { outlineText } from '../print/outline';
@@ -14,15 +15,24 @@ import type { ExperienceHost } from '../experiences/host';
 import { themeFor } from '../experiences/host';
 import { givingLine, pieceOf, slotQr, withLabel } from '../print/renderer';
 import { wordsUnderCode } from '../print/svgCreative';
+import { artworkCreative } from '../artwork/creative';
 import { qrSvg } from '../print/qr';
 import { companyQrStyle } from '../codes/style';
 import { boxFaceQr, boxFaceSizes, stopCodeBox } from '../packs/boxRenderer';
 import type { AdAssistant, ChatMessage } from '../ai/contract';
+import { starterSuggestions } from '../ai/builtinAssistant';
 import { allowedSizes, applyPatch, draftTargeting, estimate, missing, missingLabels, themeFromPoster, type AdDraft } from './draft';
 import { withCompany } from '../ai/routing';
 import { adBilling, extraPrice, feesOnWords, prepaidModel } from './billing';
 import type { PrepaidService, Quote } from './prepaid';
 import { adWords, KIND_SWITCH, ROUTE_KINDS, routeKindWords, type RouteBuyService, type RouteQuoteInput } from './routeBuys';
+
+/** A draft with nothing in it: only the assistant's greeting (nothing said, no design or scan page added from the studio). */
+// A draft with nothing in it: only the greeting, and (designing it yourself) no file uploaded to it, and on a new ad no
+// link or code style set. Files, links and styles are saved without a chat message (src/modules/artwork), so the
+// messages alone don't say a draft is empty; such a draft is listed, never reused for another ad, never closed.
+const EMPTY_DRAFT = `(jsonb_array_length(messages) <= 1 and not exists (select 1 from ad_artwork a where a.draft_id = ad_drafts.id and a.company_id = ad_drafts.company_id)
+  and (campaign_id is not null or not (ad_drafts.data ? 'experienceId' or ad_drafts.data ? 'qr' or ad_drafts.data ? 'artwork')))`;
 
 export class AdsError extends Error {
   constructor(public status: number, public code: string, message: string) {
@@ -80,11 +90,16 @@ export class AdsService {
   private async row(id: string, companyId: string, advertiserId: string): Promise<DraftRow> {
     const r = (await this.db.query<any>(`select * from ad_drafts where id = $1 and company_id = $2 and advertiser_id = $3`, [id, companyId, advertiserId])).rows[0];
     if (!r) throw new AdsError(404, 'not_found', 'Draft not found.');
-    return { id: r.id, companyId: r.company_id, advertiserId: r.advertiser_id, status: r.status, draft: parse(r.data), messages: parse(r.messages), campaignId: r.campaign_id, updatedAt: new Date(r.updated_at).toISOString() };
+    const draft = parse<AdDraft>(r.data);
+    // Designed themselves (src/modules/artwork): it prints at the sizes it has files for, on bottles only.
+    if (draft.mode === 'own') { draft.sizes = [...new Set((draft.artwork ?? []).filter((f) => f.shapeId && f.share).map((f) => f.share!))].sort((a, b) => a - b); draft.formats = ['label']; }
+    return { id: r.id, companyId: r.company_id, advertiserId: r.advertiser_id, status: r.status, draft, messages: parse(r.messages), campaignId: r.campaign_id, updatedAt: new Date(r.updated_at).toISOString() };
   }
 
   private async save(r: DraftRow) {
-    await this.db.query(`update ad_drafts set data = $2, messages = $3, status = $4, campaign_id = $5, updated_at = now() where id = $1`, [r.id, JSON.stringify(r.draft), JSON.stringify(r.messages), r.status, r.campaignId]);
+    // The advertiser's own files and code style are kept by src/modules/artwork, in their own steps: a chat turn saving
+    // the draft it read before an upload finished never drops them.
+    await this.db.query(`update ad_drafts set data = ($2::jsonb - 'artwork' - 'qr') || (select coalesce(jsonb_object_agg(e.k, e.v), '{}'::jsonb) from jsonb_each(ad_drafts.data) as e(k, v) where e.k in ('artwork', 'qr')), messages = $3, status = $4, campaign_id = $5, updated_at = now() where id = $1`, [r.id, JSON.stringify(r.draft), JSON.stringify(r.messages), r.status, r.campaignId]);
   }
 
   /**
@@ -101,11 +116,14 @@ export class AdsService {
   view(r: DraftRow) {
     const company = this.platform.companies.get(r.companyId)!;
     const left = missing(r.draft, this.host);
+    const fit = this.draftSizes(r);
     const { poster, ...rest } = r.draft;
     return {
       id: r.id, status: r.status, campaignId: r.campaignId, updatedAt: r.updatedAt, boxes: this.boxesOn(r.companyId),
       draft: { ...rest, ...(rest.formats ? { formats: this.formatsFor(r.companyId, rest.formats) } : {}), poster: poster ? { ...poster, image: poster.image ? { role: poster.image.role, attached: true } : undefined } : undefined },
       messages: r.messages, missing: left.map((m) => ({ id: m, label: missingLabels[m] })), ready: left.length === 0,
+      // The sizes that print where this ad goes, and why any size it has can't (the review page shows both).
+      printableSizes: fit.sizes, sizeNotes: fit.notes,
       estimate: estimate(r.draft, company, this.maxFactor(company.id), r.campaignId ? this.platform.campaigns.get(r.campaignId) : undefined, this.platform.featureOn), assistant: this.assistant.name,
       payment: this.paymentFor(r),
     };
@@ -115,6 +133,8 @@ export class AdsService {
   prepaid?: PrepaidService;
   /** Set by the app: buying on delivery routes (modules/ads/routeBuys). */
   routeBuys?: RouteBuyService;
+  /** Set by the app: "I'll design it myself", their own artwork (modules/artwork). */
+  artwork?: import('../artwork/service').ArtworkService;
 
   /**
    * What submitting this draft will charge, for a company where ads are paid up front: the bottles (a new ad) or the
@@ -142,16 +162,22 @@ export class AdsService {
     return this.prepaid.quote(companyId, { bottles: d.buy.prints, ...choice }, d.sizes);
   }
 
-  async createDraft(input: { companyId: string; advertiserId: string; userId?: string; fromCampaignId?: string }) {
+  async createDraft(input: { companyId: string; advertiserId: string; userId?: string; fromCampaignId?: string; mode?: AdDraft['mode'] }) {
     const adv = await this.advertiser(input.companyId, input.advertiserId);
-    let draft: AdDraft = { category: adv.category };
+    let draft: AdDraft = { category: adv.category, ...(input.mode && input.mode !== 'assistant' ? { mode: input.mode } : {}) };
     let greeting = `Hi! Tell me about the ad you want for ${adv.name}. What are you offering? You can attach your logo or a photo too.`;
+    // "I'll design it myself" (src/modules/artwork): their own files, one per size.
+    if (input.mode === 'own') {
+      if (!this.artwork) throw new AdsError(404, 'feature_off', 'Designing it yourself isn’t available here.');
+      this.artwork.gate(input.companyId);
+      greeting = `Upload your artwork here (PDF, SVG, PNG or JPG), one file per size: download a template for each size first so it fits. Tell me how many bottles, and the link your QR code should lead to. I’ll check every file before you pay.`;
+    }
     if (input.fromCampaignId) {
       const c = this.platform.campaigns.get(input.fromCampaignId);
       if (!c || c.companyId !== input.companyId || c.advertiserId !== input.advertiserId) throw new AdsError(404, 'not_found', 'Campaign not found.');
-      if (c.creativeRef?.kind !== 'poster' && c.creativeRef?.kind !== 'studio') throw new AdsError(422, 'not_editable_here', 'This ad’s artwork was uploaded as a file. Upload a new file to change it.');
+      if (c.creativeRef?.kind !== 'poster' && c.creativeRef?.kind !== 'studio' && c.creativeRef?.kind !== 'artwork') throw new AdsError(422, 'not_editable_here', 'This ad’s artwork was uploaded as a file. Upload a new file to change it.');
       draft = {
-        name: c.name, category: c.category, ...(c.creativeRef.kind === 'studio' ? { studio: c.creativeRef.spec } : { poster: c.creativeRef.spec }), sizes: c.sizes, formats: this.formatsFor(input.companyId, c.formats), locations: c.targeting.locations ?? 'all',
+        name: c.name, category: c.category, ...(c.creativeRef.kind === 'studio' ? { studio: c.creativeRef.spec } : c.creativeRef.kind === 'artwork' ? { mode: 'own' as const, ...(c.qr?.color || c.qr?.logo ? { qr: { ...(c.qr.color ? { color: c.qr.color } : {}), ...(c.qr.logo ? { logo: c.qr.logo } : {}) } } : {}) } : { poster: c.creativeRef.spec }), sizes: c.sizes, formats: this.formatsFor(input.companyId, c.formats), locations: c.targeting.locations ?? 'all',
         buy: c.buy.type === 'guaranteed' ? { type: 'guaranteed', prints: c.buy.remainingPrints, unchanged: true } : { type: 'bid', dailyCapCents: c.buy.dailyCapCents, maxCentsPerLabel: c.buy.maxCentsPerLabel, unchanged: true },
         experienceId: c.experienceId, experienceConfig: c.experienceConfig, theme: c.theme,
       };
@@ -165,24 +191,47 @@ export class AdsService {
         ? `What would you like to change? The bottles not printed yet will carry the new ad once it’s reviewed. Changing it costs $${(fee / 100).toFixed(2)}, paid when you submit; the size and the bottles you paid for stay as they are.`
         : 'What would you like to change? Changes go back to review before they print.';
     }
+    // An empty draft for the same thing (nothing said, nothing added: only the greeting) is used again, not doubled:
+    // "New ad", then the studio's "Make an ad with this design", is one ad, not an empty one left behind.
+    const empty = (await this.db.query<any>(`select id from ad_drafts where company_id = $1 and advertiser_id = $2 and status = 'open' and campaign_id is not distinct from $3 and ${EMPTY_DRAFT} order by updated_at desc limit 1`,
+      [input.companyId, input.advertiserId, input.fromCampaignId ?? null])).rows[0];
+    if (empty) return this.getDraft(empty.id, input.companyId, input.advertiserId);
     const r: DraftRow = { id: newId('dr'), companyId: input.companyId, advertiserId: input.advertiserId, status: 'open', draft, messages: [{ role: 'assistant', text: greeting, at: this.platform.bus.now().toISOString() }], campaignId: input.fromCampaignId ?? null, updatedAt: this.platform.bus.now().toISOString() };
     await this.db.query(`insert into ad_drafts (id, company_id, advertiser_id, created_by, status, data, messages, campaign_id) values ($1,$2,$3,$4,'open',$5,$6,$7)`, [r.id, r.companyId, r.advertiserId, input.userId ?? null, JSON.stringify(r.draft), JSON.stringify(r.messages), r.campaignId]);
-    return this.view(r);
+    // Changing an ad they designed themselves: its files come along, checked again.
+    const was = input.fromCampaignId ? this.platform.campaigns.get(input.fromCampaignId)?.creativeRef : undefined;
+    if (was?.kind === 'artwork' && this.artwork) {
+      await this.artwork.adopt({ companyId: r.companyId, advertiserId: r.advertiserId, draftId: r.id, files: was.files.map((f) => ({ fileId: f.fileId, shapeId: f.shapeId })) });
+      return { ...this.view(await this.row(r.id, r.companyId, r.advertiserId)), suggestions: starterSuggestions(adv, true) };
+    }
+    return { ...this.view(r), suggestions: starterSuggestions(adv, !!r.campaignId) };
   }
 
   async getDraft(id: string, companyId: string, advertiserId: string) {
-    return this.view(await this.row(id, companyId, advertiserId));
+    const r = await this.row(id, companyId, advertiserId);
+    // Before anything is said, the chat's suggestions come from this advertiser's own business (never another kind).
+    return { ...this.view(r), ...(r.messages.length <= 1 ? { suggestions: starterSuggestions(await this.advertiser(companyId, advertiserId), !!r.campaignId) } : {}) };
   }
 
+  /** Unfinished ads: never an empty one (nothing said or added in it). */
   async listDrafts(companyId: string, advertiserId: string) {
-    const rows = (await this.db.query<any>(`select id, status, data, campaign_id, updated_at from ad_drafts where company_id = $1 and advertiser_id = $2 and status = 'open' order by updated_at desc limit 20`, [companyId, advertiserId])).rows;
+    const rows = (await this.db.query<any>(`select id, status, data, campaign_id, updated_at from ad_drafts where company_id = $1 and advertiser_id = $2 and status = 'open' and not ${EMPTY_DRAFT} order by updated_at desc limit 20`, [companyId, advertiserId])).rows;
     return rows.map((r) => { const d = parse<AdDraft>(r.data); return { id: r.id, campaignId: r.campaign_id, headline: d.studio?.headline ?? d.poster?.headline ?? null, updatedAt: new Date(r.updated_at).toISOString() }; });
   }
 
   /** One turn of the chat: the assistant proposes, the platform checks, and the draft is saved. */
-  async chat(input: { id: string; companyId: string; advertiserId: string; text: string; attachments: { dataUrl: string; name?: string }[] }) {
-    const r = await this.row(input.id, input.companyId, input.advertiserId);
+  async chat(input: { id: string; companyId: string; advertiserId: string; text: string; attachments: { dataUrl: string; name?: string }[]; files?: { dataUrl: string; name?: string }[] }) {
+    let r = await this.row(input.id, input.companyId, input.advertiserId);
     if (r.status !== 'open') throw new AdsError(409, 'already_submitted', 'This ad was already submitted. Start a change from the campaign instead.');
+    // Designed themselves: every file attached is their artwork, checked and matched to its size first (src/modules/artwork).
+    let filesSaid = '';
+    const artFiles = [...(input.files ?? []), ...(r.draft.mode === 'own' ? input.attachments : [])];
+    if (artFiles.length) {
+      if (!this.artwork) throw new AdsError(404, 'feature_off', 'Uploading your own artwork isn’t available here.');
+      filesSaid = await this.artwork.fromChat({ companyId: input.companyId, advertiserId: input.advertiserId, draftId: input.id, text: input.text, files: artFiles.map((f) => ({ bytes: Buffer.from(f.dataUrl.slice(f.dataUrl.indexOf(',') + 1), 'base64'), name: f.name })) });
+      r = await this.row(input.id, input.companyId, input.advertiserId);
+      input = { ...input, attachments: r.draft.mode === 'own' ? [] : input.attachments };
+    }
     // A picture goes on the label as it is: one claiming more than 40 megapixels couldn't be drawn or printed.
     for (const a of input.attachments) {
       const over = await overPixelLimit(Buffer.from(a.dataUrl.slice(a.dataUrl.indexOf(',') + 1), 'base64'));
@@ -195,6 +244,7 @@ export class AdsService {
     // doesn't fill in a poster of its own.
     const st = r.draft.studio;
     const seen: AdDraft = st ? { ...r.draft, poster: { brand: st.brand, headline: st.headline, ...(st.sub ? { sub: st.sub } : {}), colors: { bg: st.colors.paper, fg: st.colors.ink, accent: st.colors.accent } } } : r.draft;
+    const fit = this.draftSizes(r);
     const out = await withCompany(r.companyId, async () => this.assistant.respond({
       draft: seen,
       history: r.messages.map(({ role, text, attachments }) => ({ role, text, attachments })),
@@ -205,7 +255,7 @@ export class AdsService {
         company: { name: company.name, blockedCategories: company.adRules.blockedCategories, giving: givingLine(company, locations[0]?.id ?? '') },
         machines: locations.map((l) => ({ id: l.id, name: l.name, kind: l.kind })),
         plugins: this.host.list().filter((p) => p.id !== 'custom-experience' && p.id !== 'house-promo' && p.id !== 'news').map(({ id, name, description, example, configSchema }) => ({ id, name, description, example, configSchema })),
-        icons: posterIcons, fonts: Object.keys(posterFonts), sizes: this.printableSizes(company),
+        icons: posterIcons, fonts: Object.keys(posterFonts), sizes: fit.sizes, sizesOn: fit.on,
         prices: { perPrintByShare: company.prices.perPrintByShare as any, bidStartsAt: bidFloor(company), perScan: company.prices.perScan, perArLaunch: company.prices.perArLaunch, commissionPercent: company.prices.commissionPercent, ...(prepaidModel(company) ? { prepaid: this.prepaidTerms(company.id) } : {}) },
         missing: missing(r.draft, this.host),
         boxes: this.boxesOn(r.companyId),
@@ -214,14 +264,21 @@ export class AdsService {
     // With a studio design, its words and colors change only when the message asks about them (an offer named for
     // the scan page isn't a new headline).
     const patch = { ...(out.patch ?? {}) };
+    // Their own artwork is the design: the chat doesn't draw one, and its sizes are the files' (src/modules/artwork).
+    if (r.draft.mode === 'own') { delete patch.poster; delete patch.useImage; delete patch.removeImage; delete patch.sizes; delete patch.formats; delete patch.studio; }
     if (st && patch.poster && !/\b(headline|title|big words|say|small line|subline|underneath|wording|colou?rs?|background|brand name)\b|["“]/i.test(input.text)) delete patch.poster;
-    const { draft, problems } = applyPatch(r.draft, patch, { company, locations, host: this.host, attachments: input.attachments, sizes: this.printableSizes(company), boxes: this.boxesOn(r.companyId) });
+    const { draft, problems } = applyPatch(r.draft, patch, { company, locations, host: this.host, attachments: input.attachments, sizes: fit.sizes, sizesOn: fit.on, boxes: this.boxesOn(r.companyId) });
     const now = this.platform.bus.now().toISOString();
     const left = missing(draft, this.host);
     let reply = out.reply;
     if (out.objection) await this.db.query(`insert into ai_objections (id, company_id, agent, subject, reason, at) values ($1,$2,$3,$4,$5,$6)`, [newId('obj'), r.companyId, out.objection.agent, `draft:${r.id}`, out.objection.reason, this.platform.bus.now().toISOString()]);
     if (problems.length) reply += `\n\nI couldn’t use part of that: ${problems.join(' ')}`;
-    r.messages.push({ role: 'user', text: input.text, ...(input.attachments.length ? { attachments: input.attachments.map((a) => a.name ?? 'picture') } : {}), at: now });
+    // Designing it yourself, the sizes are the files': a size named that can't print here is said in the same plain words.
+    const sizeNotes = r.draft.mode === 'own' && this.artwork ? this.artwork.sizeNotes(r.companyId, input.text).filter((w) => !filesSaid.includes(w) && !reply.includes(w)) : [];
+    if (sizeNotes.length) reply += `\n\n${sizeNotes.join(' ')}`;
+    if (filesSaid) reply = `${filesSaid}\n\n${reply}`;
+    const sent = [...input.attachments, ...artFiles];
+    r.messages.push({ role: 'user', text: input.text, ...(sent.length ? { attachments: sent.map((a) => a.name ?? 'file') } : {}), at: now });
     r.messages.push({ role: 'assistant', text: reply, at: now });
     r.draft = draft;
     await this.save(r);
@@ -229,12 +286,35 @@ export class AdsService {
   }
 
   /**
-   * The sizes an advertiser can choose here: those some label layout the company allows can hold, on any of its
-   * products (its Label layouts and size switches, its choice for each product, its most ads on a bottle).
+   * The sizes an advertiser can choose here: those some label layout the company allows can hold on the products the
+   * ad prints on (`adProducts`; its Label layouts and size switches, its choice for each product, its most ads on a bottle).
    */
-  printableSizes(company: CompanyConfig): Share[] {
-    const products = [...this.platform.products.values()].filter((p) => !p.companyId || p.companyId === company.id);
+  printableSizes(company: CompanyConfig, products = this.adProducts(company.id)): Share[] {
     return [...new Set(products.flatMap((p) => this.platform.layoutsOf(company, p).flatMap((l) => l.shares)))].sort((a, b) => a - b);
+  }
+
+  /**
+   * The products an ad prints on, so it's offered only sizes that print there: the product its bottles are paid for
+   * (an ad being made where ads are paid up front: the standard one, as the review page quotes it and route bottles
+   * print), else the products it's aimed at, else every product the company hands out.
+   */
+  adProducts(companyId: string, c?: Pick<Campaign, 'prepaid' | 'targeting'>, paidUpFront = prepaidModel(this.platform.companies.get(companyId)!)): Product[] {
+    const mine = (p: Product | undefined): p is Product => !!p && (!p.companyId || p.companyId === companyId);
+    const paidOn = c?.prepaid ? this.platform.products.get(c.prepaid.productId) : undefined;
+    if (mine(paidOn)) return [paidOn];
+    const aimed = (c?.targeting?.products ?? []).map((id) => this.platform.products.get(id)).filter(mine);
+    if (aimed.length) return aimed;
+    if (paidUpFront) return [this.platform.standardProduct(companyId)];
+    return [...this.platform.products.values()].filter(mine);
+  }
+
+  /** The sizes a draft can print at, and plain words for any size it has that can't (never dropped silently). */
+  private draftSizes(r: DraftRow) {
+    const company = this.platform.companies.get(r.companyId)!;
+    const products = this.adProducts(r.companyId, r.campaignId ? this.platform.campaigns.get(r.campaignId) : undefined);
+    const sizes = this.printableSizes(company, products), on = productWords(products);
+    const notes = (r.draft.sizes ?? []).filter((s) => !sizes.includes(s)).map((s) => sizeRefusal(s, sizes, on, company.name));
+    return { sizes, on, notes };
   }
 
   /** How ads are paid for here, in the terms the assistant and the portal use. */
@@ -258,7 +338,11 @@ export class AdsService {
     const d = r.draft;
     const spec = { brand: adv.name, headline: 'Your headline', colors: { bg: '#EEF6FB', fg: '#0B0B0B', accent: '#1E7DB8' }, ...(d.poster ?? {}) } as PosterSpec;
     const ready = !!d.experienceId && this.host.checkConfig(d.experienceId, d.experienceConfig ?? {}) === null;
-    return this.render({ companyId, advertiserId, advertiserName: adv.name, category: d.category ?? adv.category, draw: (w, h, ctx) => (d.studio ? renderStudio(d.studio, w, h, ctx) : renderPoster(spec, w, h)), sizes: d.sizes?.length ? d.sizes : ([2, 4, 6] as Share[]), formats: d.formats ?? ['label'], experience: ready ? { id: d.experienceId!, config: d.experienceConfig ?? {} } : null, theme: themeFromPoster(d) });
+    // Their own artwork: every file matched to a piece, passing or not yet, so they see it before fixing (src/modules/artwork).
+    const own = d.mode === 'own' && this.artwork ? await this.artwork.printFiles(companyId, advertiserId, d, { preview: true }) : null;
+    if (d.mode === 'own' && !own?.length) throw new AdsError(409, 'no_artwork', 'Upload your artwork first: the preview shows it on a real label.');
+    const ownArt = own?.length ? artworkCreative(own) : null;
+    return this.render({ companyId, advertiserId, advertiserName: adv.name, category: d.category ?? adv.category, draw: (w, h, ctx) => (ownArt ? ownArt.svg(w, h, ctx) : d.studio ? renderStudio(d.studio, w, h, ctx) : renderPoster(spec, w, h)), sizes: d.sizes?.length ? d.sizes : ([2, 4, 6] as Share[]), formats: d.formats ?? ['label'], experience: ready ? { id: d.experienceId!, config: d.experienceConfig ?? {} } : null, theme: themeFromPoster(d) });
   }
 
   /** Puts the photos an ad points at inside its preview (set by the app; previews without photos need nothing). */
@@ -425,13 +509,18 @@ export class AdsService {
     if (left.length) throw new AdsError(422, 'not_ready', `Before submitting, add ${left.map((m) => missingLabels[m]).join(', ')}.`);
     const company = this.platform.companies.get(r.companyId)!;
     // An ad whose sizes fit on none of the company's bottles (in the layouts it allows) would be approved and never print.
-    const prints = new Set(this.printableSizes(company));
-    if (!(r.draft.sizes ?? []).some((s) => prints.has(s))) throw new AdsError(422, 'sizes_never_print', `None of those sizes fit on ${company.name}'s bottles, so the ad would never print. Pick from: ${[...prints].sort((a, b) => a - b).map(shareLabel).join(', ')}.`);
+    const fit = this.draftSizes(r);
+    const prints = new Set(fit.sizes);
+    if (!(r.draft.sizes ?? []).some((s) => prints.has(s))) throw new AdsError(422, 'sizes_never_print', `None of those sizes fit on ${fit.on} in ${company.name}'s label layouts, so the ad would never print. Pick from: ${[...prints].sort((a, b) => a - b).map(shareLabel).join(', ')}.`);
+    // Billed after, an ad keeps every size it has: one that can't print would be approved and never print (paid up front,
+    // the size paid for is chosen from the ones that print, and checked by its quote).
+    if (!prepaidModel(company) && fit.notes.length) throw new AdsError(422, 'size_not_printable', `${fit.notes.join(' ')} Choose sizes that print in the chat.`);
     const adv = await this.advertiser(r.companyId, r.advertiserId);
     const d = r.draft as Required<Pick<AdDraft, 'sizes' | 'buy' | 'experienceId' | 'locations' | 'category'>> & AdDraft;
     if (d.buy?.type === 'bid' && this.platform.featureOn && !this.platform.featureOn(r.companyId, 'bidding')) throw new AdsError(422, 'bidding_off', `${company.name} doesn’t sell space by bidding: buy a set number of bottles instead.`);
     const spec = d.poster as PosterSpec;
-    const art = d.studio ? { creative: studioCreative(d.studio), creativeRef: { kind: 'studio' as const, spec: d.studio } } : { creative: posterCreative(spec), creativeRef: { kind: 'poster' as const, spec } };
+    const art: Pick<Campaign, 'creative' | 'creativeRef'> = d.mode === 'own' && this.artwork ? await this.artwork.art(r.companyId, r.advertiserId, d)
+      : d.studio ? { creative: studioCreative(d.studio), creativeRef: { kind: 'studio' as const, spec: d.studio } } : { creative: posterCreative(spec), creativeRef: { kind: 'poster' as const, spec } };
     const now = this.platform.bus.now().toISOString();
     const existing = r.campaignId ? this.platform.campaigns.get(r.campaignId) : undefined;
 
@@ -448,7 +537,7 @@ export class AdsService {
         if (existing.review?.status !== 'flagged') feeCents = (await this.prepaid.payChangeFee({ companyId: r.companyId, advertiserId: r.advertiserId, campaignId: existing.id, draftId: r.id, expectedFeeCents: input.pay?.expectedFeeCents }))?.feeCents ?? 0;
       } else if (!existing && route) {
         if (!this.routeBuys) throw new AdsError(404, 'feature_off', 'Buying on delivery routes isn’t available here.');
-        const out = await this.routeBuys.pay({ companyId: r.companyId, advertiserId: r.advertiserId, draftId: r.id, input: route, expectedTotalCents: input.pay?.expectedTotalCents ?? -1, expectedCreditCents: input.pay?.expectedCreditCents, sizes: d.sizes, words: adWords({ ...d, name: d.name }) });
+        const out = await this.routeBuys.pay({ companyId: r.companyId, advertiserId: r.advertiserId, draftId: r.id, input: route, expectedTotalCents: input.pay?.expectedTotalCents ?? -1, expectedCreditCents: input.pay?.expectedCreditCents, sizes: d.sizes, words: adWords({ ...d, qr: undefined, name: d.name, creativeRef: art.creativeRef }) });
         paid = { campaignId: out.campaignId, prepaid: out.prepaid, totalCents: out.totalCents };
         routePaid = out;
       } else if (!existing) {
@@ -470,11 +559,13 @@ export class AdsService {
       ...(existing ?? {}),
       id: existing?.id ?? paid?.campaignId ?? newId('cmp'), companyId: r.companyId, advertiserId: r.advertiserId, advertiserName: adv.name,
       // A paid ad prints at the one size it was paid for, whatever the change says.
-      name: d.name ?? (d.studio?.headline ?? spec.headline), category: d.category, sizes: prepaid ? [prepaid.share] : d.sizes, formats: this.formatsFor(r.companyId, d.formats),
+      name: d.name ?? (d.studio?.headline ?? spec?.headline ?? adv.name), category: d.category, sizes: prepaid ? [prepaid.share] : d.sizes, formats: this.formatsFor(r.companyId, d.formats),
       ...art,
       experienceId: d.experienceId, experienceConfig: d.experienceConfig ?? {}, theme: themeFromPoster(d),
       targeting: draftTargeting(d, existing), buy: prepaid ? (existing?.buy ?? buy) : buy,
       ...(prepaid ? { prepaid } : {}),
+      // Their own artwork: the code is always ours (dynamic), in the colour and with the logo they chose, if allowed.
+      ...(d.mode === 'own' ? { qr: { mode: 'dynamic' as const, ...(d.qr && this.artwork?.on(r.companyId, 'qr_styles') ? d.qr : {}) } } : {}),
       active: false, review: existing?.prepaid && existing.review?.status === 'flagged' ? { ...existing.review, at: now, resubmittedAt: now } : { status: 'submitted', at: now }, createdAt: existing?.createdAt ?? now,
     };
     const resubmitted = c.review?.status === 'flagged';
@@ -488,6 +579,10 @@ export class AdsService {
       : paid ? `Paid $${(paid.totalCents / 100).toFixed(2)} for ${(c.prepaid?.paid ?? 0).toLocaleString('en-US')} bottles. ` : feeCents ? `Paid the $${(feeCents / 100).toFixed(2)} change fee. ` : '';
     r.messages.push({ role: 'assistant', text: resubmitted ? `Sent again, at no fee. ${company.name}’s team will look at the change in the notes on this ad; nothing prints until it’s approved.` : `${money}Submitted. ${company.name} reviews new ads, usually within a day. You'll see it running in your campaigns once it's approved.`, at: now });
     await this.save(r);
+    // The ad is made: an empty draft left open for it ("New ad" pressed, then the ad made from the studio or another
+    // tab) is closed, so it never sits under "Unfinished ads". Only drafts with nothing in them, never paid for.
+    await this.db.query(`delete from ad_drafts where company_id = $1 and advertiser_id = $2 and status = 'open' and id <> $3 and (campaign_id is null or campaign_id = $4) and ${EMPTY_DRAFT}
+      and not exists (select 1 from ad_orders o where o.draft_id = ad_drafts.id)`, [r.companyId, r.advertiserId, r.id, c.id]);
     if (resubmitted) await this.addReviewNote({ companyId: c.companyId, campaignId: c.id, kind: 'resubmitted', authorKind: 'advertiser', authorId: r.advertiserId, text: 'The advertiser changed the ad and sent it again (no fee while it’s being discussed).' });
     // A paid ad an AI objected to while it was being made goes to the team flagged, with the AI's reasons: an AI can only flag.
     else if (c.prepaid) {
@@ -496,6 +591,8 @@ export class AdsService {
     }
     // The AI reviewer looks at every paid ad as it comes in (src/modules/ads/aiReview.ts).
     if (c.prepaid) await this.afterPaidSubmit(c).catch(() => {});
+    // Every version is rated once before it first prints, in the background (src/modules/ads/ratings.ts).
+    this.onVersion(c);
     await this.flush();
     return { campaignId: c.id, status: 'in_review', ...(paid ? { paidCents: paid.totalCents, bottles: c.prepaid?.paid ?? 0 } : {}), ...(routePaid ? { route: { houses: routePaid.houses, weeks: routePaid.weeks, creditCents: routePaid.creditCents, cardCents: routePaid.cardCents, small: routePaid.small } } : {}), ...(feeCents ? { changeFeeCents: feeCents } : {}) };
   }
@@ -581,7 +678,7 @@ export class AdsService {
         id: c.id, name: c.name ?? (c.creativeRef?.kind === 'poster' || c.creativeRef?.kind === 'studio' ? c.creativeRef.spec.headline : c.advertiserName), status: this.status(c), review: c.review ?? null, creditHold: c.creditHold ?? null,
         sizes: c.sizes, formats: this.formatsFor(input.companyId, c.formats), where: c.routeBuy ? 'routes' : c.targeting.locations ?? 'all', experienceId: c.experienceId, ...(c.routeBuy ? { route: c.routeBuy } : {}),
         budget: c.prepaid ? { type: 'prepaid', ...this.prepaid!.progress(c)! } : c.buy.type === 'guaranteed' ? { type: 'guaranteed', bottlesLeft: c.buy.remainingPrints } : { type: 'bid', dailyCapCents: c.buy.dailyCapCents, spentTodayCents: c.buy.spentTodayCents },
-        editable: c.creativeRef?.kind === 'poster' || c.creativeRef?.kind === 'studio',
+        editable: c.creativeRef?.kind === 'poster' || c.creativeRef?.kind === 'studio' || c.creativeRef?.kind === 'artwork',
         thumbSvg: `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(thumbW)}" height="450" viewBox="0 0 ${thumbW.toFixed(1)} 450">${c.creative.svg(thumbW, 450)}</svg>`,
         results: byCampaign.get(c.id) ?? blank(),
       }));
@@ -610,6 +707,9 @@ export class AdsService {
   afterPaidSubmit: (c: Campaign) => Promise<unknown> = async () => {};
   /** Set by the app: a person finally decided a paid ad; the AI reviewer's record notes it (AiReviewService.onDecided). */
   onDecided: (c: Campaign, decision: 'approved' | 'rejected', personId: string) => Promise<void> = async () => {};
+
+  /** Set by the app: a version of an ad was submitted; it's rated in the background, never waited on (AdRatingService.noteVersion). */
+  onVersion: (c: Campaign) => void = () => {};
 
   /** Set by the app: refuses an ad going live when its advertiser's credit doesn't allow it (CreditService). */
   beforeLive: (c: Campaign) => Promise<void> = async () => {};

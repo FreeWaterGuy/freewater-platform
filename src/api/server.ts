@@ -2,7 +2,9 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { ApiError, notFound, obj, S, signedInOwner, teamPersonOf, type Handler, type RouteDef, Q } from './http';
 import { consumerRoutes } from './consumer';
 import { adsRoutes } from './ads';
+import { artworkRoutes } from './artwork';
 import { aiReviewRoutes } from './aiReview';
+import { ratingsRoutes } from './ratings';
 import { deliveryRoutes } from './delivery';
 import { routeBuyRoutes } from './routeBuys';
 import { booksRoutes } from './books';
@@ -51,7 +53,10 @@ import { findApiKey, type ApiKey, type Scope , PersistencePaused } from '../db/s
 import { LeaseLostError } from '../db/leaseChecked';
 import { OrderConflictError, ReprintError } from '../platform';
 import type { Campaign, Share } from '../core/types';
+import { productWords, sizeRefusal } from '../modules/ads/layoutChoice';
+import { stickerPlace } from '../modules/packs/boxSettings';
 import { checkSvgPictures, svgCreative } from '../modules/print/svgCreative';
+import { linkFeeProblem } from '../modules/artwork/links';
 import { newId } from '../core/ids';
 import { AccountsError, roleScopes, type Role } from '../modules/accounts/service';
 import { approvalRoutes, approverStepProblem } from '../modules/accounts/secondStep';
@@ -121,7 +126,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   const server = Fastify({ logger: opts.logger ? loggerOptions : false, bodyLimit: 3 * 1024 * 1024, routerOptions: { maxParamLength: 1000 }, trustProxy, ajv });
   const { platform, packs, persistence, db, experiences } = app;
   // Files arrive as themselves. An SVG is taken too (a logo is often one); only the studio's logo route accepts it.
-  for (const type of [...Object.keys(allowedTypes), 'image/svg+xml']) server.addContentTypeParser(type, { parseAs: 'buffer', bodyLimit: 64 * 1024 * 1024 }, (_req, body, done) => done(null, body));
+  for (const type of [...Object.keys(allowedTypes), 'image/svg+xml', 'application/pdf']) server.addContentTypeParser(type, { parseAs: 'buffer', bodyLimit: 64 * 1024 * 1024 }, (_req, body, done) => done(null, body));
   // Postgres can't store the NUL character in text: refuse it anywhere in the path, query or JSON body, before any
   // code (and the database) sees it, rather than fail the save with a 500.
   server.addHook('preValidation', async (req, reply) => {
@@ -178,7 +183,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   };
   const packView = (id: string) => {
     const p = packs.packs.get(id)!;
-    return { id: p.id, status: p.status, size: p.box.bottles, boxId: p.box.id, routeId: p.routeId, stop: p.stop, address: p.address, customerId: p.customerId, loadPosition: p.loadPosition ?? null, unitIds: p.unitIds, faces: p.faces.map((f) => ({ face: f.face, advertiser: f.advertiserName, campaignId: f.campaignId, isHouse: f.isHouse })), boxSvgUrl: `/v1/packs/${p.id}/box.svg`, packUrl: p.rendered?.packUrl ?? p.boxCode ?? null, plainBox: !p.rendered };
+    return { id: p.id, status: p.status, size: p.box.bottles, boxId: p.box.id, routeId: p.routeId, stop: p.stop, address: p.address, customerId: p.customerId, loadPosition: p.loadPosition ?? null, unitIds: p.unitIds, faces: p.faces.map((f) => ({ face: f.face, advertiser: f.advertiserName, campaignId: f.campaignId, isHouse: f.isHouse })), boxSvgUrl: `/v1/packs/${p.id}/box.svg`, packUrl: p.rendered?.packUrl ?? p.boxCode ?? null, plainBox: !p.rendered,
+      // A plain box's code sticker: where it goes on the box (the packing check puts it there) and its print file.
+      sticker: p.sticker ? { widthIn: p.sticker.widthIn, heightIn: p.sticker.heightIn, side: p.sticker.side, spot: p.sticker.spot, printed: !!p.sticker.printedAt, put: `Put the box-code sticker ${stickerPlace(p.sticker)}.`, svgUrl: `/v1/packs/${p.id}/sticker.svg` } : null };
   };
   const receiptView = (unitId: string) => {
     const u = platform.units.get(unitId);
@@ -479,8 +486,12 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     if ((b.formats as string[] | undefined)?.includes('box-face') && !app.companyFeatures.on(company.id, 'box_ads')) throw new ApiError(422, 'boxes_off', `${company.name}’s delivery boxes are plain: ads print on bottles only. Leave out "box-face".`);
     checkExperience(b.experienceId, b.experienceConfig ?? {}, b.theme, company.id);
     // The same rule as a submitted draft: an ad whose sizes no layout the company allows can hold would never print.
-    const prints = app.ads.printableSizes(company);
-    if (!(b.sizes as number[]).some((s) => (prints as number[]).includes(s))) throw new ApiError(422, 'sizes_never_print', `None of those sizes fit on ${company.name}'s bottles, so the ad would never print. Pick from: ${prints.join(', ')} (shares of the label).`);
+    // On the products it's aimed at (every product if none): each size it asks for, never dropped silently.
+    const onProducts = app.ads.adProducts(company.id, { targeting: b.targeting ?? {} }, false);
+    const prints = app.ads.printableSizes(company, onProducts);
+    if (!(b.sizes as number[]).some((s) => (prints as number[]).includes(s))) throw new ApiError(422, 'sizes_never_print', `None of those sizes fit on ${productWords(onProducts)} in ${company.name}'s label layouts, so the ad would never print. Pick from: ${prints.join(', ')} (shares of the label).`);
+    const cant = [...new Set(b.sizes as Share[])].filter((s) => !prints.includes(s));
+    if (cant.length) throw new ApiError(422, 'size_not_printable', `${cant.map((s) => sizeRefusal(s, prints, productWords(onProducts), company.name)).join(' ')} Leave ${cant.length === 1 ? 'it' : 'them'} out of "sizes".`);
     const c: Campaign = {
       // An advertiser's own key prints under the name the business signed up with, never a name it sends.
       id: newId('cmp'), companyId: key!.companyId, advertiserId, advertiserName: key!.advertiserId ? (await app.ads.advertiser(key!.companyId, key!.advertiserId).catch(() => null))?.name ?? b.advertiserName : b.advertiserName, category: b.category, competitorGroup: b.competitorGroup,
@@ -492,11 +503,17 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     if (extra) throw new ApiError(422, 'campaign_invalid', extra);
     platform.campaigns.set(c.id, c);
     platform.persist.campaign(c);
+    app.ratings.noteVersion(c); // rated in the background before it first prints
     // The QR code prints over the bottom-right corner of each piece: words of the artwork there are said, not refused.
     const warnings = await app.ads.artworkWarnings(company.id, b.svg, c.sizes);
     return { status: 201, body: { ...campaignView(c), ...(warnings.length ? { warnings } : {}) } };
   } });
 
+  /** An advertiser changing a live paid ad's links some other way than Change a link (which takes the fee): refused while the fee is on. */
+  const linkFeeGuard = (c: Campaign, next: Pick<Campaign, 'experienceConfig' | 'variants' | 'qr'>) => {
+    const why = linkFeeProblem(platform.companies.get(c.companyId)!, c, next, platform.featureOn);
+    if (why) throw new ApiError(402, 'link_fee', why);
+  };
   route({ method: 'PATCH', url: '/v1/campaigns/:id', scope: 'campaigns', summary: 'Pause or resume a campaign, or change what its QR opens. Only a company key (content review) turns a campaign on; an advertiser changing what people see sends it back to review.', body: { ...obj({ active: S.bool, experienceId: S.str, experienceConfig: { type: 'object' }, theme: themeProp }), minProperties: 1 }, handler: async (req, key) => {
     const c = campaignFor(key!, (req.params as any).id);
     const b = req.body as any;
@@ -522,6 +539,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       const id = b.experienceId ?? c.experienceId;
       const config = b.experienceConfig ?? (b.experienceId && b.experienceId !== c.experienceId ? undefined : c.experienceConfig);
       if (config === undefined) throw new ApiError(422, 'experience_invalid', `Send experienceConfig for "${id}" too.`);
+      // Where a live paid ad's code leads changes only through Change a link, which takes its fee (P3: the same rule here).
+      if (!reviewer) linkFeeGuard(c, { ...c, experienceConfig: config });
       checkExperience(id, config, b.theme ?? c.theme, c.companyId);
       c.experienceId = id;
       c.experienceConfig = config;
@@ -537,6 +556,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     platform.persist.campaign(c);
     // Sent back to review with a new page: the AI reviewer looks again (its earlier verdict was about the old ad).
     if (changesPage && !reviewer && c.prepaid) await app.aiReview.onSubmitted(c).catch(() => null);
+    if (changesPage) app.ratings.noteVersion(c); // a new version: rated in the background
     return { body: campaignView(c) };
   } });
 
@@ -590,10 +610,17 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     if (!p.rendered) throw new ApiError(404, 'plain_box', 'This box is plain: ads on boxes are off, so nothing is printed on it.');
     return { type: 'image/svg+xml', raw: p.rendered.svg };
   } });
-
-  route({ method: 'POST', url: '/v1/packs/:id/verify', scope: 'packs', summary: 'The packing line reports every bottle it scanned. Returns what is missing or does not belong.', body: obj({ scannedUnitIds: { type: 'array', items: S.str, maxItems: 48 } }, ['scannedUnitIds']), handler: async (req, key) => {
+  route({ method: 'GET', url: '/v1/packs/:id/sticker.svg', scope: 'packs', summary: 'A plain box’s code sticker, as it printed (SVG, real size), to print it again by hand if it was lost or torn.', handler: async (req, key) => {
     const p = packFor(key!, (req.params as any).id);
-    try { return { body: packs.verify(p.id, (req.body as any).scannedUnitIds) }; } catch (e: any) { if (e instanceof PackStateError) throw new ApiError(409, 'wrong_stage', e.message); throw e; }
+    const sticker = packs.stickerOf(p);
+    if (!sticker) throw new ApiError(404, 'no_sticker', p.rendered ? 'This box is printed: its code is on its info strip, so it has no sticker.' : 'This pack has no box-code sticker (Features → Delivery → Box code sticker is off, or it hasn’t printed yet).');
+    return { type: 'image/svg+xml', raw: await platform.forPrint(sticker.svg) };
+  } });
+
+  route({ method: 'POST', url: '/v1/packs/:id/verify', scope: 'packs', summary: 'The packing line reports every bottle it scanned. Returns what is missing or does not belong, and, for a plain box, where its box-code sticker goes.', body: obj({ scannedUnitIds: { type: 'array', items: S.str, maxItems: 48 } }, ['scannedUnitIds']), handler: async (req, key) => {
+    const p = packFor(key!, (req.params as any).id);
+    // A plain box's code sticker goes on before it's sealed: the line is told where.
+    try { return { body: { ...packs.verify(p.id, (req.body as any).scannedUnitIds), ...(p.sticker ? { sticker: `Put the box-code sticker ${stickerPlace(p.sticker)}.` } : {}) } }; } catch (e: any) { if (e instanceof PackStateError) throw new ApiError(409, 'wrong_stage', e.message); throw e; }
   } });
 
   route({ method: 'POST', url: '/v1/packs/:id/replace', scope: 'packs', summary: 'Reprint bottles the packing check found wrong (a torn, smudged or missing label the line couldn’t read): each is printed again with exactly the same ads and takes its place in the pack; the bad one is voided and never billed to anyone. productId is ignored (a reprint is always the same product).', body: obj({ missingUnitIds: { type: 'array', items: S.str, maxItems: 48 }, productId: S.str }, ['missingUnitIds']), handler: async (req, key) => {
@@ -858,7 +885,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   consumerRoutes(app, route, { me, checkExperience });
   adsRoutes(app, route, { me });
+  artworkRoutes(app, route);
   aiReviewRoutes(app, route);
+  ratingsRoutes(app, route);
   deliveryRoutes(app, route, { me });
   routeBuyRoutes(app, route, { me });
   booksRoutes(app, route);

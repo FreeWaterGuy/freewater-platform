@@ -1,6 +1,7 @@
 import { missingLabels, type DraftPatch, type Missing } from '../ads/draft';
 import type { AdAssistant, AdAssistantInput, AdAssistantOutput } from './contract';
 import type { Share } from '../../core/types';
+import { shareName } from '../ads/layouts';
 
 /**
  * The built-in stand-in for an AI. It reads simple things out of what people type (offers, colors, prices,
@@ -99,12 +100,15 @@ export class BuiltinAdAssistant implements AdAssistant {
     const at = low.search(/\bsizes?\s+\d/);
     if (at >= 0) for (const w of low.slice(at).split(/[\s,&]+/).slice(1)) { if (w === 'and' || w === 'or') continue; if (!/^(1|2|3|4|6|8|10)$/.test(w)) break; sizeNames.add(Number(w)); }
     if (sizeNames.size) { if (/\bhalf\b/.test(low)) sizeNames.add(2); if (/\b(full wrap|whole (label|bottle)|full label)\b/.test(low)) sizeNames.add(1); }
+    // Sizes named outright go to the platform as asked (one that can't print here is refused there, in plain words);
+    // rough words pick only from the sizes that print where this ad goes.
+    const printable = (want: number[]) => { const ok = want.filter((x) => ctx.sizes.includes(x)); return (ok.length ? ok : ctx.sizes.length ? [want[0]! >= 6 ? Math.max(...ctx.sizes) : Math.min(...ctx.sizes)] : want) as Share[]; };
     if (sizeNames.size) patch.sizes = [...sizeNames].sort((a, b) => a - b) as Share[];
     else if (/\b(full wrap|whole (label|bottle)|full label)\b/.test(low)) patch.sizes = [1];
     else if (/\bhalf\b/.test(low)) patch.sizes = [2];
-    else if (/\b(small|smallest|cheap(est)?)\b/.test(low)) patch.sizes = [6, 8, 10];
-    else if (/\b(big|large|biggest)\b/.test(low)) patch.sizes = [2, 3];
-    else if (!draft.sizes) patch.sizes = [4, 6, 8];
+    else if (/\b(small|smallest|cheap(est)?)\b/.test(low)) patch.sizes = printable([6, 8, 10]);
+    else if (/\b(big|large|biggest)\b/.test(low)) patch.sizes = printable([2, 3]);
+    else if (!draft.sizes) patch.sizes = printable([4, 6, 8]);
     // Boxes only where ads on boxes are on (FreeWater's boxes are plain: never offered there).
     if (ctx.boxes !== false && /\b(box|boxes|delivery|packs?)\b/.test(low)) patch.formats = ['label', 'box-face'];
     else if (!draft.formats) patch.formats = ['label'];
@@ -142,7 +146,7 @@ export class BuiltinAdAssistant implements AdAssistant {
     if (exp?.complete) after.delete('scanPage');
     if (!headline && !draft.poster?.headline) after.add('artwork');
 
-    const reply = this.reply(did, [...after], ctx.business.name, !draft.poster, !!pre);
+    const reply = this.reply(did, [...after], ctx.business.name, !draft.poster, !!pre, category, ctx.sizes);
     return { reply, patch, suggestions: this.suggestions([...after], category, !!pre, ctx.boxes !== false) };
   }
 
@@ -170,14 +174,14 @@ export class BuiltinAdAssistant implements AdAssistant {
     return null;
   }
 
-  private reply(did: string[], left: Missing[], business: string, first: boolean, prepaid = false): string {
+  private reply(did: string[], left: Missing[], business: string, first: boolean, prepaid = false, category = '', sizes: number[] = []): string {
     const start = did.length ? `${first ? `Here's a first version for ${business}` : 'Done'}: I set ${did.join(', ').replace(/, ([^,]*)$/, ' and $1')}.` : first ? `Let's make an ad for ${business}.` : 'Got it.';
     if (!left.length) return `${start} Everything's ready. Look over the preview, then tap “Review and submit”${prepaid ? ': you’ll see the exact total before you pay' : ''}.`;
     const next = left[0]!;
     const q: Record<Missing, string> = {
-      artwork: 'What should the ad say? A short offer works best, like “Free fries with any burger”.',
+      artwork: `What should the ad say? A short offer works best, like “${offerFor(category)}”.`,
       category: 'What kind of business is it?',
-      sizes: 'How big should it be? Small (a tenth to a sixth of the label), a quarter, half, or the whole label? Every piece is about square.',
+      sizes: `How big should it be? Small (as little as ${shareName[(sizes.length ? Math.max(...sizes) : 10) as Share]} of the label), a quarter, half, or the whole label? Every piece is about square.`,
       where: 'Where should it run? Name a machine, or say “everywhere”.',
       budget: prepaid ? 'How many bottles should carry it? You pay for them up front and exactly that many go out, like “2,000 bottles” (at least 100).' : 'What’s your budget? Say a daily amount like “$20 a day”, or a number of bottles like “2,000 bottles”.',
       scanPage: 'What should open when people scan it? An offer to save, a coupon code, a booking page, or a 3D menu. A link to your website helps.',
@@ -191,8 +195,30 @@ export class BuiltinAdAssistant implements AdAssistant {
     if (next === 'where') return ['Everywhere', 'Only ATX-014'];
     if (next === 'sizes') return ['Small', 'Half the label', 'Full wrap'];
     if (next === 'scanPage') return category === 'food' ? ['A 3D menu in AR', 'A coupon: code SAVE5'] : ['An offer to save', 'A coupon: code SAVE5', 'A booking page'];
-    if (next === 'artwork') return ['“20% off your first visit”', 'Free delivery this week'];
+    if (next === 'artwork') return [`“${offerFor(category)}”`, '“20% off your first visit”'];
     return ['Make it blue', 'Use a bolder font', boxes ? 'Also print on delivery boxes' : 'Make the headline shorter'];
   }
 }
 export { missingLabels };
+
+/**
+ * An offer that fits the advertiser's own kind of business, or one that fits any (never another kind of business: a
+ * bakery is never shown "We're a taco truck").
+ */
+const OFFERS: Record<string, string> = {
+  'food-drink': 'Buy one, get one free on Fridays', food: 'Buy one, get one free on Fridays', coffee: 'Your first coffee is free',
+  'real-estate': 'Open house this Saturday', fitness: 'Your first class is free', health: 'New patients: your first visit is free',
+  retail: '20% off everything this weekend', pets: 'New customers: 15% off', events: 'Two tickets for the price of one',
+  auto: 'A free check-up with any service', news: 'Your first month free', services: 'A free quote this week',
+};
+export const offerFor = (category?: string) => OFFERS[category ?? ''] ?? '20% off your first visit';
+
+/**
+ * What the chat suggests before anything is said: from the advertiser's own business and kind of business, or plain
+ * changes when it's an ad being changed.
+ */
+export function starterSuggestions(business: { name: string; category?: string }, changing: boolean): string[] {
+  if (changing) return ['Make the headline shorter', 'Change the colors', 'Use a bolder font'];
+  const offer = offerFor(business.category);
+  return [`We’re ${business.name}. ${offer}.`, offer === '20% off your first visit' ? 'Free gift with your first order' : '20% off your first visit'];
+}

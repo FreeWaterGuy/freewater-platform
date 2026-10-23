@@ -51,7 +51,7 @@
   const screen = (...kids) => { if (stop) { stop(); stop = null; } root.replaceChildren(h('main', { class: 'screen drive no-nav' }, ...kids)); window.scrollTo(0, 0); };
   const dock = (...btns) => h('div', { class: 'dock' }, h('div', { class: 'dock-inner' }, ...btns));
   const grabCard = (s, label = 'Box to grab') => h('div', { class: 'grab' }, h('div', { class: 'code' }, h('small', { text: 'Stop' }), h('b', { text: String(s.stop) })),
-    h('div', { class: 'what' }, h('small', { text: s.pack ? `${label} · box ${s.pack.n} of ${s.pack.of} for this house` : label }), h('b', { text: `#${s.boxNumber} · ${s.packSize}-pack` }), h('span', { text: `Stop code ${s.stopCode} is printed small on the box corner` })));
+    h('div', { class: 'what' }, h('small', { text: s.pack ? `${label} · box ${s.pack.n} of ${s.pack.of} for this house` : label }), h('b', { text: `#${s.boxNumber} · ${s.packSize}-pack` }), h('span', { text: on('box_ads') ? `Stop code ${s.stopCode} is printed small on the box corner` : `Stop code ${s.stopCode} is on the box’s sticker` })));
   /** Is this switch on for the company (its Features page, or the host's FW_FEATURES)? */
   const on = (feature) => !(S.features?.off ?? []).includes(feature);
   /** A delivery area's run is named for the area and the van; a subscribers' run for its route. */
@@ -136,6 +136,9 @@
           if (video.readyState >= 2 && window.jsQR) {
             const w = 480, hh = Math.round((video.videoHeight / video.videoWidth) * w) || 360; c.width = w; c.height = hh; ctx.drawImage(video, 0, 0, w, hh);
             const q = window.jsQR(ctx.getImageData(0, 0, w, hh).data, w, hh, { inversionAttempts: 'dontInvert' });
+            // The box's code (its sticker, or its info strip): "…/Q/<code>", known from the run; older codes name the pack.
+            const smart = q && /\/Q\/([A-Za-z0-9]+)/.exec(q.data);
+            if (smart) { navigator.vibrate?.(60); return finish(S.run.stops.find((s) => s.boxCode === smart[1])?.packId ?? `unknown:${smart[1]}`); }
             const m = q && /\/(?:p|b)\/([A-Za-z0-9_-]+)/.exec(q.data);
             if (m) { navigator.vibrate?.(60); return finish(m[1]); }
           }
@@ -216,7 +219,7 @@
     const reasons = [['locked_gate', 'Locked gate'], ['dangerous_animal', 'Dangerous animal'], ['unsafe', 'Not safe'], ['no_safe_place', 'No safe place to leave it'], ['not_a_home', 'Not a home (empty, business, building site)']];
     screen(h('div', { class: 'dhead' }, h('div', { text: `Stop ${s.stop} · ${s.address.split(',')[0]}` })), h('h1', { class: 'dtitle', text: 'Can’t leave it here?' }),
       h('p', { class: 'dsub', text: 'Only for a real access or safety problem. Its box comes back with you, and the house is left out of the next deliveries until the office has looked at why.' }),
-      h('p', { class: 'small muted', text: 'Signs on the door don’t count. If someone tells you they don’t want it, leave the box and tell them they can stop deliveries in the app (scan the code on the side of the box).' }),
+      h('p', { class: 'small muted', text: `Signs on the door don’t count. If someone tells you they don’t want it, leave the box and tell them they can stop deliveries in the app (scan the code ${on('box_ads') ? 'on the side of the box' : 'on the box’s sticker'}).` }),
       h('label', { for: 'skip-note', style: 'font-weight:700', text: 'Note' }), note,
       h('div', { class: 'reasons' }, reasons.map(([r, label]) => h('button', { type: 'button', onclick: () => skipHouse(s, r, note.value.trim()) }, label))),
       dock(h('button', { class: 'btn secondary', type: 'button', onclick: nextStop }, 'Back to this stop')));

@@ -24,6 +24,11 @@ import { layoutLine, type FontSpec } from './fonts';
 const num = (v: string | undefined) => { if (v === undefined) return undefined; const t = v.trim().replace(/px$/i, '').trim(); return t !== '' && /^[-+\d.e]+$/i.test(t) && Number.isFinite(Number(t)) ? Number(t) : undefined; };
 const f2 = (n: number) => (Math.round(n * 100) / 100).toString();
 const f4 = (n: number) => (Math.round(n * 10000) / 10000).toString();
+/**
+ * Six significant figures, whatever the drawing's units: a glyph's scale and place in a drawing measured in inches (an
+ * uploaded design, a template) are tiny numbers that two decimals would round to nothing (words vanished or ran together).
+ */
+const g6 = (n: number) => Number(n.toPrecision(6)).toString();
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 function attrs(tag: string): Map<string, string> {
@@ -121,7 +126,7 @@ export function outlineText(svg: string, opts: { defs?: boolean } = {}): string 
           if (it.kind === 'picture') {
             // Room for the picture: as wide as measured, from above the letters to below them.
             const top = penY - s * 1.0, h = s * 1.3, w = it.w * s;
-            parts.push(`<svg data-fw-picture="1" x="${f2(gx)}" y="${f2(top)}" width="${f2(w)}" height="${f2(h)}" viewBox="0 0 ${f2(w)} ${f2(h)}" overflow="hidden"><text x="0" y="${f2(s)}" font-size="${f2(s)}"${c.style.family ? ` font-family="${esc(c.style.family)}"` : ''}>${esc(it.text)}</text></svg>`);
+            parts.push(`<svg data-fw-picture="1" x="${g6(gx)}" y="${g6(top)}" width="${g6(w)}" height="${g6(h)}" viewBox="0 0 ${g6(w)} ${g6(h)}" overflow="hidden"><text x="0" y="${g6(s)}" font-size="${g6(s)}"${c.style.family ? ` font-family="${esc(c.style.family)}"` : ''}>${esc(it.text)}</text></svg>`);
             continue;
           }
           const path = it.face.font.path(it.glyph);
@@ -129,8 +134,8 @@ export function outlineText(svg: string, opts: { defs?: boolean } = {}): string 
           const k = s / it.face.font.unitsPerEm;
           const skew = it.face.oblique ? -k * 0.2126 : 0; // a slant of 12 degrees for a face without its own italic
           const id = GLYPH_ID(it.face.key, it.glyph);
-          if (useDefs) { glyphs.set(id, path); parts.push(`<use href="#${id}" transform="matrix(${f4(k)} 0 ${f4(skew)} ${f4(k)} ${f2(gx)} ${f2(penY)})"/>`); }
-          else parts.push(`<path d="${path}" transform="matrix(${f4(k)} 0 ${f4(skew)} ${f4(k)} ${f2(gx)} ${f2(penY)})"/>`);
+          if (useDefs) { glyphs.set(id, path); parts.push(`<use href="#${id}" transform="matrix(${g6(k)} 0 ${g6(skew)} ${g6(k)} ${g6(gx)} ${g6(penY)})"/>`); }
+          else parts.push(`<path d="${path}" transform="matrix(${g6(k)} 0 ${g6(skew)} ${g6(k)} ${g6(gx)} ${g6(penY)})"/>`);
         }
         x += l.width * s;
         if (!parts.length) continue;

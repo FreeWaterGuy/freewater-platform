@@ -12,7 +12,7 @@ import { posterCreative, type PosterSpec } from '../creative/poster';
 import { lotteryDefaults } from '../lottery/rules';
 import { quietTransparency } from '../transparency/service';
 import { preset } from '../data/policy';
-import { BOX_DEFAULTS, BOX_INCHES, STRIP_INCHES } from '../packs/boxSettings';
+import { BOX_DEFAULTS, BOX_INCHES, STICKER_INCHES, STICKER_SIDES, STICKER_SPOTS, STRIP_INCHES } from '../packs/boxSettings';
 import { adCategories, applyChange, checkSettings, describeChange, editableKeys, fontChoices, personOnlyKeys, ratchetProblem, chainProblem, walletProblem, printLimitsChanged, type EditableKey } from './settings';
 import { adBilling, defaultAdBilling } from '../ads/billing';
 import { labelGeometry, STANDARD_LABEL } from '../print/geometry';
@@ -124,7 +124,7 @@ export class ConsoleService {
         // The Label panel page starts from the panel the company prints now (its own, or the one made from its brand).
         labelPanel: panelOf(config, givingLine(config, '')), panelSizes: PANEL_SIZES, standardLabel: STANDARD_LABEL,
         // Delivery boxes: the platform's standard box of each pack size (what's used where the company set no size of its own).
-        boxes: { standard: this.boxProducts().map((b) => ({ bottles: b.bottles, lengthIn: b.lengthIn, widthIn: b.widthIn, heightIn: b.heightIn })), defaults: BOX_DEFAULTS, inches: BOX_INCHES, stripInches: STRIP_INCHES } },
+        boxes: { standard: this.boxProducts().map((b) => ({ bottles: b.bottles, lengthIn: b.lengthIn, widthIn: b.widthIn, heightIn: b.heightIn })), defaults: BOX_DEFAULTS, inches: BOX_INCHES, stripInches: STRIP_INCHES, stickerInches: STICKER_INCHES, stickerSides: STICKER_SIDES, stickerSpots: STICKER_SPOTS } },
       locations: this.locations(companyId),
       charities,
       checklist: await this.checklist(companyId),

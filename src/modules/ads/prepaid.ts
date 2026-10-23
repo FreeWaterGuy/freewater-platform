@@ -11,6 +11,7 @@ import { PaymentError, PaymentsService } from '../payments/service';
 import { prepaidAccount } from '../ledger/ledger';
 import type { CreditService } from './credit';
 import type { ReconCheck } from '../books/reconciliation';
+import { sizeRefusal } from './layoutChoice';
 
 // Advertisers pay up front (docs/SWITCHES.md, "How advertisers pay"):
 //   quote → pay (the card is charged) → review → only paid bottles print → "N of M bottles out".
@@ -63,6 +64,8 @@ export class PrepaidService {
     const printable = new Set(this.platform.layoutsOf(company, product).flatMap((l) => l.shares));
     const sizes = (allowed?.length ? allowed : SHARES).filter((s) => printable.has(s)).sort((x, y) => x - y);
     const share = (input.share ?? sizes[0]) as Share | undefined;
+    // A size the layouts can't hold on this product is named, with the nearest that can (never dropped silently).
+    if (share && !printable.has(share)) throw new AdsError(422, 'size_not_printable', `${sizeRefusal(share, [...printable].sort((x, y) => x - y), `the ${product.name}`, company.name)} Pick one size that prints there.`);
     if (!share || !sizes.includes(share)) throw new AdsError(422, 'size_not_printable', `Pick one size this ad has artwork for that prints on the ${product.name}: ${sizes.map(shareLabel).join(', ') || 'none do'}.`);
     const perBottleCents = Math.round(company.prices.perPrintByShare[share] * (product.priceFactor ?? 1));
     const extras: Quote['extras'] = [];
@@ -147,6 +150,27 @@ export class PrepaidService {
         [newId('ado'), o.companyId, o.advertiserId, o.campaignId, o.draftId, fee, this.now()])).rows[0] ?? await this.orderFor(o.companyId, 'change', { draftId: o.draftId });
     }
     if (row.status !== 'paid') await this.charge(row, 'ad_change', 'Changing an ad');
+    return { orderId: row.id as string, feeCents: n(row.total_cents) };
+  }
+
+  /**
+   * The fee for changing a link a live ad's code leads to (src/modules/artwork/links.ts), paid up front. `key` names
+   * this one change (linkChangeKey): the same change retried finds its order and is never charged twice (the change
+   * orders' own unique key, ad_orders_change_once, holds it in the database). Booked like the change fee.
+   */
+  async payLinkFee(o: { companyId: string; advertiserId: string; campaignId: string; key: string; feeCents: number; expectedFeeCents?: number; changes: { path: string; url: string }[] }) {
+    let row = await this.orderFor(o.companyId, 'change', { draftId: o.key });
+    if (row && (row.advertiser_id !== o.advertiserId || row.campaign_id !== o.campaignId)) throw new AdsError(404, 'not_found', 'Campaign not found.');
+    if (row?.status === 'paid') return { orderId: row.id as string, feeCents: n(row.total_cents) };
+    if (!row) {
+      if (o.feeCents <= 0) return null;
+      this.payingOn(o.companyId);
+      if (o.expectedFeeCents !== o.feeCents) throw new AdsError(409, 'fee_changed', `Changing a link costs ${dollars(o.feeCents)}. Confirm that amount to pay it.`);
+      // The change itself is kept with its order, so a change paid for but not saved (a crash between) is finished later.
+      row = (await this.db.query<any>(`insert into ad_orders (id, company_id, advertiser_id, campaign_id, draft_id, kind, total_cents, extras, status, created_at) values ($1,$2,$3,$4,$5,'change',$6,$7,'paying',$8) on conflict do nothing returning *`,
+        [newId('ado'), o.companyId, o.advertiserId, o.campaignId, o.key, o.feeCents, JSON.stringify({ links: o.changes }), this.now()])).rows[0] ?? await this.orderFor(o.companyId, 'change', { draftId: o.key });
+    }
+    if (row.status !== 'paid') await this.charge(row, 'ad_change', 'Changing a link on an ad');
     return { orderId: row.id as string, feeCents: n(row.total_cents) };
   }
 

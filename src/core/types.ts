@@ -308,7 +308,9 @@ export interface CompanyConfig {
 }
 
 /** How a creative is stored: uploaded SVG artwork, or one of the built-in generated designs. */
-export type CreativeRef = { kind: 'svg'; markup: string } | { kind: 'builtin'; id: string } | { kind: 'poster'; spec: import('../modules/creative/poster').PosterSpec } | { kind: 'studio'; spec: import('../modules/studio/layout').StudioSpec };
+export type CreativeRef = { kind: 'svg'; markup: string } | { kind: 'builtin'; id: string } | { kind: 'poster'; spec: import('../modules/creative/poster').PosterSpec } | { kind: 'studio'; spec: import('../modules/studio/layout').StudioSpec }
+  /** Designed by the advertiser themselves and uploaded, one file per piece shape (src/modules/artwork). */
+  | { kind: 'artwork'; files: import('../modules/artwork/creative').ArtworkPrintFile[] };
 
 export interface Creative {
   /** Artwork as SVG markup sized to any box; the renderer scales it to the slot. A real system stores an asset URL. */
@@ -375,6 +377,8 @@ export interface Campaign {
   };
   /** What the QR is. Dynamic (the default): our code, looked up at every scan. Static: straight to a website. */
   qr?: { mode: 'dynamic' | 'static'; staticUrl?: string; bottleRef?: boolean; logo?: string; color?: string };
+  /** How many times the links its code leads to were changed after it went live (each paid for: src/modules/artwork/links.ts). */
+  linkChanges?: number;
   /**
    * Other versions of what the code opens. At each scan the first one whose conditions fit is used (or, with AI
    * personalization on, the AI chooses among the ones that fit). The campaign's own settings are the default.

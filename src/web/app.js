@@ -281,9 +281,9 @@
       const box = h('input', { class: 'input', id: 'hs-box', placeholder: '7K2Q F8MN 3XPA RT', maxlength: '24', autocapitalize: 'characters', autocomplete: 'off', style: 'text-transform:uppercase' });
       screen({ nav: 'me' }, backBar('Your house', 'Free water, left at every house on our streets', '/app/me'),
         h('p', { style: 'margin:0', text: 'We leave a free pack of water at every house on the streets we deliver to. You don’t have to sign up. To stop it, or to tell us how many people live with you, first show us it’s your house.' }),
-        h('button', { class: 'btn', type: 'button', onclick: async () => { const text = await scanQr('Scan the code on the side of your box'); if (text) claim({ code: text }); } }, 'Scan the code on your box'),
-        h('p', { class: 'small muted', style: 'margin:0', text: 'Or type the box code printed under the code on the box’s side panel (14 letters and numbers).' }),
-        h('form', { style: 'display:flex;flex-direction:column;gap:8px', onsubmit: (e) => { e.preventDefault(); if (box.value.replace(/[\s-]/g, '').length >= 10) claim({ code: box.value.trim() }); else fail(new Error('Type the whole box code from the box’s side panel.')); } },
+        h('button', { class: 'btn', type: 'button', onclick: async () => { const text = await scanQr(on('box_ads') ? 'Scan the code on the side of your box' : 'Scan the code on your box’s sticker'); if (text) claim({ code: text }); } }, 'Scan the code on your box'),
+        h('p', { class: 'small muted', style: 'margin:0', text: on('box_ads') ? 'Or type the box code printed under the code on the box’s side panel (14 letters and numbers).' : 'Or type the box code printed on the box’s sticker, after “Box code:” (14 letters and numbers).' }),
+        h('form', { style: 'display:flex;flex-direction:column;gap:8px', onsubmit: (e) => { e.preventDefault(); if (box.value.replace(/[\s-]/g, '').length >= 10) claim({ code: box.value.trim() }); else fail(new Error(on('box_ads') ? 'Type the whole box code from the box’s side panel.' : 'Type the whole box code from the box’s sticker.')); } },
           h('label', { for: 'hs-box', text: 'Box code' }), box, h('button', { class: 'btn secondary', type: 'submit' }, 'This is my house')),
         err,
         h('p', { class: 'small muted', style: 'margin:0', text: 'Use a box from the last two months. We keep only that this account goes with this address; your neighbours can’t see it.' }));

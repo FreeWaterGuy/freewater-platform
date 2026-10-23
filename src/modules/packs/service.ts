@@ -5,7 +5,8 @@ import type { Platform } from '../../platform';
 import { fillBoxFaces } from './boxFaces';
 import { labelSignature } from '../ads/engine';
 import { renderBox, stopCode, type RenderedBox } from './boxRenderer';
-import { companyBox } from './boxSettings';
+import { companyBox, stickerSetting, type StickerSetting } from './boxSettings';
+import { renderSticker, type RenderedSticker } from './sticker';
 
 export interface PackOrder {
   companyId: string;
@@ -36,10 +37,15 @@ export interface Pack {
   rendered?: RenderedBox;
   /**
    * A plain box ("Ads on boxes" off for its company): nothing was printed on it, but it still has its box code (the
-   * address its QR would hold), for the driver's scan and a house's claim. How the code reaches a plain box (a sticker?)
-   * is still being decided.
+   * address its QR would hold), for the driver's scan and a house's claim. It reaches the box on a sticker (below).
    */
   boxCode?: string;
+  /**
+   * The box-code sticker of a plain box ("Box code sticker" on): one per pack, printed with its bottles, and put on the
+   * box at the packing check (src/modules/packs/sticker.ts). Its size, side, spot and colours as set when it printed;
+   * `tries` names each print job (a resumed finish re-sends the same one, so it never prints twice).
+   */
+  sticker?: { widthIn: number; heightIn: number; side: StickerSetting['side']; spot: StickerSetting['spot']; color: string; ink: string; tries: number; failed?: boolean; printedAt?: string };
   status: 'composed' | 'box_printed' | 'mismatch' | 'verified' | 'sealed' | 'loaded' | 'delivered' | 'returned';
   loadPosition?: number;
   runId?: string;
@@ -179,6 +185,8 @@ export class PackService {
       pack.boxCode ??= pack.rendered?.packUrl ?? (p.codes ? p.codes.pack(company, pack.id) : `${company.receiptBaseUrl.replace(/\/$/, '')}/p/${pack.id}`);
       pack.faces = [];
       delete pack.rendered;
+      // Its code on a sticker, printed here with its bottles and put on the box at the packing check: exactly one.
+      if (p.featureOn(company.id, 'box_code_sticker')) await this.printSticker(pack);
       pack.status = 'box_printed';
       this.save(pack);
       return pack;
@@ -208,6 +216,42 @@ export class PackService {
     }
     if (pack.status !== 'box_printed') throw new Error(`Box for pack ${pack.id} failed to print twice. Nothing was billed for it.`);
     return pack;
+  }
+
+  /**
+   * Print a plain box's code sticker, once. Each try has its own job key, saved before it's sent: a finish resumed after
+   * a crash re-sends the same key (the printer answers it without printing again); a failed try gets a new one. Two
+   * failures in a row leave the pack waiting (plan the night again to retry), like a box that won't print.
+   */
+  private async printSticker(pack: Pack) {
+    if (pack.sticker?.printedAt) return;
+    const p = this.platform, company = p.companies.get(pack.companyId)!;
+    const st = stickerSetting(company, pack.box.bottles);
+    pack.sticker = { ...(pack.sticker ?? { ...st, tries: 0 }) };
+    const sticker = this.stickerOf(pack)!;
+    const svg = await p.forPrint(sticker.svg);
+    const printer = p.registry.printerFor(company);
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      if (!pack.sticker.tries || pack.sticker.failed) { pack.sticker.tries += 1; delete pack.sticker.failed; }
+      this.save(pack);
+      const r = await printer.print({ jobId: newId('job'), idempotencyKey: `${pack.id}:sticker:${pack.sticker.tries}`, unitId: `${pack.id}-sticker`, locationId: pack.routeId, svg, widthIn: sticker.widthIn, heightIn: sticker.heightIn });
+      if (r.status === 'printed') {
+        pack.sticker.printedAt = p.bus.now().toISOString();
+        this.save(pack);
+        return;
+      }
+      pack.sticker.failed = true;
+    }
+    this.save(pack);
+    throw new Error(`The box-code sticker for pack ${pack.id} failed to print twice. Plan the night again to retry; its bottles are printed.`);
+  }
+
+  /** A plain box's sticker, drawn as it printed (its size and colours then): to print it again by hand, or to look at. */
+  stickerOf(pack: Pack): RenderedSticker | null {
+    if (!pack.sticker || !pack.boxCode) return null;
+    const company = this.platform.companies.get(pack.companyId)!;
+    const { widthIn, heightIn, side, spot, color, ink } = pack.sticker;
+    return renderSticker({ company, packId: pack.id, packUrl: pack.boxCode, routeId: pack.routeId, stop: pack.stop, setting: { widthIn, heightIn, side, spot, color, ink } });
   }
 
   private async printBottle(pack: Pack, productId: string, counts: Map<string, number>, max: number, house: import('../../core/types').RouteHouseContext | null, route: Awaited<ReturnType<NonNullable<PackService['routeFor']>>> = null, bottleNo = 0): Promise<string> {

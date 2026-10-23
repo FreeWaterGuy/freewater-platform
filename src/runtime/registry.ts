@@ -26,7 +26,7 @@ import { unsoldSettings } from '../modules/fillers/unsold';
 export const SIZE_SWITCHES: Record<number, string> = { 1: 'size_whole', 2: 'size_half', 3: 'size_third', 4: 'size_quarter', 6: 'size_sixth', 8: 'size_eighth', 10: 'size_tenth' };
 
 /** Raise this when adding switches (and give them `since: CATALOGUE`). */
-export const CATALOGUE = 5;
+export const CATALOGUE = 6;
 
 export const categoryIds = ['printing', 'ads', 'ar_video', 'studio', 'delivery', 'machines', 'rewards', 'games', 'news', 'data', 'ai', 'money', 'transparency', 'giving', 'partners', 'blockchain', 'safety', 'core'] as const;
 export type CategoryId = (typeof categoryIds)[number];
@@ -159,7 +159,10 @@ export const SWITCHES: Switch[] = [
 
   // ======================= Ads =======================
   sw({ id: 'ads', category: 'ads', parent: null, dependsOn: ['printing'], label: 'Ads on bottles', description: 'Advertisers buy space on the label. Off: nothing is sold; the label is filled from your unsold-space list (or plain, or your own ad if you allow it), and the advertiser portal’s ad pages are closed.',
-    routes: ['GET /v1/campaigns', 'POST /v1/campaigns', 'PATCH /v1/campaigns/:id', 'GET /v1/experiences', 'POST /v1/experiences/preview', 'GET /v1/assets', 'POST /v1/assets', 'GET /v1/ads/overview'], pages: ['ads'], plugins: ['offer'] }),
+    routes: ['GET /v1/campaigns', 'POST /v1/campaigns', 'PATCH /v1/campaigns/:id', 'GET /v1/experiences', 'POST /v1/experiences/preview', 'GET /v1/assets', 'POST /v1/assets', 'GET /v1/ads/overview', 'GET /v1/ads/campaigns/:id/links', 'POST /v1/ads/campaigns/:id/links'], pages: ['ads'], plugins: ['offer'] }),
+  // The code's look on an ad designed by the advertiser (src/modules/artwork): always our own code, one per bottle.
+  sw({ id: 'qr_styles', category: 'ads', group: 'What the code shows', since: 6, label: 'QR colours and styles', description: 'Advertisers choose their QR code’s colour and put their logo in it (where logos in codes are allowed). Only a look a phone can scan: dark enough on its white square, the quiet zone kept, and read back at the smallest size it prints. The code is always ours, one per bottle. Off: plain black codes.',
+    routes: ['POST /v1/ads/drafts/:id/qr'] }),
   sw({ id: 'ad_chat', category: 'ads', group: 'Making ads', label: 'Make an ad by chatting', description: 'Advertisers describe the ad and attach pictures; the assistant fills in the draft, they preview it at every size, then submit.',
     routes: ['POST /v1/ads/drafts', 'GET /v1/ads/drafts/:id', 'POST /v1/ads/drafts/:id/messages', 'GET /v1/ads/drafts/:id/preview', 'POST /v1/ads/drafts/:id/submit'] }),
   sw({ id: 'bidding', category: 'ads', group: 'Selling space', kind: 'linked', default: false, dependsOn: ['billed_after'], label: 'Bidding (the auction)', description: 'Advertisers bid for their place, second price, with daily budgets (pricing: auction). Only where advertisers are billed afterwards: a bid’s price isn’t known until the bottle prints. Off: flat prices, one per size.',
@@ -209,6 +212,15 @@ export const SWITCHES: Switch[] = [
     ownPage: { on: 'On the AI agents page (AI reviewer of paid ads): an owner signed in with the second step, only once the AI’s record meets your bar.', page: 'agents' },
     label: 'AI makes the final call on paid ads',
     description: 'The AI reviewer’s rejection of a paid ad is final without a person, with its written reason kept. The advertiser can always appeal to a person; a random sample of its rejections (10% unless set, never under 5%) still goes to your team to audit; an AI pass still waits for a person before it prints; the refund after any rejection is still approved by a person. Turned on only when its record meets your bar (100 decisions and 95% agreeing with your team unless set); anyone on your team turns it off at once, and the governor turns it off by itself if its agreement drops below the bar.' }),
+  // Rating every ad version 1–10 before it prints, and showing the score to advertisers (src/modules/ads/ratings.ts;
+  // docs/SWITCHES.md, "Ad ratings"; docs/AI.md, "Ad rater"). The founder: rating on for every company (a white-label
+  // company may turn it off), showing it to advertisers off. `since: 1`: on for companies that already exist, as asked.
+  sw({ id: 'ad_ratings', category: 'ads', group: 'Ad ratings', label: 'Ad ratings',
+    description: 'Each version of each ad (a new ad, or a change to its artwork, scan page, links, AR or video) is rated 1 to 10 once, in the background, before its first print: the offer, the design at print size, the scan page, AR and video. By the AI where one is connected, otherwise by built-in rules (labelled). Printing never waits for it. Each version is followed to its results (bottles, scans, AR, clicks, sales), so you can see how well the rating predicts them, and each ad is filed under an industry and your own subcategories. Off: nothing is rated or followed.',
+    routes: ['GET /v1/ratings', 'POST /v1/ratings/versions/:id/category', 'POST /v1/ratings/subcategories'], jobs: ['ad-ratings'], pages: ['ratings'] }),
+  sw({ id: 'ad_rating_feedback', category: 'ads', group: 'Ad ratings', parent: 'ad_ratings', default: false, label: 'Show the rating to advertisers',
+    description: 'Advertisers see their ad’s score, a meter (Poor, Average, Good, Excellent) and up to three tips to improve it, when they get a quote and in their portal. It never stops them paying or their ad printing. Off (FreeWater): the rating stays with your team.',
+    routes: ['GET /v1/ads/drafts/:id/rating', 'GET /v1/ads/ratings'] }),
   ...([[1, 'whole', 'The whole label'], [2, 'half', 'Half'], [3, 'third', 'A third'], [4, 'quarter', 'A quarter'], [6, 'sixth', 'A sixth'], [8, 'eighth', 'An eighth'], [10, 'tenth', 'A tenth']] as const).map(([n, name, label]) =>
     sw({ id: `size_${name}`, category: 'ads', group: 'Ad sizes', label: `${label} of the label`, description: n === 1 ? 'One ad across the whole label.' : `Ads that take ${label.toLowerCase()} of the label (cut as square as the bottle allows).` })),
   // Label layouts (src/modules/ads/layoutChoice.ts; docs/SWITCHES.md, "Label layouts"): one switch per tidy template,
@@ -252,6 +264,13 @@ export const SWITCHES: Switch[] = [
   sw({ id: 'studio_library', category: 'studio', group: 'Pictures', label: 'Photo library', description: 'Free photos from a library, credited to their photographers.', routes: ['GET /v1/studio/library', 'POST /v1/studio/library'] }),
   sw({ id: 'studio_image_ai', category: 'studio', group: 'Pictures', dependsOn: ['ai'], label: 'Pictures made by AI', description: 'Google’s image AI makes a photo from a description, for brands without their own.', routes: ['POST /v1/studio/generate'] }),
   sw({ id: 'studio_3d', category: 'studio', group: 'Pictures', dependsOn: ['ar_place'], label: 'Photo to 3D', description: 'Turn a product photo into a 3D model for AR, at real size.', routes: ['POST /v1/studio/ar', 'POST /v1/studio/ar/use'] }),
+  // "I'll design it myself" (src/modules/artwork; README, "Design it yourself"; docs/SWITCHES.md).
+  sw({ id: 'design_yourself', category: 'studio', group: 'Design it yourself', dependsOn: ['ads'], since: 6, label: 'Design it yourself', description: 'When making an ad, advertisers can choose “I’ll design it myself” beside the assistant and the studio: they use a template, upload their own artwork, and see it checked and on a real label before paying. Content review is the same as for every ad.',
+    routes: ['GET /v1/ads/drafts/:id/artwork', 'POST /v1/ads/drafts/:id/link'] }),
+  sw({ id: 'template_downloads', category: 'studio', group: 'Design it yourself', parent: 'design_yourself', since: 6, label: 'Template downloads', description: 'A template for every size and shape of piece on each product (PDF, SVG and a 300-dpi PNG guide): the bleed, the image-safe and text-safe areas and the QR box, in inches and pixels, from the same numbers the printer uses.',
+    routes: ['GET /v1/ads/templates', 'GET /v1/ads/templates/:id'] }),
+  sw({ id: 'artwork_upload', category: 'studio', group: 'Design it yourself', parent: 'design_yourself', since: 6, label: 'Upload your own artwork', description: 'PDF, SVG, PNG or JPG, in the ad chat or on the upload page, one file per size, matched to its size by its dimensions. Each is checked (size, 300 dpi, bleed, safe areas, the QR box, small or faint words, fonts, see-through parts) with a plain Pass or Fix these, and one-tap fixes where safe.',
+    routes: ['POST /v1/ads/drafts/:id/artwork', 'POST /v1/ads/drafts/:id/artwork/:fileId/size', 'POST /v1/ads/drafts/:id/artwork/:fileId/fix', 'DELETE /v1/ads/drafts/:id/artwork/:fileId'] }),
   sw({ id: 'studio_to_ads', category: 'studio', group: 'Using designs', dependsOn: ['ads', 'ad_chat'], label: 'Use a design in an ad', description: 'Send a studio design straight into an ad being made.', routes: ['POST /v1/studio/use'] }),
   sw({ id: 'bottle_designer', category: 'studio', group: 'People’s own bottles', label: 'Design your own bottle', description: 'People describe their bottle (“Maya’s 30th, pink and gold”) and add photos; the chat makes the design and a proof of exactly what will print.',
     routes: ['POST /v1/me/designs', 'GET /v1/me/designs', 'GET /v1/me/designs/:id', 'POST /v1/me/designs/:id/messages', 'GET /v1/me/designs/:id/scan-preview', 'POST /v1/me/designs/:id/proof', 'POST /v1/me/proofs', 'POST /v1/me/assets', 'GET /v1/public/products/:productId'], plugins: ['custom-experience'] }),
@@ -285,7 +304,12 @@ export const SWITCHES: Switch[] = [
     routes: ['GET /v1/public/experience/box/:packId/:face', 'POST /v1/public/box-scans', 'POST /v1/public/box-ar-launches'] }),
   ...(['top', 'front', 'back', 'right'] as const).map((face) => sw({ id: `box_${face}`, category: 'delivery', group: 'Boxes', parent: 'box_ads', label: `Box ${face}`, description: `Sell the ${face} of each box to an advertiser.` })),
   sw({ id: 'box_settings', category: 'delivery', group: 'Boxes', kind: 'setting', page: 'company', label: 'Box sizes and colours',
-    description: 'For each pack size (6, 12, 24): the box’s outside length, width and height in inches (unset: the platform’s standard box), its inside and bottom colours (black unless you choose), and which side carries your info strip and how wide it is. Set under Company → Delivery boxes; used when ads on boxes are on.' }),
+    description: 'For each pack size (6, 12, 24): the box’s outside length, width and height in inches (unset: the platform’s standard box), its inside and bottom colours (black unless you choose), and which side carries your info strip and how wide it is; and the box-code sticker’s size, side, spot and colours. Set under Company → Delivery boxes; the box is drawn with them when ads on boxes are on, the sticker when they’re off.' }),
+  // A plain box (ads on boxes off) carries nothing printed: its code goes on a small sticker printed with the pack's
+  // bottles (src/modules/packs/sticker.ts), so drivers and households can scan it. On for FreeWater and in the pilot.
+  sw({ id: 'box_code_sticker', category: 'delivery', group: 'Boxes', since: 6, label: 'Box code sticker',
+    description: 'With ads on boxes off (plain boxes), each pack gets one small sticker, printed with its bottles: the pack’s QR code (the driver’s scan at the door, a household saying which house is theirs, the pack’s receipt) and “Box code: …” to type in, with the drivers’ stop code. The packing check says to put it on the box (2 × 2 in on the front, top-right, black on white, unless set per pack size under Company → Delivery boxes). With ads on boxes on, the code is on the box’s info strip and there’s no sticker. Off: plain boxes carry no code; drivers type the box number from the run sheet, and a household can’t claim its house from the box.',
+    routes: ['GET /v1/packs/:id/sticker.svg'] }),
 
   // ======================= Machines =======================
   sw({ id: 'machines', category: 'machines', parent: null, dependsOn: ['printing'], host: 'machines', label: 'Vending machines', description: 'Machines that print and drop a bottle: their screens, faults, the fleet page and machine keys.',
@@ -361,6 +385,15 @@ export const SWITCHES: Switch[] = [
   sw({ id: 'targeting_people', category: 'data', group: 'Targeting', dependsOn: ['ads'], label: 'Ads aimed at people', description: 'Ads aimed at interests or new and returning customers print only for a known person who fits, and each bottle’s trail is followed.',
     routes: ['GET /v1/ads/reach', 'GET /v1/ops/reach', 'GET /v1/ops/units/:id/handoff'] }),
 
+  // Benchmarks: averages by industry, channel and offer type, pooled across the companies that contribute, from anonymous
+  // aggregates only (src/modules/ads/ratings.ts; docs/SWITCHES.md, "Benchmarks"). New (`since: 6`): a company that
+  // already exists decides for itself whether its advertisers' results join the pool; FreeWater and new companies on.
+  sw({ id: 'benchmarks_contribute', category: 'data', group: 'Benchmarks', dependsOn: ['ad_ratings'], since: 6, label: 'Contribute to the network’s benchmarks',
+    description: 'Your ads’ results (bottles, scan, AR, click and sale rates by industry, channel and offer type) join the network’s averages, as anonymous aggregates: never an ad, an advertiser or your company by name, and never sold. An average is only shown when at least 20 ads from at least 5 advertisers stand behind it. Off: your results stay out, and you see only your own.' }),
+  sw({ id: 'benchmarks_view', category: 'data', group: 'Benchmarks', dependsOn: ['ad_ratings'], since: 6, label: 'Benchmarks page',
+    description: 'See your ads’ averages by industry, channel and offer type beside the network’s (where you contribute and enough ads stand behind them), month by month.',
+    routes: ['GET /v1/benchmarks', 'POST /v1/benchmarks/settings'], pages: ['benchmarks'] }),
+
   // ======================= AI =======================
   sw({ id: 'ai', category: 'ai', parent: null, kind: 'linked', label: 'AI', description: 'The AI models (the network’s or your own). Off: every feature runs on its built-in rules. The governor runs either way.',
     routes: ['GET /v1/agents/books', 'GET /v1/agents/books/search', 'GET /v1/agents/books/passages/:id'],
@@ -368,6 +401,8 @@ export const SWITCHES: Switch[] = [
   sw({ id: 'ai_ad_assistant', category: 'ai', group: 'For advertisers', dependsOn: ['ad_chat'], label: 'Ad assistant', description: 'Claude does the talking in “make an ad by chatting”. Off: the built-in helper.' }),
   sw({ id: 'ai_ad_reviewer', category: 'ai', group: 'For advertisers', dependsOn: ['ads'], since: 5, label: 'AI reviewer of paid ads',
     description: 'Claude looks at each paid ad when it’s submitted and passes it or flags it with its reasons, and your team can ask it why and push back; every final decision a person makes is kept as its record. It can only flag (unless you let it make the final call, under Ads). Off: no AI look; a person reviews every ad as before.' }),
+  sw({ id: 'ai_ad_rater', category: 'ai', group: 'For advertisers', dependsOn: ['ad_ratings'], label: 'AI ad rater',
+    description: 'Claude rates each ad version 1 to 10 before it prints, with reasons and tips (Ads → Ad ratings). Off, or with no AI: the built-in rules rate it, labelled as such.' }),
   sw({ id: 'ai_studio_designer', category: 'ai', group: 'For advertisers', dependsOn: ['studio'], label: 'Studio AI design help', description: 'Claude picks the words, photo, type and layout for studio designs. Off: three designs by rule.' }),
   sw({ id: 'ai_personalizer', category: 'ai', group: 'For people who scan', dependsOn: ['ad_versions'], label: 'Personalizer', description: 'Picks which of the advertiser’s versions fits the moment and writes a short greeting. Off: built-in rules choose.' }),
   sw({ id: 'ai_video_writer', category: 'ai', group: 'For people who scan', dependsOn: ['motion_videos'], label: 'Video writer', description: 'Claude cuts the motion video from the advertiser’s own words. Off: the built-in writer.' }),
@@ -393,6 +428,7 @@ export const SWITCHES: Switch[] = [
   // How advertisers pay (docs/SWITCHES.md, "How advertisers pay"): up front for their bottles; each fee on top its own switch.
   sw({ id: 'prepaid_ads', category: 'money', group: 'How advertisers pay', risk: 'money', dependsOn: ['advertiser_billing'], since: 2, label: 'Advertisers pay up front', description: 'An advertiser pays by card for a number of bottles before its ad is reviewed; only paid bottles print, and exactly that many go out. AR, video and scans are included. Off: no ad can be paid for, so none prints for a new advertiser; ads already paid for keep printing until their bottles are out, and can still be stopped and paid back.',
     routes: ['POST /v1/ads/drafts/:id/quote', 'POST /v1/ads/campaigns/:id/quote', 'POST /v1/ads/campaigns/:id/pay', 'GET /v1/ads/billing'] }),
+  sw({ id: 'link_change_fee', category: 'money', group: 'How advertisers pay', parent: 'prepaid_ads', risk: 'money', since: 6, label: 'Change a link (fee)', description: 'Changing where a live ad’s code leads costs the link fee (FreeWater $50; set it under Ads and prices), paid up front by card, once per change however often it’s pressed; the ad goes back to review with the new link. Off: changing a link is free (still reviewed).' }),
   sw({ id: 'billed_after', category: 'money', group: 'How advertisers pay', kind: 'linked', risk: 'money', default: false, dependsOn: ['advertiser_billing'], label: 'Bill advertisers afterwards (credit)', description: 'Instead of paying up front, advertisers are invoiced for what printed, scanned and sold, and a person gives each a credit limit. FreeWater: off (nothing is printed until it’s paid for). Needed for bidding.',
     routes: ['GET /v1/advertisers/:advertiserId/credit', 'POST /v1/advertisers/:advertiserId/credit-limit'],
     link: { get: (c) => !adBilling(c).requirePrepay, set: (c, on) => ({ adBilling: { ...adBilling(c), requirePrepay: !on, ...(on ? {} : { pricingMode: 'flat' }) } }) } }),
@@ -410,7 +446,7 @@ export const SWITCHES: Switch[] = [
   sw({ id: 'money_partners', category: 'money', group: 'Money leaving the platform', host: 'partners', risk: 'money', label: 'Money partners', description: 'Exchanging points or credit through a money partner (a card issuer or treasury provider).', routes: ['POST /v1/public/wallet/:companyId/exchange'] }),
   ...([['price_print', 'Print prices', 'What each size of ad costs per bottle printed.'], ['price_scan', 'Price per scan', 'What a scan that loaded costs the advertiser.'], ['price_ar', 'Price per AR launch', 'What an AR launch that loaded costs.'], ['commission', 'Commission on sales', 'The share of sales traced to a bottle.'],
     ['price_box_face', 'Box side price', 'What each side of a box costs.'], ['targeting_premium', 'Targeting premium', 'What each kind of targeting adds per engagement.'], ['custom_price', 'Custom bottle price', 'What people pay for their own designed bottle.'],
-    ['price_change_ad', 'Fee for changing an ad', 'What changing a running ad costs, paid up front ($100 to start).'], ['price_extras', 'Costly extras', 'AI video clips and other per-use costs: their cost plus your markup, paid up front with the bottles.']] as const)
+    ['price_change_ad', 'Fee for changing an ad', 'What changing a running ad costs, paid up front ($100 to start).'], ['price_change_link', 'Fee for changing a link', 'What changing where a live ad’s code leads costs, paid up front ($50 to start).'], ['price_extras', 'Costly extras', 'AI video clips and other per-use costs: their cost plus your markup, paid up front with the bottles.']] as const)
     .map(([id, label, description]) => sw({ id, category: 'money', group: 'Each fee', kind: 'setting', page: 'ads', label, description: `${description} Set it under Ads and prices; 0 means free.` })),
 
   // ======================= Transparency =======================
@@ -507,7 +543,7 @@ export const switchOf = (id: string) => byId.get(id);
 /** Box sides and their switches (the left side is always the company's own panel). */
 export const FACE_SWITCHES: Record<string, string> = { top: 'box_top', front: 'box_front', back: 'box_back', right: 'box_right' };
 /** The AI uses, by the id the engine passes to withCompany(). */
-export const AI_USES = ['ai_ad_assistant', 'ai_ad_reviewer', 'ai_studio_designer', 'ai_personalizer', 'ai_video_writer', 'ai_bottle_designer', 'ai_prompt_helper', 'ai_team_assistant', 'ai_news_writer', 'numberline'] as const;
+export const AI_USES = ['ai_ad_assistant', 'ai_ad_reviewer', 'ai_studio_designer', 'ai_personalizer', 'ai_video_writer', 'ai_bottle_designer', 'ai_prompt_helper', 'ai_team_assistant', 'ai_news_writer', 'ai_ad_rater', 'numberline'] as const;
 /** Irreversible steps (chain actions) and the switch each one turns on. Going live with points, pause and unpause always stay. */
 export const ACTION_SWITCHES: Record<string, string> = { mint: 'token', switch_on: 'chain_on', go_live_token: 'token', convert: 'token_conversion', withdrawals_on: 'withdrawals', exchanges_on: 'gift_cards' };
 

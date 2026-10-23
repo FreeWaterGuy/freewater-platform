@@ -132,7 +132,8 @@ describe('only the allowed layouts are used', () => {
     // The advertiser's chat can't pick a size no layout holds.
     const { draft, problems } = applyPatch({}, { sizes: [8, 2] } as any, { company: fw(), locations: [], host: {} as any, attachments: [], sizes: app.ads.printableSizes(fw()) });
     expect(draft.sizes).toEqual([2]);
-    expect(problems.join(' ')).toMatch(/prints only these sizes/);
+    // Named, with why and the sizes that do print (2026-10-23: never dropped silently).
+    expect(problems.join(' ')).toMatch(/An eighth can’t print on the bottles here with FreeWater’s label layouts; it prints at .*, a sixth or a tenth\./);
     app.platform.campaigns.delete(c.id);
     await allOn();
   }, 60_000);

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { overPixelLimit, pixelsText } from '../studio/photos';
 import type { Creative } from '../../core/types';
 
@@ -12,14 +13,15 @@ export function svgCreative(markup: string): Creative {
   const body = markup.replace(/^\s*<\?xml[^>]*>\s*/, '');
   const open = body.match(/<svg\b[^>]*>/i)!;
   const viewBox = /viewBox\s*=\s*["']([^"']+)["']/i.exec(open[0])![1];
-  const inner = body.slice(open.index! + open[0].length, body.lastIndexOf('</svg>'));
+  // Its ids, classes and xlink links made its own (embeddable), so it parses inside a label and can't clash with another ad.
+  const inner = embeddable(body.slice(open.index! + open[0].length, body.lastIndexOf('</svg>')), `fwu${createHash('sha256').update(markup).digest('hex').slice(0, 8)}`);
   return {
     svg: (w, h) => `<svg width="${w}" height="${h}" viewBox="${viewBox}" preserveAspectRatio="xMidYMid slice">${inner}</svg>`,
   };
 }
 
-export function checkSvg(markup: string): string | null {
-  if (markup.length > 2_000_000) return 'the file is larger than 2 MB';
+export function checkSvg(markup: string, maxBytes = 2_000_000): string | null {
+  if (markup.length > maxBytes) return `the file is larger than ${Math.round(maxBytes / 1_000_000)} MB`;
   const s = markup.replace(/^\s*<\?xml[^>]*>\s*/, '');
   if (!/^\s*<svg\b/i.test(s)) return 'it must be an <svg> file';
   if (!/<\/svg>\s*$/i.test(s)) return 'the <svg> is not closed';
@@ -107,4 +109,31 @@ export async function wordsUnderCode(markup: string, shapes: { where: string; w:
     if (dark > 6) out.push(s.where);
   }
   return out.length ? [`Words in this artwork sit where the QR code prints, bottom right (${out.slice(0, 3).join('; ')}${out.length > 3 ? ` and ${out.length - 3} more` : ''}): the code will cover them. Move them, or leave that corner plain.`] : [];
+}
+
+/**
+ * The inside of an uploaded drawing, made safe to sit inside a label beside other drawings:
+ * - `xlink:href` becomes `href` (the label's own <svg> doesn't declare the xlink prefix, so the file wouldn't parse),
+ *   and editors' own elements and attributes (sodipodi:, inkscape:, i:, x:…) are left out for the same reason;
+ * - its ids and class names get a prefix of its own, so two ads on one label can't take each other's glyphs, clip
+ *   paths, gradients or CSS (Illustrator calls every file's first style ".st0", cairo every file's first glyph "glyph-0-0").
+ */
+export function embeddable(inner: string, prefix: string): string {
+  let s = inner
+    .replace(/\sxlink:href\s*=/gi, ' href=')
+    .replace(/\sxmlns[\w.:-]*\s?=\s?("[^"]*"|'[^']*')/g, '')
+    .replace(/\s(?!xml:)[A-Za-z_][\w.-]*:[\w.-]+\s*=\s*("[^"]*"|'[^']*')/g, '')
+    .replace(/<([A-Za-z_][\w.-]*:[\w.-]+)\b[^>]*?(?:\/>|>[\s\S]*?<\/\1\s*>)/g, '');
+  const ids = new Set([...s.matchAll(/\sid\s*=\s*["']([^"']+)["']/g)].map((m) => m[1]!));
+  const classes = new Set([...s.matchAll(/\sclass\s*=\s*["']([^"']+)["']/g)].flatMap((m) => m[1]!.split(/\s+/).filter(Boolean)));
+  const P = (n: string) => `${prefix}-${n}`;
+  s = s.replace(/(\sid\s*=\s*["'])([^"']+)(["'])/g, (_m, a, id, b) => `${a}${P(id)}${b}`)
+    .replace(/(\shref\s*=\s*["']#)([^"']+)(["'])/g, (m, a, id, b) => (ids.has(id) ? `${a}${P(id)}${b}` : m))
+    .replace(/url\(\s*(["']?)#([^"')\s]+)\1\s*\)/g, (m, q, id) => (ids.has(id) ? `url(${q}#${P(id)}${q})` : m))
+    .replace(/(\sclass\s*=\s*["'])([^"']+)(["'])/g, (_m, a, list, b) => `${a}${list.split(/\s+/).filter(Boolean).map(P).join(' ')}${b}`);
+  // Inside <style>: the same names, as selectors.
+  s = s.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style>)/gi, (_m, a, css: string, b) => `${a}${css
+    .replace(/\.([A-Za-z_][\w-]*)/g, (m, n) => (classes.has(n) ? `.${P(n)}` : m))
+    .replace(/#([A-Za-z_][\w-]*)/g, (m, n) => (ids.has(n) ? `#${P(n)}` : m))}${b}`);
+  return s;
 }

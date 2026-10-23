@@ -70,6 +70,7 @@
     [/^\/console\/modules$/, modulesPage], [/^\/console\/codes$/, codesPage], [/^\/console\/products$/, productsPage], [/^\/console\/machines$/, machinesPage], [/^\/console\/team$/, teamPage], [/^\/console\/history$/, historyPage],
     [/^\/console\/keys$/, keysPage], [/^\/console\/webhooks$/, webhooksPage], [/^\/console\/webhooks\/([\w-]+)$/, webhookPage], [/^\/console\/licensees$/, licenseesPage],
     [/^\/console\/features$/, featuresPage], [/^\/console\/launch$/, launchPage], [/^\/console\/wallet$/, walletPage], [/^\/console\/offers$/, offersPage], [/^\/console\/games$/, gamesPage], [/^\/console\/chain$/, chainPage],
+    [/^\/console\/ratings$/, ratingsPage], [/^\/console\/benchmarks$/, benchmarksPage],
   ];
   /** Is this switch on, on this server and for this company? (GET /v1/public/features?company=; unknown or none: on.) */
   const on = (feature) => !feature || !(S.features?.off ?? []).includes(feature);
@@ -77,7 +78,7 @@
   // their heading). A page whose switch is off isn't shown; its switch is turned back on from the Features page.
   // (The prize game and the games are their own on/off: their pages stay so they can be turned on there, unless this
   // server runs without them at all, as the pilot runs without the prize game: then there's nothing to turn on.)
-  const PAGE_FEATURES = { offers: 'offers', chain: 'token', licensees: 'network', machines: 'machines', webhooks: 'webhooks', given: 'giveaways', docs: 'developer_pages', transparency: 'transparency', wallet: 'rewards', agents: 'ai_agents' };
+  const PAGE_FEATURES = { offers: 'offers', chain: 'token', licensees: 'network', machines: 'machines', webhooks: 'webhooks', given: 'giveaways', docs: 'developer_pages', transparency: 'transparency', wallet: 'rewards', agents: 'ai_agents', ratings: 'ad_ratings', benchmarks: 'benchmarks_view' };
   const HOST_PAGES = { game: 'lottery', games: 'games' };
   /** Does this server run the area at all (FW_FEATURES; `on` lists the server's areas, before any company switch)? */
   const hostOn = (feature) => !feature || !Array.isArray(S.features?.on) || S.features.on.includes(feature);
@@ -118,7 +119,7 @@
     const nav = [
       ['start', '/console', 'Get started', I.start], ['features', '/console/features', 'Features', I.modules],
       'Points and rewards', ['launch', '/console/launch', 'Launch', I.start], ['wallet', '/console/wallet', 'Points and credit', I.giving], ['offers', '/console/offers', 'Brand offers', I.ads], ['games', '/console/games', 'The games', I.game], ['chain', '/console/chain', 'Blockchain', I.key],
-      'Settings', ['company', '/console/company', 'Company', I.company], ['brand', '/console/brand', 'Brand', I.brand], ['label-panel', '/console/label-panel', 'Label panel', I.product], ['ads', '/console/ads', 'Ads and prices', I.ads], ['codes', '/console/codes', 'QR codes and AR', I.qr], ['products', '/console/products', 'Products', I.product],
+      'Settings', ['company', '/console/company', 'Company', I.company], ['brand', '/console/brand', 'Brand', I.brand], ['label-panel', '/console/label-panel', 'Label panel', I.product], ['ads', '/console/ads', 'Ads and prices', I.ads], ['ratings', '/console/ratings', 'Ad ratings', I.line], ['benchmarks', '/console/benchmarks', 'Benchmarks', I.line], ['codes', '/console/codes', 'QR codes and AR', I.qr], ['products', '/console/products', 'Products', I.product],
       ['giving', '/console/giving', 'Giving', I.giving], ['game', '/console/game', 'Prize game', I.game], ['transparency', '/console/transparency', 'Transparency', I.eye], ['data', '/console/data', 'Data and privacy', I.shield], ['numberline', '/console/numberline', 'Number line', I.line], ['agents', '/console/agents', 'AI agents', I.ai], ['security', '/console/security', 'Security', I.shield], ['modules', '/console/modules', 'Modules', I.modules], ['machines', '/console/machines', 'Machines', I.machine], ['team', '/console/team', 'Team', I.team], ['history', '/console/history', 'History', I.history],
       'Developers', ['keys', '/console/keys', 'API keys', I.key], ['webhooks', '/console/webhooks', 'Webhooks', I.hook], ['docs', '/developers', 'Docs', I.docs],
       ...(S.ov?.config?.id === 'freewater' ? ['FreeWater team', ['given', '/console/given', 'Bottles given & receipts', I.box]] : []),
@@ -411,7 +412,7 @@
       const id = `f${++fid}`; input.id = id;
       return h('div', { class: 'field' }, h('label', { for: id, text: label }), h('div', { class: 'suffix' }, input, h('span', { text: 'in' })), h('div', { class: 'hint', text: std == null ? 'Blank: not set.' : `Blank: the standard ${std} in.` }));
     };
-    const paint = (path, label) => {
+    const paint = (path, label, hint = 'Black unless you choose.') => {
       const v = getP(ctx.draft, path) ?? o.defaults[path.split('.').pop()];
       const pick = h('input', { type: 'color', value: v, 'aria-label': `${label} picker` });
       const hex = h('input', { class: 'input', maxlength: 7, value: v, spellcheck: 'false' });
@@ -419,7 +420,13 @@
       pick.addEventListener('input', () => { hex.value = pick.value.toUpperCase(); put(pick.value); });
       hex.addEventListener('input', () => { const val = hex.value.trim(); if (/^#[0-9a-fA-F]{6}$/.test(val)) { pick.value = val; put(val); } });
       const id = `f${++fid}`; hex.id = id;
-      return h('div', { class: 'field' }, h('label', { for: id, text: label }), h('div', { class: 'color' }, pick, hex), h('div', { class: 'hint', text: 'Black unless you choose.' }));
+      return h('div', { class: 'field' }, h('label', { for: id, text: label }), h('div', { class: 'color' }, pick, hex), h('div', { class: 'hint', text: hint }));
+    };
+    const pickOne = (path, label, values, dflt) => {
+      const sel = h('select', { class: 'input' }, values.map((v) => h('option', { value: v, text: v[0].toUpperCase() + v.slice(1).replace('-', ' ') })));
+      sel.value = getP(ctx.draft, path) ?? dflt;
+      sel.addEventListener('change', () => { setP(ctx.draft, path, sel.value); ctx.changed(); });
+      return field(label, sel);
     };
     const one = (size) => {
       const std = o.standard.find((b) => String(b.bottles) === size) ?? {};
@@ -431,9 +438,14 @@
         inch(p('lengthIn'), 'Length (outside)', std.lengthIn, o.inches), inch(p('widthIn'), 'Width (outside)', std.widthIn, o.inches), inch(p('heightIn'), 'Height (outside)', std.heightIn, o.inches),
         paint(p('insideColor'), 'Inside colour'), paint(p('bottomColor'), 'Bottom colour'),
         field('Side with your info strip', side, { hint: 'Your logo, giving line, the pack’s code and its facts. That side is never sold.' }),
-        inch(p('stripWidthIn'), 'Info strip width', null, o.stripInches)));
+        inch(p('stripWidthIn'), 'Info strip width', null, o.stripInches),
+        // The box-code sticker, for plain boxes (ads on boxes off): printed with the pack's bottles, put on at the packing check.
+        ...(o.stickerInches ? [
+          inch(p('stickerWidthIn'), 'Box-code sticker width', o.defaults.stickerWidthIn, o.stickerInches), inch(p('stickerHeightIn'), 'Box-code sticker height', o.defaults.stickerHeightIn, o.stickerInches),
+          pickOne(p('stickerSide'), 'Sticker goes on the', o.stickerSides, o.defaults.stickerSide), pickOne(p('stickerSpot'), 'Where on that side', o.stickerSpots, o.defaults.stickerSpot),
+          paint(p('stickerColor'), 'Sticker colour', 'White unless you choose.'), paint(p('stickerInk'), 'Sticker words colour', 'Black unless you choose. Dark on light, so the code reads.')] : [])));
     };
-    return section('Delivery boxes', `Each pack size’s box. Measure your boxes and enter them (blank uses the standard size shown). The inside and bottom are black unless you choose. Ads on boxes are ${on('box_ads') ? 'on: boxes print with these settings' : 'off (Features → Delivery): nothing is printed on your boxes; these settings wait until you turn them on'}.`,
+    return section('Delivery boxes', `Each pack size’s box. Measure your boxes and enter them (blank uses the standard size shown). The inside and bottom are black unless you choose. Ads on boxes are ${on('box_ads') ? 'on: boxes print with these settings, and each box’s code is on its info strip' : `off (Features → Delivery): nothing is printed on your boxes; the measurements, colours and strip wait until you turn them on${on('box_code_sticker') ? ', and each pack’s code prints on a box-code sticker set here' : ''}`}.`,
       h('div', { class: 'stack' }, ...['6', '12', '24'].map(one)));
   }
 
@@ -583,6 +595,7 @@
           ? 'Up front, by card, for a number of bottles, at the prices above (AR, video and scans included). Each fee below is charged only when it’s switched on (Features → Money and payments), to the card once a day. Saving these needs the second sign-in step.'
           : 'Billed afterwards, on invoices, with credit limits (Features → Money and payments → Bill advertisers afterwards). Saving these needs the second sign-in step.', h('div', { class: 'form' },
           num(ctx, 'adBilling.changeFeeCents', 'Fee for changing a running ad', { min: 0, max: 100000, suffix: '¢', hint: (v) => `${dollars(v ?? 0)}, paid up front. The new ad is reviewed before it prints.` }),
+          num(ctx, 'adBilling.linkChangeFeeCents', 'Fee for changing a link on a live ad', { min: 0, max: 100000, suffix: '¢', hint: (v) => `${dollars(v ?? 5000)}, paid up front, while Change a link (fee) is on (Features → Money and payments). The new link is reviewed.` }),
           num(ctx, 'adBilling.fees.scan.cents', `Fee per scan (${ctx.draft.adBilling.fees.scan.on ? 'on' : 'off'})`, { min: 0, max: 1000, suffix: '¢' }),
           num(ctx, 'adBilling.fees.arLaunch.cents', `Fee per AR launch (${ctx.draft.adBilling.fees.arLaunch.on ? 'on' : 'off'})`, { min: 0, max: 1000, suffix: '¢' }),
           num(ctx, 'adBilling.fees.commission.percent', `Commission on sales (${ctx.draft.adBilling.fees.commission.on ? 'on' : 'off'})`, { min: 0, max: 50, step: 0.5, int: false, suffix: '%' }),
@@ -873,6 +886,77 @@
   }
 
   // ---------- the number line and honest data ----------
+  // ---------- ad ratings and benchmarks (src/modules/ads/ratings.ts; docs/SWITCHES.md, "Ad ratings", "Benchmarks") ----------
+  const pct = (x) => (x == null ? '—' : `${(x * 100).toFixed(1)}%`);
+  const bar = (x, max) => h('span', { class: 'rate-bar', style: `display:inline-block;height:8px;border-radius:4px;background:currentColor;opacity:.55;width:${Math.max(2, Math.round(((x || 0) / (max || 1)) * 120))}px`, 'aria-hidden': 'true' });
+  const horizonLinks = (path, current) => h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'Results counted over' }, [['d7', 'First 7 days'], ['d30', 'First 30 days'], ['d90', 'First 90 days'], ['latest', 'So far']].map(([k, l]) => link(`${path}?horizon=${k}`, { role: 'tab', class: `btn small${k === current ? '' : ' secondary'}`, 'aria-selected': String(k === current) }, l)));
+  async function ratingsPage() {
+    const horizon = new URLSearchParams(S.path.split('?')[1] || '').get('horizon') || 'd30';
+    const R = await api('GET', `/v1/ratings?horizon=${encodeURIComponent(horizon)}`);
+    const subsOf = (cat) => R.subcategories.filter((x) => x.category === cat && !x.archived);
+    const cal = R.calibration;
+    const maxScan = Math.max(0, ...cal.byScore.map((b) => b.scanRate || 0));
+    const catSelect = (v) => {
+      const sel = h('select', { class: 'input', 'aria-label': 'Industry' }, R.taxonomy.industries.map((i) => h('option', { value: i.id, text: i.label, selected: i.id === v.category || null })));
+      const sub = h('select', { class: 'input', 'aria-label': 'Your subcategory' }, [h('option', { value: '', text: '—' }), ...subsOf(v.category).map((x) => h('option', { value: x.id, text: x.label, selected: x.id === v.subcategoryId || null }))]);
+      const save = async () => { try { await api('POST', `/v1/ratings/versions/${v.id}/category`, { category: sel.value, subcategoryId: sub.value || null }); toast('Saved.'); render(); } catch (x) { toast(x.message); } };
+      sel.addEventListener('change', () => { sub.value = ''; save(); });
+      sub.addEventListener('change', save);
+      return h('div', { style: 'display:flex;gap:6px;flex-wrap:wrap' }, sel, sub);
+    };
+    const newSub = (() => {
+      const cat = h('select', { class: 'input', 'aria-label': 'Under' }, R.taxonomy.industries.map((i) => h('option', { value: i.id, text: i.label })));
+      const label = h('input', { class: 'input', maxlength: '60', placeholder: 'e.g. Pizza', 'aria-label': 'Subcategory name' });
+      const add = h('button', { class: 'btn', type: 'button' }, 'Add');
+      add.onclick = async () => { try { await api('POST', '/v1/ratings/subcategories', { category: cat.value, label: label.value }); toast('Added.'); render(); } catch (x) { toast(x.message); } };
+      return h('div', { class: 'row', style: 'display:flex;gap:8px;flex-wrap:wrap;align-items:center' }, cat, label, add);
+    })();
+    shell('ratings', head('Ad ratings', 'Every version of every ad is rated 1 to 10 once, before it first prints: the offer, the design at print size, the scan page, AR and video. Printing never waits for it. Each version is then followed to what its bottles did, so you can see how well the rating predicts results.'),
+      h('p', { class: 'muted', text: `${R.counts.rated} rated (${R.counts.byAi} by the AI, ${R.counts.byRules} by the built-in rules), ${R.counts.waiting} waiting, ${R.counts.ratedLate} of ${R.counts.printed} printed versions rated after their first print. ${R.looksAt}` }),
+      section('How well the rating predicts results', cal.summary,
+        horizonLinks('/console/ratings', horizon),
+        h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Score', 'Ads', 'Scan rate', '', 'Sales per bottle'].map((x) => h('th', { text: x })))),
+          h('tbody', {}, cal.byScore.map((b) => h('tr', {}, h('td', { text: String(b.score) }), h('td', { text: String(b.ads) }), h('td', { text: pct(b.scanRate) }), h('td', {}, b.ads ? bar(b.scanRate, maxScan) : ''), h('td', { text: pct(b.conversionRate) })))))),
+        h('p', { class: 'muted', style: 'margin:6px 0 0', text: `Rank correlation of score with scan rate: ${cal.correlation.scanRate ?? '—'}; with sales: ${cal.correlation.conversionRate ?? '—'}. Ads with at least ${plural(cal.minBottles, 'bottle', 'bottles')} count. By rater: ${cal.byRater.map((g) => `${g.rater} ${g.rubric} (${plural(g.ads, 'ad', 'ads')}, ${g.scanRate ?? '—'})`).join('; ') || 'none yet'}.` })),
+      section('Ads', 'Newest first. Change an ad’s industry or subcategory: it carries over to the ad’s next version.',
+        R.versions.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Ad', 'Score', 'Parts', 'Rated by', 'Industry', 'Results so far'].map((x) => h('th', { text: x })))),
+          h('tbody', {}, R.versions.map((v) => h('tr', {},
+            h('td', {}, h('b', { text: v.advertiser || v.campaignId }), h('br'), h('span', { class: 'muted', text: `${v.name ?? ''} · ${when(v.seenAt)}` })),
+            h('td', {}, v.rating.ready ? h('span', {}, h('b', { text: `${v.rating.score}/10 ` }), chip(v.rating.score >= 6 ? `${v.rating.score >= 8 ? 'Excellent' : 'Good'}` : v.rating.score >= 4 ? 'Average' : 'Poor', v.rating.score >= 6 ? 'ok' : v.rating.score >= 4 ? 'warn' : 'bad')) : chip('Waiting', 'warn'), v.late ? chip('Rated late', 'warn') : null),
+            h('td', { class: 'muted', text: v.rating.ready ? `offer ${v.rating.scores.offer} · design ${v.rating.scores.design} · page ${v.rating.scores.landing} · AR ${v.rating.scores.ar} · video ${v.rating.scores.video}` : '' }),
+            h('td', { text: v.rating.ready ? `${v.rating.raterLabel}, rubric ${v.rating.rubric}${v.rating.fallbackReason ? ` (${v.rating.fallbackReason})` : ''}` : '' }),
+            h('td', {}, catSelect(v)),
+            h('td', { text: v.outcomes ? `${plural(v.outcomes.bottles, 'bottle', 'bottles')} · ${pct(v.outcomes.scanRate)} scanned · ${plural(v.outcomes.conversions, 'sale', 'sales')}` : '—' })))))) : h('p', { class: 'muted', style: 'margin:0', text: 'No ads rated yet.' })),
+      section('Your subcategories', `Under the standard industries (${R.taxonomy.source} ${R.taxonomy.licence})`,
+        h('ul', {}, R.subcategories.map((x) => h('li', {}, `${R.taxonomy.industries.find((i) => i.id === x.category)?.label ?? x.category} → ${x.label}${x.archived ? ' (archived)' : ''} `,
+          h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { try { await api('POST', '/v1/ratings/subcategories', { id: x.id, archive: !x.archived }); render(); } catch (e) { toast(e.message); } } }, x.archived ? 'Bring back' : 'Archive')))),
+        newSub));
+  }
+  async function benchmarksPage() {
+    const horizon = new URLSearchParams(S.path.split('?')[1] || '').get('horizon') || 'd30';
+    const B = await api('GET', `/v1/benchmarks?horizon=${encodeURIComponent(horizon)}`);
+    const DIMS = [['category', 'By industry'], ['channel', 'By how it went out'], ['offer_type', 'By kind of offer'], ['category_channel', 'By industry and channel'], ['subcategory', 'By your subcategories (yours only)']];
+    const figs = (f) => (f ? `${pct(f.scanRate)} scanned · ${pct(f.conversionRate)} of bottles led to a sale · ${plural(f.ads, 'ad', 'ads')}` : '—');
+    const minAds = h('input', { class: 'input', type: 'number', min: String(B.floors.minAds), value: String(B.settings.minAds), 'aria-label': 'Ads needed', style: 'max-width:110px' });
+    const minAdv = h('input', { class: 'input', type: 'number', min: String(B.floors.minAdvertisers), value: String(B.settings.minAdvertisers), 'aria-label': 'Advertisers needed', style: 'max-width:110px' });
+    const why = h('input', { class: 'input', maxlength: '300', placeholder: 'Why (needed to lower them)', 'aria-label': 'Why' });
+    const save = h('button', { class: 'btn secondary', type: 'button' }, 'Save');
+    save.onclick = async () => { try { await api('POST', '/v1/benchmarks/settings', { minAds: Number(minAds.value), minAdvertisers: Number(minAdv.value), ...(why.value.trim() ? { reason: why.value.trim() } : {}) }); toast('Saved.'); render(); } catch (x) { toast(x.message); } };
+    shell('benchmarks', head('Benchmarks', B.method),
+      B.contributes ? null : h('div', { class: 'notice', text: 'Your company doesn’t contribute its ads’ results to the network’s benchmarks, so you see only your own. Turn on “Contribute to the network’s benchmarks” on the Features page (Data & targeting) to join.' }),
+      horizonLinks('/console/benchmarks', horizon),
+      ...DIMS.map(([d, title]) => {
+        const gs = B.groups.filter((g) => g.dimension === d);
+        return gs.length ? section(title, null, h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['', 'Yours', 'The network'].map((x) => h('th', { text: x })))),
+          h('tbody', {}, gs.map((g) => h('tr', {}, h('td', { text: g.label }), h('td', { text: figs(g.yours) }),
+            h('td', { class: g.network?.shown ? '' : 'muted', text: !g.network ? '—' : g.network.shown ? `${figs(g.network)} (${g.network.advertisers} advertisers)` : g.network.why }))))))) : null;
+      }),
+      section('History', 'The network, month by month: ads first printed that month, their first 30 days.', B.history.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Month', 'Group', 'Ads', 'Scan rate', 'Sales per bottle'].map((x) => h('th', { text: x })))),
+        h('tbody', {}, B.history.slice(0, 120).map((r) => h('tr', {}, h('td', { text: r.period }), h('td', { text: `${r.dimension.replace(/_/g, ' ')}: ${r.label}` }), h('td', { text: String(r.ads) }), h('td', { text: pct(r.scanRate) }), h('td', { text: pct(r.conversionRate) })))))) : h('p', { class: 'muted', style: 'margin:0', text: 'Nothing settled yet.' })),
+      section('When an average is shown', `At least this many ads from this many advertisers (never under ${B.floors.minAds} and ${B.floors.minAdvertisers}), no advertiser with more than half of them, and enough without your own ads. Anyone on the team can raise these; lowering them is an owner’s, with a reason.`,
+        h('div', { class: 'form' }, field('Ads needed', minAds), field('Advertisers needed', minAdv), field('Why', why, { full: true })), h('div', { class: 'toolbar' }, save)));
+  }
+
   async function numberLinePage() {
     for (const s of ['company', 'custom', `bottle:${S.ov.config.standardProductId ?? 'bottle-16oz'}`]) { try { await api('POST', '/v1/numberline/place', { subject: s }); } catch {} }
     const [rows, hd] = await Promise.all([api('GET', '/v1/numberline'), api('GET', '/v1/honest-data')]);

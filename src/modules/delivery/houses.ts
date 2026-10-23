@@ -509,7 +509,7 @@ export class HouseService {
     const text = String(input.code ?? '').trim();
     // The short number in the box's corner (#7K2QF) proves only that someone saw the box: not enough. Said plainly, and
     // not counted as a wrong try (there was nothing to match).
-    if (/^#?\s*[a-z0-9]{5}$/i.test(text)) throw new DeliveryError(422, 'full_code_needed', 'That’s the box number from the corner. Scan the code on the side of the box, or type the whole box code printed under it.');
+    if (/^#?\s*[a-z0-9]{5}$/i.test(text)) throw new DeliveryError(422, 'full_code_needed', 'That’s the box number from the corner. Scan the code on the box (on its sticker, or its side panel), or type the whole box code printed with it.');
     const since = new Date(this.platform.bus.now().getTime() - 86_400_000).toISOString();
     const tooMany = () => new DeliveryError(429, 'too_many_tries', 'Too many codes that didn’t match today. Try again tomorrow, with the code from your most recent box.');
     const triesIn = async (db: SqlClient) => Number((await db.query<any>(`select count(*)::int as n from house_events where company_id = $1 and by_user = $2 and kind = 'claim_failed' and at > $3`, [companyId, userId, since])).rows[0]?.n ?? 0);
@@ -538,7 +538,7 @@ export class HouseService {
       return { kind: 'claimed' as const, houseId: pack.houseId, others: already, again: mineBefore === pack.houseId };
     });
     if (outcome.kind === 'too_many') throw tooMany();
-    if (outcome.kind === 'no_match') throw new DeliveryError(404, 'no_match', 'That code isn’t from a box we delivered in the last two months. Scan the code on the side of your most recent box, or type the whole box code printed under it.');
+    if (outcome.kind === 'no_match') throw new DeliveryError(404, 'no_match', 'That code isn’t from a box we delivered in the last two months. Scan the code on your most recent box (on its sticker, or its side panel), or type the whole box code printed with it.');
     // Someone else already said this is their house: they see it in the app (mine().notices), and the team is told.
     if (outcome.others.length && !outcome.again) {
       const h = await this.getHouse(outcome.houseId, companyId);

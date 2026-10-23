@@ -17,7 +17,10 @@ export interface AdAssistantInput {
     plugins: { id: string; name: string; description: string; example: unknown; configSchema: unknown }[];
     icons: readonly string[];
     fonts: string[];
+    /** The sizes this ad can print at: some label layout the company allows holds them on the products below. */
     sizes: number[];
+    /** Those products, in words ("the 16 oz aluminum bottle"), to say plainly why a size asked for can't print. */
+    sizesOn?: string;
     prices: {
       perPrintByShare: Record<string, number>; bidStartsAt: number; perScan: number; perArLaunch: number; commissionPercent: number;
       /** Set where ads are paid up front for a number of bottles (then there are no bids or daily amounts). */

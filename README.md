@@ -58,7 +58,7 @@ Failed prints, failed AR and duplicate orders are never billed. Ledger lines are
 `src/modules/packs` prints 6, 12 and 24 packs for a delivery route:
 
 - **Every bottle is different.** The ad engine is told which labels are already in the pack and picks a different one, and no campaign can take more than its share of a pack (`maxPackShare`, 50% by default).
-- **The box can be ad space, and starts plain.** *Ads on boxes* (`box_ads`) is off for FreeWater, in the pilot and for every new company: boxes are black and nothing is printed on them (no box job, no panel), no box side is sold or quoted, a whole-box route buy covers its bottles only, and the ad assistant and portal never offer boxes. Each pack still gets its box code (`pack.boxCode`) for the driver's scan, a house's claim and its receipt page; how the code reaches a plain box is still being decided. Turned on, top, front, back and right are sold to different advertisers (never two competitors), each with its own QR; the company's info strip, with the pack's QR, is on the side it chose (the left unless set) and is never sold; a small stop code (`R3 · 14`) sits in the corner of the front and top; box faces are billed only when the box print is confirmed. Each company sets its boxes per pack size (6, 12, 24) under *Company → Delivery boxes*: outside length × width × height (unset: the standard box; nothing assumed), inside and bottom colours (black unless set), and the info strip's side and width (docs/SWITCHES.md, "Delivery boxes").
+- **The box can be ad space, and starts plain.** *Ads on boxes* (`box_ads`) is off for FreeWater, in the pilot and for every new company: boxes are black and nothing is printed on them (no box job, no panel), no box side is sold or quoted, a whole-box route buy covers its bottles only, and the ad assistant and portal never offer boxes. Each pack still gets its box code (`pack.boxCode`) for the driver's scan, a house's claim and its receipt page, on a small box-code sticker printed with its bottles and put on at the packing check (*Box code sticker*, on; 2 × 2 in unless set per pack size). Turned on, top, front, back and right are sold to different advertisers (never two competitors), each with its own QR; the company's info strip, with the pack's QR, is on the side it chose (the left unless set) and is never sold; a small stop code (`R3 · 14`) sits in the corner of the front and top; box faces are billed only when the box print is confirmed. Each company sets its boxes per pack size (6, 12, 24) under *Company → Delivery boxes*: outside length × width × height (unset: the standard box; nothing assumed), inside and bottom colours (black unless set), and the info strip's side and width (docs/SWITCHES.md, "Delivery boxes").
 - **Checked before sealing.** The packing line scans every bottle (where there's no line, a signed-in person counts the box by hand and that check is recorded with who and when). A bottle it can't read (a label torn, smudged, printed off or missing; bottles don't get lost in packing) or one from another pack stops the line. A bad label is **reprinted exactly**: the same ads in the same places, for the same house or person (`POST /v1/packs/:id/replace`). The bad bottle is voided: its books lines are reversed and it counts against no one (no paid bottle used, nothing charged, nothing to give back); the reprint is billed instead, once, and an ad paid for N bottles still reaches exactly N. Voiding, billing the reprint, moving its route pieces and putting it in the pack happen in one write; a crash in the middle is finished at the next start. The pack is checked again before it can be sealed.
 - **Loaded in reverse.** The last stop goes in the van first, so the next box is always by the door.
 - **Right box, right door.** A stop is marked delivered only when the driver scans the box planned for that address while at that address. Anything else is rejected with what to grab instead.
@@ -224,6 +224,7 @@ junk mail but free water that gives to charity. Houses don't sign up and aren't 
 - **Today:** bottles, scans, money earned and given, deliveries, and what needs attention (ads to review, failed prints, scan pages that fell back, wrong boxes).
 - **Ad review:** each ad on a sample label, at every size, on a box and as its scan page, with a checklist. Approve, or send it back with a note. A paid ad flagged (by an automated check, an AI or a person) shows its reasons and a notes thread with the advertiser; only a person finally rejects it, with a reason (see *How advertisers pay*).
 - **The AI reviewer of paid ads:** looks at each paid ad and passes or flags it; the team can ask it why and push back on the review page (kept with the ad, apart from the advertiser's notes). Its record against the team's final decisions is on *AI agents*. A company can let it make the final call on rejections (*AI makes the final call on paid ads*, off for everyone) only once that record meets its bar (100 decisions, 95% agreeing), by an owner with the second step; the advertiser can always appeal to a person, a sample is audited, the governor turns it off if agreement drops, and refunds stay a person's step (docs/AI.md).
+- **Ad ratings, industries and benchmarks** (`src/modules/ads/ratings.ts`, `rating.ts`, `categories.ts`; console *Ad ratings* and *Benchmarks*): every version of every ad is rated 1–10 once, in the background, before its first print (offer, design at print size, scan page, AR, video; sub-scores, reasons, tips; Claude where an AI is connected, built-in rules otherwise, labelled). Printing never waits: a slow or failing AI catches up later and the rating is marked late. Each ad gets an industry from FreeWater's own list (modelled on IAB's and Google's, not copied) plus the company's own subcategories, is followed to its results (bottles, scans, AR, clicks, sales by channel), and the *Ad ratings* page shows how well the score predicts them. *Benchmarks* pools anonymous averages across the companies that contribute, shown only at 20+ ads from 5+ advertisers (no one over half, and enough without your own), kept month by month. The score reaches advertisers only if the company turns on *Show the rating to advertisers* (off). docs/SWITCHES.md, "Ad ratings" and "Benchmarks".
 - **Machines:** prints today, failures and the last print for each machine, plus any scan pages that fell back.
 - **Routes:** plan and print a night, run the packing check, and follow every stop.
 - **Areas:** the delivery areas, their settings and houses, adding houses from CSV, and drivers' skips to review.
@@ -599,6 +600,62 @@ npm run demo:ads-preview   # builds out/ads-preview/, a clickable copy that need
 - **Results from the books** (`GET /v1/ads/overview`): spend, bottles printed, box sides, scans, AR launches, sales, saves and link taps, day by day and per ad. Every ledger line now carries its campaign, so each number traces to the lines it adds up.
 - **On our delivery routes**: on the review page, *Where it goes → On our delivery routes*: the kind of buy, the size, the weeks, and areas (each a small map of its streets, where a shape can be drawn), streets or addresses; *See the exact price*, then pay and submit. *Where it went* on the ad shows the report; *Billing* shows route buys and credit.
 - **Billing**: what was paid up front for each ad (and any refund), fees switched on charged to the card each day; for companies that bill afterwards, invoices made from those ledger lines, a saved card charged automatically, and pay-now for open ones.
+
+## Design it yourself (`src/modules/artwork`)
+
+Very first when making an ad, three choices: **design it with the assistant** (the chat), **in the studio**, or
+**"I'll design it myself"** (`POST /v1/ads/drafts` with `mode: own`; the portal's *New ad*). Each is shown only where
+its switch is on.
+
+- **Templates for every piece** (`GET /v1/ads/templates`, `GET /v1/ads/templates/:id?format=pdf|svg|png`): whole, 1/2,
+  1/3, 1/4, 1/6, 1/8 and 1/10, each shape that size takes on each product under the company's label numbers and the
+  layouts it allows (a size with two shapes gets two templates, named "wide" and "tall"). Each is exactly the size of
+  the file to upload (the piece plus its bleed: 7.275 × 4.125 in, 2183 × 1238 px, for the whole 16 oz label), coloured
+  like the printer's guide: red is cut off (extend the background to it), dark blue is the piece (image-safe), light
+  blue is where words go (text-safe), and the white box is where we print the bottle's own QR code (leave it empty),
+  with the measurements in inches and pixels, the size and the product written on it. PDF (TrimBox and BleedBox set;
+  our own small writer), SVG (words as outlines) and a 300-dpi PNG guide. They come from the same functions the label
+  renderer uses (`pieceOf`, `slotQr`, `labelGeometry`), so a template and a printed label always agree; the test checks
+  that the QR box is where the code really prints.
+- **Upload** on the upload page (`/ads/drafts/:id/artwork`; `POST /v1/ads/drafts/:id/artwork`, the file as the body,
+  up to 25 MB) or in the ad chat (attach files and say what to buy: "Here are my two sizes, 1,000 bottles"; `files` on
+  `POST /v1/ads/drafts/:id/messages`). PDF, SVG, PNG or JPG, recognised by their contents. One file per size; each is
+  **matched to its size by its proportions** (with the bleed, or the piece alone), then by its size in inches (SVG, PDF)
+  or which size it is 300 dpi at (pictures). The whole label and a quarter share proportions: when nothing tells them
+  apart we ask ("Which size is it for?", `POST …/artwork/:fileId/size`).
+- **"Is it good enough?"** Each file gets a verdict, **Pass** or **Fix these**, in plain words: the wrong size (with the
+  right size in inches and pixels); resolution at print size (300 dpi or more, and what it is; pictures inside an SVG
+  or PDF too); a background that doesn't reach the bleed; words past the cut or outside the text-safe line, words
+  under 6 pt, words fainter than 3 to 1 against what's behind them (found in SVG and PDF; for a picture, "we can't check
+  words in a picture"); anything drawn in the QR box; fonts not embedded in a PDF (and a note that an SVG's live text
+  prints in our closest font); a file too large; see-through parts (they print as bare label). **One-tap fixes** where
+  safe (`POST …/artwork/:fileId/fix`): extend the background into the bleed (edge pixels copied out; a vector design
+  stretched a hair under itself, as the printer does for every ad), scale it to fit (whole, on its own background
+  colour), clear the QR box (covered with the colour around it). A fix makes a new file; the original is kept
+  (`ad_artwork`, never changed). Then the preview shows it **on a real 8 × 4 label beside sample ads**, at every shape,
+  before paying. An ad can't be paid for until every file passes. Content review is unchanged (an AI flags, a person
+  decides a paid ad).
+- **The QR code is always ours**: a secure code per bottle, printed in the QR box (`qrMode` is dynamic for these ads
+  whatever is asked). The advertiser gives the **link** it leads to (`POST /v1/ads/drafts/:id/link`; an offer page with
+  their button) and may choose its **colour and logo** (`POST /v1/ads/drafts/:id/qr`): refused unless it scans (4.5 to 1
+  on its white square, the quiet zone kept, and drawn and read back by an independent reader at the smallest size it
+  prints).
+- **Changing a link on a live ad costs a fee** (`GET/POST /v1/ads/campaigns/:id/links`; *Change a link* on the ad):
+  $50 for FreeWater (`adBilling.linkChangeFeeCents`, per company, under *Ads and prices*), paid up front by card like
+  the change fee, once per change however often it's pressed (the change is its own order key; a change paid for but
+  cut off before it was saved is finished at start-up). The new link goes back to review before the ad prints again.
+  The campaign's own settings and its versions can't be used to change a live paid ad's links while the fee is on.
+  Before an ad is live, or with *Change a link (fee)* off, a link changes for free.
+- **Print**: their files go through the same pipeline as every ad: pictures embedded, words outlined in the label's
+  fonts, the QR code drawn over its box. A PDF's first page is turned into SVG by Poppler's `pdftocairo` (words become
+  shapes), run as its own process with a time limit; the server image installs `poppler-utils` (Dockerfile). Without it,
+  PDFs are refused in plain words ("send SVG, PNG or JPG") and everything else works. An uploaded drawing's ids, class
+  names and xlink links are made its own (`embeddable`), so two uploaded ads on one label can't take each other's
+  styles, and words in a drawing measured in inches keep their size when outlined.
+- **Switches** (docs/SWITCHES.md): *Design studio → Design it yourself*, *Template downloads*, *Upload your own artwork*;
+  *Ads → QR colours and styles*; *Money → Change a link (fee)* (a money switch: on for FreeWater, off for a new company
+  until a person turns it on). Everything is per company: a white-label company's templates carry its name and label
+  numbers.
 
 ## Where people are (`src/modules/data/jurisdiction.ts`)
 

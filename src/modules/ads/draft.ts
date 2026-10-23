@@ -2,6 +2,7 @@ import { SHARES, type Campaign, type CompanyConfig, type Location, type Share } 
 import { bidFloor } from './budget';
 import { commissionPercent, engagementFee, prepaidModel, type SwitchOn } from './billing';
 import { engagementPrice } from './targeting';
+import { sizeRefusal } from './layoutChoice';
 import { checkStudioSpec, type StudioSpec } from '../studio/layout';
 import { checkPosterSpec, posterIcons, posterFonts, readableOn, contrast, type PosterSpec } from '../creative/poster';
 import type { Theme } from '../experiences/blocks';
@@ -29,6 +30,15 @@ export interface AdDraft {
   experienceId?: string;
   experienceConfig?: Record<string, unknown>;
   theme?: Partial<Theme>;
+  /**
+   * How the advertiser chose to make it: with the assistant (the default), in the studio, or "I'll design it myself"
+   * ('own': their own files, uploaded and checked, src/modules/artwork).
+   */
+  mode?: 'assistant' | 'studio' | 'own';
+  /** Their own files, one per piece shape, each with its check (kept by src/modules/artwork, never by the chat). */
+  artwork?: import('../artwork/service').ArtworkRef[];
+  /** The colour and logo of the ad's QR code (still always our code), checked so it scans (src/modules/artwork). */
+  qr?: { color?: string; logo?: string };
 }
 
 /** What an assistant may change. `useImage` picks one of the pictures attached to the message. */
@@ -43,8 +53,10 @@ export interface DraftContext {
   locations: Location[]; // the company's machines and routes
   host: ExperienceHost;
   attachments: { dataUrl: string; name?: string }[];
-  /** The sizes this company sells (some label layout it allows holds them). Every size if not given. */
+  /** The sizes this ad can print at (some label layout the company allows holds them on its products). Every size if not given. */
   sizes?: Share[];
+  /** The products those sizes are for, in words ("the 16 oz aluminum bottle"), to say why a size can't print. */
+  sizesOn?: string;
   /** Ads on boxes are on here ("box_ads"). False: an ad prints on bottles only, whatever is proposed. On if not given. */
   boxes?: boolean;
 }
@@ -61,7 +73,8 @@ export type Missing = keyof typeof missingLabels;
 
 export function missing(d: AdDraft, host: ExperienceHost): Missing[] {
   const out: Missing[] = [];
-  if (d.studio ? checkStudioSpec(d.studio) !== null : (!d.poster || checkPosterSpec(d.poster) !== null)) out.push('artwork');
+  // Designed themselves: at least one file, each matched to its size and passing the check.
+  if (d.mode === 'own' ? !(d.artwork?.length && d.artwork.every((f) => f.shapeId && f.report.verdict === 'pass')) : d.studio ? checkStudioSpec(d.studio) !== null : (!d.poster || checkPosterSpec(d.poster) !== null)) out.push('artwork');
   if (!d.category) out.push('category');
   if (!d.sizes?.length) out.push('sizes');
   if (!d.locations || (Array.isArray(d.locations) && d.locations.length === 0)) out.push('where');
@@ -137,9 +150,12 @@ export function applyPatch(d: AdDraft, patch: DraftPatch, ctx: DraftContext): { 
     const offered = ctx.sizes ?? allowedSizes;
     const asked = [...new Set((p.sizes ?? []).map(Number))];
     const sizes = asked.filter((s): s is Share => (offered as number[]).includes(s)).sort((a, b) => a - b);
-    const words = offered.map((s) => (s === 1 ? '1 (the whole label)' : s === 2 ? '2 (half)' : String(s))).join(', ');
-    if (sizes.length) next.sizes = sizes; else problems.push(`Sizes are shares of the label: ${words}.`);
-    if (sizes.length && sizes.length < asked.length) problems.push(`${ctx.company.name} prints only these sizes: ${words}.`);
+    if (sizes.length) next.sizes = sizes;
+    // Never dropped silently: each size that can't print is named, with the nearest one that can.
+    for (const s of asked.filter((x) => !(offered as number[]).includes(x))) {
+      if ((SHARES as number[]).includes(s)) problems.push(sizeRefusal(s as Share, offered, ctx.sizesOn ?? 'the bottles here', ctx.company.name));
+      else problems.push(`Sizes are shares of the label: ${offered.map((x) => (x === 1 ? '1 (the whole label)' : x === 2 ? '2 (half)' : String(x))).join(', ')}.`);
+    }
   }
   if (p.formats !== undefined) {
     let f = (p.formats ?? []).filter((x) => x === 'label' || x === 'box-face');

@@ -13,6 +13,7 @@ import { packsFor, SKIP_LABELS, SKIP_REASONS, type HouseService, type SkipReason
 
 import { DeliveryError } from './errors';
 import { holdFor } from '../fillers/unsold';
+import { stickerPlace } from '../packs/boxSettings';
 export { DeliveryError };
 
 export type Frequency = 'weekly' | 'biweekly' | 'every4weeks';
@@ -473,6 +474,16 @@ export class DeliveryService {
     return this.packCheckNow(run.id, companyId);
   }
 
+  /**
+   * A stop's box code as the box carries it (its sticker, or its info strip), so the driver app knows the box from its
+   * QR code; and, for a plain box, where the packing check puts its sticker.
+   */
+  private boxCodeOf(packId: string | null | undefined): { boxCode: string | null; sticker: string | null } {
+    const p = packId ? this.packs.packs.get(packId) : undefined;
+    const url = p?.rendered?.packUrl ?? p?.boxCode;
+    return { boxCode: url ? /\/Q\/([A-Za-z0-9]+)$/.exec(url)?.[1] ?? null : null, sticker: p?.sticker ? `Put the box-code sticker ${stickerPlace(p.sticker)}.` : null };
+  }
+
   /** Only the company's ops team or an owner, signed in as a person (never a driver, never an API key). */
   private async needOpsPerson(companyId: string, by: string, what: string) {
     const u = await this.accounts.get(by);
@@ -697,7 +708,7 @@ export class DeliveryService {
     return {
       ...run, routeName: route?.name ?? run.routeId, depot: route?.depot ?? null,
       ...(run.areaId ? { areaName: area?.name ?? run.areaId, van: Number(/\.(\d+)@/.exec(run.id)?.[1] ?? 1) } : {}),
-      stops: run.stops.map((s) => ({ ...s, stopCode: stopCode(run.routeId, s.stop), boxNumber: s.packId ? boxNumber(s.packId) : null, packStatus: s.packId ? this.packs.packs.get(s.packId)?.status ?? null : null, ...(s.houseId ? { houseStatus: houseStatus.get(s.houseId) ?? null } : {}) })),
+      stops: run.stops.map((s) => ({ ...s, stopCode: stopCode(run.routeId, s.stop), boxNumber: s.packId ? boxNumber(s.packId) : null, packStatus: s.packId ? this.packs.packs.get(s.packId)?.status ?? null : null, ...this.boxCodeOf(s.packId), ...(s.houseId ? { houseStatus: houseStatus.get(s.houseId) ?? null } : {}) })),
       loadOrder: [...run.stops].sort((a, b) => b.stop - a.stop).map((s) => ({ stop: s.stop, stopCode: stopCode(run.routeId, s.stop), packId: s.packId, boxNumber: s.packId ? boxNumber(s.packId) : null, packSize: s.packSize, address: s.address, loaded: !!s.loaded || run.status === 'out' || run.status === 'done' })),
       nextStop: next?.stop ?? null,
       counts: { stops: run.stops.length, delivered: run.stops.filter((s) => s.status === 'delivered').length, notDelivered: run.stops.filter((s) => s.status === 'not_delivered').length, bottles: run.stops.reduce((n, s) => n + s.packSize, 0), empties: run.stops.reduce((n, s) => n + (s.emptiesCollected ?? 0), 0) },

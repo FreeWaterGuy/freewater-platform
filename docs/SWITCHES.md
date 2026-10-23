@@ -91,6 +91,7 @@ wait is over. Anyone on the team can cancel a step before it runs.
 | **Fee per box side** (`fees.boxFace`) | Off (the box side price, 40¢) | Off: box sides with a paid ad are included. |
 | **Commission on sales** (`fees.commission`) | Off (3% when on) | Off: sales are still tracked and shown, never charged. |
 | **Fee for changing an ad** (`changeFeeCents`) | $100 | Paid up front when the change is submitted. The new ad is reviewed before it prints; the bottles not printed yet carry it once approved. The fee is the guard against changes every day. |
+| **Fee for changing a link** (`linkChangeFeeCents`; switch *Change a link (fee)*) | $50, on (a money switch: off for a new company until a person turns it on) | Changing where a live ad's code leads, paid up front once per change (pressing twice pays once); the new link is reviewed before it prints again. Off, or before the ad is live: free. The campaign's own settings and its versions can't change a live paid ad's links while it's on. |
 | **Costly extras** (`extras`) | AI video clip (Veo): $3 cost, 50% markup = $4.50 a clip | Cost plus the markup, paid up front with the bottles; the advertiser sees it in the quote. No paid clip left, no clip made. What each use really cost is recorded; if an ad's extras cost more than it paid, the team is told (it's never billed more). |
 
 **The advertiser, step by step:** make the ad in the chat → the review page shows the exact total (bottles × price,
@@ -300,9 +301,9 @@ skip for getting to the door (a locked gate, a dangerous animal, not safe, no sa
 stays until a person changes it. "No soliciting" signs are ignored (the founder's decision): opting out is only ever
 done in the app. Houses are addresses, never people.
 
-**Claiming a house** (the app's *Your house*): scanning the code on the side of a box delivered there in the last 60
-days, or typing the whole box code printed under it on the side panel (14 letters and numbers). A plain box (ads on
-boxes off) has the same code; how it reaches the box is still being decided. The short number in
+**Claiming a house** (the app's *Your house*): scanning the code on a box delivered there in the last 60 days, or
+typing the whole box code printed with it (14 letters and numbers): on a printed box, on its info strip; on a plain
+box (ads on boxes off), on its **box-code sticker** ("Box code: …", below). The short number in
 the box's corner is never enough: anyone passing the porch can read it. Several people can claim one house; a new
 claim of a house someone already claimed is shown to them in the app and told to the team. A claimant sees door
 photos only from their claim on, never before (another household's). Stopping deliveries always works at once (the
@@ -339,9 +340,10 @@ don't have the exact 24-pack dimensions; keep that fluid and adjustable."
 
 | Switch / setting | FreeWater | Off means / range |
 |---|---|---|
-| **Ads on boxes** (`box_ads`) | **Off** (also off in *Delivery + printed ads*, in the pilot, and for every new company, which copies FreeWater) | Boxes are plain: no box print job and no panel; no box side is quoted or sold (`box_sides_off`), and a whole-box route buy covers its bottles only and says so (`plainBox` on the quote); the ad assistant never offers or sets boxes (its tool can't); drafts, previews and ads print on bottles only ("Prints on: Bottles"); the portal has no *On a box* tab and no box-sides option. Each pack still gets its **box code** (`pack.boxCode`): the driver's scan, a house's claim and the pack's receipt page work as before. How the code reaches a plain box (a sticker?) is still being decided. On: the four sides (less the info strip's side) are sold, each with its own code. Migration 076 turned FreeWater's starting choice off on existing servers (a person's choice is left alone). |
+| **Ads on boxes** (`box_ads`) | **Off** (also off in *Delivery + printed ads*, in the pilot, and for every new company, which copies FreeWater) | Boxes are plain: no box print job and no panel; no box side is quoted or sold (`box_sides_off`), and a whole-box route buy covers its bottles only and says so (`plainBox` on the quote); the ad assistant never offers or sets boxes (its tool can't); drafts, previews and ads print on bottles only ("Prints on: Bottles"); the portal has no *On a box* tab and no box-sides option. Each pack still gets its **box code** (`pack.boxCode`): the driver's scan, a house's claim and the pack's receipt page work as before, from its **box-code sticker** (below). On: the four sides (less the info strip's side) are sold, each with its own code. Migration 076 turned FreeWater's starting choice off on existing servers (a person's choice is left alone). |
 | **Box top / front / back / right** | On (under *Ads on boxes*) | That side isn't sold. |
-| **Box sizes and colours** (`boxes`, per pack size 6, 12, 24) | Nothing set | Outside length, width and height, 1–60 in each (unset: the platform's standard box of that size; no real size is assumed). Inside and bottom colours, `#RRGGBB` (black unless set; ads there may come later). The side with the info strip (left, right, front or back; left unless set; that side is never sold) and its width, 0.5–60 in and no wider than its side (the whole side unless set). Saved field by field; `null` clears one. Used to draw a box only while *Ads on boxes* is on (`src/modules/packs/boxSettings.ts`). |
+| **Box code sticker** (`box_code_sticker`, new in catalogue 6) | **On** (FreeWater and the pilot; a new company copies it; an existing one decides, off until it does) | With ads on boxes off, each pack gets exactly one small sticker printed by the same printer with its bottles (`<pack>-sticker`, job key `<pack>:sticker:<try>`, so a resumed print never prints a second one; two failures in a row leave the pack *composed*, like a box that won't print): the pack's QR (the same address the info strip's code holds on a printed box), "Box code: XXXX XXXX XXXX XX" to type in, and the drivers' stop code and box number, every word outlined. The packing check lists it ("Put the box-code sticker on the front, top-right corner": the routes page, the pack, `POST /v1/packs/:id/verify`); `GET /v1/packs/:id/sticker.svg` prints it again. The driver app knows the box from the sticker's code (`boxCode` on each stop of the run); a household claims its house with it. With ads on boxes on, the code is on the info strip and there's no sticker. Off: plain boxes carry no code (drivers type the box number from the run sheet; a household can't claim its house from the box). `src/modules/packs/sticker.ts`. |
+| **Box sizes and colours** (`boxes`, per pack size 6, 12, 24) | Nothing set | Outside length, width and height, 1–60 in each (unset: the platform's standard box of that size; no real size is assumed). Inside and bottom colours, `#RRGGBB` (black unless set; ads there may come later). The side with the info strip (left, right, front or back; left unless set; that side is never sold) and its width, 0.5–60 in and no wider than its side (the whole side unless set). The box-code sticker: width and height 1.25–6 in (2 × 2 unless set; no bigger than its side where the box's size is set), its side (front, back, left, right or top; front unless set) and spot (top-left, top-right, center, bottom-left, bottom-right; top-right unless set), its colour (white) and its words' (black): dark on light, at least 4.5 to 1, so the code reads. Saved field by field; `null` clears one. The box is drawn with these only while *Ads on boxes* is on; the sticker only while it's off (`src/modules/packs/boxSettings.ts`). |
 
 ### Buying on delivery routes
 
@@ -553,6 +555,19 @@ starts with FreeWater's list (former advertisers, fillers, charity, picks) and n
 search box and filters (on, off, different from FreeWater, locked, new); each switch shows what it does, what it
 needs, what turning it off also turns off, FreeWater's choice and who may change it. It works on a phone.
 
+### Design it yourself (Design studio → *Design it yourself*; Ads → *QR colours and styles*)
+
+| Switch | FreeWater | What it does |
+|---|---|---|
+| *Design it yourself* (`design_yourself`) | On | "I'll design it myself" beside the assistant and the studio when making an ad. Off: not offered; drafts in that mode can't be made, and the upload page and its routes are closed. |
+| *Template downloads* (`template_downloads`, under it) | On | A template per size and shape on each product (PDF, SVG, 300-dpi PNG) from the label geometry the printer uses. |
+| *Upload your own artwork* (`artwork_upload`, under it) | On | Uploads on the upload page and in the ad chat (the chat is refused the same way when it's off), each matched to its size and checked, with one-tap fixes. |
+| *QR colours and styles* (`qr_styles`) | On | The advertiser's colour and logo in their code, only if it scans. Off: plain black codes. The code is always ours. |
+| *Change a link (fee)* (`link_change_fee`, Money) | On | See *How advertisers pay*. |
+
+All new in catalogue 6: an existing company sees them as new and decides; FreeWater has them on. PDF needs the PDF tools
+(poppler-utils) on the server; set `PDF_TOOLS=off` to refuse PDFs on purpose.
+
 ### Label layouts (Ads → Label layouts, on the Features page)
 
 Every label is one of 16 tidy templates (`src/modules/ads/layouts.ts`). Each is a switch, shown with a small picture
@@ -576,6 +591,58 @@ on, then the best-earning layout around it). On: *most revenue per bottle*, the 
 that fit, with a fair-turn bound: a paid ad left off `adRules.fairTurnBottles` bottles in a row where it fits (20
 unless set, 2 to 1,000) goes on the next bottle first, the longest-waiting first. The waiting counts live in memory:
 after a restart they start again, so a turn comes at most one bound late.
+
+### Ad ratings (Ads → *Ad ratings*; the AI's own switch under AI)
+
+The founder: "Even with the switch turned off, I want the AI to rate each ad 1–10 before it gets physically printed, so
+it can learn over time." Code: `src/modules/ads/rating.ts` (the rubric and the raters), `ratings.ts` (when, outcomes,
+calibration, benchmarks), `categories.ts` (the industries). Console: *Ad ratings* and *Benchmarks*.
+
+| Switch | FreeWater | New company | Company that already existed | What it does |
+|---|---|---|---|---|
+| **Ad ratings** (`ad_ratings`) | on | copies FreeWater (on) | **on** (as the founder asked; a white-label company may turn it off) | Every ad version rated 1–10 once, in the background, before its first print; followed to its results; filed under an industry. Off: nothing rated or followed for that company. |
+| **Show the rating to advertisers** (`ad_rating_feedback`, under it) | **off** | copies (off) | off | The advertiser sees the score, a meter (Poor 1–3, Average 4–5, Good 6–7, Excellent 8–10) and up to three tips, on the review page before paying and on each ad in the portal. Its own request, after the page: it never stands between the advertiser and paying, and never stops an ad. Off: its two routes are off (404 `feature_off`) and the portal shows nothing. |
+| **AI ad rater** (`ai_ad_rater`, AI category) | on | copies (on) | on | Claude rates (through the company's AI routing). Off, or no AI: the built-in rules rate, labelled so. |
+
+**When a version is rated.** A version is the ad's content: artwork, scan page and its links, AR, video (`contentHash`).
+It's rated once, the first time any of these happens: the ad is submitted (or changed through the API or the codes
+page), the advertiser asks for its score at quote time, or a bottle with it prints. **Printing never waits.** If the AI
+is slow (30 seconds) or fails, the print goes ahead and the hourly job (`ad-ratings`) asks again, 2 then 4 minutes later;
+after the third failure, the rules rate it, with the reason kept. A version first printed before its rating was done is
+marked **rated late**, shown on the *Ad ratings* page. Changing only how many bottles or where is not a new version.
+
+**Industries.** FreeWater's own list of 27 top-level industries (`src/modules/ads/categories.ts`), modelled on the
+IAB Tech Lab Ad Product Taxonomy and Google's product taxonomy but not a copy of either: neither states a licence
+clearly, so we wrote our own. Its ids never change. Each version gets a primary industry (the rules' guess from what the
+advertiser said it is and the ad's words; the AI's choice when it rates), an optional second one, and optionally one
+of the company's **own subcategories** (added and archived by a person on the *Ad ratings* page; never deleted). A
+person's choice carries over to the ad's next versions. Every change is logged (`ad_category_changes`). Features kept
+with each version: offer type and size, AR, video, a link, sizes, and how it goes out (delivery, machines, events).
+
+**Outcomes and calibration.** Each version is followed by the window in which it was the ad's current one: bottles
+printed (voided ones left out), bottles scanned, scans, AR launches, link clicks, sales and their value, by channel
+(machine, delivery, event). *So far* is refreshed hourly; the 7-, 30- and 90-day horizons (bottles of those first days
+and what they did in the 14 days after) are written once and never change. The *Ad ratings* page holds each score
+against its ads' scan and sale rates (ads with 100+ bottles), with the rank correlation, by rater and rubric: "how
+well the rating predicts results".
+
+### Benchmarks (Data & targeting → *Benchmarks*)
+
+| Switch | FreeWater | New company | Company that already existed | What it does |
+|---|---|---|---|---|
+| **Contribute to the network's benchmarks** (`benchmarks_contribute`) | on | copies (on) | **off until it decides** (new: its advertisers' results joining a pool is its own decision) | Its ads' results join the network's averages, as anonymous aggregates. Off: they leave the pool at once, and the company sees only its own figures (give to get). |
+| **Benchmarks page** (`benchmarks_view`) | on | copies (on) | off until it decides | The *Benchmarks* console page and its routes. |
+
+**The method.** Each ad counts once: its rates over the bottles of its first 30 days (7, 90 or so far can be chosen),
+once it has 100+ bottles. Grouped by industry, channel, industry and channel, offer type, and (the company's own only)
+its subcategories. Each figure is the average of the ads' rates (each ad equal), with the median scan rate. **A
+network figure is shown only when** at least **20 ads** from at least **5 advertisers** stand behind it (a company may
+raise these for itself: anyone on its team raises them; an owner lowers them back, with a reason; never under 20 and 5,
+held by the database too), **no advertiser has more than half** of the ads, and the same is still true **without the
+viewing company's own ads** (so nobody can subtract themselves to see someone else's). Never an ad, an advertiser or a
+company by name in the network's figures. **Kept for decades:** each month, once settled (45 days after it ends), the
+network's figures for the ads first printed that month are kept (`ad_benchmark_snapshots`, append-only), only for
+groups that would meet the bar without any one company; nothing else is kept with them. Never sold.
 
 ### How to add a feature
 

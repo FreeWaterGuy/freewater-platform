@@ -82,6 +82,12 @@ on: `ANTHROPIC_API_KEY`.
 | **Pictures made to order** (Google Imagen) | Makes a photo from a description for brands without their own. `GEMINI_API_KEY`, `IMAGEN_MODEL`. | The advertiser chooses whether to use it. Not yet tried against the live service. | Photo libraries (Unsplash, Pexels), or the brand's own photos. |
 | **Photo to 3D** (to be chosen) | Would turn a product photo into a 3D model for AR. | Not chosen yet. | The product photo becomes a standing photo card in AR. |
 
+### Rating ads before they print
+
+| AI | What it does | Its limits | Without it |
+|---|---|---|---|
+| **Ad rater** (Claude; agent `ad-rater`; switch *AI ad rater*, AI category, under *Ad ratings* in Ads) | The founder: "I want the AI to rate each ad 1–10 before it gets physically printed, so it can learn over time." Every **version** of an ad (a new ad, or a change to its artwork, scan page, links, AR or video; the same content is the same version) is rated **once**, in the background, when it's submitted or changed, at quote time when the advertiser asks for its score, or at its first print if nothing asked earlier. Sub-scores 1–10 for the **offer** (is there one; discount depth; how clear), the **design** (readable at the size it prints, hierarchy, contrast, brand), the **landing** (the scan page and its link), **AR** and **video**, an overall score (rubric `v1`: 30/30/20/10/10), short reasons, up to three tips, and an industry from the standard list. Kept with its rater, model and rubric version, so ratings are compared over the years (`src/modules/ads/rating.ts`, `ratings.ts`). | **Printing never waits for it**, not for a moment: a slow AI (it gives up after 30 seconds) or a failing one is asked again by the hourly job (3 tries, 2 then 4 minutes apart), and the bottles print meanwhile; the rating is then marked **late** (`rated_before_print` false). It sees the ad's words, colours, measured contrast, sizes, scan page and links, as data (never instructions), **never the pictures** and nothing about a person. Through the company's AI routing (white-label naming, its own key or none), metered on its own line, the governor first. Code holds its answer to the rubric: whole scores 1–10, the overall within one point of its weighted parts, at most three tips with no links, an industry from the list. A finished rating never changes (the database refuses); a new rubric rates again as a new row. **It never stops, flags or delays an ad**; it's shown to the advertiser only where the company turns that on (*Show the rating to advertisers*, off). | The **built-in rules** rate it with the same rubric, labelled "Built-in rules (no AI)": at once when there's no AI (no key, the company's AI off, this use off, the governor declining), or after the AI's third failed try, with the reason kept. |
+
 ### Reviewing paid ads
 
 | AI | What it does | Its limits | Without it |
@@ -201,4 +207,4 @@ with people.
 | `AI_KEY_<COMPANY ID>` | An operator's own Anthropic key, when it chose its own AI |
 
 The code for all of this is in `src/modules/ai`, `src/modules/agents`, `src/modules/numberline`,
-`src/modules/video`, `src/modules/studio`, `src/modules/games/prompter.ts` and `src/modules/team/intake.ts`.
+`src/modules/video`, `src/modules/studio`, `src/modules/games/prompter.ts`, `src/modules/team/intake.ts` and `src/modules/ads/rating.ts`.
