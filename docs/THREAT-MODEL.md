@@ -842,6 +842,17 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 431 | `GET /v1/ads/bonus` | campaigns | no | advertiser only (its own) | OK (whether its past ads may print free, and how many bonus bottles) |
 | 432 | `POST /v1/ads/bonus` | campaigns | yes | the advertiser's own person, signed in (not a key) | OK (allows or stops free bonus printing of its own past ads; never billed) |
 | 433 | `GET /v1/packs/:id/sticker.svg` | packs | no | the pack must be the caller’s company’s (`packFor`) | OK (a plain box’s code sticker, to print again by hand: its QR, box code and stop code, never the address) |
+| 434 | `GET /v1/ads/templates` | campaigns | no | the caller's company only; *Template downloads* | OK (read-only: the company's own piece sizes) |
+| 435 | `GET /v1/ads/templates/:id` | campaigns | no | the caller's company only (an id of another company's product is 404); *Template downloads* | OK (a file made from the company's own geometry; nothing personal) |
+| 436 | `GET /v1/ads/drafts/:id/artwork` | campaigns | no | advertiser only, its own draft (company and advertiser in the query) | OK |
+| 437 | `POST /v1/ads/drafts/:id/artwork` | campaigns | no | advertiser only, its own open draft; *Upload your own artwork* | OK: a file up to 25 MB, its type from its contents; SVG refused with scripts, handlers, outside links (checkSvg); PDF read by Poppler in a separate process with a time limit, first page only; 40 megapixel limit; stored as it came, never changed (ad_artwork, updates refused) |
+| 438 | `POST /v1/ads/drafts/:id/artwork/:fileId/size` | campaigns | no | advertiser only, its own draft and file | OK (checks the file again for the size named) |
+| 439 | `POST /v1/ads/drafts/:id/artwork/:fileId/fix` | campaigns | no | advertiser only, its own draft and file; only a fix the check offered | OK (makes a new file; the old one is kept) |
+| 440 | `DELETE /v1/ads/drafts/:id/artwork/:fileId` | campaigns | no | advertiser only, its own open draft | OK (takes the file off the draft; the file is kept with the draft) |
+| 441 | `POST /v1/ads/drafts/:id/link` | campaigns | no | advertiser only, its own open draft | OK (https only; the scan page's settings checked by its plug-in) |
+| 442 | `POST /v1/ads/drafts/:id/qr` | campaigns | no | advertiser only, its own open draft; *QR colours and styles* | OK (colour 4.5 to 1 on white, logo checked as SVG/picture, the code drawn and read back at the smallest size; the code stays ours, dynamic) |
+| 443 | `GET /v1/ads/campaigns/:id/links` | campaigns | no | advertiser only, its own ad | OK |
+| 444 | `POST /v1/ads/campaigns/:id/links` | campaigns | no | advertiser only, its own ad; money: the link fee (prepaid, *Change a link (fee)*), one order per change key (ad_orders_change_once), the total confirmed | OK: paid before the change is saved; a retry finds its order; a crash between is finished at start (recoverLinkChanges); the ad goes back to review; the campaign PATCH and codes PATCH refuse link changes on live paid ads while the fee is on (P3) |
 
 ---
 

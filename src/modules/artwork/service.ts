@@ -1,0 +1,454 @@
+import { createHash } from 'node:crypto';
+import sharp from 'sharp';
+import jsQR from 'jsqr';
+import type { Campaign, CompanyConfig, CreativeRef, Share } from '../../core/types';
+import { SHARES } from '../../core/types';
+import { newId } from '../../core/ids';
+import type { SqlClient } from '../../db/client';
+import type { Platform } from '../../platform';
+import type { ExperienceHost } from '../experiences/host';
+import { AdsError, type AdsService } from '../ads/service';
+import type { PrepaidService } from '../ads/prepaid';
+import type { AdDraft } from '../ads/draft';
+import { checkQrColor, checkQrLogo, qrDraw } from '../print/qr';
+import { artworkCreative, type ArtworkPrintFile } from './creative';
+import { adProducts, canvasOf, inches, pieceShapes, px300, shareShort, type PieceShape } from './shapes';
+import { templateFileName, templatePdf, templatePng, templateSvg } from './templates';
+import { ArtworkError, applyFix, fixWords, matchShape, preflight, printMarkup, readSource, type ArtKind, type FixId, type Report, type Source } from './preflight';
+import { isLive, linkChangeFee, linkChangeKey, linksChanged, linksOf, withLink, LINK_FEE_SWITCH } from './links';
+import { pdfToolsAvailable } from './pdf';
+
+// "I'll design it myself" (README, "Design it yourself"; docs/SWITCHES.md). Templates for every piece, uploads in the
+// ad chat or on the upload page matched to their size and checked (preflight.ts), one-tap fixes, the QR code's colour
+// and logo (checked so it scans), the links the code leads to, and changing a link on a live ad for the company's fee.
+
+/** One of the advertiser's files on a draft, with its check. Kept in the draft's data by this service only. */
+export interface ArtworkRef {
+  id: string; name: string; kind: ArtKind;
+  /** The piece it's for (null until we know: a file that fits two sizes, or none). */
+  shapeId: string | null; share: Share | null; placement: 'bleed' | 'trim' | null;
+  report: Report;
+  /** For a file that matches no size or two: the sizes it's nearest to, to ask or to fit it to. */
+  candidates?: string[];
+  /** Made by a one-tap fix from this file. */
+  fixedFrom?: string; fix?: FixId;
+}
+
+export const SWITCH = { own: 'design_yourself', templates: 'template_downloads', upload: 'artwork_upload', qr: 'qr_styles' } as const;
+
+const SIZE_WORDS: [RegExp, Share][] = [[/\b(whole|full)\b|\b1\/1\b/i, 1], [/\bhalf\b|\b1\/2\b/i, 2], [/\bthirds?\b|\b1\/3\b/i, 3], [/\bquarters?\b|\b1\/4\b/i, 4], [/\bsixths?\b|\b1\/6\b/i, 6], [/\beighths?\b|\b1\/8\b/i, 8], [/\btenths?\b|\b1\/10\b/i, 10]];
+/** The sizes a message names ("the half and the quarter"). */
+export const sizesNamed = (text: string): Share[] => SIZE_WORDS.filter(([re]) => re.test(text)).map(([, s]) => s);
+
+export class ArtworkService {
+  /** Files read for printing and previews, by file id: the last 40 (P7: bounded). */
+  private cache = new Map<string, { body: string; bg: string; shapeId: string; placement: string }>();
+
+  constructor(private db: SqlClient, private platform: Platform, private ads: AdsService, private prepaid: PrepaidService, private host: ExperienceHost, private flush: () => Promise<void>) {}
+
+  private company(id: string): CompanyConfig {
+    const c = this.platform.companies.get(id);
+    if (!c) throw new AdsError(404, 'not_found', 'Company not found.');
+    return c;
+  }
+  on(companyId: string, id: string) { return !this.platform.featureOn || this.platform.featureOn(companyId, id); }
+  /** Refused, the same as a route whose switch is off (P3: the chat and the API take the same path). */
+  gate(companyId: string, ...ids: string[]) {
+    for (const id of [SWITCH.own, ...ids]) if (!this.on(companyId, id)) throw new AdsError(404, 'feature_off', `${({ design_yourself: 'Designing it yourself', template_downloads: 'Template downloads', artwork_upload: 'Uploading your own artwork', qr_styles: 'QR colours and styles' } as Record<string, string>)[id] ?? 'This'} is switched off for ${this.company(companyId).name}.`);
+  }
+
+  shapes(companyId: string): PieceShape[] { return pieceShapes(this.platform, this.company(companyId)); }
+  private shape(companyId: string, id: string | null | undefined) { return id ? this.shapes(companyId).find((s) => s.id === id) ?? null : null; }
+
+  // ---------- templates ----------
+
+  /** Every template this company offers: each product, each size, each shape, with its numbers and its files. */
+  async templates(companyId: string) {
+    this.gate(companyId, SWITCH.templates);
+    const company = this.company(companyId);
+    const shapes = this.shapes(companyId);
+    const pdf = await pdfToolsAvailable();
+    return {
+      company: company.name, pdf,
+      accepts: pdf ? ['PDF', 'SVG', 'PNG', 'JPG'] : ['SVG', 'PNG', 'JPG'],
+      rules: { minDpi: 300, minTextPt: 6, colours: { cut: 'red: the bleed, cut off', image: 'dark blue: the piece (image-safe)', text: 'light blue: text-safe', qr: 'white: the QR box, leave empty' } },
+      products: adProducts(this.platform, companyId).map((p) => ({ id: p.id, name: p.name, shapes: shapes.filter((s) => s.productId === p.id).map((s) => this.templateView(s, company)) })).filter((p) => p.shapes.length),
+    };
+  }
+  private templateView(s: PieceShape, company: CompanyConfig) {
+    const C = canvasOf(s);
+    return {
+      id: s.id, name: s.name, share: s.share, size: shareShort(s.share), layouts: s.layouts,
+      piece: { wIn: s.wIn, hIn: s.hIn, px: { w: px300(s.wIn), h: px300(s.hIn) } },
+      withBleed: { wIn: C.wIn, hIn: C.hIn, px: { w: px300(C.wIn), h: px300(C.hIn) } }, bleedIn: s.bleedIn,
+      textSafe: { wIn: Math.round((s.wIn - 2 * s.textInset.xIn) * 1000) / 1000, hIn: Math.round((s.hIn - 2 * s.textInset.yIn) * 1000) / 1000, insetIn: s.textInset },
+      qrBox: s.qr,
+      files: Object.fromEntries((['pdf', 'svg', 'png'] as const).map((f) => [f, { url: `/v1/ads/templates/${encodeURIComponent(s.id)}?format=${f}`, name: templateFileName(s, company.name, f) }])),
+    };
+  }
+  async templateFile(companyId: string, id: string, format: 'pdf' | 'svg' | 'png') {
+    this.gate(companyId, SWITCH.templates);
+    const company = this.company(companyId);
+    const s = this.shape(companyId, id);
+    if (!s) throw new AdsError(404, 'not_found', 'There’s no template by that name here.');
+    const name = templateFileName(s, company.name, format);
+    if (format === 'svg') return { type: 'image/svg+xml', bytes: Buffer.from(templateSvg(s, company.name)), name };
+    if (format === 'png') return { type: 'image/png', bytes: await templatePng(s, company.name), name };
+    return { type: 'application/pdf', bytes: templatePdf(s, company.name), name };
+  }
+
+  // ---------- the draft's files ----------
+
+  /** The draft, open, with its data read fresh (and locked, in a transaction). */
+  private async withDraft<T>(companyId: string, advertiserId: string, draftId: string, change: (d: AdDraft) => T | Promise<T>): Promise<{ draft: AdDraft; out: T }> {
+    return this.db.transaction(async (tx) => {
+      const r = (await tx.query<any>(`select data, status from ad_drafts where id = $1 and company_id = $2 and advertiser_id = $3 for update`, [draftId, companyId, advertiserId])).rows[0];
+      if (!r) throw new AdsError(404, 'not_found', 'Draft not found.');
+      if (r.status !== 'open') throw new AdsError(409, 'already_submitted', 'This ad was already submitted. Start a change from the campaign instead.');
+      const d: AdDraft = typeof r.data === 'string' ? JSON.parse(r.data) : r.data;
+      const out = await change(d);
+      await tx.query(`update ad_drafts set data = $2, updated_at = now() where id = $1`, [draftId, JSON.stringify(d)]);
+      return { draft: d, out };
+    });
+  }
+
+  private async readDraft(companyId: string, advertiserId: string, draftId: string): Promise<AdDraft> {
+    const r = (await this.db.query<any>(`select data from ad_drafts where id = $1 and company_id = $2 and advertiser_id = $3`, [draftId, companyId, advertiserId])).rows[0];
+    if (!r) throw new AdsError(404, 'not_found', 'Draft not found.');
+    return typeof r.data === 'string' ? JSON.parse(r.data) : r.data;
+  }
+
+  private async fileRow(companyId: string, advertiserId: string, id: string) {
+    const r = (await this.db.query<any>(`select * from ad_artwork where id = $1 and company_id = $2 and advertiser_id = $3`, [id, companyId, advertiserId])).rows[0];
+    if (!r) throw new AdsError(404, 'not_found', 'That file isn’t here.');
+    return r;
+  }
+
+  /** Check a file against this company's pieces: matched to its size (or the size named), then checked. */
+  private async check(companyId: string, src: Source, hint: { share?: Share; shapeId?: string }) {
+    const shapes = this.shapes(companyId);
+    const m = matchShape(src, shapes, hint);
+    if (m.kind === 'ok') return { shapeId: m.shape.id, share: m.shape.share, placement: m.placement, report: await preflight(src, m.shape, m.placement) };
+    if (m.kind === 'ask') return { shapeId: null, share: null, placement: null, candidates: m.shapes.map((s) => s.id), report: await preflight(src, null, null, { asked: m.shapes }) };
+    return { shapeId: null, share: null, placement: null, candidates: m.nearest.map((s) => s.id), report: await preflight(src, null, null, { wrongFor: m.nearest }) };
+  }
+
+  private async store(o: { companyId: string; advertiserId: string; draftId: string; name: string; kind: ArtKind; bytes: Buffer; fixedFrom?: string; fix?: FixId }) {
+    const id = newId('art');
+    await this.db.query(`insert into ad_artwork (id, company_id, advertiser_id, draft_id, name, kind, bytes, size_bytes, sha256, fixed_from, fix, created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      [id, o.companyId, o.advertiserId, o.draftId, o.name.slice(0, 200), o.kind, o.bytes, o.bytes.length, createHash('sha256').update(o.bytes).digest('hex'), o.fixedFrom ?? null, o.fix ?? null, this.platform.bus.now().toISOString()]);
+    return id;
+  }
+
+  /** Put a checked file on the draft: a file for a piece replaces any earlier one for that piece. */
+  private place(d: AdDraft, ref: ArtworkRef, replacing?: string) {
+    d.mode = 'own';
+    d.formats = ['label'];
+    const list = (d.artwork ?? []).filter((f) => f.id !== replacing && f.id !== ref.id && !(ref.shapeId && f.shapeId === ref.shapeId));
+    list.push(ref);
+    d.artwork = list;
+    // The sizes it prints at are the sizes it has files for.
+    d.sizes = SHARES.filter((s) => list.some((f) => f.share === s && f.shapeId));
+  }
+
+  /** Upload one file (the upload page, or each file attached in the chat). */
+  async upload(o: { companyId: string; advertiserId: string; draftId: string; bytes: Uint8Array; name?: string; share?: Share; shapeId?: string }): Promise<ArtworkRef> {
+    this.gate(o.companyId, SWITCH.upload);
+    await this.readDraft(o.companyId, o.advertiserId, o.draftId); // the draft is theirs (before any work is done)
+    let src: Source;
+    try { src = await readSource(o.bytes); } catch (e) { throw asAds(e); }
+    const checked = await this.check(o.companyId, src, { share: o.share, shapeId: o.shapeId });
+    const name = (o.name ?? `artwork.${src.kind === 'jpeg' ? 'jpg' : src.kind}`).replace(/[\u0000-\u001f]/g, '').slice(0, 120) || 'artwork';
+    const id = await this.store({ companyId: o.companyId, advertiserId: o.advertiserId, draftId: o.draftId, name, kind: src.kind, bytes: src.bytes });
+    const ref: ArtworkRef = { id, name, kind: src.kind, ...checked };
+    await this.withDraft(o.companyId, o.advertiserId, o.draftId, (d) => this.place(d, ref));
+    return ref;
+  }
+
+  /** Say which size a file is for (when it fits two, or none): checked again for that size. */
+  async assign(o: { companyId: string; advertiserId: string; draftId: string; fileId: string; share?: Share; shapeId?: string }): Promise<ArtworkRef> {
+    this.gate(o.companyId, SWITCH.upload);
+    const row = await this.fileRow(o.companyId, o.advertiserId, o.fileId);
+    const src = await readSource(row.bytes).catch((e) => { throw asAds(e); });
+    const checked = await this.check(o.companyId, src, { share: o.share, shapeId: o.shapeId });
+    const { out } = await this.withDraft(o.companyId, o.advertiserId, o.draftId, (d) => {
+      const had = d.artwork?.find((f) => f.id === o.fileId);
+      if (!had) throw new AdsError(404, 'not_found', 'That file isn’t on this ad.');
+      const ref: ArtworkRef = { ...had, ...checked };
+      if (!checked.candidates) delete ref.candidates;
+      this.place(d, ref);
+      return ref;
+    });
+    return out;
+  }
+
+  /** A one-tap fix: the file is fixed into a new file (the old one is kept), checked again for the same piece. */
+  async fix(o: { companyId: string; advertiserId: string; draftId: string; fileId: string; fix: FixId }): Promise<ArtworkRef> {
+    this.gate(o.companyId, SWITCH.upload);
+    const d = await this.readDraft(o.companyId, o.advertiserId, o.draftId);
+    const had = d.artwork?.find((f) => f.id === o.fileId);
+    if (!had) throw new AdsError(404, 'not_found', 'That file isn’t on this ad.');
+    if (!had.report.fixes.includes(o.fix)) throw new AdsError(409, 'fix_not_offered', `“${fixWords[o.fix]}” isn’t needed for this file.`);
+    const target = this.shape(o.companyId, had.shapeId ?? had.candidates?.[0]);
+    if (!target) throw new AdsError(409, 'size_first', 'Say which size this file is for first.');
+    const row = await this.fileRow(o.companyId, o.advertiserId, o.fileId);
+    const src = await readSource(row.bytes).catch((e) => { throw asAds(e); });
+    let fixed: { kind: ArtKind; bytes: Buffer };
+    try { fixed = await applyFix(src, target, had.placement, o.fix); } catch (e) { throw asAds(e); }
+    const src2 = await readSource(fixed.bytes).catch((e) => { throw asAds(e); });
+    const checked = await this.check(o.companyId, src2, { shapeId: target.id });
+    const name = `${had.name.replace(/\.[a-z]+$/i, '')} (fixed).${fixed.kind === 'jpeg' ? 'jpg' : fixed.kind}`;
+    const id = await this.store({ companyId: o.companyId, advertiserId: o.advertiserId, draftId: o.draftId, name, kind: fixed.kind, bytes: fixed.bytes, fixedFrom: o.fileId, fix: o.fix });
+    const ref: ArtworkRef = { id, name, kind: fixed.kind, ...checked, fixedFrom: o.fileId, fix: o.fix };
+    await this.withDraft(o.companyId, o.advertiserId, o.draftId, (dd) => this.place(dd, ref, o.fileId));
+    return ref;
+  }
+
+  /** Changing an ad they designed: its files come onto the new draft, checked again (the same files, the same pieces). */
+  async adopt(o: { companyId: string; advertiserId: string; draftId: string; files: { fileId: string; shapeId: string }[] }) {
+    for (const f of o.files) {
+      const row = await this.fileRow(o.companyId, o.advertiserId, f.fileId).catch(() => null);
+      if (!row) continue;
+      const src = await readSource(row.bytes).catch(() => null);
+      if (!src) continue;
+      const checked = await this.check(o.companyId, src, { shapeId: f.shapeId });
+      const ref: ArtworkRef = { id: row.id, name: row.name ?? 'artwork', kind: row.kind, ...checked };
+      await this.withDraft(o.companyId, o.advertiserId, o.draftId, (d) => this.place(d, ref));
+    }
+  }
+
+  async remove(o: { companyId: string; advertiserId: string; draftId: string; fileId: string }) {
+    this.gate(o.companyId, SWITCH.upload);
+    await this.withDraft(o.companyId, o.advertiserId, o.draftId, (d) => {
+      if (!d.artwork?.some((f) => f.id === o.fileId)) throw new AdsError(404, 'not_found', 'That file isn’t on this ad.');
+      d.artwork = d.artwork.filter((f) => f.id !== o.fileId);
+      d.sizes = SHARES.filter((s) => d.artwork!.some((f) => f.share === s && f.shapeId));
+    });
+    return this.list(o.companyId, o.advertiserId, o.draftId);
+  }
+
+  /** The draft's files and checks, which pieces have a file, and the links and code style. */
+  async list(companyId: string, advertiserId: string, draftId: string) {
+    this.gate(companyId);
+    const d = await this.readDraft(companyId, advertiserId, draftId);
+    const shapes = this.shapes(companyId);
+    const files = d.artwork ?? [];
+    const std = this.platform.standardProduct(companyId);
+    const ready = files.length > 0 && files.every((f) => f.shapeId && f.report.verdict === 'pass');
+    return {
+      mode: d.mode ?? 'assistant', ready,
+      verdict: !files.length ? 'empty' : ready ? 'pass' : 'fix',
+      files,
+      // Which piece shapes have a file: a size with two shapes on a product may have one file (the other shape gets it fitted).
+      coverage: shapes.filter((s) => s.productId === std.id).map((s) => ({ shapeId: s.id, share: s.share, name: s.name, fileId: files.find((f) => f.shapeId === s.id)?.id ?? files.find((f) => f.share === s.share && f.shapeId)?.id ?? null })),
+      links: d.experienceId ? linksOf({ experienceConfig: d.experienceConfig }) : [],
+      qr: d.qr ?? null, qrStyles: this.on(companyId, SWITCH.qr),
+      pdf: await pdfToolsAvailable(),
+      fixWords,
+    };
+  }
+
+  // ---------- the chat ----------
+
+  /**
+   * Files attached in the ad chat: each uploaded and checked as on the upload page. One file and one size named in
+   * the message ("this is the half"): that size; otherwise each is matched by its dimensions. Returns what to say.
+   */
+  async fromChat(o: { companyId: string; advertiserId: string; draftId: string; text: string; files: { bytes: Uint8Array; name?: string }[] }): Promise<string> {
+    if (!o.files.length) return '';
+    this.gate(o.companyId, SWITCH.upload);
+    const named = sizesNamed(o.text);
+    const lines: string[] = [];
+    for (const f of o.files) {
+      try {
+        const ref = await this.upload({ companyId: o.companyId, advertiserId: o.advertiserId, draftId: o.draftId, bytes: f.bytes, name: f.name, ...(o.files.length === 1 && named.length === 1 ? { share: named[0] } : {}) });
+        lines.push(this.say(ref, o.companyId));
+      } catch (e) { lines.push(`“${f.name ?? 'That file'}”: ${(e as Error).message}`); }
+    }
+    return lines.join('\n');
+  }
+
+  /** One file's result, in a line of the chat. */
+  say(ref: ArtworkRef, companyId: string): string {
+    const s = this.shape(companyId, ref.shapeId);
+    const head = `“${ref.name}”${s ? ` → ${s.name.toLowerCase()} (${inches(s.wIn)} × ${inches(s.hIn)} in)` : ''}`;
+    if (ref.report.verdict === 'pass') return `${head}: Pass.${ref.report.issues.length ? ` Note: ${ref.report.issues.map((i) => i.words).join(' ')}` : ''}`;
+    const fixes = ref.report.fixes.length ? ` One tap can fix some of it on the upload page: ${ref.report.fixes.map((x) => fixWords[x].toLowerCase()).join(', ')}.` : '';
+    return `${head}: Fix these. ${ref.report.issues.filter((i) => i.level === 'must').map((i) => `• ${i.words}`).join(' ')}${fixes}`;
+  }
+
+  // ---------- printing ----------
+
+  /** The files ready to print (all passing), or for a preview, every file matched to a piece. */
+  async printFiles(companyId: string, advertiserId: string, d: AdDraft, opts: { preview?: boolean } = {}): Promise<ArtworkPrintFile[]> {
+    const out: ArtworkPrintFile[] = [];
+    for (const f of d.artwork ?? []) {
+      if (!f.shapeId || !f.placement || (!opts.preview && f.report.verdict !== 'pass')) continue;
+      const shape = this.shape(companyId, f.shapeId);
+      if (!shape) continue;
+      let hit = this.cache.get(f.id);
+      if (!hit || hit.shapeId !== f.shapeId || hit.placement !== f.placement) {
+        const row = await this.fileRow(companyId, advertiserId, f.id);
+        const src = await readSource(row.bytes);
+        const pm = printMarkup(src, shape, f.placement);
+        hit = { body: pm.body, bg: await backgroundOf(pm.wrap('px'), shape), shapeId: f.shapeId, placement: f.placement };
+        this.cache.set(f.id, hit);
+        if (this.cache.size > 40) this.cache.delete(this.cache.keys().next().value!);
+      }
+      out.push({ fileId: f.id, share: shape.share, shapeId: shape.id, wIn: shape.wIn, hIn: shape.hIn, bleedIn: shape.bleedIn, body: hit.body, bg: hit.bg });
+    }
+    return out;
+  }
+
+  /** What the ad prints (for submitting): refused, in plain words, until every file passes. */
+  async art(companyId: string, advertiserId: string, d: AdDraft): Promise<{ creative: Campaign['creative']; creativeRef: CreativeRef }> {
+    this.gate(companyId, SWITCH.upload);
+    const files = d.artwork ?? [];
+    if (!files.length) throw new AdsError(422, 'not_ready', 'Upload your artwork first (PDF, SVG, PNG or JPG), one file per size.');
+    const bad = files.filter((f) => !f.shapeId || f.report.verdict !== 'pass');
+    if (bad.length) throw new AdsError(422, 'artwork_not_ready', `Fix your artwork first: ${bad.map((f) => `“${f.name}”: ${f.report.summary}`).join(' ')}`);
+    const printFiles = await this.printFiles(companyId, advertiserId, d);
+    return { creative: artworkCreative(printFiles), creativeRef: { kind: 'artwork', files: printFiles } };
+  }
+
+  // ---------- the code: its links and its look ----------
+
+  /** Where the code leads, for a draft: the scan page's main link (an offer with a button to it). */
+  async setLink(o: { companyId: string; advertiserId: string; draftId: string; url: string; label?: string; headline?: string }) {
+    this.gate(o.companyId);
+    const adv = await this.ads.advertiser(o.companyId, o.advertiserId);
+    if (!/^https:\/\/[^\s]+$/i.test(o.url)) throw new AdsError(422, 'bad_link', 'A link starts with https:// (like https://yourshop.com/offer).');
+    await this.withDraft(o.companyId, o.advertiserId, o.draftId, (d) => {
+      const id = d.experienceId && this.host.has(d.experienceId) && linksOf({ experienceConfig: d.experienceConfig }).length ? d.experienceId : 'offer';
+      const current = linksOf({ experienceConfig: d.experienceConfig });
+      const config = id === d.experienceId && current.length ? withLink(d.experienceConfig ?? {}, current[0]!.path.replace(/^experienceConfig\./, ''), o.url)
+        : { headline: (o.headline ?? (d.experienceConfig as any)?.headline ?? adv.name).slice(0, 120), link: { label: (o.label ?? 'Visit us').slice(0, 60), url: o.url } };
+      const bad = this.host.checkConfig(id, config);
+      if (bad) throw new AdsError(422, 'bad_link', `That link can’t be used: ${bad}.`);
+      d.experienceId = id;
+      d.experienceConfig = config as Record<string, unknown>;
+    });
+    return this.list(o.companyId, o.advertiserId, o.draftId);
+  }
+
+  /**
+   * The code's colour and logo on a draft. Our own code always (one per bottle); only its look is the advertiser's,
+   * and only a look a phone can scan: dark enough against its white square (4.5 to 1), a logo the code can carry, and
+   * drawn and read back at the smallest size it prints.
+   */
+  async setQrStyle(o: { companyId: string; advertiserId: string; draftId: string; color?: string | null; logo?: string | null }) {
+    this.gate(o.companyId, SWITCH.qr);
+    const company = this.company(o.companyId);
+    const style: { color?: string; logo?: string } = {};
+    if (o.color) { const bad = checkQrColor(o.color); if (bad) throw new AdsError(422, 'qr_unscannable', `That code wouldn’t scan: ${bad}.`); style.color = o.color.toUpperCase(); }
+    if (o.logo) {
+      if (company.qr?.advertiserLogos === false) throw new AdsError(422, 'logos_off', `${company.name} doesn’t put advertisers’ logos in codes.`);
+      const bad = checkQrLogo(o.logo);
+      if (bad) throw new AdsError(422, 'qr_unscannable', `That logo can’t go in the code: ${bad}.`);
+      style.logo = o.logo;
+    }
+    const problem = await scanProblem(company, style, this.shapes(o.companyId));
+    if (problem) throw new AdsError(422, 'qr_unscannable', problem);
+    await this.withDraft(o.companyId, o.advertiserId, o.draftId, (d) => { if (style.color || style.logo) d.qr = style; else delete d.qr; });
+    return this.list(o.companyId, o.advertiserId, o.draftId);
+  }
+
+  /** A live ad's links and what changing one costs. */
+  linkTerms(companyId: string, advertiserId: string, campaignId: string) {
+    const c = this.campaign(companyId, advertiserId, campaignId);
+    const company = this.company(companyId);
+    const live = isLive(c);
+    return { campaignId: c.id, links: linksOf(c), live, feeCents: live ? linkChangeFee(company, this.platform.featureOn) : 0, changes: c.linkChanges ?? 0 };
+  }
+
+  private campaign(companyId: string, advertiserId: string, id: string) {
+    const c = this.platform.campaigns.get(id);
+    if (!c || c.companyId !== companyId || c.advertiserId !== advertiserId || c.isHouse) throw new AdsError(404, 'not_found', 'Campaign not found.');
+    return c;
+  }
+
+  /**
+   * Change where a live ad's code leads. Its fee (the company's, FreeWater $50, while "Change a link (fee)" is on) is
+   * paid first, once per change whatever the retries; then the new links are saved and the ad goes back to review (a
+   * person checks where it now sends people) before it prints again. Before it's live, a link changes for free.
+   */
+  async changeLinks(o: { companyId: string; advertiserId: string; campaignId: string; changes: { path: string; url: string }[]; expectedFeeCents?: number }) {
+    const c = this.campaign(o.companyId, o.advertiserId, o.campaignId);
+    if (c.prepaid?.stoppedAt) throw new AdsError(409, 'stopped', 'This ad was stopped and paid back.');
+    const before = linksOf(c);
+    if (!o.changes.length) throw new AdsError(422, 'no_change', 'Say which link changes, and to what.');
+    for (const ch of o.changes) {
+      if (!before.some((l) => l.path === ch.path)) throw new AdsError(422, 'unknown_link', `This ad has no link at “${ch.path}”.`);
+      if (!/^https:\/\/[^\s]+$/i.test(ch.url) || ch.url.length > 2000) throw new AdsError(422, 'bad_link', 'A link starts with https:// (like https://yourshop.com/offer).');
+    }
+    const next = this.applyChanges(c, o.changes);
+    if (!linksChanged(before, linksOf(next))) throw new AdsError(409, 'no_change', 'It already leads there. Nothing was charged.');
+    const bad = this.host.checkConfig(next.experienceId, next.experienceConfig ?? {}) ?? (next.variants ?? []).map((v: any) => (v?.experienceConfig ? this.host.checkConfig(v.experienceId ?? next.experienceId, v.experienceConfig) : null)).find(Boolean) ?? null;
+    if (bad) throw new AdsError(422, 'bad_link', `That link can’t be used: ${bad}.`);
+    const company = this.company(o.companyId);
+    const fee = isLive(c) ? linkChangeFee(company, this.platform.featureOn) : 0;
+    let feeCents = 0;
+    if (fee > 0) feeCents = (await this.prepaid.payLinkFee({ companyId: o.companyId, advertiserId: o.advertiserId, campaignId: c.id, key: linkChangeKey(c, o.changes), feeCents: fee, expectedFeeCents: o.expectedFeeCents, changes: o.changes }))?.feeCents ?? 0;
+    this.save(c, o.changes);
+    if (c.prepaid) await this.ads.afterPaidSubmit(c).catch(() => {});
+    await this.flush();
+    return { campaignId: c.id, links: linksOf(c), feeCents, status: 'in_review' as const };
+  }
+
+  private applyChanges(c: Campaign, changes: { path: string; url: string }[]) {
+    let next = { experienceId: c.experienceId, experienceConfig: c.experienceConfig ?? {}, variants: c.variants, qr: c.qr };
+    for (const ch of changes) next = withLink(next, ch.path, ch.url);
+    return next;
+  }
+  private save(c: Campaign, changes: { path: string; url: string }[]) {
+    const next = this.applyChanges(c, changes);
+    const live = isLive(c);
+    c.experienceConfig = next.experienceConfig;
+    c.variants = next.variants;
+    c.qr = next.qr;
+    if (live) c.linkChanges = (c.linkChanges ?? 0) + 1;
+    // Where people are sent changed: a person checks it before it prints again (as any change to what people see).
+    c.active = false;
+    c.review = { status: 'submitted', at: this.platform.bus.now().toISOString() };
+    this.platform.persist.campaign(c);
+  }
+
+  /** Link changes paid for but not saved (a crash between): saved now, from what was kept with the payment. */
+  async recoverLinkChanges() {
+    const rows = (await this.db.query<any>(`select campaign_id, advertiser_id, company_id, draft_id, extras from ad_orders where kind = 'change' and status = 'paid' and draft_id like 'link:%'`)).rows;
+    for (const r of rows) {
+      const c = this.platform.campaigns.get(r.campaign_id);
+      const n = Number(String(r.draft_id).split(':')[2]);
+      if (!c || c.companyId !== r.company_id || (c.linkChanges ?? 0) >= n) continue;
+      const changes = (typeof r.extras === 'string' ? JSON.parse(r.extras) : r.extras)?.links;
+      if (!Array.isArray(changes)) continue;
+      try { this.save(c, changes); } catch { /* the reconciliation shows it */ }
+    }
+  }
+}
+
+const asAds = (e: unknown) => (e instanceof ArtworkError ? new AdsError(e.status, e.code, e.message) : e);
+
+/** The colour most of a design's edge is: its background, for fitting it into a piece of another shape. */
+async function backgroundOf(svg: string, shape: PieceShape): Promise<string> {
+  const { data, info } = await sharp(Buffer.from(svg), { limitInputPixels: false }).flatten({ background: '#FFFFFF' }).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const b = Math.round(shape.bleedIn * 100) + 2, counts = new Map<string, number>();
+  const add = (x: number, y: number) => { const i = (y * info.width + x) * 3; const k = [data[i]!, data[i + 1]!, data[i + 2]!].map((v) => Math.min(255, Math.round(v / 8) * 8).toString(16).padStart(2, '0')).join(''); counts.set(k, (counts.get(k) ?? 0) + 1); };
+  for (let x = b; x < info.width - b; x++) { add(x, b); add(x, info.height - b - 1); }
+  for (let y = b; y < info.height - b; y++) { add(b, y); add(info.width - b - 1, y); }
+  return `#${([...counts.entries()].sort((p, q) => q[1] - p[1])[0]?.[0] ?? 'ffffff').toUpperCase()}`;
+}
+
+/**
+ * Would a phone read this code? Drawn as it prints (our own encoder, its white square and quiet zone) at the smallest
+ * size any piece prints it, at 300 dpi, then read back with an independent reader (jsQR). Null when it scans.
+ */
+export async function scanProblem(company: CompanyConfig, style: { color?: string; logo?: string }, shapes: PieceShape[]): Promise<string | null> {
+  const sizeIn = Math.min(...shapes.map((s) => s.qr.sizeIn), 0.8);
+  const side = Math.round(sizeIn * 300);
+  const text = `${company.receiptBaseUrl.replace(/\/$/, '')}/Q/7KX2M9QPA4ZR1C`;
+  const q = qrDraw(text, 0, 0, side, 'H', style);
+  const png = await sharp(Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${side + 40}" height="${side + 40}"><rect width="100%" height="100%" fill="#777777"/><g transform="translate(20 20)">${q.svg}</g></svg>`)).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const read = jsQR(new Uint8ClampedArray(png.data.buffer, png.data.byteOffset, png.data.length), png.info.width, png.info.height, { inversionAttempts: 'dontInvert' });
+  return read?.data === text ? null : `that code wouldn’t scan at ${inches(sizeIn)} in (the smallest it prints here). Use a darker colour or a simpler logo.`;
+}

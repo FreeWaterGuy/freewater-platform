@@ -153,6 +153,27 @@ export class PrepaidService {
     return { orderId: row.id as string, feeCents: n(row.total_cents) };
   }
 
+  /**
+   * The fee for changing a link a live ad's code leads to (src/modules/artwork/links.ts), paid up front. `key` names
+   * this one change (linkChangeKey): the same change retried finds its order and is never charged twice (the change
+   * orders' own unique key, ad_orders_change_once, holds it in the database). Booked like the change fee.
+   */
+  async payLinkFee(o: { companyId: string; advertiserId: string; campaignId: string; key: string; feeCents: number; expectedFeeCents?: number; changes: { path: string; url: string }[] }) {
+    let row = await this.orderFor(o.companyId, 'change', { draftId: o.key });
+    if (row && (row.advertiser_id !== o.advertiserId || row.campaign_id !== o.campaignId)) throw new AdsError(404, 'not_found', 'Campaign not found.');
+    if (row?.status === 'paid') return { orderId: row.id as string, feeCents: n(row.total_cents) };
+    if (!row) {
+      if (o.feeCents <= 0) return null;
+      this.payingOn(o.companyId);
+      if (o.expectedFeeCents !== o.feeCents) throw new AdsError(409, 'fee_changed', `Changing a link costs ${dollars(o.feeCents)}. Confirm that amount to pay it.`);
+      // The change itself is kept with its order, so a change paid for but not saved (a crash between) is finished later.
+      row = (await this.db.query<any>(`insert into ad_orders (id, company_id, advertiser_id, campaign_id, draft_id, kind, total_cents, extras, status, created_at) values ($1,$2,$3,$4,$5,'change',$6,$7,'paying',$8) on conflict do nothing returning *`,
+        [newId('ado'), o.companyId, o.advertiserId, o.campaignId, o.key, o.feeCents, JSON.stringify({ links: o.changes }), this.now()])).rows[0] ?? await this.orderFor(o.companyId, 'change', { draftId: o.key });
+    }
+    if (row.status !== 'paid') await this.charge(row, 'ad_change', 'Changing a link on an ad');
+    return { orderId: row.id as string, feeCents: n(row.total_cents) };
+  }
+
   /** One charge per order at a time in this server: a second press waits for the first and finds it paid. */
   private charging = new Map<string, Promise<void>>();
   /**

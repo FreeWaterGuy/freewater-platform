@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { ApiError, notFound, obj, S, signedInOwner, teamPersonOf, type Handler, type RouteDef, Q } from './http';
 import { consumerRoutes } from './consumer';
 import { adsRoutes } from './ads';
+import { artworkRoutes } from './artwork';
 import { aiReviewRoutes } from './aiReview';
 import { deliveryRoutes } from './delivery';
 import { routeBuyRoutes } from './routeBuys';
@@ -54,6 +55,7 @@ import type { Campaign, Share } from '../core/types';
 import { productWords, sizeRefusal } from '../modules/ads/layoutChoice';
 import { stickerPlace } from '../modules/packs/boxSettings';
 import { checkSvgPictures, svgCreative } from '../modules/print/svgCreative';
+import { linkFeeProblem } from '../modules/artwork/links';
 import { newId } from '../core/ids';
 import { AccountsError, roleScopes, type Role } from '../modules/accounts/service';
 import { approvalRoutes, approverStepProblem } from '../modules/accounts/secondStep';
@@ -123,7 +125,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   const server = Fastify({ logger: opts.logger ? loggerOptions : false, bodyLimit: 3 * 1024 * 1024, routerOptions: { maxParamLength: 1000 }, trustProxy, ajv });
   const { platform, packs, persistence, db, experiences } = app;
   // Files arrive as themselves. An SVG is taken too (a logo is often one); only the studio's logo route accepts it.
-  for (const type of [...Object.keys(allowedTypes), 'image/svg+xml']) server.addContentTypeParser(type, { parseAs: 'buffer', bodyLimit: 64 * 1024 * 1024 }, (_req, body, done) => done(null, body));
+  for (const type of [...Object.keys(allowedTypes), 'image/svg+xml', 'application/pdf']) server.addContentTypeParser(type, { parseAs: 'buffer', bodyLimit: 64 * 1024 * 1024 }, (_req, body, done) => done(null, body));
   // Postgres can't store the NUL character in text: refuse it anywhere in the path, query or JSON body, before any
   // code (and the database) sees it, rather than fail the save with a 500.
   server.addHook('preValidation', async (req, reply) => {
@@ -505,6 +507,11 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     return { status: 201, body: { ...campaignView(c), ...(warnings.length ? { warnings } : {}) } };
   } });
 
+  /** An advertiser changing a live paid ad's links some other way than Change a link (which takes the fee): refused while the fee is on. */
+  const linkFeeGuard = (c: Campaign, next: Pick<Campaign, 'experienceConfig' | 'variants' | 'qr'>) => {
+    const why = linkFeeProblem(platform.companies.get(c.companyId)!, c, next, platform.featureOn);
+    if (why) throw new ApiError(402, 'link_fee', why);
+  };
   route({ method: 'PATCH', url: '/v1/campaigns/:id', scope: 'campaigns', summary: 'Pause or resume a campaign, or change what its QR opens. Only a company key (content review) turns a campaign on; an advertiser changing what people see sends it back to review.', body: { ...obj({ active: S.bool, experienceId: S.str, experienceConfig: { type: 'object' }, theme: themeProp }), minProperties: 1 }, handler: async (req, key) => {
     const c = campaignFor(key!, (req.params as any).id);
     const b = req.body as any;
@@ -530,6 +537,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       const id = b.experienceId ?? c.experienceId;
       const config = b.experienceConfig ?? (b.experienceId && b.experienceId !== c.experienceId ? undefined : c.experienceConfig);
       if (config === undefined) throw new ApiError(422, 'experience_invalid', `Send experienceConfig for "${id}" too.`);
+      // Where a live paid ad's code leads changes only through Change a link, which takes its fee (P3: the same rule here).
+      if (!reviewer) linkFeeGuard(c, { ...c, experienceConfig: config });
       checkExperience(id, config, b.theme ?? c.theme, c.companyId);
       c.experienceId = id;
       c.experienceConfig = config;
@@ -873,6 +882,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
 
   consumerRoutes(app, route, { me, checkExperience });
   adsRoutes(app, route, { me });
+  artworkRoutes(app, route);
   aiReviewRoutes(app, route);
   deliveryRoutes(app, route, { me });
   routeBuyRoutes(app, route, { me });

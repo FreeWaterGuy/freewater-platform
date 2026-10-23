@@ -11,6 +11,7 @@ import type { LedgerEntry } from '../modules/ledger/ledger';
 import type { Pack } from '../modules/packs/service';
 import type { RenderedLabel } from '../modules/print/contract';
 import { svgCreative } from '../modules/print/svgCreative';
+import { artworkCreative } from '../modules/artwork/creative';
 import { posterCreative } from '../modules/creative/poster';
 import type { SqlClient } from './client';
 import { LeaseLostError } from './leaseChecked';
@@ -439,7 +440,7 @@ export function campaignRecord(c: Campaign): CampaignRecord {
 
 export function hydrateCampaign(r: CampaignRecord, builtins: Record<string, Creative>): Campaign {
   const ref = r.creativeRef;
-  const creative = ref.kind === 'svg' ? svgCreative(ref.markup) : ref.kind === 'poster' ? posterCreative(ref.spec) : ref.kind === 'studio' ? studioCreative(ref.spec) : builtins[ref.id];
+  const creative = ref.kind === 'svg' ? svgCreative(ref.markup) : ref.kind === 'poster' ? posterCreative(ref.spec) : ref.kind === 'studio' ? studioCreative(ref.spec) : ref.kind === 'artwork' ? artworkCreative(ref.files) : builtins[ref.id];
   if (!creative) throw new Error(`Campaign ${r.id} uses built-in artwork "${ref.kind === 'builtin' ? ref.id : ''}" that this server doesn't have`);
   return { ...r, creative };
 }

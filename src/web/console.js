@@ -594,6 +594,7 @@
           ? 'Up front, by card, for a number of bottles, at the prices above (AR, video and scans included). Each fee below is charged only when it’s switched on (Features → Money and payments), to the card once a day. Saving these needs the second sign-in step.'
           : 'Billed afterwards, on invoices, with credit limits (Features → Money and payments → Bill advertisers afterwards). Saving these needs the second sign-in step.', h('div', { class: 'form' },
           num(ctx, 'adBilling.changeFeeCents', 'Fee for changing a running ad', { min: 0, max: 100000, suffix: '¢', hint: (v) => `${dollars(v ?? 0)}, paid up front. The new ad is reviewed before it prints.` }),
+          num(ctx, 'adBilling.linkChangeFeeCents', 'Fee for changing a link on a live ad', { min: 0, max: 100000, suffix: '¢', hint: (v) => `${dollars(v ?? 5000)}, paid up front, while Change a link (fee) is on (Features → Money and payments). The new link is reviewed.` }),
           num(ctx, 'adBilling.fees.scan.cents', `Fee per scan (${ctx.draft.adBilling.fees.scan.on ? 'on' : 'off'})`, { min: 0, max: 1000, suffix: '¢' }),
           num(ctx, 'adBilling.fees.arLaunch.cents', `Fee per AR launch (${ctx.draft.adBilling.fees.arLaunch.on ? 'on' : 'off'})`, { min: 0, max: 1000, suffix: '¢' }),
           num(ctx, 'adBilling.fees.commission.percent', `Commission on sales (${ctx.draft.adBilling.fees.commission.on ? 'on' : 'off'})`, { min: 0, max: 50, step: 0.5, int: false, suffix: '%' }),

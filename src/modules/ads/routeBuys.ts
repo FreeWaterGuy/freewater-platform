@@ -1236,8 +1236,9 @@ export function adWords(c: { creativeRef?: Campaign['creativeRef']; experienceCo
     else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v).slice(0, 60)) if (!['colors', 'icon', 'font', 'photo', 'logo', 'image', 'asset', 'layout'].includes(k)) walk(x, depth + 1);
   };
   const ref = c.creativeRef as any;
-  if (ref?.kind === 'svg') {
-    const markup = String(ref.markup ?? '').slice(0, 200_000);
+  if (ref?.kind === 'svg' || ref?.kind === 'artwork') {
+    // An uploaded drawing, or the advertiser's own files (src/modules/artwork): their words, where they're words.
+    const markup = String(ref.kind === 'svg' ? ref.markup ?? '' : (ref.files ?? []).map((f: any) => String(f?.body ?? '').replace(/data:[^"')\s]{100,}/g, '')).join('\n')).slice(0, 200_000);
     // Each run of text, and each line (<text>) with its pieces together: letters set one by one still read as words.
     walk((markup.match(/>[^<]{1,300}</g) ?? []).map((t: string) => t.slice(1, -1)));
     for (const t of (markup.match(/<text\b[\s\S]{0,4000}?<\/text>/gi) ?? []).slice(0, 50)) { const inner = t.replace(/<[^>]{0,500}>/g, ''); push(inner); }

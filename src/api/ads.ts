@@ -14,6 +14,8 @@ export function adsRoutes(app: App, route: (r: RouteDef) => void, h: { me: (key:
   const companyStaff = (key: ApiKey | null) => {
     if (!key || key.advertiserId || key.locationId) throw new ApiError(403, 'missing_scope', 'Only the company’s team can review ads.');
   };
+  // Artwork attached in the chat (src/modules/artwork): what the file is, its contents decide, never its name.
+  const artworkFile = { type: 'object', additionalProperties: false, properties: { dataUrl: { type: 'string', maxLength: 2_900_000, pattern: '^data:(application/pdf|image/svg\\+xml|image/png|image/jpeg);base64,' }, name: { type: 'string', maxLength: 120 } }, required: ['dataUrl'] };
   const attachment = { type: 'object', additionalProperties: false, properties: { dataUrl: { type: 'string', maxLength: 1_400_000, pattern: '^data:image/(png|jpeg|webp);base64,' }, name: { type: 'string', maxLength: 120 } }, required: ['dataUrl'] };
 
   route({ method: 'POST', url: '/v1/advertisers', scope: 'me', summary: 'Start advertising: turn your account into a business account.', body: obj({ businessName: { type: 'string', minLength: 2, maxLength: 60 }, category: { type: 'string', minLength: 2, maxLength: 40 }, website: { type: 'string', pattern: '^https://', maxLength: 200 } }, ['businessName', 'category']), handler: async (req, key) => {
@@ -40,15 +42,15 @@ export function adsRoutes(app: App, route: (r: RouteDef) => void, h: { me: (key:
     return { body: await app.unsold.setBonusAllowed(key!.companyId, adv, (req.body as any).allowed) };
   } });
 
-  route({ method: 'POST', url: '/v1/ads/drafts', scope: 'campaigns', summary: 'Start making an ad in the chat, or start changing one of your ads.', body: obj({ fromCampaignId: S.str }), handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/ads/drafts', scope: 'campaigns', summary: 'Start making an ad (mode: with the assistant in the chat, in the studio, or own: “I’ll design it myself”, uploading your own artwork), or start changing one of your ads.', body: obj({ fromCampaignId: S.str, mode: { type: 'string', enum: ['assistant', 'studio', 'own'] } }), handler: async (req, key) => {
     const b = (req.body ?? {}) as any;
-    return { status: 201, body: await ads.createDraft({ companyId: key!.companyId, advertiserId: advertiserOf(key), userId: key!.userId, fromCampaignId: b.fromCampaignId }) };
+    return { status: 201, body: await ads.createDraft({ companyId: key!.companyId, advertiserId: advertiserOf(key), userId: key!.userId, fromCampaignId: b.fromCampaignId, mode: b.mode }) };
   } });
   route({ method: 'GET', url: '/v1/ads/drafts/:id', scope: 'campaigns', summary: 'A draft and its conversation.', handler: async (req, key) => ({ body: await ads.getDraft((req.params as any).id, key!.companyId, advertiserOf(key)) }) });
-  route({ method: 'POST', url: '/v1/ads/drafts/:id/messages', scope: 'campaigns', summary: 'Say something to the assistant, with up to 4 pictures. It changes the draft and answers.', body: obj({ text: { type: 'string', maxLength: 2000 }, attachments: { type: 'array', maxItems: 4, items: attachment } }, ['text']), handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/ads/drafts/:id/messages', scope: 'campaigns', summary: 'Say something to the assistant, with up to 4 pictures, and (designing it yourself) up to 6 files of your own artwork (PDF, SVG, PNG or JPG; each is matched to its size, checked, and put on the ad; bigger files go to /artwork). It changes the draft and answers.', body: obj({ text: { type: 'string', maxLength: 2000 }, attachments: { type: 'array', maxItems: 4, items: attachment }, files: { type: 'array', maxItems: 6, items: artworkFile } }, ['text']), handler: async (req, key) => {
     const b = req.body as any;
-    if (!b.text.trim() && !(b.attachments ?? []).length) throw new ApiError(400, 'empty', 'Say something or attach a picture.');
-    return { body: await ads.chat({ id: (req.params as any).id, companyId: key!.companyId, advertiserId: advertiserOf(key), text: b.text, attachments: b.attachments ?? [] }) };
+    if (!b.text.trim() && !(b.attachments ?? []).length && !(b.files ?? []).length) throw new ApiError(400, 'empty', 'Say something or attach a picture.');
+    return { body: await ads.chat({ id: (req.params as any).id, companyId: key!.companyId, advertiserId: advertiserOf(key), text: b.text, attachments: b.attachments ?? [], files: b.files ?? [] }) };
   } });
   route({ method: 'GET', url: '/v1/ads/drafts/:id/preview', scope: 'campaigns', summary: 'The ad at every size, on a real label, on a box, and its scan page.', handler: async (req, key) => ({ body: await ads.preview((req.params as any).id, key!.companyId, advertiserOf(key)) }) });
   // Paying up front (docs/SWITCHES.md, "How advertisers pay"): the size, product and extras chosen, and the total the

@@ -30,6 +30,15 @@ export interface AdDraft {
   experienceId?: string;
   experienceConfig?: Record<string, unknown>;
   theme?: Partial<Theme>;
+  /**
+   * How the advertiser chose to make it: with the assistant (the default), in the studio, or "I'll design it myself"
+   * ('own': their own files, uploaded and checked, src/modules/artwork).
+   */
+  mode?: 'assistant' | 'studio' | 'own';
+  /** Their own files, one per piece shape, each with its check (kept by src/modules/artwork, never by the chat). */
+  artwork?: import('../artwork/service').ArtworkRef[];
+  /** The colour and logo of the ad's QR code (still always our code), checked so it scans (src/modules/artwork). */
+  qr?: { color?: string; logo?: string };
 }
 
 /** What an assistant may change. `useImage` picks one of the pictures attached to the message. */
@@ -64,7 +73,8 @@ export type Missing = keyof typeof missingLabels;
 
 export function missing(d: AdDraft, host: ExperienceHost): Missing[] {
   const out: Missing[] = [];
-  if (d.studio ? checkStudioSpec(d.studio) !== null : (!d.poster || checkPosterSpec(d.poster) !== null)) out.push('artwork');
+  // Designed themselves: at least one file, each matched to its size and passing the check.
+  if (d.mode === 'own' ? !(d.artwork?.length && d.artwork.every((f) => f.shapeId && f.report.verdict === 'pass')) : d.studio ? checkStudioSpec(d.studio) !== null : (!d.poster || checkPosterSpec(d.poster) !== null)) out.push('artwork');
   if (!d.category) out.push('category');
   if (!d.sizes?.length) out.push('sizes');
   if (!d.locations || (Array.isArray(d.locations) && d.locations.length === 0)) out.push('where');

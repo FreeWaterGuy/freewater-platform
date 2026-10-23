@@ -91,6 +91,7 @@ wait is over. Anyone on the team can cancel a step before it runs.
 | **Fee per box side** (`fees.boxFace`) | Off (the box side price, 40¢) | Off: box sides with a paid ad are included. |
 | **Commission on sales** (`fees.commission`) | Off (3% when on) | Off: sales are still tracked and shown, never charged. |
 | **Fee for changing an ad** (`changeFeeCents`) | $100 | Paid up front when the change is submitted. The new ad is reviewed before it prints; the bottles not printed yet carry it once approved. The fee is the guard against changes every day. |
+| **Fee for changing a link** (`linkChangeFeeCents`; switch *Change a link (fee)*) | $50, on (a money switch: off for a new company until a person turns it on) | Changing where a live ad's code leads, paid up front once per change (pressing twice pays once); the new link is reviewed before it prints again. Off, or before the ad is live: free. The campaign's own settings and its versions can't change a live paid ad's links while it's on. |
 | **Costly extras** (`extras`) | AI video clip (Veo): $3 cost, 50% markup = $4.50 a clip | Cost plus the markup, paid up front with the bottles; the advertiser sees it in the quote. No paid clip left, no clip made. What each use really cost is recorded; if an ad's extras cost more than it paid, the team is told (it's never billed more). |
 
 **The advertiser, step by step:** make the ad in the chat → the review page shows the exact total (bottles × price,
@@ -553,6 +554,19 @@ starts with FreeWater's list (former advertisers, fillers, charity, picks) and n
 **The page:** the main switches as cards, the starting points, *Every switch* (categories → groups → switches) with a
 search box and filters (on, off, different from FreeWater, locked, new); each switch shows what it does, what it
 needs, what turning it off also turns off, FreeWater's choice and who may change it. It works on a phone.
+
+### Design it yourself (Design studio → *Design it yourself*; Ads → *QR colours and styles*)
+
+| Switch | FreeWater | What it does |
+|---|---|---|
+| *Design it yourself* (`design_yourself`) | On | "I'll design it myself" beside the assistant and the studio when making an ad. Off: not offered; drafts in that mode can't be made, and the upload page and its routes are closed. |
+| *Template downloads* (`template_downloads`, under it) | On | A template per size and shape on each product (PDF, SVG, 300-dpi PNG) from the label geometry the printer uses. |
+| *Upload your own artwork* (`artwork_upload`, under it) | On | Uploads on the upload page and in the ad chat (the chat is refused the same way when it's off), each matched to its size and checked, with one-tap fixes. |
+| *QR colours and styles* (`qr_styles`) | On | The advertiser's colour and logo in their code, only if it scans. Off: plain black codes. The code is always ours. |
+| *Change a link (fee)* (`link_change_fee`, Money) | On | See *How advertisers pay*. |
+
+All new in catalogue 6: an existing company sees them as new and decides; FreeWater has them on. PDF needs the PDF tools
+(poppler-utils) on the server; set `PDF_TOOLS=off` to refuse PDFs on purpose.
 
 ### Label layouts (Ads → Label layouts, on the Features page)
 
