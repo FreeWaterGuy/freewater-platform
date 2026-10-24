@@ -136,6 +136,10 @@ await journey('owner changes a setting in the console and it is saved', async (p
   await page.waitForFunction(() => /Saved as version/.test(document.querySelector('.toast')?.textContent ?? ''), null, { timeout: 15_000 });
   const boxes = app.platform.companies.get('freewater')!.boxes;
   expect(boxes?.['24']?.lengthIn === 16.5 && boxes?.['24']?.bottomColor === '#1E7DB8', `boxes: ${JSON.stringify(boxes)}`);
+  // Its real name back: a bottle's panel must name the company (it's FreeWater's own panel, "… for FreeWater Inc"), so
+  // under the test name nothing would print in the journeys after this one.
+  await app.console.save('freewater', { name: before }, 'journey');
+  expect(app.platform.companies.get('freewater')!.name === before, 'name not put back');
 });
 
 await journey('a team member who isn’t an owner is kept out of the console', async (page) => {
