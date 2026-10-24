@@ -1,6 +1,7 @@
 import type { App } from '../app';
 import type { ApiKey } from '../db/store';
 import { ApiError, obj, type RouteDef } from './http';
+import { PAUSE_STOPS } from '../modules/chain/pause';
 
 /** The chain layer: public seals and proofs; the team's actions that need several people, and the pause switch. */
 export function chainRoutes(app: App, route: (r: RouteDef) => void) {
@@ -51,5 +52,14 @@ export function chainRoutes(app: App, route: (r: RouteDef) => void) {
     throw new ApiError(501, 'not_yet', 'Withdrawals are signed by the team in Squads; this request can’t be made here yet.');
   } });
 
+  // The company's emergency stop (src/modules/chain/pause.ts): on the console's main menu whatever is switched on, the
+  // blockchain or not. What it stops is listed from the company's own switches.
+  route({ method: 'GET', url: '/v1/pause', scope: ['admin', 'ledger'], summary: 'The emergency stop: whether everything (or only the chain) is paused, by whom and why, what pausing stops for your company, and any unpause on its way.', handler: async (_req, key) => {
+    const companyId = key!.companyId;
+    const pauses = await chain.pausesInForce(companyId);
+    const unpause = (await chain.actions(companyId)).filter((a) => a.kind === 'unpause' && ['proposed', 'approved'].includes(a.status));
+    return { body: { paused: pauses.some((p) => p.scope === 'all'), chainPaused: pauses.length > 0, pauses, stops: PAUSE_STOPS.filter((x) => app.companyFeatures.on(companyId, x.feature)).map((x) => ({ id: x.id, label: x.label })), unpause } };
+  } });
+  route({ method: 'POST', url: '/v1/pause', scope: ['admin', 'ledger'], summary: 'Pause everything now: nothing prints and no money leaves, and every token action stops. Any one owner or finance person, at once, with a reason; unpausing needs other people’s approval and the wait.', body: obj({ reason: { type: 'string', minLength: 3, maxLength: 300 } }, ['reason']), handler: async (req, key) => ({ body: await chain.pause(key!.companyId, person(key), (req.body as any).reason, 'all') }) });
   route({ method: 'POST', url: '/v1/chain/pause', scope: ['admin', 'ledger'], summary: 'The pause switch: stops everything on the chain at once. Any one person; unpausing needs approvals and a wait.', body: obj({ reason: { type: 'string', minLength: 3, maxLength: 300 } }, ['reason']), handler: async (req, key) => ({ body: await chain.pause(key!.companyId, person(key), (req.body as any).reason) }) });
 }

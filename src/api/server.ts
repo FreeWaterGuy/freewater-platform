@@ -1,3 +1,4 @@
+import { PAUSE_ROUTES, PAUSED_MESSAGE } from '../modules/chain/pause';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { ApiError, notFound, obj, S, signedInOwner, teamPersonOf, type Handler, type RouteDef, Q } from './http';
 import { consumerRoutes } from './consumer';
@@ -1043,6 +1044,13 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     throw new ApiError(404, 'feature_off', `${switchOf(id)?.label ?? 'This'} is switched off for ${platform.companies.get(companyId)!.name}.`);
   };
 
+  /** The company's emergency stop is on: what it stops (printing, money leaving) refuses, 423 paused (src/modules/chain/pause.ts). */
+  const pauseGate = async (r: RouteDef, req: FastifyRequest, key: ApiKey | null) => {
+    if (!PAUSE_ROUTES.has(`${r.method} ${r.url}`)) return;
+    const companyId = companyOfRequest(req, key);
+    if (companyId && platform.companies.has(companyId) && (await app.chain.stopped(companyId))) throw new ApiError(423, 'paused', PAUSED_MESSAGE);
+  };
+
   for (const r of routes) {
     server.route({
       method: r.method,
@@ -1072,6 +1080,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       },
       handler: async (req: FastifyRequest, reply: FastifyReply) => {
         featureGate(r, req, (req as any).apiKey as ApiKey | null);
+        await pauseGate(r, req, (req as any).apiKey as ApiKey | null);
         const out = await r.handler(req, (req as any).apiKey as ApiKey | null);
         // Answer only once the change is safely stored. Things recorded on the way past (a scan, what someone did on
         // the page) don't wait while the database is refusing changes: they're queued in order and go in with the rest.

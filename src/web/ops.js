@@ -66,8 +66,9 @@
     if (cleanup) { cleanup(); cleanup = null; }
     if (!S.config) S.config = await api('GET', '/v1/public/app-config');
     // Areas switched off on this server (FW_FEATURES): pages that belong to one aren't shown or opened.
-    if (!S.features) S.features = await api('GET', `/v1/public/features?company=${encodeURIComponent(S.config.companyId)}`).catch(() => ({ off: [] }));
     if (S.token && !S.me) { try { S.me = await api('GET', '/v1/me'); } catch { S.me = null; } }
+    // The switches of the company of the person signed in (a licensee's team sees its own, not the host's).
+    if (!S.features) S.features = await api('GET', `/v1/public/features?company=${encodeURIComponent(S.me?.companyId ?? S.config.companyId)}`).catch(() => ({ off: [] }));
     if (!S.me) return signIn();
     if (S.me.advertiserId || S.me.role === 'consumer') return shell('', h('div', { class: 'notice err', text: 'This console is for the company’s team. Ask an owner to add you.' }));
     const pathname = S.path.split('?')[0];
@@ -95,14 +96,15 @@
 
   // ---------- today ----------
   async function today() {
-    const [o, machines, fleet] = await Promise.all([api('GET', '/v1/ops/overview'), api('GET', '/v1/ops/machines').catch(() => []), api('GET', '/v1/ops/fleet').catch(() => [])]);
+    // Panels and links for areas that are off (machines in the pilot, say) aren't shown, and their data isn't asked for.
+    const [o, machines, fleet] = await Promise.all([api('GET', '/v1/ops/overview'), on('machines') ? api('GET', '/v1/ops/machines').catch(() => []) : [], on('machines') ? api('GET', '/v1/ops/fleet').catch(() => []) : []]);
     const a = o.attention;
     const hot = [
       ...fleet.filter((m) => m.hardware === 'model6' && (m.availability.state !== 'ready' || m.incidents.some((i) => i.severity === 'critical'))).map((m) => link(`/ops/machines/${m.id}`, { class: 'hot' }, h('span', { text: `${m.id}: ${m.incidents.find((i) => i.severity === 'critical')?.message ?? m.availability.message}` }), h('b', { text: 'Look →' }))),
-      a.adsToReview && link('/ops/review', { class: 'hot' }, h('span', { text: `${a.adsToReview} ${a.adsToReview === 1 ? 'ad is' : 'ads are'} waiting for review` }), h('b', { text: 'Review →' })),
-      a.printFailures && link('/ops/machines', { class: 'hot' }, h('span', { text: `${a.printFailures} failed print${a.printFailures === 1 ? '' : 's'} today (never billed)` }), h('b', { text: 'Machines →' })),
+      a.adsToReview && can('review') && link('/ops/review', { class: 'hot' }, h('span', { text: `${a.adsToReview} ${a.adsToReview === 1 ? 'ad is' : 'ads are'} waiting for review` }), h('b', { text: 'Review →' })),
+      a.printFailures && (can('machines') ? link('/ops/machines', { class: 'hot' }, h('span', { text: `${a.printFailures} failed print${a.printFailures === 1 ? '' : 's'} today (never billed)` }), h('b', { text: 'Machines →' })) : h('div', { class: 'hot' }, h('span', { text: `${a.printFailures} failed print${a.printFailures === 1 ? '' : 's'} today (never billed)` }))),
       a.pluginFailures && h('div', { class: 'hot' }, h('span', { text: `${a.pluginFailures} scan page${a.pluginFailures === 1 ? '' : 's'} fell back to the simple card recently` })),
-      o.delivery.wrongBoxScans && link('/ops/routes', { class: 'hot' }, h('span', { text: `${o.delivery.wrongBoxScans} wrong box${o.delivery.wrongBoxScans === 1 ? '' : 'es'} caught at the door today` }), h('b', { text: 'Routes →' })),
+      o.delivery.wrongBoxScans && can('routes') && link('/ops/routes', { class: 'hot' }, h('span', { text: `${o.delivery.wrongBoxScans} wrong box${o.delivery.wrongBoxScans === 1 ? '' : 'es'} caught at the door today` }), h('b', { text: 'Routes →' })),
     ].filter(Boolean);
     shell('today', head('Today', new Date(`${o.date}T12:00:00Z`).toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })),
       h('div', { class: 'kpis' },
@@ -110,10 +112,10 @@
         h('div', { class: 'kpi' }, h('span', { text: 'Scans' }), h('b', { text: o.engagement.scans.toLocaleString() }), h('small', { text: `${o.engagement.arLaunches} AR launches` })),
         h('div', { class: 'kpi' }, h('span', { text: 'Earned' }), h('b', { text: dollars(o.money.revenueCents) }), h('small', { text: 'from ads and custom bottles' })),
         h('div', { class: 'kpi' }, h('span', { text: 'Given' }), h('b', { text: dollars(o.money.donatedCents) }), h('small', { text: 'to charity' })),
-        h('div', { class: 'kpi' }, h('span', { text: 'Deliveries' }), h('b', { text: `${o.delivery.delivered}/${o.delivery.stops}` }), h('small', { text: `${o.delivery.routes} route${o.delivery.routes === 1 ? '' : 's'}${o.delivery.notDelivered ? ` · ${o.delivery.notDelivered} coming back` : ''}` }))),
-      h('div', { class: 'grid2' },
+        on('routes') ? h('div', { class: 'kpi' }, h('span', { text: 'Deliveries' }), h('b', { text: `${o.delivery.delivered}/${o.delivery.stops}` }), h('small', { text: `${o.delivery.routes} route${o.delivery.routes === 1 ? '' : 's'}${o.delivery.notDelivered ? ` · ${o.delivery.notDelivered} coming back` : ''}` })) : null),
+      h('div', { class: on('machines') ? 'grid2' : '' },
         h('section', { class: 'panel-box' }, h('h2', { text: 'Needs attention' }), hot.length ? h('div', { class: 'attn' }, hot) : h('p', { style: 'margin:0;color:var(--muted)', text: 'Nothing right now.' })),
-        h('section', { class: 'panel-box' }, h('h2', {}, 'Machines', link('/ops/machines', { style: 'font-size:14px;font-weight:500' }, 'All →')), machineTable(machines))));
+        on('machines') ? h('section', { class: 'panel-box' }, h('h2', {}, 'Machines', can('machines') ? link('/ops/machines', { style: 'font-size:14px;font-weight:500' }, 'All →') : null), machineTable(machines)) : null));
   }
   const statusPill = (s) => h('span', { class: `pill ${s === 'ok' ? 'ok' : s === 'attention' ? 'bad' : 'warn'}`, text: s === 'ok' ? 'Printing' : s === 'attention' ? 'Needs a look' : 'Quiet' });
   const machineTable = (machines) => h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Machine', 'Today', 'Failed', 'Last print', ''].map((x) => h('th', { text: x })))),
@@ -403,7 +405,9 @@
 
   // ---------- books ----------
   async function booksPage() {
-    const [totals, lines, preview, transfers] = await Promise.all([api('GET', `/v1/public/companies/${S.config.companyId}/totals`), api('GET', '/v1/ledger?limit=500').catch(() => []), api('GET', '/v1/payouts/preview').catch(() => null), api('GET', '/v1/payouts').catch(() => null)]);
+    // The signed-in person's own company (a licensee's team sees its own), and only while its open books are on.
+    const mine = S.me?.companyId ?? S.config.companyId;
+    const [totals, lines, preview, transfers] = await Promise.all([(S.features?.off ?? []).includes('open_books') ? null : api('GET', `/v1/public/companies/${encodeURIComponent(mine)}/totals`), api('GET', '/v1/ledger?limit=500').catch(() => []), api('GET', '/v1/payouts/preview').catch(() => null), api('GET', '/v1/payouts').catch(() => null)]);
     const recent = lines.slice(-40).reverse();
     const send = h('button', { class: 'btn', type: 'button', onclick: async () => {
       send.disabled = true; send.textContent = 'Sending…';
@@ -416,9 +420,9 @@
     const date = h('input', { class: 'input', id: 'x-date', type: 'date', value: new Date().toISOString().slice(0, 10) });
     shell('books', head('Books', 'Every line is final. Corrections are new lines, never edits. Everything on the public open-books site comes from here.', h('a', { class: 'btn secondary', href: fixture ? '#' : '/books', target: '_blank', rel: 'noopener' }, 'Open the public site')),
       h('div', { class: 'kpis', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' },
-        h('div', { class: 'kpi dark' }, h('span', { text: 'Bottles, all time' }), h('b', { text: totals.bottles.toLocaleString() })),
-        h('div', { class: 'kpi' }, h('span', { text: 'Earned, all time' }), h('b', { text: dollars(totals.revenueCents) })),
-        h('div', { class: 'kpi' }, h('span', { text: 'Given, all time' }), h('b', { text: dollars(totals.donatedCents) }))),
+        totals && h('div', { class: 'kpi dark' }, h('span', { text: 'Bottles, all time' }), h('b', { text: totals.bottles.toLocaleString() })),
+        totals && h('div', { class: 'kpi' }, h('span', { text: 'Earned, all time' }), h('b', { text: dollars(totals.revenueCents) })),
+        totals && h('div', { class: 'kpi' }, h('span', { text: 'Given, all time' }), h('b', { text: dollars(totals.donatedCents) }))),
       preview ? h('div', { class: 'grid2' },
         h('section', { class: 'panel-box' }, h('h2', {}, 'Charity transfers', send),
           h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Charity', 'Owed now', ''].map((x) => h('th', { text: x })))),

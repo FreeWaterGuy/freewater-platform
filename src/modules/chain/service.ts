@@ -1,3 +1,4 @@
+import type { PauseScope } from './pause';
 import type { SqlClient } from '../../db/client';
 import type { Platform } from '../../platform';
 import type { WalletService } from '../wallet/service';
@@ -363,15 +364,35 @@ export class ChainService {
       await this.wallet.recordMint(companyId, x.subject, x.tokens, `${id}:${x.subject}`, ref);
     }
   }
-  /** The pause switch: any one person, at once, no wait. Unpausing needs the full approval and wait. */
-  async pause(companyId: string, person: string, reason: string) {
+  /**
+   * The pause switch: any one person, at once, no wait. Unpausing needs the full approval and wait. `scope` 'chain'
+   * (the Blockchain page, the daily check) stops token actions; 'all' (the Pause page, src/modules/chain/pause.ts) is
+   * the company's emergency stop: printing and money leaving too.
+   */
+  async pause(companyId: string, person: string, reason: string, scope: PauseScope = 'chain') {
     const ref = await this.chainFor(companyId).setPaused(true).then((r) => r.ref).catch(() => 'not on chain');
-    await this.db.query(`insert into chain_actions (id, company_id, kind, params, proposed_by, approvals, needed, status, created_at, ran_by, ran_at, ref) values ($1,$2,'pause',$3,$4,'[]',1,'done',$5,$4,$5,$6)`, [newId('ca'), companyId, JSON.stringify({ reason: reason.slice(0, 300) }), person, this.now(), ref]);
+    await this.db.query(`insert into chain_actions (id, company_id, kind, params, proposed_by, approvals, needed, status, created_at, ran_by, ran_at, ref) values ($1,$2,'pause',$3,$4,'[]',1,'done',$5,$4,$5,$6)`, [newId('ca'), companyId, JSON.stringify({ reason: reason.slice(0, 300), scope }), person, this.now(), ref]);
     // Any unpause already on its way was about an earlier pause: a new pause cancels it (unpausing now needs a new one).
     await this.db.query(`update chain_actions set status = 'cancelled', cancelled_by = $2 where company_id = $1 and kind = 'unpause' and status in ('proposed','approved')`, [companyId, `pause by ${person}`]);
-    this.alert?.(companyId, `Chain paused by ${person}: ${reason}`);
-    return { paused: true, ref };
+    this.alert?.(companyId, `${scope === 'all' ? 'Everything' : 'Chain'} paused by ${person}: ${reason}`);
+    return { paused: true, scope, ref };
   }
+  /**
+   * The pauses in force (every pause since the last unpause that ran), newest first. Read from the books each time, so
+   * a restart can't lose one (P6).
+   */
+  async pausesInForce(companyId: string) {
+    const rows = (await this.db.query<any>(`select kind, params, ran_by, ran_at from chain_actions where company_id = $1 and kind in ('pause','unpause') and status = 'done' order by ran_at desc, created_at desc limit 200`, [companyId])).rows;
+    const out: { scope: PauseScope; reason: string; by: string; at: string }[] = [];
+    for (const r of rows) {
+      if (r.kind === 'unpause') break;
+      const p = typeof r.params === 'string' ? JSON.parse(r.params) : r.params ?? {};
+      out.push({ scope: p.scope === 'all' ? 'all' : 'chain', reason: p.reason ?? '', by: r.ran_by, at: new Date(r.ran_at).toISOString() });
+    }
+    return out;
+  }
+  /** The company's emergency stop is on: nothing prints and no money leaves (PAUSE_STOPS). */
+  async stopped(companyId: string) { return (await this.pausesInForce(companyId)).some((p) => p.scope === 'all'); }
   /** Was there a pause at or after this time? */
   private async pausedSince(companyId: string, at: string | Date) {
     return (await this.db.query(`select 1 from chain_actions where company_id = $1 and kind = 'pause' and created_at >= $2 limit 1`, [companyId, new Date(at).toISOString()])).rows.length > 0;

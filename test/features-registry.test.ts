@@ -434,7 +434,7 @@ describe('modules work alone', () => {
     for (const [path, ops] of Object.entries<any>(spec.paths)) {
       for (const [m, op] of Object.entries<any>(ops)) {
         const url = path.replace(/\{([a-zA-Z]+)\}/g, ':$1');
-        if (['/v1/platform/companies', '/v1/launch/reset', '/v1/platform/persistence/skip-stuck', '/v1/platform/jobs/:name/run', '/v1/auth/sign-out', '/v1/me', '/v1/console/features', '/v1/me/data'].includes(url) && m !== 'get') continue;
+        if (['/v1/platform/companies', '/v1/launch/reset', '/v1/platform/persistence/skip-stuck', '/v1/platform/jobs/:name/run', '/v1/auth/sign-out', '/v1/me', '/v1/console/features', '/v1/me/data', '/v1/pause'].includes(url) && m !== 'get') continue; // (the emergency stop takes approvals and a wait to undo)
         const body = op.requestBody?.content?.['application/json']?.schema;
         const r = await call(m.toUpperCase(), fill(url, { id: unit, unitId: unit, companyId: 'freewater' }), token, body ? sample(body) : m === 'get' ? undefined : {});
         // Refused by the route's own switch (the gate's words), not by a step or a check inside.

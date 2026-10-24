@@ -105,6 +105,12 @@ export interface Switch {
   ownPage?: { on: string; page: string };
   /** Turned off only by an owner with a written reason (at least 10 characters), never by a starting point; the team is alerted. */
   offNeedsReason?: string;
+  /**
+   * A security switch: turning it off weakens the company's security. Never changed by a starting point, a bundle of
+   * changes, a restored version or an agent's proposal; turned off only on its own, by an owner signed in with the
+   * second step, with a written reason (docs/SWITCHES.md, "Security switches"). Turning it on is always quick.
+   */
+  security?: string;
   link?: Link;
   /** For kind 'setting': the console page. */
   page?: string;
@@ -217,7 +223,7 @@ export const SWITCHES: Switch[] = [
   // Link safety (src/modules/ads/linkSafety.ts; docs/SWITCHES.md, "Link safety"). The founder: every link is approved
   // before it goes live, "what if they changed it to porn or malware". On for every company (`since: 1`: companies that
   // already exist get it too); only an owner turns it off, with a written reason, and never a starting point.
-  sw({ id: 'link_safety', category: 'ads', group: 'Review', label: 'Link safety',
+  sw({ id: 'link_safety', category: 'ads', group: 'Review', label: 'Link safety', security: 'Unsafe links (adult, malware, phishing) would reach people’s phones unchecked.',
     offNeedsReason: 'Every link an ad leads to is checked before a person reviews it and every day while it runs; turning that off is an owner’s decision, written down.',
     description: 'Every link an ad leads to (a new ad, a changed link, a QR code’s destination) is checked automatically before a person reviews it: https only, no passwords, no private or numeric addresses, not on the list of adult, malware and phishing sites and link shorteners (plus your own), every redirect followed from our server, the last page’s type and title, and Google Safe Browsing where the host set a key. Unsafe links are refused before anything is paid; doubtful ones go to your team with the reasons. Every live link is checked again each day: one that turned bad sends its ad’s code to a holding page (“this link is being checked”) and alerts your team. Off (an owner, with a reason): only the basic checks run, and people still review every link.',
     jobs: ['link-safety'] }),
@@ -507,7 +513,7 @@ export const SWITCHES: Switch[] = [
     jobs: ['books-and-agents', 'agent-exams'], pages: ['agents'] }),
   sw({ id: 'numberline', category: 'safety', parent: null, locked: 'The number line is the only essential agent: its work is never halted, only limited, and it can never contradict the numbers (docs/AI.md).', label: 'The number line', description: 'Every offering placed on the number line (for sale, free or negatively priced) by rules it can’t contradict.',
     routes: ['GET /v1/numberline', 'GET /v1/numberline/history', 'POST /v1/numberline/place', 'POST /v1/numberline/override'], pages: ['numberline'] }),
-  sw({ id: 'pause_switch', category: 'safety', parent: null, locked: 'Any one person can stop every token action at once. It can never be removed.', label: 'The pause switch', description: 'Pause now, by any one person, immediately; unpausing needs approvals.', routes: ['POST /v1/chain/pause', 'GET /v1/chain'] }),
+  sw({ id: 'pause_switch', category: 'safety', parent: null, locked: 'Any one person can stop everything at once. It can never be removed.', label: 'The pause switch', description: 'The emergency stop, on the console’s main menu (Pause): any one owner or finance person, immediately, stops printing, money leaving and every token action; the Blockchain page’s pause stops token actions only. Unpausing needs approvals and the wait.', routes: ['POST /v1/chain/pause', 'GET /v1/chain', 'GET /v1/pause', 'POST /v1/pause'], pages: ['pause'] }),
   sw({ id: 'approvals', category: 'safety', parent: null, locked: 'Anything irreversible needs people, approvals and a wait.', label: 'Approvals and waits', description: 'Steps that can’t be undone are proposed, approved by people who were already on the team, then wait at least 24 hours.',
     routes: ['GET /v1/chain/actions', 'POST /v1/chain/actions', 'POST /v1/chain/actions/:id/approve', 'POST /v1/chain/actions/:id/cancel', 'POST /v1/chain/actions/:id/run'] }),
   sw({ id: 'launch_stages', category: 'safety', parent: null, locked: 'The stages only move forward, through approved steps; testing can be wiped, live can’t.', label: 'Testing, then going live', description: 'Testing (bots and a full reset), live with points, live with the token, in order, never back.', routes: ['GET /v1/launch', 'POST /v1/launch/reset', 'POST /v1/launch/bots'], pages: ['launch'] }),
@@ -531,7 +537,8 @@ export const SWITCHES: Switch[] = [
   sw({ id: 'print_limits', category: 'safety', parent: null, locked: 'Machines’ print limits are a safety limit: stricter, never weaker.', label: 'Machines’ print limits', description: 'A stolen machine key can’t print (and bill) at scale.' }),
   sw({ id: 'security', category: 'safety', parent: null, locked: 'The security log and the security agent keep watch for every company.', label: 'The security log', description: 'Sign-ins, failed sign-ins, keys, team changes and settings saved; the security agent looks around every hour.',
     routes: ['GET /v1/security/events', 'POST /v1/security/review'], pages: ['security'] }),
-  sw({ id: 'owner_second_step', category: 'safety', group: 'Your choices', parent: null, kind: 'linked', default: false, label: 'Owners need a second sign-in step', description: 'Every owner signs in with a code from an authenticator app too. Recommended before going live.', link: flag('security.ownersNeedSecondStep', { base: () => ({ ownersNeedSecondStep: false }) }) }),
+  sw({ id: 'owner_second_step', category: 'safety', group: 'Your choices', parent: null, kind: 'linked', default: false, security: 'A stolen email inbox would open the whole company again.',
+    offNeedsReason: 'Owners would sign in with an emailed code alone; turning that off is an owner’s own decision, written down.', label: 'Owners need a second sign-in step', description: 'Every owner signs in with a code from an authenticator app too. Recommended before going live.', link: flag('security.ownersNeedSecondStep', { base: () => ({ ownersNeedSecondStep: false }) }) }),
 
   // ======================= The platform's core (locked) =======================
   sw({ id: 'core_platform', category: 'core', parent: null, locked: 'Needed to run anything: without it nothing else works.', label: 'Accounts, team, keys and settings', description: 'Signing in with a code, people’s accounts, the team, API keys, every setting and its history, health checks.',
@@ -585,6 +592,11 @@ export const autonomySwitches = () => SWITCHES.filter((s) => s.risk === 'autonom
 /** A new company starts with it off, whatever FreeWater chose. */
 export const startsOffForNew = (s: Switch) => !s.locked && (!!s.risk || !!s.startsOff);
 
+/** The security switches: off weakens the company's security (each only on its own, by an owner with the second step and a reason). */
+export const securitySwitches = () => SWITCHES.filter((s) => !!s.security);
+/** The security switches kept in the settings that this settings change turns off (by label). */
+export const securityWeakened = (before: any, after: any) => SWITCHES.filter((s) => s.security && s.kind === 'linked' && s.link!.get(before) && !s.link!.get(after)).map((s) => s.label);
+
 /** What it needs to be on: its parent and what it depends on. */
 export const needsOf = (s: Switch) => [...(s.parent ? [s.parent] : []), ...s.dependsOn];
 /** Every switch that is off whenever this one is (its children and dependants, all the way down). */
@@ -597,7 +609,7 @@ export function dependantsOf(id: string): string[] {
 
 /**
  * Ready-made starting points. Each names the switches it wants on; every other switch that can be turned off is off.
- * Locked ones stay on. A starting point never turns on a money, chain or one-way switch by itself: those stay as they
+ * Locked ones stay on, and security switches are never touched (they stay as they are). A starting point never turns on a money, chain or one-way switch by itself: those stay as they
  * are and are listed for a person to turn on through the usual steps.
  */
 export interface StartingPoint { id: string; label: string; description: string; on: (s: Switch, freewater: (id: string) => boolean) => boolean }

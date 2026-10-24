@@ -151,12 +151,12 @@ export const approvalRoutes: ReadonlySet<string> = new Set([
  * the approval settings below, and making (or changing) an owner or finance person.
  */
 export const conditionalApprovalRoutes: Readonly<Record<string, string>> = {
-  'PATCH /v1/console/settings': 'changes any of approvalSettings',
+  'PATCH /v1/console/settings': 'changes any of approvalSettings, or turns off a security switch (owners’ second sign-in step)',
   'POST /v1/console/history/:version/restore': 'the version put back differs from the current settings in any of approvalSettings',
   'POST /v1/agents/proposals/:id/decide': 'approving a proposal whose change is to one of approvalSettings',
   'POST /v1/agents/proposals/:id/undo': 'undoing a change to one of approvalSettings',
   'POST /v1/team': 'the role given, or the person’s current role, is owner or finance',
-  'POST /v1/console/features': 'turning ON a money, chain or one-way switch (turning anything off stays quick: any owner signed in)',
+  'POST /v1/console/features': 'turning ON a money, chain or one-way switch, or turning OFF a security switch (turning anything else off stays quick: any owner signed in)',
   'POST /v1/review/ai/final-call': 'turning ON “AI makes the final call on paid ads” (turning it off: anyone on the team, at once)',
   'POST /v1/review/ai/settings': 'lowering the AI reviewer’s bar or its audit sample (raising them: anyone on the team)',
 };

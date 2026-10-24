@@ -22,7 +22,12 @@ import { givingLine, labelFitProblem, withLabel } from '../print/renderer';
 /** Where a settings change came from, and why (for the switches' history on the Features page). */
 export interface SaveNote { via: string; reason?: string }
 /** `confirmStranded`: the count of paid pieces a label-layout change would strand, as the preview showed it (it must match). */
-export interface SaveOpts { chainApproved?: boolean; person?: boolean; note?: SaveNote; inTx?: (tx: SqlClient) => Promise<void>; confirmStranded?: number }
+/** Why a change that turns a security switch off is refused. */
+const SECURITY_OFF = (labels: string[]) => `It turns off ${labels.map((l) => `“${l}”`).join(' and ')}, which guards your company. Only an owner signed in with the second sign-in step turns that off, on its own (not with other changes), with a reason of at least 10 characters (Features, or Security).`;
+
+export interface SaveOpts { chainApproved?: boolean; person?: boolean; note?: SaveNote; inTx?: (tx: SqlClient) => Promise<void>; confirmStranded?: number;
+  /** Set only by a caller that checked a security switch going off (an owner with the second step, on its own, with a reason). */
+  securityOff?: { reason: string } }
 
 export class ConsoleError extends Error {
   constructor(public code: string, message: string, public status = 400) {
@@ -64,6 +69,8 @@ export class ConsoleService {
   onCreate?: (tx: SqlClient, companyId: string, by: string) => Promise<void>;
   /** Set by the app: the switches kept in the settings that this change turns on or off (a key never changes a switch). */
   switchesChanged?: (before: CompanyConfig, after: CompanyConfig) => string[];
+  /** Set by the Features service: the security switches a change turns off (by label). */
+  securityWeakened?: (before: CompanyConfig, after: CompanyConfig) => string[];
   /**
    * Set by the app (src/modules/ads/layoutGuard.ts): a change to the label layouts' settings (most ads on a bottle,
    * fewest, each product's layouts) that leaves no layout while ads are on is refused; one that would strand paid
@@ -177,6 +184,8 @@ export class ConsoleService {
     try { next = applyChange(cur, change); } catch (e: any) { throw new ConsoleError('not_editable', e.message); }
     if (opts.person === false && printLimitsChanged(cur, next)) throw new ConsoleError('person_needed', 'The machines’ print limits are a safety limit: a person signed in changes them, not a service key.', 403);
     if (opts.person === false) { const flips = this.switchesChanged?.(cur, next) ?? []; if (flips.length) throw new ConsoleError('person_needed', `This turns a switch on or off (${flips.join(', ')}): a person signed in does that, never a service key.`, 403); }
+    const weakened = this.securityWeakened?.(cur, next) ?? [];
+    if (weakened.length && !(opts.securityOff && opts.securityOff.reason.trim().length >= 10)) throw new ConsoleError('security_switch', SECURITY_OFF(weakened), 403);
     const problem = checkSettings(next, this.registry.names()) ?? ratchetProblem(cur, next) ?? chainProblem(cur, next, opts.chainApproved) ?? walletProblem(cur, next, opts.chainApproved) ?? this.labelProblem(companyId, cur, next);
     if (problem) throw new ConsoleError('invalid_settings', problem, 422);
     await this.layoutsAllow(companyId, cur, next, opts.confirmStranded, 'Check it first (Features → Label layouts shows the count), then save again confirming it.');
@@ -226,6 +235,9 @@ export class ConsoleService {
     // Putting back an old version passes the same checks as any other change (the chain can't come back on this way).
     const money = personOnlyKeys.some((k) => JSON.stringify((cur as any)[k] ?? null) !== JSON.stringify((next as any)[k] ?? null)) || printLimitsChanged(cur, next) || !!this.switchesChanged?.(cur, next).length;
     if (money && !opts.person) throw new ConsoleError('person_needed', 'This version changes money, chain or one-way settings, or turns a switch on or off; a person signed in has to put it back.', 403);
+    // A version put back never weakens security: turn the security switch off on its own first, if that's meant.
+    const weakened = this.securityWeakened?.(cur, next) ?? [];
+    if (weakened.length) throw new ConsoleError('security_switch', `Version ${v} can’t be put back as it is: ${SECURITY_OFF(weakened)}`, 422);
     if (opts.approval) {
       const changed = [...new Set([...Object.keys(cur), ...Object.keys(next)])].filter((k) => JSON.stringify((cur as any)[k] ?? null) !== JSON.stringify((next as any)[k] ?? null));
       await opts.approval(changed);

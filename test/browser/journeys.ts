@@ -27,6 +27,9 @@
  *  15. Play's points counter shows what the wallet holds.
  *  16. The scan page in the pilot: no "free water near me", "printed fresh for home delivery", and the data question
  *      is an inline banner that covers nothing.
+ *  17–20. Every console and ops page in the menu opens without an error, in the pilot and for a licensee with every
+ *      main switch off; the AI agents page shows what's on (which AI, the governor, the AI reviewer), never what's off;
+ *      ops Today shows no Machines panel with machines off.
  * (And on the pilot's server, after 6: the ad chat's "Every size" keeps every piece inside its panel, and the sample
  * bottle says where the ad is, with the other pieces marked "Sample ad"; with ads on boxes off, no "On a box" tab. And
  * designing it yourself: after a QR colour is saved, the upload page's label preview draws the code in that colour.)
@@ -36,6 +39,7 @@ import { createApp } from '../../src/app';
 import { buildServer } from '../../src/api/server';
 import { createPgliteClient } from '../../src/db/pglite';
 import { featuresFrom } from '../../src/runtime/features';
+import { CATEGORIES } from '../../src/runtime/registry';
 import { TestOutbox } from '../../src/adapters/messaging/contract';
 import { boxNumber } from '../../src/modules/packs/boxRenderer';
 import { doorPhoto } from '../door-photo';
@@ -556,6 +560,91 @@ await journey('the scan page in the pilot: no machine doors, and the data questi
   });
   expect(cover.pos === 'static' && cover.covered === 0, `consent: ${JSON.stringify(cover)}`);
 }, { ...phone, isMobile: true });
+
+// ---------- every console and ops page with areas switched off (walkthrough problems #10, #13, #21, #28) ----------
+// The pilot's server (FW_FEATURES=pilot: no agents' fund, network, offers or machines), as FreeWater runs it, and a
+// licensee with every main switch off on its Features page. Every page in each menu opens with no error on it, the
+// AI agents page shows what's on (the governor, which AI, the AI reviewer's record), and nothing from an area that's
+// off is shown (no Machines panel on ops Today).
+const errorOnPage = async (page: any) => page.evaluate(() => {
+  const err = [...document.querySelectorAll('.notice.err')].map((e) => (e as HTMLElement).innerText.trim()).filter(Boolean);
+  const txt = document.body.innerText || '';
+  // An area being off is said in plain words ("Switched off on this server"); a page failing because of it isn't.
+  return err.length ? err.join(' | ') : /Something went wrong|is switched off for /.test(txt) ? (txt.match(/[^\n]*(Something went wrong|is switched off for )[^\n]*/)?.[0] ?? 'error') : null;
+});
+const sweep = async (page: any, app: 'console' | 'ops', company: string) => {
+  const start = app === 'console' ? `${aBase}/console?company=${company}` : `${aBase}/ops`;
+  await page.goto(start);
+  await page.waitForSelector('nav[aria-label="Main"] a', { timeout: 20_000 });
+  const hrefs: string[] = await page.$$eval('nav[aria-label="Main"] a[href^="/"]', (as: HTMLAnchorElement[]) => [...new Set(as.map((a) => a.getAttribute('href')!))].filter((x) => x.startsWith('/console') || x.startsWith('/ops')));
+  const failed: string[] = [];
+  for (const href of hrefs) {
+    await page.goto(`${aBase}${href}`);
+    await page.waitForSelector('main h1, main .notice.err', { timeout: 20_000 }).catch(() => {});
+    await page.waitForLoadState('networkidle');
+    const err = await errorOnPage(page);
+    if (err) failed.push(`${href}: ${err.slice(0, 160)}`);
+  }
+  return { hrefs, failed };
+};
+const swOwner = await aApp.accounts.createSession(aOwner.id, { secondStep: true });
+const lOwner = await aApp.accounts.invite({ companyId: 'peak-spring', email: 'owner.sweep@peakspring.example', role: 'owner' });
+const lToken = await aApp.accounts.createSession(lOwner.id, { secondStep: true });
+const mains = Object.fromEntries(CATEGORIES.filter((c) => c.main).map((c) => [c.main!, false]));
+await aApp.companyFeatures.change('peak-spring', { ...mains }, { userId: lOwner.id, name: 'Owner', approverProblem: async () => null } as any);
+
+await journey('every console page opens without an error in the pilot, and the AI agents page shows what’s on', async (page) => {
+  await signedIn(page, 'fw_console_token', swOwner, { fw_console_company: 'freewater' });
+  const { hrefs, failed } = await sweep(page, 'console', 'freewater');
+  expect(hrefs.includes('/console/agents'), `no AI agents page in the menu: ${hrefs.join(' ')}`);
+  expect(!failed.length, `pages with an error: ${failed.join(' ; ')}`);
+  await page.goto(`${aBase}/console/agents`);
+  await page.waitForSelector('main h1', { timeout: 20_000 });
+  await page.waitForLoadState('networkidle');
+  const text = await page.evaluate(() => document.body.innerText);
+  for (const want of ['Which AI', 'Their charter, and the governor', 'AI reviewer of paid ads']) expect(text.includes(want), `the AI agents page has no “${want}”`);
+  for (const gone of ['The agents’ fund', 'Continuity', 'Value-back test', 'The upsides library']) expect(!text.includes(gone), `the AI agents page shows “${gone}”, which is off`);
+  // The overview (Get started) shows no machine steps or figures with machines off.
+  await page.goto(`${aBase}/console`);
+  await page.waitForSelector('main h1', { timeout: 20_000 });
+  const start = await page.evaluate(() => document.querySelector('main')!.innerText);
+  expect(!/first machine|Machines\n/i.test(start), 'Get started shows machines, which are off');
+  // The emergency stop is on the main menu without the blockchain.
+  expect(hrefs.includes('/console/pause') && !hrefs.includes('/console/chain'), `menu: ${hrefs.join(' ')}`);
+});
+
+await journey('every console page opens without an error for a licensee with every main switch off', async (page) => {
+  await signedIn(page, 'fw_console_token', lToken, { fw_console_company: 'peak-spring' });
+  const { hrefs, failed } = await sweep(page, 'console', 'peak-spring');
+  expect(hrefs.includes('/console/agents'), `no AI agents page (Which AI) in the menu: ${hrefs.join(' ')}`);
+  expect(!failed.length, `pages with an error: ${failed.join(' ; ')}`);
+  await page.goto(`${aBase}/console/agents`);
+  await page.waitForSelector('main h1', { timeout: 20_000 });
+  await page.waitForLoadState('networkidle');
+  const text = await page.evaluate(() => document.body.innerText);
+  expect(text.includes('Which AI') && text.includes('Their charter, and the governor'), 'the licensee’s AI agents page lacks Which AI or the governor');
+});
+
+await journey('every ops page opens without an error in the pilot, and Today shows no Machines panel', async (page) => {
+  await signedIn(page, 'fw_ops_token', swOwner);
+  const { hrefs, failed } = await sweep(page, 'ops', 'freewater');
+  expect(!hrefs.includes('/ops/machines'), `Machines is in the ops menu: ${hrefs.join(' ')}`);
+  expect(!failed.length, `pages with an error: ${failed.join(' ; ')}`);
+  await page.goto(`${aBase}/ops`);
+  await page.waitForSelector('main h1', { timeout: 20_000 });
+  await page.waitForLoadState('networkidle');
+  const heads: string[] = await page.$$eval('main h2', (hs: HTMLElement[]) => hs.map((x) => x.innerText.trim()));
+  expect(!heads.some((x) => /^Machines/.test(x)), `ops Today shows: ${heads.join(', ')}`);
+});
+
+await journey('every ops page opens without an error for a licensee with every main switch off', async (page) => {
+  await signedIn(page, 'fw_ops_token', lToken);
+  const { hrefs, failed } = await sweep(page, 'ops', 'peak-spring');
+  expect(!hrefs.some((x) => /machines|routes|areas|subscriptions|review/.test(x)), `ops menu shows switched-off areas: ${hrefs.join(' ')}`);
+  expect(!failed.length, `pages with an error: ${failed.join(' ; ')}`);
+  const heads: string[] = await page.goto(`${aBase}/ops`).then(() => page.waitForSelector('main h1', { timeout: 20_000 })).then(() => page.$$eval('main h2', (hs: HTMLElement[]) => hs.map((x) => x.innerText.trim())));
+  expect(!heads.some((x) => /^Machines/.test(x)), `ops Today shows: ${heads.join(', ')}`);
+});
 
 await aServer.close();
 await aDb.close();

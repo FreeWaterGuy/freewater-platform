@@ -496,3 +496,26 @@ size, not bleed copies; the fixed `extend_bleed`); box faces have no bleed; the 
 same `piece`. Mutants caught: inner-edge crop removed, edge strips drawn on every side, own-bleed box widened. Not
 checked: a real printer and cutter (the drift tolerance), real phones showing the two views; the printer should confirm
 that a 0.005 in edge extension is acceptable for photographic edges.
+
+## Walkthrough videos: security and broken pages (security architect, 2026-10-24, branch `m-sec`)
+
+The owner, ops and white-label walkthrough videos (problems #10, #12, #13, #15, #21, #28).
+
+| Date | Role | Severity | Pattern | Where | Finding | Fix / test |
+|---|---|---|---|---|---|---|
+| 2026-10-24 | Security architect | CRITICAL | P3 / P16 | `FeatureService.plan` (starting points) | “Delivery + printed ads” (every starting point) turned **off** *Owners need a second sign-in step*: a starting point turns off every switch it doesn't list, and the safety category's own choice wasn't excluded. CONFIRMED (`test/security-switches.test.ts` fails on the old code) | Switches flagged `security` (registry: second step, link safety) are left out of every starting point and said "Left on"; test over every starting point |
+| 2026-10-24 | Security architect | HIGH | P3 / P4 | `PATCH /v1/console/settings`, `FeatureService.change`, `ConsoleService.restoreNow`, agents' `apply` | Sibling paths weakening the same control: any admin-scoped person (no second step, no reason, inside a bundle) could turn the second step off in settings; a restored older version or an agent's proposal (`security.ownersNeedSecondStep` false) could too. CONFIRMED | Off only on its own, by an owner signed in with the second step, with a 10+ character reason (422 `one_at_a_time` / `reason_needed`, 403 `second_step_required`); `ConsoleService.securityWeakened` refuses every other save and every restore (`security_switch`); the Security page asks for the reason |
+| 2026-10-24 | Security architect | MEDIUM | P3 | `FeatureService.plan` (dependants) | Turning off *Ads on bottles* also cleared *Link safety*'s own choice without a reason, so turning ads back on left link safety off. CONFIRMED | Security and reason-to-turn-off switches keep their own choice when a parent goes off |
+| 2026-10-24 | Security architect | HIGH | P16 | console *Blockchain* page only | The only pause was on the Blockchain page (off in the pilot), and it stopped token actions only: no emergency stop for printing or money. CONFIRMED (`test/pause-everything.test.ts`) | `src/modules/chain/pause.ts`: *Pause* on the main menu (`GET/POST /v1/pause`), any one owner or finance person at once; stops printing and money leaving (423 `paused`, the `offers` job skipped) and token actions; the Blockchain page's pause stays token-only (a chain mismatch never stops a delivery night); unpausing is the same approved step and wait |
+| 2026-10-24 | Security architect | MEDIUM | — | `console.js` `agentsPage` (and Which AI on it) | “Something went wrong” in the pilot (`/v1/environment/experiments` isn't registered with offers off) and for a licensee (“Value-back tests is switched off…”); a licensee with *Value and code agents* off had no AI agents page (or Which AI) at all. CONFIRMED (browser sweep fails on the old code) | `getIf`: each area's data only while it's on; the page belongs to the governor (always shown) and lists the AI assistants' and ratings' switches; `test/ai-agents-page.test.ts` |
+| 2026-10-24 | Security architect | MEDIUM | — | console games, ads (unsold space), codes, products, number line, Get started, Blockchain (seals) | Siblings: each errored (or showed machines) with an area off for a licensee. CONFIRMED by the sweep | Gated the same way; codes and products belong to *Printing bottles* (as the registry says) |
+| 2026-10-24 | Security architect | LOW | P5 | `ops.js` `render`, `today`, `booksPage` | Ops read the host company's switches and totals for a licensee's team (its menu showed switched-off areas); Today showed a Machines panel with machines off. CONFIRMED | The signed-in company's switches and totals; machine panels, links and figures only while machines are on |
+
+Siblings searched: every GET on every console and ops page (each now belongs to an always-on switch, its page's own
+switch, or is asked for only while its switch is on); every starting point and the host presets against every
+security switch; every route that saves settings (PATCH, restore, the Features page, agents' proposals, the security
+agent's own suggestion, which only turns the second step on). The browser sweep (`test/browser/journeys.ts`, journeys
+17–20) opens every console and ops menu page in the pilot and for a licensee with every main switch off.
+Not checked: real phones; whether the founder wants the emergency stop to include printing (it's what was asked, but
+unpausing takes approvals and the wait, so a mistaken pause holds delivery nights until two others approve: the
+founder should confirm); whether ops people (not only owners and finance) should be able to press it.

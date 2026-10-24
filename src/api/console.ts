@@ -2,7 +2,8 @@ import type { App } from '../app';
 import { createApiKey, revokeApiKey, scopeInfo, type ApiKey, type Scope } from '../db/store';
 import { publicEvents, testEvent } from '../modules/webhooks/catalog';
 import { ApiError, obj, S, signedInOwner, type RouteDef, Q } from './http';
-import { personOnlyKeys } from '../modules/console/settings';
+import { applyChange, personOnlyKeys } from '../modules/console/settings';
+import { securityWeakened } from '../runtime/registry';
 import { approvalSettings, approverStepProblem } from '../modules/accounts/secondStep';
 
 /**
@@ -27,14 +28,27 @@ export function consoleRoutes(app: App, route: (r: RouteDef) => void) {
       return { name: key!.name, platform: key!.scopes.includes('platform'), person: !!key!.userId, ...(ss ? { secondStep: ss } : {}), ...(u ? { role: u.role } : {}), mustSetUpSecondStep: must };
     })() } };
   } });
-  route({ method: 'PATCH', url: '/v1/console/settings', scope: 'admin', summary: 'Change your settings: brand, product facts, giving, open books, ad rules, prices, modules and more. Send only what changes, and the version you started from.', body: obj({ changes: changesProp, version: S.int, confirmStranded: S.int }, ['changes']), handler: async (req, key) => {
+  route({ method: 'PATCH', url: '/v1/console/settings', scope: 'admin', summary: 'Change your settings: brand, product facts, giving, open books, ad rules, prices, modules and more. Send only what changes, and the version you started from. Turning off a security setting (owners’ second sign-in step) is its own change, by an owner who passed the second step, with a reason.', body: obj({ changes: changesProp, version: S.int, confirmStranded: S.int, reason: { type: 'string', maxLength: 300 } }, ['changes']), handler: async (req, key) => {
     const b = req.body as any;
+    // Weakening security (docs/SWITCHES.md, "Security switches"): an owner signed in, with the second step, on its own, with a reason.
+    const cur = app.platform.companies.get(staff(key).companyId);
+    let next: unknown = null;
+    try { next = cur ? applyChange(cur, b.changes ?? {}) : null; } catch { /* the save below says what's wrong */ }
+    const weakened = cur && next ? securityWeakened(cur, next) : [];
+    let securityOff: { reason: string } | undefined;
+    if (weakened.length) {
+      const k = signedInOwner(key, `Turning off “${weakened.join('” and “')}”`);
+      if (Object.keys(b.changes ?? {}).some((x) => x !== 'security')) throw new ApiError(422, 'one_at_a_time', `Turn off “${weakened.join('” and “')}” on its own, not with other changes.`);
+      if (String(b.reason ?? '').trim().length < 10) throw new ApiError(422, 'reason_needed', `Say why “${weakened.join('” and “')}” is turned off (at least 10 characters), for the record.`);
+      await approverStep(k);
+      securityOff = { reason: String(b.reason).trim() };
+    }
     // Money, chain and one-way settings are changed by a person signed in, never by a service key.
     if (personOnlyKeys.some((k) => k in (b.changes ?? {})) && !key!.userId) throw new ApiError(403, 'person_needed', 'Money, chain and one-way settings (giving, the agents’ fund, the promise, the youngest age, the prize game, AI and data rules, news on bottles) are changed by a person signed in, not a service key.');
     // Switching money, prizes or the token is an approval: an owner's or finance person's sign-in must have passed the second step.
     if (approvalSettings.some((k) => k in (b.changes ?? {}))) await approverStep(key!);
     // A label-layout change that would strand paid pieces is saved only with their count confirmed (the preview shows it).
-    return { body: await cons.save(staff(key).companyId, b.changes, by(key!), b.version, { person: !!key!.userId, confirmStranded: b.confirmStranded }) };
+    return { body: await cons.save(staff(key).companyId, b.changes, by(key!), b.version, { person: !!key!.userId, confirmStranded: b.confirmStranded, ...(securityOff ? { securityOff, note: { via: 'settings', reason: securityOff.reason } } : {}) }) };
   } });
   // Space nobody bought (src/modules/fillers/unsold.ts): the list, the former advertisers and why each is or isn't
   // used, the picks to choose from, the delivery areas to hold, blank pieces so far. The list itself is saved as the
