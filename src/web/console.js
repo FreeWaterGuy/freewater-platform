@@ -70,7 +70,7 @@
     [/^\/console\/modules$/, modulesPage], [/^\/console\/codes$/, codesPage], [/^\/console\/products$/, productsPage], [/^\/console\/machines$/, machinesPage], [/^\/console\/team$/, teamPage], [/^\/console\/history$/, historyPage],
     [/^\/console\/keys$/, keysPage], [/^\/console\/webhooks$/, webhooksPage], [/^\/console\/webhooks\/([\w-]+)$/, webhookPage], [/^\/console\/licensees$/, licenseesPage],
     [/^\/console\/features$/, featuresPage], [/^\/console\/launch$/, launchPage], [/^\/console\/wallet$/, walletPage], [/^\/console\/offers$/, offersPage], [/^\/console\/games$/, gamesPage], [/^\/console\/chain$/, chainPage],
-    [/^\/console\/ratings$/, ratingsPage], [/^\/console\/benchmarks$/, benchmarksPage], [/^\/console\/pause$/, pausePage],
+    [/^\/console\/ratings$/, ratingsPage], [/^\/console\/benchmarks$/, benchmarksPage], [/^\/console\/pause$/, pausePage], [/^\/console\/bottles$/, bottlesPage],
   ];
   /** Is this switch on, on this server and for this company? (GET /v1/public/features?company=; unknown or none: on.) */
   const on = (feature) => !feature || !(S.features?.off ?? []).includes(feature);
@@ -79,7 +79,7 @@
   // (The prize game and the games are their own on/off: their pages stay so they can be turned on there, unless this
   // server runs without them at all, as the pilot runs without the prize game: then there's nothing to turn on.)
   // (The AI agents page belongs to the governor, which is always on: it shows what's on and hides what's off.)
-  const PAGE_FEATURES = { offers: 'offers', chain: 'token', licensees: 'network', machines: 'machines', webhooks: 'webhooks', given: 'giveaways', docs: 'developer_pages', transparency: 'transparency', wallet: 'rewards', ratings: 'ad_ratings', benchmarks: 'benchmarks_view', codes: 'printing', products: 'printing' };
+  const PAGE_FEATURES = { offers: 'offers', chain: 'token', licensees: 'network', machines: 'machines', webhooks: 'webhooks', given: 'giveaways', docs: 'developer_pages', transparency: 'transparency', wallet: 'rewards', ratings: 'ad_ratings', benchmarks: 'benchmarks_view', codes: 'printing', products: 'printing', 'review-ads': 'ads', 'review-links': 'ads', 'review-fillers': 'fillers' };
   const HOST_PAGES = { game: 'lottery', games: 'games' };
   /** Does this server run the area at all (FW_FEATURES; `on` lists the server's areas, before any company switch)? */
   const hostOn = (feature) => !feature || !Array.isArray(S.features?.on) || S.features.on.includes(feature);
@@ -121,6 +121,9 @@
   function shell(active, ...content) {
     const nav = [
       ['start', '/console', 'Get started', I.start], ['features', '/console/features', 'Features', I.modules], ['pause', '/console/pause', 'Pause', I.shield],
+      // Review: the ad queues together (ad review, changed links, filler and charity pieces) in the ops console, a bottle
+      // found by its printed code, and the unsold-space order (kept with the ad settings).
+      'Review', ['review-ads', '/ops/review', 'Ad review', I.ads], ['review-links', '/ops/review/links', 'Link changes', I.hook], ['review-fillers', '/ops/review/fillers', 'Filler and charity', I.giving], ['bottles', '/console/bottles', 'Find a bottle', I.product], ['unsold', '/console/ads#unsold', 'Unsold-space order', I.line],
       'Points and rewards', ['launch', '/console/launch', 'Launch', I.start], ['wallet', '/console/wallet', 'Points and credit', I.giving], ['offers', '/console/offers', 'Brand offers', I.ads], ['games', '/console/games', 'The games', I.game], ['chain', '/console/chain', 'Blockchain', I.key],
       'Settings', ['company', '/console/company', 'Company', I.company], ['brand', '/console/brand', 'Brand', I.brand], ['label-panel', '/console/label-panel', 'Label panel', I.product], ['ads', '/console/ads', 'Ads and prices', I.ads], ['ratings', '/console/ratings', 'Ad ratings', I.line], ['benchmarks', '/console/benchmarks', 'Benchmarks', I.line], ['codes', '/console/codes', 'QR codes and AR', I.qr], ['products', '/console/products', 'Products', I.product],
       ['giving', '/console/giving', 'Giving', I.giving], ['game', '/console/game', 'Prize game', I.game], ['transparency', '/console/transparency', 'Transparency', I.eye], ['data', '/console/data', 'Data and privacy', I.shield], ['numberline', '/console/numberline', 'Number line', I.line], ['agents', '/console/agents', 'AI agents', I.ai], ['security', '/console/security', 'Security', I.shield], ['modules', '/console/modules', 'Modules', I.modules], ['machines', '/console/machines', 'Machines', I.machine], ['team', '/console/team', 'Team', I.team], ['history', '/console/history', 'History', I.history],
@@ -131,7 +134,7 @@
     const b = S.ov?.config?.brand ?? S.config?.brand ?? { logoTop: 'free', logoBottom: 'water' };
     root.replaceChildren(h('div', { class: 'shell' },
       h('aside', { class: 'side' }, h('div', { class: 'logo', 'aria-label': `${S.config?.name ?? ''} console` }, h('span', { text: b.logoTop }), h('span', { text: b.logoBottom }), h('small', { text: 'Console' })),
-        h('nav', { 'aria-label': 'Main' }, nav.filter((n) => typeof n === 'string' || pageOn(n[0])).map((n) => (typeof n === 'string' ? h('div', { class: 'group', text: n }) : link(n[1], { 'aria-current': active === n[0] ? 'page' : null }, icon(n[3]), n[2])))),
+        h('nav', { 'aria-label': 'Main' }, nav.filter((n) => typeof n === 'string' || pageOn(n[0])).map((n) => (typeof n === 'string' ? h('div', { class: 'group', text: n }) : n[1].startsWith('/ops/') ? h('a', { href: fixture ? '#' : n[1] }, icon(n[3]), n[2]) : link(n[1], { 'aria-current': active === n[0] ? 'page' : null }, icon(n[3]), n[2])))),
         h('div', { class: 'who' }, h('b', { text: S.me.displayName || S.me.email || '' }), S.config?.name, h('br'), h('button', { type: 'button', onclick: async () => { try { await api('POST', '/v1/auth/sign-out'); } catch {} S.token = null; S.me = null; S.dirty = false; store.set('fw_console_token', null); render(); } }, 'Sign out'))),
       h('main', { class: 'main' }, ...content)));
   }
@@ -678,7 +681,9 @@
       };
       draw();
     }).catch((x) => box.replaceChildren(h('p', { class: 'notice err', text: x.message })));
-    return section('Unsold space', 'What fills space nobody bought, in order. Every piece is another business’s ad: never billed, never counted against a paid ad.', box);
+    const sec = section('Unsold space', 'What fills space nobody bought, in order. Every piece is another business’s ad: never billed, never counted against a paid ad.', h('p', { class: 'muted', style: 'margin:0' }, 'Charity partners’ pieces and ads offered free are approved in Review: ', h('a', { href: fixture ? '#' : '/ops/review/fillers' }, 'Filler and charity →')), box);
+    if (sec) { sec.id = 'unsold'; if (!fixture && location.hash === '#unsold') setTimeout(() => sec.scrollIntoView({ block: 'start' }), 0); }
+    return sec;
   }
 
   // ---------- QR codes and AR ----------
@@ -1515,9 +1520,42 @@
     shell('team', head('Team', 'People who run the company. They sign in with a code sent to their email; there are no passwords.'),
       h('div', { class: 'stack' },
         section('Add someone', null, form),
+        reviewersSection(),
         section(`${people.length} ${people.length === 1 ? 'person' : 'people'}`, null, h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Name', 'Role', 'Last signed in', ''].map((x) => h('th', { text: x })))),
           h('tbody', {}, people.map((p) => h('tr', {}, h('td', {}, h('b', { text: p.displayName || p.email }), p.displayName ? h('div', { class: 'muted', style: 'font-size:13px', text: p.email }) : null), h('td', {}, h('span', { class: `pill${p.role === 'owner' ? ' dark' : ''}`, text: label(p.role) })), h('td', { text: ago(p.lastSignInAt) }),
             h('td', { style: 'text-align:right' }, p.id === S.me.id ? h('span', { class: 'muted', text: 'You' }) : h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { try { await api('DELETE', `/v1/team/${p.id}`); toast(`${p.displayName || p.email} is off the team and signed out.`); render(); } catch (x) { toast(x.message); } } }, 'Remove'))))))))));
+  }
+
+  /** Who reviews ads: owners (and reviewers), or ops people too. A person decides either way; refunds stay with owners and finance. */
+  function reviewersSection() {
+    const cur = S.ov?.config?.adReview?.whoReviews === 'owners' ? 'owners' : 'owners_ops';
+    const sel = h('select', { class: 'input', id: 'who-reviews', 'aria-label': 'Who reviews ads' }, [['owners_ops', 'Owners and ops'], ['owners', 'Owners only']].map(([v, l]) => h('option', { value: v, text: l, selected: v === cur })));
+    const save = h('button', { class: 'btn secondary', type: 'button', onclick: async () => { if (sel.value === cur) return; try { await api('PATCH', '/v1/console/settings', { version: S.ov.version, changes: { adReview: { whoReviews: sel.value } } }); toast(sel.value === 'owners' ? 'Saved: only owners (and reviewers) review ads now.' : 'Saved: ops people review ads too.'); render(); } catch (x) { toast(x.message); } } }, 'Save');
+    return section('Who reviews ads', 'Ads, changed links and filler and charity pieces, in the ops console’s Review. Each is still decided by a person signed in; paying back a rejected ad is always an owner or finance person, with the second sign-in step. Ads aimed at a few houses stay with owners and reviewers.', h('div', { class: 'toolbar' }, field('Who reviews ads', sel), save));
+  }
+
+  // ---------- find a bottle by its printed code ----------
+  async function bottlesPage() {
+    const qs = new URLSearchParams(S.path.split('?')[1] || '');
+    const input = h('input', { class: 'input', id: 'c-bottle', value: qs.get('code') || '', autocomplete: 'off', autocapitalize: 'characters', spellcheck: 'false', placeholder: 'B-7F3K29', 'aria-label': 'Bottle code', style: 'max-width:240px' });
+    const out = h('div', { class: 'stack' });
+    const find = async () => {
+      const code = input.value.trim().replace(/[^A-Za-z0-9 _-]/g, '');
+      if (!code) return;
+      try {
+        const b = await api('GET', `/v1/console/bottles/${encodeURIComponent(code)}`);
+        const row = (k, v) => (v ? h('tr', {}, h('th', { style: 'text-align:left;padding-right:14px', text: k }), h('td', { text: v })) : null);
+        out.replaceChildren(section(b.code ?? b.unitId, null, h('table', { class: 'list bottle-found' }, h('tbody', {},
+          row('Status', b.voided ? `Voided at the packing check (${b.voided.reason}); reprinted as ${b.voided.reprint?.code ?? 'not yet'}` : b.status),
+          row('Printed', `${when(b.printedAt)} · ${b.place}`), row('Product', b.product), row('Reprint of', b.reprintOf?.code ?? b.reprintOf?.unitId),
+          row('Ads', b.custom ? 'A custom bottle: no ads' : b.ads.map((a) => `${a.advertiser} (${a.size}${a.paid ? ', paid' : a.unsold ? `, ${a.unsold}` : ''})`).join(' · ')),
+          row('Box', b.box ? `#${b.box.boxNumber} · ${b.box.address}${b.box.area ? ` · ${b.box.area}` : ''} · ${b.box.status}` : 'Not in a delivery box'),
+          row('Drop', b.drop ? `${b.drop.status === 'delivered' ? `Delivered ${when(b.drop.at)}` : b.drop.status} (night of ${b.drop.night}, stop ${b.drop.stop})${b.drop.photo ? `, photo at the door${b.drop.photo.location === 'unverified' ? ' (unverified location)' : ''}: see it in Ops → Find a bottle` : ''}` : null)))));
+      } catch (x) { out.replaceChildren(h('div', { class: 'notice err', text: x.message })); }
+    };
+    shell('bottles', head('Find a bottle', 'Type the code printed at the bottom of its label’s panel (“Bottle code: B-7F3K29”), with or without “B-”, in any case.'),
+      h('form', { class: 'toolbar', onsubmit: (e) => { e.preventDefault(); find(); } }, input, h('button', { class: 'btn blue', type: 'submit' }, 'Find')), out);
+    if (input.value) find(); else input.focus();
   }
 
   // ---------- history ----------

@@ -130,7 +130,9 @@ export function codesArRoutes(app: App, server: FastifyInstance, route: (r: Rout
   } });
   route({ method: 'GET', url: '/v1/ops/reach', scope: ['admin', 'ledger'], summary: 'Bottles printed for a known person: handed over, and first opened by that person, across all advertisers (last 30 days).', handler: async (_req, key) => ({ body: await handoff.report(staff(key).companyId) }) });
   route({ method: 'GET', url: '/v1/ops/units/:id/handoff', scope: ['admin', 'orders'], summary: 'One bottle’s trail: who it was printed for and why each ad was chosen, how it was handed over, and who opened it first.', handler: async (req, key) => {
-    const h = await handoff.forUnit((req.params as any).id);
+    // By its long id or the code printed on its label ("B-7F3K29", any case, with or without "B-").
+    const typed = String((req.params as any).id);
+    const h = await handoff.forUnit(platform.units.has(typed) ? typed : (await app.codes.findBottle(staff(key).companyId, typed))?.unitId ?? typed);
     if (!h || platform.units.get(h.unitId)?.companyId !== staff(key).companyId) throw notFound('Bottle');
     return { body: h };
   } });

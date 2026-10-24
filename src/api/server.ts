@@ -70,6 +70,8 @@ import { glbToUsdz } from '../modules/models/usdz';
 import { arBundle } from '../web/ar/bundle';
 import { switchOf } from '../runtime/registry';
 import { featuresRoutes } from './features';
+import { teamScreenRoutes } from './teamScreens';
+import { OPS_REVIEW_ROUTES, reviewsAds } from '../modules/ops/teamScreens';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -153,6 +155,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     if (key.locationId && u.locationId !== key.locationId) throw notFound('Bottle'); // a machine's key sees only its own bottles
     return u;
   };
+  /** A bottle as a person typed it: its long id, or the code printed on its label ("B-7F3K29", any case, with or without "B-"). */
+  const unitTyped = async (key: ApiKey, typed: string) => unitFor(key, platform.units.has(typed) ? typed : (await app.codes.findBottle(key.companyId, typed))?.unitId ?? typed);
   const packFor = (key: ApiKey, id: string) => {
     const p = packs.packs.get(id);
     if (!p || p.companyId !== key.companyId) throw notFound('Pack');
@@ -396,12 +400,12 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   } });
 
   route({ method: 'GET', url: '/v1/units/:id', scope: ['orders', 'packs', 'admin'], summary: 'One bottle: its slots, QR links and receipt.', handler: async (req, key) => {
-    const u = unitFor(key!, (req.params as any).id);
+    const u = await unitTyped(key!, (req.params as any).id);
     return { body: { ...unitView(u.id), receipt: u.status === 'dispensed' ? receiptView(u.id) : null } };
   } });
 
   route({ method: 'GET', url: '/v1/units/:id/label.svg', scope: ['orders', 'packs', 'admin'], summary: "The bottle's print-ready label (SVG, real size in inches).", handler: async (req, key) => {
-    const u = unitFor(key!, (req.params as any).id);
+    const u = await unitTyped(key!, (req.params as any).id);
     const svg = await platform.labelSvg(u.id);
     if (!svg) throw notFound('Label');
     return { type: 'image/svg+xml', raw: await platform.forPrint(svg) }; // with its photos inside, ready to print
@@ -635,7 +639,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     const p = packFor(key!, (req.params as any).id);
     const b = req.body as any;
     let fresh: string[];
-    try { fresh = await packs.replace(p.id, b.missingUnitIds); } catch (e: any) { if (e instanceof PackStateError || e instanceof ReprintError) throw new ApiError(409, 'wrong_stage', e.message); throw e; }
+    // Each bottle by its long id or the code printed on its label (what a person at the packing check reads).
+    const bad = await Promise.all((b.missingUnitIds as string[]).map(async (x) => (platform.units.has(x) ? x : (await app.codes.findBottle(key!.companyId, x))?.unitId ?? x)));
+    try { fresh = await packs.replace(p.id, bad); } catch (e: any) { if (e instanceof PackStateError || e instanceof ReprintError) throw new ApiError(409, 'wrong_stage', e.message); throw e; }
     return { body: { reprinted: fresh, pack: packView(p.id) } };
   } });
 
@@ -784,7 +790,11 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     return { status: 204 };
   } });
 
-  route({ method: 'GET', url: '/v1/me', scope: 'me', summary: 'Your account, privacy choices and what you can do.', handler: async (_req, key) => ({ body: { ...(await app.accounts.get(me(key))), scopes: key!.scopes } }) });
+  route({ method: 'GET', url: '/v1/me', scope: 'me', summary: 'Your account, privacy choices and what you can do.', handler: async (_req, key) => {
+    const u = await app.accounts.get(me(key));
+    // reviewsAds: whether this person reviews ads here (owners and reviewers; ops people where the company lets them).
+    return { body: { ...u, scopes: key!.scopes, ...(u && u.role !== 'consumer' && !u.advertiserId ? { reviewsAds: reviewsAds(u.role, platform.companies.get(u.companyId)) } : {}) } };
+  } });
 
   route({ method: 'PATCH', url: '/v1/me', scope: 'me', summary: 'Change your name, privacy choices or interests.', body: obj({
     displayName: { type: ['string', 'null'], maxLength: 80 },
@@ -918,6 +928,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   featuresRoutes(app, route);
   newsRoutes(app, route);
   fillerRoutes(app, route);
+  teamScreenRoutes(app, route);
   householdRoutes(app, route);
 
   // ---------- wiring ----------
@@ -1248,6 +1259,10 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       // The platform operator's owners may also set up licensees.
       const scopes = user.role === 'owner' && user.companyId === PLATFORM_COMPANY ? [...roleScopes.owner, 'platform' as Scope] : roleScopes[user.role as Role];
       key = { id: user.id, companyId: user.companyId, name: user.displayName ?? user.email ?? user.phone ?? user.id, scopes, advertiserId: user.advertiserId ?? undefined, userId: user.id, sessionToken: raw };
+      // Ops people review ads where the company lets them ("Who reviews ads", console → Team; FreeWater: owners and
+      // ops): only the review screens' routes, signed in as a person, never with a key. A person still decides each ad;
+      // refunds, the AI reviewer's settings and ads aimed at a few houses stay with owners (and finance or reviewers).
+      if (user.role === 'ops' && OPS_REVIEW_ROUTES.has(`${req.method} ${req.routeOptions?.url ?? ''}`) && reviewsAds(user.role, platform.companies.get(user.companyId))) key.scopes = [...new Set([...key.scopes, ...(Array.isArray(scope) ? scope : [scope])])];
     } else {
       key = await findApiKey(db, raw);
     }

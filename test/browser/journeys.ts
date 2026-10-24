@@ -30,6 +30,13 @@
  *  17–20. Every console and ops page in the menu opens without an error, in the pilot and for a licensee with every
  *      main switch off; the AI agents page shows what's on (which AI, the governor, the AI reviewer), never what's off;
  *      ops Today shows no Machines panel with machines off.
+ * The team's screens the ops walkthrough found missing (on the pilot's server, signed in as ops, at a phone's width
+ * where ops use phones):
+ *   T1. After 7: at the packing check, ops reprints a bad label by picking its bottle; the bad one is voided.
+ *   T2. A bottle is found by the code printed on it (typed in lower case, no "B-"), with its box and ads.
+ *   T3. One Review section: a changed link (the safety check's reasons, old and new), a charity piece on a real label
+ *       approved, and the ad preview's other pieces filled as the engine would (never "Sample ad").
+ *   T4. After 9: the house-claim notice (deliveries stopped by a new claim) on Areas, and on Today.
  * (And on the pilot's server, after 6: the ad chat's "Every size" keeps every piece inside its panel, and the sample
  * bottle says where the ad is, with the other pieces marked "Sample ad"; with ads on boxes off, no "On a box" tab. And
  * designing it yourself: after a QR colour is saved, the upload page's label preview draws the code in that colour.)
@@ -338,6 +345,28 @@ await journey('ops plans and prints a night for a delivery area', async (page) =
   expect(steps.length >= 6 && steps.every((t: string | null) => /Put the box-code sticker on the front, top-right corner/.test(t ?? '')), `sticker steps: ${steps.join(' | ')}`);
 });
 
+
+await journey('T1. at the packing check, ops reprints a bad label by picking its bottle (phone)', async (page) => {
+  const pack = [...pilot.packs.packs.values()].find((p) => p.houseId && p.runId?.endsWith(`@${NIGHT}`) && p.status === 'box_printed');
+  expect(!!pack, 'needs the night planned in the journey before');
+  const bad = pack!.unitIds[1]!;
+  const code = (await one(`select code from bottle_codes where unit_id = $1`, [bad])).code as string;
+  await signedIn(page, 'fw_ops_token', await opsToken());
+  await page.goto(`${pBase}/ops/routes?date=${NIGHT}`);
+  const row = page.locator('tr', { hasText: `#${boxNumber(pack!.id)}` });
+  await row.locator('button.reprint').click({ timeout: 30_000 });
+  await page.waitForSelector('.sheet .pick-bottle', { timeout: 20_000 });
+  page.on('dialog', (d: any) => d.accept());
+  await page.locator('.sheet .pick-bottle', { hasText: code }).locator('input').check();
+  await page.click('.sheet button:has-text("Reprint with the same ads")');
+  await toast(page, /Reprinted 1 bottle with the same ads/, 60_000);
+  const fresh = [...pilot.platform.units.values()].find((u) => u.replaces === bad);
+  expect(!!fresh && !!pilot.platform.units.get(bad)!.voided && pilot.packs.packs.get(pack!.id)!.unitIds.includes(fresh!.id), 'reprinted, the bad one voided, the new one in the box');
+  expect(JSON.stringify(fresh!.placements) === JSON.stringify(pilot.platform.units.get(bad)!.placements), 'the same ads');
+  // Every width it's used at: nothing sideways on a phone.
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'the page scrolls sideways on a phone');
+}, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+
 let dropped: any = null;
 await journey('a driver takes the run, loads the van and drops a box with a photo', async (page) => {
   const run = [...pilot.packs.packs.values()].find((p) => p.houseId && p.runId?.endsWith(`@${NIGHT}`))!.runId!;
@@ -394,6 +423,67 @@ await journey('a resident says which house is theirs and stops deliveries', asyn
   expect(h.status === 'opted_out', `house is ${h.status}`);
   await page.waitForSelector('button:has-text("Start deliveries again")', { timeout: 20_000 });
 }, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+
+await journey('T4. ops sees the house-claim notice (deliveries stopped by a new claim) on Areas and on Today', async (page) => {
+  expect(!!dropped, 'needs the resident’s stop in the journey before');
+  await signedIn(page, 'fw_ops_token', await opsToken());
+  await page.goto(`${pBase}/ops/areas`);
+  await page.waitForSelector('.house-notices', { timeout: 30_000 });
+  const t = (await page.textContent('.house-notices'))!;
+  const street = (await one(`select address from houses where id = $1`, [dropped.house.id])).address.split(',')[0];
+  expect(t.includes(street) && /Stopped by a new claim/.test(t) && /claim was 0 days old/.test(t), `notices: ${t.slice(0, 300)}`);
+  await page.goto(`${pBase}/ops`);
+  await page.waitForSelector('.attn a:has-text("house claim")', { timeout: 30_000 });
+}, { viewport: { width: 390, height: 844 }, isMobile: true });
+
+await journey('T2. ops finds a bottle by the code printed on its label (lower case, no “B-”), on a phone', async (page) => {
+  const u = [...pilot.platform.units.values()].find((x) => x.packId && pilot.packs.packs.get(x.packId)?.houseId && !x.voided)!;
+  const code = (await one(`select code from bottle_codes where unit_id = $1`, [u.id])).code as string;
+  await signedIn(page, 'fw_ops_token', await opsToken());
+  await page.goto(`${pBase}/ops`);
+  await page.click('nav a:has-text("Find a bottle")', { timeout: 30_000 });
+  await page.fill('#b-code', code.slice(2).toLowerCase());
+  await page.click('button:has-text("Find")');
+  await page.waitForSelector('.bottle-card', { timeout: 20_000 });
+  const card = (await page.textContent('.bottle-card'))!;
+  const pack = pilot.packs.packs.get(u.packId!)!;
+  expect(card.includes(code) && card.includes(`#${boxNumber(pack.id)}`) && card.includes(u.placements[0]!.advertiserName), `card: ${card.slice(0, 400)}`);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'the page scrolls sideways on a phone');
+}, { viewport: { width: 390, height: 844 }, isMobile: true });
+
+await journey('T3. one Review section: a changed link with its safety reasons, a charity piece on a label, the real fill', async (page) => {
+  // A changed link waiting (the old one still live) and a charity piece proposed by an owner.
+  const live = [...pilot.platform.campaigns.values()].find((c) => c.companyId === 'freewater' && (c.experienceConfig as any)?.link?.url && !c.isHouse)!;
+  await pDb.query(`insert into ad_link_changes (id, company_id, campaign_id, advertiser_id, number, changes, before, fee_cents, safety, safety_reasons, status, created_at) values ('alc-journey', 'freewater', $1, $2, 1, $3, $4, 5000, 'flag', 'It goes through a redirect to another site.', 'waiting', now())`,
+    [live.id, live.advertiserId, JSON.stringify([{ path: 'experienceConfig.link.url', url: 'https://example.com/journey-new' }]), JSON.stringify([{ path: 'experienceConfig.link.url', url: (live.experienceConfig as any).link.url }])]);
+  const piece = (await pCall('POST', '/v1/fillers', pAdmin, { kind: 'charity', name: 'Well Aware', headline: 'Clean water in Kenya', text: 'Wells that last for decades.' })).body;
+  await signedIn(page, 'fw_ops_token', await opsToken());
+  await page.goto(`${pBase}/ops`);
+  await page.click('nav a:has-text("Review")', { timeout: 30_000 });
+  await page.click('.review-tabs a:has-text("Link changes")');
+  await page.waitForSelector('.link-change', { timeout: 20_000 });
+  const lc = (await page.textContent('.link-change'))!;
+  expect(lc.includes('https://example.com/journey-new') && lc.includes((live.experienceConfig as any).link.url) && /still live/.test(lc) && /redirect to another site/.test(lc), `link change: ${lc.slice(0, 400)}`);
+  await page.fill('.link-change textarea', 'That page sells something else entirely.');
+  await page.click('.link-change button:has-text("Reject, keep the old link")');
+  await toast(page, /Rejected: the old link stays live/);
+  expect((await one(`select status from ad_link_changes where id = 'alc-journey'`)).status === 'rejected', 'the change is rejected');
+  // The charity piece, on a real label, approved by the ops person.
+  await page.click('.review-tabs a:has-text("Filler and charity")');
+  await page.waitForSelector(`.filler[data-id="${piece.id}"] .label-views img`, { timeout: 30_000 });
+  page.on('dialog', (d: any) => d.accept());
+  await page.locator(`.filler[data-id="${piece.id}"] button:has-text("Approve")`).click();
+  await toast(page, /Approved: it can fill unsold space/);
+  expect(pilot.platform.campaigns.get(piece.id)!.filler!.status === 'approved', 'the piece is approved');
+  // An ad waiting: its preview's other pieces are what the unsold-space list puts there, never "Sample ad".
+  const waiting = [...pilot.platform.campaigns.values()].find((c) => c.companyId === 'freewater' && !c.isHouse && c.sizes.length && c.id !== live.id)!;
+  waiting.review = { status: 'submitted', at: new Date(now).toISOString() } as any;
+  await page.click('.review-tabs a:has-text("Ads")');
+  await page.waitForSelector('.caption.label-fill', { timeout: 30_000 });
+  const fill = (await page.textContent('.caption.label-fill'))!;
+  expect(/unsold-space list/.test(fill) && !/Sample ad/.test(fill), `fill: ${fill}`);
+  waiting.review = { status: 'approved', at: new Date(now).toISOString() } as any;
+}, { viewport: { width: 1280, height: 800 } });
 
 await journey('the owner chooses label layouts and the most ads on one bottle on the Features page', async (page) => {
   await signedIn(page, 'fw_console_token', await pilot.accounts.createSession(pOwner.id, { secondStep: true }), { fw_console_company: 'freewater' });

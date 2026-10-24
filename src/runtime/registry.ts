@@ -293,11 +293,11 @@ export const SWITCHES: Switch[] = [
   // ======================= Delivery =======================
   sw({ id: 'delivery', category: 'delivery', parent: null, dependsOn: ['printing'], label: 'Home delivery', description: 'Free 6, 12 and 24 packs on a schedule: night planning, the packing check, loading in reverse and the right box at the right door.',
     routes: ['POST /v1/public/delivery/check', 'GET /v1/me/delivery', 'POST /v1/me/delivery', 'PATCH /v1/me/delivery', 'GET /v1/ops/subscriptions', 'GET /v1/ops/runs', 'POST /v1/ops/runs/plan', 'POST /v1/ops/runs/:id/pack-check', 'POST /v1/ops/runs/:id/close',
-      'POST /v1/packs', 'GET /v1/packs/:id', 'GET /v1/packs/:id/box.svg', 'POST /v1/packs/:id/verify', 'POST /v1/packs/:id/replace', 'POST /v1/packs/:id/seal', 'POST /v1/routes/:routeId/load', 'POST /v1/deliveries', 'GET /v1/public/packs/:packId'],
+      'POST /v1/packs', 'GET /v1/packs/:id', 'GET /v1/packs/:id/box.svg', 'POST /v1/packs/:id/verify', 'POST /v1/packs/:id/replace', 'GET /v1/ops/packs/:id/bottles', 'POST /v1/packs/:id/seal', 'POST /v1/routes/:routeId/load', 'POST /v1/deliveries', 'GET /v1/public/packs/:packId'],
     jobs: ['deliveries-overdue'] }),
   // Delivery areas (the Austin pilot): FreeWater chooses the streets and every house on them gets packs, in street order.
   sw({ id: 'delivery_areas', category: 'delivery', group: 'Delivery areas', since: 2, label: 'Delivery areas (house after house)', description: 'Choose streets on a map or from a list of addresses, and every house on them gets free packs in street order, with no sign-up. Each area has its own frequency, pack size and packs per house, and starts off until a person turns it on. Someone living there can stop it in the app.',
-    routes: ['GET /v1/ops/areas', 'POST /v1/ops/areas', 'PATCH /v1/ops/areas/:id', 'GET /v1/ops/areas/:id/houses', 'POST /v1/ops/areas/:id/houses/import', 'GET /v1/ops/house-reviews', 'POST /v1/ops/houses/:id/review',
+    routes: ['GET /v1/ops/areas', 'POST /v1/ops/areas', 'PATCH /v1/ops/areas/:id', 'GET /v1/ops/areas/:id/houses', 'POST /v1/ops/areas/:id/houses/import', 'GET /v1/ops/house-reviews', 'GET /v1/ops/house-notices', 'POST /v1/ops/houses/:id/review',
       'GET /v1/me/house', 'POST /v1/me/house/claim', 'PATCH /v1/me/house', 'DELETE /v1/me/house'] }),
   sw({ id: 'household_packs', category: 'delivery', group: 'Delivery areas', parent: 'delivery_areas', since: 2, label: 'More packs for bigger households', description: 'Once someone in the app tells us how many people live in their house, it gets enough packs for them (the area’s “bottles a person a week”, up to its “most packs per house”). Off: every house gets the area’s packs per house, and the app doesn’t ask.' }),
   sw({ id: 'house_ad_context', category: 'delivery', group: 'Delivery areas', parent: 'delivery_areas', dependsOn: ['ads'], since: 2, label: 'Ads know the house’s street and area', description: 'When a house’s pack is printed, the ad engine is told which area and street it’s going to (and the household size, if the house told us and targeting people is on). Never a name: houses aren’t people. Off: the ads are chosen as for any pack on that route.' }),
@@ -547,7 +547,7 @@ export const SWITCHES: Switch[] = [
       'GET /v1/keys', 'POST /v1/keys', 'DELETE /v1/keys/:id', 'GET /v1/console', 'PATCH /v1/console/settings', 'POST /v1/console/preview-label', 'GET /v1/console/history', 'GET /v1/console/history/:version', 'POST /v1/console/history/:version/restore', 'GET /v1/console/bottles/:code',
       'GET /v1/console/features', 'POST /v1/console/features/preview', 'POST /v1/console/features', 'GET /v1/console/features/history',
       'GET /health/deep', 'GET /v1/platform/status', 'POST /v1/platform/persistence/skip-stuck', 'POST /v1/platform/jobs/:name/run', 'GET /v1/ops/overview', 'GET /v1/ops/plugin-failures'],
-    jobs: ['memory', 'spool', 'capacity', 'backup', 'restore-check'], pages: ['start', 'company', 'brand', 'label-panel', 'modules', 'team', 'history', 'keys', 'features'], plugins: ['house-promo'] }),
+    jobs: ['memory', 'spool', 'capacity', 'backup', 'restore-check'], pages: ['start', 'company', 'brand', 'label-panel', 'modules', 'team', 'history', 'keys', 'features', 'bottles'], plugins: ['house-promo'] }),
 ];
 for (const s of SWITCHES) if ((s.parent as unknown) === undefined) s.parent = CATEGORIES.find((c) => c.id === s.category)!.main;
 // A category's main switch has no parent of its own.

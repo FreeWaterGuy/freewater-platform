@@ -118,6 +118,15 @@ team to ensure that it was rejected for a valid reason"). The money is already t
 While it's flagged the money stays held and nothing prints. An ad not paid up front is reviewed as before. This rule
 is part of *Ad review* on the Features page, which is locked on.
 
+**Who reviews ads** (`adReview.whoReviews`, *Console → Team*; a setting only a person signed in changes, kept in the
+settings history). *Owners and ops* (`owners_ops`, the default and FreeWater's choice) or *owners only* (`owners`).
+Reviewers always review; an ops person is a person signed in, so "a person decides" holds either way. With ops on,
+an ops person reaches only the review screens' routes (*Ops → Review*: ads and their notes and AI talk, changed links
+and link holds, approving or stopping filler and charity pieces), never with a key, never the AI reviewer's settings
+or record, and never a refund (an owner or finance person with the second step). Ads aimed at fewer than 50 houses
+stay with owners and reviewers. *Ops → Review* is shown only to people who review (`GET /v1/me` → `reviewsAds`).
+Filler and charity pieces are decided in their own queue, never in the ads queue.
+
 **The AI reviewer** (*AI reviewer of paid ads*, AI category; docs/AI.md). It looks at every paid ad as it comes in and
 passes it or flags it with its reasons; a flag is a flag like any other (above). On the review page a person can ask
 it why and push back; the talk is kept with the ad, apart from the notes with the advertiser. Every final decision a
