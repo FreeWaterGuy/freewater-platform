@@ -15,8 +15,6 @@
   };
   /** "1 bottle", "2 bottles": a count with its noun, singular for exactly one. */
   const plural = (n, one, many) => `${n} ${String(n).replace(/[^0-9.-]/g, '') === '1' ? one : many}`;
-  const NS = 'http://www.w3.org/2000/svg';
-  const sv = (tag, a) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(a)) e.setAttribute(k, String(v)); return e; };
   const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} } };
   const toastEl = h('div', { class: 'toast', role: 'status', style: 'bottom:calc(150px + env(safe-area-inset-bottom))' }); document.body.append(toastEl);
   let tt; const toast = (m) => { toastEl.textContent = m; toastEl.classList.add('show'); clearTimeout(tt); tt = setTimeout(() => toastEl.classList.remove('show'), 2600); };
@@ -171,18 +169,8 @@
   }
 
   // ---------- house after house ----------
-  function miniMap(run, current) {
-    const pts = run.stops.map((s) => s.point);
-    const all = [...pts, ...(run.depot ? [run.depot] : [])];
-    const minLat = Math.min(...all.map((p) => p.lat)), maxLat = Math.max(...all.map((p) => p.lat)), minLng = Math.min(...all.map((p) => p.lng)), maxLng = Math.max(...all.map((p) => p.lng));
-    const W = 340, H = 150, pad = 16;
-    const x = (p) => pad + ((p.lng - minLng) / Math.max(1e-6, maxLng - minLng)) * (W - pad * 2);
-    const y = (p) => H - pad - ((p.lat - minLat) / Math.max(1e-6, maxLat - minLat)) * (H - pad * 2);
-    const s = sv('svg', { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'xMidYMid meet', role: 'img', 'aria-label': `Route map, stop ${current.stop} highlighted` });
-    s.append(sv('polyline', { points: run.stops.map((st) => `${x(st.point)},${y(st.point)}`).join(' '), fill: 'none', stroke: '#9AA6B2', 'stroke-width': 2, 'stroke-dasharray': '4 4' }));
-    for (const st of run.stops) s.append(sv('circle', { cx: x(st.point), cy: y(st.point), r: st.stop === current.stop ? 8 : 4.5, fill: st.status === 'delivered' ? '#1F8A4C' : st.status === 'not_delivered' ? '#B42318' : st.stop === current.stop ? '#1F2633' : '#C5CED6', stroke: '#fff', 'stroke-width': 2 }));
-    return h('div', { class: 'mapbox' }, s);
-  }
+  /** The run's stops at street scale, numbered, the current one highlighted (src/web/routemap.js). */
+  const miniMap = (run, current) => h('div', { class: 'mapbox' }, window.fwRouteMap.draw(run, current, { tiles: run.mapTiles }));
   function nextStop() {
     const r = S.run;
     const s = r.stops.find((x) => x.status === 'planned');

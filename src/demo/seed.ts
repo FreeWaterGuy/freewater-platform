@@ -223,6 +223,28 @@ export function wellAwarePiece(): Campaign {
   });
 }
 
+/**
+ * The two other Austin charities on FreeWater's list, each with a piece approved by a person on the team, in every size
+ * the templates use (down to tenths). With Well Aware, the former advertisers and the filler ads, the demo's list has
+ * more than ten different pieces that fit a tenth: a label of ten tenths with nothing paid on it fills with no blank
+ * piece (the owner video printed three blank pieces on each bottle when the list had only seven).
+ */
+export function otherCharityPieces(): Campaign[] {
+  const looks = [
+    { id: 'apf', name: 'Austin Parks Foundation', headline: 'Parks for everyone in Austin', sub: 'Scan to find a park day near you', colors: { bg: '#2F6B3A', fg: '#FFFFFF', accent: '#F2C14E' }, icon: 'star' as PosterIcon, url: 'https://austinparks.org', about: 'Austin Parks Foundation works with the city and neighbours to keep Austin’s parks and trails open, green and safe.' },
+    { id: 'ctfb', name: 'Central Texas Food Bank', headline: 'No one in Central Texas should go hungry', sub: 'Scan to see how to help', colors: { bg: '#F4EDE2', fg: '#3A2412', accent: '#C2410C' }, icon: 'heart' as PosterIcon, url: 'https://www.centraltexasfoodbank.org', about: 'Central Texas Food Bank gets food to families across 21 counties, with pantries, school programs and mobile markets.' },
+  ];
+  return looks.map((l) => posterCampaign({
+    id: `cmp-charity-${l.id}`, advertiserId: 'freewater', advertiserName: l.name, category: 'house', sizes: all, formats: ['label', 'box-face'], isHouse: true,
+    spec: { brand: l.name, headline: l.headline, sub: l.sub, colors: l.colors, icon: l.icon, font: 'rounded' },
+    experienceId: 'news-card',
+    experienceConfig: { headline: l.headline, byline: `${l.name}, on FreeWater’s list of charities`, paragraphs: [l.about, 'This piece of the label was open, so it tells you about them.'], url: l.url },
+    buy: { type: 'guaranteed', remainingPrints: 1e9 }, review: { status: 'approved', at: DEMO_APPROVED, by: 'demo seed' },
+    filler: { kind: 'charity', status: 'approved', proposedBy: 'demo seed', proposedAt: DEMO_APPROVED, approvedBy: 'demo seed', approvedAt: DEMO_APPROVED, weight: 1 },
+    name: `${l.name} (charity partner)`, createdAt: DEMO_APPROVED,
+  }));
+}
+
 /** Advertisers who paid before and whose ads are over: printed free as a bonus in space nobody bought. */
 const formerLooks: { id: string; name: string; category: string; headline: string; sub: string; colors: PosterSpec['colors']; icon: PosterIcon }[] = [
   { id: 'barton', name: 'Barton Creek Bikes', category: 'bikes', headline: 'Tune-ups while you wait', sub: 'Any bike, any brand', colors: { bg: '#F7F7F2', fg: '#1E2B1A', accent: '#3E7D2A' }, icon: 'bolt' },
@@ -230,6 +252,8 @@ const formerLooks: { id: string; name: string; category: string; headline: strin
   { id: 'greenleaf', name: 'Green Leaf Market', category: 'grocery', headline: 'Local produce from Texas farms', sub: 'Scan for the market map', colors: { bg: '#E8F3E1', fg: '#173B12', accent: '#4C8C2B' }, icon: 'bag' },
   { id: 'luckypaws', name: 'Lucky Paws Grooming', category: 'pets', headline: 'Happy dogs, clean dogs', sub: 'Grooming on South Lamar', colors: { bg: '#FFF3D6', fg: '#3B2410', accent: '#C2410C' }, icon: 'paw' },
   { id: 'solyoga', name: 'Sol Yoga Studio', category: 'wellness', headline: 'Breathe easy, stretch often', sub: 'Classes for every level', colors: { bg: '#FBEFE6', fg: '#4A2416', accent: '#D9822B' }, icon: 'heart' },
+  { id: 'zilker', name: 'Zilker Paddle Co.', category: 'outdoors', headline: 'Kayaks and paddleboards by the hour', sub: 'On Lady Bird Lake', colors: { bg: '#DFF1F7', fg: '#0B3140', accent: '#1E7DB8' }, icon: 'star' },
+  { id: 'southside', name: 'Southside Music Lessons', category: 'education', headline: 'Guitar, piano and drums for all ages', sub: 'Lessons near South Congress', colors: { bg: '#1D1A2B', fg: '#F7F3EA', accent: '#F2C14E' }, icon: 'music' },
 ];
 export const demoFormerCampaignIds = formerLooks.map((f) => `cmp-former-${f.id}`);
 
@@ -260,7 +284,7 @@ export function approvedFillerAds(): Campaign[] {
 
 /** Everything the demo seeds for space nobody bought. */
 export function demoUnsoldCampaigns(): Campaign[] {
-  return [wellAwarePiece(), ...approvedFillerAds(), ...formerAdvertiserCampaigns()];
+  return [wellAwarePiece(), ...otherCharityPieces(), ...approvedFillerAds(), ...formerAdvertiserCampaigns()];
 }
 
 export const mayaDesign: Creative = {

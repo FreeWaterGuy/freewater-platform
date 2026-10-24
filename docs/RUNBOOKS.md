@@ -351,9 +351,11 @@ house* with a real reason. A charged phone and a car charger matter: the photo a
 **End of the day (ops):**
 
 1. Every van's run says *done* (*Routes*). A run with stops still *planned*: ask the driver to finish them (*Done*, or
-   *Problem at this stop*: the box comes back). Boxes that came back are put away. A run that can't be finished that
-   day is closed out the next morning (*Routes* → pick yesterday → *Close out…*, with a reason; only a run from an
-   earlier day can be): its stops are marked not delivered and their boxes go back.
+   *Problem at this stop*: the box comes back). Boxes that came back are put away. A run that can't be finished today
+   (the van broke down) is closed now: *Routes* → *Close the run…*, with a reason. Its stops not done are marked not
+   delivered, the driver's app can't scan another, and the boxes come back like any box a driver couldn't leave
+   (subscribers are told). A run left over from an earlier day: *Routes* → pick that day → *Close out…*, with a reason.
+   After its last stop a run closes itself; each drop's time shows under *When*.
 2. Stops showing "Scanned at the door, no photo yet": see "A drop shows … no photo yet".
 3. *Areas* → "driver skips to review": decide each (see "A driver skipped a house").
 4. The alerts channel: nothing red left. `/health/ready` says `"ok": true`.

@@ -74,6 +74,14 @@ const journey = async (name: string, f: (page: any) => Promise<void>, opts: Reco
   const [, err] = results.at(-1)!;
   console.log(`${err ? 'FAIL' : 'ok  '} ${name}${err ? `: ${err}` : ''}`);
 };
+/**
+ * Codes people shouldn't read on a screen (src/web/words.js): snake_case codes ("box_printed", "second_step_on"), raw
+ * ids ("user:usr_…", "key_…") and ISO timestamps. What `sel`'s visible text has of them.
+ */
+const rawCodes = async (page: any, sel = 'main') => page.evaluate((q: string) => {
+  const t = (document.querySelector(q) as HTMLElement | null)?.innerText ?? '';
+  return [...t.matchAll(/\b[a-z]+(?:_[a-z0-9]+)+\b|\b(?:user:)?(?:usr|key|adv|pk)_[A-Za-z0-9]{4,}|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/g)].map((m) => m[0]);
+}, sel);
 const roleOf = async (email: string) => (await db.query<any>(`select role from users where email = $1`, [email])).rows[0]?.role ?? null;
 const expect = (ok: boolean, what: string) => { if (!ok) throw new Error(what); };
 
@@ -353,7 +361,29 @@ await journey('a driver takes the run, loads the van and drops a box with a phot
     await page.waitForFunction((b: string) => !document.querySelector('.sheet') && [...document.querySelectorAll('.row')].some((r) => r.textContent!.includes(`#${b}`) && r.textContent!.includes('Loaded')) || /STOP 1 OF/.test(document.body.innerText), s.boxNumber, { timeout: 20_000, polling: 200 });
   }
   await page.waitForSelector('text=STOP 1 OF', { timeout: 20_000 });
+  // The map at street scale (src/web/routemap.js): a numbered marker for every stop, none on top of another, stop 1
+  // highlighted, all inside the map, and a line through them in order.
+  const marks = await page.$$eval('.mapbox .routemap g.stop', (gs: Element[]) => gs.map((g) => { const b = g.getBoundingClientRect(); return { stop: g.getAttribute('data-stop'), text: g.textContent, current: g.classList.contains('current'), x: b.x + b.width / 2, y: b.y + b.height / 2 }; }));
+  const box = await page.$eval('.mapbox', (e: Element) => { const b = e.getBoundingClientRect(); return { x: b.x, y: b.y, w: b.width, h: b.height }; });
+  expect(marks.length === view.stops.length, `markers: ${marks.length} for ${view.stops.length} stops`);
+  expect(marks.every((m: any) => m.text === m.stop), `numbers: ${marks.map((m: any) => m.text).join(',')}`);
+  expect(marks.filter((m: any) => m.current).map((m: any) => m.stop).join() === '1', 'stop 1 is the highlighted one');
+  for (const a of marks) for (const b of marks) if (a !== b) expect(Math.hypot(a.x - b.x, a.y - b.y) >= 20, `stops ${a.stop} and ${b.stop} overlap (${Math.round(Math.hypot(a.x - b.x, a.y - b.y))} px apart)`);
+  expect(marks.every((m: any) => m.x > box.x && m.x < box.x + box.w && m.y > box.y && m.y < box.y + box.h), 'a marker is off the map');
+  expect(Math.max(...marks.map((m: any) => m.y)) - Math.min(...marks.map((m: any) => m.y)) > box.h * 0.4, 'the run doesn’t fill the map (zoomed out to the depot?)');
+  expect(!!(await page.$('.mapbox .routemap polyline')), 'no line through the stops');
+  if (process.env.DRIVER_MAP_PNG) await page.locator('.mapbox').screenshot({ path: process.env.DRIVER_MAP_PNG });
+  expect((await rawCodes(page)).length === 0, `raw codes on the driver’s screen: ${(await rawCodes(page)).join(', ')}`);
+  // The wrong box at the door first: the screen says “Wrong box” once (its heading), and what to grab instead.
+  const second = view.stops.find((x: any) => x.stop === 2);
   await page.click('button:has-text("I’m at the door")');
+  await page.fill('#box-no', second.boxNumber);
+  await page.click('.sheet button:has-text("Use")');
+  await page.waitForSelector('.verdict.bad', { timeout: 20_000 });
+  const wrong = await page.evaluate(() => document.body.innerText);
+  expect((wrong.match(/wrong box/gi) ?? []).length === 1, `“Wrong box” said ${(wrong.match(/wrong box/gi) ?? []).length} times: ${wrong.slice(0, 300)}`);
+  expect(/That box is for stop 2/.test(wrong), `the wrong-box message: ${wrong.slice(0, 300)}`);
+  await page.click('button:has-text("Scan the right box")');
   await page.fill('#box-no', first.boxNumber);
   await page.click('.sheet button:has-text("Use")');
   await page.waitForSelector('text=GPS agrees', { timeout: 20_000 });
@@ -390,6 +420,31 @@ await journey('a resident says which house is theirs and stops deliveries', asyn
   expect(h.status === 'opted_out', `house is ${h.status}`);
   await page.waitForSelector('button:has-text("Start deliveries again")', { timeout: 20_000 });
 }, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+
+await journey('the ops route page shows each drop’s time in plain words, and ops closes the run early', async (page) => {
+  expect(!!dropped, 'needs the box dropped in the journey before');
+  page.on('dialog', (d: any) => d.accept('The van broke down'));
+  await signedIn(page, 'fw_ops_token', await opsToken());
+  await page.goto(`${pBase}/ops/routes?date=${NIGHT}`);
+  const run = page.locator('section.run', { hasText: 'Journey Oak and Elm' });
+  await run.locator('td.drop-time', { hasText: /\d{1,2}:\d{2}\s?[AP]M/ }).first().waitFor({ timeout: 30_000 });
+  // The drop's time, in Austin's time zone.
+  const stopsOf = async () => { const v = (await one(`select stops from route_runs where id = $1`, [dropped.pack.runId])).stops; return typeof v === 'string' ? JSON.parse(v) : v; };
+  const at = new Date((await stopsOf()).find((x: any) => x.stop === dropped.pack.stop).at);
+  const want = at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Chicago' });
+  expect((await run.locator('td.drop-time').allTextContents()).includes(want), `drop time ${want} not shown: ${(await run.locator('td.drop-time').allTextContents()).join(' | ')}`);
+  expect((await rawCodes(page)).length === 0, `raw codes on the routes page: ${(await rawCodes(page)).join(', ')}`);
+  await run.locator('button:has-text("Close the run…")').click({ timeout: 20_000 });
+  await toast(page, /Run closed: \d+ box/);
+  const r = { ...(await one(`select status from route_runs where id = $1`, [dropped.pack.runId])), stops: await stopsOf() };
+  expect(r.status === 'done', `run is ${r.status}`);
+  expect(r.stops.filter((x: any) => x.status === 'not_delivered').every((x: any) => /^(Run closed early: The van broke down|They stopped)/.test(x.reason)), `reasons: ${r.stops.map((x: any) => x.reason).join(' | ')}`);
+  await page.waitForSelector('section.run:has-text("Journey Oak and Elm") .pill:has-text("Not delivered: Run closed early")', { timeout: 20_000 });
+  expect((await rawCodes(page)).length === 0, `raw codes after closing: ${(await rawCodes(page)).join(', ')}`);
+  await page.goto(`${pBase}/ops/areas/${area.id}`);
+  await page.waitForSelector('text=Add houses', { timeout: 30_000 });
+  expect((await rawCodes(page)).length === 0, `raw codes on the area page: ${(await rawCodes(page)).join(', ')}`);
+});
 
 await journey('the owner chooses label layouts and the most ads on one bottle on the Features page', async (page) => {
   await signedIn(page, 'fw_console_token', await pilot.accounts.createSession(pOwner.id, { secondStep: true }), { fw_console_company: 'freewater' });
@@ -556,6 +611,31 @@ await journey('the scan page in the pilot: no machine doors, and the data questi
   });
   expect(cover.pos === 'static' && cover.covered === 0, `consent: ${JSON.stringify(cover)}`);
 }, { ...phone, isMobile: true });
+
+await journey('the pilot’s console: no empty menu heading, and Security, Launch and Points and credit in plain words', async (page) => {
+  // Something in each log: a sign-in, a key, the second step, a reset by a person, a blank piece's placeholder.
+  await aApp.launch.reset('freewater', `user:${aOwner.id}`);
+  aApp.platform.ensureBlank('freewater');
+  await aCall('POST', '/v1/auth/start', undefined, { companyId: 'freewater', channel: 'email', to: 'owner.app@freewater.io' });
+  await aCall('POST', '/v1/auth/verify', undefined, { companyId: 'freewater', channel: 'email', to: 'owner.app@freewater.io', code: /(\d{6})/.exec(aOutbox.lastTo('owner.app@freewater.io')!.text)![1] });
+  await signedIn(page, 'fw_console_token', await aApp.accounts.createSession(aOwner.id, { secondStep: true }), { fw_console_company: 'freewater' });
+  await page.goto(`${aBase}/console/security`);
+  await page.waitForSelector('text=The log', { timeout: 30_000 });
+  // Every heading in the menu has something under it (the pilot has no Licensees page: no "Platform" heading).
+  const menu = await page.$$eval('aside nav > *', (els: Element[]) => els.map((e) => (e.classList.contains('group') ? `#${e.textContent}` : 'page')));
+  const empty = menu.filter((m: string, i: number) => m.startsWith('#') && (i + 1 === menu.length || menu[i + 1]!.startsWith('#')));
+  expect(empty.length === 0, `menu headings with nothing under them: ${empty.join(', ')}`);
+  await page.waitForFunction(() => /Signed in/.test(document.querySelector('main')?.textContent || ''), null, { timeout: 20_000 });
+  expect((await rawCodes(page)).length === 0, `raw codes on Security: ${(await rawCodes(page)).join(', ')}`);
+  await page.goto(`${aBase}/console/launch`);
+  await page.waitForSelector('text=Last reset', { timeout: 30_000 });
+  expect((await rawCodes(page)).length === 0, `raw codes on Launch: ${(await rawCodes(page)).join(', ')}`);
+  await page.goto(`${aBase}/console/wallet`);
+  await page.waitForSelector('text=Brand reserves', { timeout: 30_000 });
+  expect((await rawCodes(page)).length === 0, `raw codes on Points and credit: ${(await rawCodes(page)).join(', ')}`);
+  const brands = await page.$$eval('main select option', (os: Element[]) => os.map((o) => o.textContent));
+  expect(brands.length > 0 && !brands.some((b: string | null) => /Open space|Well Aware|^FreeWater$/.test(b ?? '')), `reserve list: ${brands.join(', ')}`);
+});
 
 await aServer.close();
 await aDb.close();

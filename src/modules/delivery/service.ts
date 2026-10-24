@@ -53,6 +53,16 @@ export interface Run {
   areaId?: string | null;
 }
 
+/**
+ * Map tiles under the driver's route map, when the host set a provider (FW_MAP_TILES, an https address with {z}, {x}
+ * and {y}; FW_MAP_ATTRIBUTION, the credit its terms ask for). Without one the map is drawn plain, no tiles needed.
+ */
+export function mapTiles(env: NodeJS.ProcessEnv = process.env): { url: string; attribution: string } | null {
+  const url = env.FW_MAP_TILES?.trim();
+  if (!url || !/^https:\/\/[^\s"'<>]+$/.test(url) || !['{z}', '{x}', '{y}'].every((t) => url.includes(t))) return null;
+  return { url, attribution: (env.FW_MAP_ATTRIBUTION ?? '').slice(0, 120) };
+}
+
 /** Streets aren't straight lines, and a van in town averages about 24 km/h. */
 const ROAD_FACTOR = 1.35, KM_PER_HOUR = 24;
 const parse = <T>(v: unknown): T => (typeof v === 'string' ? JSON.parse(v) : v) as T;
@@ -491,9 +501,12 @@ export class DeliveryService {
   }
 
   /**
-   * A run from an earlier day that will never be driven (left over: a box never sealed, a van never loaded) is closed
-   * out so it can't take over a later night: its boxes not delivered go back ('returned'), its stops not delivered are
-   * marked so with the reason, and the run is done. Only an ops person or an owner, with a reason.
+   * Close a run, with a reason. A run from an earlier day that will never be driven (left over: a box never sealed, a
+   * van never loaded) is closed out so it can't take over a later night. Today's run can be closed early (the van broke
+   * down): its driver can't scan another stop, and what wasn't left comes back as a box the driver couldn't leave does
+   * (subscribers are told). Either way its boxes not delivered go back ('returned'), its stops not delivered are marked
+   * so with the reason, and the run is done. After the last stop a run closes itself (delivered). Only an ops person or
+   * an owner.
    */
   closeRun(runId: string, companyId: string, by: string, reason: string) {
     return this.serial(`run:${runId}`, () => this.closeRunNow(runId, companyId, by, reason));
@@ -504,16 +517,31 @@ export class DeliveryService {
     const run = (await this.db.query<any>(`select * from route_runs where id = $1 and company_id = $2`, [runId, companyId])).rows[0];
     const routeId = run ? String(run.route_id) : runId.replace(/@.*$/, '');
     if (!run && ![...this.packs.packs.values()].some((p) => p.companyId === companyId && p.routeId === routeId && (p.runId ?? '') === runId)) throw new DeliveryError(404, 'not_found', 'Route run not found.');
+    if (run?.status === 'done') throw new DeliveryError(409, 'already_done', 'This run is already done.');
+    const early = !!run && this.run(run).date === this.today(companyId);
     let closed;
-    try { closed = this.packs.closeRun(companyId, routeId, runId, by, reason); } catch (e) { if (e instanceof PackStateError) throw new DeliveryError(409, 'not_closable', e.message); throw e; }
+    try { closed = this.packs.closeRun(companyId, routeId, runId, by, reason, { early }); } catch (e) { if (e instanceof PackStateError) throw new DeliveryError(409, 'not_closable', e.message); throw e; }
+    const why = reason.trim();
+    const told: string[] = [];
     if (run) {
       const r = this.run(run);
-      for (const st of r.stops) if (st.status === 'planned') { st.status = 'not_delivered'; st.reason = `Run closed out: ${reason.trim()}`; }
+      const at = this.platform.bus.now().toISOString();
+      for (const st of r.stops) if (st.status === 'planned') {
+        Object.assign(st, { status: 'not_delivered', reason: `${early ? 'Run closed early' : 'Run closed out'}: ${why}`, ...(early ? { at } : {}) });
+        if (early && st.userId) told.push(st.userId);
+      }
       r.status = 'done';
       await this.saveRun(r);
     }
     await this.flush();
-    return { runId, routeId, closedOut: closed.map((p) => ({ packId: p.id, stop: p.stop })) };
+    for (const u of told) await this.notify(u, 'We couldn\'t bring your FreeWater today. It\'s back at the micro-factory and comes with your next delivery.');
+    return { runId, routeId, early, closedOut: closed.map((p) => ({ packId: p.id, stop: p.stop })) };
+  }
+
+  /** The driver's run must be out, and theirs; one the office closed says so, so the driver brings the boxes back. */
+  private stillOut(run: Run, driverId: string) {
+    if (run.status === 'done' && run.driverId === driverId && run.stops.some((s) => s.status === 'not_delivered' && /^Run closed/.test(s.reason ?? ''))) throw new DeliveryError(409, 'run_closed', 'The office closed this run. Bring the boxes that are left back to the micro-factory.');
+    if (run.status !== 'out' || run.driverId !== driverId) throw new DeliveryError(409, 'not_your_route', 'Start this route first.');
   }
 
   /** A driver takes the route. Then each box is scanned into the van, last stop first, so stop 1 ends up by the door. */
@@ -566,7 +594,7 @@ export class DeliveryService {
   photoNeeded(companyId: string) { return !!this.photos && this.on(companyId, 'drop_photo_proof'); }
   private async deliverNow(input: { runId: string; companyId: string; driverId: string; stop: number; scannedPackId: string; point?: GeoPoint; confirmedAtDoor?: boolean; emptiesCollected: number }) {
     const run = await this.getRun(input.runId, input.companyId);
-    if (run.status !== 'out' || run.driverId !== input.driverId) throw new DeliveryError(409, 'not_your_route', 'Start this route first.');
+    this.stillOut(run, input.driverId);
     const s = run.stops.find((x) => x.stop === input.stop);
     if (!s) throw new DeliveryError(404, 'not_found', 'No such stop.');
     if (s.status !== 'planned') throw new DeliveryError(409, 'already_done', `Stop ${s.stop} is already ${s.status === 'delivered' ? 'delivered' : 'marked not delivered'}.`);
@@ -645,7 +673,7 @@ export class DeliveryService {
   }
   private async failStopNow(input: { runId: string; companyId: string; driverId: string; stop: number; reason: string }) {
     const run = await this.getRun(input.runId, input.companyId);
-    if (run.status !== 'out' || run.driverId !== input.driverId) throw new DeliveryError(409, 'not_your_route', 'Start this route first.');
+    this.stillOut(run, input.driverId);
     const s = run.stops.find((x) => x.stop === input.stop);
     if (!s || s.status !== 'planned') throw new DeliveryError(409, 'already_done', 'That stop is already done.');
     // Already sent back, but the stop never saved (a restart in between): just finish the stop.
@@ -671,7 +699,7 @@ export class DeliveryService {
   private async skipHouseNow(input: { runId: string; companyId: string; driverId: string; stop: number; reason: SkipReason; note?: string }) {
     if (!SKIP_REASONS.includes(input.reason)) throw new DeliveryError(422, 'bad_reason', `Say why: ${SKIP_REASONS.join(', ')}.`);
     const run = await this.getRun(input.runId, input.companyId);
-    if (run.status !== 'out' || run.driverId !== input.driverId) throw new DeliveryError(409, 'not_your_route', 'Start this route first.');
+    this.stillOut(run, input.driverId);
     const s = run.stops.find((x) => x.stop === input.stop);
     if (!s) throw new DeliveryError(404, 'not_found', 'No such stop.');
     if (!this.on(input.companyId, 'driver_house_skip')) throw new DeliveryError(404, 'feature_off', 'Skipping a house is switched off for this company: use “Problem at this stop”.');
@@ -707,6 +735,8 @@ export class DeliveryService {
     const houseStatus = this.houses ? await this.houses.statuses([...new Set(run.stops.flatMap((s) => (s.houseId ? [s.houseId] : [])))]) : new Map();
     return {
       ...run, routeName: route?.name ?? run.routeId, depot: route?.depot ?? null,
+      // Times on the run (each drop's `at`) are shown in the company's time zone; the driver's map may draw tiles.
+      timezone: this.platform.companies.get(run.companyId)?.timezone ?? 'UTC', ...(mapTiles() ? { mapTiles: mapTiles() } : {}),
       ...(run.areaId ? { areaName: area?.name ?? run.areaId, van: Number(/\.(\d+)@/.exec(run.id)?.[1] ?? 1) } : {}),
       stops: run.stops.map((s) => ({ ...s, stopCode: stopCode(run.routeId, s.stop), boxNumber: s.packId ? boxNumber(s.packId) : null, packStatus: s.packId ? this.packs.packs.get(s.packId)?.status ?? null : null, ...this.boxCodeOf(s.packId), ...(s.houseId ? { houseStatus: houseStatus.get(s.houseId) ?? null } : {}) })),
       loadOrder: [...run.stops].sort((a, b) => b.stop - a.stop).map((s) => ({ stop: s.stop, stopCode: stopCode(run.routeId, s.stop), packId: s.packId, boxNumber: s.packId ? boxNumber(s.packId) : null, packSize: s.packSize, address: s.address, loaded: !!s.loaded || run.status === 'out' || run.status === 'done' })),
