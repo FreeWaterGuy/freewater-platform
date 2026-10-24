@@ -45,5 +45,5 @@
 .reasons { display: flex; flex-direction: column; gap: 8px; }
 .reasons button { text-align: left; padding: 14px 16px; border-radius: 14px; border: 0; background: var(--soft); font-weight: 700; font-size: 16px; cursor: pointer; }
 .notes { border-radius: 12px; background: #FFF4D6; color: #5C3F00; padding: 10px 12px; font-size: 15px; }
-.mapbox { border-radius: 18px; background: linear-gradient(135deg, #E8EEF3, #F6F8FA); height: 150px; position: relative; overflow: hidden; }
+.mapbox { border-radius: 18px; background: #EEF2F5; aspect-ratio: 340 / 220; position: relative; overflow: hidden; }
 .mapbox svg { position: absolute; inset: 0; width: 100%; height: 100%; }

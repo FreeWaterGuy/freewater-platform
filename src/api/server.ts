@@ -45,7 +45,8 @@ import { FleetError } from '../modules/fleet/service';
 import { WebhookError } from '../modules/webhooks/service';
 import { ConsoleError } from '../modules/console/service';
 import { BooksError } from '../modules/books/service';
-import { DeliveryError } from '../modules/delivery/service';
+import { DeliveryError, mapTiles } from '../modules/delivery/service';
+import { isPlaceholder } from '../modules/fillers/unsold';
 import { AdsError } from '../modules/ads/service';
 import { DesignError } from '../modules/custom/service';
 import { FeatureError } from '../modules/features/service';
@@ -463,7 +464,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   // ---------- campaigns: advertisers and the company ----------
 
   route({ method: 'GET', url: '/v1/campaigns', scope: 'campaigns', summary: "Campaigns you can see. An advertiser's key sees only its own.", handler: async (_req, key) => ({
-    body: [...platform.campaigns.values()].filter((c) => c.companyId === key!.companyId && (!key!.advertiserId || c.advertiserId === key!.advertiserId)).map(campaignView),
+    // The blank piece's placeholder isn't anyone's campaign (src/modules/fillers/unsold.ts): never listed.
+    body: [...platform.campaigns.values()].filter((c) => c.companyId === key!.companyId && !isPlaceholder(c) && (!key!.advertiserId || c.advertiserId === key!.advertiserId)).map(campaignView),
   }) });
 
   route({ method: 'POST', url: '/v1/campaigns', scope: 'campaigns', summary: 'Create a campaign with uploaded SVG artwork. It starts paused until content review approves it.', body: obj({
@@ -1139,6 +1141,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     'console.js': { type: 'text/javascript', path: join(webDir, 'console.js') },
     'console.css': { type: 'text/css', path: join(webDir, 'console.css') },
     'labelviews.js': { type: 'text/javascript', path: join(webDir, 'labelviews.js') },
+    'words.js': { type: 'text/javascript', path: join(webDir, 'words.js') },
+    'routemap.js': { type: 'text/javascript', path: join(webDir, 'routemap.js') },
     'jsqr.js': { type: 'text/javascript', path: createRequire(import.meta.url).resolve('jsqr/dist/jsQR.js') },
   };
   const cache = new Map<string, Buffer>();
@@ -1173,7 +1177,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   const opsPage = async (_req: FastifyRequest, reply: FastifyReply) => reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', "default-src 'self'; img-src 'self' data: blob:; connect-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; frame-src 'self'; frame-ancestors 'none'").send(file(join(webDir, 'ops.html')));
   server.get('/ops', opsPage);
   server.get('/ops/*', opsPage);
-  const driverPage = async (_req: FastifyRequest, reply: FastifyReply) => reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; frame-ancestors 'none'").header('permissions-policy', 'camera=(self), geolocation=(self)').send(file(join(webDir, 'driver.html')));
+  // The driver's map may draw tiles from the host's provider (FW_MAP_TILES): only that one address is allowed for pictures.
+  const tileHost = (() => { const t = mapTiles(); try { return t ? ` ${new URL(t.url.replace(/[{}]/g, '')).origin}` : ''; } catch { return ''; } })();
+  const driverPage = async (_req: FastifyRequest, reply: FastifyReply) => reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', `default-src 'self'; img-src 'self' data: blob:${tileHost}; media-src 'self' blob:; connect-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; frame-ancestors 'none'`).header('permissions-policy', 'camera=(self), geolocation=(self)').send(file(join(webDir, 'driver.html')));
   // The public open-books site.
   const booksPage = async (_req: FastifyRequest, reply: FastifyReply) => reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', "default-src 'self'; img-src 'self' data:; connect-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; frame-ancestors 'none'").send(file(join(webDir, 'books.html')));
   server.get('/books', booksPage);

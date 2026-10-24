@@ -83,7 +83,7 @@
       }
       const s = r.stops.find((x) => x.stop === Number(m[3]));
       if (m[4] === 'deliver') {
-        if (body.scannedPackId !== s.packId) { S.ov.delivery.wrongBoxScans++; const o = r.stops.find((x) => x.packId === body.scannedPackId); fail(409, o ? `Wrong box. That one is for stop ${o.stop}, ${o.address}. Grab the box marked ${stopCode(r.routeId, s.stop)}.` : `That code isn't a pack on this route. Grab the box marked ${stopCode(r.routeId, s.stop)}.`); }
+        if (body.scannedPackId !== s.packId) { S.ov.delivery.wrongBoxScans++; const o = r.stops.find((x) => x.packId === body.scannedPackId); fail(409, o ? `That box is for stop ${o.stop}, ${o.address}. Grab the box marked ${stopCode(r.routeId, s.stop)}.` : `That code isn't a pack on this route. Grab the box marked ${stopCode(r.routeId, s.stop)}.`); }
         if (!body.confirmedAtDoor) fail(409, `You're not at ${s.address} yet.`);
         Object.assign(s, { status: 'delivered', packStatus: 'delivered', at: new Date().toISOString(), emptiesCollected: body.emptiesCollected, atAddressBy: 'driver' });
         return recount(r);

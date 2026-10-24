@@ -57,6 +57,11 @@ export interface UnsoldFiller {
   house?: Campaign;
   /** A blank piece here is expected (the no-ads control): nobody is told. */
   quiet?: boolean;
+  /**
+   * How many of these pieces carry artwork laid out at a size it wasn't made for (a poster fills any size, but only
+   * when nothing fits as made). The engine prefers a label with fewer, after fewer blank pieces.
+   */
+  misfits?(placed: Placement[]): number;
 }
 
 export interface PrintAudience {

@@ -24,6 +24,8 @@
   const toastEl = h('div', { class: 'toast', role: 'status' }); document.body.append(toastEl);
   let tt; const toast = (m) => { toastEl.textContent = m; toastEl.classList.add('show'); clearTimeout(tt); tt = setTimeout(() => toastEl.classList.remove('show'), 2600); };
   const S = { token: store.get('fw_ops_token'), me: null, config: null, path: fixture ? fixture.start : location.pathname + location.search };
+  /** Plain words for the server's codes, and times in the company's time zone (src/web/words.js). */
+  const W = window.fwWords;
 
   // The second sign-in step: when it's on, sign-in asks for the code from the authenticator app (or a recovery code).
   const withSecondStep = (r) => (!r || !r.secondStep ? Promise.resolve(r) : new Promise((resolve, reject) => {
@@ -263,7 +265,7 @@
             m.mode === 'out_of_service' ? h('div', { class: 'toolbar' }, h('span', { text: `Out of service${m.modeReason ? `: ${m.modeReason}` : ''}` }), h('button', { class: 'btn small', type: 'button', onclick: () => send('in_service') }, 'Put back in service'))
               : h('div', { class: 'toolbar' }, reason, h('button', { class: 'btn secondary small', type: 'button', onclick: () => send('out_of_service', reason.value.trim() ? { reason: reason.value.trim() } : undefined) }, 'Take out of service')),
             h('div', { class: 'toolbar' }, version, h('button', { class: 'btn secondary small', type: 'button', onclick: () => { if (!/^\d+\.\d+\.\d+$/.test(version.value.trim())) return toast('Type a version like 1.0.1'); send('update_software', { version: version.value.trim() }); } }, 'Update software')),
-            m.commands.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Asked', 'What', 'By', 'Result'].map((x) => h('th', { text: x })))), h('tbody', {}, m.commands.slice(0, 8).map((c) => h('tr', {}, h('td', { text: ago(c.createdAt) }), h('td', { text: commandNames[c.kind] ?? c.kind }), h('td', { text: c.createdBy ?? '' }), h('td', {}, h('span', { class: `pill ${c.status === 'done' ? 'ok' : c.status === 'failed' ? 'bad' : 'warn'}`, text: c.status === 'pending' || c.status === 'sent' ? 'Waiting' : c.result || c.status }))))))) : null),
+            m.commands.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Asked', 'What', 'By', 'Result'].map((x) => h('th', { text: x })))), h('tbody', {}, m.commands.slice(0, 8).map((c) => h('tr', {}, h('td', { text: ago(c.createdAt) }), h('td', { text: commandNames[c.kind] ?? c.kind }), h('td', { text: W.actor(c.createdBy) }), h('td', {}, h('span', { class: `pill ${c.status === 'done' ? 'ok' : c.status === 'failed' ? 'bad' : 'warn'}`, text: c.status === 'pending' || c.status === 'sent' ? 'Waiting' : c.result || W.status(c.status) }))))))) : null),
           h('section', { class: 'panel-box' }, h('h2', { text: 'Problems' }),
             m.incidentHistory.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('tbody', {}, m.incidentHistory.slice(0, 10).map((i) => h('tr', {}, h('td', {}, h('span', { class: `pill ${i.resolvedAt ? '' : i.severity === 'critical' ? 'bad' : 'warn'}`, text: i.resolvedAt ? 'Fixed' : 'Open' })), h('td', { text: i.message }), h('td', { style: 'color:var(--muted);white-space:nowrap', text: i.resolvedAt ? `${ago(i.openedAt)}, fixed in ${Math.max(1, Math.round((Date.parse(i.resolvedAt) - Date.parse(i.openedAt)) / 60000))} min` : ago(i.openedAt) })))))) : h('p', { style: 'margin:0;color:var(--muted)', text: 'None so far.' }))),
         h('section', { class: 'panel-box', style: 'margin-top:18px' }, h('h2', { text: 'Recent bottles' }),
@@ -290,17 +292,27 @@
     try { await api('POST', `/v1/ops/runs/${encodeURIComponent(r.id)}/stops/${s.stop}/deliver-without-photo`, { reason: reason.trim() }); toast('Marked delivered, with your reason.'); } catch (x) { toast(x.message); }
     render();
   }
-  /** A run that will never be finished (a night long gone, a van that didn't go): its boxes go back, with why. */
-  async function closeOut(r) {
-    const reason = window.prompt(`Close out ${r.areaName ? `${r.areaName} · van ${r.van}` : r.routeName}? Stops not delivered are marked not delivered and their boxes go back. Why? (kept on the record)`);
-    if (!reason || reason.trim().length < 5) return;
-    try { const x = await api('POST', `/v1/ops/runs/${encodeURIComponent(r.id)}/close`, { reason: reason.trim() }); toast(`Closed out: ${x.closedOut.length} box(es) go back.`); } catch (x) { toast(x.message); }
+  /**
+   * Close a run with why: today's before its last stop (the van broke down; the driver can't scan another stop), or one
+   * from an earlier day that will never be finished. Its boxes not left come back and are handled as any box that comes
+   * back. After the last stop a run closes itself.
+   */
+  async function closeOut(r, today) {
+    const name = r.areaName ? `${r.areaName} · van ${r.van}` : r.routeName;
+    const left = r.counts.stops - r.counts.delivered - r.counts.notDelivered;
+    const reason = window.prompt(today ? `Close ${name} now, before its last stop? The ${plural(left, 'stop', 'stops')} not done ${left === 1 ? 'is' : 'are'} marked not delivered, the driver can’t scan another, and the boxes come back. Why? (kept on the record, e.g. “The van broke down”)` : `Close out ${name}? Stops not delivered are marked not delivered and their boxes go back. Why? (kept on the record)`);
+    if (!reason) return;
+    if (reason.trim().length < 5) { toast('Say why in a few words (at least 5 letters).'); return; }
+    try { const x = await api('POST', `/v1/ops/runs/${encodeURIComponent(r.id)}/close`, { reason: reason.trim() }); toast(`Run closed: ${plural(x.closedOut.length, 'box comes', 'boxes come')} back.`); } catch (x) { toast(x.message); }
     render();
   }
   async function routesPage() {
     const q = new URLSearchParams(S.path.split('?')[1] || '');
-    const date = q.get('date') || (await api('GET', '/v1/ops/overview')).date;
+    const todayDate = (await api('GET', '/v1/ops/overview')).date;
+    const date = q.get('date') || todayDate;
     const data = await api('GET', `/v1/ops/runs?date=${date}`);
+    W.setZone(data.runs[0]?.timezone);
+    const today = date === todayDate;
     const picker = h('input', { type: 'date', value: date, 'aria-label': 'Night', onchange: (e) => go(`/ops/routes?date=${e.target.value}`) });
     const plan = h('button', { class: 'btn', type: 'button', onclick: async () => { plan.disabled = true; plan.textContent = 'Planning and printing…'; try { const r = await api('POST', '/v1/ops/runs/plan', { date }); toast(r.length ? `${r.length} route${r.length === 1 ? '' : 's'} planned and printed` : 'Nobody is due that day'); } catch (x) { toast(x.message); } render(); } }, 'Plan and print this night');
     const stages = ['printing', 'packing', 'ready', 'out', 'done'];
@@ -310,12 +322,14 @@
         const at = stages.indexOf(r.status);
         return h('section', { class: 'run' },
           h('div', { class: 'run-head' }, h('div', {}, h('h3', { text: r.areaName ? `${r.areaName} · van ${r.van} · ${r.routeId.replace(/^route-/, 'Route ')}` : `${r.routeName} · ${r.routeId.replace(/^route-/, 'Route ')}` }), h('div', { style: 'color:var(--muted);font-size:14px', text: `${plural(r.counts.stops, 'stop', 'stops')} · ${plural(r.counts.bottles, 'bottle', 'bottles')} · about ${r.distanceKm} km, ${r.minutes} min · from ${r.depot?.name ?? 'the depot'}` })),
-            h('div', { class: 'toolbar' }, r.status === 'packing' ? h('button', { class: 'btn small', type: 'button', onclick: async () => { try { const x = await api('POST', `/v1/ops/runs/${r.id}/pack-check`); toast(x.problems.length ? `${x.problems.length} box(es) need attention` : 'Every box checked and sealed'); } catch (e) { toast(e.message); } render(); } }, 'Run packing check') : null, r.driverId ? h('span', { class: 'pill dark', text: 'Driver assigned' }) : null, r.status !== 'done' ? h('button', { class: 'btn secondary small', type: 'button', onclick: () => closeOut(r) }, 'Close out…') : null)),
+            h('div', { class: 'toolbar' }, r.status === 'packing' ? h('button', { class: 'btn small', type: 'button', onclick: async () => { try { const x = await api('POST', `/v1/ops/runs/${r.id}/pack-check`); toast(x.problems.length ? `${x.problems.length} box(es) need attention` : 'Every box checked and sealed'); } catch (e) { toast(e.message); } render(); } }, 'Run packing check') : null, r.driverId ? h('span', { class: 'pill dark', text: 'Driver assigned' }) : null, r.status !== 'done' && date <= todayDate ? h('button', { class: 'btn secondary small', type: 'button', onclick: () => closeOut(r, today) }, today ? 'Close the run…' : 'Close out…') : null)),
           h('div', { class: 'steps' }, stages.map((s, i) => h('span', { class: i < at ? 'done' : i === at ? 'on' : '', text: stageName[s] }))),
-          h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Stop', 'Address', 'Box', 'Pack', 'Status', ''].map((x) => h('th', { text: x })))),
+          h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Stop', 'Address', 'Box', 'Pack', 'Status', 'When', ''].map((x) => h('th', { text: x })))),
             h('tbody', {}, r.stops.map((s) => h('tr', {}, h('td', {}, h('b', { text: s.stopCode })), h('td', { text: s.address }), h('td', {}, `#${s.boxNumber ?? '—'}`, (r.status === 'printing' || r.status === 'packing') && s.sticker ? h('div', { class: 'sticker-step', style: 'color:var(--muted);font-size:13px', text: s.sticker }) : null), h('td', { text: `${s.packSize}` }),
               h('td', {}, s.status === 'delivered' ? h('span', {}, h('span', { class: 'pill ok', text: `Delivered${s.atAddressBy === 'driver' ? ' (driver confirmed)' : ''}${s.photoWaived ? ' without a photo' : ''}` }), s.photo ? h('button', { class: 'linkish', type: 'button', onclick: () => openDropPhoto(s.photo.id) }, ' Photo') : null, s.photo && s.photo.location === 'unverified' ? h('span', { class: 'pill warn', title: 'The phone gave no location (or too vague a one) when the photo was taken', text: 'unverified location' }) : null) :
-                s.doorScan ? h('span', {}, h('span', { class: 'pill warn', text: 'Scanned at the door, no photo yet' }), h('button', { class: 'btn secondary small', type: 'button', onclick: () => vouch(r, s) }, 'Delivered without photo…')) : s.status === 'not_delivered' ? h('span', { class: `pill ${s.skipped ? 'warn' : 'bad'}`, text: `${s.skipped ? 'Skipped' : 'Not delivered'}: ${s.reason}` }) : s.houseStatus && s.houseStatus !== 'active' ? h('span', { class: 'pill warn', text: 'Stopped since the plan: keep the box' }) : h('span', { class: 'pill', text: s.packStatus === 'loaded' ? 'On the van' : s.packStatus === 'sealed' ? 'Sealed' : s.packStatus ?? 'Planned' })),
+                s.doorScan ? h('span', {}, h('span', { class: 'pill warn', text: 'Scanned at the door, no photo yet' }), h('button', { class: 'btn secondary small', type: 'button', onclick: () => vouch(r, s) }, 'Delivered without photo…')) : s.status === 'not_delivered' ? h('span', { class: `pill ${s.skipped ? 'warn' : 'bad'}`, text: `${s.skipped ? 'Skipped' : 'Not delivered'}${s.reason ? `: ${W.skipReason(s.reason)}` : ''}` }) : s.houseStatus && s.houseStatus !== 'active' ? h('span', { class: 'pill warn', text: 'Stopped since the plan: keep the box' }) : h('span', { class: 'pill', text: W.status(s.packStatus) || 'Planned' })),
+              // When the box was left (or the stop given up), in the company's time zone; a box scanned at its door waiting for its photo, then.
+              h('td', { class: 'drop-time', style: 'white-space:nowrap', text: s.at ? W.time(s.at) : s.doorScan ? `Scanned ${W.time(s.doorScan.at)}` : '—' }),
               h('td', { style: 'color:var(--muted);font-size:13px' }, s.emptiesCollected ? `${plural(s.emptiesCollected, 'empty', 'empties')}` : '', s.checkedByHand ? `Checked by hand, ${ago(s.checkedByHand.at)}` : '',
                 // No packing line for this box: a signed-in person counts every bottle and checks it by hand (who and when are kept).
                 r.status === 'packing' && s.packId && (s.packStatus === 'box_printed' || s.packStatus === 'mismatch') ? h('button', { class: 'btn secondary small reprint', type: 'button', onclick: () => reprintSheet(r, s) }, 'Reprint a bad label…') : null,
@@ -332,7 +346,7 @@
     const create = h('form', { class: 'panel-box', onsubmit: async (e) => { e.preventDefault(); try { const a = await api('POST', '/v1/ops/areas', { name: name.value.trim(), routeId: routeId.value.trim() }); toast('Area made. It’s off until you turn it on.'); go(`/ops/areas/${a.id}`); } catch (x) { toast(x.message); } } },
       h('h2', { text: 'New area' }), h('p', { style: 'margin:0;color:var(--muted);font-size:14px', text: 'Its vans start from the route’s micro-factory and drive on the route’s days. It starts off; add houses, check them, then turn it on.' }),
       h('div', { class: 'field' }, h('label', { for: 'ar-name', text: 'Name' }), name), h('div', { class: 'field' }, h('label', { for: 'ar-route', text: 'Route' }), routeId), h('button', { class: 'btn', type: 'submit' }, 'Make the area'));
-    const review = (r) => h('tr', {}, h('td', {}, h('b', { text: r.address.split(',')[0] }), h('div', { style: 'color:var(--muted);font-size:12px', text: r.areaName })), h('td', { text: r.skipReason ?? '' }),
+    const review = (r) => h('tr', {}, h('td', {}, h('b', { text: r.address.split(',')[0] }), h('div', { style: 'color:var(--muted);font-size:12px', text: r.areaName })), h('td', { text: W.skipReason(r.skipReason) }),
       h('td', {}, h('div', { class: 'toolbar' },
         h('button', { class: 'btn small', type: 'button', onclick: async () => { try { await api('POST', `/v1/ops/houses/${r.id}/review`, { decision: 'deliver' }); toast('It gets packs again from the next night'); } catch (x) { toast(x.message); } render(); } }, 'Deliver again'),
         h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { try { await api('POST', `/v1/ops/houses/${r.id}/review`, { decision: 'skip' }); toast('Skipped from now on'); } catch (x) { toast(x.message); } render(); } }, 'Keep skipping'))));
@@ -360,7 +374,7 @@
     const el = (tag, a) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(a)) e.setAttribute(k, String(v)); svg.append(e); return e; };
     if (polygon) el('polygon', { points: polygon.map(([lat, lng]) => `${x({ lat, lng })},${y({ lat, lng })}`).join(' '), fill: 'none', stroke: '#9AA6B2', 'stroke-dasharray': '5 4', 'stroke-width': 2 });
     const color = { active: '#1F8A4C', opted_out: '#B7791F', skip_pending: '#B42318', skipped: '#9AA6B2' };
-    for (const hs of houses) el('circle', { cx: x(hs.point), cy: y(hs.point), r: 4, fill: color[hs.status] ?? '#1F2633' }).append(Object.assign(document.createElementNS(NS, 'title'), { textContent: `${hs.address} · ${HS[hs.status]?.[1] ?? hs.status}` }));
+    for (const hs of houses) el('circle', { cx: x(hs.point), cy: y(hs.point), r: 4, fill: color[hs.status] ?? '#1F2633' }).append(Object.assign(document.createElementNS(NS, 'title'), { textContent: `${hs.address} · ${HS[hs.status]?.[1] ?? W.status(hs.status)}` }));
     return svg;
   }
   async function areaPage(id) {
@@ -396,8 +410,8 @@
           h('button', { class: 'btn secondary', type: 'button', onclick: () => { let polygon = null; try { polygon = poly.value.trim() ? JSON.parse(poly.value) : null; } catch { return toast('The polygon isn’t valid: [[lat, lng], …]'); } save({ polygon }, 'Polygon saved for the next houses added'); } }, 'Save polygon')),
         result),
       h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Address', 'Status', 'People', 'Last left', 'Next due'].map((x) => h('th', { text: x })))),
-        h('tbody', {}, houses.map((x) => h('tr', {}, h('td', {}, x.address, x.claimed ? h('span', { class: 'pill', style: 'margin-left:6px', text: 'In the app' }) : null), h('td', {}, h('span', { class: `pill ${HS[x.status]?.[0] ?? ''}`, text: HS[x.status]?.[1] ?? x.status }), x.skipReason ? h('div', { style: 'color:var(--muted);font-size:12px', text: x.skipReason }) : null),
-          h('td', { text: x.householdSize ? String(x.householdSize) : '—' }), h('td', { text: x.lastDeliveredAt ? ago(x.lastDeliveredAt) : '—' }), h('td', { text: x.status === 'active' ? x.nextDate ?? 'Next plan' : '—' })))))));
+        h('tbody', {}, houses.map((x) => h('tr', {}, h('td', {}, x.address, x.claimed ? h('span', { class: 'pill', style: 'margin-left:6px', text: 'In the app' }) : null), h('td', {}, h('span', { class: `pill ${HS[x.status]?.[0] ?? ''}`, text: HS[x.status]?.[1] ?? W.status(x.status) }), x.skipReason ? h('div', { style: 'color:var(--muted);font-size:12px', text: W.skipReason(x.skipReason) }) : null),
+          h('td', { text: x.householdSize ? String(x.householdSize) : '—' }), h('td', { text: x.lastDeliveredAt ? ago(x.lastDeliveredAt) : '—' }), h('td', { text: x.status === 'active' ? (x.nextDate ? W.day(x.nextDate) : 'Next plan') : '—' })))))));
   }
 
   // ---------- deliveries ----------
@@ -407,7 +421,7 @@
     const freq = { weekly: 'Weekly', biweekly: 'Every 2 weeks', every4weeks: 'Every 4 weeks' };
     shell('subs', head('Deliveries', `${subs.length} home${subs.length === 1 ? '' : 's'} getting packs. ${plural(subs.reduce((n, s) => n + (s.status === 'active' ? s.packSize : 0), 0), 'bottle', 'bottles')} a cycle.`),
       subs.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Customer', 'Address', 'Route', 'Pack', 'How often', 'Next', 'Status'].map((x) => h('th', { text: x })))),
-        h('tbody', {}, subs.map((s) => h('tr', {}, h('td', { text: s.customer }), h('td', { text: s.address }), h('td', { text: s.routeId }), h('td', { text: `${s.packSize}` }), h('td', { text: `${freq[s.frequency]}, ${days[s.day]}` }), h('td', { text: s.nextDate ?? '—' }), h('td', {}, h('span', { class: `pill ${s.status === 'active' ? 'ok' : 'warn'}`, text: s.status === 'active' ? 'Active' : 'Paused' })))))))
+        h('tbody', {}, subs.map((s) => h('tr', {}, h('td', { text: s.customer }), h('td', { text: s.address }), h('td', { text: s.routeName ?? W.route(s.routeId) }), h('td', { text: `${s.packSize}` }), h('td', { text: `${freq[s.frequency]}, ${days[s.day]}` }), h('td', { text: s.nextDate ? W.day(s.nextDate) : '—' }), h('td', {}, h('span', { class: `pill ${s.status === 'active' ? 'ok' : 'warn'}`, text: s.status === 'active' ? 'Active' : W.status(s.status) })))))))
         : h('div', { class: 'empty', text: 'No one has signed up for delivery yet.' }));
   }
 

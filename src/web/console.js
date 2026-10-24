@@ -29,7 +29,9 @@
   };
   const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} } };
   const dollars = (c) => `$${(c / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  const when = (iso) => (iso ? new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—');
+  /** Plain words for the server's codes, and dates in the company's time zone (src/web/words.js). */
+  const W = window.fwWords;
+  const when = (iso) => W.when(iso);
   const ago = (iso) => { if (!iso) return 'never'; const s = Math.max(1, Math.round((Date.now() - Date.parse(iso)) / 1000)); return s < 60 ? 'just now' : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} d ago`; };
   const svgSrc = (s) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(s)}`;
   const toastEl = h('div', { class: 'toast', role: 'status' }); document.body.append(toastEl);
@@ -115,6 +117,7 @@
       S.config = await api('GET', `/v1/public/app-config?company=${encodeURIComponent(S.company)}`);
       S.features = await api('GET', `/v1/public/features?company=${encodeURIComponent(S.company)}`).catch(() => ({ off: [] }));
     }
+    W.setZone(S.ov.config?.timezone); // dates on every page in the company's time zone
     if (S.ov.you?.mustSetUpSecondStep) return mustSetUpPage();
     if (!pageOn(pathname.replace(/\/$/, '').split('/')[2])) return go('/console', true);
     for (const [re, fn] of routes) {
@@ -124,6 +127,11 @@
     go('/console', true);
   }
 
+  /** The menu as shown: pages that are on, and a heading only when something under it is (no empty "Platform"). */
+  const menuShown = (nav, shown) => {
+    const pages = nav.filter((n) => typeof n === 'string' || shown(n[0]));
+    return pages.filter((n, i) => typeof n !== 'string' || (i + 1 < pages.length && typeof pages[i + 1] !== 'string'));
+  };
   function shell(active, ...content) {
     const nav = [
       ['start', '/console', 'Get started', I.start], ['features', '/console/features', 'Features', I.modules], ['pause', '/console/pause', 'Pause', I.shield],
@@ -141,7 +149,7 @@
     root.replaceChildren(h('div', { class: 'shell' },
       // The sidebar in the company's own colours (its panel, text and accent), never the platform's.
       h('aside', { class: 'side', style: b.panelColor ? `--brand-panel:${b.panelColor};--brand-text:${b.textColor};--brand-accent:${b.accentColor}` : null }, h('div', { class: 'logo', 'aria-label': `${S.config?.name ?? ''} console` }, h('span', { text: b.logoTop }), h('span', { text: b.logoBottom }), h('small', { text: 'Console' })),
-        h('nav', { 'aria-label': 'Main' }, nav.filter((n) => typeof n === 'string' || pageOn(n[0])).map((n) => (typeof n === 'string' ? h('div', { class: 'group', text: n }) : n[1].startsWith('/ops/') ? h('a', { href: fixture ? '#' : n[1] }, icon(n[3]), n[2]) : link(n[1], { 'aria-current': active === n[0] ? 'page' : null }, icon(n[3]), n[2])))),
+        h('nav', { 'aria-label': 'Main' }, menuShown(nav, pageOn).map((n) => (typeof n === 'string' ? h('div', { class: 'group', text: n }) : n[1].startsWith('/ops/') ? h('a', { href: fixture ? '#' : n[1] }, icon(n[3]), n[2]) : link(n[1], { 'aria-current': active === n[0] ? 'page' : null }, icon(n[3]), n[2])))),
         h('div', { class: 'who' }, h('b', { text: S.me.displayName || S.me.email || '' }), S.config?.name, h('br'), h('button', { type: 'button', onclick: async () => { try { await api('POST', '/v1/auth/sign-out'); } catch {} S.token = null; S.me = null; S.dirty = false; store.set('fw_console_token', null); render(); } }, 'Sign out'))),
       h('main', { class: 'main' }, ...content)));
   }
@@ -252,8 +260,8 @@
         h('div', { class: 'toolbar' }, h('button', { class: 'btn small secondary', type: 'button', onclick: () => copy(a.toSign) }, 'Copy transaction'), sig, btn('Check and record', () => api('POST', `/v1/chain/actions/${a.id}/signed`, { signature: sig.value.trim() }))));
     })() : null;
     return h('tr', {}, h('td', {}, h('b', { text: names[a.kind] ?? a.kind }), a.params?.plan ? h('div', { class: 'muted', text: `${a.params.plan.total.toLocaleString()} token units to ${plural(a.params.plan.people, 'person', 'people')}` }) : a.params?.reason ? h('div', { class: 'muted', text: a.params.reason }) : null, sign),
-      h('td', { text: a.status === 'proposed' ? `${a.approvals.length} of ${plural(a.needed, 'approval', 'approvals')}` : a.status === 'approved' ? (ready ? 'Ready to run' : `Waiting until ${when(a.notBefore)}`) : a.status }),
-      h('td', { text: a.proposedBy }),
+      h('td', { text: a.status === 'proposed' ? `${a.approvals.length} of ${plural(a.needed, 'approval', 'approvals')}` : a.status === 'approved' ? (ready ? 'Ready to run' : `Waiting until ${when(a.notBefore)}`) : W.status(a.status) }),
+      h('td', { text: a.proposedByName ?? W.actor(a.proposedBy) }),
       h('td', {}, h('div', { class: 'toolbar' },
         a.status === 'proposed' ? btn('Approve', () => api('POST', `/v1/chain/actions/${a.id}/approve`)) : null,
         ready ? btn('Run it now', () => api('POST', `/v1/chain/actions/${a.id}/run`), 'btn small blue') : null,
@@ -272,7 +280,7 @@
       const go = h('button', { class: 'btn secondary', type: 'button', disabled: true }, 'Wipe all test data');
       word.addEventListener('input', () => { go.disabled = word.value !== 'RESET'; });
       go.addEventListener('click', async () => { go.disabled = true; try { const r = await api('POST', '/v1/launch/reset', { confirm: 'RESET' }); toast(`Wiped: ${Object.entries(r.counts).filter(([, n]) => n).map(([k, n]) => `${n} ${k}`).join(', ') || 'nothing to wipe'}.`); render(); } catch (x) { toast(x.message); } });
-      return section('Reset', 'Wipes every wallet, game answer, offer claim, seal and bot from testing. Settings, products and offers themselves stay.', h('div', { class: 'toolbar' }, word, go), st.lastReset ? h('p', { class: 'muted', style: 'margin:0', text: `Last reset ${ago(st.lastReset.at)} by ${st.lastReset.by}.` }) : null);
+      return section('Reset', 'Wipes every wallet, game answer, offer claim, seal and bot from testing. Settings, products and offers themselves stay.', h('div', { class: 'toolbar' }, word, go), st.lastReset ? h('p', { class: 'muted', style: 'margin:0', text: `Last reset ${ago(st.lastReset.at)} by ${st.lastReset.byName ?? W.actor(st.lastReset.by)}.` }) : null);
     })();
     const bots = (() => {
       const n = h('input', { class: 'input', type: 'number', min: 1, max: 200, value: 20, 'aria-label': 'How many bots' });
@@ -318,17 +326,18 @@
   // ---------- wallet and points ----------
   async function walletPage() {
     const [supply, check, camps] = await Promise.all([api('GET', `/v1/public/wallet/${encodeURIComponent(S.ov.config.id)}/supply`), api('GET', '/v1/wallet/check'), api('GET', '/v1/campaigns').catch(() => [])]);
-    const brands = [...new Map(camps.map((c) => [c.advertiserId, c.advertiserName])).entries()];
+    // Brands with a reserve: real advertisers only (never the company's own pieces, filler copies or the blank "Open space").
+    const brands = [...new Map(camps.filter((c) => !c.isHouse).map((c) => [c.advertiserId, c.advertiserName])).entries()];
     settingsPage('wallet', 'Points and credit', 'Points are earned for real activity and are the same whichever item someone picks. Dollar credit is paid from a brand’s reserve, never more than it holds.', (ctx) => {
       if (!ctx.draft.wallet) { ctx.draft.wallet = structuredClone(S.ov.options.wallet); S.ov.config.wallet = structuredClone(S.ov.options.wallet); }
       const actions = Object.keys(ctx.draft.wallet.points.perAction);
-      const label = { scan: 'Scanning a real bottle', game_round: 'Each game screen', ad_feedback: 'Each ad round', feedback: 'Feedback (20+ characters)', prompt: 'A real question', upload: 'A picture with feedback', streak_bonus: 'Every 10 in a row' };
+      const label = { scan: 'Scanning a real bottle', game_round: 'Each game screen', ad_feedback: 'Each ad round', feedback: 'Feedback (20+ characters)', prompt: 'A real question', upload: 'A picture with feedback', streak_bonus: 'Every 10 in a row', data_full: 'Sharing all their data (once)' };
       const reserve = (() => { const who = h('select', { class: 'input' }, brands.map(([id, name]) => h('option', { value: `advertiser:${id}`, text: name }))), amt = h('input', { class: 'input', type: 'number', min: 0.01, step: '0.01', placeholder: '$' }), ref = h('input', { class: 'input', placeholder: 'Payment reference' }); return h('div', { class: 'stack' }, h('div', { class: 'form' }, field('Brand (reserve)', who), field('Amount arrived', amt), field('Payment reference', ref)), h('div', { class: 'toolbar' }, h('button', { class: 'btn secondary', type: 'button', onclick: async () => { try { const r = await api('POST', '/v1/wallet/reserve', { sponsor: who.value, cents: Math.round(Number(amt.value) * 100), ref: ref.value.trim() }); toast(`Reserve now ${dollars(r.reserve)}.`); } catch (x) { toast(x.message); } } }, 'Record money in reserve'))); })();
       return [
         h('div', { class: 'kpis', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' },
           h('div', { class: 'kpi' }, h('span', { text: 'Points given out' }), h('b', { text: supply.issued.toLocaleString() })), h('div', { class: 'kpi' }, h('span', { text: 'Cap' }), h('b', { text: supply.cap.toLocaleString() })),
           h('div', { class: 'kpi' }, h('span', { text: 'Halvings so far' }), h('b', { text: String(supply.era) })), h('div', { class: 'kpi' }, h('span', { text: 'Books add up' }), h('b', { text: check.ok ? 'Yes' : 'No' }))),
-        section('Points per action', 'What each action earns now, before halvings. Points never depend on which item someone picks.', h('div', { class: 'form' }, actions.map((k) => num(ctx, `wallet.points.perAction.${k}`, label[k] ?? k, { min: 0, max: 10000, hint: `Earns ${supply.earnNow[k] ?? 0} now` }))),
+        section('Points per action', 'What each action earns now, before halvings. Points never depend on which item someone picks.', h('div', { class: 'form' }, actions.map((k) => num(ctx, `wallet.points.perAction.${k}`, label[k] ?? W.humanize(k), { min: 0, max: 10000, hint: `Earns ${supply.earnNow[k] ?? 0} now` }))),
           h('div', { class: 'form' }, num(ctx, 'wallet.points.dailyMax', 'Most points one person can earn in a day', { min: 0, max: 1000000 }), text(ctx, 'wallet.points.name', 'What points are called', { max: 40 }))),
         section('Money switches', 'Changed only by a person signed in. Exchanging points for anything else takes the several-people approval under Launch.',
           toggle(ctx, 'wallet.credit.enabled', 'Dollar credit', 'Pay people from brands’ reserves (offers, rewards).'), on('offers') ? toggle(ctx, 'offers.enabled', 'Brand offers', 'Approved offers go live for people to claim.') : null, on('gift_cards') ? exchangesSwitch(ctx) : null),
@@ -1073,7 +1082,6 @@
   async function securityPage() {
     const s = await api('GET', '/v1/security/events');
     const act = async (method, url, body, msg) => { try { await api(method, url, body); toast(msg); render(); } catch (e) { toast(e.message); } };
-    const NAMES = { signed_in: 'Signed in', sign_in_failed: 'Failed sign-in', key_created: 'Key made', key_revoked: 'Key turned off', team_member_added: 'Team member added', team_member_removed: 'Team member removed', settings_saved: 'Settings saved', settings_restored: 'Old settings put back', autonomy_changed: 'Self-running level changed', licensee_created: 'Licensee set up', batch_voided: 'Batch voided', webhook_created: 'Webhook added', rate_limited: 'Too many requests (slowed down)', blocked_bad_keys: 'Blocked for wrong keys' };
     const week = s.events.filter((e) => Date.parse(e.at) > Date.now() - 7 * 86400000);
     const n = (k) => week.filter((e) => e.kind === k).length;
     const open = s.proposals.filter((p) => ['proposed', 'noted'].includes(p.status));
@@ -1107,7 +1115,7 @@
           h('li', { text: 'Each day’s books are fingerprinted and published, so the past can’t be quietly rewritten, and the agents’ governor stops all spending if the books can’t be verified.' }))),
         section('The log', 'Newest first. Addresses are shortened: enough to spot a pattern, not to find a person.',
           s.events.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['When', 'What', 'Who', 'From', 'Details'].map((x) => h('th', { text: x })))),
-            h('tbody', {}, s.events.slice(0, 200).map((e) => h('tr', {}, h('td', { style: 'white-space:nowrap', text: when(e.at) }), h('td', { text: NAMES[e.kind] ?? e.kind }), h('td', { style: 'font-size:13px', text: e.actor ?? '' }), h('td', { class: 'mono', text: e.ip ?? '' }), h('td', { class: 'muted', style: 'font-size:12px;max-width:320px', text: Object.entries(e.detail ?? {}).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`).join(' · ') }))))))
+            h('tbody', {}, s.events.slice(0, 200).map((e) => h('tr', {}, h('td', { style: 'white-space:nowrap', text: when(e.at) }), h('td', { text: W.event(e.kind) }), h('td', { style: 'font-size:13px', text: W.actor(e.actor) }), h('td', { class: 'mono', text: e.ip ?? '' }), h('td', { class: 'muted', style: 'font-size:12px;max-width:320px', text: W.detail(e.detail) }))))))
             : h('p', { class: 'muted', style: 'margin:0', text: 'Nothing logged yet.' }))));
   }
 
