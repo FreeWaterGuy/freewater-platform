@@ -95,6 +95,8 @@ export async function runPage(file: string, opts: { fixtureName: string; fixture
   window.window = window; window.self = window; window.globalThis = window;
   window.fwLabel = { views: (svg: string) => ({ el: new Element0('div'), set: noop, svg }) };
   const ctx = vm.createContext(window);
+  // The plain-words list the console, ops and driver pages load before themselves (their HTML shells do the same).
+  vm.runInContext(readFileSync(join(import.meta.dirname, '..', 'src', 'web', 'words.js'), 'utf8'), ctx, { filename: 'words.js' });
   const code = readFileSync(join(import.meta.dirname, '..', 'src', 'web', file), 'utf8');
   vm.runInContext(code, ctx, { filename: file });
   // Let the page's requests and timers settle.

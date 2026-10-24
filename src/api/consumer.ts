@@ -104,7 +104,7 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     // The company named, else the one this web address belongs to (its own domain or platform address), else the app's.
     const company = companyForRequest(platform.companies, (req.query as any).company, req.headers.host);
     if (!company) throw notFound('Company');
-    return { body: { companyId: company.id, name: company.name, brand: company.brand, hosts: siteHosts(company), site: siteBase(company) } };
+    return { body: { companyId: company.id, name: company.name, brand: company.brand, timezone: company.timezone, hosts: siteHosts(company), site: siteBase(company) } };
   } });
 
   route({ method: 'GET', url: '/v1/public/companies/:companyId/machines', scope: 'public', summary: "A company's machines, for the map.", handler: async (req) => {

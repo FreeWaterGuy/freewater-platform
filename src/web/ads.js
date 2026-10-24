@@ -37,7 +37,7 @@
   const toastEl = h('div', { class: 'toast', role: 'status' }); document.body.append(toastEl);
   let tt; const toast = (m) => { toastEl.textContent = m; toastEl.classList.add('show'); clearTimeout(tt); tt = setTimeout(() => toastEl.classList.remove('show'), 2600); };
 
-  const state = { token: store.get('fw_ads_token'), me: null, config: null, path: fixture ? fixture.start : location.pathname + location.search };
+  const state = { token: fixture?.token ?? store.get('fw_ads_token'), me: null, config: null, path: fixture ? fixture.start : location.pathname + location.search };
 
   // The second sign-in step: when it's on, sign-in asks for the code from the authenticator app (or a recovery code).
   const withSecondStep = (r) => (!r || !r.secondStep ? Promise.resolve(r) : new Promise((resolve, reject) => {
@@ -264,6 +264,8 @@
   async function signedIn() {
     if (!state.config) state.config = await api('GET', '/v1/public/app-config');
     if (state.token && !state.me) { try { state.me = await api('GET', '/v1/me'); } catch { state.me = null; } }
+    // An advertiser of a licensee sees the licensee's name and brand, whatever address the portal opened at.
+    if (state.me?.companyId && state.me.companyId !== state.config.companyId) state.config = await api('GET', `/v1/public/app-config?company=${encodeURIComponent(state.me.companyId)}`).catch(() => state.config);
     if (!state.me) { authScreen(); return false; }
     if (!state.me.advertiserId) { setupScreen(); return false; }
     if (!state.business) { try { state.business = await api('GET', '/v1/ads/advertiser'); } catch {} }

@@ -601,3 +601,25 @@ Siblings searched: every `status ?? ` / `?? x.status` / `.replace(/^route-/` on 
 pieces). Not done here: the books page's ledger account names (`revenue:print`) are accountants' codes, left as they
 are; the white-label and team screens belong to other branches. Not checked: real phones in a van (map legibility in
 sunlight), a real tile provider's terms and look, real subscribers receiving the "couldn't bring" message.
+
+## Integration of the walkthrough-video branches (integrator, 2026-10-24, branch `video-fixes-2`)
+
+`m-sec`, `m-team`, `m-wl` and `m-pol` merged in that order. Conflicts kept both sides: the console's routes and menu
+(Pause and the Review section; m-sec's `printing` pages with m-team's review pages; m-wl's sidebar colours with m-pol's
+"no empty heading" menu and m-team's links into ops), ops Today (m-sec's switch and role gates on every panel and link,
+with m-team's link-change and house-claim notices), the console's boot (m-wl's signed-in company with m-pol's time
+zone), the route table (m-team's and m-wl's rows renumbered 462–466 after m-sec's 460–461), SWITCHES (m-sec's stricter
+second-step row with m-wl's new rows) and every REVIEW-LOG row.
+
+| Date | Role | Severity | Pattern | Where | Finding | Fix / test |
+|---|---|---|---|---|---|---|
+| 2026-10-24 | Integrator | HIGH | P16 | `PAUSE_STOPS` (m-sec) × reprint from the packing check (m-team) | The emergency stop didn't stop `POST /v1/packs/:id/replace`, which prints a bottle (now on the ops packing screen). CONFIRMED | Added to the `printing` stop. `test/pause-everything.test.ts` (423 while paused; failed with 404 before) |
+| 2026-10-24 | Integrator | MEDIUM | P3 | `DeliveryService.closeRun` (m-pol) × company names (m-wl) | Closing a run early texted "We couldn't bring your FreeWater today" to a licensee's customers (and no longer compiled against m-wl's `notify`). CONFIRMED by `tsc` | Uses the company's name like every other delivery text |
+| 2026-10-24 | Integrator | MEDIUM | P3 / P5 | `ops.js` `render` (m-sec "own company" × m-wl branding) | A licensee's team opening ops at the platform's address saw "free water"/"FreeWater Ops" on every page, the new Review, Find a bottle and house-notice pages included. CONFIRMED (the white-label sweep, extended to every ops page, failed) | Ops loads the signed-in company's app config. Siblings: `driver.js` read the host's switches and brand, `ads.js` the host's brand: same fix; `test/white-label.test.ts` "follow the signed-in company" (failed before) |
+| 2026-10-24 | Integrator | MEDIUM | — | `test/dom-shim.ts` (m-wl) × `words.js` (m-pol) | The white-label tests ran console.js without the plain-words list, so every console page crashed and the "never FreeWater" sweep passed on empty pages. CONFIRMED | The shim loads `words.js` like the HTML shells; the sweep now covers Pause, Find a bottle, Security, AI agents, all ops pages and the driver app, and fails on a page that drew nothing |
+| 2026-10-24 | Integrator | LOW | — | m-team's ops Review / Find a bottle and console Find a bottle × m-pol's plain words | Times in the browser's zone (not the company's), raw statuses (`dispensed`, a box's or drop's code) and ISO nights. CONFIRMED (`test/team-screens.test.ts` "plain words, in the company's time zone") | `W.when`/`W.status`/`W.day`; `app-config` carries the company's time zone; the routes page falls back to it with no runs |
+
+Checked and left as they are: closing a run early stays allowed while paused (it prints nothing and moves no money; it
+brings boxes back); m-team's review queues, house notices, box bottles and bottle lookup read only the signed-in key's
+company on the server. "Who reviews ads" stays a person-only setting, not a security switch (the founder may want it one).
+Not checked: real phones, real DNS, a real printer.

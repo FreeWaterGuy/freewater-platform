@@ -23,7 +23,7 @@
   const svgSrc = (s) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(s)}`;
   const toastEl = h('div', { class: 'toast', role: 'status' }); document.body.append(toastEl);
   let tt; const toast = (m) => { toastEl.textContent = m; toastEl.classList.add('show'); clearTimeout(tt); tt = setTimeout(() => toastEl.classList.remove('show'), 2600); };
-  const S = { token: store.get('fw_ops_token'), me: null, config: null, path: fixture ? fixture.start : location.pathname + location.search };
+  const S = { token: fixture?.token ?? store.get('fw_ops_token'), me: null, config: null, path: fixture ? fixture.start : location.pathname + location.search };
   /** Plain words for the server's codes, and times in the company's time zone (src/web/words.js). */
   const W = window.fwWords;
 
@@ -69,6 +69,9 @@
     if (!S.config) S.config = await api('GET', '/v1/public/app-config');
     // Areas switched off on this server (FW_FEATURES): pages that belong to one aren't shown or opened.
     if (S.token && !S.me) { try { S.me = await api('GET', '/v1/me'); } catch { S.me = null; } }
+    // The signed-in company is the one shown, its name and brand too, whatever address ops was opened at.
+    if (S.me?.companyId && S.me.companyId !== S.config.companyId) S.config = await api('GET', `/v1/public/app-config?company=${encodeURIComponent(S.me.companyId)}`).catch(() => S.config);
+    W.setZone(S.config.timezone); // times on every page in the company's time zone
     // The switches of the company of the person signed in (a licensee's team sees its own, not the host's).
     if (!S.features) S.features = await api('GET', `/v1/public/features?company=${encodeURIComponent(S.me?.companyId ?? S.config.companyId)}`).catch(() => ({ off: [] }));
     if (!S.me) return signIn();
@@ -311,7 +314,7 @@
     const todayDate = (await api('GET', '/v1/ops/overview')).date;
     const date = q.get('date') || todayDate;
     const data = await api('GET', `/v1/ops/runs?date=${date}`);
-    W.setZone(data.runs[0]?.timezone);
+    W.setZone(data.runs[0]?.timezone ?? S.config.timezone);
     const today = date === todayDate;
     const picker = h('input', { type: 'date', value: date, 'aria-label': 'Night', onchange: (e) => go(`/ops/routes?date=${e.target.value}`) });
     const plan = h('button', { class: 'btn', type: 'button', onclick: async () => { plan.disabled = true; plan.textContent = 'Planning and printing…'; try { const r = await api('POST', '/v1/ops/runs/plan', { date }); toast(r.length ? `${r.length} route${r.length === 1 ? '' : 's'} planned and printed` : 'Nobody is due that day'); } catch (x) { toast(x.message); } render(); } }, 'Plan and print this night');
@@ -470,7 +473,8 @@
   const reviewTabs = (active) => h('div', { class: 'toolbar review-tabs', style: 'margin-bottom:16px' },
     h('nav', { class: 'tabs', 'aria-label': 'Review' }, [['ads', '/ops/review', 'Ads'], ['links', '/ops/review/links', 'Link changes'], ['fillers', '/ops/review/fillers', 'Filler and charity']].filter(([id]) => id !== 'fillers' || !(S.features?.off ?? []).includes('fillers')).map(([id, path, label]) => link(path, { class: `tab${active === id ? ' on' : ''}`, 'aria-current': active === id ? 'page' : null }, label))),
     S.me?.role === 'owner' ? h('a', { class: 'btn secondary small', href: fixture ? '#' : '/console/ads#unsold' }, 'Unsold-space order (console) →') : h('span', { style: 'color:var(--muted);font-size:13px', text: 'What fills unsold space, in order, is set by an owner in the console.' }));
-  const when = (iso) => (iso ? new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—');
+  /** "Nov 10, 7:42 PM" in the company's time zone (src/web/words.js). */
+  const when = (iso) => W.when(iso);
   const VERDICT = { pass: ['ok', 'Passed'], flag: ['warn', 'Flagged: look closely'], refuse: ['bad', 'Refused'] };
   const verdictPill = (v) => h('span', { class: `pill ${VERDICT[v]?.[0] ?? ''}`, text: VERDICT[v]?.[1] ?? v });
   const urlLine = (label, items, cls) => h('div', { class: `link-line ${cls}` }, h('b', { text: label }), h('ul', {}, (items ?? []).map((x) => h('li', {}, h('code', { text: x.url }), x.path && x.path !== 'experienceConfig.link.url' ? h('span', { style: 'color:var(--muted);font-size:12px', text: ` (${x.path})` }) : null))));
@@ -543,14 +547,14 @@
     const other = (x) => (x ? h('button', { class: 'linkish', type: 'button', onclick: () => go(`/ops/bottles?code=${encodeURIComponent(x.code ?? x.unitId)}`) }, x.code ?? x.unitId) : null);
     const d = b.drop;
     return h('section', { class: 'panel-box bottle-card' },
-      h('h2', {}, h('span', { text: b.code ?? b.unitId }), h('span', { class: `pill ${b.voided ? 'bad' : b.status === 'failed' ? 'bad' : 'ok'}`, text: b.voided ? 'Voided at the packing check' : STATUS[b.status] ?? b.status })),
+      h('h2', {}, h('span', { text: b.code ?? b.unitId }), h('span', { class: `pill ${b.voided ? 'bad' : b.status === 'failed' ? 'bad' : 'ok'}`, text: b.voided ? 'Voided at the packing check' : STATUS[b.status] ?? W.status(b.status) })),
       h('dl', { class: 'facts' },
         h('dt', { text: 'Printed' }), h('dd', { text: `${when(b.printedAt)} · ${b.place}` }),
         h('dt', { text: 'Product' }), h('dd', { text: b.product }),
         b.voided ? [h('dt', { text: 'Voided' }), h('dd', {}, `${b.voided.reason}, ${when(b.voided.at)}. Reprinted as `, other(b.voided.reprint) ?? 'not yet', ' with the same ads.')] : null,
         b.reprintOf ? [h('dt', { text: 'Reprint of' }), h('dd', {}, other(b.reprintOf), ' (its label came out wrong)')] : null,
-        b.box ? [h('dt', { text: 'Box' }), h('dd', { text: `#${b.box.boxNumber} · ${b.box.address}${b.box.area ? ` · ${b.box.area}` : ''} · ${{ composed: 'being made', box_printed: 'printed, waiting for its check', mismatch: 'needs its check again', verified: 'checked', sealed: 'sealed', loaded: 'on the van', delivered: 'delivered', returned: 'came back' }[b.box.status] ?? b.box.status}` })] : [h('dt', { text: 'Box' }), h('dd', { text: 'Not in a delivery box (handed out at a machine, or a custom bottle).' })],
-        d ? [h('dt', { text: 'Drop' }), h('dd', {}, d.status === 'delivered' ? `Delivered ${when(d.at)} (night of ${d.night}, stop ${d.stop})${d.atAddressBy === 'driver' ? ', driver confirmed the address' : ''}` : d.status === 'not_delivered' ? `Not delivered: ${d.reason ?? ''}` : `Planned for the night of ${d.night}, stop ${d.stop}`,
+        b.box ? [h('dt', { text: 'Box' }), h('dd', { text: `#${b.box.boxNumber} · ${b.box.address}${b.box.area ? ` · ${b.box.area}` : ''} · ${{ composed: 'being made', box_printed: 'printed, waiting for its check', mismatch: 'needs its check again', verified: 'checked', sealed: 'sealed', loaded: 'on the van', delivered: 'delivered', returned: 'came back' }[b.box.status] ?? W.status(b.box.status)}` })] : [h('dt', { text: 'Box' }), h('dd', { text: 'Not in a delivery box (handed out at a machine, or a custom bottle).' })],
+        d ? [h('dt', { text: 'Drop' }), h('dd', {}, d.status === 'delivered' ? `Delivered ${when(d.at)} (night of ${W.day(d.night)}, stop ${d.stop})${d.atAddressBy === 'driver' ? ', driver confirmed the address' : ''}` : d.status === 'not_delivered' ? `Not delivered: ${d.reason ?? ''}` : `Planned for the night of ${W.day(d.night)}, stop ${d.stop}`,
           d.photo ? [' · ', h('button', { class: 'linkish', type: 'button', onclick: () => openDropPhoto(d.photo.id) }, 'Photo at the door'), d.photo.location === 'unverified' ? h('span', { class: 'pill warn', text: 'unverified location' }) : null] : d.withoutPhoto ? ` · no photo, vouched for by the team: ${d.withoutPhoto.reason}` : '')] : null),
       b.custom ? h('p', { style: 'margin:0', text: 'A custom bottle: no ads on it.' }) : h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Piece', 'Size', 'Ad', ''].map((x) => h('th', { text: x })))),
         h('tbody', {}, b.ads.map((a) => h('tr', {}, h('td', { text: String(a.slot + 1) }), h('td', { text: a.size }), h('td', {}, h('b', { text: a.advertiser }), a.ad ? ` · ${a.ad}` : ''), h('td', {}, a.paid ? h('span', { class: 'pill ok', text: 'Paid' }) : h('span', { style: 'color:var(--muted);font-size:13px', text: a.unsold ? `Unsold space: ${a.unsold}` : 'Free' })))))) ));

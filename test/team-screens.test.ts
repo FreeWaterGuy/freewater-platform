@@ -195,3 +195,20 @@ describe('9: the review preview shows the real fill of unsold space', () => {
     expect(pv.fill.find((x: any) => x.advertiser === 'Well Aware').kind).toBe('charity');
   });
 });
+
+describe('the new team screens speak plain words, in the company’s time zone (src/web/words.js)', () => {
+  it('ops Review → Filler and charity shows when a piece was proposed in Austin’s time, not the browser’s', async () => {
+    const { runPage } = await import('./dom-shim');
+    await call('POST', '/v1/fillers', admin, { kind: 'charity', name: 'Zone Check', headline: 'Wells in Kenya', text: 'Wells that last.' });
+    const api = async (method: string, url: string, body?: unknown) => {
+      const r = await call(method, url, owner, body);
+      if (r.status >= 400) throw new Error(r.body?.error?.message ?? 'error');
+      return r.body;
+    };
+    const page = await runPage('ops.js', { fixtureName: '__FW_OPS_FIXTURE__', rootId: 'root', fixture: { token: owner, start: '/ops/review/fillers', api } });
+    const text = page.text();
+    expect(text).toMatch(/Wells in Kenya/);
+    // Proposed at 16:00 UTC on Nov 2: 10:00 AM in Austin (CST), whatever zone the browser is in.
+    expect(text).toMatch(/proposed Nov 2, 10:00 AM/);
+  });
+});

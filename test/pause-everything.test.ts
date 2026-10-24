@@ -81,6 +81,9 @@ describe('the emergency stop, without the blockchain', () => {
     expect(st.pauses[0]).toMatchObject({ scope: 'all', reason: 'Labels are printing wrong' });
     expect(await order()).toMatchObject({ status: 423, code: 'paused' });
     expect(await call('POST', '/v1/payouts/run', owner, {})).toMatchObject({ status: 423, code: 'paused' });
+    // A reprint from the packing check prints a bottle too (the ops Review/packing screens offer it): refused as well.
+    // (The stop comes before anything about the box is looked at.)
+    expect(await call('POST', '/v1/packs/pk-any/replace', admin, { missingUnitIds: ['u-any'] })).toMatchObject({ status: 423, code: 'paused' });
     // A restart keeps it (it's in the books, not in memory).
     expect(await app.chain.stopped('freewater')).toBe(true);
     // Other companies aren't paused.

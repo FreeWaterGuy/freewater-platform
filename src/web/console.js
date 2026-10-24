@@ -1577,11 +1577,11 @@
         const b = await api('GET', `/v1/console/bottles/${encodeURIComponent(code)}`);
         const row = (k, v) => (v ? h('tr', {}, h('th', { style: 'text-align:left;padding-right:14px', text: k }), h('td', { text: v })) : null);
         out.replaceChildren(section(b.code ?? b.unitId, null, h('table', { class: 'list bottle-found' }, h('tbody', {},
-          row('Status', b.voided ? `Voided at the packing check (${b.voided.reason}); reprinted as ${b.voided.reprint?.code ?? 'not yet'}` : b.status),
+          row('Status', b.voided ? `Voided at the packing check (${b.voided.reason}); reprinted as ${b.voided.reprint?.code ?? 'not yet'}` : W.status(b.status)),
           row('Printed', `${when(b.printedAt)} · ${b.place}`), row('Product', b.product), row('Reprint of', b.reprintOf?.code ?? b.reprintOf?.unitId),
           row('Ads', b.custom ? 'A custom bottle: no ads' : b.ads.map((a) => `${a.advertiser} (${a.size}${a.paid ? ', paid' : a.unsold ? `, ${a.unsold}` : ''})`).join(' · ')),
-          row('Box', b.box ? `#${b.box.boxNumber} · ${b.box.address}${b.box.area ? ` · ${b.box.area}` : ''} · ${b.box.status}` : 'Not in a delivery box'),
-          row('Drop', b.drop ? `${b.drop.status === 'delivered' ? `Delivered ${when(b.drop.at)}` : b.drop.status} (night of ${b.drop.night}, stop ${b.drop.stop})${b.drop.photo ? `, photo at the door${b.drop.photo.location === 'unverified' ? ' (unverified location)' : ''}: see it in Ops → Find a bottle` : ''}` : null)))));
+          row('Box', b.box ? `#${b.box.boxNumber} · ${b.box.address}${b.box.area ? ` · ${b.box.area}` : ''} · ${W.status(b.box.status)}` : 'Not in a delivery box'),
+          row('Drop', b.drop ? `${b.drop.status === 'delivered' ? `Delivered ${when(b.drop.at)}` : W.status(b.drop.status)} (night of ${W.day(b.drop.night)}, stop ${b.drop.stop})${b.drop.photo ? `, photo at the door${b.drop.photo.location === 'unverified' ? ' (unverified location)' : ''}: see it in Ops → Find a bottle` : ''}` : null)))));
       } catch (x) { out.replaceChildren(h('div', { class: 'notice err', text: x.message })); }
     };
     shell('bottles', head('Find a bottle', 'Type the code printed at the bottom of its label’s panel (“Bottle code: B-7F3K29”), with or without “B-”, in any case.'),

@@ -18,6 +18,8 @@
     paused: 'Paused', cancelled: 'Cancelled',
     // an action that needs several people
     proposed: 'Waiting for approvals', approved: 'Approved, waiting', signing: 'Waiting to be signed', expired: 'Expired', failed: 'Failed', noted: 'Noted',
+    // a bottle
+    dispensed: 'Printed and handed out', rendered: 'Waiting to print', filled: 'Waiting to print',
     // a machine command
     pending: 'Waiting', sent: 'Waiting',
   };

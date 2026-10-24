@@ -276,6 +276,20 @@ describe('#14 every company has a public transparency page', () => {
   });
 });
 
+describe('the driver app and the ad portal follow the signed-in company, not the address', () => {
+  it('a licensee’s driver gets its own switches and brand; a licensee’s advertiser its brand', async () => {
+    const asked: string[] = [];
+    const spy = (token: string) => { const real = pageApi(token); return async (m: string, url: string, b?: unknown) => { asked.push(url); return real(m, url, b); }; };
+    await runPage('driver.js', { fixtureName: '__FW_DRIVER_FIXTURE__', rootId: 'root', fixture: { token: ownerToken, api: spy(ownerToken) } });
+    expect(asked).toContain(`/v1/public/features?company=${LIC}`);
+    expect(asked).not.toContain('/v1/public/features?company=freewater');
+    expect(asked).toContain(`/v1/public/app-config?company=${LIC}`);
+    asked.length = 0;
+    await runPage('ads.js', { fixtureName: '__FW_ADS_FIXTURE__', rootId: 'root', fixture: { token: ownerToken, start: '/ads', api: spy(ownerToken) } });
+    expect(asked).toContain(`/v1/public/app-config?company=${LIC}`);
+  });
+});
+
 describe('the sweep: every page, email and label for a test licensee carries its brand, never FreeWater’s', () => {
   it('pages (shells and drawn), the scan footer, the manifest, emails and the label panel', async () => {
     const u = lastUnit();
@@ -291,7 +305,13 @@ describe('the sweep: every page, email and label for a test licensee carries its
     seen['receipt'] = (await runPage('books.js', { fixtureName: '__FW_BOOKS_FIXTURE__', rootId: 'root', fixture: { start: `/r/${u.id}`, api: fetchLike } })).text();
     seen['open books'] = (await runPage('books.js', { fixtureName: '__FW_BOOKS_FIXTURE__', rootId: 'root', fixture: { start: `/books?company=${LIC}`, api: fetchLike } })).text();
     seen['transparency'] = (await runPage('transparency.js', { fixtureName: '__FW_TRANSPARENCY_FIXTURE__', rootId: 'root', fixture: { search: `?company=${LIC}`, api: fetchLike } })).text();
-    for (const start of ['/console', '/console/label-panel', '/console/brand', '/console/company']) seen[`console ${start}`] = (await runPage('console.js', { fixtureName: '__FW_CONSOLE_FIXTURE__', rootId: 'root', fixture: { token: ownerToken, start, api: pageApi(ownerToken) } })).text();
+    for (const start of ['/console', '/console/label-panel', '/console/brand', '/console/company', '/console/pause', '/console/bottles', '/console/security', '/console/agents']) seen[`console ${start}`] = (await runPage('console.js', { fixtureName: '__FW_CONSOLE_FIXTURE__', rootId: 'root', fixture: { token: ownerToken, start, api: pageApi(ownerToken) } })).text();
+    // The ops console, opened at the platform's own address (no ?company=) by the licensee's team: its brand, not the host's.
+    for (const start of ['/ops', '/ops/review', '/ops/review/links', '/ops/review/fillers', '/ops/bottles', '/ops/routes', '/ops/areas', '/ops/books']) seen[`ops ${start}`] = (await runPage('ops.js', { fixtureName: '__FW_OPS_FIXTURE__', rootId: 'root', fixture: { token: ownerToken, start, api: pageApi(ownerToken) } })).text();
+    // The driver's app, the same way (a licensee's driver signed in at the platform's address).
+    seen['driver app'] = (await runPage('driver.js', { fixtureName: '__FW_DRIVER_FIXTURE__', rootId: 'root', fixture: { token: ownerToken, api: pageApi(ownerToken) } })).text();
+    // A page that failed to draw can't leak a name: each drawn page must have drawn its menu and something on it.
+    for (const [where, text] of Object.entries(seen)) if (/^(console|ops|driver) /.test(where)) expect(text.length, `${where} drew nothing`).toBeGreaterThan(80);
     // Data the pages show.
     seen['scan footer'] = JSON.stringify((await call('GET', `/v1/public/experience/${u.id}/0?viewer=viewer-wl-3`)).body.footer);
     seen['receipt data'] = JSON.stringify((await call('GET', `/v1/public/receipts/${u.id}`)).body);

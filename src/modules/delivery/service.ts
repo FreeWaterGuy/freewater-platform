@@ -534,7 +534,7 @@ export class DeliveryService {
       await this.saveRun(r);
     }
     await this.flush();
-    for (const u of told) await this.notify(u, 'We couldn\'t bring your FreeWater today. It\'s back at the micro-factory and comes with your next delivery.');
+    for (const u of told) await this.notify(u, (co) => `We couldn't bring your ${co} delivery today. It's back at the micro-factory and comes with your next delivery.`);
     return { runId, routeId, early, closedOut: closed.map((p) => ({ packId: p.id, stop: p.stop })) };
   }
 

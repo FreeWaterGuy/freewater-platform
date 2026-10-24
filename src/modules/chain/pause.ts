@@ -27,8 +27,8 @@ export interface PauseStop {
 }
 
 export const PAUSE_STOPS: PauseStop[] = [
-  { id: 'printing', label: 'Printing new bottles: orders, packs and delivery nights, the free bottle at a machine, paid custom bottles, labels kept ready offline', feature: 'printing',
-    routes: ['POST /v1/orders', 'POST /v1/packs', 'POST /v1/ops/runs/plan', 'POST /v1/me/vends', 'POST /v1/me/custom-orders', 'POST /v1/machine/buffer'], jobs: [] },
+  { id: 'printing', label: 'Printing new bottles: orders, packs and delivery nights, reprints from the packing check, the free bottle at a machine, paid custom bottles, labels kept ready offline', feature: 'printing',
+    routes: ['POST /v1/orders', 'POST /v1/packs', 'POST /v1/packs/:id/replace', 'POST /v1/ops/runs/plan', 'POST /v1/me/vends', 'POST /v1/me/custom-orders', 'POST /v1/machine/buffer'], jobs: [] },
   { id: 'charity_payouts', label: 'Sending charity payouts', feature: 'giving', routes: ['POST /v1/payouts/run'], jobs: [] },
   { id: 'owner_payouts', label: 'Paying owners', feature: 'books_audit', routes: ['POST /v1/books/owner-payouts'], jobs: [] },
   { id: 'agents_fund', label: 'The AI agents sharing out or spending their fund', feature: 'agents_fund', routes: ['POST /v1/agents/settle', 'POST /v1/agents/:agentId/spend', 'POST /v1/agents/spends/:id/decide'], jobs: [] },

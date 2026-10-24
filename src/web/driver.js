@@ -18,7 +18,7 @@
   const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} } };
   const toastEl = h('div', { class: 'toast', role: 'status', style: 'bottom:calc(150px + env(safe-area-inset-bottom))' }); document.body.append(toastEl);
   let tt; const toast = (m) => { toastEl.textContent = m; toastEl.classList.add('show'); clearTimeout(tt); tt = setTimeout(() => toastEl.classList.remove('show'), 2600); };
-  const S = { token: store.get('fw_driver_token'), me: null, config: null, run: null };
+  const S = { token: fixture?.token ?? store.get('fw_driver_token'), me: null, config: null, run: null };
 
   // The second sign-in step: when it's on, sign-in asks for the code from the authenticator app (or a recovery code).
   const withSecondStep = (r) => (!r || !r.secondStep ? Promise.resolve(r) : new Promise((resolve, reject) => {
@@ -66,9 +66,11 @@
   // ---------- sign in ----------
   async function boot() {
     if (!S.config) S.config = await api('GET', '/v1/public/app-config');
+    if (S.token && !S.me) { try { S.me = await api('GET', '/v1/me'); } catch { S.me = null; } }
+    // The signed-in driver's company is the one shown (its name, brand and switches), whatever address the app opened at.
+    if (S.me?.companyId && S.me.companyId !== S.config.companyId) { S.config = await api('GET', `/v1/public/app-config?company=${encodeURIComponent(S.me.companyId)}`).catch(() => S.config); S.features = null; }
     // What this company switched off (its Features page): the screens don't offer it.
     if (!S.features) S.features = await api('GET', `/v1/public/features?company=${encodeURIComponent(S.config.companyId)}`).catch(() => ({ off: [] }));
-    if (S.token && !S.me) { try { S.me = await api('GET', '/v1/me'); } catch { S.me = null; } }
     if (!S.me) return signIn();
     if (!S.me.scopes?.includes('packs') && !S.me.scopes?.includes('admin')) return screen(h('h1', { class: 'dtitle', text: 'This app is for drivers' }), h('p', { class: 'dsub', text: 'Ask your manager to add you as a driver, then sign in again.' }), signOutBtn());
     return routes();
