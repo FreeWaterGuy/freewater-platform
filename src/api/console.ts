@@ -4,6 +4,7 @@ import { publicEvents, testEvent } from '../modules/webhooks/catalog';
 import { ApiError, obj, S, signedInOwner, type RouteDef, Q } from './http';
 import { personOnlyKeys } from '../modules/console/settings';
 import { approvalSettings, approverStepProblem } from '../modules/accounts/secondStep';
+import { TeamScreens } from '../modules/ops/teamScreens';
 
 /**
  * The white-label console and the developer side: a company's settings and their history, machines, the team,
@@ -65,13 +66,14 @@ export function consoleRoutes(app: App, route: (r: RouteDef) => void) {
 
   // ---------- bottle codes ----------
   // The short code at the bottom of each label's panel ("Bottle code: B-7F3K29", print/bottleCode.ts): the team finds
-  // the bottle from it (a customer reading it out, a returned bottle). Only the company's own bottles; nothing personal.
-  route({ method: 'GET', url: '/v1/console/bottles/:code', params: { code: { type: 'string', minLength: 6, maxLength: 12, pattern: '^[A-Za-z0-9 -]+$' } }, scope: 'admin', summary: 'The bottle a printed bottle code belongs to (“B-7F3K29”; case, dashes and O/0, I/1 mix-ups don’t matter).', handler: async (req, key) => {
-    const companyId = staff(key).companyId;
-    const found = await app.codes.findBottle(companyId, (req.params as any).code);
-    const unit = found ? app.platform.units.get(found.unitId) : undefined;
-    if (!found) throw new ApiError(404, 'not_found', 'No bottle of yours has that code.');
-    return { body: { code: found.code, unitId: found.unitId, ...(unit ? { status: unit.status, productId: unit.productId, locationId: unit.locationId, createdAt: unit.createdAt } : {}) } };
+  // the bottle from it (a customer reading it out, a returned bottle, a bad label at the packing check), as printed or
+  // as typed (case, the "B-", dashes and O/0, I/1 mix-ups don't matter), or by its long id. Owners and ops (a driver
+  // or an advertiser can't). Only the company's own bottles; nothing personal beyond the address its box went to.
+  const screens = new TeamScreens(app.db, app.platform, app.packs, app.delivery);
+  route({ method: 'GET', url: '/v1/console/bottles/:code', params: { code: { type: 'string', minLength: 6, maxLength: 64, pattern: '^[A-Za-z0-9 _-]+$' } }, scope: ['admin', 'orders'], summary: 'The bottle a printed bottle code belongs to (“B-7F3K29”; with or without the “B-”, case, dashes and O/0, I/1 mix-ups don’t matter; or its long id): where and when it printed, the ads on it, its box and house, and the proof of its drop.', handler: async (req, key) => {
+    const found = await screens.bottle(staff(key).companyId, (req.params as any).code);
+    if (!found) throw new ApiError(404, 'not_found', 'No bottle of yours has that code. Check the letters after “B-” on the bottom line of its panel.');
+    return { body: found };
   } });
 
   // ---------- machines ----------

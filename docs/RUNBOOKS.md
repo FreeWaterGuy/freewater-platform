@@ -477,8 +477,11 @@ left. The scan alone is remembered on the stop but not delivered.
 The packing line can't read a bottle (a label torn, smudged, printed off, or missing): it stops the box. Bottles don't
 get lost in packing; a bad label is replaced.
 
-1. Take the bad bottle out and press *Reprint* for it (`POST /v1/packs/:id/replace` with its id). The new bottle has
-   exactly the same ads in the same places, for the same house or person.
+1. Take the bad bottle out. On a phone: *Ops → Routes*, the night, the box's row → *Reprint a bad label…*; tick the
+   bottle whose code matches the one on the bad label (the bottom line of its panel, "Bottle code: B-…"), or type the
+   code (with or without "B-", any case), and press *Reprint with the same ads* (`POST /v1/packs/:id/replace` takes
+   the bottle's id or its printed code). The new bottle has exactly the same ads in the same places, for the same
+   house or person. If the code can't be read at all, tick the bottle the line said was missing.
 2. The bad bottle is voided: it counts against no advertiser (its books lines are reversed, no paid bottle is used, no
    refund or credit is needed); the reprint is billed instead, once. Throw the bad bottle away (it was never handed
    out; its codes open a page but are never billed).
@@ -489,6 +492,41 @@ get lost in packing; a bad label is replaced.
    "reprint(s) cut off by a restart were finished"): the bad bottle voided, the reprint billed and in the box. Then
    the daily reconciliation checks the counts (`prepaid_bottles`, `prepaid_balances`). A reprint cut off before it
    printed is let go at the next press of *Reprint*.
+
+## Find a bottle from the code on its label
+
+A customer reads out "B-7F3K29", a bottle comes back, a driver finds one loose in the van:
+
+1. *Ops → Find a bottle* (or *Console → Review → Find a bottle*). Type the code as read: "B-" is optional, case
+   doesn't matter, O and 0, I/L and 1 are the same. The long id works too.
+2. It shows where and when it printed, the ads on it (paid, or what filled unsold space), its box and the address it
+   went to, and the proof of the drop (time, photo at the door, whether the location was verified). Nothing about who
+   got it: if a person's data is needed, that's a data request (docs/COMPLIANCE.md), not this screen.
+3. "No bottle of yours has that code": check the letters again (U isn't used), or it's another company's bottle.
+   A voided bottle says so and links to its reprint.
+
+## House claims to know about
+
+*Ops → Areas* lists them at the top (and *Today* says how many this week): a house someone already claimed, claimed
+again by someone else; deliveries stopped by a claim only days old (`delivery.newClaimDays`). Nothing to do for most:
+a new household or a second person living there. If a stop looks wrong (a neighbour, not the household), look at the
+house's history and claims; the stop stands until someone at the house starts deliveries again in the app (never
+restart it for them).
+
+## Review: ads, changed links, filler and charity pieces
+
+All in *Ops → Review* (three tabs; the console's *Review* group links there). Who may use it is the company's choice
+(*Console → Team → Who reviews ads*: owners and ops, FreeWater's choice, or owners only; reviewers always). An ops
+person can't change the AI reviewer's settings, approve an ad aimed at a few houses, or pay anything back.
+
+1. **Changed links**: the old link (still live) and the new one, the automatic link-safety check's verdict and
+   reasons, and the AI reviewer's view. Approve (the new link goes live now; it's checked again first and refused if it
+   turned unsafe) or reject with a reason the advertiser sees (10+ characters; the old link stays, the fee is kept).
+   Ads on hold because a link turned bad are listed under it: *Clear the hold…* with what you checked.
+2. **Filler and charity**: each piece on a real label. Approve (it can fill unsold space now) or reject; an approved
+   piece can be stopped at once. The order the list is used in stays in *Console → Ads and prices → Unsold space*.
+3. **Ads**: the preview's other pieces show what fills unsold space today (or "open space" when nothing on the list
+   fits): if that's blank, approve a charity piece or pick ads, so bottles don't print blank pieces.
 
 ## Someone at a house wants deliveries to stop (or to start again)
 

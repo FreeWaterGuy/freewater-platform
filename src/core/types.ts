@@ -184,6 +184,11 @@ export interface CompanyConfig {
   /** Security choices. Owners can be required to use a second sign-in step (a code from an authenticator app). */
   security?: { ownersNeedSecondStep: boolean };
   /**
+   * Who reviews ads (src/modules/ops/teamScreens.ts): 'owners' (and reviewers), or 'owners_ops' (ops people too, signed
+   * in; the default, FreeWater's choice). A person decides either way; refunds stay with owners and finance.
+   */
+  adReview?: { whoReviews: 'owners' | 'owners_ops' };
+  /**
    * The AI agents' own fund and place in the books. Off unless the company turns it on. The agents' fund gets
    * `percentOfExtra` of the upside as it's earned, before costs, the same way and the same share as the charity
    * (FreeWater: 10%): print money on a bottle above the $1 base, and all scans, AR, box sides, custom bottles and

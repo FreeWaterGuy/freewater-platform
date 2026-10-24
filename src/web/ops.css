@@ -33,3 +33,25 @@ textarea.input { min-height: 80px; resize: vertical; }
 .meter { position: relative; width: 110px; height: 22px; border-radius: 6px; background: var(--soft); overflow: hidden; font-size: 12px; }
 .meter i { position: absolute; inset: 0 auto 0 0; opacity: .22; }
 .meter span { position: relative; padding-left: 8px; line-height: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+/* The Review section's tabs, the bottle lookup, the reprint sheet (phones: the packing check is done standing up). */
+.review-tabs { justify-content: space-between; }
+.tabs a.tab { border-radius: 999px; padding: 8px 14px; background: var(--soft); font-weight: 700; color: var(--ink); text-decoration: none; min-height: 36px; display: inline-flex; align-items: center; }
+.tabs a.tab.on { background: var(--black); color: #fff; }
+.link-line ul { margin: 4px 0 0; padding-left: 18px; }
+.link-line code { word-break: break-all; font-size: 14px; }
+.link-line.old code { color: var(--muted); }
+.link-line.new code { font-weight: 700; }
+.filler-pic { max-width: 640px; }
+dl.facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; margin: 0; }
+dl.facts dt { color: var(--muted); font-size: 13px; }
+dl.facts dd { margin: 0; }
+.sheet-wrap { position: fixed; inset: 0; background: rgba(0, 0, 0, .55); display: grid; place-items: end center; z-index: 90; padding: 12px; }
+.sheet { background: #fff; color: var(--ink); border-radius: 20px; padding: 18px; width: 100%; max-width: 520px; max-height: 88vh; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+.pick-bottles { display: flex; flex-direction: column; gap: 6px; }
+.pick-bottle { display: flex; gap: 12px; align-items: center; padding: 10px 12px; border-radius: 14px; background: var(--soft); cursor: pointer; min-height: 48px; }
+.pick-bottle input { width: 22px; height: 22px; flex: none; }
+.pick-bottle span { display: flex; flex-direction: column; min-width: 0; }
+.pick-bottle small { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (min-width: 761px) { .sheet-wrap { place-items: center; } }
+@media (max-width: 760px) { dl.facts { grid-template-columns: 1fr; } dl.facts dt { margin-top: 6px; } }
