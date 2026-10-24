@@ -7,6 +7,7 @@ import { labelSignature } from '../ads/engine';
 import { renderBox, stopCode, type RenderedBox } from './boxRenderer';
 import { companyBox, stickerSetting, type StickerSetting } from './boxSettings';
 import { renderSticker, type RenderedSticker } from './sticker';
+import { siteBase } from '../../core/site';
 
 export interface PackOrder {
   companyId: string;
@@ -182,7 +183,7 @@ export class PackService {
     // use; it's then ready for its check like any printed box.
     // (A box drawn before they were turned off, that never printed, isn't printed either: its code is kept.)
     if (p.featureOn && !p.featureOn(company.id, 'box_ads')) {
-      pack.boxCode ??= pack.rendered?.packUrl ?? (p.codes ? p.codes.pack(company, pack.id) : `${company.receiptBaseUrl.replace(/\/$/, '')}/p/${pack.id}`);
+      pack.boxCode ??= pack.rendered?.packUrl ?? (p.codes ? p.codes.pack(company, pack.id) : `${siteBase(company)}/p/${pack.id}`);
       pack.faces = [];
       delete pack.rendered;
       // Its code on a sticker, printed here with its bottles and put on the box at the packing check: exactly one.

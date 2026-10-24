@@ -103,7 +103,7 @@
     const me = state.me;
     root.replaceChildren(h('div', { class: 'shell' },
       h('aside', { class: 'side' },
-        h('div', { class: 'logo', 'aria-label': 'FreeWater Ads' }, h('span', { text: 'free' }), h('span', { text: 'water' }), h('small', { text: 'Ads' })),
+        h('div', { class: 'logo', 'aria-label': `${state.config?.name ?? ''} Ads` }, h('span', { text: state.config?.brand?.logoTop ?? '' }), h('span', { text: state.config?.brand?.logoBottom ?? '', style: state.config?.brand?.accentColor ? `color:${state.config.brand.accentColor}` : null }), h('small', { text: 'Ads' })),
         h('nav', { 'aria-label': 'Main' },
           link('/ads', { 'aria-current': active === 'overview' ? 'page' : null }, icon(I.chart), 'Overview'),
           !on('ad_chat') ? null : link('/ads/new', { 'aria-current': active === 'new' ? 'page' : null }, icon(I.plus), 'New ad'),
@@ -270,7 +270,7 @@
     return true;
   }
   const pitch = () => h('div', { class: 'left' },
-    h('div', { class: 'logo' }, h('span', { text: 'free' }), h('span', { text: 'water' }), h('small', { text: 'Ads' })),
+    h('div', { class: 'logo' }, h('span', { text: state.config?.brand?.logoTop ?? '' }), h('span', { text: state.config?.brand?.logoBottom ?? '' }), h('small', { text: 'Ads' })),
     h('div', {}, h('h1', {}, 'Put your brand in ', h('span', { text: 'everyone’s hand.' })),
       h('ul', {}, h('li', { text: 'Your ad prints on free bottles of water, fresh, one at a time.' }), h('li', { text: 'Pay for prints, scans, AR launches and sales. Nothing else.' }), h('li', { text: 'Make the ad by chatting. Review it before it prints.' }))),
     h('p', { style: 'opacity:.6;font-size:13px;margin:0', text: 'Every bottle gives to charity, and the books are open.' }));
@@ -343,24 +343,24 @@
       try {
         const o = await api('POST', '/v1/offers', { title: f.title.value.trim(), ...(f.details.value.trim() ? { details: f.details.value.trim() } : {}), products: f.barcodes.value.split(/[\s,]+/).filter(Boolean), retailers: f.stores.value.split(',').map((x) => x.trim()).filter(Boolean), reward, pointsCost: Number(f.points.value || 0), perPerson: Number(f.per.value || 1), maxClaims: Number(f.max.value || 1) });
         await api('POST', `/v1/offers/${o.id}/submit`);
-        toast('Sent to FreeWater to approve.'); go('/ads/offers');
+        toast(`Sent to ${state.config.name} to approve.`); go('/ads/offers');
       } catch (x) { toast(x.message); }
     } },
       h('h2', { class: 'section', text: 'Make an offer' }),
-      h('p', { style: 'margin:0;color:var(--muted)', text: 'People trade points for it, buy your product at any store you list, and send a photo of the receipt. You pay back what they spent (and anything extra) from your reserve. FreeWater approves each offer.' }),
+      h('p', { style: 'margin:0;color:var(--muted)', text: `People trade points for it, buy your product at any store you list, and send a photo of the receipt. You pay back what they spent (and anything extra) from your reserve. ${state.config.name} approves each offer.` }),
       fld('title', 'What it is', inp('title', { maxlength: 80, placeholder: 'A free king-size Snickers' })),
       fld('barcodes', 'The exact products (barcode numbers)', f.barcodes, 'The number under the UPC or EAN barcode. Several? Separate them with commas.'), found,
       fld('stores', 'Where', inp('stores', { placeholder: 'Walmart, Target (or “any”)' })),
       fld('kind', 'The deal', kind), (pctBox = fld('percent', 'Percent off', inp('percent', { type: 'number', min: 1, max: 100, placeholder: '50' }))), (offBox = fld('off', 'Amount off ($)', inp('off', { type: 'number', min: 0, step: '0.01' }))),
       fld('upto', 'Pay back up to ($)', inp('upto', { type: 'number', min: 0, step: '0.01', value: '3.00' }), 'The most paid back for the product itself.'),
       fld('youget', 'Plus, to the person ($)', inp('youget', { type: 'number', min: 0, step: '0.01', placeholder: '0.25' }), 'Optional: makes it negatively priced.'),
-      fld('cause', 'Plus, to the cause ($)', inp('cause', { type: 'number', min: 0, step: '0.01', placeholder: '0.10' }), `Optional: goes to ${state.me?.company?.cause ?? 'FreeWater’s cause'}.`),
+      fld('cause', 'Plus, to the cause ($)', inp('cause', { type: 'number', min: 0, step: '0.01', placeholder: '0.10' }), `Optional: goes to ${state.me?.company?.cause ?? `${state.config.name}’s cause`}.`),
       fld('points', 'Points it costs', inp('points', { type: 'number', min: 0, value: 100 })), fld('per', 'Each person, up to', inp('per', { type: 'number', min: 1, value: 1 })), fld('max', 'In all, up to', inp('max', { type: 'number', min: 1, value: 1000 })),
       fld('details', 'Anything else (optional)', inp('details', { maxlength: 500 })),
       h('div', {}, h('button', { class: 'btn', type: 'submit' }, 'Send for approval')));
     const showDeal = () => { pctBox.hidden = kind.value !== 'percent_off'; offBox.hidden = kind.value !== 'cents_off'; };
     kind.addEventListener('change', showDeal); showDeal();
-    const status = { draft: 'Draft', pending: 'Waiting for FreeWater', live: 'Live', paused: 'Paused' };
+    const status = { draft: 'Draft', pending: `Waiting for ${state.config.name}`, live: 'Live', paused: 'Paused' };
     shell('offers',
       h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Offers' }), h('p', { text: 'Free, cheaper or negatively priced: your product at any store, paid for from your reserve.' }))),
       list.length ? h('div', { class: 'cards', style: 'margin-bottom:24px' }, list.map((o) => h('div', { class: 'panel', style: 'gap:6px' }, h('b', { text: o.title }), h('span', { text: o.deal }), h('span', { style: 'color:var(--muted)', text: `${status[o.status] ?? o.status} · ${o.claimed} claimed · ${o.left} left` }),
@@ -390,7 +390,7 @@
         h('section', { class: 'panel', style: 'gap:10px' }, h('h2', { class: 'section', text: '1. Add our tag to your website' }),
           h('p', { style: 'margin:0', text: 'Put this on every page, just before </head>. It remembers when someone arrived from one of your bottles.' }), codeBox(t.install.everyPage),
           h('p', { style: 'margin:0', text: 'On your order confirmation page, report the sale with your order number and the amount:' }), codeBox(t.install.orderConfirmation),
-          h('p', { style: 'margin:0;color:var(--muted);font-size:14px', text: `It only reports sales from people who came from a bottle in the last ${plural(t.clickWindowDays, 'day', 'days')}, or who used one of your FreeWater coupons. Nothing about your other customers is sent. Sales the tag reports show here as unverified and aren’t billed until your server confirms them (below) or the coupon is used at the counter.` })),
+          h('p', { style: 'margin:0;color:var(--muted);font-size:14px', text: `It only reports sales from people who came from a bottle in the last ${plural(t.clickWindowDays, 'day', 'days')}, or who used one of your ${state.config.name} coupons. Nothing about your other customers is sent. Sales the tag reports show here as unverified and aren’t billed until your server confirms them (below) or the coupon is used at the counter.` })),
         h('section', { class: 'panel', style: 'gap:10px' }, h('h2', { class: 'section', text: '2. Say which websites are yours' }),
           h('form', { style: 'display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end', onsubmit: async (e) => { e.preventDefault(); try { await api('POST', '/v1/ads/tracking/domains', { domains: domains.value.split(/[\s,]+/).filter(Boolean) }); toast('Saved. Your tag now reports from these sites.'); } catch (x) { toast(x.message); } } },
             h('div', { class: 'field', style: 'flex:1;min-width:240px' }, h('label', { for: 't-domains', text: 'Your websites' }), domains), h('button', { class: 'btn', type: 'submit' }, 'Save')),

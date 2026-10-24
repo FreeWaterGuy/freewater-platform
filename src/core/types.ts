@@ -101,6 +101,12 @@ export interface CompanyConfig {
   receiptBaseUrl: string; // where scan and receipt links point, e.g. https://go.freewater.io
   /** A short address just for QR codes, e.g. https://fw.ac. Shorter means fewer, bigger squares. Defaults to receiptBaseUrl. */
   scanBaseUrl?: string;
+  /**
+   * The company's own web domain for its codes and pages (src/core/site.ts; docs/RUNNING.md "A company's own domain").
+   * Set and checked from the console's Company page, never by a plain settings save: once `verified` (its DNS shows the
+   * `token`), codes printed for the company use it; until then they use `receiptBaseUrl` (its platform subdomain).
+   */
+  domain?: { host: string; token: string; verified: boolean; verifiedAt?: string; verifiedBy?: string };
   brand: {
     logoTop: string; // "free"
     logoBottom: string; // "water"
@@ -732,8 +738,15 @@ export interface LabelPanelSettings {
   icons: { name: string; image: PanelImage }[];
   /** In the accent colour ("PLEASE REFILL", "AND RECYCLE"). */
   refill: string[];
-  /** Who makes it and how to reach them ("Manufactured by:", "RAIN Bottling Co", … phone, email). */
+  /** Who makes it ("Manufactured by:", "RAIN Bottling Co", …); older panels also carry the phone and email here. */
   maker: string[];
+  /** How to reach the company (phone, email, web), printed after the maker's lines. */
+  contact?: string[];
+  /**
+   * The company's own line in the small print ("Bottled for Peak Spring Water Co."). Unset: the "Bottled for …" line of
+   * the Brand page's product facts, if there is one; empty: none.
+   */
+  bottledFor?: string;
   /** In italics ("Processed by ozonation"). */
   process: string;
   /** The recycling mark: a plain one drawn by the platform, an uploaded one, or none. */

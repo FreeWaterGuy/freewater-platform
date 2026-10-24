@@ -52,7 +52,8 @@ import { FeatureError } from '../modules/features/service';
 import type { App } from '../app';
 import { findApiKey, type ApiKey, type Scope , PersistencePaused } from '../db/store';
 import { LeaseLostError } from '../db/leaseChecked';
-import { OrderConflictError, ReprintError } from '../platform';
+import { OrderConflictError, PanelIncompleteError, ReprintError } from '../platform';
+import { companyForRequest } from '../core/site';
 import type { Campaign, Share } from '../core/types';
 import { productWords, sizeRefusal } from '../modules/ads/layoutChoice';
 import { stickerPlace } from '../modules/packs/boxSettings';
@@ -1133,6 +1134,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     'ops.css': { type: 'text/css', path: join(webDir, 'ops.css') },
     'books.js': { type: 'text/javascript', path: join(webDir, 'books.js') },
     'books.css': { type: 'text/css', path: join(webDir, 'books.css') },
+    'transparency.js': { type: 'text/javascript', path: join(webDir, 'transparency.js') },
+    'transparency.css': { type: 'text/css', path: join(webDir, 'transparency.css') },
     'console.js': { type: 'text/javascript', path: join(webDir, 'console.js') },
     'console.css': { type: 'text/css', path: join(webDir, 'console.css') },
     'labelviews.js': { type: 'text/javascript', path: join(webDir, 'labelviews.js') },
@@ -1141,6 +1144,21 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   const cache = new Map<string, Buffer>();
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- only paths from the fixed static-file table above
   const file = (p: string) => { let b = cache.get(p); if (!b || process.env.NODE_ENV !== 'production') cache.set(p, (b = readFileSync(p))); return b; };
+  // Every page's shell (its title and the no-JavaScript line) carries the name of the company the page is for: the
+  // bottle's or box's company, the one named (?company= / ?c=), or the one this web address belongs to. Never the
+  // platform's name on another company's page.
+  const pageCompany = (req: FastifyRequest) => {
+    const p: any = req.params ?? {}, q: any = req.query ?? {};
+    const own = typeof p.unitId === 'string' ? platform.units.get(p.unitId)?.companyId : typeof p.packId === 'string' ? packs.packs.get(p.packId)?.companyId : undefined;
+    return own ? platform.companies.get(own) : companyForRequest(platform.companies, q.company ?? q.c, req.headers.host);
+  };
+  const htmlEsc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  server.addHook('onSend', async (req, reply, payload) => {
+    if (!(Buffer.isBuffer(payload) || typeof payload === 'string') || !String(reply.getHeader('content-type') ?? '').startsWith('text/html')) return payload;
+    const c = pageCompany(req);
+    if (!c || c.id === PLATFORM_COMPANY) return payload;
+    return String(payload).replace(/FreeWater/g, htmlEsc(c.name));
+  });
   const page = async (_req: FastifyRequest, reply: FastifyReply) => reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', "default-src 'self'; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' blob: data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; frame-ancestors 'none'").send(file(join(webDir, 'scan.html')));
   for (const u of ['/s/:unitId/:slot', '/p/:packId', '/b/:packId/:face']) server.get(u, page);
   // The same page inside the advertiser portal, showing a draft before it exists. Only this site may frame it.
@@ -1161,6 +1179,8 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   server.get('/books', booksPage);
   server.get('/r/:unitId', booksPage); // the QR on every bottle's black panel opens its open-books receipt
   server.get('/books/*', booksPage);
+  // Each company's public transparency page (?company=<id>, or the company this web address belongs to).
+  server.get('/transparency', async (_req, reply) => reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', "default-src 'self'; img-src 'self' data:; connect-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; frame-ancestors 'none'").send(file(join(webDir, 'transparency.html'))));
   // The white-label console and the developer portal: one page; /developers is readable without signing in.
   const consolePage = async (_req: FastifyRequest, reply: FastifyReply) => reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', "default-src 'self'; img-src 'self' data: blob:; connect-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; frame-ancestors 'none'").send(file(join(webDir, 'console.html')));
   for (const u of ['/console', '/console/*', '/developers', '/developers/*']) server.get(u, consolePage);
@@ -1172,9 +1192,12 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   server.get('/app', appPage);
   // The games, for points: /play?c=<company>.
   server.get('/play', async (_req, reply) => reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('content-security-policy', "default-src 'self'; img-src 'self' data: blob:; connect-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; frame-ancestors 'none'").send(file(join(webDir, 'play.html'))));
+  const appCompany = (req: FastifyRequest) => companyForRequest(platform.companies, (req.query as any)?.company, req.headers.host);
   server.get('/app/*', async (req, reply) => {
     if (req.url.split('?')[0] === '/app/manifest.webmanifest') {
-      return reply.type('application/manifest+json').send({ name: 'FreeWater', short_name: 'FreeWater', start_url: '/app', display: 'standalone', background_color: '#FFFFFF', theme_color: '#FFFFFF', icons: [{ src: '/static/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' }] });
+      // The app's name on a phone's home screen is the company's: the one this address belongs to (?company= or its host).
+      const c = appCompany(req);
+      return reply.type('application/manifest+json').send({ name: c?.name ?? 'Free water', short_name: (c?.name ?? 'Free water').slice(0, 12), start_url: c && c.id !== PLATFORM_COMPANY ? `/app?company=${c.id}` : '/app', display: 'standalone', background_color: '#FFFFFF', theme_color: c?.brand.panelColor ?? '#FFFFFF', icons: [{ src: '/static/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' }] });
     }
     return appPage(req, reply);
   });
@@ -1213,7 +1236,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       const b: any = req.body ?? {};
       securityLog.record({ kind: 'sign_in_failed', companyId: typeof b.companyId === 'string' && platform.companies.has(b.companyId) ? b.companyId : null, actor: mask(b.to), ip: req.ip, detail: { reason: err.code ?? 'invalid' } }, `sif:${req.ip}:${b.to}`);
     }
-    if (err instanceof ApiError || err instanceof PersistencePaused || err instanceof LeaseLostError || err instanceof OrderConflictError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
+    if (err instanceof ApiError || err instanceof PersistencePaused || err instanceof LeaseLostError || err instanceof OrderConflictError || err instanceof PanelIncompleteError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
     if (err instanceof AccountsError || err instanceof PaymentError || err instanceof ExperienceError || err instanceof AssetError || err instanceof AdsError || err instanceof DesignError || err instanceof DeliveryError || err instanceof BooksError || err instanceof WebhookError || err instanceof ConsoleError || err instanceof FleetError || err instanceof AttributionError || err instanceof LotteryError || err instanceof VideoError || err instanceof DataError || err instanceof NumberLineError || err instanceof FeatureError) return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
     if (err.code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE') return reply.code(415).send({ error: { code: 'unsupported_type', message: 'Send JSON, or for uploads a .glb, PNG, JPEG, WebP or MP4 file.' } });
     if (err.code === 'FST_ERR_CTP_BODY_TOO_LARGE') return reply.code(413).send({ error: { code: 'too_large', message: 'That is too big to upload.' } });
@@ -1226,7 +1249,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     if (/^Unknown (bottle|unit|pack)/i.test(err.message)) return reply.code(404).send({ error: { code: 'not_found', message: err.message } });
     // The database unreachable (restarting, failing over): say so plainly, and leave the alerting to the saving check.
     if (/ECONNREFUSED|ECONNRESET|ETIMEDOUT|Connection terminated|terminating connection|the database system is (starting up|shutting down)|timeout exceeded when trying to connect|Client has encountered a connection error/i.test(String(err?.message ?? '') + String(err?.code ?? ''))) {
-      return reply.code(503).header('retry-after', '5').send({ error: { code: 'database_unavailable', message: 'FreeWater can’t reach its database for a moment. Please try again shortly.' } });
+      return reply.code(503).header('retry-after', '5').send({ error: { code: 'database_unavailable', message: 'We can’t reach the database for a moment. Please try again shortly.' } });
     }
     server.log.error(err);
     // To the error tracker with its stack, the route's pattern and the company (never the address, body or headers);

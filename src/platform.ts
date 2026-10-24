@@ -9,6 +9,7 @@ import { AuctionStats, momentAt } from './modules/ads/auction';
 import { Ledger } from './modules/ledger/ledger';
 import type { RenderedLabel } from './modules/print/contract';
 import { printReady } from './modules/print/renderer';
+import { panelGapMessage, panelGaps } from './modules/print/panel';
 import { houseOnlyAdEngine } from './modules/ads/engine';
 import { blankCampaign, blankCampaignId, keepOwnOut, noUnsold, type UnsoldContext } from './modules/fillers/unsold';
 import type { UnsoldFiller } from './modules/ads/contract';
@@ -44,6 +45,15 @@ export class ReprintError extends Error {}
 export class OrderConflictError extends Error {
   status = 409; code = 'order_conflict';
   constructor() { super('That order id is already used for a different bottle. Start a new order.'); }
+}
+
+/**
+ * A company whose label panel is missing a required part (its name, contact, maker, or the product's contents and
+ * source): nothing prints until it's filled in, and the message says what's missing (src/modules/print/panel.ts).
+ */
+export class PanelIncompleteError extends Error {
+  status = 409; code = 'panel_incomplete';
+  constructor(message: string, public gaps: string[]) { super(message); }
 }
 
 export interface PlatformOptions {
@@ -297,11 +307,18 @@ export class Platform {
     return { ok: true, unit, label, attempts: 0 };
   }
 
+  /** Refuses (before anything is filled, held or billed) when the company's panel is missing a required part. */
+  private panelReady(company: CompanyConfig, product: Product) {
+    const gaps = panelGaps(company, product);
+    if (gaps.length) throw new PanelIncompleteError(panelGapMessage(company, gaps), gaps);
+  }
+
   /** Steps 1 and 2: fill the slots and draw the label. Nothing is billed yet. */
   private async fillAndRender(opts: OrderOptions & { orderId: string }) {
     const company = need(this.companies, opts.companyId, 'company');
     const product = need(this.products, opts.productId, 'product');
     const location = need(this.locations, opts.locationId, 'location');
+    this.panelReady(company, product);
     const kind = opts.custom ? 'custom' : 'ad_supported';
 
     this.bus.publish('order.created', company.id, { orderId: opts.orderId, locationId: location.id, productId: product.id, kind, customerId: opts.custom?.customerId, packId: opts.packId }, opts.orderId);
@@ -502,6 +519,7 @@ export class Platform {
     const company = need(this.companies, old.companyId, 'company');
     const product = need(this.products, old.productId, 'product');
     const location = need(this.locations, old.locationId, 'location');
+    this.panelReady(company, product);
     this.bus.publish('order.created', company.id, { orderId, locationId: location.id, productId: product.id, kind: old.kind, customerId: old.ownerId, packId: old.packId }, orderId);
     const unit: Unit = {
       id: newId('u'), companyId: company.id, productId: product.id, locationId: location.id, kind: old.kind, ownerId: old.ownerId,

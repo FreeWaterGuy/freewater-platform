@@ -2892,6 +2892,14 @@ alter table ad_benchmark_snapshots add column epsilon double precision;
 alter table ad_versions add column as_is jsonb;
 `,
   },
+  {
+    // A company's own domain for its codes and pages (src/core/site.ts): no two companies ever hold the same one, even
+    // when two saves race (the console checks first; this is the guarantee).
+    id: '080_company_domains',
+    sql: `
+create unique index companies_own_domain on companies ((lower(config->'domain'->>'host'))) where config->'domain'->>'host' is not null;
+`,
+  },
 ];
 
 /** Runs every migration not yet run (or, for tests that start from an older schema, those in `list`). */

@@ -1,3 +1,4 @@
+import { companyForRequest, siteBase, siteHosts } from '../core/site';
 import { adArea, placementShare } from '../modules/ads/layouts';
 import { outlineText } from '../modules/print/outline';
 import { houseAd } from '../modules/fillers/house';
@@ -100,12 +101,10 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
   // ---------- public ----------
 
   route({ method: 'GET', url: '/v1/public/app-config', scope: 'public', summary: 'Which company this app is for, its brand, and which web addresses its QR codes use.', handler: async (req) => {
-    const id = String((req.query as any).company ?? process.env.APP_COMPANY ?? 'freewater');
-    const company = platform.companies.get(id);
+    // The company named, else the one this web address belongs to (its own domain or platform address), else the app's.
+    const company = companyForRequest(platform.companies, (req.query as any).company, req.headers.host);
     if (!company) throw notFound('Company');
-    let host = '';
-    try { host = new URL(company.receiptBaseUrl).host; } catch {}
-    return { body: { companyId: company.id, name: company.name, brand: company.brand, hosts: host ? [host] : [] } };
+    return { body: { companyId: company.id, name: company.name, brand: company.brand, hosts: siteHosts(company), site: siteBase(company) } };
   } });
 
   route({ method: 'GET', url: '/v1/public/companies/:companyId/machines', scope: 'public', summary: "A company's machines, for the map.", handler: async (req) => {
@@ -147,7 +146,7 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     if (key!.locationId && key!.locationId !== location.id) throw notFound('Machine');
     const c = await presence.current(location.id);
     const company = platform.companies.get(key!.companyId)!;
-    return { body: { ...c, url: `${company.receiptBaseUrl.replace(/\/$/, '')}/app/m/${location.id}?c=${c.code}` } };
+    return { body: { ...c, url: `${siteBase(company)}/app/m/${location.id}?c=${c.code}` } };
   } });
 
   // ---------- people ----------

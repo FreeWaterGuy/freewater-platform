@@ -15,6 +15,7 @@ import { targetingPremium } from '../modules/ads/targeting';
 import { engagementFee } from '../modules/ads/billing';
 import { ExperienceError } from '../modules/experiences/service';
 import { ApiError, notFound, obj, S, teamPersonOf, type RouteDef } from './http';
+import { siteBase } from '../core/site';
 
 /**
  * QR codes (logos, static or dynamic, versions of the call to action, AI personalization), AR that follows the
@@ -48,7 +49,7 @@ export function codesArRoutes(app: App, server: FastifyInstance, route: (r: Rout
     if (b.logo !== undefined) { const bad = checkQrLogo(b.logo); if (bad) throw new ApiError(422, 'logo_refused', `The logo: ${bad}.`); }
     if (b.color !== undefined) { const bad = checkQrColor(b.color); if (bad) throw new ApiError(422, 'color_refused', bad); }
     const company = platform.companies.get(key!.companyId)!;
-    const text = b.text ?? `${(company.scanBaseUrl ?? company.receiptBaseUrl).replace(/\/$/, '').toUpperCase()}/Q/7KX2M9QPA4ZR1C`;
+    const text = b.text ?? `${(company.scanBaseUrl ?? siteBase(company)).replace(/\/$/, '').toUpperCase()}/Q/7KX2M9QPA4ZR1C`;
     const style = { ...(b.brandInitials ? { logo: monogramLogo(company.brand) } : {}), ...(b.logo ? { logo: b.logo } : {}), ...(b.color ? { color: b.color } : {}), ...(b.logoShare ? { logoShare: b.logoShare } : {}) };
     const plan = qrPlan(text, style);
     return { body: {

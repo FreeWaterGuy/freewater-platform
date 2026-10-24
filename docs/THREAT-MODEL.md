@@ -927,6 +927,9 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 461 | `POST /v1/pause` | [admin, ledger] | yes | any one owner or finance person, at once, with a reason; never a key; no second step (pausing is never slowed) | OK (stops printing and money leaving: 423 `paused` on the routes in `PAUSE_STOPS`; unpausing is the usual approved step and wait) |
 | 462 | `GET /v1/ops/packs/:id/bottles` | [admin, packs] | no | team only (no advertiser/machine key); only the company's own boxes | OK (2026-10-24; each bottle's printed code and its ads' names, to pick a bad label at the packing check; nothing about who lives there) |
 | 463 | `GET /v1/ops/house-notices` | [admin, packs] | no | team only (no advertiser/machine key) | OK (2026-10-24; a house claimed again, deliveries stopped by a claim days old: the house, its area and when, never who) |
+| 464 | `POST /v1/console/domain` | admin | no | team only, a person signed in (403 for a service key); the company's own; a domain another company holds or the platform's own is refused | OK (080: one domain per company, a unique index; saved unchecked: codes don't use it yet) |
+| 465 | `POST /v1/console/domain/verify` | admin | no | team only, a person signed in; the company's own | OK (DNS TXT check; only then do new codes use the domain; an old version put back never restores a domain) |
+| 466 | `GET /v1/public/companies/:companyId/transparency` | public | — | — | OK (public by design; Transparency → Public transparency page; only the company's own settings and books, no personal data) |
 
 ---
 

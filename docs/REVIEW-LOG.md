@@ -524,3 +524,59 @@ agent's own suggestion, which only turns the second step on). The browser sweep 
 Not checked: real phones; whether the founder wants the emergency stop to include printing (it's what was asked, but
 unpausing takes approvals and the wait, so a mistaken pause holds delivery nights until two others approve: the
 founder should confirm); whether ops people (not only owners and finance) should be able to press it.
+
+## White label: the licensee video's problems, and a public transparency page (spec checker, 2026-10-24, branch `m-wl`)
+
+The founder's rule: everything is modular and white-label; FreeWater's name never shows where a licensee's should.
+Items #19, #20, #22–#27 and #14 of the walkthrough list. Every fix has a test in `test/white-label.test.ts`, each shown
+failing with its fix taken out (the old file, or the one line reverted) and passing with it.
+
+| Date | Role | Severity | Pattern | Where | Finding | Fix / test |
+|---|---|---|---|---|---|---|
+| 2026-10-24 | Spec checker | HIGH | P13 | `ConsoleService.createCompany` | A new licensee was `structuredClone(FreeWater)`: its label panel ("free water", "@freewater.io", "for FreeWater Inc", FreeWater's phone and email), its short QR address and accent blue came along, so its bottles printed FreeWater's panel. | The panel, `scanBaseUrl` and `domain` are never copied; `panelOf` builds the panel from the company's own brand, with a "Bottled for <name>" line and blank maker/contact lines; a neutral default accent. Test: `#19 … starts from its own brand`. |
+| 2026-10-24 | Spec checker | HIGH | P14 | `Platform.fillAndRender`, `reprintNow` (`panelReady`) | Nothing stopped a company printing a panel missing its name, maker, contact or the product's contents/source. | `panelGaps` + `PanelIncompleteError` (409 `panel_incomplete`, plain words) before anything is filled, held or billed, on order, prepare (Model 6 stock) and reprint; the console's Label panel page and Getting started list what's missing. Tests: `#19 refuses to print …`, `prints once …`. |
+| 2026-10-24 | Spec checker | MEDIUM | P16 | `print/panel.ts` `build` | The Brand page's "Bottled for <company>" product-fact line never printed once a company had a panel (only panel-less companies printed product facts). | `bottledFor` on the panel (editable on the Label panel page; unset: the Brand page's "Bottled for …" line). Tests: `#27`. |
+| 2026-10-24 | Spec checker | MEDIUM | P3 | `web/books.js` `bottlePage`, header | A licensee's bottle receipt loaded the platform company's summary first and fell back to the word "freewater": "freewater OPEN BOOKS" on its receipt. | The receipt switches to the bottle's own company (`companyId` from the bottle), never a hard-coded name; `q()` compares with the address's own company, not `'freewater'`; footer links the transparency page. Test: `#20`. |
+| 2026-10-24 | Spec checker | MEDIUM | P3 | `ConsoleService.createCompany` email; siblings `DeliveryService.notify`, `BooksService` bank reference, `server.ts` 503 message | Welcome subject "… is set up on FreeWater"; delivery texts "Your 6-pack of FreeWater", "Your FreeWater delivery"; the charity transfer's bank reference "FreeWater T-…"; "FreeWater can't reach its database". | Each names the company (or is neutral). Tests: `#22`, the sweep (emails). |
+| 2026-10-24 | Spec checker | LOW | P3 | `server.ts` manifest; siblings: every page shell's `<title>`/noscript, `app.js`, `ads.js`, `ops.js`, `driver.js`, `machine.js`, `scan.js` toasts | The app manifest, page titles and logos were hard-coded "FreeWater"/"free water". | Manifest and shells are served in the name of the company the page is for (its bottle's, `?company=`, or its host: one `onSend` hook); the pages read the logo and name from `app-config`. Tests: `#23`, the sweep. |
+| 2026-10-24 | Spec checker | MEDIUM | P16 | `web/scan.js` `panel` | "This bottle carries our own message" whenever no ad on it was paid, including when its pieces were other businesses' ads printed free in unsold space. | The footer carries `freeAds` and the scanned piece's owner; the page says the ads are other businesses' and causes', and "The ad above is X's, not <company>'s; <company>'s own space is this panel". Test: `#24`. |
+| 2026-10-24 | Spec checker | MEDIUM | — | codes (`renderer`, `codes/service` `scanBase`, packs, box renderer, fleet, consumer, books payouts, artwork, ads preview) | A licensee's codes could only live on `…go.freewater.io` (or a `receiptBaseUrl` typed with no proof). | `domain` setting (`src/core/site.ts`): set by a person, used only once a DNS TXT check passes (`siteBase`); every code builder uses `siteBase`; `app-config` and the manifest answer by host; an old version put back never restores a domain (P3); one domain per company (migration 080, unique index). Tests: `#25`. Docs: RUNNING *A company's own domain*. |
+| 2026-10-24 | Spec checker | LOW | — | `console.js` shell, `console.css` | The licensee console's sidebar logo line was FreeWater blue; the console also took its name and switches from the address's company, not the signed-in one ("Welcome to FreeWater" on a licensee's console opened without `?company=`). | Sidebar in the company's panel/text/accent colours; after `GET /v1/console` the shell reloads the signed-in company's config and switches. Tests: `#26`, the sweep. |
+| 2026-10-24 | Spec checker | HIGH | P5 / P13 | `createCompany`; `UnsoldSpace.picks` | A new licensee copied FreeWater's unsold-space picks (FreeWater's advertisers' campaign ids), and the filler took a pick from any company: another company's advertisers on the licensee's bottles. | Picks are never carried over, and a pick is used only if it's the company's own campaign. Test: `#19 never carries over the template's unsold-space picks` (the filter is defence in depth; PLAUSIBLE path, no test drives a foreign pick through the filler). |
+| 2026-10-24 | Spec checker | MEDIUM | P16 | (missing) | Docs referred to "your transparency page" (feature list switch) but no page existed (#14). | `GET /v1/public/companies/:id/transparency` + `/transparency` page, switch `transparency_page` (Transparency; on; its extras opt-in), linked from scan pages and receipts. Tests: `#14` (four). |
+
+**Rules table** (rule → code → test → status):
+
+| Rule (docs) | Code | Test | Status |
+|---|---|---|---|
+| New things start safe, never a copy of a live company's identity (REVIEW-PATTERNS P13) | `createCompany` deletes `labelPanel`, `scanBaseUrl`, `domain` | `#19 starts from its own brand` | enforced (was contradicted) |
+| A company's panel is its own (README *The company panel*; SWITCHES *Label panel*) | `panelOf`, `bottledForOf` | `#19`, `#27` | enforced |
+| Bottles don't print without the panel's required parts (new) | `Platform.panelReady` | `#19 refuses to print` | enforced |
+| FreeWater's name never where a licensee's should be (founder) | page `onSend` hook, web pages, emails, codes | the sweep | enforced; allow-list below |
+| Where codes point is a person's decision, proved before use (new; SWITCHES *Own domain*) | `setDomain`/`verifyDomain`, routes need `key.userId`, `restore` keeps the current domain | `#25` (three) | enforced |
+| One domain per company | migration 080 | `#25 … another company can't take it` | enforced |
+| Ads are third-party; only the panel is the company's (README) | scan footer `freeAds`/`scanned`, `scan.js` | `#24` | enforced (was contradicted) |
+| Each company chooses how open to be; new companies quiet (README *Transparency*) | `transparencyPage` (extras from `feature_list`, `transparency.counters`) | `#14 … quiet` | enforced |
+| Off means off for that company (SWITCHES) | `transparency_page` route gate, `ExperienceService.transparencyUrl` | `#14 is a switch` | enforced |
+
+Siblings searched: every `receiptBaseUrl` used to build a code or link (all now `siteBase`); every `messenger.send`
+(welcome, delivery, charity transfer, sign-in already used the brand); every hard-coded "FreeWater"/"freewater"/"free"
+"water" logo in `src/web` (app, ads, ops, driver, machine, console, scan, books) and every HTML shell; AI prompts (the ad
+rater named FreeWater; `ai/routing.ts` already swaps the operator's name into the others). Two existing tests encoded the
+old behaviour and were updated: `console.test.ts` (a licensee now fills its panel before its first bottle) and
+`label-print.test.ts` (a panel made from the brand prints its "Bottled for" line, not every product fact).
+
+Allowed on purpose (the platform speaking as itself, not as the company): the Features page's "FreeWater's choice"
+column, the developer portal ("Build on FreeWater", the `FreeWater-Signature` webhook header), the OpenAPI title, the
+"Share with the platform (FreeWater)" data setting, and a licensee's platform address (`<id>.go.freewater.io`) among the
+hosts its app follows, for codes printed before its own domain was checked. No "powered by" line is printed anywhere.
+
+For the founder: (1) *Public transparency page* is on for new companies (its basics are disclosures: how the bottle is
+paid for, data and opt-outs), while what it publishes beyond them (switch list, live counters, live feed, fingerprints)
+starts off; say if the page itself should start off for new companies instead. (2) A legacy panel counts as having
+contact details when its maker's lines hold a phone, email or web address (FreeWater's do). (3) The Brand page's product
+facts still print on delivery boxes' info strips; only their "Bottled for" line reaches the label panel.
+
+Not checked: real DNS (a stub resolver), real certificates for a company's domain, a real phone adding the app to its
+home screen, real browsers (the pages ran in a small DOM stand-in, `test/dom-shim.ts`), and whether the panel's
+required parts match each state's labelling law (a lawyer should confirm; COMPLIANCE).

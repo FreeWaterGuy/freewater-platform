@@ -175,7 +175,7 @@ export class BooksService {
     const t = (await this.db.query<any>(`select t.*, c.name as charity_name, c.payout_label, c.email as charity_email from charity_transfers t join charities c on c.id = t.charity_id where t.id = $1 and t.status = 'sending'`, [id])).rows[0];
     if (!t) return this.transfer(id);
     const amountCents = n(t.amount_cents);
-    const r = await this.payouts.send({ charityName: t.charity_name, payoutLabel: t.payout_label, amountCents, reference: `FreeWater ${t.number}`, idempotencyKey: `${companyId}:${id}` });
+    const r = await this.payouts.send({ charityName: t.charity_name, payoutLabel: t.payout_label, amountCents, reference: `${company(this.platform, companyId).slice(0, 24)} ${t.number}`, idempotencyKey: `${companyId}:${id}` });
     const token = randomBytes(18).toString('base64url');
     // Sent: its line goes in the books first, and is stored, before the transfer is marked sent. A crash in between
     // leaves it 'sending' with its line already counted, and the next run asks the bank again with the same key (the
@@ -476,7 +476,7 @@ export class BooksService {
   }
 }
 
-function company(p: Platform, id: string) { return p.companies.get(id)?.name ?? 'FreeWater'; }
+function company(p: Platform, id: string) { return p.companies.get(id)?.name ?? id; }
 export function describeGiving(c: CompanyConfig) {
   const g = c.giving;
   if (g.mode === 'per_unit') return `${g.centsPerUnit}¢ from every bottle`;

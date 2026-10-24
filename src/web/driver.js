@@ -78,8 +78,8 @@
   function signIn() {
     let to = '';
     const step1 = () => {
-      const input = h('input', { class: 'input', id: 'd-email', type: 'email', autocomplete: 'email', placeholder: 'you@freewater.io' });
-      screen(h('div', { class: 'logo big' }, h('span', { text: 'free' }), h('span', { text: 'water' })), h('h1', { class: 'dtitle', text: 'Driver sign in' }),
+      const input = h('input', { class: 'input', id: 'd-email', type: 'email', autocomplete: 'email', placeholder: 'you@work.com' });
+      screen(h('div', { class: 'logo big', 'aria-label': S.config?.name ?? '' }, h('span', { text: S.config?.brand?.logoTop ?? '' }), h('span', { text: S.config?.brand?.logoBottom ?? '' })), h('h1', { class: 'dtitle', text: 'Driver sign in' }),
         h('form', { style: 'display:flex;flex-direction:column;gap:12px', onsubmit: async (e) => { e.preventDefault(); to = input.value.trim(); try { await api('POST', '/v1/auth/start', { companyId: S.config.companyId, channel: 'email', to }); step2(); } catch (x) { toast(x.message); } } },
           h('label', { for: 'd-email', style: 'font-weight:700', text: 'Work email' }), input, h('button', { class: 'btn', type: 'submit' }, 'Email me a code')));
     };

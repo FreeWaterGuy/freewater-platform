@@ -3,6 +3,7 @@ import type { SqlClient } from '../../db/client';
 import type { Persistence } from '../../core/persistence';
 import type { CompanyConfig } from '../../core/types';
 import { bottleCodeOf, normalizeBottleCode } from '../print/bottleCode';
+import { siteBase } from '../../core/site';
 
 // Smart codes: what every QR on a bottle, box or receipt holds. Each is short, random and signed:
 //   HTTPS://GO.FREEWATER.IO/Q/7KX2M9QPA4ZR1C
@@ -47,7 +48,7 @@ const b32 = (buf: Buffer, len: number) => {
 
 /** The address a code is printed as: the company's scan address in capitals, then /Q/ and the code. */
 export function scanBase(company: CompanyConfig) {
-  return (company.scanBaseUrl ?? company.receiptBaseUrl).replace(/\/$/, '').toUpperCase();
+  return (company.scanBaseUrl ?? siteBase(company)).replace(/\/$/, '').toUpperCase();
 }
 
 /** The internal secrets, each from the host's settings as FW_SECRET_<NAME> (e.g. FW_SECRET_SECOND_STEP). */

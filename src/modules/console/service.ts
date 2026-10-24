@@ -16,7 +16,9 @@ import { BOX_DEFAULTS, BOX_INCHES, STICKER_INCHES, STICKER_SIDES, STICKER_SPOTS,
 import { adCategories, applyChange, checkSettings, describeChange, editableKeys, fontChoices, personOnlyKeys, ratchetProblem, chainProblem, walletProblem, printLimitsChanged, type EditableKey } from './settings';
 import { adBilling, defaultAdBilling } from '../ads/billing';
 import { labelGeometry, STANDARD_LABEL } from '../print/geometry';
-import { panelOf, PANEL_SIZES } from '../print/panel';
+import { bottledForOf, panelGaps, panelOf, PANEL_SIZES } from '../print/panel';
+import { domainProblem, domainRecords, fallbackBase, siteBase } from '../../core/site';
+import { randomBytes } from 'node:crypto';
 import { givingLine, labelFitProblem, withLabel } from '../print/renderer';
 
 /** Where a settings change came from, and why (for the switches' history on the Features page). */
@@ -129,7 +131,10 @@ export class ConsoleService {
       config, version,
       options: { modules: this.registry.names(), fonts: fontChoices, categories: adCategories, timezones: commonTimezones, editable: editableKeys, lottery: lotteryDefaults(config), wallet: defaultWallet(config.name), games: defaultGames, chain: defaultChain,
         // The Label panel page starts from the panel the company prints now (its own, or the one made from its brand).
-        labelPanel: panelOf(config, givingLine(config, '')), panelSizes: PANEL_SIZES, standardLabel: STANDARD_LABEL,
+        labelPanel: { contact: [], ...panelOf(config, givingLine(config, '')), bottledFor: bottledForOf(config, config.labelPanel ?? panelOf(config, null)) }, panelSizes: PANEL_SIZES, standardLabel: STANDARD_LABEL,
+        // What the panel still needs before bottles can print (empty: nothing), and where the company's codes point now.
+        panelGaps: panelGaps(config, this.platform.standardProduct(companyId)), siteBase: siteBase(config),
+        domain: config.domain ? { ...config.domain, records: domainRecords(config.domain.host, config.domain.token) } : null,
         // Delivery boxes: the platform's standard box of each pack size (what's used where the company set no size of its own).
         boxes: { standard: this.boxProducts().map((b) => ({ bottles: b.bottles, lengthIn: b.lengthIn, widthIn: b.widthIn, heightIn: b.heightIn })), defaults: BOX_DEFAULTS, inches: BOX_INCHES, stripInches: STRIP_INCHES, stickerInches: STICKER_INCHES, stickerSides: STICKER_SIDES, stickerSpots: STICKER_SPOTS } },
       locations: this.locations(companyId),
@@ -155,6 +160,7 @@ export class ConsoleService {
     const bottles = await q(`select count(*)::int as n from units where company_id = $1`);
     return [
       { id: 'brand', label: 'Make the bottle yours: logo, colors, lettering', done: versions > 0, path: '/console/brand' },
+      { id: 'panel', label: 'Fill in your label panel: your name, maker and how to reach you (bottles print only once it’s done)', done: !panelGaps(c, this.platform.standardProduct(companyId)).length, path: '/console/label-panel' },
       { id: 'giving', label: c.giving.mode === 'none' ? 'Decide on giving (it’s off right now)' : 'Add the charities you give to', done: c.giving.mode === 'none' ? versions > 0 : charities > 0, path: '/console/giving' },
       { id: 'machine', label: 'Add your first machine', done: machines > 0, path: '/console/machines' },
       { id: 'team', label: 'Invite your team', done: team > 1, path: '/console/team' },
@@ -231,7 +237,9 @@ export class ConsoleService {
     const old = await this.version(companyId, v);
     const latest = await this.baseline(companyId);
     const cur = this.company(companyId);
-    const next = { ...old, id: companyId };
+    const next: CompanyConfig = { ...old, id: companyId };
+    // The domain is proved, not restored: an old version never brings back a domain (or its check) that was since changed.
+    if (cur.domain) next.domain = cur.domain; else delete next.domain;
     // Putting back an old version passes the same checks as any other change (the chain can't come back on this way).
     const money = personOnlyKeys.some((k) => JSON.stringify((cur as any)[k] ?? null) !== JSON.stringify((next as any)[k] ?? null)) || printLimitsChanged(cur, next) || !!this.switchesChanged?.(cur, next).length;
     if (money && !opts.person) throw new ConsoleError('person_needed', 'This version changes money, chain or one-way settings, or turns a switch on or off; a person signed in has to put it back.', 403);
@@ -352,8 +360,8 @@ export class ConsoleService {
     const config: CompanyConfig = {
       ...structuredClone(base),
       id, name,
-      receiptBaseUrl: input.receiptBaseUrl ?? `https://${id}.go.freewater.io`,
-      brand: { logoTop: name.split(/\s+/)[0]!.toLowerCase().slice(0, 12), logoBottom: (name.split(/\s+/)[1] ?? '').toLowerCase().slice(0, 12), panelColor: '#000000', accentColor: '#7FC6EA', textColor: '#FFFFFF', fontFamily: fontChoices[1]!.value, ...input.brand },
+      receiptBaseUrl: input.receiptBaseUrl ?? fallbackBase(id),
+      brand: { logoTop: name.split(/\s+/)[0]!.toLowerCase().slice(0, 12), logoBottom: (name.split(/\s+/)[1] ?? '').toLowerCase().slice(0, 12), panelColor: '#000000', accentColor: '#D4D4D4', textColor: '#FFFFFF', fontFamily: fontChoices[1]!.value, ...input.brand },
       productFacts: ['SPRING WATER', '16 fl oz (473 ml)', `Bottled for ${name}`.slice(0, 60)],
       giving: input.giving === 'per_unit' ? { mode: 'per_unit', centsPerUnit: 10, percentOfExtra: 10, extraAboveCents: base.prices.perPrintByShare[1], defaultCharity: 'Charity to be chosen', minimumTransferCents: 2500 } : { mode: 'none' },
       openBooks: true,
@@ -374,6 +382,14 @@ export class ConsoleService {
     // the choice for each shared product (FreeWater's own products aren't the new company's).
     const shared = Object.entries(config.adRules.productLayouts ?? {}).filter(([pid]) => { const p = this.platform.products.get(pid); return p && !p.companyId; });
     if (shared.length) config.adRules.productLayouts = Object.fromEntries(shared); else delete config.adRules.productLayouts;
+    // Nothing that is the template's own identity: its label panel (logo, handle, maker, contact), its short QR address
+    // and its domain. The new company's panel is made from its own brand (print/panel.ts), and bottles print only once
+    // it fills in its maker and contact lines.
+    delete config.labelPanel;
+    delete config.scanBaseUrl;
+    delete config.domain;
+    // Its unsold-space picks are ads of the template's own (another company's advertisers): never carried over (P5).
+    if (config.unsold?.picks) config.unsold = { ...config.unsold, picks: [] };
     delete config.lottery;
     delete config.agents;
     delete config.ratchet;
@@ -404,9 +420,52 @@ export class ConsoleService {
     await this.flush();
     const owner = await this.accounts.invite({ companyId: id, email: input.ownerEmail, role: 'owner', displayName: input.ownerName });
     const url = this.opts.consoleUrl ? `${this.opts.consoleUrl}/console?company=${id}` : `/console?company=${id}`;
-    await this.messenger.send({ channel: 'email', to: owner.email!, subject: `${name} is set up on FreeWater`,
+    await this.messenger.send({ channel: 'email', to: owner.email!, subject: `${name} is set up and ready`,
       text: `Hi${input.ownerName ? ` ${input.ownerName}` : ''},\n\n${name} is ready. Sign in with this email at ${url} and the console will walk you through your brand, giving, your first machine and your team.\n\nYou'll get a sign-in code each time; there's no password.` });
     return { company: (await this.companies()).find((c) => c.id === id)!, owner: { id: owner.id, email: owner.email } };
+  }
+
+  // ---------- the company's own domain (src/core/site.ts) ----------
+
+  /**
+   * Ask for a domain of the company's own (a person signed in). It is saved unproved, with a new check token: codes keep
+   * using the current address until `verifyDomain` finds the token in the domain's DNS. Empty `host` takes it off.
+   */
+  async setDomain(companyId: string, host: string, by: string) {
+    return this.serial(companyId, async () => {
+      const version = await this.baseline(companyId);
+      const cur = this.company(companyId);
+      const h = host.trim().toLowerCase();
+      const next: CompanyConfig = structuredClone(cur);
+      if (!h) delete next.domain;
+      else {
+        const bad = domainProblem(h);
+        if (bad) throw new ConsoleError('invalid_domain', bad, 422);
+        for (const c of this.platform.companies.values()) if (c.id !== companyId && c.domain?.host === h) throw new ConsoleError('domain_taken', 'Another company already uses that domain.', 409);
+        if (cur.domain?.host === h) return { domain: cur.domain, records: domainRecords(h, cur.domain.token), version };
+        next.domain = { host: h, token: `bv-${randomBytes(12).toString('hex')}`, verified: false };
+      }
+      const r = await this.commit(companyId, next, by, [h ? `Own domain set to ${h} (not checked yet)` : 'Own domain taken off: codes use the platform address'], version, { note: { via: 'settings (own domain)' } });
+      return { domain: r.config.domain ?? null, records: r.config.domain ? domainRecords(h, r.config.domain.token) : null, version: r.version };
+    });
+  }
+
+  /** Check the domain's DNS for the token (a person signed in). Found: codes printed from now on use the domain. */
+  async verifyDomain(companyId: string, by: string, lookup: (name: string) => Promise<string[][]>) {
+    return this.serial(companyId, async () => {
+      const version = await this.baseline(companyId);
+      const cur = this.company(companyId);
+      const d = cur.domain;
+      if (!d) throw new ConsoleError('no_domain', 'Add your domain first.', 404);
+      if (d.verified) return { domain: d, version };
+      const rec = domainRecords(d.host, d.token);
+      let found: string[][] = [];
+      try { found = await lookup(rec.verify.name); } catch { found = []; }
+      if (!found.some((parts) => parts.join('').trim() === d.token)) throw new ConsoleError('not_verified', `The check record isn’t there yet. Add a TXT record named ${rec.verify.name} with the value ${d.token}, wait a few minutes, and check again.`, 409);
+      const next: CompanyConfig = { ...structuredClone(cur), domain: { ...d, verified: true, verifiedAt: this.now(), verifiedBy: by } };
+      const r = await this.commit(companyId, next, by, [`Own domain ${d.host} checked: new codes use it`], version, { note: { via: 'settings (own domain)' } });
+      return { domain: r.config.domain!, version: r.version };
+    });
   }
 
   async keys(companyId: string) {

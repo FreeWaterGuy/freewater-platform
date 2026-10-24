@@ -34,7 +34,7 @@ export const can12oz: Product = {
   category: 'sparkling water',
   container: { shape: 'can', diameterIn: 2.6, heightIn: 4.83 },
   label: { widthIn: 8.37, heightIn: 3.9, seamIn: 0.2, panelWidthIn: 0.9, bleedIn: 0.0625 },
-  panelInfo: { contents: 'SPARKLING WATER', volume: '12floz (355ml)' },
+  panelInfo: { contents: 'SPARKLING WATER', volume: '12floz (355ml)', source: ['Source:', 'Natural Spring Water, Tiger, GA'] },
   facts: ['SPARKLING SPRING WATER', '12 fl oz (355 ml)', 'Canned for FreeWater Inc, Austin, TX'],
 };
 export const products: Product[] = [bottle16oz, bottle25oz, can12oz];
@@ -120,6 +120,14 @@ export const peakSpring: CompanyConfig = {
   receiptBaseUrl: 'https://water.peakspring.example',
   brand: { logoTop: 'peak', logoBottom: 'spring', panelColor: '#123B2A', accentColor: '#F2C14E', textColor: '#FFFFFF', fontFamily: "'DM Sans', Arial, sans-serif" },
   productFacts: ['MOUNTAIN SPRING WATER', '16 fl oz (473 ml)', 'Bottled for Peak Spring Water Co.'],
+  // Its own panel, from its own brand and details (never FreeWater's: a licensee's label carries its own name).
+  labelPanel: {
+    colors: { background: '#123B2A', text: '#FFFFFF', accent: '#F2C14E' },
+    logo: { kind: 'text', top: 'peak', bottom: 'spring' },
+    charity: [], handle: '@peakspring', icons: [], refill: ['PLEASE REFILL', 'AND RECYCLE'],
+    maker: ['Bottled by Peak Spring Water Co.', 'Denver, CO'], contact: ['hi@peakspring.example'], process: '',
+    recycle: { show: true }, codeLabel: 'Bottle code',
+  },
   giving: { mode: 'none' },
   qr: { logo: 'none', advertiserLogos: false, allowStatic: false },
   consumerPricing: 'discounted',

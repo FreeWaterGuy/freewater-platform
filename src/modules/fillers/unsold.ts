@@ -351,7 +351,7 @@ export class UnsoldSpace {
   private picks(ctx: UnsoldContext): Campaign[] {
     const now = this.clock();
     return unsoldSettings(ctx.company).picks.map((id) => this.platform.campaigns.get(id)).filter((c): c is Campaign =>
-      !!c && !isOwnPiece(c, ctx.company.id) && c.id !== blankCampaignId(ctx.company.id) && (c.filler ? c.filler.status === 'approved' : true)
+      !!c && c.companyId === ctx.company.id && !isOwnPiece(c, ctx.company.id) && c.id !== blankCampaignId(ctx.company.id) && (c.filler ? c.filler.status === 'approved' : true)
       && (c.isHouse ? !!c.filler : this.bonusAllowed(ctx.company.id, c.advertiserId) && !this.isRefused(ctx.company.id, c.advertiserId))
       && this.fitsHere(c, ctx) && !notCurrent(c, now, this.lastPaid.has(c.id) ? new Date(this.lastPaid.get(c.id)!) : undefined));
   }

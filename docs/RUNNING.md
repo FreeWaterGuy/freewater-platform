@@ -37,6 +37,7 @@ with a plain explanation.
 | `DATABASE_URL` | Postgres 13–17, e.g. `postgres://user:pass@host:5432/freewater?sslmode=require`. Use a managed one with automatic backups and point-in-time recovery. |
 | `PUBLIC_URL` | The https address of the site. It goes on every printed QR code and in every email. |
 | `TRUST_PROXY` | Which proxies' word to take for a visitor's address. The number of proxies in front of the server (`1` for one load balancer, `2` with a CDN such as Cloudflare in front of it), or their addresses or ranges (`10.0.0.0/8`), or `none` when nothing is in front. Never `true`: every visitor writes `X-Forwarded-For` too, so trusting every hop lets anyone pose as any address and walk past sign-in limits, request limits and points-per-network rules. The server refuses `true`, `*`, `all` and ranges like `0.0.0.0/0`. With a hop count, make sure the server can only be reached through the load balancer (the usual set-up on hosting platforms); if it can also be reached directly, give the load balancer's addresses instead. |
+| `PLATFORM_SITE_DOMAIN` | The domain companies' platform addresses are on (`<company id>.<this>`), `go.freewater.io` unless set. See *A company's own domain*. |
 | `HOST`, `PORT` | `0.0.0.0` and `8080` in the container (already set in the image). |
 | `ALERT_WEBHOOK_URL` | A chat channel's incoming webhook (Slack, Discord, Google Chat). Alerts go there. |
 | `ALERT_EMAIL` | Also email alerts (once email is connected). |
@@ -319,6 +320,29 @@ by hand (`npm run backup`, below) are run with `DATABASE_URL` set to the owner's
 dump and recreate the triggers.
 `fw.test_reset`, which lets a test-stage reset delete journal rows, still works as `fw_app`: the triggers allow it only
 inside that reset's own transaction and only while the company is still testing.
+
+## A company's own domain
+
+Every company starts on a platform address, `https://<company id>.go.freewater.io` (the host setting
+`PLATFORM_SITE_DOMAIN` changes `go.freewater.io`). Point a wildcard DNS record `*.go.freewater.io` at the server so
+every new company's codes answer from the start. A company can use a domain of its own instead
+(`src/core/site.ts`):
+
+1. On *Console → Company → Your own domain*, a person signed in types the domain (`water.yourbrand.com`). It's saved
+   unchecked, with a check token. Codes keep the platform address.
+2. At the company's DNS provider, add the two records the page shows:
+   - `TXT _bottle-verify.water.yourbrand.com` with the token (`bv-…`), which proves the company controls the domain;
+   - `CNAME water.yourbrand.com` → `go.freewater.io` (or your `PLATFORM_SITE_DOMAIN`), which sends its visitors to the
+     platform.
+3. Add the domain to the load balancer's certificate (or its automatic certificates) so `https://water.yourbrand.com`
+   works.
+4. Press *Check DNS*. Once the TXT record is found, every code printed from then on, and every link the platform writes
+   for the company, uses the domain; its pages (the app, scan pages, receipts, the open books, its transparency page)
+   answer there in its name.
+
+Codes already printed keep their address, and the platform address keeps answering, so nothing printed stops working.
+Taking the domain off (an empty domain) goes back to the platform address for new codes. Two companies can never hold
+the same domain (the database refuses it), and the platform's own domain can't be claimed.
 
 ## Load test
 
