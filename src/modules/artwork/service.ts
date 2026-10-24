@@ -21,6 +21,7 @@ import { reasonWords, type LinkSafetyService } from '../ads/linkSafety';
 import { artworkReady, cantPrint, currentAsIs, fineToPrint, mustCodes } from './asIs';
 import { productWords, sizeRefusal } from '../ads/layoutChoice';
 import { shareName } from '../ads/layouts';
+import { siteBase } from '../../core/site';
 
 /** The words of the tick (the advertiser's portal shows these; kept with the choice). */
 export const AS_IS_WORDS = 'I understand — use it as it is';
@@ -684,7 +685,7 @@ async function backgroundOf(svg: string, shape: PieceShape): Promise<string> {
 export async function scanProblem(company: CompanyConfig, style: { color?: string; logo?: string }, shapes: PieceShape[]): Promise<string | null> {
   const sizeIn = Math.min(...shapes.map((s) => s.qr.sizeIn), 0.8);
   const side = Math.round(sizeIn * 300);
-  const text = `${company.receiptBaseUrl.replace(/\/$/, '')}/Q/7KX2M9QPA4ZR1C`;
+  const text = `${siteBase(company)}/Q/7KX2M9QPA4ZR1C`;
   const q = qrDraw(text, 0, 0, side, 'H', style);
   const png = await sharp(Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${side + 40}" height="${side + 40}"><rect width="100%" height="100%" fill="#777777"/><g transform="translate(20 20)">${q.svg}</g></svg>`)).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   const read = jsQR(new Uint8ClampedArray(png.data.buffer, png.data.byteOffset, png.data.length), png.info.width, png.info.height, { inversionAttempts: 'dontInvert' });

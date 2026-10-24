@@ -607,7 +607,7 @@ export class DeliveryService {
     await this.saveRun(run);
     if (s.houseId) await this.houses?.delivered(s.houseId, s.at!);
     await this.flush();
-    if (s.userId) await this.notify(s.userId, `Your ${s.packSize}-pack of FreeWater was delivered${s.emptiesCollected ? `, and we picked up ${s.emptiesCollected} empties` : ''}. Leave your empties out next time and we'll take them.`);
+    if (s.userId) await this.notify(s.userId, (co) => `Your ${s.packSize}-pack from ${co} was delivered${s.emptiesCollected ? `, and we picked up ${s.emptiesCollected} empties` : ''}. Leave your empties out next time and we'll take them.`);
     return this.view(run);
   }
 
@@ -654,7 +654,7 @@ export class DeliveryService {
     if (run.stops.every((x) => x.status !== 'planned')) run.status = 'done';
     await this.saveRun(run);
     await this.flush();
-    if (s.userId) await this.notify(s.userId, `We couldn't leave your FreeWater today (${input.reason.toLowerCase()}). It's back at the micro-factory and comes with your next delivery.`);
+    if (s.userId) await this.notify(s.userId, (co) => `We couldn't leave your ${co} delivery today (${input.reason.toLowerCase()}). It's back at the micro-factory and comes with your next delivery.`);
     return this.view(run);
   }
 
@@ -691,11 +691,14 @@ export class DeliveryService {
     return this.view(run);
   }
 
-  private async notify(userId: string, text: string) {
+  /** Tell a subscriber, in their company's name (never the platform's). */
+  private async notify(userId: string, words: (company: string) => string) {
     const u = await this.accounts.get(userId);
     if (!u) return;
+    const co = this.platform.companies.get(u.companyId)?.name ?? 'your water company';
+    const text = words(co);
     if (u.phone) await this.messenger.send({ channel: 'sms', to: u.phone, text });
-    else if (u.email) await this.messenger.send({ channel: 'email', to: u.email, subject: 'Your FreeWater delivery', text });
+    else if (u.email) await this.messenger.send({ channel: 'email', to: u.email, subject: `Your ${co} delivery`, text });
   }
 
   /** A run as the driver and ops see it: stops in order, each with its box code, and where things stand. */

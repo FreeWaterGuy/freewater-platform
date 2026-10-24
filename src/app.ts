@@ -1,3 +1,4 @@
+import { resolveTxt } from 'node:dns/promises';
 import { printReady } from './modules/print/renderer';
 import type { SqlClient } from './db/client';
 import { migrate } from './db/migrations';
@@ -216,6 +217,8 @@ export interface AppOptions {
   adReviewer?: AdReviewer;
   /** Rates each ad version before it prints (src/modules/ads/ratings.ts); without one, Claude where there's an AI, else the built-in rules. */
   adRater?: AdRater;
+  /** Reads a domain's DNS TXT records, to check a company's own domain (src/core/site.ts). Defaults to real DNS. */
+  dnsTxt?: (name: string) => Promise<string[][]>;
 }
 
 /** Start the platform on a database: migrate, load everything, and keep writing every change back. */
@@ -785,6 +788,7 @@ export async function createApp(opts: AppOptions) {
   };
   // Holdout tests: for a small share of scans the personalizer is skipped, so its real value shows in the books.
   experiences.holdout = (agent, key) => agents.holdout(agent, key);
+  experiences.featureOn = (companyId, id) => companyFeatures.on(companyId, id);
   experiences.onArm = (a) => agents.recordArm(a);
 
   // Model 6 machines: bottles ordered there print at the machine; everything else uses the company's other printer.
@@ -815,7 +819,7 @@ export async function createApp(opts: AppOptions) {
   // The demo's former advertisers ran paid before it starts (src/demo/history.ts): their past bottles, printed once.
   if (empty && opts.seedDemo && opts.demoUnsold) await printFormerAdvertisersPast({ platform, persistence }, demoFormerCampaignIds);
 
-  return { ...made, aiReview, linkSafety, ratings, fillers, unsold, news, households, routeBuys, features, companyFeatures, db, persistence, runtime, demoKeys, accounts, payments, credit, prepaid, artwork, messenger, experiences, assets, ads, designs, delivery, houses, dropPhotos, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
+  return { ...made, aiReview, linkSafety, ratings, fillers, unsold, news, households, routeBuys, features, companyFeatures, db, persistence, runtime, demoKeys, accounts, payments, credit, prepaid, artwork, messenger, experiences, assets, ads, designs, delivery, houses, dropPhotos, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation, dnsTxt: opts.dnsTxt ?? ((name: string) => resolveTxt(name)) };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

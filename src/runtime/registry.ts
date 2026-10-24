@@ -470,6 +470,8 @@ export const SWITCHES: Switch[] = [
   sw({ id: 'hourly_seals', category: 'transparency', group: 'Proof', label: 'Hourly seals in public', description: 'Anyone can check their own wallet entry against the hour’s seal. (The seals are made either way.)',
     routes: ['GET /v1/public/wallet/:companyId/seals', 'GET /v1/public/wallet/:companyId/proof/:entryId'] }),
   sw({ id: 'advertiser_statements', category: 'transparency', group: 'For advertisers', kind: 'linked', dependsOn: ['ads'], label: 'Advertiser statements', description: 'Every bottle, bid, auction price and reason, as a table or spreadsheet.', routes: ['GET /v1/ads/statement'], link: flag('transparency.advertiserStatements', { base: () => quietTransparency }) }),
+  sw({ id: 'transparency_page', category: 'transparency', group: 'This list', since: 7, label: 'Public transparency page', description: 'A public page, no sign-in, linked from every scan page and receipt: who you are, how the free bottle is paid for, what goes to charity (from the books), how ads are chosen, what data is kept and how households say no, how the AI is used, the open books and daily proof, and how to reach you. What else it shows (live counters, your switches) is your choice.',
+    routes: ['GET /v1/public/companies/:companyId/transparency'] }),
   sw({ id: 'feature_list', category: 'transparency', group: 'This list', label: 'Publish our feature list', description: 'Show which of these switches you have on, on your transparency page.', startsOff: 'A new company chooses how open to be.', routes: ['GET /v1/public/companies/:companyId/features'] }),
 
   // ======================= Charity & giving =======================
@@ -537,7 +539,7 @@ export const SWITCHES: Switch[] = [
   sw({ id: 'core_platform', category: 'core', parent: null, locked: 'Needed to run anything: without it nothing else works.', label: 'Accounts, team, keys and settings', description: 'Signing in with a code, people’s accounts, the team, API keys, every setting and its history, health checks.',
     routes: ['GET /v1/public/features', 'GET /v1/public/app-config', 'POST /v1/auth/start', 'POST /v1/auth/verify', 'POST /v1/auth/second-step', 'POST /v1/auth/sign-out', 'GET /v1/me', 'PATCH /v1/me',
       'GET /v1/me/second-step', 'POST /v1/me/second-step/start', 'POST /v1/me/second-step/confirm', 'POST /v1/me/second-step/recovery-codes', 'POST /v1/me/second-step/off', 'POST /v1/team', 'GET /v1/team', 'DELETE /v1/team/:userId', 'POST /v1/advertisers', 'GET /v1/ads/advertiser',
-      'GET /v1/keys', 'POST /v1/keys', 'DELETE /v1/keys/:id', 'GET /v1/console', 'PATCH /v1/console/settings', 'POST /v1/console/preview-label', 'GET /v1/console/history', 'GET /v1/console/history/:version', 'POST /v1/console/history/:version/restore', 'GET /v1/console/bottles/:code',
+      'GET /v1/keys', 'POST /v1/keys', 'DELETE /v1/keys/:id', 'GET /v1/console', 'PATCH /v1/console/settings', 'POST /v1/console/preview-label', 'POST /v1/console/domain', 'POST /v1/console/domain/verify', 'GET /v1/console/history', 'GET /v1/console/history/:version', 'POST /v1/console/history/:version/restore', 'GET /v1/console/bottles/:code',
       'GET /v1/console/features', 'POST /v1/console/features/preview', 'POST /v1/console/features', 'GET /v1/console/features/history',
       'GET /health/deep', 'GET /v1/platform/status', 'POST /v1/platform/persistence/skip-stuck', 'POST /v1/platform/jobs/:name/run', 'GET /v1/ops/overview', 'GET /v1/ops/plugin-failures'],
     jobs: ['memory', 'spool', 'capacity', 'backup', 'restore-check'], pages: ['start', 'company', 'brand', 'label-panel', 'modules', 'team', 'history', 'keys', 'features'], plugins: ['house-promo'] }),
@@ -562,7 +564,7 @@ export const ACTION_SWITCHES: Record<string, string> = { mint: 'token', switch_o
  */
 export const SCREENS: Record<string, string> = {
   '/console': 'core_platform', '/console/*': 'core_platform', '/developers': 'developer_pages', '/developers/*': 'developer_pages', '/app': 'core_platform', '/app/*': 'core_platform', '/ads': 'core_platform', '/ads/*': 'core_platform',
-  '/ops': 'core_platform', '/ops/*': 'core_platform', '/driver': 'driver_app', '/driver/*': 'driver_app', '/play': 'games', '/books': 'open_books', '/books/*': 'open_books', '/r/:unitId': 'bottle_receipts',
+  '/ops': 'core_platform', '/ops/*': 'core_platform', '/driver': 'driver_app', '/driver/*': 'driver_app', '/play': 'games', '/books': 'open_books', '/books/*': 'open_books', '/transparency': 'transparency_page', '/r/:unitId': 'bottle_receipts',
   '/s/:unitId/:slot': 'scan_pages', '/p/:packId': 'delivery', '/b/:packId/:face': 'box_ads', '/preview/scan': 'scan_pages', '/q/:code': 'scan_pages', '/Q/:code': 'scan_pages', '/v/:code': 'scan_pages', '/V/:code': 'scan_pages',
   '/go/:token': 'sales_tracking', '/t.js': 'sales_tracking', '/v1/public/conversions': 'sales_tracking', '/v1/public/companies/:companyId/live': 'live_feed', '/v1/public/labels/:file': 'scan_pages',
   '/models/builtin/:file': 'ar_place', '/assets/:file': 'core_platform', '/static/:name': 'core_platform', '/static/ar.js': 'ar_on_bottle', '/v1/openapi.json': 'core_platform',

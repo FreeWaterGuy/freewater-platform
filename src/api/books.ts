@@ -2,6 +2,7 @@ import type { App } from '../app';
 import type { ApiKey } from '../db/store';
 import { expenseCategories, ownerPayoutKinds, reinvestCategories } from '../modules/books/service';
 import { ApiError, obj, S, type RouteDef, Q } from './http';
+import { siteBase } from '../core/site';
 
 /** The public open books, and the company's side of them: charities, transfers and costs. */
 export function booksRoutes(app: App, route: (r: RouteDef) => void) {
@@ -16,7 +17,7 @@ export function booksRoutes(app: App, route: (r: RouteDef) => void) {
   /** Optional: the same requestId again records nothing new (a retried request), and answers with what was recorded. */
   const requestId = { type: 'string', pattern: '^[A-Za-z0-9_-]{8,80}$' };
   const wrap = async <T>(f: () => Promise<T>) => { try { return await f(); } catch (e: any) { if (e?.status && e?.code) throw new ApiError(e.status, e.code, e.message); throw e; } };
-  const base = (companyId: string) => app.platform.companies.get(companyId)!.receiptBaseUrl.replace(/\/$/, '');
+  const base = (companyId: string) => siteBase(app.platform.companies.get(companyId)!);
 
   // ---------- public ----------
   route({ method: 'GET', url: '/v1/public/books', scope: 'public', summary: 'Every company that publishes its books.', handler: async () => ({ body: books.companies() }) });

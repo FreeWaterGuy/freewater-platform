@@ -5,6 +5,9 @@
   const fixture = window.__FW_APP_FIXTURE__; // only in the offline preview
   const root = document.getElementById('root');
 
+  /** The company this app is for (its name from the app config), never the platform's name on another company's app. */
+  const co = () => state.config?.name ?? 'us';
+
   // ---------- helpers ----------
   const h = (tag, attrs, ...kids) => {
     const el = document.createElement(tag);
@@ -168,7 +171,7 @@
               let vk = {}; try { vk = { ...(/^[A-Za-z0-9_-]{8,64}$/.test(localStorage.getItem('fw_viewer') || '') ? { viewerKey: localStorage.getItem('fw_viewer') } : {}) }; } catch {}
               const r = await api('POST', '/v1/auth/verify', { companyId: state.config.companyId, channel, to, code: input.value.trim(), ...vk });
               state.token = r.token; store.set('fw_token', r.token); state.me = null; await loadMe();
-              toast(r.isNew ? 'Welcome to FreeWater' : 'Signed in'); close(true);
+              toast(r.isNew ? `Welcome to ${co()}` : 'Signed in'); close(true);
             } catch (x) { err.textContent = x.message; err.hidden = false; ok.disabled = false; }
           } }, input, err, ok),
           h('button', { class: 'btn secondary', type: 'button', onclick: step1 }, 'Use a different email or number'));
@@ -195,16 +198,16 @@
     const stats = mine?.stats ?? { bottles: 0, donatedCents: 0, savedCents: 0 };
     const m0 = machines[0];
     screen({ nav: 'home' },
-      h('div', { class: 'topbar' }, h('div', { class: 'logo', 'aria-label': 'freewater' }, h('span', { text: 'free' }), h('span', { text: 'water' })),
+      h('div', { class: 'topbar' }, h('div', { class: 'logo', 'aria-label': co() }, h('span', { text: state.config?.brand?.logoTop ?? '' }), h('span', { text: state.config?.brand?.logoBottom ?? '', style: state.config?.brand?.accentColor ? `color:${state.config.brand.accentColor}` : null })),
         me ? link('/app/me', { class: 'avatar', 'aria-label': 'Your account' }, initials(me)) : h('button', { class: 'btn small secondary', type: 'button', onclick: async () => { if (await signIn()) render(); } }, 'Sign in')),
       h('section', { class: 'hero-card' },
-        h('div', { class: 'headline' }, 'Save money.', h('span', { text: 'Drink FreeWater.' })),
+        h('div', { class: 'headline' }, 'Save money.', h('span', { text: `Drink ${co()}.` })),
         me ? h('div', { class: 'stats' },
           h('div', {}, h('b', { text: String(stats.bottles) }), h('span', { text: stats.bottles === 1 ? 'bottle' : 'bottles' })),
           h('div', {}, h('b', { text: money(stats.donatedCents) }), h('span', { text: 'to charity' })),
           h('div', {}, h('b', { text: money(stats.savedCents) }), h('span', { text: 'saved' })))
           : h('p', { style: 'margin:0;opacity:.85', text: 'Free spring water, paid for by the ads on the bottle. Every bottle gives to charity.' })),
-      link('/app/scan', { class: 'tile blue' }, h('span', { class: 'tile-ico' }, icon(I.scan)), h('span', { class: 'grow' }, h('b', { text: 'Scan a bottle' }), h('span', { text: 'Open the AR printed on any FreeWater' }))),
+      link('/app/scan', { class: 'tile blue' }, h('span', { class: 'tile-ico' }, icon(I.scan)), h('span', { class: 'grow' }, h('b', { text: 'Scan a bottle' }), h('span', { text: `Open the AR printed on any ${co()} bottle` }))),
       on('rewards') ? link('/app/wallet', { class: 'tile ice' }, h('span', { class: 'grow' }, h('b', { text: 'Your wallet' }), h('span', { class: 'muted small', text: 'Points, offers, coupons and what you saved' })), h('span', { class: 'go', text: 'Open' })) : null,
       on('delivery') ? (house && on('delivery_areas') ? houseCard(house) : deliveryCard(delivery)) : null,
       on('machines') && on('app_free_bottle') && m0 && link(`/app/m/${m0.id}`, { class: 'tile ice' }, h('span', { class: 'grow' }, h('b', { text: `${m0.id} on ${m0.name}` }), h('span', { class: 'muted small', text: m0.address || m0.city })), h('span', { class: 'go', text: 'Get one' })),
@@ -524,7 +527,7 @@
       h('h2', { class: 'section' }, b.kind === 'custom' ? 'What it opens' : 'Tap an ad to open it'),
       h('div', {}, b.ads.map((a) => h('div', { class: 'ad-row' },
         h('span', { class: 'size', title: `${a.size} of the label`, text: a.size ?? `${a.sixths}/6` }),
-        h('span', { class: 'grow' }, h('b', { text: a.name }), h('span', { class: 'small muted', text: a.isHouse ? 'From FreeWater' : a.experience })),
+        h('span', { class: 'grow' }, h('b', { text: a.name }), h('span', { class: 'small muted', text: a.isHouse ? `From ${co()}` : a.experience })),
         a.ar ? h('a', { class: 'pill', href: fixture ? '#' : a.url, onclick: open(a) }, icon(I.ar), 'AR')
              : h('a', { class: 'pill light', href: fixture ? '#' : a.url, onclick: open(a) }, 'Open')))),
       h('div', { class: 'notice' }, b.kind === 'custom'
@@ -555,7 +558,7 @@
         const w = 480, hgt = Math.round((video.videoHeight / video.videoWidth) * w) || 640;
         canvas.width = w; canvas.height = hgt; ctx.drawImage(video, 0, 0, w, hgt);
         const found = window.jsQR(ctx.getImageData(0, 0, w, hgt).data, w, hgt, { inversionAttempts: 'dontInvert' });
-        if (found) { const next = handleCode(found.data); if (next) { stopCurrent(); stopCurrent = null; if (next.startsWith('/app')) go(next); else location.href = next; return; } status.textContent = 'That code isn’t from FreeWater.'; }
+        if (found) { const next = handleCode(found.data); if (next) { stopCurrent(); stopCurrent = null; if (next.startsWith('/app')) go(next); else location.href = next; return; } status.textContent = `That code isn’t from ${co()}.`; }
       }
       raf = requestAnimationFrame(tick);
     };
@@ -746,7 +749,7 @@
         consent('personalizedOffers', 'Offers picked for me', 'Use the interests below to choose which offers you see when you scan.'),
         consent('shareInterestsWithAdvertisers', 'Share my interests with advertisers', 'Not used yet: today no advertiser sees anyone’s interests. If that changes, it will be only with this on, and never your name or contact details.'),
         on('machines') && consent('location', 'Use my location', 'Show the nearest machines first.'),
-        consent('marketing', 'News from FreeWater', 'Now and then, by email or text.')),
+        consent('marketing', `News from ${co()}`, 'Now and then, by email or text.')),
       me.consents.personalizedOffers && h('div', { class: 'field' }, h('label', { text: 'Your interests' }), h('div', { class: 'chips' }, allInterests.map((i) => h('button', { type: 'button', class: 'chip-btn', 'aria-pressed': String(mine.has(i)), onclick: async (e) => {
         mine.has(i) ? mine.delete(i) : mine.add(i); e.currentTarget.setAttribute('aria-pressed', String(mine.has(i)));
         state.me = await api('PATCH', '/v1/me', { interests: [...mine] });
@@ -766,7 +769,7 @@
       h('h2', { class: 'section' }, 'Your data'),
       h('button', { class: 'btn secondary', type: 'button', onclick: async () => {
         let data; try { data = await api('GET', '/v1/me/export'); } catch (x) { toast(x.message); return; }
-        const a = h('a', { href: URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })), download: 'my-freewater-data.json' });
+        const a = h('a', { href: URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })), download: 'my-data.json' });
         document.body.append(a); a.click(); a.remove(); toast('Downloaded');
       } }, 'Download my data'),
       h('button', { class: 'btn secondary', type: 'button', onclick: async () => {
@@ -940,7 +943,7 @@
       // And what this company switched off on its Features page (?company=): those aren't shown either.
       state.features = await api('GET', `/v1/public/features?company=${encodeURIComponent(state.config.companyId)}`).catch(() => ({ off: [] }));
     }
-    catch { root.replaceChildren(h('div', { class: 'boot' }, h('p', { text: 'Can’t reach FreeWater. Check your connection and try again.' }))); return; }
+    catch { root.replaceChildren(h('div', { class: 'boot' }, h('p', { text: 'Can’t connect. Check your connection and try again.' }))); return; }
     render();
   })();
 })();

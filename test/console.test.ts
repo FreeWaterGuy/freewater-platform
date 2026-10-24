@@ -302,6 +302,12 @@ describe('the white-label console', () => {
     const firstPreview = (await call('POST', '/v1/console/preview-label', ana, { changes: {} })).body;
     expect(firstPreview.svg).toContain('#0B3D91');
     const machine = (await call('POST', '/v1/console/machines', ana, { id: 'LW-001', name: 'Pier 4', city: 'Chicago' })).body;
+    // Its panel is made from its own brand, with its maker and contact blank: nothing prints until they're filled in.
+    const refused = await call('POST', '/v1/orders', machine.apiKey, { orderId: 'lw-0', locationId: 'LW-001', productId: 'bottle-16oz' });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error.code).toBe('panel_incomplete');
+    const ov = (await call('GET', '/v1/console', ana)).body;
+    expect((await call('PATCH', '/v1/console/settings', ana, { changes: { labelPanel: { ...ov.options.labelPanel, maker: ['Lake Water Co', 'Chicago, IL'], contact: ['hi@lake.example'] } }, version: ov.version })).status).toBe(200);
     const bottle = await call('POST', '/v1/orders', machine.apiKey, { orderId: 'lw-1', locationId: 'LW-001', productId: 'bottle-16oz' });
     expect(bottle.status).toBe(201);
     // Nothing sold and nothing on its unsold-space list yet: plain pieces, never its own house ad in the ad area
@@ -311,7 +317,7 @@ describe('the white-label console', () => {
     const after = (await call('GET', '/v1/console', ana)).body.checklist;
     expect(after.find((c: any) => c.id === 'bottle').done).toBe(true);
     // FreeWater's own ads never reach her bottles, and her settings never touch FreeWater's.
-    expect((await call('GET', '/v1/console/history', ana)).body.length).toBe(1);
+    expect((await call('GET', '/v1/console/history', ana)).body.length).toBe(2); // set up, then its own panel
     const list = (await call('GET', '/v1/platform/companies', owner)).body;
     expect(list.find((c: any) => c.id === 'lake-water')).toMatchObject({ machines: 1, bottles: 1 });
   });

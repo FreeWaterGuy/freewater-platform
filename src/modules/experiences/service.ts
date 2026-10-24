@@ -31,6 +31,12 @@ export interface ScanFooter {
   giving: string | null;
   receiptUrl: string | null;
   packUrl: string | null;
+  /** Other businesses' and causes' ads printed free in space nobody bought (not counted in `ads`, which paid). */
+  freeAds?: number;
+  /** The piece that was scanned: whose it is, and whether it's another business's or cause's (ads always are). */
+  scanned?: { owner: string; thirdParty: boolean };
+  /** The company's public transparency page, when it publishes one. */
+  transparencyUrl?: string | null;
 }
 
 export interface OpenedExperience {
@@ -331,6 +337,12 @@ export class ExperienceService {
     return (await this.db.query(`select 1 from viewer_advertisers where company_id = $1 and viewer_key = $2 and advertiser_id = $3`, [companyId, viewerKey, advertiserId])).rows.length > 0;
   }
 
+  /** Set by the app: whether a company's switch is on (for the transparency page link). */
+  featureOn?: (companyId: string, id: string) => boolean;
+  private transparencyUrl(companyId: string) {
+    return !this.featureOn || this.featureOn(companyId, 'transparency_page') ? `/transparency?company=${encodeURIComponent(companyId)}` : null;
+  }
+
   private resolveOwner(target: Target): { companyId: string; locationId: string; ownerName: string; advertiserId?: string; campaign?: Campaign; pluginId: string; config: unknown; footer: ScanFooter } {
     const p = this.platform;
     if (target.kind === 'slot') {
@@ -340,7 +352,9 @@ export class ExperienceService {
       const footer: ScanFooter = {
         company: company.name, brand: company.brand, receiptUrl: `/r/${unit.id}`, packUrl: unit.packId ? `/p/${unit.packId}` : null,
         ads: unit.kind === 'custom' ? null : unit.placements.filter((x) => !x.isHouse).length,
+        freeAds: unit.kind === 'custom' ? 0 : unit.placements.filter(thirdPartyFree).length,
         giving: givingLine(company, unit.locationId),
+        transparencyUrl: this.transparencyUrl(unit.companyId),
       };
       if (unit.kind === 'custom') {
         if (target.slot !== 0) throw new ExperienceError(404, 'not_found', 'Slot not found.');
@@ -352,6 +366,7 @@ export class ExperienceService {
       // Codes don't die: a bottle printed by a campaign that has ended opens the advertiser's current one. A bonus piece
       // (a former advertiser's past ad on space nobody bought) always opens the advertiser's current page.
       if (campaign && ((!campaign.active && !campaign.isHouse && campaign.afterEnd !== 'keep') || pl.unsold === 'former_advertiser')) campaign = this.current(unit.companyId, campaign.advertiserId, 'label') ?? campaign;
+      footer.scanned = { owner: pl.advertiserName, thirdParty: !pl.isHouse || thirdPartyFree(pl) };
       return { companyId: unit.companyId, locationId: unit.locationId, ownerName: pl.advertiserName, advertiserId: pl.isHouse ? undefined : pl.advertiserId, campaign, pluginId: campaign?.experienceId ?? pl.experienceId, config: campaign?.experienceConfig, footer };
     }
     const pack = this.packs.packs.get(target.packId);
@@ -361,7 +376,7 @@ export class ExperienceService {
     const company = p.companies.get(pack.companyId)!;
     let campaign = p.campaigns.get(f.campaignId);
     if (campaign && ((!campaign.active && !campaign.isHouse && campaign.afterEnd !== 'keep') || f.unsold === 'former_advertiser')) campaign = this.current(pack.companyId, campaign.advertiserId, 'box-face') ?? campaign;
-    const footer: ScanFooter = { company: company.name, brand: company.brand, receiptUrl: null, packUrl: `/p/${pack.id}`, ads: pack.faces.filter((x) => !x.isHouse).length, giving: givingLine(company, pack.routeId) };
+    const footer: ScanFooter = { company: company.name, brand: company.brand, receiptUrl: null, packUrl: `/p/${pack.id}`, ads: pack.faces.filter((x) => !x.isHouse).length, freeAds: pack.faces.filter(thirdPartyFree).length, giving: givingLine(company, pack.routeId), scanned: { owner: f.advertiserName, thirdParty: !f.isHouse || thirdPartyFree(f) }, transparencyUrl: this.transparencyUrl(pack.companyId) };
     return { companyId: pack.companyId, locationId: pack.routeId, ownerName: f.advertiserName, advertiserId: f.isHouse ? undefined : f.advertiserId, campaign, pluginId: campaign?.experienceId ?? f.experienceId, config: campaign?.experienceConfig, footer };
   }
 }
@@ -386,3 +401,6 @@ function pickWrap(cfg: unknown) {
   const effect = ['none', 'shimmer', 'ripple', 'sparkle'].includes(str('effect') ?? '') ? str('effect') : 'shimmer';
   return { ...(url('imageUrl') ? { imageUrl: url('imageUrl') } : {}), ...(url('videoUrl') ? { videoUrl: url('videoUrl') } : {}), effect, ...(/^#[0-9a-fA-F]{6}$/.test(str('color') ?? '') ? { color: str('color') } : {}) };
 }
+
+/** A piece of space nobody bought, filled free with another business's or a cause's ad (never the company's own). */
+const thirdPartyFree = (p: { isHouse: boolean; unsold?: string }) => p.isHouse && !!p.unsold && p.unsold !== 'own' && p.unsold !== 'neutral';

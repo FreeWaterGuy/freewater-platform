@@ -9,6 +9,7 @@ import { checkLabelGeometry, companyLabel, labelGeometry } from './geometry';
 import { layoutPanel, panelOf } from './panel';
 import { bottleCodeOf } from './bottleCode';
 import { outlineText, picturesForPrint } from './outline';
+import { siteBase } from '../../core/site';
 
 export const PX_PER_IN = 100; // drawing units; the SVG's width/height are set in real inches
 
@@ -29,7 +30,7 @@ export const svgLabelRenderer: LabelRenderer = {
     const U = PX_PER_IN;
     const W = g.width * U, H = g.height * U, B = g.bleed * U;
     const ad = { x: g.ad.x * U, y: g.ad.y * U, w: g.ad.w * U, h: g.ad.h * U };
-    const base = company.receiptBaseUrl.replace(/\/$/, '');
+    const base = siteBase(company);
     // Everything scales with the label, so the same layout works on a short can sleeve or a tall bottle.
     const k = labelScale(product);
 
@@ -141,7 +142,7 @@ export function labelFitProblem(company: CompanyConfig, products: Product[]): st
     if (bad.length) return `On the ${p.name}: ${bad[0]}`;
     const g = labelGeometry(product.label);
     const U = PX_PER_IN;
-    const lay = layoutPanel({ company, product, x: g.panel.x * U, w: g.panel.w * U, h: g.height * U, marginY: g.text.y * U, receiptUrl: `${company.receiptBaseUrl}/Q/WWWWWWWWWWWWWW`, qrStyle: companyQrStyle(company), bottleCode: 'B-WWWWWW', givingLine: givingLine(company, '') });
+    const lay = layoutPanel({ company, product, x: g.panel.x * U, w: g.panel.w * U, h: g.height * U, marginY: g.text.y * U, receiptUrl: `${siteBase(company)}/Q/WWWWWWWWWWWWWW`, qrStyle: companyQrStyle(company), bottleCode: 'B-WWWWWW', givingLine: givingLine(company, '') });
     if (lay.problems.length) return `The label panel doesn’t fit on the ${p.name}: ${lay.problems[0]}`;
   }
   return null;

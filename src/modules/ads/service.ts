@@ -28,6 +28,7 @@ import { withCompany } from '../ai/routing';
 import { adBilling, extraPrice, feesOnWords, prepaidModel } from './billing';
 import type { PrepaidService, Quote } from './prepaid';
 import { adWords, KIND_SWITCH, ROUTE_KINDS, routeKindWords, type RouteBuyService, type RouteQuoteInput } from './routeBuys';
+import { siteBase } from '../../core/site';
 
 /** A draft with nothing in it: only the assistant's greeting (nothing said, no design or scan page added from the studio). */
 // A draft with nothing in it: only the greeting, and (designing it yourself) no file uploaded to it, and on a new ad no
@@ -432,7 +433,7 @@ export class AdsService {
     const product = this.platform.standardProduct(o.companyId);
     // Only the layouts this company allows (its switches, its choice for each product, its most ads on a bottle).
     const layouts = this.platform.layoutsOf(company, product);
-    const sampleQr = `${company.receiptBaseUrl.replace(/\/$/, '')}/s/preview/0`;
+    const sampleQr = `${siteBase(company)}/s/preview/0`;
     // A piece drawn exactly as it prints: the artwork told where its code goes, and the code drawn there.
     // (A box side is drawn keeping clear of the drivers' stop code too, as the front and top print.)
     // Its words as outlines, exactly as they print (print/outline.ts).

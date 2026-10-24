@@ -106,6 +106,12 @@
     if (!S.me) return signIn();
     if (!['owner'].includes(S.me.role)) return shell('', h('div', { class: 'notice err', text: 'The console is for company owners. Ask an owner to change your role, or use the ops console.' }));
     try { S.ov = await api('GET', '/v1/console'); } catch (e) { return shell('', h('div', { class: 'notice err', text: e.message })); }
+    // The signed-in company is the one shown: its name, brand and switches, whatever address the console was opened at.
+    if (S.ov.config.id !== S.config?.companyId) {
+      S.company = S.ov.config.id; store.set('fw_console_company', S.company);
+      S.config = await api('GET', `/v1/public/app-config?company=${encodeURIComponent(S.company)}`);
+      S.features = await api('GET', `/v1/public/features?company=${encodeURIComponent(S.company)}`).catch(() => ({ off: [] }));
+    }
     if (S.ov.you?.mustSetUpSecondStep) return mustSetUpPage();
     if (!pageOn(pathname.replace(/\/$/, '').split('/')[2])) return go('/console', true);
     for (const [re, fn] of routes) {
@@ -125,9 +131,10 @@
       ...(S.ov?.config?.id === 'freewater' ? ['FreeWater team', ['given', '/console/given', 'Bottles given & receipts', I.box]] : []),
       ...(S.ov?.you?.platform ? ['Platform', ['licensees', '/console/licensees', 'Licensees', I.licensees]] : []),
     ];
-    const b = S.ov?.config?.brand ?? S.config?.brand ?? { logoTop: 'free', logoBottom: 'water' };
+    const b = S.ov?.config?.brand ?? S.config?.brand ?? { logoTop: '', logoBottom: '' };
     root.replaceChildren(h('div', { class: 'shell' },
-      h('aside', { class: 'side' }, h('div', { class: 'logo', 'aria-label': `${S.config?.name ?? ''} console` }, h('span', { text: b.logoTop }), h('span', { text: b.logoBottom }), h('small', { text: 'Console' })),
+      // The sidebar in the company's own colours (its panel, text and accent), never the platform's.
+      h('aside', { class: 'side', style: b.panelColor ? `--brand-panel:${b.panelColor};--brand-text:${b.textColor};--brand-accent:${b.accentColor}` : null }, h('div', { class: 'logo', 'aria-label': `${S.config?.name ?? ''} console` }, h('span', { text: b.logoTop }), h('span', { text: b.logoBottom }), h('small', { text: 'Console' })),
         h('nav', { 'aria-label': 'Main' }, nav.filter((n) => typeof n === 'string' || pageOn(n[0])).map((n) => (typeof n === 'string' ? h('div', { class: 'group', text: n }) : link(n[1], { 'aria-current': active === n[0] ? 'page' : null }, icon(n[3]), n[2])))),
         h('div', { class: 'who' }, h('b', { text: S.me.displayName || S.me.email || '' }), S.config?.name, h('br'), h('button', { type: 'button', onclick: async () => { try { await api('POST', '/v1/auth/sign-out'); } catch {} S.token = null; S.me = null; S.dirty = false; store.set('fw_console_token', null); render(); } }, 'Sign out'))),
       h('main', { class: 'main' }, ...content)));
@@ -384,6 +391,7 @@
         section('Name and web address', null, h('div', { class: 'form' },
           text(ctx, 'name', 'Company name', { max: 60, hint: 'Shown in the app, on receipts and in the open books.' }),
           text(ctx, 'receiptBaseUrl', 'QR web address', { max: 200, mono: true, placeholder: 'https://go.yourbrand.com', hint: 'Every QR code on your bottles opens a page here. Point this domain at the platform before changing it.' }),
+          domainBox(),
           select(ctx, 'timezone', 'Time zone', [...new Set([S.ov.config.timezone, ...S.ov.options.timezones].filter(Boolean))].map((t) => [t, t.replace(/_/g, ' ')]), { hint: 'Used for “today”, delivery nights and daily books.' }))),
         section('Bottles for people', 'What people pay at your machines and in the app, and how many free bottles one person can get.', h('div', { class: 'form' },
           select(ctx, 'consumerPricing', 'Bottle price', [['free', 'Free (paid for by the ads)'], ['discounted', 'Discounted'], ['full', 'Full price']]),
@@ -395,6 +403,17 @@
           num(ctx, 'machines.offlinePerHour', 'At most this many an hour, per machine', { min: 0, max: 120 }),
           num(ctx, 'machines.bufferSize', 'Labels each machine keeps ready', { min: 0, max: 50, hint: 'Their ads are held, never billed unless printed. Unused ones are let go after a day.' }))),
         boxesSection(ctx))]);
+  }
+
+  // ---------- your own domain (src/core/site.ts; docs/RUNNING.md): codes use it once its DNS check passes ----------
+  function domainBox() {
+    const d = S.ov.options.domain;
+    const input = h('input', { class: 'input', maxlength: 120, placeholder: 'water.yourbrand.com', spellcheck: 'false', style: 'font-family:var(--mono)', value: d?.host ?? '' });
+    const run = async (path, body) => { try { await api('POST', path, body); S.ov = await api('GET', '/v1/console'); render(); toast('Saved.'); } catch (x) { toast(x.message); } };
+    return h('div', { class: 'field full' }, h('label', { for: input.id = `f${++fid}`, text: 'Your own domain' }),
+      h('div', { class: 'row' }, input, h('button', { class: 'btn secondary small', type: 'button', onclick: () => run('/v1/console/domain', { host: input.value.trim() }) }, d ? 'Change' : 'Use it'),
+        d && !d.verified ? h('button', { class: 'btn blue small', type: 'button', onclick: () => run('/v1/console/domain/verify') }, 'Check DNS') : null),
+      h('div', { class: 'hint', text: d ? (d.verified ? `Checked. New codes use https://${d.host}. Codes printed before keep their address, which keeps working.` : `Not checked yet: codes use ${S.ov.options.siteBase}. Add a TXT record named ${d.records.verify.name} with the value ${d.records.verify.value}, and a CNAME from ${d.host} to ${d.records.point.value}, then Check DNS.`) : `Your codes use ${S.ov.options.siteBase}. Add a domain you control to use it instead (DNS steps follow).` }));
   }
 
   // ---------- delivery boxes (src/modules/packs/boxSettings.ts) ----------
@@ -478,7 +497,7 @@
           select(ctx, 'brand.fontFamily', 'Lettering', S.ov.options.fonts.map((f) => [f.value, f.label]), { hint: 'Only fonts every printer has.' }))),
         section('Colors', 'Text must be easy to read on the panel; the preview tells you if it isn’t.', h('div', { class: 'form' },
           color(ctx, 'brand.panelColor', 'Panel'), color(ctx, 'brand.textColor', 'Text'), color(ctx, 'brand.accentColor', 'Accent', { hint: 'The bottom logo line, the giving line and buttons in the app.' }))),
-        section('Product facts', 'Printed small at the bottom of the panel. One line each.', text(ctx, 'productFacts', 'Lines', { area: true, lines: true, full: true, hint: 'What the water is, the size, the source and who bottled it. Up to 6 lines.' })))],
+        section('Product facts', 'Printed small at the bottom of the panel. One line each.', text(ctx, 'productFacts', 'Lines', { area: true, lines: true, full: true, hint: 'What the water is, the size, the source and who bottled it. Up to 6 lines. Printed on your delivery boxes’ info strip; the “Bottled for …” line also prints on your label panel (edit it on the Label panel page).' })))],
     { onChange: (_d, ch) => refresh(ch) });
   }
 
@@ -541,19 +560,23 @@
           return h('div', { class: 'form' }, field('New icon’s name', name), upload('Its picture (your own file of the icon)', (data) => { if (!name.value.trim()) { toast('Name the icon first.'); return; } P.icons.push({ name: name.value.trim(), image: data }); ctx.changed(); drawIcons(); }));
         })()]));
       drawIcons();
+      const gaps = S.ov.options.panelGaps ?? [];
       return [h('div', { class: 'stack' },
+        gaps.length ? h('div', { class: 'notice err', role: 'alert', text: `Your bottles can’t print until your panel has ${gaps.join('; ')}. Fill these in and save.` }) : null,
         h('div', { class: 'preview' }, h('div', { class: 'cap' }, h('b', { text: 'Your panel as it prints' }), h('span', { text: 'On your standard product, at its real proportions. Words are outlines in the print file, exactly as here.' })), img, problem),
         section('Colours', 'Words must be easy to read on the background; the preview tells you if they aren’t.', h('div', { class: 'form' },
           color(ctx, 'labelPanel.colors.background', 'Background'), color(ctx, 'labelPanel.colors.text', 'Text'), color(ctx, 'labelPanel.colors.accent', 'Accent', { hint: 'The logo’s bottom line, the first giving line, the refill line, the recycling mark.' }))),
         section('Logo', null, logoBox),
         section('Giving line', 'Under the logo, bold italic, one entry a line.', h('div', { class: 'form' },
           lines('charity', 'Lines', 'Like 10 CENTS+ / PER WATER / GOES TO / CHARITY. Up to 6 lines of 24 characters.'),
-          toggle(ctx, 'labelPanel.accentFirst', 'First line in the accent colour', 'As on FreeWater’s label.', { full: true }))),
+          toggle(ctx, 'labelPanel.accentFirst', 'First line in the accent colour', 'Draws the eye to what you give.', { full: true }))),
         section('Under the QR code', 'The QR code opens each bottle’s receipt; it isn’t changed here.', h('div', { class: 'form' }, text(ctx, 'labelPanel.handle', 'Handle', { max: 40, placeholder: '@yourbrand' }))),
         section('Social icons', 'Upload each icon’s picture yourself (the platform doesn’t draw other companies’ logos). They print in this order, in one row.', iconBox),
         section('The rest, top to bottom', 'What’s inside and where it comes from are set on each product (Products page).', h('div', { class: 'form' },
           lines('refill', 'Refill line', 'In the accent colour. Up to 3 lines.'),
-          lines('maker', 'Who makes it', 'Small print, wrapped to fit: maker, city, phone, email. Up to 10 lines.'),
+          text(ctx, 'labelPanel.bottledFor', 'Bottled for', { max: 60, full: true, placeholder: `Bottled for ${S.config?.name ?? 'your company'}`, hint: 'Your company’s own line in the small print. Needed to print (or your name in the maker’s lines).' }),
+          lines('maker', 'Who makes it', 'Small print, wrapped to fit: the manufacturer and its city. Up to 10 lines. Needed to print.'),
+          lines('contact', 'How to reach you', 'A phone, an email or a web address, one a line. Up to 4 lines. Needed to print.'),
           text(ctx, 'labelPanel.process', 'Process line', { max: 60, hint: 'In italics, like “Processed by ozonation”. Leave empty for none.' }),
           toggle(ctx, 'labelPanel.recycle.show', 'Recycling mark', 'Beside the process line.', { full: true }),
           upload('Your own recycling mark (optional)', (data) => { P.recycle = { ...P.recycle, image: data }; ctx.changed(); }),

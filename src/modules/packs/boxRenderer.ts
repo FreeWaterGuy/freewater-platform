@@ -4,6 +4,7 @@ import { givingLine } from '../print/renderer';
 import { qrSvg } from '../print/qr';
 import { campaignQrStyle, companyQrStyle, qrMode, staticTarget } from '../codes/style';
 import { companyBox } from './boxSettings';
+import { siteBase } from '../../core/site';
 
 const PX = 40; // drawing units per inch; the SVG's width and height are in real inches
 
@@ -45,7 +46,7 @@ export function renderBox(input: {
   const box = companyBox(company, input.box);
   const L = box.lengthIn * PX, Wd = box.widthIn * PX, H = box.heightIn * PX;
   const totalW = 2 * Wd + 2 * L, totalH = H + 2 * Wd;
-  const base = company.receiptBaseUrl.replace(/\/$/, '');
+  const base = siteBase(company);
   const rects: Record<BoxFace, { x: number; y: number; w: number; h: number }> = {
     top: { x: Wd, y: 0, w: L, h: Wd },
     left: { x: 0, y: Wd, w: Wd, h: H },

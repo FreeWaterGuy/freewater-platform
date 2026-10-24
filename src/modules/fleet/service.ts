@@ -9,6 +9,7 @@ import { newId } from '../../core/ids';
 import { givingLine } from '../print/renderer';
 import { MachinePresence } from '../machines/presence';
 import { PrintCounter, printLimits } from './printCap';
+import { siteBase } from '../../core/site';
 
 export class FleetError extends Error {
   constructor(public code: string, message: string, public status = 400) {
@@ -341,7 +342,7 @@ export class FleetService {
   async presenceFor(locationId: string) {
     const c = await this.presence.current(locationId);
     const company = this.platform.companies.get(this.location(locationId).companyId!)!;
-    return { ...c, url: `${company.receiptBaseUrl.replace(/\/$/, '')}/app/m/${locationId}?c=${c.code}` };
+    return { ...c, url: `${siteBase(company)}/app/m/${locationId}?c=${c.code}` };
   }
 
   /** What the machine's screen shows when nobody's using it: the brand, the rules, and ads that run here. */
@@ -357,7 +358,7 @@ export class FleetService {
       company: company.name, brand: company.brand, machine: { id: l.id, name: l.name, city: l.city },
       pricing: company.consumerPricing, freeBottlesPerDay: company.consumer?.freeBottlesPerDay ?? 3, giving: givingLine(company, l.id),
       printSeconds: l.printSeconds ?? 25, offlineWalkUp: s.offlineWalkUp, offlinePerHour: s.offlinePerHour, ads,
-      appUrl: `${company.receiptBaseUrl.replace(/\/$/, '')}/app`,
+      appUrl: `${siteBase(company)}/app`,
     };
     let h = 0;
     for (const ch of JSON.stringify(config)) h = (h * 31 + ch.charCodeAt(0)) | 0;

@@ -912,6 +912,9 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 457 | `POST /v1/ads/drafts/:id/artwork/as-is` | campaigns | yes | advertiser, signed in as a person (403 for a service key); its own draft; refused while a file can't print at all | OK (079; recorded with the ad and its version) |
 | 458 | `GET /v1/ads/campaigns/:id/links` (changed) | campaigns | no | advertiser only, its own ad | OK (shows the change waiting and any hold) |
 | 459 | `POST /v1/ads/campaigns/:id/links` (changed) | campaigns | no | advertiser only, its own ad; money: the link fee, once; one change per ad at a time | OK (079; checked before charging; the old link stays live; a person approves) |
+| 460 | `POST /v1/console/domain` | admin | no | team only, a person signed in (403 for a service key); the company's own; a domain another company holds or the platform's own is refused | OK (080: one domain per company, a unique index; saved unchecked: codes don't use it yet) |
+| 461 | `POST /v1/console/domain/verify` | admin | no | team only, a person signed in; the company's own | OK (DNS TXT check; only then do new codes use the domain; an old version put back never restores a domain) |
+| 462 | `GET /v1/public/companies/:companyId/transparency` | public | — | — | OK (public by design; Transparency → Public transparency page; only the company's own settings and books, no personal data) |
 
 ---
 

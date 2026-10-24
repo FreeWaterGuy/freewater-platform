@@ -225,7 +225,8 @@ describe('the company panel', () => {
     expect(panel).toContain('fill="#123B2A"');
     expect(wordsOf(panel).slice(0, 2)).toEqual(['peak', 'spring']);
     expect(panel).toMatch(/data-fw-text="spring"[^>]*fill="#F2C14E"/);
-    expect(wordsOf(panel).join(' ')).toContain('MOUNTAIN SPRING WATER');
+    // Its own “Bottled for” line (from its product facts); its maker's and contact lines stay blank until it fills them in.
+    expect(wordsOf(panel).join(' ')).toContain('Bottled for Peak Spring Water Co.');
     expect(wordsOf(panel).join(' ')).not.toMatch(/freewater|FreeWater|CHARITY|RAIN Bottling/);
     expect(printed.codes!.find((c) => c.role === 'receipt')!.text).toMatch(/^https:\/\/water\.peakspring\.example\//);
     // Its own uploaded logo and icons, in its order.

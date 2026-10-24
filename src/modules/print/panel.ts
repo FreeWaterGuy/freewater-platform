@@ -49,7 +49,11 @@ export function freewaterPanel(accent = '#4FB6E8'): LabelPanelSettings {
   };
 }
 
-/** The panel a company prints: its own settings, or one made from its brand, giving line and product facts. */
+/**
+ * The panel a company prints: its own settings, or one made from its own brand, giving line and name. Never another
+ * company's: a new company's panel has its logo and colours, a "Bottled for <its name>" line, and its maker's and
+ * contact lines blank until it fills them in (until then it can't print bottles: `panelGaps`).
+ */
 export function panelOf(company: CompanyConfig, givingLine: string | null): LabelPanelSettings {
   if (company.labelPanel) return company.labelPanel;
   const b = company.brand;
@@ -57,9 +61,45 @@ export function panelOf(company: CompanyConfig, givingLine: string | null): Labe
     colors: { background: b.panelColor, text: b.textColor, accent: b.accentColor },
     logo: { kind: 'text', top: b.logoTop, bottom: b.logoBottom },
     charity: givingLine ? byLength(givingLine.toUpperCase(), 14) : [], accentFirst: false,
-    handle: '', icons: [], refill: ['PLEASE REFILL', 'AND RECYCLE'],
-    maker: company.productFacts, process: '', recycle: { show: true }, codeLabel: 'Bottle code',
+    handle: company.domain?.verified ? company.domain.host : '', icons: [], refill: ['PLEASE REFILL', 'AND RECYCLE'],
+    maker: [], contact: [], bottledFor: bottledForOf(company, undefined), process: '', recycle: { show: true }, codeLabel: 'Bottle code',
   };
+}
+
+/** The "Bottled for …" line the panel prints: the panel's own, else the Brand page's product-facts line, else its name. */
+export function bottledForOf(company: CompanyConfig, p: LabelPanelSettings | undefined): string {
+  if (p?.bottledFor !== undefined) return p.bottledFor.trim();
+  const fact = company.productFacts.find((l) => /^(bottled|canned|packed|filled) for\b/i.test(l.trim()));
+  if (fact) return fact.trim().slice(0, 60);
+  return p ? '' : `Bottled for ${company.name}`.slice(0, 60);
+}
+
+/** An email address, a phone number or a web address in a line: a way to reach the company. */
+const REACH = /@[\w-]+\.[\w.-]+|\+?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}|\b[\w-]+\.(com|io|org|net|co|us|ca|uk|de|example)\b|https?:\/\//i;
+
+/**
+ * What a company's panel still needs before its bottles may print on this product, in plain words (empty when
+ * nothing): its name, how to reach it, who makes it (the panel), and what's inside and where it comes from (the
+ * product). Printing refuses until these are filled in; the console says which.
+ */
+export function panelGaps(company: CompanyConfig, product: Product): string[] {
+  const p = panelOf(company, null);
+  const has = (ls: string[] | undefined) => !!ls?.some((l) => l.trim());
+  const maker = p.maker.filter((l) => l.trim());
+  const gaps: string[] = [];
+  const name = company.name.trim().toLowerCase();
+  if (!bottledForOf(company, company.labelPanel) && !maker.some((l) => name && l.toLowerCase().includes(name))) gaps.push('your company’s name (the “Bottled for” line)');
+  if (!has(p.contact) && !maker.some((l) => REACH.test(l))) gaps.push('how to reach you (a phone, email or web address)');
+  if (!maker.length) gaps.push('who makes it (the manufacturer’s lines)');
+  const info = product.panelInfo;
+  if (!(info?.contents?.trim() || (!info && has(product.facts)))) gaps.push(`what’s inside (the ${product.name}’s contents, on the Products page)`);
+  if (!(has(info?.source) || product.facts?.some((l) => /source/i.test(l)))) gaps.push(`where it comes from (the ${product.name}’s source, on the Products page)`);
+  return gaps;
+}
+
+/** The plain message a company sees when its bottles can't print because its panel isn't filled in. */
+export function panelGapMessage(company: CompanyConfig, gaps: string[]): string {
+  return `${company.name}’s bottles can’t print yet: the label panel is missing ${gaps.join('; ')}. Fill it in on the console’s Label panel page (Settings → Label panel); nothing printed meanwhile.`;
 }
 
 /** Words in lines of about `max` characters (a giving line made from the settings, before it's measured). */
@@ -149,7 +189,8 @@ function build(p: LabelPanelSettings, inp: PanelInput, k: number) {
   // Small type, left-aligned and wrapped: where it comes from (the product), then who makes it (the company).
   const small: FontSpec = { family: font, weight: 600 };
   const infoSize = sized('info');
-  const fine = [...(info?.source ?? (info ? [] : inp.product.facts ?? [])), ...p.maker].filter((t) => t.trim());
+  const bottledFor = bottledForOf(inp.company, inp.company.labelPanel);
+  const fine = [...(info?.source ?? (info ? [] : inp.product.facts ?? [])), ...(bottledFor ? [bottledFor] : []), ...p.maker, ...(p.contact ?? [])].filter((t) => t.trim());
   const wrapLines = (texts: string[], spec: FontSpec, what: string) => texts.flatMap((t) => wrapTo(t, inner, infoSize, spec)).map((t): Line => {
     const em = measure(t, spec);
     if (em * infoSize > inner + 1e-6) problems.push(`${what}: the word “${t}” is too long for the panel even at the smallest print size.`);
@@ -338,6 +379,8 @@ export function checkPanelSettings(p: LabelPanelSettings | undefined): string | 
   }
   if (!lines(p.refill, 3, 24)) return 'The refill line is up to 3 lines of up to 24 characters.';
   if (!lines(p.maker, 10, 60)) return 'The maker’s lines are up to 10 lines of up to 60 characters.';
+  if (p.contact !== undefined && !lines(p.contact, 4, 60)) return 'The contact lines are up to 4 lines of up to 60 characters (a phone, an email, a web address).';
+  if (p.bottledFor !== undefined && !line(p.bottledFor, 60)) return 'The “Bottled for” line is up to 60 characters.';
   if (!line(p.process, 60)) return 'The process line is up to 60 characters.';
   if (!p.recycle || typeof p.recycle.show !== 'boolean') return 'The recycling mark is shown or not.';
   if (p.recycle.image !== undefined) { const bad = pictureProblem(p.recycle.image, 'The recycling mark', MIN_PIXELS.recycle); if (bad) return bad; }
