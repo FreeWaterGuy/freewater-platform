@@ -25,7 +25,7 @@ import { givingLine, labelFitProblem, withLabel } from '../print/renderer';
 export interface SaveNote { via: string; reason?: string }
 /** `confirmStranded`: the count of paid pieces a label-layout change would strand, as the preview showed it (it must match). */
 /** Why a change that turns a security switch off is refused. */
-const SECURITY_OFF = (labels: string[]) => `It turns off ${labels.map((l) => `“${l}”`).join(' and ')}, which guards your company. Only an owner signed in with the second sign-in step turns that off, on its own (not with other changes), with a reason of at least 10 characters (Features, or Security).`;
+const SECURITY_OFF = (labels: string[]) => `It weakens ${labels.map((l) => `“${l}”`).join(' and ')}, which guards your company. Only an owner signed in with the second sign-in step does that, one change on its own (not with other changes), with a reason of at least 10 characters (Features, Security, or Pause).`;
 
 export interface SaveOpts { chainApproved?: boolean; person?: boolean; note?: SaveNote; inTx?: (tx: SqlClient) => Promise<void>; confirmStranded?: number;
   /** Set only by a caller that checked a security switch going off (an owner with the second step, on its own, with a reason). */

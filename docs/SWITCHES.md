@@ -26,7 +26,9 @@ it off again. Read it before going live, and keep it open the first time you fli
 - **Machines have a print limit** (6 a minute and 1,500 a day by default; *Machines* settings), so a stolen machine key
   can't bill advertisers at scale. Revoke a lost machine's key at once.
 - **The safety limits never come off.** The pause switch, the daily check of the books, the approval rules and the
-  points cap can be made stricter, never weaker, while things are live.
+  points cap can be made stricter, never weaker, while things are live. The pause itself is never removed; what it
+  stops, who presses it and how it's undone are adjustable (*Pause settings*, below), and making any of that weaker is
+  a security change: an owner signed in with the second step, one change at a time, with a reason.
 
 Where things are: the **console** is at `/console` (sign in as an owner). Most switches live under
 **Points and rewards** in its menu: *Launch*, *Points and credit*, *Brand offers*, *The games*, *Blockchain*. Keys
@@ -221,8 +223,9 @@ called. Points are the same whichever item someone picks. The cap (500 million) 
 | **Switch on** | Hourly seals go to the chain as well as GitHub; token steps can run. | Happens with *going live with the token*, or *Blockchain → Propose switching the chain on* (approvals and the wait). |
 | **Switch off** | Nothing touches a blockchain; seals go to GitHub only. | *Blockchain → Switch the chain off now*. Immediate. |
 | **Pause (token actions)** | Stops every token action at once (minting, conversions, withdrawals). Recorded on the chain. Printing and money go on. | *Blockchain → Pause now*. **Any one person, immediately, no wait.** It also pauses itself if the daily check finds the books and the chain disagree. To stop everything, use *Pause* on the main menu (below). |
-| **Pause everything (the emergency stop)** | Stops, for this company, what it has switched on of: **printing new bottles** (orders, packs and delivery nights, the free bottle at a machine, paid custom bottles, labels kept ready offline), **money leaving** (charity payouts, paying owners, the agents' fund being shared out or spent, brand offers going live or paying out, gift cards, withdrawals, money partners, prize redemptions), and **every token action**. Each answers 423 `paused`; the offers job skips the company. Never stopped: settling money already moving (refunds, stopping a paid ad and paying it back, settling gift cards bought), scans, the books, the team. Kept in the books (`chain_actions`), so a restart keeps it. | *Pause* on the console's main menu, **whatever is switched on (the blockchain or not)**: `POST /v1/pause` with a reason. **Any one owner or finance person, immediately, no wait, never a key, no second step.** The page lists what it stops for your company (`GET /v1/pause`). The team is alerted. |
-| **Unpause** | Ends every pause in force (the Blockchain page's and the emergency stop): token actions, printing and money run again. | *Pause → Propose unpausing* (or *Blockchain → Propose unpausing*): approved by other owners or finance people, then the wait. A pause pressed after it was proposed cancels it. |
+| **Pause (the emergency stop)** | Stops, for this company, what its *Pause settings* say, of what it has switched on: **money** (charity payouts, paying owners, the agents' fund being shared out or spent, brand offers going live or paying out, gift cards, money partners, prize redemptions, and charging advertisers' cards for invoices and fees: those are charged at the next run after unpausing, nothing is lost), **token actions** (minting, conversions, moving tokens out) and **printing** (orders, packs and delivery nights, reprints from the packing check, the free bottle at a machine, paid custom bottles, labels kept ready offline). All three by default. Each answers 423 `paused`; the offers and card-fee jobs skip the company while money is paused. Never stopped: settling money already moving (refunds, stopping a paid ad and paying it back, settling gift cards bought), scans, the books, the team. Kept in the books (`chain_actions`, with what each press stopped), so a restart keeps it. | *Pause* on the console's main menu, **whatever is switched on (the blockchain or not)**: `POST /v1/pause` with a reason. **One owner or finance person (ops people too where the company allows), immediately, no wait, never a key, no second step.** The page lists exactly what pressing will stop (`GET /v1/pause`); where the company allows choosing at press time, the person pressing may **untick printing for that one press** (`printing: false`) to keep a delivery night going. Money and token actions can never be left out at press time; anything can be added. The team is alerted. Ops people press it from the ops console (*Pause*). |
+| **Unpause everything** | Ends every pause in force (the Blockchain page's and the emergency stop): money, token actions and printing run again. | *Pause → Propose unpausing everything* (or *Blockchain → Propose unpausing*): approved by other owners or finance people (2 by default, 1 to 5), then the wait (48 hours by default, at least 1 hour). With the chain switched on, the chain's own rules apply too, whichever is stricter. A pause pressed after it was proposed cancels it. |
+| **Start printing again** (`unpause_printing`) | Printing runs again; money and token actions stay paused. For a mistaken pause on a delivery night. | *Pause → Propose starting printing again*: approved by other owners or finance people (1 by default, 1 to 5), then its own wait (none by default, up to 30 days). With no wait, the last approval starts printing at once. A pause pressed after it was proposed cancels it; a pause pressed after printing started again stops printing again. A test reset keeps it (migration 084). |
 | **Mint** | Makes new tokens into custody. | Proposed, approved, waited, then **signed by the key holders in Squads**. The server can never mint on the real network by itself. Not allowed while live with points (only in testing or with the token). |
 
 **Signing in Squads (the real network):** when an approved mint or conversion runs, its status becomes *signing* and
@@ -233,6 +236,26 @@ signatures can't be cancelled for a week (reject it in Squads instead).
 
 **The daily check** compares the token count in the books with the token count on the chain. If they differ,
 everything pauses and the team is alerted. See *Blockchain → Last daily check*.
+
+**Pause settings** (*Pause → Pause settings*, per company, setting `pause`; each change is kept in the settings history
+in plain words, like "Approvals needed to unpause: 2 → 1"). The pause itself can never be removed: clearing the
+settings, or having it stop nothing, is refused (`test/pause-settings.test.ts`).
+
+| Setting | Default | Range | Weaker means |
+|---|---|---|---|
+| What Pause stops: money / token actions / printing | all three on (the safest) | each on or off, at least one on | turning one off |
+| Let the person pressing keep printing going (choose at press time) | on | on or off | turning it on |
+| Who can press Pause | owners and finance | owners and finance, or owners, finance and ops | (not weaker: more people can stop things; a person signed in changes it) |
+| Unpausing everything: other people who approve | 2 | 1 to 5 (never none) | fewer |
+| Unpausing everything: the wait after the last approval | 48 hours | 1 to 720 hours | shorter |
+| Starting printing again: other people who approve | 1 | 1 to 5 (never none) | fewer |
+| Starting printing again: the wait | none (0) | 0 to 720 hours | shorter |
+
+Making it **stricter** is quick: an owner signed in. Making it **weaker** follows the security-switch rule: an owner
+signed in **with the second sign-in step**, **one change on its own** (a save with anything else in it is refused
+whole), with a **written reason** (10+ characters), never a key, never a restored settings version, never an agent's
+proposal. A step already proposed keeps the rules it was proposed under; a later stricter wait applies to it too.
+Unpausing (either kind) stays with owners and finance, whoever may press.
 
 **Hourly seals:** every hour of the wallet books gets one fingerprint, including the hour before, published to
 GitHub (and the chain when it's on). Anyone can check their own entry at
@@ -573,7 +596,10 @@ written reason of at least 10 characters; it's kept in the switches' history and
 never changes one (the preview says "Left on"), turning off its parent leaves its own choice as it was (it's off with
 the parent and back with it), a settings version put back that would turn one off is refused, and so is any other save
 that skips these checks (an agent's proposal). `test/security-switches.test.ts` checks every starting point, preset
-and bundle.
+and bundle. The same rule covers **weakening the pause** (*Pause settings*, section 3: stopping less, letting the
+person pressing leave printing out, fewer approvals or a shorter wait to undo it), one change at a time
+(`securityWeakened` in `src/runtime/registry.ts`, `pauseWeakened` in `src/modules/chain/pause.ts`;
+`test/pause-settings.test.ts`).
 
 **The page:** the main switches as cards, the starting points, *Every switch* (categories → groups → switches) with a
 search box and filters (on, off, different from FreeWater, locked, new); each switch shows what it does, what it

@@ -88,7 +88,11 @@ describe.skipIf(!url)('the new migrations over data the old code wrote, on real 
 
   it('the test-stage reset still wipes test records, keeping brand money and pauses', async () => {
     const pauses = (await db.query<any>(`select count(*)::int as n from chain_actions where company_id = 'freewater' and kind = 'pause'`)).rows[0].n;
+    // Starting printing again on its own stays too (084): a reset never pauses printing again.
+    await db.query(`insert into chain_actions (id, company_id, kind, params, proposed_by, approvals, needed, status, created_at, ran_by, ran_at) values ('ca_pg_084','freewater','unpause_printing','{}','test','[]',1,'done',now(),'test',now()) on conflict do nothing`);
     const r = await app.launch.reset('freewater', 'user:josh');
+    expect((await db.query(`select 1 from chain_actions where id = 'ca_pg_084'`)).rows).toHaveLength(1);
+    await expect(db.transaction(async (tx) => { await tx.query(`select set_config('fw.test_reset', 'freewater', true)`); await tx.query(`delete from chain_actions where id = 'ca_pg_084'`); })).rejects.toThrow(/permanent record/);
     expect(r.counts['wallet entries']).toBeGreaterThan(0);
     expect((await db.query<any>(`select count(*)::int as n from wallet_tx where company_id = 'freewater' and kind not in ('fund','correction')`)).rows[0].n).toBe(0);
     expect((await db.query<any>(`select count(*)::int as n from chain_actions where company_id = 'freewater' and kind = 'pause'`)).rows[0].n).toBe(pauses);

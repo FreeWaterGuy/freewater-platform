@@ -1,4 +1,4 @@
-import { PAUSE_ROUTES, PAUSED_MESSAGE } from '../modules/chain/pause';
+import { OPS_PAUSE_ROUTES, PAUSE_ROUTES, PAUSED_MESSAGE, pressesPause } from '../modules/chain/pause';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { ApiError, notFound, obj, S, signedInOwner, teamPersonOf, type Handler, type RouteDef, Q } from './http';
 import { consumerRoutes } from './consumer';
@@ -796,7 +796,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
   route({ method: 'GET', url: '/v1/me', scope: 'me', summary: 'Your account, privacy choices and what you can do.', handler: async (_req, key) => {
     const u = await app.accounts.get(me(key));
     // reviewsAds: whether this person reviews ads here (owners and reviewers; ops people where the company lets them).
-    return { body: { ...u, scopes: key!.scopes, ...(u && u.role !== 'consumer' && !u.advertiserId ? { reviewsAds: reviewsAds(u.role, platform.companies.get(u.companyId)) } : {}) } };
+    return { body: { ...u, scopes: key!.scopes, ...(u && u.role !== 'consumer' && !u.advertiserId ? { reviewsAds: reviewsAds(u.role, platform.companies.get(u.companyId)), pressesPause: pressesPause(u.role, platform.companies.get(u.companyId)) } : {}) } };
   } });
 
   route({ method: 'PATCH', url: '/v1/me', scope: 'me', summary: 'Change your name, privacy choices or interests.', body: obj({
@@ -1058,11 +1058,12 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     throw new ApiError(404, 'feature_off', `${switchOf(id)?.label ?? 'This'} is switched off for ${platform.companies.get(companyId)!.name}.`);
   };
 
-  /** The company's emergency stop is on: what it stops (printing, money leaving) refuses, 423 paused (src/modules/chain/pause.ts). */
+  /** The company's emergency stop is on: what it stops (money, token actions, printing) refuses, 423 paused (src/modules/chain/pause.ts). */
   const pauseGate = async (r: RouteDef, req: FastifyRequest, key: ApiKey | null) => {
-    if (!PAUSE_ROUTES.has(`${r.method} ${r.url}`)) return;
+    const stop = PAUSE_ROUTES.get(`${r.method} ${r.url}`);
+    if (!stop) return;
     const companyId = companyOfRequest(req, key);
-    if (companyId && platform.companies.has(companyId) && (await app.chain.stopped(companyId))) throw new ApiError(423, 'paused', PAUSED_MESSAGE);
+    if (companyId && platform.companies.has(companyId) && (await app.chain.stopped(companyId, stop.area))) throw new ApiError(423, 'paused', PAUSED_MESSAGE[stop.area]);
   };
 
   for (const r of routes) {
@@ -1292,6 +1293,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       // ops): only the review screens' routes, signed in as a person, never with a key. A person still decides each ad;
       // refunds, the AI reviewer's settings and ads aimed at a few houses stay with owners (and finance or reviewers).
       if (user.role === 'ops' && OPS_REVIEW_ROUTES.has(`${req.method} ${req.routeOptions?.url ?? ''}`) && reviewsAds(user.role, platform.companies.get(user.companyId))) key.scopes = [...new Set([...key.scopes, ...(Array.isArray(scope) ? scope : [scope])])];
+      // Ops people press Pause where the company lets them ("Who can press Pause", console → Pause): only the Pause
+      // page's two routes, signed in as a person. Unpausing stays with owners and finance.
+      if (user.role === 'ops' && OPS_PAUSE_ROUTES.has(`${req.method} ${req.routeOptions?.url ?? ''}`) && pressesPause(user.role, platform.companies.get(user.companyId))) key.scopes = [...new Set([...key.scopes, ...(Array.isArray(scope) ? scope : [scope])])];
     } else {
       key = await findApiKey(db, raw);
     }

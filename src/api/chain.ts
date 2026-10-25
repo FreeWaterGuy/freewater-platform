@@ -1,7 +1,7 @@
 import type { App } from '../app';
 import type { ApiKey } from '../db/store';
 import { ApiError, obj, type RouteDef } from './http';
-import { PAUSE_STOPS } from '../modules/chain/pause';
+import { PAUSE_AREAS, PAUSE_LIMITS, PAUSE_STOPS, pauseSettings, pressStops } from '../modules/chain/pause';
 
 /** The chain layer: public seals and proofs; the team's actions that need several people, and the pause switch. */
 export function chainRoutes(app: App, route: (r: RouteDef) => void) {
@@ -27,7 +27,7 @@ export function chainRoutes(app: App, route: (r: RouteDef) => void) {
     return u && u.companyId === companyId ? u.displayName || u.email || u.phone || null : null;
   };
   route({ method: 'GET', url: '/v1/chain/actions', scope: ['admin', 'ledger'], summary: 'Actions proposed, approved, waiting and done (with who proposed each, by name).', handler: async (_req, key) => ({ body: await Promise.all((await chain.actions(key!.companyId)).map(async (a) => ({ ...a, proposedByName: await nameOf(key!.companyId, a.proposedBy) }))) }) });
-  route({ method: 'POST', url: '/v1/chain/actions', scope: ['admin', 'ledger'], summary: 'Propose something that can’t be undone: a mint, unpausing, or switching the chain on. Other people must approve it, then it waits.', body: obj({ kind: { type: 'string', enum: ['mint', 'unpause', 'switch_on', 'go_live_points', 'go_live_token', 'convert', 'withdrawals_on', 'exchanges_on'] }, params: { type: 'object' } }, ['kind']), handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/chain/actions', scope: ['admin', 'ledger'], summary: 'Propose something that can’t be undone: a mint, unpausing (everything, or printing only: unpause_printing), or switching the chain on. Other people must approve it, then it waits.', body: obj({ kind: { type: 'string', enum: ['mint', 'unpause', 'unpause_printing', 'switch_on', 'go_live_points', 'go_live_token', 'convert', 'withdrawals_on', 'exchanges_on'] }, params: { type: 'object' } }, ['kind']), handler: async (req, key) => {
     const b = req.body as any;
     const who = person(key);
     // Going live with points needs only its proposer, so only an owner may propose it. Every other step needs approvals
@@ -63,12 +63,26 @@ export function chainRoutes(app: App, route: (r: RouteDef) => void) {
 
   // The company's emergency stop (src/modules/chain/pause.ts): on the console's main menu whatever is switched on, the
   // blockchain or not. What it stops is listed from the company's own switches.
-  route({ method: 'GET', url: '/v1/pause', scope: ['admin', 'ledger'], summary: 'The emergency stop: whether everything (or only the chain) is paused, by whom and why, what pausing stops for your company, and any unpause on its way.', handler: async (_req, key) => {
+  // Ops people reach these two only where the company lets them press Pause (src/api/server.ts, authenticate).
+  route({ method: 'GET', url: '/v1/pause', scope: ['admin', 'ledger'], summary: 'The emergency stop: what is paused now (money, token actions, printing), by whom and why, what pressing it stops for your company and what the person pressing may leave out, the rules for starting again, and any unpause on its way.', handler: async (_req, key) => {
     const companyId = key!.companyId;
     const pauses = await chain.pausesInForce(companyId);
-    const unpause = (await chain.actions(companyId)).filter((a) => a.kind === 'unpause' && ['proposed', 'approved'].includes(a.status));
-    return { body: { paused: pauses.some((p) => p.scope === 'all'), chainPaused: pauses.length > 0, pauses, stops: PAUSE_STOPS.filter((x) => app.companyFeatures.on(companyId, x.feature)).map((x) => ({ id: x.id, label: x.label })), unpause } };
+    const now = await chain.stoppedNow(companyId);
+    const settings = pauseSettings(platform.companies.get(companyId));
+    const unpause = (await chain.actions(companyId)).filter((a) => (a.kind === 'unpause' || a.kind === 'unpause_printing') && ['proposed', 'approved'].includes(a.status));
+    const stops = PAUSE_STOPS.filter((x) => app.companyFeatures.on(companyId, x.feature)).map((x) => ({ id: x.id, area: x.area, label: x.label }));
+    return { body: {
+      paused: pauses.some((p) => p.scope === 'all'), chainPaused: pauses.length > 0, stopped: now, pauses, stops,
+      areas: PAUSE_AREAS.map((a) => ({ ...a, onPress: settings.stops[a.id], mayLeaveOut: a.id === 'printing' && settings.stops.printing && settings.chooseAtPress })),
+      settings, limits: PAUSE_LIMITS, rules: { unpause: chain.rulesFor('unpause', companyId), unpausePrinting: chain.rulesFor('unpause_printing', companyId) }, unpause,
+    } };
   } });
-  route({ method: 'POST', url: '/v1/pause', scope: ['admin', 'ledger'], summary: 'Pause everything now: nothing prints and no money leaves, and every token action stops. Any one owner or finance person, at once, with a reason; unpausing needs other people’s approval and the wait.', body: obj({ reason: { type: 'string', minLength: 3, maxLength: 300 } }, ['reason']), handler: async (req, key) => ({ body: await chain.pause(key!.companyId, person(key), (req.body as any).reason, 'all') }) });
+  route({ method: 'POST', url: '/v1/pause', scope: ['admin', 'ledger'], summary: 'Press Pause now, with a reason: it stops what your Pause settings say (money, token actions, printing; all three unless changed). Send printing: false to keep printing going for this one press, where your company allows choosing; anything may be added. A person signed in (owners and finance; ops people where allowed), never a key; unpausing needs other people’s approval and the wait.', body: obj({ reason: { type: 'string', minLength: 3, maxLength: 300 }, money: { type: 'boolean' }, tokens: { type: 'boolean' }, printing: { type: 'boolean' } }, ['reason']), handler: async (req, key) => {
+    const who = person(key);
+    const b = req.body as any;
+    let stops;
+    try { stops = pressStops(pauseSettings(platform.companies.get(key!.companyId)), { money: b.money, tokens: b.tokens, printing: b.printing }); } catch (e: any) { throw new ApiError(422, 'not_allowed', e.message); }
+    return { body: await chain.pause(key!.companyId, who, b.reason, 'all', stops) };
+  } });
   route({ method: 'POST', url: '/v1/chain/pause', scope: ['admin', 'ledger'], summary: 'The pause switch: stops everything on the chain at once. Any one person; unpausing needs approvals and a wait.', body: obj({ reason: { type: 'string', minLength: 3, maxLength: 300 } }, ['reason']), handler: async (req, key) => ({ body: await chain.pause(key!.companyId, person(key), (req.body as any).reason) }) });
 }

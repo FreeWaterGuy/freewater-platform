@@ -2,7 +2,7 @@ import type { App } from '../app';
 import { createApiKey, revokeApiKey, scopeInfo, type ApiKey, type Scope } from '../db/store';
 import { publicEvents, testEvent } from '../modules/webhooks/catalog';
 import { ApiError, obj, S, signedInOwner, type RouteDef, Q } from './http';
-import { applyChange, personOnlyKeys } from '../modules/console/settings';
+import { applyChange, describeChange, personOnlyKeys } from '../modules/console/settings';
 import { securityWeakened } from '../runtime/registry';
 import { approvalSettings, approverStepProblem } from '../modules/accounts/secondStep';
 import { TeamScreens } from '../modules/ops/teamScreens';
@@ -31,16 +31,17 @@ export function consoleRoutes(app: App, route: (r: RouteDef) => void) {
   } });
   route({ method: 'PATCH', url: '/v1/console/settings', scope: 'admin', summary: 'Change your settings: brand, product facts, giving, open books, ad rules, prices, modules and more. Send only what changes, and the version you started from. Turning off a security setting (owners’ second sign-in step) is its own change, by an owner who passed the second step, with a reason.', body: obj({ changes: changesProp, version: S.int, confirmStranded: S.int, reason: { type: 'string', maxLength: 300 } }, ['changes']), handler: async (req, key) => {
     const b = req.body as any;
-    // Weakening security (docs/SWITCHES.md, "Security switches"): an owner signed in, with the second step, on its own, with a reason.
+    // Weakening security (docs/SWITCHES.md, "Security switches"; the pause stopping less, or undoing it needing fewer
+    // people or a shorter wait): an owner signed in, with the second step, one change on its own, with a reason.
     const cur = app.platform.companies.get(staff(key).companyId);
-    let next: unknown = null;
+    let next: any = null;
     try { next = cur ? applyChange(cur, b.changes ?? {}) : null; } catch { /* the save below says what's wrong */ }
     const weakened = cur && next ? securityWeakened(cur, next) : [];
     let securityOff: { reason: string } | undefined;
     if (weakened.length) {
-      const k = signedInOwner(key, `Turning off “${weakened.join('” and “')}”`);
-      if (Object.keys(b.changes ?? {}).some((x) => x !== 'security')) throw new ApiError(422, 'one_at_a_time', `Turn off “${weakened.join('” and “')}” on its own, not with other changes.`);
-      if (String(b.reason ?? '').trim().length < 10) throw new ApiError(422, 'reason_needed', `Say why “${weakened.join('” and “')}” is turned off (at least 10 characters), for the record.`);
+      const k = signedInOwner(key, `Weakening “${weakened.join('” and “')}”`);
+      if (Object.keys(b.changes ?? {}).some((x) => x !== 'security' && x !== 'pause') || describeChange(cur!, next).length > 1) throw new ApiError(422, 'one_at_a_time', `Change “${weakened.join('” and “')}” on its own, one at a time, not with other changes.`);
+      if (String(b.reason ?? '').trim().length < 10) throw new ApiError(422, 'reason_needed', `Say why you’re weakening “${weakened.join('” and “')}” (at least 10 characters), for the record.`);
       await approverStep(k);
       securityOff = { reason: String(b.reason).trim() };
     }

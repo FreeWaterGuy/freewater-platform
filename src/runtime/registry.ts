@@ -21,6 +21,7 @@ import { defaultWallet } from '../modules/wallet/assets';
 import { adBilling } from '../modules/ads/billing';
 import { TEMPLATES, templateShares } from '../modules/ads/layouts';
 import { unsoldSettings } from '../modules/fillers/unsold';
+import { pauseWeakened } from '../modules/chain/pause';
 
 /** Ad sizes (shares of the label) and their switches. */
 export const SIZE_SWITCHES: Record<number, string> = { 1: 'size_whole', 2: 'size_half', 3: 'size_third', 4: 'size_quarter', 6: 'size_sixth', 8: 'size_eighth', 10: 'size_tenth' };
@@ -515,7 +516,7 @@ export const SWITCHES: Switch[] = [
     jobs: ['books-and-agents', 'agent-exams'], pages: ['agents'] }),
   sw({ id: 'numberline', category: 'safety', parent: null, locked: 'The number line is the only essential agent: its work is never halted, only limited, and it can never contradict the numbers (docs/AI.md).', label: 'The number line', description: 'Every offering placed on the number line (for sale, free or negatively priced) by rules it can’t contradict.',
     routes: ['GET /v1/numberline', 'GET /v1/numberline/history', 'POST /v1/numberline/place', 'POST /v1/numberline/override'], pages: ['numberline'] }),
-  sw({ id: 'pause_switch', category: 'safety', parent: null, locked: 'Any one person can stop everything at once. It can never be removed.', label: 'The pause switch', description: 'The emergency stop, on the console’s main menu (Pause): any one owner or finance person, immediately, stops printing, money leaving and every token action; the Blockchain page’s pause stops token actions only. Unpausing needs approvals and the wait.', routes: ['POST /v1/chain/pause', 'GET /v1/chain', 'GET /v1/pause', 'POST /v1/pause'], pages: ['pause'] }),
+  sw({ id: 'pause_switch', category: 'safety', parent: null, locked: 'Any one person can stop everything at once. It can never be removed: only what it stops, who presses it and how it’s undone can change (making it weaker takes an owner, the second step and a reason).', label: 'The pause switch', description: 'The emergency stop, on the console’s main menu (Pause): one owner or finance person (ops too, where allowed), immediately, stops money leaving, token actions and printing (each adjustable on the Pause page; the person pressing may keep printing going where allowed); the Blockchain page’s pause stops token actions only. Unpausing needs approvals and the wait; printing can start again on its own by a quicker rule.', routes: ['POST /v1/chain/pause', 'GET /v1/chain', 'GET /v1/pause', 'POST /v1/pause'], pages: ['pause'] }),
   sw({ id: 'approvals', category: 'safety', parent: null, locked: 'Anything irreversible needs people, approvals and a wait.', label: 'Approvals and waits', description: 'Steps that can’t be undone are proposed, approved by people who were already on the team, then wait at least 24 hours.',
     routes: ['GET /v1/chain/actions', 'POST /v1/chain/actions', 'POST /v1/chain/actions/:id/approve', 'POST /v1/chain/actions/:id/cancel', 'POST /v1/chain/actions/:id/run'] }),
   sw({ id: 'launch_stages', category: 'safety', parent: null, locked: 'The stages only move forward, through approved steps; testing can be wiped, live can’t.', label: 'Testing, then going live', description: 'Testing (bots and a full reset), live with points, live with the token, in order, never back.', routes: ['GET /v1/launch', 'POST /v1/launch/reset', 'POST /v1/launch/bots'], pages: ['launch'] }),
@@ -596,8 +597,11 @@ export const startsOffForNew = (s: Switch) => !s.locked && (!!s.risk || !!s.star
 
 /** The security switches: off weakens the company's security (each only on its own, by an owner with the second step and a reason). */
 export const securitySwitches = () => SWITCHES.filter((s) => !!s.security);
-/** The security switches kept in the settings that this settings change turns off (by label). */
-export const securityWeakened = (before: any, after: any) => SWITCHES.filter((s) => s.security && s.kind === 'linked' && s.link!.get(before) && !s.link!.get(after)).map((s) => s.label);
+/**
+ * The security switches kept in the settings that this settings change turns off (by label), and the ways it makes
+ * the pause weaker (it stops less, or undoing it needs fewer people or a shorter wait: src/modules/chain/pause.ts).
+ */
+export const securityWeakened = (before: any, after: any) => [...SWITCHES.filter((s) => s.security && s.kind === 'linked' && s.link!.get(before) && !s.link!.get(after)).map((s) => s.label), ...pauseWeakened(before, after)];
 
 /** What it needs to be on: its parent and what it depends on. */
 export const needsOf = (s: Switch) => [...(s.parent ? [s.parent] : []), ...s.dependsOn];

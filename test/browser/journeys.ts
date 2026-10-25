@@ -820,6 +820,39 @@ await journey('the pilot’s console: no empty menu heading, and Security, Launc
   expect(brands.length > 0 && !brands.some((b: string | null) => /Open space|Well Aware|^FreeWater$/.test(b ?? '')), `reserve list: ${brands.join(', ')}`);
 });
 
+// Last on this app (it leaves money paused): the Pause page shows what pressing will stop and its settings; printing
+// can be left out for one press; ops people get Pause on their menu once an owner allows it.
+await journey('Pause shows what it will stop, keeps printing when unticked, and ops press it where allowed', async (page) => {
+  const owner = await aApp.accounts.createSession(aOwner.id, { secondStep: true });
+  await signedIn(page, 'fw_console_token', owner, { fw_console_company: 'freewater' });
+  await page.goto(`${aBase}/console/pause`);
+  await page.waitForSelector('text=Pause settings', { timeout: 30_000 });
+  const text = await page.evaluate(() => document.querySelector('main')!.innerText);
+  for (const want of ['Money', 'Token actions', 'Printing', 'Sending charity payouts', 'Who can press Pause', 'Starting printing again on its own']) expect(text.includes(want), `the Pause page has no “${want}”`);
+  expect(await page.isDisabled('#pz-money') && !(await page.isDisabled('#pz-printing')), 'money should be fixed and printing untickable');
+  await page.uncheck('#pz-printing');
+  await page.fill('input[aria-label="Why you’re pausing"]', 'Journey: odd payout, delivery night on');
+  await page.click('button:has-text("Pause now")');
+  await toast(page, /Paused/);
+  const st = (await aCall('GET', '/v1/pause', owner)).body.stopped;
+  expect(st.money && st.tokens && !st.printing, `stopped: ${JSON.stringify(st)}`);
+  await page.waitForSelector('text=Propose unpausing everything', { timeout: 20_000 });
+  // Ops: not on their menu until an owner says so (a person signed in), then there with the same choice.
+  const opsUser = await aApp.accounts.invite({ companyId: 'freewater', email: 'ops.pause@freewater.io', role: 'ops' });
+  const opsToken = await aApp.accounts.createSession(opsUser.id);
+  expect((await aCall('GET', '/v1/me', opsToken)).body.pressesPause === false, 'ops press Pause by default');
+  const v = (await aCall('GET', '/v1/console', owner)).body.version;
+  expect((await aCall('PATCH', '/v1/console/settings', owner, { version: v, changes: { pause: { whoPresses: 'owners_finance_ops' } } })).status === 200, 'owner could not let ops press Pause');
+  const ops = await page.context().newPage();
+  await signedIn(ops, 'fw_ops_token', opsToken);
+  await ops.goto(`${aBase}/ops`);
+  await ops.waitForSelector('nav[aria-label="Main"] a[href="/ops/pause"]', { timeout: 20_000 });
+  await ops.goto(`${aBase}/ops/pause`);
+  await ops.waitForSelector('text=The emergency stop', { timeout: 20_000 });
+  expect(!(await errorOnPage(ops)), `ops Pause page: ${await errorOnPage(ops)}`);
+  await ops.close();
+});
+
 await aServer.close();
 await aDb.close();
 await pServer.close();

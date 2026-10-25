@@ -624,3 +624,32 @@ Checked and left as they are: closing a run early stays allowed while paused (it
 brings boxes back); m-team's review queues, house notices, box bottles and bottle lookup read only the signed-in key's
 company on the server. "Who reviews ads" stays a person-only setting, not a security switch (the founder may want it one).
 Not checked: real phones, real DNS, a real printer.
+
+## The pause, adjustable per company (SRE, 2026-10-25, branch `n-pause`)
+
+The founder: "whatever you think, just make sure it's adjustable." Built per company, in the console's *Pause* page,
+recorded in the settings history: what Pause stops (money, token actions, printing; all on by default), letting the
+person pressing untick printing for one press (default on), who presses (owners and finance; ops optional), unpausing
+everything (2 others, 48 hours; 1 to 5, at least 1 hour) and a quicker printing-only start (`unpause_printing`: 1
+other, no wait; 1 to 5, 0 to 720 hours). The pause can't be removed; weakening it follows the security-switch rule.
+Migration 084. `test/pause-settings.test.ts` (31 tests, each new rule shown failing by a mutation of its code),
+`test/db-postgres.test.ts` (084 over data the old code wrote, real Postgres 16), browser journey "Pause shows what it
+will stop…".
+
+| Date | Role | Severity | Pattern | Where | Finding | Fix / test |
+|---|---|---|---|---|---|---|
+| 2026-10-25 | SRE | MEDIUM | P3 / P6 | `LaunchService.reset`, `chain_actions_guard` (trigger) | A test reset keeps pauses but would have deleted a printing-only unpause, pausing printing again by itself after a reset. CONFIRMED (mutation: "a test reset keeps printing started again" and "the database itself keeps…" fail) | `unpause_printing` kept by the reset and by the trigger (migration 084, `create or replace` of the guard) |
+| 2026-10-25 | SRE | MEDIUM | P3 | `applyChange` (settings) | A partial Pause change (`{ unpause: { approvals: 3 } }`) would have replaced the whole `unpause` rule, putting its wait back to the default unseen. CONFIRMED (mutation: "the quick path follows its own settings" fails) | Pause settings merge choice by choice over the company's current ones |
+| 2026-10-25 | SRE | MEDIUM | P16 | `PATCH /v1/console/settings` "on its own" check | The security-switch rule's "on its own" only looked at the top-level key, so two pause weakenings (or a weakening and a harmless change) in one `pause` save would have passed. CONFIRMED (mutation: "fewer approvals… one change at a time" fails) | Refused unless the save changes exactly one thing (`describeChange` has one line) |
+| 2026-10-25 | SRE | LOW | P16 | `PAUSE_STOPS` | The founder lists "charges" under money; card charges weren't stopped. | `card_charges`: `POST /v1/invoices/run` and the `ad-fees` job skip while money is paused (deferred, never lost: the next run invoices everything not yet invoiced) |
+
+Siblings searched: every reader of a pause (`stopped`, `isPaused`, `pausesInForce`: the route gate, the job runner, the
+chain's run, `GET /v1/chain`), every place listing chain-action kinds kept by a reset (the launch service, the
+trigger), every path that saves settings (PATCH, restore, the Features page, an agent's save through the service: all
+reach `securityWeakened`), and every role gate on the pause routes (ops elevation copies "Who reviews ads": session
+only, the two Pause routes only). Left as they are, for the founder to confirm: **refunds are never stopped** (the
+founder's list says "refunds"; the locked rule *Settling money already in flight* says a refund always goes through, so
+the pause leaves them, and the page says so); unpausing stays with owners and finance even where ops press; the
+printing-only path can't go below 1 approval (the founder said "never 0 for money"; printing kept the same floor, as it
+bills advertisers); "Who can press Pause" is a person-only setting, not a weakening. Not checked: real phones, a real
+printer mid-pause, Solana's own pause on the real network.

@@ -17,7 +17,7 @@
   const plural = (n, one, many) => `${n} ${String(n).replace(/[^0-9.-]/g, '') === '1' ? one : many}`;
   const NS = 'http://www.w3.org/2000/svg';
   const icon = (d) => { const s = document.createElementNS(NS, 'svg'); for (const [k, v] of Object.entries({ viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' })) s.setAttribute(k, v); for (const p of d.split('|')) { const e = document.createElementNS(NS, 'path'); e.setAttribute('d', p); s.append(e); } return s; };
-  const I = { today: 'M3 12h4l3-8 4 16 3-8h4', review: 'M4 4h16v16H4z|M8 12l3 3 5-6', machine: 'M6 3h12v18H6z|M9 7h6|M10 17h4', route: 'M6 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z|M18 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z|M6 15V9a4 4 0 0 1 4-4h6|M18 9v6a4 4 0 0 1-4 4H8', people: 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z|M2 21a7 7 0 0 1 14 0|M17 3a4 4 0 0 1 0 8|M22 21a7 7 0 0 0-5-6.7', books: 'M4 4h12a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4z|M8 8h8|M8 12h8' };
+  const I = { today: 'M3 12h4l3-8 4 16 3-8h4', review: 'M4 4h16v16H4z|M8 12l3 3 5-6', machine: 'M6 3h12v18H6z|M9 7h6|M10 17h4', route: 'M6 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z|M18 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z|M6 15V9a4 4 0 0 1 4-4h6|M18 9v6a4 4 0 0 1-4 4H8', people: 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z|M2 21a7 7 0 0 1 14 0|M17 3a4 4 0 0 1 0 8|M22 21a7 7 0 0 0-5-6.7', books: 'M4 4h12a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4z|M8 8h8|M8 12h8', pause: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z|M10 9v6|M14 9v6' };
   const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} } };
   const dollars = (c) => `$${(c / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const svgSrc = (s) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(s)}`;
@@ -52,14 +52,14 @@
     if (!res.ok) throw new Error(data?.error?.message || 'Something went wrong.');
     return data;
   }
-  const routes = [[/^\/ops\/?$/, today, 'today'], [/^\/ops\/review$/, reviewPage, 'review'], [/^\/ops\/review\/links$/, linkChangesPage, 'review'], [/^\/ops\/review\/fillers$/, fillersPage, 'review'], [/^\/ops\/bottles$/, bottlesPage, 'bottles'], [/^\/ops\/machines$/, machinesPage, 'machines'], [/^\/ops\/machines\/([\w-]+)$/, machinePage, 'machines'], [/^\/ops\/routes$/, routesPage, 'routes'], [/^\/ops\/subscriptions$/, subsPage, 'subs'], [/^\/ops\/areas$/, areasPage, 'areas'], [/^\/ops\/areas\/([\w-]+)$/, areaPage, 'areas'], [/^\/ops\/books$/, booksPage, 'books']];
+  const routes = [[/^\/ops\/?$/, today, 'today'], [/^\/ops\/review$/, reviewPage, 'review'], [/^\/ops\/review\/links$/, linkChangesPage, 'review'], [/^\/ops\/review\/fillers$/, fillersPage, 'review'], [/^\/ops\/bottles$/, bottlesPage, 'bottles'], [/^\/ops\/machines$/, machinesPage, 'machines'], [/^\/ops\/machines\/([\w-]+)$/, machinePage, 'machines'], [/^\/ops\/routes$/, routesPage, 'routes'], [/^\/ops\/subscriptions$/, subsPage, 'subs'], [/^\/ops\/areas$/, areasPage, 'areas'], [/^\/ops\/areas\/([\w-]+)$/, areaPage, 'areas'], [/^\/ops\/books$/, booksPage, 'books'], [/^\/ops\/pause$/, pausePage, 'pause']];
   // The scopes each page's main call needs (from its route in src/api). 'admin' passes them all.
   const PAGE_SCOPES = { today: ['packs', 'events', 'ledger', 'campaigns'], review: ['campaigns'], machines: ['orders', 'packs', 'events'], routes: ['packs'], subs: ['packs'], areas: ['packs'], books: ['ledger'], bottles: ['orders'] };
   // The switch each page belongs to (src/runtime/registry.ts): a page whose switch is off, on this server or for this
   // company (its Features page), isn't shown or opened.
   const PAGE_FEATURES = { review: 'ads', machines: 'machines', routes: 'delivery', subs: 'delivery', areas: 'delivery_areas' };
   const on = (page) => !PAGE_FEATURES[page] || !(S.features?.off ?? []).includes(PAGE_FEATURES[page]);
-  const can = (page) => { if (!on(page)) return false; if (page === 'review' && typeof S.me?.reviewsAds === 'boolean') return S.me.reviewsAds; const sc = S.me?.scopes; if (!Array.isArray(sc)) return true; return sc.includes('admin') || (PAGE_SCOPES[page] ?? []).some((x) => sc.includes(x)); };
+  const can = (page) => { if (!on(page)) return false; if (page === 'review' && typeof S.me?.reviewsAds === 'boolean') return S.me.reviewsAds; if (page === 'pause') return S.me?.pressesPause === true; const sc = S.me?.scopes; if (!Array.isArray(sc)) return true; return sc.includes('admin') || (PAGE_SCOPES[page] ?? []).some((x) => sc.includes(x)); };
   let cleanup = null;
   function go(path, replace) { S.path = path; if (!fixture) history[replace ? 'replaceState' : 'pushState'](null, '', path); render(); }
   window.addEventListener('popstate', () => { S.path = location.pathname + location.search; render(); });
@@ -81,7 +81,7 @@
     go('/ops', true);
   }
   function shell(active, ...content) {
-    const nav = [['today', '/ops', 'Today', I.today], ['review', '/ops/review', 'Review', I.review], ['bottles', '/ops/bottles', 'Find a bottle', I.bottle], ['machines', '/ops/machines', 'Machines', I.machine], ['routes', '/ops/routes', 'Routes', I.route], ['areas', '/ops/areas', 'Areas', I.route], ['subs', '/ops/subscriptions', 'Deliveries', I.people], ['books', '/ops/books', 'Books', I.books]];
+    const nav = [['today', '/ops', 'Today', I.today], ['review', '/ops/review', 'Review', I.review], ['bottles', '/ops/bottles', 'Find a bottle', I.bottle], ['machines', '/ops/machines', 'Machines', I.machine], ['routes', '/ops/routes', 'Routes', I.route], ['areas', '/ops/areas', 'Areas', I.route], ['subs', '/ops/subscriptions', 'Deliveries', I.people], ['books', '/ops/books', 'Books', I.books], ['pause', '/ops/pause', 'Pause', I.pause]];
     root.replaceChildren(h('div', { class: 'shell' },
       h('aside', { class: 'side' }, h('div', { class: 'logo', 'aria-label': `${S.config?.name ?? ''} Ops` }, h('span', { text: S.config?.brand?.logoTop ?? '' }), h('span', { text: S.config?.brand?.logoBottom ?? '', style: S.config?.brand?.accentColor ? `color:${S.config.brand.accentColor}` : null }), h('small', { text: 'Ops' })),
         h('nav', { 'aria-label': 'Main' }, nav.filter(([id]) => can(id)).map(([id, path, label, ic]) => link(path, { 'aria-current': active === id ? 'page' : null }, icon(ic), label))),
@@ -129,6 +129,35 @@
   const statusPill = (s) => h('span', { class: `pill ${s === 'ok' ? 'ok' : s === 'attention' ? 'bad' : 'warn'}`, text: s === 'ok' ? 'Printing' : s === 'attention' ? 'Needs a look' : 'Quiet' });
   const machineTable = (machines) => h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Machine', 'Today', 'Failed', 'Last print', ''].map((x) => h('th', { text: x })))),
     h('tbody', {}, machines.map((m) => h('tr', {}, h('td', {}, h('b', { text: m.id }), h('div', { style: 'color:var(--muted);font-size:12px', text: m.name })), h('td', { text: String(m.printedToday) }), h('td', { text: String(m.failedPrintsToday) }), h('td', { text: m.lastPrintAt ? new Date(m.lastPrintAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '—' }), h('td', {}, statusPill(m.status)))))));
+
+  // ---------- the emergency stop (src/modules/chain/pause.ts) ----------
+  // Shown to whoever may press it here (owners and finance; ops people where the company lets them). It shows what
+  // pressing will stop; printing can be left out for one press where the company allows. Starting again is done by
+  // owners and finance in the console (other people approve, then the wait).
+  async function pausePage() {
+    const p = await api('GET', '/v1/pause');
+    const AREA = { money: 'Money', tokens: 'Token actions', printing: 'Printing' };
+    const reason = h('input', { class: 'input', placeholder: 'Why you’re pausing (for the record)', 'aria-label': 'Why you’re pausing', maxlength: 300 });
+    const ticks = {};
+    const rows = p.areas.map((a) => {
+      const box = h('input', { type: 'checkbox', id: `opz-${a.id}`, checked: a.onPress, disabled: a.onPress && !a.mayLeaveOut });
+      ticks[a.id] = box;
+      return h('li', { style: 'margin:0 0 10px' }, h('label', { for: box.id, style: 'display:flex;gap:8px;align-items:flex-start' }, box, h('span', {}, h('b', { text: AREA[a.id] }), a.mayLeaveOut ? h('span', { style: 'color:var(--muted)', text: ' (untick to keep printing going this time)' }) : null)),
+        h('ul', { style: 'margin:4px 0 0 26px;color:var(--muted);font-size:13px' }, p.stops.filter((x) => x.area === a.id).map((x) => h('li', { text: x.label }))));
+    });
+    const press = async () => {
+      if (reason.value.trim().length < 3) { toast('Say why you’re pausing.'); reason.focus(); return; }
+      const body = { reason: reason.value.trim() };
+      for (const a of p.areas) if (ticks[a.id].checked !== a.onPress) body[a.id] = ticks[a.id].checked;
+      try { await api('POST', '/v1/pause', body); toast('Paused. The team was told.'); render(); } catch (x) { toast(x.message); }
+    };
+    const now = ['money', 'tokens', 'printing'].filter((k) => p.stopped?.[k]).map((k) => AREA[k].toLowerCase());
+    shell('pause', head('Pause', now.length ? `Paused now: ${now.join(', ')}. Owners and finance start it again from the console.` : 'Everything is running.'),
+      h('section', { class: 'panel-box' }, h('h2', { text: 'The emergency stop' }), h('p', { style: 'margin:0 0 8px', text: 'Press it the moment something looks wrong. Pressing it now stops:' }),
+        h('ul', { style: 'list-style:none;padding:0;margin:0 0 12px' }, rows),
+        h('p', { style: 'color:var(--muted);font-size:13px;margin:0 0 12px', text: 'Refunds and money already moving still settle. Starting again takes other people’s approval.' }),
+        h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' }, reason, h('button', { class: 'btn', type: 'button', onclick: press }, 'Pause now'))));
+  }
 
   // ---------- ad review ----------
   async function reviewPage() {

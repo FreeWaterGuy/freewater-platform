@@ -252,7 +252,7 @@
   const chip = (text, tone) => h('span', { class: `pill${tone ? ` ${tone}` : ''}`, text });
   const actionRow = (a, after) => {
     const btn = (label, fn, cls = 'btn small') => h('button', { class: cls, type: 'button', onclick: async (e) => { e.currentTarget.disabled = true; try { await fn(); toast('Done.'); render(); } catch (x) { toast(x.message); e.currentTarget.disabled = false; } } }, label);
-    const names = { exchanges_on: 'Turn on gift cards', go_live_points: 'Go live with points', go_live_token: 'Go live with the token', convert: 'Turn points into tokens', withdrawals_on: 'Turn on withdrawals', mint: 'Mint tokens', unpause: 'Unpause', switch_on: 'Switch the chain on', pause: 'Pause' };
+    const names = { exchanges_on: 'Turn on gift cards', go_live_points: 'Go live with points', go_live_token: 'Go live with the token', convert: 'Turn points into tokens', withdrawals_on: 'Turn on withdrawals', mint: 'Mint tokens', unpause: 'Unpause everything', unpause_printing: 'Start printing again', switch_on: 'Switch the chain on', pause: 'Pause' };
     const ready = a.status === 'approved' && a.notBefore && Date.parse(a.notBefore) <= Date.now();
     const sign = a.status === 'signing' ? (() => {
       const sig = h('input', { class: 'input', placeholder: 'Transaction signature from Squads', spellcheck: 'false', style: 'font-family:var(--mono)' });
@@ -301,26 +301,82 @@
   }
 
   // ---------- the emergency stop (src/modules/chain/pause.ts) ----------
-  // On the main menu whatever is switched on (the Blockchain page may be off, as in the pilot). Pausing: any one
-  // person, at once. Unpausing: proposed, approved by other people, then the wait, as every unpause.
+  // On the main menu whatever is switched on (the Blockchain page may be off, as in the pilot). Pausing: one person,
+  // at once, stopping what the company's Pause settings say (the person pressing may keep printing going where
+  // allowed). Unpausing: proposed, approved by other people, then the wait; printing can start again on its own, by a
+  // quicker rule. The settings below are adjustable; the pause itself never goes away, and weakening it is a security
+  // change (an owner with the second step, a reason, one change at a time).
   async function pausePage() {
     const p = await api('GET', '/v1/pause');
+    const AREA = { money: 'Money', tokens: 'Token actions', printing: 'Printing' };
+    const hours = (n) => (n === 0 ? 'no wait' : n % 24 === 0 && n >= 48 ? plural(n / 24, 'day', 'days') : plural(n, 'hour', 'hours'));
+    const others = (n) => plural(n, 'other person', 'other people');
     const reason = h('input', { class: 'input', placeholder: 'Why you’re pausing (for the record)', 'aria-label': 'Why you’re pausing', maxlength: 300 });
+    // What this press stops: the settings, ticked; printing can be unticked where allowed; anything can be added.
+    const ticks = {};
+    const pressList = p.areas.map((a) => {
+      const box = h('input', { type: 'checkbox', id: `pz-${a.id}`, checked: a.onPress });
+      if (a.onPress && !a.mayLeaveOut) box.disabled = true;
+      ticks[a.id] = box;
+      const items = p.stops.filter((x) => x.area === a.id);
+      return h('li', { style: 'margin:0 0 8px' }, h('label', { for: box.id, style: 'display:flex;gap:8px;align-items:flex-start;cursor:pointer' }, box, h('span', {}, h('b', { text: AREA[a.id] }), a.onPress && !a.mayLeaveOut ? h('span', { class: 'muted', text: ' (always, here)' }) : a.mayLeaveOut ? h('span', { class: 'muted', text: ' (untick to keep printing going this time)' }) : h('span', { class: 'muted', text: ' (not stopped unless you tick it)' }))),
+        items.length ? h('ul', { class: 'muted', style: 'margin:4px 0 0 26px;padding-left:16px;font-size:13px;line-height:1.6' }, items.map((x) => h('li', { text: x.label }))) : null);
+    });
     const pressed = async () => {
       if (reason.value.trim().length < 3) { toast('Say why you’re pausing.'); reason.focus(); return; }
-      try { await api('POST', '/v1/pause', { reason: reason.value.trim() }); toast('Everything is paused. The team was told.'); render(); } catch (x) { toast(x.message); }
+      const body = { reason: reason.value.trim() };
+      for (const a of p.areas) if (ticks[a.id].checked !== a.onPress) body[a.id] = ticks[a.id].checked;
+      if (!p.areas.some((a) => ticks[a.id].checked)) { toast('Tick at least one thing to stop.'); return; }
+      try { await api('POST', '/v1/pause', body); toast('Paused. The team was told.'); render(); } catch (x) { toast(x.message); }
     };
+    const st = p.stopped ?? { money: false, tokens: false, printing: false };
+    const nowWords = ['money', 'tokens', 'printing'].filter((x) => st[x]).map((x) => AREA[x].toLowerCase());
     const last = p.pauses[0];
-    shell('pause', head('Pause', p.paused ? `Everything is paused${last ? ` since ${when(last.at)} (${last.reason})` : ''}.` : p.chainPaused ? 'Token actions are paused (from the Blockchain page or the daily check). Printing and money run as usual.' : 'Everything is running.'),
+    const r = p.rules, u = p.unpause;
+    const startAgain = (p.chainPaused) ? section('Starting again', u.length ? 'Unpausing was proposed: other people approve it, then it waits, then it can run.' : null,
+      u.length ? actionsTable(u) : h('div', { class: 'stack' },
+        st.printing && (st.money || st.tokens) ? h('div', {}, h('p', { style: 'margin:0 0 6px', text: `Start printing again on its own: ${others(r.unpausePrinting.approvalsNeeded)} approve${r.unpausePrinting.approvalsNeeded === 1 ? 's' : ''}, then ${hours(r.unpausePrinting.delayHours)}. Money and token actions stay paused.` }), h('button', { class: 'btn blue', type: 'button', onclick: () => propose('unpause_printing').catch((x) => toast(x.message)) }, 'Propose starting printing again')) : null,
+        st.printing && !st.money && !st.tokens ? h('div', {}, h('p', { style: 'margin:0 0 6px', text: `Only printing is paused: ${others(r.unpausePrinting.approvalsNeeded)} approve${r.unpausePrinting.approvalsNeeded === 1 ? 's' : ''}, then ${hours(r.unpausePrinting.delayHours)}.` }), h('button', { class: 'btn blue', type: 'button', onclick: () => propose('unpause_printing').catch((x) => toast(x.message)) }, 'Propose starting printing again')) : null,
+        h('div', {}, h('p', { style: 'margin:0 0 6px', text: `Unpause everything: ${others(r.unpause.approvalsNeeded)} approve, then ${hours(r.unpause.delayHours)}.` }), h('button', { class: st.printing && !st.money && !st.tokens ? 'btn secondary' : 'btn blue', type: 'button', onclick: () => propose('unpause').catch((x) => toast(x.message)) }, 'Propose unpausing everything')))) : null;
+    shell('pause', head('Pause', p.paused ? `Paused: ${nowWords.length ? nowWords.join(', ') : 'nothing left'}${last ? ` (since ${when(last.at)}: ${last.reason})` : ''}.` : p.chainPaused ? 'Token actions are paused (from the Blockchain page or the daily check). Printing and money run as usual.' : 'Everything is running.'),
       h('div', { class: 'stack' },
-        section('The emergency stop', 'Press it the moment something looks wrong. Any one owner or finance person can, at once, with a reason; the whole team is told. Starting again takes other people’s approval and the wait, so it can’t be undone by the same person in a hurry.',
-          h('p', { style: 'margin:0 0 6px', text: 'Pausing stops, for your company:' }),
-          h('ul', { style: 'margin:0 0 12px;padding-left:18px;line-height:1.7' }, p.stops.map((x) => h('li', { text: x.label }))),
+        section('The emergency stop', 'Press it the moment something looks wrong, with a reason; the whole team is told. You see exactly what it will stop before you press. Starting again takes other people’s approval, so it can’t be undone by the same person in a hurry.',
+          h('p', { style: 'margin:0 0 6px', text: 'Pressing it now stops, for your company:' }),
+          h('ul', { style: 'margin:0 0 12px;padding-left:0;list-style:none' }, pressList),
           h('p', { class: 'muted', style: 'margin:0 0 12px;font-size:13px', text: 'It never stops settling money already moving: refunds, stopping a paid ad and paying it back, settling gift cards already bought. Scans, the books and the team keep working.' }),
-          p.paused ? null : h('div', { class: 'toolbar' }, reason, h('button', { class: 'btn', type: 'button', onclick: pressed }, 'Pause everything now'))),
-        p.chainPaused ? section('Starting again', p.unpause.length ? 'Unpausing was proposed: other people approve it, then it waits, then it can run.' : 'Propose unpausing: other owners or finance people approve it, then the wait.',
-          p.unpause.length ? actionsTable(p.unpause) : h('button', { class: 'btn blue', type: 'button', onclick: () => propose('unpause').catch((x) => toast(x.message)) }, 'Propose unpausing')) : null,
-        p.pauses.length ? section('Pauses in force', null, h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('tbody', {}, p.pauses.map((x) => h('tr', {}, h('td', { text: when(x.at) }), h('td', { text: x.scope === 'all' ? 'Everything' : 'Token actions' }), h('td', { text: x.reason }))))))) : null));
+          h('div', { class: 'toolbar' }, reason, h('button', { class: 'btn', type: 'button', onclick: pressed }, p.paused ? 'Pause again' : 'Pause now'))),
+        startAgain,
+        p.pauses.length ? section('Pauses in force', null, h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('tbody', {}, p.pauses.map((x) => h('tr', {}, h('td', { text: when(x.at) }), h('td', { text: ['money', 'tokens', 'printing'].filter((k) => x.stops[k]).map((k) => AREA[k]).join(', ') || 'Nothing now (printing started again)' }), h('td', { text: x.reason }))))))) : null,
+        pauseSettingsSection(p)));
+  }
+  /** The company's Pause settings: owners change them; each change is kept in the settings history. */
+  function pauseSettingsSection(p) {
+    const s = p.settings, L = p.limits;
+    const owner = S.ov?.you?.role === 'owner' || S.ov?.you?.platform;
+    const save = async (change, weaker, what) => {
+      // Weakening the pause is its own decision, written down (and needs your second step), one change at a time.
+      const reason = weaker ? window.prompt(`Why weaken “${what}”? (at least 10 characters, for the record)`) : null;
+      if (weaker && !reason) { render(); return; }
+      try { await api('PATCH', '/v1/console/settings', { version: S.ov.version, changes: { pause: change }, ...(reason ? { reason } : {}) }); toast('Saved. It’s in the settings history.'); S.ov = null; render(); } catch (x) { toast(x.message); render(); }
+    };
+    const check = (label, on, hint, onchange) => { const box = h('input', { type: 'checkbox', checked: on, disabled: !owner, onchange: (e) => onchange(e.currentTarget.checked) }); return h('label', { style: 'display:flex;gap:8px;align-items:flex-start;margin:0 0 8px' }, box, h('span', {}, h('b', { text: label }), hint ? h('div', { class: 'muted', style: 'font-size:13px', text: hint }) : null)); };
+    const numberRow = (label, value, min, max, unit, onsave) => {
+      const n = h('input', { class: 'input', type: 'number', min, max, step: 1, value, disabled: !owner, style: 'max-width:110px' });
+      return h('div', { class: 'toolbar' }, field(`${label} (${min} to ${max} ${unit})`, n), owner ? h('button', { class: 'btn secondary small', type: 'button', onclick: () => { const v = Number(n.value); if (!Number.isInteger(v) || v < min || v > max) return toast(`Pick ${min} to ${max}.`); if (v !== value) onsave(v); } }, 'Save') : null);
+    };
+    const AREA = { money: ['Money', 'Payouts, the agents’ fund, offers, gift cards, prizes, and charging advertisers’ cards (charged after unpausing).'], tokens: ['Token actions', 'Minting, conversions, moving tokens out.'], printing: ['Printing', 'Orders, packs and delivery nights, reprints, machines.'] };
+    return section('Pause settings', `Adjustable for your company; the pause itself can never be removed. Making it weaker (stopping less, fewer approvals, a shorter wait) is done by an owner signed in with the second step, one change at a time, with a reason.${owner ? '' : ' Only owners change these.'}`,
+      h('h3', { style: 'margin:8px 0', text: 'What Pause stops' }),
+      ['money', 'tokens', 'printing'].map((k) => check(AREA[k][0], s.stops[k], AREA[k][1], (v) => save({ stops: { [k]: v } }, !v, `Pause stops ${AREA[k][0].toLowerCase()}`))),
+      check('Let the person pressing keep printing going', s.chooseAtPress, 'They see what will stop and may untick printing for that one press (to keep a delivery night going). Money and token actions always stop.', (v) => save({ chooseAtPress: v }, v, 'Pause stops everything it’s set to')),
+      h('h3', { style: 'margin:16px 0 8px', text: 'Who can press Pause' }),
+      (() => { const sel = h('select', { class: 'input', disabled: !owner, 'aria-label': 'Who can press Pause' }, h('option', { value: 'owners_finance', text: 'Owners and finance', selected: s.whoPresses === 'owners_finance' }), h('option', { value: 'owners_finance_ops', text: 'Owners, finance and ops', selected: s.whoPresses === 'owners_finance_ops' })); return h('div', { class: 'toolbar' }, sel, owner ? h('button', { class: 'btn secondary small', type: 'button', onclick: () => { if (sel.value !== s.whoPresses) save({ whoPresses: sel.value }, false); } }, 'Save') : null, h('span', { class: 'muted', style: 'font-size:13px', text: 'Ops people press it from the ops console, signed in. Unpausing stays with owners and finance.' })); })(),
+      h('h3', { style: 'margin:16px 0 8px', text: 'Unpausing everything (money and token actions always come back this way)' }),
+      numberRow('Other people who approve', s.unpause.approvals, L.approvals.min, L.approvals.max, 'people', (v) => save({ unpause: { approvals: v } }, v < s.unpause.approvals, 'Approvals needed to unpause')),
+      numberRow('Hours to wait after the last approval', s.unpause.waitHours, L.wait.min, L.wait.max, 'hours', (v) => save({ unpause: { waitHours: v } }, v < s.unpause.waitHours, 'The wait before unpausing')),
+      h('h3', { style: 'margin:16px 0 8px', text: 'Starting printing again on its own (the quick path)' }),
+      numberRow('Other people who approve', s.printingUnpause.approvals, L.approvals.min, L.approvals.max, 'people', (v) => save({ printingUnpause: { approvals: v } }, v < s.printingUnpause.approvals, 'Approvals needed to start printing again')),
+      numberRow('Hours to wait (0: it starts at the last approval)', s.printingUnpause.waitHours, L.printingWait.min, L.printingWait.max, 'hours', (v) => save({ printingUnpause: { waitHours: v } }, v < s.printingUnpause.waitHours, 'The wait before printing starts again')));
   }
 
   // ---------- wallet and points ----------

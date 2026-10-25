@@ -195,6 +195,13 @@ export interface CompanyConfig {
    */
   adReview?: { whoReviews: 'owners' | 'owners_ops' };
   /**
+   * The emergency stop (src/modules/chain/pause.ts): what pressing Pause stops, whether the person pressing may leave
+   * printing out, who presses it, and the rules for starting again. Unset: the defaults (everything stops; owners and
+   * finance; 2 others and 48 hours to unpause, 1 other and no wait to start printing again). The pause itself can't be
+   * removed; making it weaker is a security change (an owner, the second step, a reason, one at a time).
+   */
+  pause?: Partial<import('../modules/chain/pause').PauseSettings>;
+  /**
    * The AI agents' own fund and place in the books. Off unless the company turns it on. The agents' fund gets
    * `percentOfExtra` of the upside as it's earned, before costs, the same way and the same share as the charity
    * (FreeWater: 10%): print money on a bottle above the $1 base, and all scans, AR, box sides, custom bottles and

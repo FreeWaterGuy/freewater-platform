@@ -5,6 +5,7 @@ import { checkPolicy } from '../data/policy';
 import { checkAiSettings } from '../ai/settings';
 import { checkWallet, defaultWallet } from '../wallet/assets';
 import { checkChain, defaultChain } from '../chain/settings';
+import { checkPause, pauseSettings } from '../chain/pause';
 import { extraAboveCents } from '../ledger/ledger';
 import { adBilling, adLimits, checkAdBilling } from '../ads/billing';
 import { blocklist } from '../ads/linkList';
@@ -50,11 +51,11 @@ export const fontChoices: { id: string; label: string; value: string }[] = [
 export const adCategories = ['food', 'drink', 'coffee', 'fitness', 'health', 'news', 'retail', 'local-services', 'real-estate', 'auto', 'finance', 'entertainment', 'events', 'travel', 'tech', 'education', 'nonprofit', 'politics', 'alcohol', 'tobacco', 'cannabis', 'gambling', 'weapons', 'dating'];
 
 /** The parts of the settings a PATCH may send. Anything else is refused. */
-export const editableKeys = ['name', 'receiptBaseUrl', 'scanBaseUrl', 'brand', 'productFacts', 'giving', 'openBooks', 'unitCosts', 'consumerPricing', 'timezone', 'consumer', 'machines', 'qr', 'ar', 'standardProductId', 'adRules', 'prices', 'modules', 'lottery', 'data', 'transparency', 'agents', 'ratchet', 'security', 'research', 'wallet', 'offers', 'games', 'minimumAge', 'chain', 'launch', 'ai', 'adBilling', 'news', 'delivery', 'labelPanel', 'labelGeometry', 'unsold', 'boxes', 'adReview'] as const;
+export const editableKeys = ['name', 'receiptBaseUrl', 'scanBaseUrl', 'brand', 'productFacts', 'giving', 'openBooks', 'unitCosts', 'consumerPricing', 'timezone', 'consumer', 'machines', 'qr', 'ar', 'standardProductId', 'adRules', 'prices', 'modules', 'lottery', 'data', 'transparency', 'agents', 'ratchet', 'security', 'research', 'wallet', 'offers', 'games', 'minimumAge', 'chain', 'launch', 'ai', 'adBilling', 'news', 'delivery', 'labelPanel', 'labelGeometry', 'unsold', 'boxes', 'adReview', 'pause'] as const;
 export type EditableKey = (typeof editableKeys)[number];
 /** Settings only a person signed in may change or put back: money, the chain, and every one-way or money-adjacent promise. */
 // Unsold space: a key can't let the company's own ads into the ad area (the founder's rule), nor change what fills it.
-export const personOnlyKeys: readonly EditableKey[] = ['wallet', 'offers', 'chain', 'ratchet', 'agents', 'minimumAge', 'giving', 'lottery', 'ai', 'data', 'launch', 'security', 'adBilling', 'news', 'delivery', 'unsold', 'adReview'];
+export const personOnlyKeys: readonly EditableKey[] = ['wallet', 'offers', 'chain', 'ratchet', 'agents', 'minimumAge', 'giving', 'lottery', 'ai', 'data', 'launch', 'security', 'adBilling', 'news', 'delivery', 'unsold', 'adReview', 'pause'];
 
 /** The highest a machine's print limits may be set: a bottle takes several seconds, so more is a leaked key, not a busy machine. */
 export const PRINT_LIMITS = { perMinute: 20, perDay: 20_000 };
@@ -202,6 +203,8 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
   }
   const ch = checkChain(c.chain);
   if (ch) return `Chain: ${ch}`;
+  const pz = checkPause(c.pause);
+  if (pz) return `Pause: ${pz}`;
   const wal = checkWallet(c.wallet);
   if (wal) return `Wallet: ${wal}`;
   if (c.minimumAge !== undefined && !isInt(c.minimumAge, 13, 21)) return 'The youngest age that may take part must be 13 to 21.';
@@ -287,6 +290,14 @@ export function applyChange(cur: CompanyConfig, change: Partial<Record<EditableK
   const next: any = structuredClone(cur);
   for (const [k, v] of Object.entries(change)) {
     if (!(editableKeys as readonly string[]).includes(k)) throw new Error(`“${k}” can’t be changed here.`);
+    // Pause settings, choice by choice, on top of what the company has now (defaults filled in); anything that isn't an
+    // object (null: "remove it") is kept as sent, for the checks to refuse.
+    if (k === 'pause' && v && typeof v === 'object' && !Array.isArray(v)) {
+      const base = pauseSettings(cur), x = v as Record<string, any>;
+      const part = (y: unknown, b: object) => (y && typeof y === 'object' && !Array.isArray(y) ? { ...b, ...y } : y === undefined ? b : y);
+      next.pause = { ...base, ...x, stops: part(x.stops, base.stops), unpause: part(x.unpause, base.unpause), printingUnpause: part(x.printingUnpause, base.printingUnpause) };
+      continue;
+    }
     // The label panel is replaced whole; null puts back the one made from the brand.
     if (k === 'labelPanel') { if (v === null) delete next.labelPanel; else next.labelPanel = v; continue; }
     // Delivery boxes, per pack size, field by field; null clears a size or a field (src/modules/packs/boxSettings.ts).
@@ -349,6 +360,18 @@ export function describeChange(before: CompanyConfig, after: CompanyConfig): str
   const out: string[] = [];
   for (const k of editableKeys) {
     const a = (before as any)[k], b = (after as any)[k];
+    // Pause settings, one plain line per choice (defaults filled in, so a first save reads as what changed).
+    if (k === 'pause') {
+      if (JSON.stringify(a ?? null) === JSON.stringify(b ?? null)) continue;
+      const x = pauseSettings(before), y = pauseSettings(after);
+      const leaves = (p: ReturnType<typeof pauseSettings>): [string, unknown][] => [
+        ['Pause stops money', p.stops.money], ['Pause stops token actions', p.stops.tokens], ['Pause stops printing', p.stops.printing], ['The person pressing Pause may leave printing out', p.chooseAtPress],
+        ['Who can press Pause', p.whoPresses === 'owners_finance_ops' ? 'owners, finance and ops' : 'owners and finance'], ['Approvals needed to unpause', p.unpause.approvals], ['Hours to wait before unpausing', p.unpause.waitHours],
+        ['Approvals needed to start printing again', p.printingUnpause.approvals], ['Hours to wait before printing starts again', p.printingUnpause.waitHours]];
+      const ya = leaves(y);
+      leaves(x).forEach(([name, v], i) => { if (v !== ya[i]![1]) out.push(`${name}: ${show(v)} → ${show(ya[i]![1])}`); });
+      continue;
+    }
     if (deep.has(k) && a && b && typeof a === 'object') {
       for (const f of new Set([...Object.keys(a), ...Object.keys(b)])) {
         if (JSON.stringify(a[f]) === JSON.stringify(b[f])) continue;

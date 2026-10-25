@@ -368,6 +368,7 @@ house* with a real reason. A charged phone and a car charger matter: the photo a
 | The server restarted while planning | Runs already made are kept; boxes already printed are kept | Press *Plan and print this night* again: it finishes what's left, prints nothing twice |
 | The server restarted while drivers are out | Every stop already done is saved | Drivers carry on; if a stop says it can't be done, press *Done* (or *Problem*) again: it finishes it, once |
 | The database is down ("changes are paused") | Drivers' scans wait | Drivers wait a few minutes and press again; see "The database is down" |
+| Someone pressed *Pause* by mistake ("Printing is paused") | Nothing prints until it's started again; money stays paused longer | *Console → Pause → Propose starting printing again*; one other owner or finance person approves and printing starts at once (the defaults). See "Someone pressed Pause by mistake" |
 | A printer jams mid-plan | That run stays *printing* | Fix the printer, press *Plan and print this night* again |
 | Photos won't send (many drivers at once) | File storage is down, or the phones have no signal | If it's storage (the alerts channel says so, or the host's status page): an owner turns *Photo proof of each drop* off for the day (Console → *Features*), drivers close and reopen the driver app and scan without photos, and it's turned back on at the end of the day. One driver only: see "A drop shows … no photo yet" |
 | A driver's phone dies | Their run is saved on the server | Another phone signs in as that driver and carries on from the next stop |
@@ -625,6 +626,34 @@ service and call the machine's maker.
 Live-action and animated clips cost money each. A company stops starting new ones at `FOOTAGE_PER_COMPANY_DAY`
 (default 60) in any 24 hours; each ad stops at 12. Motion videos still show. If the company really is that busy, raise
 the host setting and restart; if not, check which ads are making clips (`GET /v1/campaigns/<id>/videos`).
+
+## Someone pressed Pause by mistake (or it stopped more than it needed to)
+
+What you see: a red alert "Paused (money, token actions, printing) by …: <their reason>"; new orders, packs, a night's
+plan and reprints answer "Printing is paused"; payouts answer "Money is paused". Nothing is lost: scans, the books,
+refunds and money already moving keep working, and card fees are charged at the next run after unpausing.
+
+1. **Don't press anything else yet.** Ask the person who pressed it why (the reason is on *Console → Pause*, under
+   *Pauses in force*). If they saw something real (wrong labels, an odd payout), deal with that first: a mistaken pause
+   costs a little time, a missed real problem costs money.
+2. **If it was a mistake and tonight is a delivery night, start printing on its own first.** *Console → Pause →
+   Propose starting printing again*. By default one other owner or finance person approves it on the same page
+   (*Approve*), and printing starts at that moment (no wait). Check: *Pause* says "Paused: money, token actions", and a
+   test order or tonight's plan goes through. Money and token actions stay paused; that's on purpose.
+3. **Then unpause everything, by the stricter rule.** *Pause → Propose unpausing everything*. Two other owners or
+   finance people approve (by default), then it waits 48 hours, then an owner presses *Run it now* (under *Starting
+   again*). Tell the team when it will run. If money must move sooner (payroll to a charity, say), that's a decision
+   for the owners together, not a shortcut: the wait is the protection.
+4. **If someone presses Pause again while an unpause waits,** the waiting unpause is cancelled (it was about the earlier
+   press). Find out why, then propose again.
+5. **Afterwards, if presses like this keep happening:** look at *Pause → Pause settings*. A company that runs a delivery
+   night most nights can keep "Let the person pressing keep printing going" on (the default), so the person pressing
+   unticks *Printing* when the problem is about money. Shortening the wait or needing fewer approvals is a security
+   change: an owner signed in with the second step, one change at a time, with a reason; it's kept in the settings
+   history.
+
+What can't happen: a key can't press or undo it; ops people press it only where the company allows, and never undo it;
+a test reset never unpauses anything (nor pauses printing again that people started); a restart keeps every pause.
 
 ## A backup or the restore check failed
 
