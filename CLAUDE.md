@@ -77,7 +77,7 @@ touches: `docs/OVERVIEW.md`, `SWITCHES.md`, `RUNNING.md`, `RUNBOOKS.md`, `GO-LIV
   - 10 Dependabot PRs (#22–#31), some with major version jumps. Test each before merging; never bulk-merge.
   - The GitHub protection settings listed in `docs/SUPPLY-CHAIN.md` are for Josh to switch on.
   - Physical pilot tests (printer, labels, route) haven't happened yet.
-  - The walkthrough videos live only in the chat they were made in, not in GitHub.
+  - The walkthrough videos are in `videos/` (recorded before the last fixes).
 
 ## How work is saved
 
