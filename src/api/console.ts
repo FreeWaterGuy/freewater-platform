@@ -4,7 +4,7 @@ import { publicEvents, testEvent } from '../modules/webhooks/catalog';
 import { ApiError, obj, S, signedInOwner, type RouteDef, Q } from './http';
 import { applyChange, describeChange, personOnlyKeys } from '../modules/console/settings';
 import { securityWeakened } from '../runtime/registry';
-import { approvalSettings, approverStepProblem } from '../modules/accounts/secondStep';
+import { approvalSettings, approverStepProblem, ownerSetupDue } from '../modules/accounts/secondStep';
 import { TeamScreens } from '../modules/ops/teamScreens';
 
 /**
@@ -25,8 +25,9 @@ export function consoleRoutes(app: App, route: (r: RouteDef) => void) {
     return { body: { ...(await cons.overview(key!.companyId)), you: await (async () => {
       const ss = key!.userId ? await app.secondStep.status(key!.userId) : null;
       const u = key!.userId ? await app.accounts.get(key!.userId) : null;
-      const must = !!(u?.role === 'owner' && app.platform.companies.get(key!.companyId)?.security?.ownersNeedSecondStep && !ss?.enabled);
-      return { name: key!.name, platform: key!.scopes.includes('platform'), person: !!key!.userId, ...(ss ? { secondStep: ss } : {}), ...(u ? { role: u.role } : {}), mustSetUpSecondStep: must };
+      // Required here and no app yet: set up now, or (signed in before it was required) by the end of the grace period.
+      const due = u?.role === 'owner' && !ss?.enabled && key!.sessionToken ? ownerSetupDue(app.platform.companies.get(key!.companyId)?.security, await app.accounts.sessionStartedAt(key!.sessionToken), app.platform.bus.now()) : { must: false, dueBy: null };
+      return { name: key!.name, platform: key!.scopes.includes('platform'), person: !!key!.userId, ...(ss ? { secondStep: ss } : {}), ...(u ? { role: u.role } : {}), mustSetUpSecondStep: due.must, ...(due.dueBy ? { secondStepDueBy: due.dueBy } : {}) };
     })() } };
   } });
   route({ method: 'PATCH', url: '/v1/console/settings', scope: 'admin', summary: 'Change your settings: brand, product facts, giving, open books, ad rules, prices, modules and more. Send only what changes, and the version you started from. Turning off a security setting (owners’ second sign-in step) is its own change, by an owner who passed the second step, with a reason.', body: obj({ changes: changesProp, version: S.int, confirmStranded: S.int, reason: { type: 'string', maxLength: 300 } }, ['changes']), handler: async (req, key) => {

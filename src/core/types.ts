@@ -187,8 +187,12 @@ export interface CompanyConfig {
   launch?: { stage: 'test' | 'points' | 'token'; withdrawals?: boolean };
   /** How much of the books the world sees, live. Each company chooses. */
   transparency?: Transparency;
-  /** Security choices. Owners can be required to use a second sign-in step (a code from an authenticator app). */
-  security?: { ownersNeedSecondStep: boolean };
+  /**
+   * Security choices. Owners can be required to use a second sign-in step (a code from an authenticator app). Owners
+   * already signed in when it became required (`requiredSince`, set by the server) keep working for `graceDays` (default
+   * 7, 0 to 30) before they must set one up; anyone signing in after it's required sets one up first.
+   */
+  security?: { ownersNeedSecondStep: boolean; graceDays?: number; requiredSince?: string };
   /**
    * Who reviews ads (src/modules/ops/teamScreens.ts): 'owners' (and reviewers), or 'owners_ops' (ops people too, signed
    * in; the default, FreeWater's choice). A person decides either way; refunds stay with owners and finance.

@@ -466,14 +466,18 @@ export class Ledger {
   /** The same, for a whole company (its public sales counter). */
   companySalesStandingWithoutCommission(companyId: string) { return this.uncharged.get(`company:${companyId}`) ?? 0; }
   /**
-   * Sales traced to a bottle that carry no commission line (an advertiser who pays up front, with the commission fee
-   * off): they're still sales, so the advertiser's results and the public counter count them from here.
+   * Every confirmed sale the books hold for an advertiser (since a moment, if given), net of refunds: the one source
+   * both the advertiser's Overview and Sales tracking count from. A sale counts while it isn't refunded in full; its
+   * value and its commission are what's left after refunds (the commission exactly as its reversals took it back).
+   * Sales the advertiser's own website reported and its server hasn't confirmed aren't in the books yet.
    */
-  salesWithoutCommission(companyId: string, advertiserId?: string) {
-    const out: { campaignId: string; at: Date; amountCents: number; refundedCents: number }[] = [];
+  salesOf(companyId: string, advertiserId?: string, since?: Date) {
+    const out: { campaignId: string; at: Date; standing: boolean; netCents: number; commissionCents: number }[] = [];
     for (const s of this.sales.values()) {
-      if (s.lines.length || s.companyId !== companyId || (advertiserId && s.advertiserId !== advertiserId) || !s.campaignId || !s.at) continue;
-      out.push({ campaignId: s.campaignId, at: s.at, amountCents: s.amountCents, refundedCents: s.refundedCents });
+      if (s.companyId !== companyId || (advertiserId && s.advertiserId !== advertiserId) || !s.campaignId || !s.at || (since && s.at < since)) continue;
+      const upTo = (c: number) => (s.refundedCents >= s.amountCents ? c : Math.round((c * s.refundedCents) / s.amountCents));
+      const commissionCents = s.lines.filter((l) => l.kind === 'commission').reduce((a, l) => a + l.amountCents - upTo(l.amountCents), 0);
+      out.push({ campaignId: s.campaignId, at: s.at, standing: s.refundedCents < s.amountCents, netCents: Math.max(0, s.amountCents - s.refundedCents), commissionCents });
     }
     return out;
   }

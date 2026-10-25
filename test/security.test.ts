@@ -78,7 +78,9 @@ describe('security without slowing anything down', () => {
     const found = (await call('POST', '/v1/security/review', keys['freewater-admin'])).body;
     const p = found.find((x: any) => /Old test script/.test(x.title));
     expect(p).toMatchObject({ agentId: 'security', kind: 'security', status: 'proposed' });
-    expect((await call('GET', '/v1/agents', old.key)).status).toBe(200); // nothing happens until a person says so
+    // Nothing happens until a person says so (checked without using the key: one used again since it was suggested
+    // isn't turned off, test/second-step-lockout.test.ts).
+    expect((await db.query<any>(`select revoked_at from api_keys where id = $1`, [old.record.id])).rows[0].revoked_at).toBeNull();
     expect((await call('POST', `/v1/agents/proposals/${p.id}/decide`, keys['freewater-person'], { approve: true })).body.status).toBe('done');
     expect((await call('GET', '/v1/agents', old.key, undefined, '203.0.113.50')).status).toBe(401);
     // Every company gets its security agent, even one that hasn't turned the agents' fund on.

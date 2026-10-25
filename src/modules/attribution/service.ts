@@ -374,7 +374,12 @@ export class AttributionService {
     const lower = await one(`select count(*)::int as n, coalesce(sum(tag_value_cents - value_cents),0)::int as cents from conversions where company_id = $1 and created_at >= $2 and status = 'billed' and tag_value_cents > value_cents ${adv}`);
     const coupons = await one(`select count(*)::int as issued, count(redeemed_at)::int as redeemed from coupon_codes where company_id = $1 and created_at >= $2 ${adv}`);
     const recent = (await this.db.query<any>(`select * from conversions where company_id = $1 and created_at >= $2 ${adv} order by created_at desc limit 20`, args)).rows.map((r) => this.view(r));
-    return { since, clicks: clicks.n, sales: { count: conv.n, valueCents: conv.value, commissionCents: conv.commission, bySource: { tag: conv.tag, server: conv.server, coupon: conv.coupon }, fromAr: { count: ar.n, valueCents: ar.value } }, unverified: { count: unverified.n, valueCents: unverified.value }, confirmedBelowTag: { count: lower.n, cents: lower.cents }, coupons: { issued: coupons.issued, redeemed: coupons.redeemed }, recent };
+    // The sales counted are the books' (ledger.salesOf, as the advertiser's Overview counts them): confirmed, net of
+    // refunds, however they were reported (tag confirmed by the server, server, counter, or POST /v1/purchases).
+    const books = this.platform.ledger.salesOf(companyId, advertiserId, new Date(since));
+    const count = books.filter((s) => s.standing).length;
+    const direct = Math.max(0, count - conv.tag - conv.server - conv.coupon);
+    return { since, clicks: clicks.n, counted: 'confirmed sales in the books, net of refunds', sales: { count, valueCents: books.reduce((a, s) => a + s.netCents, 0), commissionCents: books.reduce((a, s) => a + s.commissionCents, 0), bySource: { tag: conv.tag, server: conv.server, coupon: conv.coupon, direct }, fromAr: { count: ar.n, valueCents: ar.value } }, unverified: { count: unverified.n, valueCents: unverified.value }, confirmedBelowTag: { count: lower.n, cents: lower.cents }, coupons: { issued: coupons.issued, redeemed: coupons.redeemed }, recent };
   }
 }
 

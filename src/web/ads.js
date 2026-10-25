@@ -382,7 +382,8 @@
       h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Sales tracking' }), h('p', { text: `Every sale that came from your ads, matched to the exact bottle. Last 30 days.` }))),
       h('div', { class: 'kpis' },
         kpi('Taps on your links', num(s.clicks), 'each gets its own click id; taps are never billed', true),
-        kpi('Sales from bottles', num(s.sales.count), `${s.sales.bySource.tag} website · ${s.sales.bySource.server} your server · ${s.sales.bySource.coupon} at the counter`),
+        // Confirmed sales in the books, net of refunds: the same count as the Overview (which covers 14 days).
+        kpi('Sales from bottles', num(s.sales.count), `confirmed, net of refunds: ${s.sales.bySource.tag} website · ${s.sales.bySource.server} your server · ${s.sales.bySource.coupon} at the counter${s.sales.bySource.direct ? ` · ${s.sales.bySource.direct} from your till or system` : ''}`),
         kpi('Those sales', dollars(s.sales.valueCents), 'what customers spent'),
         kpi('Commission', dollars(s.sales.commissionCents), 'on confirmed sales only; on your invoice'),
         kpi('Sales from AR', num(s.sales.fromAr?.count ?? 0), `${dollars(s.sales.fromAr?.valueCents ?? 0)} bought from the buy button inside AR`),
@@ -700,7 +701,8 @@
         h('div', { class: 'kpi' }, h('span', { text: 'Bottles with your ad' }), h('b', { text: num(p.prints) }), h('small', { text: p.boxFaces ? `+ ${plural(num(p.boxFaces), 'box', 'boxes')}` : 'printed' })),
         h('div', { class: 'kpi' }, h('span', { text: 'Scans' }), h('b', { text: num(p.scans) }), h('small', { text: p.prints ? `${Math.round((p.scans / p.prints) * 100)}% of bottles` : 'that loaded' })),
         h('div', { class: 'kpi' }, h('span', { text: 'AR launches' }), h('b', { text: num(p.arLaunches) }), h('small', { text: `${plural(num(t.saves), 'save', 'saves')} all time` })),
-        h('div', { class: 'kpi' }, h('span', { text: 'Sales from bottles' }), h('b', { text: dollars(p.salesCents) }), h('small', { text: `${plural(num(p.sales), 'order', 'orders')}` }))),
+        // Confirmed sales in the books, net of refunds: the same count as Sales tracking (which covers 30 days).
+        h('div', { class: 'kpi' }, h('span', { text: 'Sales from bottles' }), h('b', { text: dollars(p.salesCents) }), h('small', { text: `${plural(num(p.sales), 'confirmed order', 'confirmed orders')}, net of refunds${o.salesWaiting?.count ? ` · ${num(o.salesWaiting.count)} more waiting for your server` : ''}` }))),
       chart(o.daily),
       o.drafts.length ? h('div', {}, h('h2', { class: 'section', text: 'Unfinished ads' }), h('div', { class: 'drafts' }, o.drafts.map((d) => link(`/ads/drafts/${d.id}`, {}, h('span', { text: d.headline || 'New ad' }), h('span', { style: 'color:var(--muted)', text: `${d.campaignId ? 'Change to a live ad · ' : ''}Continue` }))))) : null,
       bonusBox(),
@@ -735,6 +737,11 @@
     }).catch(() => { box.hidden = true; });
     return box;
   }
+  /** A link change after paying for it: waiting for review (the old link stays live until approved), or how it was decided. */
+  const linkChangeNotice = (lc) => !lc ? null
+    : lc.status === 'waiting' ? h('div', { class: 'notice', style: 'margin-top:8px', text: `Waiting for review: ${lc.urls.join(', ')} (the old link stays live until approved).` })
+    : lc.status === 'approved' ? h('div', { class: 'notice ok', style: 'margin-top:8px', text: `Link change approved: ${lc.urls.join(', ')} ${lc.live ? 'is live now' : 'goes live in a moment'}.` })
+    : h('div', { class: 'notice err', style: 'margin-top:8px', text: `Link change not approved: ${lc.urls.join(', ')}.${lc.note ? ` Why: ${lc.note}` : ''} The old link stays live.` });
   function campaignCard(c) {
     const r = c.results;
     const actions = [];
@@ -754,6 +761,7 @@
       h('div', {},
         h('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:4px' }, h('span', { class: `status ${c.status}`, text: statusText[c.status] })),
         h('h3', { text: c.name }),
+        linkChangeNotice(c.linkChange),
         h('div', { class: 'meta', text: `${c.route ? `On delivery routes: ${routeKind(c.route.kind) ?? c.route.kind}, ${plural(num(c.route.houses), 'house', 'houses')}` : c.where === 'all' ? 'Every machine' : c.where.join(', ')} · ${budget} · ${onBoxes(c.formats) ? 'bottles and boxes' : 'bottles'}` }),
         h('div', { class: 'nums' }, [['Bottles', num(r.prints)], ['Scans', num(r.scans)], ['AR', num(r.arLaunches)], ['Spent', dollars(r.spendCents)]].map(([k, v]) => h('div', {}, h('b', { text: v }), k))),
         c.status === 'not_approved' && c.review?.note && !paid ? h('div', { class: 'note' }, h('b', { text: 'What to change: ' }), c.review.note) : null,
@@ -909,7 +917,9 @@
     const err = h('div', { class: 'notice err', hidden: true });
     const inputs = t.links.map((l) => ({ l, input: h('input', { class: 'input', type: 'url', value: l.url, 'aria-label': l.label || l.path }) }));
     const fee = t.live && on('link_change_fee') ? t.feeCents : 0;
-    const go2 = h('button', { type: 'button', class: 'btn wide', onclick: async () => {
+    const last = t.pending ?? t.last;
+    const decided = last ? linkChangeNotice({ status: last.status, urls: last.changes.map((x) => x.url), note: last.decided?.note ?? null, live: last.live }) : null;
+    const go2 = h('button', { type: 'button', class: 'btn wide', disabled: t.pending ? true : null, title: t.pending ? 'One change at a time: the one waiting is decided first.' : null, onclick: async () => {
       err.hidden = true;
       const changes = inputs.filter(({ l, input }) => input.value.trim() !== l.url).map(({ l, input }) => ({ path: l.path, url: input.value.trim() }));
       if (!changes.length) { err.textContent = 'Change a link first.'; err.hidden = false; return; }
@@ -918,7 +928,7 @@
       catch (x) { err.textContent = x.message; err.hidden = false; go2.disabled = false; }
     } }, fee ? `Pay ${dollars(fee)} and change the link` : 'Change the link');
     shell('overview', h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: 'Change a link' }), h('p', { text: `Your QR code stays the same on every bottle; this changes where it leads. ${fee ? `Once an ad is live this costs ${dollars(fee)}, paid now. ` : ''}${state.config.name} checks the new link before your ad prints again.` }))),
-      err, t.links.length ? h('div', { class: 'form' }, inputs.map(({ l, input }) => [h('label', { text: l.label || l.path }), input])) : h('p', { class: 'muted', text: 'This ad’s code doesn’t lead to a link of yours.' }), t.links.length ? go2 : null);
+      decided, err, t.links.length ? h('div', { class: 'form' }, inputs.map(({ l, input }) => [h('label', { text: l.label || l.path }), input])) : h('p', { class: 'muted', text: 'This ad’s code doesn’t lead to a link of yours.' }), t.links.length ? go2 : null);
   }
 
   async function builder(id) {

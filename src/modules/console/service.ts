@@ -188,6 +188,7 @@ export class ConsoleService {
     if (expectedVersion !== undefined && expectedVersion !== version) throw new ConsoleError('version_conflict', `Someone else saved changes (now version ${version}). Reload to see them, then make your change again.`, 409);
     let next: CompanyConfig;
     try { next = applyChange(cur, change); } catch (e: any) { throw new ConsoleError('not_editable', e.message); }
+    next = await this.secondStepRule(companyId, cur, next);
     if (opts.person === false && printLimitsChanged(cur, next)) throw new ConsoleError('person_needed', 'The machines’ print limits are a safety limit: a person signed in changes them, not a service key.', 403);
     if (opts.person === false) { const flips = this.switchesChanged?.(cur, next) ?? []; if (flips.length) throw new ConsoleError('person_needed', `This turns a switch on or off (${flips.join(', ')}): a person signed in does that, never a service key.`, 403); }
     const weakened = this.securityWeakened?.(cur, next) ?? [];
@@ -198,6 +199,23 @@ export class ConsoleService {
     const changes = describeChange(cur, next);
     if (!changes.length) return { config: cur, version, changes };
     return this.commit(companyId, next, by, changes, version, opts);
+  }
+
+  /**
+   * Requiring owners' second sign-in step never locks out the people who must set it up (src/modules/accounts/secondStep.ts,
+   * ownerSetupDue): it's turned on only when at least one owner already has an app set up, and the moment it was turned
+   * on is the server's (owners signed in before then keep a grace period), never the caller's.
+   */
+  private async secondStepRule(companyId: string, cur: CompanyConfig, next: CompanyConfig): Promise<CompanyConfig> {
+    if (!next.security) return next;
+    const security = { ...next.security };
+    if (security.ownersNeedSecondStep && !cur.security?.ownersNeedSecondStep) {
+      const ready = (await this.db.query<any>(`select count(*)::int as n from users u join second_steps s on s.user_id = u.id and s.enabled_at is not null where u.company_id = $1 and u.role = 'owner' and u.deleted_at is null`, [companyId])).rows[0]?.n ?? 0;
+      if (!ready) throw new ConsoleError('no_owner_ready', 'At least one owner must set up their own second sign-in step (an authenticator app, under Security) before it can be required for every owner, so nobody is locked out. Nothing was changed.', 422);
+      security.requiredSince = this.now();
+    } else if (cur.security?.requiredSince) security.requiredSince = cur.security.requiredSince;
+    else delete security.requiredSince;
+    return { ...next, security };
   }
 
   private async commit(companyId: string, next: CompanyConfig, by: string, changes: string[], from: number, opts: SaveOpts = {}) {
@@ -237,9 +255,10 @@ export class ConsoleService {
     const old = await this.version(companyId, v);
     const latest = await this.baseline(companyId);
     const cur = this.company(companyId);
-    const next: CompanyConfig = { ...old, id: companyId };
+    let next: CompanyConfig = { ...old, id: companyId };
     // The domain is proved, not restored: an old version never brings back a domain (or its check) that was since changed.
     if (cur.domain) next.domain = cur.domain; else delete next.domain;
+    next = await this.secondStepRule(companyId, cur, next);
     // Putting back an old version passes the same checks as any other change (the chain can't come back on this way).
     const money = personOnlyKeys.some((k) => JSON.stringify((cur as any)[k] ?? null) !== JSON.stringify((next as any)[k] ?? null)) || printLimitsChanged(cur, next) || !!this.switchesChanged?.(cur, next).length;
     if (money && !opts.person) throw new ConsoleError('person_needed', 'This version changes money, chain or one-way settings, or turns a switch on or off; a person signed in has to put it back.', 403);

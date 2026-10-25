@@ -62,7 +62,7 @@ import { checkSvgPictures, svgCreative } from '../modules/print/svgCreative';
 import { linkFeeProblem, linksOf } from '../modules/artwork/links';
 import { newId } from '../core/ids';
 import { AccountsError, roleScopes, type Role } from '../modules/accounts/service';
-import { approvalRoutes, approverStepProblem } from '../modules/accounts/secondStep';
+import { approvalRoutes, approverStepProblem, ownerSetupDue } from '../modules/accounts/secondStep';
 import { PaymentError } from '../modules/payments/service';
 import { ExperienceError, publicPlace, targetKey, type Target } from '../modules/experiences/service';
 import { bottleCostLines, distributedBy, printedFresh } from '../modules/books/bottleReceipt';
@@ -729,7 +729,9 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
     await app.data.link(b.companyId, [...own, ...phone], 'signed in').catch(() => null);
     // Someone with a second step turned on gets a ticket for it, not yet a session.
     if (r.challenge) return { body: { secondStep: true, challenge: r.challenge } };
-    return { body: { token: r.token, isNew: r.isNew, user: r.user } };
+    // An owner where it's required who has no app yet: signed in, and taken straight to setting one up.
+    const mustSetUp = r.user.role === 'owner' && !!platform.companies.get(r.user.companyId)?.security?.ownersNeedSecondStep;
+    return { body: { token: r.token, isNew: r.isNew, user: r.user, ...(mustSetUp ? { mustSetUpSecondStep: true } : {}) } };
   } });
   route({ method: 'POST', url: '/v1/auth/second-step', scope: 'public', summary: 'The second sign-in step: the 6-digit code from your authenticator app (or a recovery code), with the ticket from /v1/auth/verify. Returns a sign-in token.', body: obj({ challenge: { type: 'string', pattern: '^fwc_[A-Za-z0-9_-]{20,64}$' }, code: { type: 'string', minLength: 6, maxLength: 16 } }, ['challenge', 'code']), handler: async (req) => {
     const b = req.body as any;
@@ -1300,8 +1302,10 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
       key = await findApiKey(db, raw);
     }
     if (!key) throw new ApiError(401, 'invalid_key', 'That API key is not valid or was revoked.');
-    // A company can require its owners to use a second sign-in step. Until they set it up, they can only set it up.
-    if (key.userId && raw.startsWith('fws_') && platform.companies.get(key.companyId)?.security?.ownersNeedSecondStep) {
+    // A company can require its owners to use a second sign-in step. An owner without one who signed in before it was
+    // required keeps working through the grace period; otherwise, until they set it up, they can only set it up.
+    const security = platform.companies.get(key.companyId)?.security;
+    if (key.userId && raw.startsWith('fws_') && security?.ownersNeedSecondStep) {
       const u = await app.accounts.get(key.userId);
       if (u?.role === 'owner') {
         const url = req.routeOptions?.url ?? '';
@@ -1310,7 +1314,7 @@ export async function buildServer(app: App, opts: { logger?: boolean } = {}): Pr
           const hit = secondStepCache.get(u.id);
           const on = hit && hit.at > Date.now() - 60_000 ? hit.on : await app.secondStep.enabled(u.id);
           secondStepCache.set(u.id, { on, at: Date.now() });
-          if (!on) throw new ApiError(403, 'second_step_required', 'Owners here need a second sign-in step. Set up an authenticator app first (in the console, or POST /v1/me/second-step/start).');
+          if (!on && ownerSetupDue(security, await app.accounts.sessionStartedAt(raw), platform.bus.now()).must) throw new ApiError(403, 'second_step_required', 'Owners here need a second sign-in step. Set up an authenticator app first (in the console, or POST /v1/me/second-step/start).');
         }
       }
     }

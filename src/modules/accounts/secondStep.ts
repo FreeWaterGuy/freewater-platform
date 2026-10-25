@@ -120,6 +120,26 @@ export class SecondStep {
   }
 }
 
+// ---------- requiring it for owners, without locking anyone out ----------
+//
+// "Owners need a second sign-in step" (security.ownersNeedSecondStep) can be turned on only once at least one owner
+// has an app set up (ConsoleService refuses it otherwise, however it's asked: the setting, the switch, a restored
+// version or the security agent's proposal). Owners already signed in when it became required keep working for the
+// grace period (security.graceDays, default 7); anyone signing in after it, or still without an app when the grace
+// ends, is taken to set one up (the setup routes always stay open), never refused outright.
+
+export const SECOND_STEP_GRACE_DAYS = 7;
+
+/** Must this owner (no app set up) set one up before anything else, and if not yet, by when. */
+export function ownerSetupDue(security: { ownersNeedSecondStep?: boolean; graceDays?: number; requiredSince?: string } | undefined, sessionStartedAt: Date | null, now: Date): { must: boolean; dueBy: string | null } {
+  if (!security?.ownersNeedSecondStep) return { must: false, dueBy: null };
+  const since = security.requiredSince ? Date.parse(security.requiredSince) : NaN;
+  // Signed in after it was required (or it was required before this was recorded): set it up now.
+  if (!Number.isFinite(since) || !sessionStartedAt || sessionStartedAt.getTime() > since) return { must: true, dueBy: null };
+  const due = since + (security.graceDays ?? SECOND_STEP_GRACE_DAYS) * 86_400_000;
+  return now.getTime() < due ? { must: false, dueBy: new Date(due).toISOString() } : { must: true, dueBy: null };
+}
+
 // ---------- approvers: the second step before approving money or token steps ----------
 //
 // Owners and finance people approve things that move money or tokens (threat model R4). An inbox alone must never be

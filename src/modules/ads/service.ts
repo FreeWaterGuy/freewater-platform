@@ -672,7 +672,6 @@ export class AdsService {
       if (r.kind === 'scan') t.scans += n;
       if (r.kind === 'ar') t.arLaunches += n;
       if (r.kind === 'box_face') t.boxFaces += n;
-      if ((r.kind === 'commission' || r.kind === 'commission_reversal') && company.prices.commissionPercent) { t.sales += n; t.salesCents += Math.round((cents * 100) / company.prices.commissionPercent); }
     };
     const total = blank(), period = blank();
     const byCampaign = new Map<string, Totals>();
@@ -686,14 +685,14 @@ export class AdsService {
       const day = days.get(r.day);
       if (day) { add(day, r); add(period, r); }
     }
-    // Sales with no commission line (paid up front, commission off): counted from the sales themselves, net of refunds.
+    // Sales: the confirmed sales in the books, net of refunds, the same source and rules as Sales tracking
+    // (ledger.salesOf), whether or not they carry a commission.
     const dayIn = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' });
-    for (const s of this.platform.ledger.salesWithoutCommission(input.companyId, input.advertiserId)) {
-      const open = s.refundedCents < s.amountCents ? 1 : 0, cents = Math.max(0, s.amountCents - s.refundedCents);
+    for (const s of this.platform.ledger.salesOf(input.companyId, input.advertiserId)) {
       const day = days.get(dayIn.format(s.at));
       const ts = [total, byCampaign.get(s.campaignId) ?? blank(), ...(day ? [day, period] : [])];
       byCampaign.set(s.campaignId, ts[1]!);
-      for (const t of ts) { t.sales += open; t.salesCents += cents; }
+      for (const t of ts) { t.sales += s.standing ? 1 : 0; t.salesCents += s.netCents; }
     }
     for (const e of engaged) {
       // An ad aimed at a few houses: the advertiser knows the houses, so whether someone there saved it or tapped
@@ -703,6 +702,14 @@ export class AdsService {
       byCampaign.set(e.campaign_id, t);
       if (e.action === 'save') { t.saves += Number(e.n); total.saves += Number(e.n); }
       if (e.action === 'link' || e.action === 'call') { t.linkTaps += Number(e.n); total.linkTaps += Number(e.n); }
+    }
+    // Each ad's latest link change: waiting for review (the old link stays live), or how it was decided (shown 30 days).
+    const linkChanges = new Map<string, { status: string; urls: string[]; note: string | null; decidedAt: string | null; live: boolean; at: string }>();
+    const shownSince = this.platform.bus.now().getTime() - 30 * 86_400_000;
+    for (const r of (await this.db.query<any>(`select distinct on (campaign_id) campaign_id, status, changes, note, decided_at, applied_at, created_at from ad_link_changes where company_id = $1 and advertiser_id = $2 order by campaign_id, number desc`, [input.companyId, input.advertiserId])).rows) {
+      if (r.status !== 'waiting' && (!r.decided_at || new Date(r.decided_at).getTime() < shownSince)) continue;
+      const changes = (typeof r.changes === 'string' ? JSON.parse(r.changes) : r.changes) as { url: string }[];
+      linkChanges.set(r.campaign_id, { status: r.status, urls: changes.map((x) => x.url), note: r.note ?? null, decidedAt: r.decided_at ? new Date(r.decided_at).toISOString() : null, live: !!r.applied_at, at: new Date(r.created_at).toISOString() });
     }
     const product = this.platform.standardProduct(input.companyId);
     const thumbW = (adArea(product).w * 100) / 6 * 2;
@@ -715,10 +722,15 @@ export class AdsService {
         editable: c.creativeRef?.kind === 'poster' || c.creativeRef?.kind === 'studio' || c.creativeRef?.kind === 'artwork',
         thumbSvg: `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(thumbW)}" height="450" viewBox="0 0 ${thumbW.toFixed(1)} 450">${c.creative.svg(thumbW, 450)}</svg>`,
         results: byCampaign.get(c.id) ?? blank(),
+        ...(linkChanges.has(c.id) ? { linkChange: linkChanges.get(c.id) } : {}),
       }));
     const adv = await this.advertiser(input.companyId, input.advertiserId);
     const billing = prepaidModel(company) ? { model: 'prepaid' as const, ...this.prepaidTerms(company.id), orders: this.prepaid ? await this.prepaid.orders(input.companyId, input.advertiserId) : [] } : { model: 'billed_after' as const };
-    return { advertiser: adv, days: input.days, total, period, daily: [...days.entries()].map(([day, t]) => ({ day, ...t })), campaigns, drafts: await this.listDrafts(input.companyId, input.advertiserId), prices: estimate({}, company, this.maxFactor(company.id), undefined, this.platform.featureOn), billing };
+    // Sales the advertiser's website reported that its server hasn't confirmed: not in the books, not billed, shown apart.
+    const waiting = (await this.db.query<any>(`select count(*)::int as n, coalesce(sum(value_cents),0)::bigint as cents from conversions where company_id = $1 and advertiser_id = $2 and status = 'unverified' and refunded_at is null and created_at >= $3`,
+      [input.companyId, input.advertiserId, new Date(this.platform.bus.now().getTime() - input.days * 86_400_000).toISOString()])).rows[0];
+    const salesWaiting = { count: Number(waiting?.n ?? 0), valueCents: Number(waiting?.cents ?? 0) };
+    return { advertiser: adv, days: input.days, total, period, salesWaiting, daily: [...days.entries()].map(([day, t]) => ({ day, ...t })), campaigns, drafts: await this.listDrafts(input.companyId, input.advertiserId), prices: estimate({}, company, this.maxFactor(company.id), undefined, this.platform.featureOn), billing };
   }
 
   // ---------- content review (the company) ----------

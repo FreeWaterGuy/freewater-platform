@@ -764,6 +764,12 @@ export async function createApp(opts: AppOptions) {
     const a = await artwork.art(companyId, advertiserId, d).catch(() => null);
     return a ? { creativeRef: a.creativeRef, qr: { mode: 'dynamic' as const, ...(d.qr && artwork.on(companyId, 'qr_styles') ? d.qr : {}) } } : null;
   };
+  // The demo's sample ads are rated now, before anything prints, as a submitted ad is on the real path (they never went
+  // through submitting). An AI slower than half a minute is left to finish in the background: then it's truly late.
+  if (demoKeys) {
+    for (const c of platform.campaigns.values()) await ratings.noteVersionNow(c).catch(() => null);
+    await Promise.race([ratings.idle(), new Promise((r) => setTimeout(r, 30_000).unref())]);
+  }
   // Link changes paid for but not saved (a crash between) are finished now, after ratings are wired, so each is noted
   // as a new version and rated before it prints (it waits for review anyway).
   await artwork.recoverLinkChanges();

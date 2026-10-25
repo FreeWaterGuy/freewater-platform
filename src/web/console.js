@@ -151,8 +151,10 @@
       h('aside', { class: 'side', style: b.panelColor ? `--brand-panel:${b.panelColor};--brand-text:${b.textColor};--brand-accent:${b.accentColor}` : null }, h('div', { class: 'logo', 'aria-label': `${S.config?.name ?? ''} console` }, h('span', { text: b.logoTop }), h('span', { text: b.logoBottom }), h('small', { text: 'Console' })),
         h('nav', { 'aria-label': 'Main' }, menuShown(nav, pageOn).map((n) => (typeof n === 'string' ? h('div', { class: 'group', text: n }) : n[1].startsWith('/ops/') ? h('a', { href: fixture ? '#' : n[1] }, icon(n[3]), n[2]) : link(n[1], { 'aria-current': active === n[0] ? 'page' : null }, icon(n[3]), n[2])))),
         h('div', { class: 'who' }, h('b', { text: S.me.displayName || S.me.email || '' }), S.config?.name, h('br'), h('button', { type: 'button', onclick: async () => { try { await api('POST', '/v1/auth/sign-out'); } catch {} S.token = null; S.me = null; S.dirty = false; store.set('fw_console_token', null); render(); } }, 'Sign out'))),
-      h('main', { class: 'main' }, ...content)));
+      h('main', { class: 'main' }, setUpByNotice(), ...content)));
   }
+  /** Required for owners and not set up yet, signed in before it was: everything works until the date, then only setting it up. */
+  const setUpByNotice = () => (S.ov?.you?.secondStepDueBy ? h('div', { class: 'notice', style: 'margin-bottom:14px' }, `Owners here now need a second sign-in step. Set up your authenticator app by ${when(S.ov.you.secondStepDueBy)} under `, link('/console/security', {}, 'Security'), '; until then everything works as before. After that date the console opens only to set it up.') : null);
   const head = (title, sub, ...right) => h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: title }), sub ? h('p', { text: sub }) : null), right.length ? h('div', { class: 'toolbar' }, right) : null);
 
   function signIn() {
@@ -1132,7 +1134,7 @@
   }
   /** Owners who must set it up see only this until they do. */
   function mustSetUpPage() {
-    shell('', head('One more step to keep the company safe', 'Owners here need a second sign-in step. Set up an authenticator app on your phone; it takes a minute. Then everything else opens.'), h('div', { class: 'stack' }, section('Your second sign-in step', null, secondStepBox(() => { S.ov = null; render(); }))));
+    shell('', head('One more step to keep the company safe', 'Owners here need a second sign-in step. You’re signed in with your emailed code; now set up an authenticator app on your phone (it takes a minute), and everything else opens. Nothing is lost meanwhile.'), h('div', { class: 'stack' }, section('Your second sign-in step', null, secondStepBox(() => { S.ov = null; render(); }))));
   }
 
   async function securityPage() {
@@ -1152,7 +1154,16 @@
             const reason = on ? window.prompt('Why stop requiring it? (at least 10 characters, for the record)') : null;
             if (on && !reason) return;
             try { await api('PATCH', '/v1/console/settings', { version: S.ov.version, changes: { security: { ownersNeedSecondStep: !on } }, ...(reason ? { reason } : {}) }); toast(on ? 'No longer required.' : 'Now required for owners.'); S.ov = null; render(); } catch (x) { toast(x.message); }
-          } }, on ? 'Stop requiring it' : 'Require it for owners'));
+          } }, on ? 'Stop requiring it' : 'Require it for owners'),
+          // Owners already signed in when it becomes required keep working this many days before they must set one up.
+          h('button', { class: 'btn secondary small', type: 'button', onclick: async () => {
+            const cur = S.ov.config.security?.graceDays ?? 7;
+            const days = Number(window.prompt('Days owners already signed in have to set theirs up (0 to 30):', String(cur)));
+            if (!Number.isInteger(days) || days === cur) return;
+            const reason = on && days > cur ? window.prompt('Why give owners longer? (at least 10 characters, for the record)') : null;
+            if (on && days > cur && !reason) return;
+            try { await api('PATCH', '/v1/console/settings', { version: S.ov.version, changes: { security: { ownersNeedSecondStep: on, graceDays: days } }, ...(reason ? { reason } : {}) }); toast('Saved.'); S.ov = null; render(); } catch (x) { toast(x.message); }
+          } }, `Days to set it up: ${S.ov.config.security?.graceDays ?? 7}`));
         })()) : '',
         h('div', { class: 'kpis', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' },
           h('div', { class: 'kpi' }, h('span', { text: 'Sign-ins this week' }), h('b', { text: String(n('signed_in')) })),

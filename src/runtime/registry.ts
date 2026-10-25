@@ -601,7 +601,9 @@ export const securitySwitches = () => SWITCHES.filter((s) => !!s.security);
  * The security switches kept in the settings that this settings change turns off (by label), and the ways it makes
  * the pause weaker (it stops less, or undoing it needs fewer people or a shorter wait: src/modules/chain/pause.ts).
  */
-export const securityWeakened = (before: any, after: any) => [...SWITCHES.filter((s) => s.security && s.kind === 'linked' && s.link!.get(before) && !s.link!.get(after)).map((s) => s.label), ...pauseWeakened(before, after)];
+export const securityWeakened = (before: any, after: any) => [...SWITCHES.filter((s) => s.security && s.kind === 'linked' && s.link!.get(before) && !s.link!.get(after)).map((s) => s.label), ...pauseWeakened(before, after), ...graceWeakened(before, after)];
+/** Giving owners longer to set up the second sign-in step while it's required leaves an inbox alone enough for longer. */
+const graceWeakened = (before: any, after: any) => before?.security?.ownersNeedSecondStep && after?.security?.ownersNeedSecondStep && (after.security.graceDays ?? 7) > (before.security.graceDays ?? 7) ? ['The days owners have to set up their second sign-in step'] : [];
 
 /** What it needs to be on: its parent and what it depends on. */
 export const needsOf = (s: Switch) => [...(s.parent ? [s.parent] : []), ...s.dependsOn];
