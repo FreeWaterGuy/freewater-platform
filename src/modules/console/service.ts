@@ -462,7 +462,7 @@ export class ConsoleService {
       let found: string[][] = [];
       try { found = await lookup(rec.verify.name); } catch { found = []; }
       // nosemgrep: fw-timing-unsafe-compare -- the domain check token is public by design (it's published in the company's DNS TXT record), not a secret
-    if (!found.some((parts) => parts.join('').trim() === d.token)) throw new ConsoleError('not_verified', `The check record isn’t there yet. Add a TXT record named ${rec.verify.name} with the value ${d.token}, wait a few minutes, and check again.`, 409);
+      if (!found.some((parts) => parts.join('').trim() === d.token)) throw new ConsoleError('not_verified', `The check record isn’t there yet. Add a TXT record named ${rec.verify.name} with the value ${d.token}, wait a few minutes, and check again.`, 409);
       const next: CompanyConfig = { ...structuredClone(cur), domain: { ...d, verified: true, verifiedAt: this.now(), verifiedBy: by } };
       const r = await this.commit(companyId, next, by, [`Own domain ${d.host} checked: new codes use it`], version, { note: { via: 'settings (own domain)' } });
       return { domain: r.config.domain!, version: r.version };
