@@ -694,3 +694,4 @@ could reach (the ratings list and its counts leave them out; calibration needs a
 Not checked: the law (the lawyer should confirm what the household screen may show and the audience lookup's log),
 real data companies' files.
 
+| 2026-10-25 | API fuzz in CI (admin key) | MEDIUM | — | `POST /v1/games/catalog/photos` (and siblings: barcode lookup, Unsplash/Pexels/Imagen, Veo) called outside sites with no time limit; the photo button tried up to 60 items one after another, so a silent site held the request open until the connection dropped | One helper (src/core/http.ts): every outside call gives up after 10 s (60 s for generation and video downloads), downloads are size-capped, and the photo button stops after 20 s and says so (the 6-hourly job picks up) | `test/outside-timeouts.test.ts` (two tests hang on the old code) |

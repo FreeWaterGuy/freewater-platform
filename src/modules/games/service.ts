@@ -58,12 +58,18 @@ export class GamesService {
    * Find photos for items that don't have one yet (a few at a time; run in the background, daily). Items with no free
    * photo are tried again after a week. Returns how many were found.
    */
-  async fillImages(companyId: string, limit = 20) {
+  /**
+   * Look for photos of items that don't have one. Each outside lookup has its own time limit (core/http); `budgetMs`
+   * bounds the whole run, so a button press answers promptly and the regular job picks up where it stopped.
+   */
+  async fillImages(companyId: string, limit = 20, budgetMs = 4 * 60_000) {
     let found = 0, tried = 0;
+    const until = Date.now() + budgetMs;
     const known = new Map((await this.db.query<any>(`select item_id, status, checked_at from catalog_images where company_id = $1`, [companyId])).rows.map((r) => [r.item_id as string, r]));
     const weekAgo = this.clock().getTime() - 7 * 86_400_000;
     for (const cat of this.catalog(companyId)) for (const item of cat.items) {
-      if (tried >= limit) return { found, tried };
+      if (tried >= limit) return { found, tried, stoppedEarly: false };
+      if (Date.now() >= until) return { found, tried, stoppedEarly: true };
       if (item.image) continue;
       const k = known.get(item.id);
       if (k && (k.status !== 'none' || new Date(k.checked_at).getTime() > weekAgo)) continue;
@@ -76,7 +82,7 @@ export class GamesService {
         found++;
       } else await this.saveImage(companyId, item.id, { status: 'none' });
     }
-    return { found, tried };
+    return { found, tried, stoppedEarly: false };
   }
   /** The company's own photo for an item (a brand's official one, say). Used before any other. */
   async setImage(companyId: string, itemId: string, image: { contentType: string; bytes: Uint8Array }, credit: string) {
