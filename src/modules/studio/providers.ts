@@ -2,6 +2,7 @@
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import sharp from 'sharp';
+import { bytesCapped, OUTSIDE_SLOW_TIMEOUT_MS, withTimeout } from '../../core/http';
 import { box, cylinder, toGlb, texturedCard } from '../models/glb';
 import { shortenWords } from '../../core/shorten';
 
@@ -53,7 +54,7 @@ const json = async (res: Response, who: string) => {
   if (!res.ok) throw new ProviderError('provider_failed', `${who} answered ${res.status}.`);
   return res.json() as Promise<any>;
 };
-const bytesOf = async (res: Response, who: string) => { if (!res.ok) throw new ProviderError('provider_failed', `${who} answered ${res.status} for the file.`); return new Uint8Array(await res.arrayBuffer()); };
+const bytesOf = async (res: Response, who: string) => { if (!res.ok) throw new ProviderError('provider_failed', `${who} answered ${res.status} for the file.`); return bytesCapped(res, 40 * 1024 * 1024, who).catch((e: unknown) => { throw new ProviderError('provider_failed', (e as Error).message); }); };
 
 // ---------- Unsplash ----------
 
@@ -64,7 +65,8 @@ const bytesOf = async (res: Response, who: string) => { if (!res.ok) throw new P
 export class UnsplashLibrary implements PhotoLibrary {
   readonly name = 'unsplash';
   private seen = new Map<string, any>();
-  constructor(private key: string, private f: typeof fetch = fetch, private app = 'freewater') {}
+  private f: typeof fetch;
+  constructor(private key: string, f: typeof fetch = fetch, private app = 'freewater') { this.f = withTimeout(f); }
   private get(url: string) { return this.f(url, { headers: { authorization: `Client-ID ${this.key}`, 'accept-version': 'v1' } }); }
   private view(p: any): StockPhoto {
     const utm = `utm_source=${encodeURIComponent(this.app)}&utm_medium=referral`;
@@ -93,7 +95,8 @@ export class UnsplashLibrary implements PhotoLibrary {
 export class PexelsLibrary implements PhotoLibrary {
   readonly name = 'pexels';
   private seen = new Map<string, any>();
-  constructor(private key: string, private f: typeof fetch = fetch) {}
+  private f: typeof fetch;
+  constructor(private key: string, f: typeof fetch = fetch) { this.f = withTimeout(f); }
   private get(url: string) { return this.f(url, { headers: { authorization: this.key } }); }
   private view(p: any): StockPhoto {
     return { id: String(p.id), source: 'pexels', description: p.alt ?? '', width: p.width, height: p.height, previewUrl: p.src?.medium, credit: { name: p.photographer ?? 'Pexels', url: p.photographer_url }, pageUrl: p.url };
@@ -121,7 +124,8 @@ export class PexelsLibrary implements PhotoLibrary {
  */
 export class ImagenMaker implements ImageMaker {
   readonly name = 'imagen';
-  constructor(private key: string, private model = 'imagen-4.0-generate-001', private f: typeof fetch = fetch) {}
+  private f: typeof fetch;
+  constructor(private key: string, private model = 'imagen-4.0-generate-001', f: typeof fetch = fetch) { this.f = withTimeout(f, OUTSIDE_SLOW_TIMEOUT_MS); }
   async generate(prompt: string, aspect: '1:1' | '3:4' | '4:3' | '9:16' | '16:9') {
     const res = await this.f(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(this.model)}:predict`, {
       method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': this.key },

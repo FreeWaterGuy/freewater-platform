@@ -1,3 +1,4 @@
+import { withTimeout } from '../../core/http';
 // Barcodes: every product on a shelf has a GTIN (the number under the UPC or EAN barcode). Offers name the exact
 // products they cover by GTIN, and receipts are matched against them.
 
@@ -17,7 +18,8 @@ export interface ProductLookup { readonly name: string; lookup(gtin: string): Pr
 /** Open Food Facts (free, no key): groceries, drinks, snacks, many household items. */
 export class OpenFoodFactsLookup implements ProductLookup {
   readonly name = 'openfoodfacts';
-  constructor(private f: typeof fetch = fetch) {}
+  private f: typeof fetch;
+  constructor(f: typeof fetch = fetch) { this.f = withTimeout(f); }
   async lookup(gtin: string) {
     for (const code of [gtin, gtin.replace(/^0+/, '').padStart(13, '0'), gtin.replace(/^0+/, '').padStart(12, '0')]) {
       const r = await this.f(`https://world.openfoodfacts.org/api/v2/product/${code}?fields=code,product_name,brands,image_front_url`, { headers: { 'user-agent': 'FreeWater/1.0 (https://freewater.io)' } }).catch(() => null);

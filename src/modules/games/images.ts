@@ -13,6 +13,8 @@ import type { CatalogItem, Category } from './catalog';
 export interface FoundImage { bytes: Uint8Array; contentType: 'image/jpeg'; credit: string; license: string; sourceUrl: string; source: string }
 export interface ProductImageSource { readonly name: string; find(item: CatalogItem, cat: Category): Promise<FoundImage | null> }
 
+import { bytesCapped, withTimeout } from '../../core/http';
+const MAX_PHOTO_BYTES = 15 * 1024 * 1024;
 const UA = 'FreeWater/1.0 (https://freewater.io; hello@freewater.io)';
 // eslint-disable-next-line security/detect-unsafe-regex -- anchored, linear; the input is a short license name
 const FREE_LICENSE = /^(cc0|cc[ -]by(-sa)?([ -][0-9.]+)?|public domain|pd[- ]?.*|attribution)$/i;
@@ -24,14 +26,14 @@ export async function cardJpeg(bytes: Uint8Array) {
 }
 
 async function getJson(f: typeof fetch, url: string) {
-  const r = await f(url, { headers: { 'user-agent': UA, accept: 'application/json' } });
+  const r = await withTimeout(f)(url, { headers: { 'user-agent': UA, accept: 'application/json' } });
   if (!r.ok) throw new Error(`${new URL(url).host} answered ${r.status}`);
   return r.json() as Promise<any>;
 }
 async function getBytes(f: typeof fetch, url: string) {
-  const r = await f(url, { headers: { 'user-agent': UA } });
+  const r = await withTimeout(f)(url, { headers: { 'user-agent': UA } });
   if (!r.ok) throw new Error(`${new URL(url).host} answered ${r.status}`);
-  return new Uint8Array(await r.arrayBuffer());
+  return bytesCapped(r, MAX_PHOTO_BYTES, new URL(url).host);
 }
 
 /** Wikipedia: the lead photo of the item's article, from Wikimedia Commons, if it's freely licensed and not a logo. */

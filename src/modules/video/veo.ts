@@ -1,4 +1,5 @@
 import type { FootageProvider, VideoBrief } from './contract';
+import { bytesCapped, OUTSIDE_SLOW_TIMEOUT_MS, withTimeout } from '../../core/http';
 
 // Live-action and animated footage from Google's Veo video model (through the Gemini API). Each clip is 8 seconds,
 // vertical, with sound, and takes from about 11 seconds to a few minutes to make, so footage is made ahead of time.
@@ -13,7 +14,8 @@ export class VeoProvider implements FootageProvider {
   constructor(private opts: { apiKey: string; model?: string; fetch?: typeof fetch; image?: (url: string) => Promise<{ mimeType: string; data: string } | null> }) {
     this.name = `Veo (${opts.model ?? 'veo-3.1-generate-preview'})`;
   }
-  private get f() { return this.opts.fetch ?? fetch; }
+  // Starting and checking a job are quick; downloading the finished video can take a minute.
+  private get f() { return withTimeout(this.opts.fetch ?? fetch, OUTSIDE_SLOW_TIMEOUT_MS); }
   private headers = () => ({ 'x-goog-api-key': this.opts.apiKey, 'content-type': 'application/json' });
 
   /** The words the video model gets: the advertiser's facts, the moment, the look. Never anything about the person. */
@@ -60,6 +62,6 @@ export class VeoProvider implements FootageProvider {
     if (!uri) throw new Error('Veo made no video (it may have been blocked by its safety filters)');
     const file = await this.f(uri, { headers: { 'x-goog-api-key': this.opts.apiKey }, redirect: 'follow' });
     if (!file.ok) throw new Error(`Downloading the video failed (${file.status})`);
-    return new Uint8Array(await file.arrayBuffer());
+    return bytesCapped(file, 200 * 1024 * 1024, 'Veo');
   }
 }
