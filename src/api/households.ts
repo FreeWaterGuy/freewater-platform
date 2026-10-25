@@ -22,6 +22,15 @@ export function householdRoutes(app: App, route: (r: RouteDef) => void) {
     if (!key!.userId) throw new ApiError(403, 'person_needed', 'A person on the team imports household data (buying data is a decision), signed in, not a service key.');
     return { status: 201, body: await wrap(() => households.importHouseholds(key!.companyId, req.body as any, `user:${key!.userId}`)) };
   } });
+  // Owners and finance (people), or an admin key: the console's Household data screen. Totals only, never a house.
+  route({ method: 'GET', url: '/v1/households/summary', scope: ['admin', 'ledger'], summary: 'Household and area data in totals: the switches, area statistics (sample or real, and their source), each import (source, date, kept, refused and how many were sensitive), what’s held by source and kind, and how many houses said no. Never a house or its attributes.', handler: async (_req, key) => {
+    const k = staff(key);
+    if (!k.scopes.includes('admin')) {
+      const u = k.userId ? await app.accounts.get(k.userId) : null;
+      if (!u || u.companyId !== k.companyId || u.role !== 'finance') throw new ApiError(403, 'owner_or_finance', 'Household data is for owners and finance, signed in.');
+    }
+    return { body: await wrap(() => households.summary(k.companyId)), headers: { 'cache-control': 'private, no-store' } };
+  } });
   route({ method: 'GET', url: '/v1/households/imports', scope: 'admin', summary: 'Household data imports: source, date, bought or first-party, how much is still held.', handler: async (_req, key) => ({ body: { imports: await households.imports(staff(key).companyId) } }) });
   route({ method: 'DELETE', url: '/v1/households/imports/:id', scope: 'admin', summary: 'Delete everything one import brought. Immediate.', handler: async (req, key) => ({ body: await wrap(() => households.deleteImport(staff(key).companyId, (req.params as any).id)) }) });
   route({ method: 'DELETE', url: '/v1/households/sources/:source', scope: 'admin', summary: 'Delete everything one data company gave us. Immediate.', handler: async (req, key) => ({ body: await households.deleteSource(staff(key).companyId, (req.params as any).source) }) });

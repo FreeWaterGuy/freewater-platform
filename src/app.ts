@@ -100,6 +100,7 @@ import type { BlobStore } from './modules/assets/blobs';
 import type { InstanceLease } from './runtime/lease';
 import { leaseCheckedClient } from './db/leaseChecked';
 import type { JobRunner } from './runtime/jobs';
+import { seedDemoBenchmarks } from './demo/demoBenchmarks';
 import { boxes, builtinCreatives, demoFormerCampaignIds, demoUnsoldCampaigns, formerAdvertiserCampaigns, freewater, locations, peakSpring, products, sampleCampaigns } from './demo/seed';
 import { printFormerAdvertisersPast } from './demo/history';
 import { FillerService } from './modules/fillers/service';
@@ -824,6 +825,13 @@ export async function createApp(opts: AppOptions) {
   await persistence.flush();
   // The demo's former advertisers ran paid before it starts (src/demo/history.ts): their past bottles, printed once.
   if (empty && opts.seedDemo && opts.demoUnsold) await printFormerAdvertisersPast({ platform, persistence }, demoFormerCampaignIds);
+  // The demo's Benchmarks page: a settled month of SAMPLE ad results at both demo companies (both contribute, as sample
+  // data), released by the real monthly release, so the page shows how it works (src/demo/demoBenchmarks.ts).
+  if (empty && opts.seedDemo && opts.demoUnsold) {
+    await companyFeatures.change('peak-spring', { benchmarks_contribute: true }, { userId: 'demo-seed', name: 'Demo seed (sample data)', approverProblem: async () => null }, { reason: 'Demo: sample data joins the sample benchmarks.' }).catch(() => null);
+    await seedDemoBenchmarks(db, now, ['freewater', 'peak-spring']);
+    await ratings.snapshotDue();
+  }
 
   return { ...made, aiReview, linkSafety, ratings, fillers, unsold, news, households, routeBuys, features, companyFeatures, db, persistence, runtime, demoKeys, accounts, payments, credit, prepaid, artwork, messenger, experiences, assets, ads, designs, delivery, houses, dropPhotos, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation, dnsTxt: opts.dnsTxt ?? ((name: string) => resolveTxt(name)) };
 }

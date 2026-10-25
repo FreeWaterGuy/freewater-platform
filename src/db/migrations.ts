@@ -2928,6 +2928,15 @@ begin
 end $$;
 `,
   },
+  {
+    // Household data imports keep why rows were refused, by kind (sensitive, off the list, bad value, no address, a
+    // house that said no), so the console's Household data screen shows how much sensitive data was turned away.
+    // Imports from before keep only their total (src/modules/households/service.ts).
+    id: '086_household_refused_by',
+    sql: `
+alter table household_imports add column refused_by jsonb;
+`,
+  },
 ];
 
 /** Runs every migration not yet run (or, for tests that start from an older schema, those in `list`). */

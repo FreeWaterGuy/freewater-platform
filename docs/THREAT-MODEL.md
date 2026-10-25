@@ -932,6 +932,7 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 464 | `POST /v1/console/domain` | admin | no | team only, a person signed in (403 for a service key); the company's own; a domain another company holds or the platform's own is refused | OK (080: one domain per company, a unique index; saved unchecked: codes don't use it yet) |
 | 465 | `POST /v1/console/domain/verify` | admin | no | team only, a person signed in; the company's own | OK (DNS TXT check; only then do new codes use the domain; an old version put back never restores a domain) |
 | 466 | `GET /v1/public/companies/:companyId/transparency` | public | — | — | OK (public by design; Transparency → Public transparency page; only the company's own settings and books, no personal data) |
+| 467 | `GET /v1/households/summary` | [admin, ledger] | no | team only; owners, finance (with only *ledger*: a person whose role is finance, never a service key) or an admin key | OK (the console's Household data screen: totals only, never a house, an address or one house's attributes; `no-store`) |
 
 ---
 

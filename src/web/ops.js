@@ -160,6 +160,21 @@
   }
 
   // ---------- ad review ----------
+  /** The built-in rules on a paid ad (src/modules/ads/aiReview.ts, reviewByRules): what each check found and why. */
+  function rulesBox(c, ai, ask, show) {
+    const b = ai.builtIn, word = { ok: 'fine', flag: 'flagged', look: 'worth a look' };
+    ask.placeholder = 'Ask the built-in rules why…';
+    return h('div', { class: 'panel-box rules-box', style: 'border-left:3px solid var(--muted, #888)' },
+      h('b', { text: `${b.label} (only your team sees this)` }),
+      h('p', { style: 'margin:4px 0;color:var(--muted);font-size:13px', text: b.looksAt }),
+      h('p', { style: 'margin:4px 0', text: b.verdict === 'flag' ? `By these rules they would flag it: ${b.reasons.join(' ')}` : 'By these rules they would pass it.' }),
+      h('ul', { style: 'margin:0;padding-left:18px;line-height:1.6' }, b.checks.map((x) => h('li', {}, h('b', { text: `${x.label}: ${word[x.result] ?? x.result}. ` }), x.why))),
+      ai.thread.length ? h('ul', { style: 'margin:0;padding-left:18px;line-height:1.6' }, ai.thread.map((m) => h('li', {}, h('b', { text: m.from === 'team' ? 'Team: ' : m.by === 'stand-in (no AI)' ? 'Built-in rules: ' : 'AI: ' }), m.text))) : null,
+      h('div', { class: 'field' }, h('label', { for: 'r-ask', text: 'Ask the built-in rules' }), ask),
+      h('div', {}, h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { if (!ask.value.trim()) return; try { await api('POST', `/v1/review/campaigns/${c.id}/ai`, { text: ask.value.trim() }); await show(); } catch (x) { toast(x.message); } } }, 'Ask')),
+      h('p', { style: 'margin:0;color:var(--muted);font-size:13px', text: 'Fixed checks, not an AI: they say what they found and why, but can’t weigh what you say. They never flag or decide an ad. Your final decision is kept against what they said.' }));
+  }
+
   async function reviewPage() {
     const queue = await api('GET', '/v1/review/campaigns');
     let current = queue[0]?.id ?? null;
@@ -200,7 +215,9 @@
         ai.thread.length ? h('ul', { style: 'margin:0;padding-left:18px;line-height:1.6' }, ai.thread.map((m) => h('li', {}, h('b', { text: m.from === 'team' ? 'Team: ' : `AI${m.by === 'stand-in (no AI)' ? ' (stand-in)' : ''}${m.changedView ? `, now ${m.changedView === 'pass' ? 'passing' : 'flagging'} it` : ''}: ` }), m.text))) : null,
         h('div', { class: 'field' }, h('label', { for: 'r-ask', text: 'Ask the AI' }), ask),
         h('div', {}, h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { if (!ask.value.trim()) return; try { await api('POST', `/v1/review/campaigns/${c.id}/ai`, { text: ask.value.trim() }); await show(); } catch (x) { toast(x.message); } } }, 'Ask')),
-        h('p', { style: 'margin:0;color:var(--muted);font-size:13px', text: 'It explains, and may change its view; it can’t approve, reject or pay anything back. What it said first stays in its record against your decision.' })) : null;
+        h('p', { style: 'margin:0;color:var(--muted);font-size:13px', text: 'It explains, and may change its view; it can’t approve, reject or pay anything back. What it said first stays in its record against your decision.' }))
+        // No AI verdict (no AI connected, or it's off): the built-in rules' checks, labelled, and you can ask them why.
+        : ai?.builtIn ? rulesBox(c, ai, ask, show) : null;
       const decide = async (decision) => {
         if ((decision === 'reject' || decision === 'flag') && !note.value.trim()) { toast(decision === 'flag' ? 'Say what the concern is.' : paid ? 'Write why it’s rejected.' : 'Say what needs to change.'); note.focus(); return; }
         if (decision === 'reject' && paid && !window.confirm(`Reject ${c.advertiser}’s paid ad for good? Its refund is then offered for approval.`)) return;

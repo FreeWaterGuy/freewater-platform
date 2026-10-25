@@ -72,7 +72,7 @@
     [/^\/console\/modules$/, modulesPage], [/^\/console\/codes$/, codesPage], [/^\/console\/products$/, productsPage], [/^\/console\/machines$/, machinesPage], [/^\/console\/team$/, teamPage], [/^\/console\/history$/, historyPage],
     [/^\/console\/keys$/, keysPage], [/^\/console\/webhooks$/, webhooksPage], [/^\/console\/webhooks\/([\w-]+)$/, webhookPage], [/^\/console\/licensees$/, licenseesPage],
     [/^\/console\/features$/, featuresPage], [/^\/console\/launch$/, launchPage], [/^\/console\/wallet$/, walletPage], [/^\/console\/offers$/, offersPage], [/^\/console\/games$/, gamesPage], [/^\/console\/chain$/, chainPage],
-    [/^\/console\/ratings$/, ratingsPage], [/^\/console\/benchmarks$/, benchmarksPage], [/^\/console\/pause$/, pausePage], [/^\/console\/bottles$/, bottlesPage],
+    [/^\/console\/ratings$/, ratingsPage], [/^\/console\/benchmarks$/, benchmarksPage], [/^\/console\/households$/, householdsPage], [/^\/console\/pause$/, pausePage], [/^\/console\/bottles$/, bottlesPage],
   ];
   /** Is this switch on, on this server and for this company? (GET /v1/public/features?company=; unknown or none: on.) */
   const on = (feature) => !feature || !(S.features?.off ?? []).includes(feature);
@@ -140,7 +140,7 @@
       'Review', ['review-ads', '/ops/review', 'Ad review', I.ads], ['review-links', '/ops/review/links', 'Link changes', I.hook], ['review-fillers', '/ops/review/fillers', 'Filler and charity', I.giving], ['bottles', '/console/bottles', 'Find a bottle', I.product], ['unsold', '/console/ads#unsold', 'Unsold-space order', I.line],
       'Points and rewards', ['launch', '/console/launch', 'Launch', I.start], ['wallet', '/console/wallet', 'Points and credit', I.giving], ['offers', '/console/offers', 'Brand offers', I.ads], ['games', '/console/games', 'The games', I.game], ['chain', '/console/chain', 'Blockchain', I.key],
       'Settings', ['company', '/console/company', 'Company', I.company], ['brand', '/console/brand', 'Brand', I.brand], ['label-panel', '/console/label-panel', 'Label panel', I.product], ['ads', '/console/ads', 'Ads and prices', I.ads], ['ratings', '/console/ratings', 'Ad ratings', I.line], ['benchmarks', '/console/benchmarks', 'Benchmarks', I.line], ['codes', '/console/codes', 'QR codes and AR', I.qr], ['products', '/console/products', 'Products', I.product],
-      ['giving', '/console/giving', 'Giving', I.giving], ['game', '/console/game', 'Prize game', I.game], ['transparency', '/console/transparency', 'Transparency', I.eye], ['data', '/console/data', 'Data and privacy', I.shield], ['numberline', '/console/numberline', 'Number line', I.line], ['agents', '/console/agents', 'AI agents', I.ai], ['security', '/console/security', 'Security', I.shield], ['modules', '/console/modules', 'Modules', I.modules], ['machines', '/console/machines', 'Machines', I.machine], ['team', '/console/team', 'Team', I.team], ['history', '/console/history', 'History', I.history],
+      ['giving', '/console/giving', 'Giving', I.giving], ['game', '/console/game', 'Prize game', I.game], ['transparency', '/console/transparency', 'Transparency', I.eye], ['data', '/console/data', 'Data and privacy', I.shield], ['households', '/console/households', 'Household data', I.shield], ['numberline', '/console/numberline', 'Number line', I.line], ['agents', '/console/agents', 'AI agents', I.ai], ['security', '/console/security', 'Security', I.shield], ['modules', '/console/modules', 'Modules', I.modules], ['machines', '/console/machines', 'Machines', I.machine], ['team', '/console/team', 'Team', I.team], ['history', '/console/history', 'History', I.history],
       'Developers', ['keys', '/console/keys', 'API keys', I.key], ['webhooks', '/console/webhooks', 'Webhooks', I.hook], ['docs', '/developers', 'Docs', I.docs],
       ...(S.ov?.config?.id === 'freewater' ? ['FreeWater team', ['given', '/console/given', 'Bottles given & receipts', I.box]] : []),
       ...(S.ov?.you?.platform ? ['Platform', ['licensees', '/console/licensees', 'Licensees', I.licensees]] : []),
@@ -1074,18 +1074,53 @@
     save.onclick = async () => { try { await api('POST', '/v1/benchmarks/settings', { minAds: Number(minAds.value), minAdvertisers: Number(minAdv.value), ...(why.value.trim() ? { reason: why.value.trim() } : {}) }); toast('Saved.'); render(); } catch (x) { toast(x.message); } };
     shell('benchmarks', head('Benchmarks', B.method),
       h('div', { class: 'notice', text: `Benchmarks are guidance, not a guarantee. ${B.promise}` }),
+      B.demo ? h('div', { class: 'notice warn demo-data', text: B.demo.note }) : null,
       B.contributes ? null : h('div', { class: 'notice', text: 'Your company doesn’t contribute its ads’ results to the network’s benchmarks, so you see only your own. Turn on “Contribute to the network’s benchmarks” on the Features page (Data & targeting) to join.' }),
       horizonLinks('/console/benchmarks', horizon),
       ...DIMS.map(([d, title]) => {
         const gs = B.groups.filter((g) => g.dimension === d);
         return gs.length ? section(title, null, h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['', 'Yours', 'The network'].map((x) => h('th', { text: x })))),
           h('tbody', {}, gs.map((g) => h('tr', {}, h('td', { text: g.label }), h('td', { text: figs(g.yours) }),
-            h('td', { class: g.network?.shown ? '' : 'muted', text: !g.network ? '—' : g.network.shown ? `${figs(g.network)} (about ${g.network.advertisers} advertisers, ${g.network.period})` : g.network.why }))))))) : null;
+            h('td', { class: g.network?.shown ? '' : 'muted', text: !g.network ? '—' : g.network.shown ? `${figs(g.network)} (about ${g.network.advertisers} advertisers, ${g.network.period}${g.network.demo ? ', demo data' : ''})` : g.network.why }))))))) : null;
       }),
       section('History', 'The network, month by month: ads first printed that month, their first 30 days (with noise, rounded; small groups held back).', B.history.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Month', 'Group', 'Ads', 'Scan rate', 'Sales per bottle'].map((x) => h('th', { text: x })))),
-        h('tbody', {}, B.history.slice(0, 120).map((r) => h('tr', {}, h('td', { text: r.period }), h('td', { text: `${r.dimension.replace(/_/g, ' ')}: ${r.label}` }), h('td', { text: String(r.ads) }), h('td', { text: pct(r.scanRate) }), h('td', { text: pct(r.conversionRate) })))))) : h('p', { class: 'muted', style: 'margin:0', text: 'Nothing settled yet.' })),
+        h('tbody', {}, B.history.slice(0, 120).map((r) => h('tr', {}, h('td', { text: r.demo ? `${r.period} (demo data)` : r.period }), h('td', { text: `${r.dimension.replace(/_/g, ' ')}: ${r.label}` }), h('td', { text: String(r.ads) }), h('td', { text: pct(r.scanRate) }), h('td', { text: pct(r.conversionRate) })))))) : h('p', { class: 'muted', style: 'margin:0', text: 'Nothing settled yet.' })),
       section('When an average is shown', `At least this many ads from this many advertisers (never under ${B.floors.minAds} and ${B.floors.minAdvertisers}), no advertiser with more than half of them, and enough without any one company’s ads. Anyone on the team can raise these; lowering them is an owner’s, with a reason.`,
         h('div', { class: 'form' }, field('Ads needed', minAds), field('Advertisers needed', minAdv), field('Why', why, { full: true })), h('div', { class: 'toolbar' }, save)));
+  }
+
+  // ---------- household data (Data & targeting; src/modules/households; docs/COMPLIANCE.md, "Household data") ----------
+  // Totals only: the area statistics and their source, each import and what it refused, what's held by source and kind,
+  // and how many houses said no. Never a house or what was bought about one. Deleting a source works even switched off.
+  async function householdsPage() {
+    const D = await api('GET', '/v1/households/summary');
+    const sw = D.switches;
+    const state = (x) => chip(x ? 'On' : 'Off', x ? 'ok' : 'warn');
+    const n = (x) => Number(x || 0).toLocaleString();
+    const REFUSED = { sensitive: 'sensitive', unknown_attribute: 'not on the list', bad_value: 'bad value', no_address: 'no address', house_said_no: 'house said no' };
+    const drop = async (source) => {
+      if (!window.confirm(`Delete everything ${source} gave you? This can’t be undone.`)) return;
+      try { const r = await api('DELETE', `/v1/households/sources/${encodeURIComponent(source)}`); toast(`Deleted ${plural(n(r.deleted), 'fact', 'facts')} from ${source}.`); render(); } catch (x) { toast(x.message); }
+    };
+    shell('households', head('Household data', 'Data & targeting: what may be used to choose ads for houses that haven’t signed up, in totals.'),
+      h('div', { class: 'notice' }, ...D.explanation.map((t) => h('p', { style: 'margin:0 0 6px', text: t }))),
+      section('Switches', 'Changed on the Features page (Data & targeting). Off, that kind of data is never used or taken in; deleting it always works.',
+        h('ul', { style: 'list-style:none;padding:0;margin:0;line-height:2' },
+          h('li', {}, state(sw.houseTargeting), ' Ads aimed at houses'), h('li', {}, state(sw.areaData), ' Area statistics'), h('li', {}, state(sw.householdData), ' Bought household data'))),
+      section('Area statistics', D.areas.total ? `${plural(n(D.areas.total), 'area', 'areas')}: ${n(D.areas.real)} real, ${n(D.areas.sample)} sample (sample figures are made up, to show how it works, and say so).` : 'No area statistics yet.',
+        D.areas.sources.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Source', 'Real or sample', 'Kind', 'Areas', 'Dated'].map((x) => h('th', { text: x })))),
+          h('tbody', {}, D.areas.sources.map((a) => h('tr', {}, h('td', { text: a.source }), h('td', {}, chip(a.sample ? 'Sample' : 'Real', a.sample ? 'warn' : 'ok')), h('td', { text: a.kind.replace(/_/g, ' ') }), h('td', { text: n(a.areas) }), h('td', { text: a.oldest === a.newest ? a.oldest : `${a.oldest} to ${a.newest}` })))))) : null),
+      section('Bought data by source', `${plural(n(D.bought.facts), 'fact', 'facts')} about ${plural(n(D.bought.houses), 'house', 'houses')}. Each is deleted ${plural(D.bought.keepDays, 'day', 'days')} after its import. Deleting a source deletes everything it gave you, at once.`,
+        D.bought.sources.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Source', 'Bought or yours', 'Houses', 'Facts', 'Data dated', ''].map((x) => h('th', { text: x })))),
+          h('tbody', {}, D.bought.sources.map((x) => h('tr', {}, h('td', { text: x.source }), h('td', { text: x.origin === 'first_party' ? 'Your own survey' : 'Bought' }), h('td', { text: n(x.houses) }), h('td', { text: n(x.facts) }), h('td', { text: x.oldest ? (x.oldest === x.newest ? x.oldest : `${x.oldest} to ${x.newest}`) : '—' }),
+            h('td', {}, h('button', { class: 'btn secondary small', type: 'button', onclick: () => drop(x.source) }, 'Delete this source'))))))) : h('p', { class: 'muted', style: 'margin:0', text: 'None held.' }),
+        D.bought.byAttribute.length ? h('p', { class: 'muted', style: 'margin:8px 0 0', text: `Houses with each kind of fact: ${D.bought.byAttribute.map((a) => `${a.attribute.replace(/_/g, ' ')} ${n(a.houses)}`).join(' · ')}.` }) : null),
+      section('Imports', 'Each import, newest first: what was kept and what was refused, and why. Sensitive kinds are refused by rule and never kept.',
+        D.imports.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Imported', 'Source', 'Data dated', 'Kept', 'Refused', 'Of them sensitive', 'Still held'].map((x) => h('th', { text: x })))),
+          h('tbody', {}, D.imports.map((i) => h('tr', {}, h('td', { text: when(i.importedAt) }), h('td', { text: i.source }), h('td', { text: i.sourceDate }), h('td', { text: n(i.kept) }),
+            h('td', { text: i.refusedBy ? `${n(i.refused)}${i.refused ? ` (${Object.entries(i.refusedBy).map(([k, v]) => `${REFUSED[k] ?? k} ${n(v)}`).join(', ')})` : ''}` : n(i.refused) }),
+            h('td', { text: i.sensitiveRefused == null ? 'not recorded' : n(i.sensitiveRefused) }), h('td', { text: n(i.stillHeld) })))))) : h('p', { class: 'muted', style: 'margin:0', text: 'No imports yet. Household data is imported through the API by a person on the team (docs/COMPLIANCE.md, “Household data”).' })),
+      section('Houses that said no', `${plural(n(D.optOuts), 'house has', 'houses have')} said “don’t use my home”. Nothing about them is used, their bought data was deleted, and later imports skip them. Anyone can say no without an account.`));
   }
 
   async function numberLinePage() {
@@ -1351,6 +1386,8 @@
               r.byReason.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['What it said', 'Decided by your team', 'Agreed'].map((x) => h('th', { text: x })))),
                 h('tbody', {}, r.byReason.map((x) => h('tr', {}, h('td', { text: x.category === 'none' ? 'Passed it' : `Flagged: ${x.label}` }), h('td', { text: String(x.decisions) }), h('td', { text: `${x.agreed} (${pct(Math.floor((x.agreed * 1000) / Math.max(1, x.decisions)) / 10)})` }))))))
                 : h('p', { class: 'hint', text: 'No decisions yet. Every time a person on your team approves or rejects a paid ad it looked at, it goes here.' }),
+              // With no AI, the built-in rules give a verdict instead: kept against your decisions too, apart from the AI's record.
+              r.builtIn ? h('p', { class: 'hint', text: `${r.builtIn.label}: ${r.builtIn.summary} False flags ${r.builtIn.falseFlags}, missed ${r.builtIn.missed}. Never part of the AI’s record.` }) : '',
               h('p', { style: 'margin:8px 0 4px' }, h('b', { text: `AI makes the final call on paid ads: ${fc.on ? 'on' : 'off'}` }), fc.switchedOn && !fc.on ? ' (switched on, but something it needs is off)' : ''),
               h('p', { class: 'hint', text: fc.on
                 ? 'Its rejections are final without a person, with its reason. The advertiser can always appeal to a person; a sample of its rejections comes to your team to audit; an AI pass still waits for a person; paying back a rejected ad is still an owner’s or finance person’s step.'
