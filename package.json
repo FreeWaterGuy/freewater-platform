@@ -46,7 +46,7 @@
   "dependencies": {
     "@electric-sql/pglite": "^0.2.12",
     "@google/model-viewer": "^3.5.0",
-    "@solana/web3.js": "^1.98.4",
+    "@solana/web3.js": "^3.1.0",
     "ajv": "^8.20.0",
     "esbuild": "^0.25.12",
     "fastify": "^5.12.7",
