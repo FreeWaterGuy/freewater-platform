@@ -213,3 +213,8 @@ pre.code .c { color: #8A96A0; }
 .unsold-order li .grow, .unsold-picks li .grow { flex: 1; min-width: 0; }
 .unsold-order { counter-reset: u; }
 .unsold-order li::before { counter-increment: u; content: counter(u) "."; font-weight: 700; }
+
+/* The sidebar in the company's own colours (console.js sets them from its brand). */
+.side { background: var(--brand-panel, var(--black)); color: var(--brand-text, #fff); }
+.side .logo span:nth-child(2) { color: var(--brand-accent, var(--blue)); }
+.side nav a, .side .logo small { color: var(--brand-text, #fff); }

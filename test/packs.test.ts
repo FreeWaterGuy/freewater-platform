@@ -105,7 +105,7 @@ describe('packs', () => {
 
     const wrong = s.packs.deliver({ routeId: 'route-3', stop: 14, scannedPackId: p15.id, atAddress: true, photoProof: true, emptiesCollected: 0 });
     expect(wrong.ok).toBe(false);
-    expect(!wrong.ok && wrong.reason).toMatch(/Wrong box.*stop 15, 1310 Kenwood Ave.*R3 · 14/);
+    expect(!wrong.ok && wrong.reason).toMatch(/^That box is for stop 15, 1310 Kenwood Ave.*R3 · 14/);
     expect(p14.status).toBe('loaded');
 
     const away = s.packs.deliver({ routeId: 'route-3', stop: 14, scannedPackId: p14.id, atAddress: false, photoProof: true, emptiesCollected: 0 });

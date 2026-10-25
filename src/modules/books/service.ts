@@ -8,6 +8,7 @@ import type { PayoutProvider } from '../../adapters/payouts/contract';
 import type { PackService } from '../packs/service';
 import { withCharityLock } from './charityLock';
 import { bottleCostLines, distributedBy, printedFresh, publicPlace } from './bottleReceipt';
+import { bottleCodeOf, normalizeBottleCode } from '../print/bottleCode';
 
 export class BooksError extends Error {
   constructor(public status: number, public code: string, message: string) {
@@ -175,7 +176,7 @@ export class BooksService {
     const t = (await this.db.query<any>(`select t.*, c.name as charity_name, c.payout_label, c.email as charity_email from charity_transfers t join charities c on c.id = t.charity_id where t.id = $1 and t.status = 'sending'`, [id])).rows[0];
     if (!t) return this.transfer(id);
     const amountCents = n(t.amount_cents);
-    const r = await this.payouts.send({ charityName: t.charity_name, payoutLabel: t.payout_label, amountCents, reference: `FreeWater ${t.number}`, idempotencyKey: `${companyId}:${id}` });
+    const r = await this.payouts.send({ charityName: t.charity_name, payoutLabel: t.payout_label, amountCents, reference: `${company(this.platform, companyId).slice(0, 24)} ${t.number}`, idempotencyKey: `${companyId}:${id}` });
     const token = randomBytes(18).toString('base64url');
     // Sent: its line goes in the books first, and is stored, before the transfer is marked sent. A crash in between
     // leaves it 'sending' with its line already counted, and the next run asks the bank again with the same key (the
@@ -378,7 +379,17 @@ export class BooksService {
   }
 
   /** Everything about one bottle: what it earned, what it cost, what it gave, and the transfer that sent it. */
-  async bottle(unitId: string) {
+  /**
+   * One bottle's receipt, by its id (the receipt link) or by the bottle code printed under its QR ("B-7F3K29", typed
+   * any way normalizeBottleCode reads it; in `companyId` when given, else the one company that has it).
+   */
+  async bottle(idOrCode: string, companyId?: string) {
+    let unitId = idOrCode;
+    const typed = this.platform.units.has(idOrCode) ? null : normalizeBottleCode(idOrCode);
+    if (typed) {
+      const hits = (await this.db.query<{ unit_id: string }>(`select unit_id from bottle_codes where code = $1${companyId ? ' and company_id = $2' : ''} limit 2`, companyId ? [typed, companyId] : [typed])).rows;
+      if (hits.length === 1) unitId = hits[0]!.unit_id;
+    }
     const u = this.platform.units.get(unitId);
     if (!u || (u.status !== 'dispensed' && u.status !== 'printed')) throw new BooksError(404, 'not_found', 'No bottle has that code.');
     const company = this.company(u.companyId, true);
@@ -401,8 +412,10 @@ export class BooksService {
       if (t) transfer = await this.transfer(t.id);
     }
     const ads = u.placements.filter((p) => !p.isHouse);
+    // What's printed under its QR, the code a person reads and types (never the internal id: that's for the link).
+    const printed = (await this.db.query<{ code: string }>(`select code from bottle_codes where unit_id = $1`, [unitId])).rows[0]?.code ?? bottleCodeOf(unitId);
     return {
-      unitId, company: company.name, companyId: company.id, printedAt: u.createdAt, place: publicPlace(loc, u.locationId), printedFresh: printedFresh(u, loc), distributedBy: distributedBy(u, loc), kind: u.kind,
+      unitId, bottleCode: printed, company: company.name, companyId: company.id, printedAt: u.createdAt, place: publicPlace(loc, u.locationId), printedFresh: printedFresh(u, loc), distributedBy: distributedBy(u, loc), kind: u.kind,
       ads: ads.length, earned: receipt.earned, earnedLines: receipt.lines.filter((l) => l.kind !== 'donation').map((l) => ({ kind: l.kind, memo: l.memo, amountCents: l.amountCents, at: l.at.toISOString() })),
       standardCosts: company.unitCosts ?? null, costLines: bottleCostLines(company, distributedBy(u, loc)), giving: donation && to.length ? { cents: to.reduce((a, [, c]) => a + c, 0), charity: to.map(([k]) => k).join(' & '), transfer } : null, givingOn: company.giving.mode !== 'none',
     };
@@ -476,7 +489,7 @@ export class BooksService {
   }
 }
 
-function company(p: Platform, id: string) { return p.companies.get(id)?.name ?? 'FreeWater'; }
+function company(p: Platform, id: string) { return p.companies.get(id)?.name ?? id; }
 export function describeGiving(c: CompanyConfig) {
   const g = c.giving;
   if (g.mode === 'per_unit') return `${g.centsPerUnit}¢ from every bottle`;

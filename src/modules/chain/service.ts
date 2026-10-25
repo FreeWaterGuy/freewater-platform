@@ -1,3 +1,4 @@
+import { pauseSettings, stopsOf, type PauseArea, type PauseScope, type PauseStopsWhat } from './pause';
 import type { SqlClient } from '../../db/client';
 import type { Platform } from '../../platform';
 import type { WalletService } from '../wallet/service';
@@ -21,8 +22,10 @@ export class ChainError extends Error { constructor(public code: string, message
 export { defaultChain, checkChain, type ChainSettings } from './settings';
 import { defaultChain, type ChainSettings } from './settings';
 
-export type ActionKind = 'mint' | 'unpause' | 'switch_on' | 'go_live_points' | 'go_live_token' | 'convert' | 'withdrawals_on' | 'exchanges_on';
-const IRREVERSIBLE: ActionKind[] = ['mint', 'unpause', 'switch_on', 'go_live_points', 'go_live_token', 'convert', 'withdrawals_on', 'exchanges_on'];
+export type ActionKind = 'mint' | 'unpause' | 'unpause_printing' | 'switch_on' | 'go_live_points' | 'go_live_token' | 'convert' | 'withdrawals_on' | 'exchanges_on';
+const IRREVERSIBLE: ActionKind[] = ['mint', 'unpause', 'unpause_printing', 'switch_on', 'go_live_points', 'go_live_token', 'convert', 'withdrawals_on', 'exchanges_on'];
+/** The steps that end pauses: everything, or printing only (src/modules/chain/pause.ts). */
+const UNPAUSES = new Set<string>(['unpause', 'unpause_printing']);
 
 export class ChainService {
   constructor(private db: SqlClient, private platform: Platform, private wallet: WalletService, private publishers: AnchorPublisher[] = [], private clock: () => Date = () => new Date()) {}
@@ -43,6 +46,21 @@ export class ChainService {
   alert?: (companyId: string, message: string) => void;
 
   settings(companyId: string): ChainSettings { return { ...defaultChain, ...(this.platform.companies.get(companyId)?.chain ?? {}) }; }
+  /**
+   * How many other people approve this kind of step, and the wait. Unpausing follows the company's Pause settings
+   * (src/modules/chain/pause.ts); with the chain switched on, unpausing everything also keeps the chain's own rules,
+   * whichever is stricter. Starting printing again has its own, quicker rule. Everything else: the chain's rules.
+   */
+  rulesFor(kind: string, companyId: string): { approvalsNeeded: number; delayHours: number } {
+    const s = this.settings(companyId);
+    if (kind === 'go_live_points') return { approvalsNeeded: 0, delayHours: 24 };
+    if (kind === 'unpause_printing') { const r = pauseSettings(this.platform.companies.get(companyId)).printingUnpause; return { approvalsNeeded: r.approvals, delayHours: r.waitHours }; }
+    if (kind === 'unpause') {
+      const r = pauseSettings(this.platform.companies.get(companyId)).unpause;
+      return s.enabled ? { approvalsNeeded: Math.max(r.approvals, s.approvalsNeeded), delayHours: Math.max(r.waitHours, s.delayHours) } : { approvalsNeeded: r.approvals, delayHours: r.waitHours };
+    }
+    return { approvalsNeeded: s.approvalsNeeded, delayHours: s.delayHours };
+  }
   private now() { return this.clock().toISOString(); }
 
   // ---------- seals ----------
@@ -145,15 +163,15 @@ export class ChainService {
     if (kind === 'mint' && stage === 'points') throw new ChainError('wrong_stage', 'Minting waits for going live with the token.', 409);
     if (kind === 'convert' && (await this.db.query(`select 1 from chain_actions where company_id = $1 and kind = 'convert' and status in ('proposed','approved','running','signing','confirming','recording')`, [companyId])).rows.length) throw new ChainError('one_at_a_time', 'A conversion is already under way.', 409);
     if ((kind === 'convert' || kind === 'withdrawals_on') && stage !== 'token') throw new ChainError('wrong_stage', 'This comes after going live with the token.', 409);
+    if (kind === 'unpause_printing' && !(await this.stopped(companyId, 'printing'))) throw new ChainError('not_paused', 'Printing isn’t paused.', 409);
     if (this.isMember && !(await this.isMember(companyId, person, this.clock()))) throw new ChainError('not_member', 'Only owners and finance people on the team can propose this.', 403);
     const id = newId('ca');
     // The rules as they are now are kept with the action: changing settings later can't weaken it.
     const s = this.settings(companyId);
-    const needed = kind === 'go_live_points' ? 0 : s.approvalsNeeded;
-    const delay = kind === 'go_live_points' ? 24 : s.delayHours;
+    const { approvalsNeeded: needed, delayHours: delay } = this.rulesFor(kind, companyId);
     // Two conversions proposed at the same moment both pass the check above; the database keeps one (053).
     await this.db.query(`insert into chain_actions (id, company_id, kind, params, proposed_by, approvals, needed, status, created_at, rules, not_before) values ($1,$2,$3,$4,$5,'[]',$6,$7,$8,$9,$10)`,
-      [id, companyId, kind, JSON.stringify(params), person, needed, needed === 0 ? 'approved' : 'proposed', this.now(), JSON.stringify({ ...s, delayHours: delay }), needed === 0 ? new Date(this.clock().getTime() + delay * 3600_000).toISOString() : null])
+      [id, companyId, kind, JSON.stringify(params), person, needed, needed === 0 ? 'approved' : 'proposed', this.now(), JSON.stringify({ ...s, approvalsNeeded: needed, delayHours: delay }), needed === 0 ? new Date(this.clock().getTime() + delay * 3600_000).toISOString() : null])
       .catch((e: any) => { throw e?.code === '23505' && kind === 'convert' ? new ChainError('one_at_a_time', 'A conversion is already under way.', 409) : e; });
     this.alert?.(companyId, `${person} proposed: ${kind} ${JSON.stringify(params)}. ${needed ? `It needs ${needed} other people to approve, then` : 'It runs after'} a ${delay}-hour wait.`);
     return this.action(companyId, id);
@@ -164,7 +182,7 @@ export class ChainService {
     const proposed = (await this.db.query<any>(`select created_at from chain_actions where id = $1 and company_id = $2`, [id, companyId])).rows[0];
     if (!proposed) throw new ChainError('not_found', 'No such action.', 404);
     if (this.isMember && !(await this.isMember(companyId, person, new Date(proposed.created_at)))) throw new ChainError('not_member', 'Only owners and finance people who held that role when this was proposed can approve it.', 403);
-    return this.db.transaction(async (tx) => {
+    const out = await this.db.transaction(async (tx) => {
       const a = (await tx.query<any>(`select * from chain_actions where id = $1 and company_id = $2 for update`, [id, companyId])).rows[0];
       if (!a) throw new ChainError('not_found', 'No such action.', 404);
       if (a.status !== 'proposed') throw new ChainError('not_open', 'This isn’t waiting for approvals.', 409);
@@ -174,11 +192,19 @@ export class ChainService {
       approvals.push({ by: person, at: this.now() });
       const ready = approvals.length >= a.needed;
       const rules: ChainSettings = { ...defaultChain, ...(typeof a.rules === 'string' ? JSON.parse(a.rules) : a.rules ?? {}) };
-      const delay = Math.max(rules.delayHours, this.settings(companyId).delayHours);
+      // The wait kept with it, or the company's own if that's longer now (a later, stricter setting applies too).
+      const delay = Math.max(rules.delayHours, this.rulesFor(a.kind, companyId).delayHours);
       await tx.query(`update chain_actions set approvals = $2, status = $3, not_before = $4 where id = $1`, [id, JSON.stringify(approvals), ready ? 'approved' : 'proposed', ready ? new Date(this.clock().getTime() + delay * 3600_000).toISOString() : null]);
       this.alert?.(companyId, `${person} approved ${a.kind} (${approvals.length} of ${a.needed}).${ready ? ` It can run after ${delay} hours.` : ''}`);
-      return { approvals: approvals.length, needed: a.needed, ready };
+      return { approvals: approvals.length, needed: a.needed, ready, kind: a.kind as string, delay };
     });
+    // The quick path (Pause settings: no wait to start printing again): the last approval starts printing at once, so a
+    // mistaken pause doesn't hold up a delivery night. Money and tokens never come back this way.
+    if (out.ready && out.kind === 'unpause_printing' && out.delay === 0) {
+      const ran = await this.run(companyId, id, person).catch(() => null);
+      return { approvals: out.approvals, needed: out.needed, ready: out.ready, ...(ran ? { ran: ran.status } : {}) };
+    }
+    return { approvals: out.approvals, needed: out.needed, ready: out.ready };
   }
   async cancel(companyId: string, id: string, person: string) {
     // A mint waiting for signatures in Squads may already be signed there: it can't be cancelled here for a week from
@@ -203,7 +229,7 @@ export class ChainService {
     if (a.status === 'recording') return this.finishRecording(companyId, a, person);
     if (a.status !== 'approved') throw new ChainError('not_approved', 'This hasn’t been approved by enough people.', 409);
     // 3: an unpause proposed before the latest pause can't undo it (that pause may be about something it never saw).
-    if (a.kind === 'unpause' && (await this.pausedSince(companyId, a.created_at))) {
+    if (UNPAUSES.has(a.kind) && (await this.pausedSince(companyId, a.created_at))) {
       await this.db.query(`update chain_actions set status = 'cancelled', cancelled_by = 'a later pause' where id = $1 and status = 'approved'`, [id]);
       throw new ChainError('paused_after', 'Everything was paused again after this unpause was proposed. Propose a new one.', 409);
     }
@@ -216,7 +242,7 @@ export class ChainService {
     const st = this.stage(companyId);
     if ((a.kind === 'go_live_points' && st !== 'test') || (a.kind === 'go_live_token' && st !== 'points') || (a.kind === 'convert' && st !== 'token') || (a.kind === 'mint' && st === 'points')) throw new ChainError('wrong_stage', 'This doesn’t fit where the company is now.', 409);
     if (onChain && !s.enabled) throw new ChainError('switched_off', 'The chain is switched off.', 403);
-    if (a.kind !== 'unpause' && onChain && (await this.isPaused(companyId))) throw new ChainError('paused', 'Everything is paused.', 423);
+    if (onChain && (await this.isPaused(companyId))) throw new ChainError('paused', 'Everything is paused.', 423);
     const runAt = this.now();
     const took = await this.db.query(`update chain_actions set status = 'running', running_at = $2 where id = $1 and status = 'approved'`, [id, runAt]);
     if (!Number(took.rowCount ?? 0)) throw new ChainError('not_approved', 'Already running.', 409);
@@ -257,6 +283,7 @@ export class ChainService {
         } else ref = a.ref;
         await this.finishMint(companyId, id, plan, ref);
       } else if (a.kind === 'unpause') ref = (await chain.setPaused(false)).ref;
+      else if (a.kind === 'unpause_printing') ref = 'printing';
       else if (a.kind === 'switch_on' || a.kind === 'go_live_points' || a.kind === 'go_live_token' || a.kind === 'withdrawals_on' || a.kind === 'exchanges_on') {
         if (!this.turnOn) throw new Error('Settings can’t be changed from here.');
         // Going live starts clean: everything from testing is wiped first, so no test record ever reaches real people.
@@ -363,24 +390,57 @@ export class ChainService {
       await this.wallet.recordMint(companyId, x.subject, x.tokens, `${id}:${x.subject}`, ref);
     }
   }
-  /** The pause switch: any one person, at once, no wait. Unpausing needs the full approval and wait. */
-  async pause(companyId: string, person: string, reason: string) {
-    const ref = await this.chainFor(companyId).setPaused(true).then((r) => r.ref).catch(() => 'not on chain');
-    await this.db.query(`insert into chain_actions (id, company_id, kind, params, proposed_by, approvals, needed, status, created_at, ran_by, ran_at, ref) values ($1,$2,'pause',$3,$4,'[]',1,'done',$5,$4,$5,$6)`, [newId('ca'), companyId, JSON.stringify({ reason: reason.slice(0, 300) }), person, this.now(), ref]);
+  /**
+   * The pause switch: one person, at once, no wait. Unpausing needs approvals and the wait. `scope` 'chain' (the
+   * Blockchain page, the daily check) stops token actions; 'all' (the Pause page, src/modules/chain/pause.ts) is the
+   * company's emergency stop, stopping what `stops` says (by default the company's Pause settings: money, token actions
+   * and printing).
+   */
+  async pause(companyId: string, person: string, reason: string, scope: PauseScope = 'chain', stops?: PauseStopsWhat) {
+    const what = scope === 'all' ? (stops ?? pauseSettings(this.platform.companies.get(companyId)).stops) : stopsOf({ scope });
+    const ref = what.tokens ? await this.chainFor(companyId).setPaused(true).then((r) => r.ref).catch(() => 'not on chain') : 'not on chain';
+    await this.db.query(`insert into chain_actions (id, company_id, kind, params, proposed_by, approvals, needed, status, created_at, ran_by, ran_at, ref) values ($1,$2,'pause',$3,$4,'[]',1,'done',$5,$4,$5,$6)`, [newId('ca'), companyId, JSON.stringify({ reason: reason.slice(0, 300), scope, ...(scope === 'all' ? { stops: what } : {}) }), person, this.now(), ref]);
     // Any unpause already on its way was about an earlier pause: a new pause cancels it (unpausing now needs a new one).
-    await this.db.query(`update chain_actions set status = 'cancelled', cancelled_by = $2 where company_id = $1 and kind = 'unpause' and status in ('proposed','approved')`, [companyId, `pause by ${person}`]);
-    this.alert?.(companyId, `Chain paused by ${person}: ${reason}`);
-    return { paused: true, ref };
+    await this.db.query(`update chain_actions set status = 'cancelled', cancelled_by = $2 where company_id = $1 and kind in ('unpause','unpause_printing') and status in ('proposed','approved')`, [companyId, `pause by ${person}`]);
+    const words = scope === 'all' ? (['money', 'tokens', 'printing'] as PauseArea[]).filter((x) => what[x]).map((x) => (x === 'tokens' ? 'token actions' : x)).join(', ') : 'token actions';
+    this.alert?.(companyId, `${scope === 'all' ? 'Paused' : 'Chain paused'} (${words}) by ${person}: ${reason}`);
+    return { paused: true, scope, stops: what, ref };
+  }
+  /**
+   * The pauses in force (every pause since the last unpause that ran), newest first, each with what it still stops: a
+   * printing-only unpause that ran after it means it no longer stops printing. Read from the books each time, so a
+   * restart can't lose one (P6).
+   */
+  async pausesInForce(companyId: string) {
+    const rows = (await this.db.query<any>(`select kind, params, ran_by, ran_at from chain_actions where company_id = $1 and kind in ('pause','unpause','unpause_printing') and status = 'done' order by ran_at desc, created_at desc limit 200`, [companyId])).rows;
+    const out: { scope: PauseScope; stops: PauseStopsWhat; reason: string; by: string; at: string }[] = [];
+    let printingBack = false;
+    for (const r of rows) {
+      if (r.kind === 'unpause') break;
+      if (r.kind === 'unpause_printing') { printingBack = true; continue; }
+      const p = typeof r.params === 'string' ? JSON.parse(r.params) : r.params ?? {};
+      const stops = stopsOf(p);
+      if (printingBack) stops.printing = false;
+      out.push({ scope: p.scope === 'all' ? 'all' : 'chain', stops, reason: p.reason ?? '', by: r.ran_by, at: new Date(r.ran_at).toISOString() });
+    }
+    return out;
+  }
+  /** What the pauses in force stop, together. */
+  async stoppedNow(companyId: string): Promise<PauseStopsWhat> {
+    const all = await this.pausesInForce(companyId);
+    return { money: all.some((p) => p.stops.money), tokens: all.some((p) => p.stops.tokens), printing: all.some((p) => p.stops.printing) };
+  }
+  /** Is this stopped by a pause in force? With no area: is the company's emergency stop (the Pause page) on at all. */
+  async stopped(companyId: string, area?: PauseArea) {
+    const all = await this.pausesInForce(companyId);
+    return area ? all.some((p) => p.stops[area]) : all.some((p) => p.scope === 'all' && (p.stops.money || p.stops.tokens || p.stops.printing));
   }
   /** Was there a pause at or after this time? */
   private async pausedSince(companyId: string, at: string | Date) {
     return (await this.db.query(`select 1 from chain_actions where company_id = $1 and kind = 'pause' and created_at >= $2 limit 1`, [companyId, new Date(at).toISOString()])).rows.length > 0;
   }
-  /** Paused if the latest pause came after the latest unpause that ran. Kept here, so a restart can't lose it. */
-  async isPaused(companyId: string) {
-    const r = (await this.db.query<any>(`select kind from chain_actions where company_id = $1 and kind in ('pause','unpause') and status = 'done' order by ran_at desc limit 1`, [companyId])).rows[0];
-    return r?.kind === 'pause';
-  }
+  /** Token actions are paused: a pause in force stops them. Kept in the books, so a restart can't lose it. */
+  async isPaused(companyId: string) { return this.stopped(companyId, 'tokens'); }
   async action(companyId: string, id: string) {
     const a = (await this.db.query<any>(`select * from chain_actions where id = $1 and company_id = $2`, [id, companyId])).rows[0];
     if (!a) throw new ChainError('not_found', 'No such action.', 404);

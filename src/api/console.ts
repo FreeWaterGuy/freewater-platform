@@ -2,8 +2,10 @@ import type { App } from '../app';
 import { createApiKey, revokeApiKey, scopeInfo, type ApiKey, type Scope } from '../db/store';
 import { publicEvents, testEvent } from '../modules/webhooks/catalog';
 import { ApiError, obj, S, signedInOwner, type RouteDef, Q } from './http';
-import { personOnlyKeys } from '../modules/console/settings';
-import { approvalSettings, approverStepProblem } from '../modules/accounts/secondStep';
+import { applyChange, describeChange, personOnlyKeys } from '../modules/console/settings';
+import { securityWeakened } from '../runtime/registry';
+import { approvalSettings, approverStepProblem, ownerSetupDue } from '../modules/accounts/secondStep';
+import { TeamScreens } from '../modules/ops/teamScreens';
 
 /**
  * The white-label console and the developer side: a company's settings and their history, machines, the team,
@@ -23,18 +25,33 @@ export function consoleRoutes(app: App, route: (r: RouteDef) => void) {
     return { body: { ...(await cons.overview(key!.companyId)), you: await (async () => {
       const ss = key!.userId ? await app.secondStep.status(key!.userId) : null;
       const u = key!.userId ? await app.accounts.get(key!.userId) : null;
-      const must = !!(u?.role === 'owner' && app.platform.companies.get(key!.companyId)?.security?.ownersNeedSecondStep && !ss?.enabled);
-      return { name: key!.name, platform: key!.scopes.includes('platform'), person: !!key!.userId, ...(ss ? { secondStep: ss } : {}), ...(u ? { role: u.role } : {}), mustSetUpSecondStep: must };
+      // Required here and no app yet: set up now, or (signed in before it was required) by the end of the grace period.
+      const due = u?.role === 'owner' && !ss?.enabled && key!.sessionToken ? ownerSetupDue(app.platform.companies.get(key!.companyId)?.security, await app.accounts.sessionStartedAt(key!.sessionToken), app.platform.bus.now()) : { must: false, dueBy: null };
+      return { name: key!.name, platform: key!.scopes.includes('platform'), person: !!key!.userId, ...(ss ? { secondStep: ss } : {}), ...(u ? { role: u.role } : {}), mustSetUpSecondStep: due.must, ...(due.dueBy ? { secondStepDueBy: due.dueBy } : {}) };
     })() } };
   } });
-  route({ method: 'PATCH', url: '/v1/console/settings', scope: 'admin', summary: 'Change your settings: brand, product facts, giving, open books, ad rules, prices, modules and more. Send only what changes, and the version you started from.', body: obj({ changes: changesProp, version: S.int, confirmStranded: S.int }, ['changes']), handler: async (req, key) => {
+  route({ method: 'PATCH', url: '/v1/console/settings', scope: 'admin', summary: 'Change your settings: brand, product facts, giving, open books, ad rules, prices, modules and more. Send only what changes, and the version you started from. Turning off a security setting (owners’ second sign-in step) is its own change, by an owner who passed the second step, with a reason.', body: obj({ changes: changesProp, version: S.int, confirmStranded: S.int, reason: { type: 'string', maxLength: 300 } }, ['changes']), handler: async (req, key) => {
     const b = req.body as any;
+    // Weakening security (docs/SWITCHES.md, "Security switches"; the pause stopping less, or undoing it needing fewer
+    // people or a shorter wait): an owner signed in, with the second step, one change on its own, with a reason.
+    const cur = app.platform.companies.get(staff(key).companyId);
+    let next: any = null;
+    try { next = cur ? applyChange(cur, b.changes ?? {}) : null; } catch { /* the save below says what's wrong */ }
+    const weakened = cur && next ? securityWeakened(cur, next) : [];
+    let securityOff: { reason: string } | undefined;
+    if (weakened.length) {
+      const k = signedInOwner(key, `Weakening “${weakened.join('” and “')}”`);
+      if (Object.keys(b.changes ?? {}).some((x) => x !== 'security' && x !== 'pause') || describeChange(cur!, next).length > 1) throw new ApiError(422, 'one_at_a_time', `Change “${weakened.join('” and “')}” on its own, one at a time, not with other changes.`);
+      if (String(b.reason ?? '').trim().length < 10) throw new ApiError(422, 'reason_needed', `Say why you’re weakening “${weakened.join('” and “')}” (at least 10 characters), for the record.`);
+      await approverStep(k);
+      securityOff = { reason: String(b.reason).trim() };
+    }
     // Money, chain and one-way settings are changed by a person signed in, never by a service key.
     if (personOnlyKeys.some((k) => k in (b.changes ?? {})) && !key!.userId) throw new ApiError(403, 'person_needed', 'Money, chain and one-way settings (giving, the agents’ fund, the promise, the youngest age, the prize game, AI and data rules, news on bottles) are changed by a person signed in, not a service key.');
     // Switching money, prizes or the token is an approval: an owner's or finance person's sign-in must have passed the second step.
     if (approvalSettings.some((k) => k in (b.changes ?? {}))) await approverStep(key!);
     // A label-layout change that would strand paid pieces is saved only with their count confirmed (the preview shows it).
-    return { body: await cons.save(staff(key).companyId, b.changes, by(key!), b.version, { person: !!key!.userId, confirmStranded: b.confirmStranded }) };
+    return { body: await cons.save(staff(key).companyId, b.changes, by(key!), b.version, { person: !!key!.userId, confirmStranded: b.confirmStranded, ...(securityOff ? { securityOff, note: { via: 'settings', reason: securityOff.reason } } : {}) }) };
   } });
   // Space nobody bought (src/modules/fillers/unsold.ts): the list, the former advertisers and why each is or isn't
   // used, the picks to choose from, the delivery areas to hold, blank pieces so far. The list itself is saved as the
@@ -54,6 +71,10 @@ export function consoleRoutes(app: App, route: (r: RouteDef) => void) {
     if (b.refused && !String(b.reason ?? '').trim()) throw new ApiError(422, 'reason_needed', 'Say why this advertiser is refused.');
     return { body: await app.unsold.setRefused(k.companyId, id, b.refused, by(k), b.reason?.trim()) };
   } });
+  // The company's own domain for its codes and pages (src/core/site.ts; docs/RUNNING.md). A person signed in sets and checks it.
+  const personOf = (key: ApiKey | null) => { const k = staff(key); if (!k.userId) throw new ApiError(403, 'person_needed', 'Where your codes point is changed by a person signed in, never a service key.'); return k; };
+  route({ method: 'POST', url: '/v1/console/domain', scope: 'admin', summary: 'Use a domain of your own for your codes and pages (empty to stop). It is checked before any code uses it: the answer has the DNS records to add.', body: obj({ host: { type: 'string', maxLength: 120 } }, ['host']), handler: async (req, key) => { const k = personOf(key); return { body: await cons.setDomain(k.companyId, (req.body as any).host, by(k)) }; } });
+  route({ method: 'POST', url: '/v1/console/domain/verify', scope: 'admin', summary: 'Check your domain’s DNS for the check record. Once found, codes printed from then on use your domain.', handler: async (_req, key) => { const k = personOf(key); return { body: await cons.verifyDomain(k.companyId, by(k), app.dnsTxt) }; } });
   route({ method: 'POST', url: '/v1/console/preview-label', scope: 'admin', summary: 'A sample bottle label with these settings, before saving. Problems are listed instead of saving anything.', body: obj({ changes: changesProp }), handler: async (req, key) => ({ body: await cons.previewLabel(staff(key).companyId, (req.body as any).changes ?? {}) }) });
   route({ method: 'GET', url: '/v1/console/history', scope: 'admin', summary: 'Every saved change to your settings, newest first: who, when and what.', handler: async (_req, key) => ({ body: await cons.history(staff(key).companyId) }) });
   route({ method: 'GET', url: '/v1/console/history/:version', params: { version: Q.count }, scope: 'admin', summary: 'Your settings as they were at one version.', handler: async (req, key) => ({ body: await cons.version(staff(key).companyId, Number((req.params as any).version)) }) });
@@ -65,13 +86,14 @@ export function consoleRoutes(app: App, route: (r: RouteDef) => void) {
 
   // ---------- bottle codes ----------
   // The short code at the bottom of each label's panel ("Bottle code: B-7F3K29", print/bottleCode.ts): the team finds
-  // the bottle from it (a customer reading it out, a returned bottle). Only the company's own bottles; nothing personal.
-  route({ method: 'GET', url: '/v1/console/bottles/:code', params: { code: { type: 'string', minLength: 6, maxLength: 12, pattern: '^[A-Za-z0-9 -]+$' } }, scope: 'admin', summary: 'The bottle a printed bottle code belongs to (“B-7F3K29”; case, dashes and O/0, I/1 mix-ups don’t matter).', handler: async (req, key) => {
-    const companyId = staff(key).companyId;
-    const found = await app.codes.findBottle(companyId, (req.params as any).code);
-    const unit = found ? app.platform.units.get(found.unitId) : undefined;
-    if (!found) throw new ApiError(404, 'not_found', 'No bottle of yours has that code.');
-    return { body: { code: found.code, unitId: found.unitId, ...(unit ? { status: unit.status, productId: unit.productId, locationId: unit.locationId, createdAt: unit.createdAt } : {}) } };
+  // the bottle from it (a customer reading it out, a returned bottle, a bad label at the packing check), as printed or
+  // as typed (case, the "B-", dashes and O/0, I/1 mix-ups don't matter), or by its long id. Owners and ops (a driver
+  // or an advertiser can't). Only the company's own bottles; nothing personal beyond the address its box went to.
+  const screens = new TeamScreens(app.db, app.platform, app.packs, app.delivery);
+  route({ method: 'GET', url: '/v1/console/bottles/:code', params: { code: { type: 'string', minLength: 6, maxLength: 64, pattern: '^[A-Za-z0-9 _-]+$' } }, scope: ['admin', 'orders'], summary: 'The bottle a printed bottle code belongs to (“B-7F3K29”; with or without the “B-”, case, dashes and O/0, I/1 mix-ups don’t matter; or its long id): where and when it printed, the ads on it, its box and house, and the proof of its drop.', handler: async (req, key) => {
+    const found = await screens.bottle(staff(key).companyId, (req.params as any).code);
+    if (!found) throw new ApiError(404, 'not_found', 'No bottle of yours has that code. Check the letters after “B-” on the bottom line of its panel.');
+    return { body: found };
   } });
 
   // ---------- machines ----------

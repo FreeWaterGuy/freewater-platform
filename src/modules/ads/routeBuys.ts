@@ -6,7 +6,7 @@ import { SHARES } from '../../core/types';
 import { newId } from '../../core/ids';
 import { AdsError } from './service';
 import { holds, shareLabel } from './layouts';
-import { adLimits, chargeLimitProblem, prepaidModel } from './billing';
+import { adLimits, chargeLimitProblem, includedWords, prepaidModel } from './billing';
 import { syncPrepaidBuy } from './budget';
 import type { PrepaidService } from './prepaid';
 import { prepaidAccount } from '../ledger/ledger';
@@ -554,7 +554,7 @@ export class RouteBuyService {
       ifAHouseStops: oneHouse
         ? 'If the house stops deliveries or blocks your ads, the part not delivered is paid back to your card (a person at the company approves it).'
         : 'If a house stops deliveries or blocks your ads, the pieces not delivered there come back to you as credit for other houses, used on your next route buy.',
-      included: 'AR, video and scans are included, at every size.',
+      included: includedWords(company, this.platform.featureOn),
       plainBox: input.kind === 'box' && !this.boxesOn(companyId) ? `${company.name}’s delivery boxes are plain: nothing is printed on them, so a whole box covers its bottles only.` : null,
     };
     return { ...quote, plan: spots, targeted };

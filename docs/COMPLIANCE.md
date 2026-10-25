@@ -136,6 +136,13 @@ existed before decides for itself (off until it does). Data is never sold (`docs
 - Never: an address it didn't send, a house's audience, bought data (a quote can't test one house any more, H2), a
   resident, a claim, a photo.
 
+**Seeing it** (console → *Household data*, `GET /v1/households/summary`, owners and finance): totals only. The
+switches, area statistics (sample or real, and their source), each import (source, date, kept, refused, how many were
+sensitive: recorded by kind from migration 086; older imports show their total only), what's held by source and kind,
+deleting a source, and how many houses said no. Never a house, an address or one house's attributes. The single-house
+check (`GET /v1/households/audience`) stays API-only and isn't on the screen: it takes no reason and keeps no log of who
+looked (for the lawyer: add a stated reason and a log before it's shown to people).
+
 #### Household data: the formats (for the data company the founder picks)
 
 `POST /v1/households/imports` (a person signed in; *Bought household data* on), body

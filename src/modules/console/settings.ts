@@ -5,6 +5,7 @@ import { checkPolicy } from '../data/policy';
 import { checkAiSettings } from '../ai/settings';
 import { checkWallet, defaultWallet } from '../wallet/assets';
 import { checkChain, defaultChain } from '../chain/settings';
+import { checkPause, pauseSettings } from '../chain/pause';
 import { extraAboveCents } from '../ledger/ledger';
 import { adBilling, adLimits, checkAdBilling } from '../ads/billing';
 import { blocklist } from '../ads/linkList';
@@ -14,6 +15,7 @@ import { checkUnsold } from '../fillers/unsold';
 import { templateById } from '../ads/layouts';
 import { checkPanelSettings } from '../print/panel';
 import { checkBoxSettings, mergeBoxSettings } from '../packs/boxSettings';
+import { shortenWords } from '../../core/shorten';
 
 const GEOMETRY_KEYS = ['widthIn', 'heightIn', 'seamIn', 'panelWidthIn', 'panelSide', 'bleedIn', 'imageSafe', 'textSafe', 'minQrIn'];
 /**
@@ -50,11 +52,11 @@ export const fontChoices: { id: string; label: string; value: string }[] = [
 export const adCategories = ['food', 'drink', 'coffee', 'fitness', 'health', 'news', 'retail', 'local-services', 'real-estate', 'auto', 'finance', 'entertainment', 'events', 'travel', 'tech', 'education', 'nonprofit', 'politics', 'alcohol', 'tobacco', 'cannabis', 'gambling', 'weapons', 'dating'];
 
 /** The parts of the settings a PATCH may send. Anything else is refused. */
-export const editableKeys = ['name', 'receiptBaseUrl', 'scanBaseUrl', 'brand', 'productFacts', 'giving', 'openBooks', 'unitCosts', 'consumerPricing', 'timezone', 'consumer', 'machines', 'qr', 'ar', 'standardProductId', 'adRules', 'prices', 'modules', 'lottery', 'data', 'transparency', 'agents', 'ratchet', 'security', 'research', 'wallet', 'offers', 'games', 'minimumAge', 'chain', 'launch', 'ai', 'adBilling', 'news', 'delivery', 'labelPanel', 'labelGeometry', 'unsold', 'boxes'] as const;
+export const editableKeys = ['name', 'receiptBaseUrl', 'scanBaseUrl', 'brand', 'productFacts', 'giving', 'openBooks', 'unitCosts', 'consumerPricing', 'timezone', 'consumer', 'machines', 'qr', 'ar', 'standardProductId', 'adRules', 'prices', 'modules', 'lottery', 'data', 'transparency', 'agents', 'ratchet', 'security', 'research', 'wallet', 'offers', 'games', 'minimumAge', 'chain', 'launch', 'ai', 'adBilling', 'news', 'delivery', 'labelPanel', 'labelGeometry', 'unsold', 'boxes', 'adReview', 'pause'] as const;
 export type EditableKey = (typeof editableKeys)[number];
 /** Settings only a person signed in may change or put back: money, the chain, and every one-way or money-adjacent promise. */
 // Unsold space: a key can't let the company's own ads into the ad area (the founder's rule), nor change what fills it.
-export const personOnlyKeys: readonly EditableKey[] = ['wallet', 'offers', 'chain', 'ratchet', 'agents', 'minimumAge', 'giving', 'lottery', 'ai', 'data', 'launch', 'security', 'adBilling', 'news', 'delivery', 'unsold'];
+export const personOnlyKeys: readonly EditableKey[] = ['wallet', 'offers', 'chain', 'ratchet', 'agents', 'minimumAge', 'giving', 'lottery', 'ai', 'data', 'launch', 'security', 'adBilling', 'news', 'delivery', 'unsold', 'adReview', 'pause'];
 
 /** The highest a machine's print limits may be set: a bottle takes several seconds, so more is a leaked key, not a busy machine. */
 export const PRINT_LIMITS = { perMinute: 20, perDay: 20_000 };
@@ -202,6 +204,8 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
   }
   const ch = checkChain(c.chain);
   if (ch) return `Chain: ${ch}`;
+  const pz = checkPause(c.pause);
+  if (pz) return `Pause: ${pz}`;
   const wal = checkWallet(c.wallet);
   if (wal) return `Wallet: ${wal}`;
   if (c.minimumAge !== undefined && !isInt(c.minimumAge, 13, 21)) return 'The youngest age that may take part must be 13 to 21.';
@@ -217,6 +221,8 @@ export function checkSettings(c: CompanyConfig, registered: { ads: string[]; ren
     if ((c.giving.percentOfProfit ?? 0) + (a.percentOfProfit ?? 0) > 90) return 'The charity’s and the agents’ shares of the profit can’t add up to more than 90%.';
   }
   if (c.security && typeof c.security.ownersNeedSecondStep !== 'boolean') return 'Requiring a second sign-in step for owners is on or off.';
+  if (c.security?.graceDays !== undefined && !(Number.isInteger(c.security.graceDays) && c.security.graceDays >= 0 && c.security.graceDays <= 30)) return 'The days owners have to set up their second sign-in step are a whole number from 0 to 30.';
+  if (c.adReview !== undefined && (!c.adReview || typeof c.adReview !== 'object' || !['owners', 'owners_ops'].includes((c.adReview as any).whoReviews) || Object.keys(c.adReview).length !== 1)) return 'Who reviews ads is “owners” or “owners_ops” (owners and ops).';
   if (c.transparency) {
     const t = c.transparency;
     if (!['liveFeed', 'counters', 'publishFingerprints', 'advertiserStatements', 'showAmounts'].every((k) => typeof (t as any)[k] === 'boolean') || !['machine', 'city', 'none'].includes(t.feedDetail)) return 'Each transparency setting is on or off, and the feed shows the machine, the city, or no place.';
@@ -286,6 +292,14 @@ export function applyChange(cur: CompanyConfig, change: Partial<Record<EditableK
   const next: any = structuredClone(cur);
   for (const [k, v] of Object.entries(change)) {
     if (!(editableKeys as readonly string[]).includes(k)) throw new Error(`“${k}” can’t be changed here.`);
+    // Pause settings, choice by choice, on top of what the company has now (defaults filled in); anything that isn't an
+    // object (null: "remove it") is kept as sent, for the checks to refuse.
+    if (k === 'pause' && v && typeof v === 'object' && !Array.isArray(v)) {
+      const base = pauseSettings(cur), x = v as Record<string, any>;
+      const part = (y: unknown, b: object) => (y && typeof y === 'object' && !Array.isArray(y) ? { ...b, ...y } : y === undefined ? b : y);
+      next.pause = { ...base, ...x, stops: part(x.stops, base.stops), unpause: part(x.unpause, base.unpause), printingUnpause: part(x.printingUnpause, base.printingUnpause) };
+      continue;
+    }
     // The label panel is replaced whole; null puts back the one made from the brand.
     if (k === 'labelPanel') { if (v === null) delete next.labelPanel; else next.labelPanel = v; continue; }
     // Delivery boxes, per pack size, field by field; null clears a size or a field (src/modules/packs/boxSettings.ts).
@@ -335,19 +349,31 @@ const labels: Record<string, string> = {
   scanBaseUrl: 'Short QR address', standardProductId: 'Standard product', 'qr.logo': 'Logo in your codes', 'qr.logoSvg': 'Your code logo', 'qr.color': 'Code color',
   'qr.advertiserLogos': 'Advertisers’ logos in their codes', 'qr.allowStatic': 'Static codes allowed', 'ar.trackingCodes': 'AR tracking strip', 'ar.stripEverywhere': 'Tracking strip along every ad',
   'machines.offlineWalkUp': 'Free bottles while offline', 'machines.offlinePerHour': 'Offline bottles per hour', 'machines.bufferSize': 'Labels kept ready', 'modules.ads': 'Ad engine', 'modules.renderer': 'Label maker', 'modules.printer': 'Printer',
-  'transparency.liveFeed': 'Live public feed', 'transparency.counters': 'Live public counters', 'transparency.publishFingerprints': 'Publishing daily fingerprints', 'transparency.advertiserStatements': 'Advertiser statements', 'transparency.feedDetail': 'Places in the feed', 'transparency.showAmounts': 'Amounts in the feed', data: 'Data collection', 'agents.enabled': 'The AI agents’ fund', 'agents.percentOfExtra': 'The AI agents’ share of the upside', 'agents.percentOfProfit': 'The AI agents’ share of the profit', 'agents.milestone': 'The AI agents’ milestone', ratchet: 'Giving and the AI agents’ share only go up', 'security.ownersNeedSecondStep': 'Owners need a second sign-in step',
+  'transparency.liveFeed': 'Live public feed', 'transparency.counters': 'Live public counters', 'transparency.publishFingerprints': 'Publishing daily fingerprints', 'transparency.advertiserStatements': 'Advertiser statements', 'transparency.feedDetail': 'Places in the feed', 'transparency.showAmounts': 'Amounts in the feed', data: 'Data collection', 'agents.enabled': 'The AI agents’ fund', 'agents.percentOfExtra': 'The AI agents’ share of the upside', 'agents.percentOfProfit': 'The AI agents’ share of the profit', 'agents.milestone': 'The AI agents’ milestone', ratchet: 'Giving and the AI agents’ share only go up', 'security.ownersNeedSecondStep': 'Owners need a second sign-in step', 'security.graceDays': 'Days owners have to set up their second sign-in step', 'security.requiredSince': 'Second sign-in step required since', 'adReview.whoReviews': 'Who reviews ads', adReview: 'Who reviews ads',
   adBilling: 'How advertisers pay', 'adBilling.pricingMode': 'Pricing (flat or auction)', 'adBilling.requirePrepay': 'Advertisers pay up front', 'adBilling.fees': 'Fees on top of bottles (scan, AR, box side, commission)', 'adBilling.changeFeeCents': 'Fee for changing an ad', 'adBilling.linkChangeFeeCents': 'Fee for changing a link', 'adBilling.extras': 'Costly extras and their markup', 'adBilling.limits': 'Limits on one payment (weeks of a route buy, the most one charge can be, how long credit lasts)',
   labelPanel: 'Label panel', labelGeometry: 'Label size and areas', boxes: 'Delivery boxes', 'boxes.6': 'The 6-pack box', 'boxes.12': 'The 12-pack box', 'boxes.24': 'The 24-pack box',
   'lottery.enabled': 'Prize game', 'lottery.oddsPercent': 'Chance of winning', 'lottery.chancesPerDay': 'Chances per person a day', 'lottery.winsPerDay': 'Prizes per person a day', 'lottery.watchSeconds': 'Watching before the ball', 'lottery.ballMs': 'Time the ball is on screen', 'lottery.prizes': 'Prizes', 'lottery.minAge': 'Youngest age to play', 'lottery.rulesUrl': 'Official rules link', 'lottery.rulesText': 'Rules note',
 };
-const deep = new Set(['boxes', 'brand', 'giving', 'consumer', 'machines', 'qr', 'ar', 'adRules', 'prices', 'modules', 'lottery', 'transparency', 'agents', 'security', 'adBilling', 'delivery', 'unsold']);
-const show = (v: unknown) => (v === undefined ? 'none' : typeof v === 'string' ? (v.length > 30 ? `${v.slice(0, 28)}…` : v || 'blank') : typeof v === 'boolean' ? (v ? 'on' : 'off') : Array.isArray(v) ? (v.length ? v.join(', ').slice(0, 40) : 'none') : typeof v === 'object' && v ? 'changed' : String(v));
+const deep = new Set(['boxes', 'brand', 'giving', 'consumer', 'machines', 'qr', 'ar', 'adRules', 'prices', 'modules', 'lottery', 'transparency', 'agents', 'security', 'adBilling', 'delivery', 'unsold', 'adReview']);
+const show = (v: unknown) => (v === undefined ? 'none' : typeof v === 'string' ? (shortenWords(v, 30) || 'blank') : typeof v === 'boolean' ? (v ? 'on' : 'off') : Array.isArray(v) ? (v.length ? v.join(', ').slice(0, 40) : 'none') : typeof v === 'object' && v ? 'changed' : String(v));
 
 /** What changed, as a short list a person can read in the history. */
 export function describeChange(before: CompanyConfig, after: CompanyConfig): string[] {
   const out: string[] = [];
   for (const k of editableKeys) {
     const a = (before as any)[k], b = (after as any)[k];
+    // Pause settings, one plain line per choice (defaults filled in, so a first save reads as what changed).
+    if (k === 'pause') {
+      if (JSON.stringify(a ?? null) === JSON.stringify(b ?? null)) continue;
+      const x = pauseSettings(before), y = pauseSettings(after);
+      const leaves = (p: ReturnType<typeof pauseSettings>): [string, unknown][] => [
+        ['Pause stops money', p.stops.money], ['Pause stops token actions', p.stops.tokens], ['Pause stops printing', p.stops.printing], ['The person pressing Pause may leave printing out', p.chooseAtPress],
+        ['Who can press Pause', p.whoPresses === 'owners_finance_ops' ? 'owners, finance and ops' : 'owners and finance'], ['Approvals needed to unpause', p.unpause.approvals], ['Hours to wait before unpausing', p.unpause.waitHours],
+        ['Approvals needed to start printing again', p.printingUnpause.approvals], ['Hours to wait before printing starts again', p.printingUnpause.waitHours]];
+      const ya = leaves(y);
+      leaves(x).forEach(([name, v], i) => { if (v !== ya[i]![1]) out.push(`${name}: ${show(v)} → ${show(ya[i]![1])}`); });
+      continue;
+    }
     if (deep.has(k) && a && b && typeof a === 'object') {
       for (const f of new Set([...Object.keys(a), ...Object.keys(b)])) {
         if (JSON.stringify(a[f]) === JSON.stringify(b[f])) continue;

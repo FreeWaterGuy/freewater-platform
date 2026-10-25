@@ -9,6 +9,7 @@ import { defaultCatalog, fictionalAds, frameNet, frameText, structuralTier, type
 import { builtinPrompter, type Prompter } from './prompter';
 import { cardJpeg, type ProductImageSource } from './images';
 import { dataUse } from '../data/policy';
+import { isPlaceholder } from '../fillers/unsold';
 
 // The games: screens of two to four choices (real brands as plain cards, each with a price setup), "which ad works"
 // rounds, a feedback box and a prompt box for anything. Points are the same whichever item is picked, so the pick
@@ -365,7 +366,7 @@ export class GamesService {
   }
   /** Ads to compare: made-up brands from the studio, and real ones running now. Nothing here is billed or scannable. */
   private adRound(companyId: string) {
-    const running = [...this.platform.campaigns.values()].filter((c) => c.companyId === companyId && c.active !== false && !c.id.startsWith('house'))
+    const running = [...this.platform.campaigns.values()].filter((c) => c.companyId === companyId && c.active !== false && !c.id.startsWith('house') && !isPlaceholder(c))
       .map((c) => ({ id: `c:${c.id}`, label: c.advertiserName, svg: () => c.creative.svg(300, 400) }));
     const made = fictionalAds.map((f) => ({ id: `f:${f.id}`, label: f.spec.brand, svg: () => renderStudio(f.spec, 300, 400) }));
     const pool = [...this.pick(running, 2), ...this.pick(made, 3)];

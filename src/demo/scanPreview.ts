@@ -17,7 +17,9 @@ const server = await buildServer(app);
 const get = async (url: string) => (await server.inject({ method: 'GET', url })).json();
 
 const slots = new Map<string, { unitId: string; slot: number }>();
-for (let i = 0; i < 80 && slots.size < 8; i++) {
+// Every advertiser a scene below shows needs a bottle (the unsold-space ads the demo adds take spots too).
+const wanted = ['cmp-joes', 'cmp-luma', 'cmp-maple', 'cmp-orbit', 'cmp-daily'];
+for (let i = 0; i < 160 && (slots.size < 8 || wanted.some((id) => !slots.has(id))); i++) {
   const r = await app.platform.order({ companyId: 'freewater', orderId: `pv-${i}`, locationId: 'ATX-014', productId: 'bottle-16oz' });
   if (r.ok) for (const p of r.unit.placements) if (!slots.has(p.campaignId)) slots.set(p.campaignId, { unitId: r.unit.id, slot: p.slotIndex });
 }
@@ -32,7 +34,8 @@ app.platform.campaigns.get('cmp-joes')!.active = true;
 await app.persistence.flush();
 const custom = await app.platform.order({ companyId: 'freewater', orderId: 'pv-maya', locationId: 'ATX-014', productId: 'bottle-16oz', custom: { customerId: 'jordan', art: mayaDesign, priceCents: 300, experienceConfig: { from: 'Jordan and friends', message: 'Happy 30th, Maya!', confetti: true } } });
 const pack = await app.packs.compose({ companyId: 'freewater', customerId: 'c1', address: 'hidden', routeId: 'route-3', stop: 1, boxId: 'box-6', productId: 'bottle-16oz' });
-const top = pack.faces.find((f) => f.face === 'top')!;
+// Ads on boxes are off unless a company turns them on (migration 076): then the box has no advertiser's side to show.
+const top = pack.faces.find((f) => f.face === 'top' && f.advertiserName);
 
 // AR that follows the bottle: a full-wrap living label, and a latte that sits on top of the bottle.
 const active = new Map([...app.platform.campaigns.values()].map((c) => [c.id, c.active]));
@@ -103,7 +106,7 @@ await slotScene('news', 'News story', 'A short story with a link to the rest.', 
   delete fw.lottery;
 }
 if (custom.ok) scenes.push({ id: 'custom', label: 'Custom bottle', note: 'A bottle someone paid to design. No ads: the sender’s message and confetti.', path: `/s/${custom.unit.id}/0`, data: await get(`/v1/public/experience/${custom.unit.id}/0?viewer=preview-viewer`) });
-scenes.push({ id: 'box', label: `Box: ${top.advertiserName}`, note: 'Every side of a delivery box has its own code. Scans are billed to that side’s advertiser.', path: `/b/${pack.id}/top`, data: await get(`/v1/public/experience/box/${pack.id}/top?viewer=preview-viewer`) });
+if (top) scenes.push({ id: 'box', label: `Box: ${top.advertiserName}`, note: 'Every side of a delivery box has its own code. Scans are billed to that side’s advertiser.', path: `/b/${pack.id}/top`, data: await get(`/v1/public/experience/box/${pack.id}/top?viewer=preview-viewer`) });
 scenes.push({ id: 'pack', label: 'Pack page', note: 'The code on the box’s panel: what’s in the pack and what it gave. Never the address.', path: `/p/${pack.id}`, data: await get(`/v1/public/packs/${pack.id}`) });
 // Record a couple of scans so the receipt shows real numbers from the ledger.
 const joes = slots.get('cmp-joes')!;

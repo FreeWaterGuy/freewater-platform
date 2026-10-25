@@ -55,7 +55,7 @@ export function deliveryRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     const p = req.params as any;
     return { body: await delivery.checkByHand(p.id, key!.companyId, Number(p.stop), person(key), typeof (req.body as any)?.reason === 'string' ? String((req.body as any).reason).slice(0, 300) : undefined) };
   } });
-  route({ method: 'POST', url: '/v1/ops/runs/:id/close', scope: ['admin', 'packs'], summary: 'Close out a run from an earlier day that will never be driven: its boxes go back and it can’t take over a later night. A signed-in ops person or owner, with a reason.', body: obj({ reason: { type: 'string', minLength: 5, maxLength: 300 } }, ['reason']), handler: async (req, key) => {
+  route({ method: 'POST', url: '/v1/ops/runs/:id/close', scope: ['admin', 'packs'], summary: 'Close a run, with a reason (a signed-in ops person or owner): one from an earlier day that will never be driven, or today’s before its last stop (the van broke down). Its boxes not delivered go back and its stops are marked not delivered; after the last stop a run closes itself.', body: obj({ reason: { type: 'string', minLength: 5, maxLength: 300 } }, ['reason']), handler: async (req, key) => {
     staff(key);
     return { body: await delivery.closeRun((req.params as any).id, key!.companyId, person(key), (req.body as any).reason) };
   } });

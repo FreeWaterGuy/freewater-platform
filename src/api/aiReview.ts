@@ -30,7 +30,7 @@ export function aiReviewRoutes(app: App, route: (r: RouteDef) => void) {
 
   route({ method: 'GET', url: '/v1/review/ai', scope: 'campaigns', summary: 'The AI reviewer of paid ads: its record against your team’s final decisions (the last decisions within your bar, by reason; false flags; misses), your bar and audit sample, and whether it makes the final call.', handler: async (_req, key) => {
     const k = team(key);
-    return { body: { ...await svc.record(k.companyId), history: await svc.barHistory(k.companyId) } };
+    return { body: { ...await svc.record(k.companyId), history: await svc.barHistory(k.companyId), builtIn: await svc.rulesRecord(k.companyId) } };
   } });
   // Every role on the team holds one of these scopes: anyone on the team can turn it off (the service lets only an owner turn it on).
   route({ method: 'POST', url: '/v1/review/ai/final-call', scope: ['campaigns', 'orders', 'packs', 'ledger', 'invoices'], summary: 'Turn “AI makes the final call on paid ads” on (an owner signed in with the second step, with a reason, only when the AI’s record meets your bar) or off (anyone on the team, at once). Never an API key.', body: obj({ on: { type: 'boolean' }, reason: { type: 'string', maxLength: 300 } }, ['on']), handler: async (req, key) => {

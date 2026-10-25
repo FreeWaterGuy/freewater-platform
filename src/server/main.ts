@@ -4,6 +4,7 @@
 //   SEED_DEMO=1 npm start              on an empty database, loads the sample catalog and prints demo API keys
 // Production settings are explained in docs/RUNNING.md; the server checks them before it starts.
 /* eslint-disable security/detect-non-literal-fs-filename -- the data folder from the host's settings */
+import { PAUSE_JOBS } from '../modules/chain/pause';
 import { getHeapStatistics } from 'node:v8';
 import { createApp, type RuntimeChecks } from '../app';
 import { buildServer } from '../api/server';
@@ -129,8 +130,9 @@ const saved = (f: () => Promise<unknown>) => async () => { await f(); await app!
 const companies = () => [...app!.platform.companies.values()];
 // One company's failure is reported with its id and never stops the job for the others. A company that switched the
 // job's feature off (its Features page, src/runtime/registry.ts) is skipped.
+// A company whose emergency stop stops money skips the jobs that pay money out or charge cards (src/modules/chain/pause.ts).
 const perCompany = (job: string, step: (companyId: string) => Promise<unknown>, which: () => string[] = () => companies().map((c) => c.id).filter((id) => app!.companyFeatures.jobOn(id, job))) =>
-  forEachCompany(which(), step, (companyId, error) => {
+  forEachCompany(which(), async (companyId) => { const stop = PAUSE_JOBS.get(job); return stop && (await app!.chain.stopped(companyId, stop.area)) ? undefined : step(companyId); }, (companyId, error) => {
     reporter.captureException(error, { tags: { source: 'job', job, companyId } });
     void alerts.alert(`job:${job}:${companyId}`, 'warning', `Background job “${job}” failed for company ${companyId}`, String((error as Error)?.stack ?? error), { tracked: reporter.enabled });
   });

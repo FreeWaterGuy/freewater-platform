@@ -145,7 +145,7 @@
     if (previewMode) { toast('Saving works once your ad is live'); return; }
     if (token) api('POST', '/v1/me/saved', { target: ctx.targetKey }).catch(() => {});
     else engage(ctx, 'save');
-    toast(token ? 'Saved to your FreeWater app' : 'Saved on this phone');
+    toast(token ? 'Saved to your account in the app' : 'Saved on this phone');
   }
   function markSaved(btn) { btn.classList.add('saved'); btn.replaceChildren(icon(ICON.check), 'Saved'); btn.disabled = true; }
 
@@ -751,17 +751,24 @@
   // The bottle's black panel, carried onto the page: who made it, what it gave, and its receipt.
   function panel(f, target) {
     const facts = [];
-    if (f.ads !== null) facts.push(h('div', { text: f.ads === 0 ? (target.kind === 'box-face' ? 'This box carries our own message.' : 'This bottle carries our own message.') : `This ${target.kind === 'box-face' ? 'box' : 'bottle'} has ${f.ads} ${f.ads === 1 ? 'ad' : 'ads'}. They paid for your water.` }));
-    else facts.push(h('div', { text: 'A custom bottle, designed and paid for by the sender.' }));
+    // Ads are always another business's or a cause's; only this panel is the company's own (never "our message" over an ad).
+    const thing = target.kind === 'box-face' ? 'box' : 'bottle';
+    if (f.ads !== null) {
+      const free = f.freeAds || 0;
+      facts.push(h('div', { text: f.ads > 0 ? `This ${thing} has ${f.ads} paid ${f.ads === 1 ? 'ad' : 'ads'}${free ? ` and ${free} printed free in space nobody bought` : ''}. The paid ads paid for your water.`
+        : free ? `The ads on this ${thing} are other businesses’ and causes’, printed free in space nobody bought.` : `This ${thing} carries ${f.company}’s own message.` }));
+      if (f.scanned?.thirdParty) facts.push(h('div', { text: `The ad above is ${f.scanned.owner}’s, not ${f.company}’s. ${f.company}’s own space on the ${thing} is this panel.` }));
+    } else facts.push(h('div', { text: 'A custom bottle, designed and paid for by the sender.' }));
     if (f.giving) facts.push(h('div', { class: 'giving', text: f.giving }));
     if (f.story) {
       const m = f.story.minutesSincePrint;
       const ago = m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${plural(Math.round(m / 1440), 'day', 'days')} ago`;
-      facts.push(h('div', { class: 'story', text: `Genuine. ${f.story.printedFresh}, ${ago}.${f.story.passedOn ? ` It’s been passed along: ${plural(f.story.people, 'person', 'people')} have scanned it.` : ''}` }));
+      facts.push(h('div', { class: 'story', text: `Genuine. ${f.story.printedFresh}, ${ago}.${f.story.passedOn ? ` It’s been passed along: ${plural(f.story.people, 'person has', 'people have')} scanned it.` : ''}` }));
     }
     const links = [];
     if (f.receiptUrl) links.push(h('a', { href: fixture ? '#' : f.receiptUrl, text: 'See this bottle’s receipt' }));
     if (f.packUrl && target.kind !== 'slot') links.push(h('a', { href: fixture ? '#' : f.packUrl, text: 'Everything in this pack' }));
+    if (f.transparencyUrl) links.push(h('a', { href: fixture ? '#' : f.transparencyUrl, text: `How ${f.company} works` }));
     const [top, bottom] = [f.brand.logoTop, f.brand.logoBottom];
     return h('footer', { class: 'panel' },
       h('div', { class: 'logo', 'aria-label': `${top}${bottom}` }, h('span', { text: top }), h('span', { text: bottom })),

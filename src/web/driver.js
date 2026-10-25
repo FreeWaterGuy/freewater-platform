@@ -15,12 +15,10 @@
   };
   /** "1 bottle", "2 bottles": a count with its noun, singular for exactly one. */
   const plural = (n, one, many) => `${n} ${String(n).replace(/[^0-9.-]/g, '') === '1' ? one : many}`;
-  const NS = 'http://www.w3.org/2000/svg';
-  const sv = (tag, a) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(a)) e.setAttribute(k, String(v)); return e; };
   const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} } };
   const toastEl = h('div', { class: 'toast', role: 'status', style: 'bottom:calc(150px + env(safe-area-inset-bottom))' }); document.body.append(toastEl);
   let tt; const toast = (m) => { toastEl.textContent = m; toastEl.classList.add('show'); clearTimeout(tt); tt = setTimeout(() => toastEl.classList.remove('show'), 2600); };
-  const S = { token: store.get('fw_driver_token'), me: null, config: null, run: null };
+  const S = { token: fixture?.token ?? store.get('fw_driver_token'), me: null, config: null, run: null };
 
   // The second sign-in step: when it's on, sign-in asks for the code from the authenticator app (or a recovery code).
   const withSecondStep = (r) => (!r || !r.secondStep ? Promise.resolve(r) : new Promise((resolve, reject) => {
@@ -68,9 +66,11 @@
   // ---------- sign in ----------
   async function boot() {
     if (!S.config) S.config = await api('GET', '/v1/public/app-config');
+    if (S.token && !S.me) { try { S.me = await api('GET', '/v1/me'); } catch { S.me = null; } }
+    // The signed-in driver's company is the one shown (its name, brand and switches), whatever address the app opened at.
+    if (S.me?.companyId && S.me.companyId !== S.config.companyId) { S.config = await api('GET', `/v1/public/app-config?company=${encodeURIComponent(S.me.companyId)}`).catch(() => S.config); S.features = null; }
     // What this company switched off (its Features page): the screens don't offer it.
     if (!S.features) S.features = await api('GET', `/v1/public/features?company=${encodeURIComponent(S.config.companyId)}`).catch(() => ({ off: [] }));
-    if (S.token && !S.me) { try { S.me = await api('GET', '/v1/me'); } catch { S.me = null; } }
     if (!S.me) return signIn();
     if (!S.me.scopes?.includes('packs') && !S.me.scopes?.includes('admin')) return screen(h('h1', { class: 'dtitle', text: 'This app is for drivers' }), h('p', { class: 'dsub', text: 'Ask your manager to add you as a driver, then sign in again.' }), signOutBtn());
     return routes();
@@ -78,8 +78,8 @@
   function signIn() {
     let to = '';
     const step1 = () => {
-      const input = h('input', { class: 'input', id: 'd-email', type: 'email', autocomplete: 'email', placeholder: 'you@freewater.io' });
-      screen(h('div', { class: 'logo big' }, h('span', { text: 'free' }), h('span', { text: 'water' })), h('h1', { class: 'dtitle', text: 'Driver sign in' }),
+      const input = h('input', { class: 'input', id: 'd-email', type: 'email', autocomplete: 'email', placeholder: 'you@work.com' });
+      screen(h('div', { class: 'logo big', 'aria-label': S.config?.name ?? '' }, h('span', { text: S.config?.brand?.logoTop ?? '' }), h('span', { text: S.config?.brand?.logoBottom ?? '' })), h('h1', { class: 'dtitle', text: 'Driver sign in' }),
         h('form', { style: 'display:flex;flex-direction:column;gap:12px', onsubmit: async (e) => { e.preventDefault(); to = input.value.trim(); try { await api('POST', '/v1/auth/start', { companyId: S.config.companyId, channel: 'email', to }); step2(); } catch (x) { toast(x.message); } } },
           h('label', { for: 'd-email', style: 'font-weight:700', text: 'Work email' }), input, h('button', { class: 'btn', type: 'submit' }, 'Email me a code')));
     };
@@ -171,18 +171,8 @@
   }
 
   // ---------- house after house ----------
-  function miniMap(run, current) {
-    const pts = run.stops.map((s) => s.point);
-    const all = [...pts, ...(run.depot ? [run.depot] : [])];
-    const minLat = Math.min(...all.map((p) => p.lat)), maxLat = Math.max(...all.map((p) => p.lat)), minLng = Math.min(...all.map((p) => p.lng)), maxLng = Math.max(...all.map((p) => p.lng));
-    const W = 340, H = 150, pad = 16;
-    const x = (p) => pad + ((p.lng - minLng) / Math.max(1e-6, maxLng - minLng)) * (W - pad * 2);
-    const y = (p) => H - pad - ((p.lat - minLat) / Math.max(1e-6, maxLat - minLat)) * (H - pad * 2);
-    const s = sv('svg', { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'xMidYMid meet', role: 'img', 'aria-label': `Route map, stop ${current.stop} highlighted` });
-    s.append(sv('polyline', { points: run.stops.map((st) => `${x(st.point)},${y(st.point)}`).join(' '), fill: 'none', stroke: '#9AA6B2', 'stroke-width': 2, 'stroke-dasharray': '4 4' }));
-    for (const st of run.stops) s.append(sv('circle', { cx: x(st.point), cy: y(st.point), r: st.stop === current.stop ? 8 : 4.5, fill: st.status === 'delivered' ? '#1F8A4C' : st.status === 'not_delivered' ? '#B42318' : st.stop === current.stop ? '#1F2633' : '#C5CED6', stroke: '#fff', 'stroke-width': 2 }));
-    return h('div', { class: 'mapbox' }, s);
-  }
+  /** The run's stops at street scale, numbered, the current one highlighted (src/web/routemap.js). */
+  const miniMap = (run, current) => h('div', { class: 'mapbox' }, window.fwRouteMap.draw(run, current, { tiles: run.mapTiles }));
   function nextStop() {
     const r = S.run;
     const s = r.stops.find((x) => x.status === 'planned');

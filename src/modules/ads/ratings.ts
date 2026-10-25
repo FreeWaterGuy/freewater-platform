@@ -39,6 +39,11 @@ import { EPSILON_PER_CELL, releaseCell, ROUND_COUNT, ROUND_RATE, suppress, type 
  */
 
 export const RATINGS_SWITCH = 'ad_ratings';
+/**
+ * The demo's sample month of ad results (src/demo/demoBenchmarks.ts) uses campaign ids that start with this: never a
+ * real ad's. The Benchmarks page labels a month holding them as demo data; the Ad ratings list leaves them out.
+ */
+export const DEMO_BENCHMARK_PREFIX = 'demo-benchmarks-';
 export const FEEDBACK_SWITCH = 'ad_rating_feedback';
 export const HORIZONS = { d7: 7, d30: 30, d90: 90 } as const;
 export type Horizon = keyof typeof HORIZONS | 'latest';
@@ -169,7 +174,7 @@ export class AdRatingService {
       if (last?.content_hash === digest) return { id: last.id as string };
       // A person's choice of industry carries over to the ad's next version; otherwise the rules guess (the AI may refine it).
       const byPerson = last && String(last.category_by).startsWith('user:');
-      const guess = guessIndustry(c.category, input.words);
+      const guess = guessIndustry(c.category, [input.advertiser, ...input.words]);
       const id = newId('adv_v');
       // "I understand — use it as it is" (src/modules/artwork/asIs.ts) is kept with the version: its outcomes are read knowing it.
       await tx.query(`insert into ad_versions (id, company_id, campaign_id, advertiser_id, content_hash, seen_at, category, secondary_category, subcategory_id, category_by, features, as_is) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
@@ -291,10 +296,10 @@ export class AdRatingService {
   async list(companyId: string, horizon: Horizon = 'd30') {
     const rows = (await this.db.query<any>(`select v.id as version_id, v.campaign_id, v.seen_at, v.first_printed_at, v.rated_before_print, v.category as v_category, v.secondary_category as v_secondary, v.subcategory_id, v.category_by, v.features, v.as_is, r.*
       from ad_versions v left join ad_ratings r on r.company_id = v.company_id and r.content_hash = v.content_hash and r.rubric_version = $2
-      where v.company_id = $1 order by v.seen_at desc, v.seq desc limit 200`, [companyId, RUBRIC_VERSION])).rows;
+      where v.company_id = $1 and v.campaign_id not like $3 order by v.seen_at desc, v.seq desc limit 200`, [companyId, RUBRIC_VERSION, `${DEMO_BENCHMARK_PREFIX}%`])).rows;
     const outcomes = await this.outcomesOf(companyId, rows.map((r) => r.version_id), 'latest');
     const counts = (await this.db.query<any>(`select count(*) filter (where status = 'done')::int as done, count(*) filter (where status <> 'done')::int as waiting, count(*) filter (where rater = 'rules')::int as by_rules, count(*) filter (where rater = 'claude')::int as by_ai from ad_ratings where company_id = $1`, [companyId])).rows[0];
-    const late = (await this.db.query<any>(`select count(*) filter (where rated_before_print = false)::int as late, count(*) filter (where first_printed_at is not null)::int as printed from ad_versions where company_id = $1`, [companyId])).rows[0];
+    const late = (await this.db.query<any>(`select count(*) filter (where rated_before_print = false)::int as late, count(*) filter (where first_printed_at is not null)::int as printed from ad_versions where company_id = $1 and campaign_id not like $2`, [companyId, `${DEMO_BENCHMARK_PREFIX}%`])).rows[0];
     return {
       taxonomy: { ...TAXONOMY, industries: INDUSTRIES.map(({ id, label }) => ({ id, label })) },
       subcategories: await this.subcategories(companyId),
@@ -586,6 +591,8 @@ export class AdRatingService {
     const contributes = this.contributes(companyId);
     const own = this.groups(await this.results([companyId], horizon), true);
     const released = contributes ? (await this.db.query<any>(`select period, dimension, key, published, suppressed from ad_benchmark_snapshots where horizon = 'd30' and epsilon is not null order by period desc, dimension, key limit 2000`)).rows : [];
+    // Months that hold the demo's sample ads (never in production): labelled wherever their figures show.
+    const demoPeriods = new Set((await this.db.query<any>(`select to_char(first_printed_at at time zone 'UTC', 'YYYY-MM') as m from ad_versions where first_printed_at is not null and campaign_id like $1 group by 1`, [`${DEMO_BENCHMARK_PREFIX}%`])).rows.map((r) => r.m as string));
     const latest = released[0]?.period as string | undefined;
     // Each figure as last released (its most recent month with one): every month's cells were held back on their own.
     const cells = new Map<string, any>();
@@ -610,12 +617,15 @@ export class AdRatingService {
       const mine = own.find((g) => g.dimension === dimension && g.key === key)?.ads ?? [];
       return { dimension, key, label: label(dimension, key), yours: mine.length ? AdRatingService.figures(mine) : null, network: network(dimension, key) };
     }).sort((a, b) => a.dimension.localeCompare(b.dimension) || (b.yours?.ads ?? 0) - (a.yours?.ads ?? 0) || a.label!.localeCompare(b.label!));
-    const history = released.filter((r) => r.published).slice(0, 500).map((r) => ({ period: r.period as string, dimension: r.dimension as string, key: r.key as string, label: r.dimension === 'all' ? 'All ads' : r.dimension === 'score' ? `Score ${r.key}` : label(r.dimension, r.key), ...parse<Released>(r.published) }));
+    const history = released.filter((r) => r.published).slice(0, 500).map((r) => ({ period: r.period as string, dimension: r.dimension as string, key: r.key as string, label: r.dimension === 'all' ? 'All ads' : r.dimension === 'score' ? `Score ${r.key}` : label(r.dimension, r.key), demo: demoPeriods.has(r.period), ...parse<Released>(r.published) }));
+    for (const g of groups) if (g.network?.shown && demoPeriods.has((g.network as any).period)) (g.network as any).demo = true;
+    const yoursDemo = (await this.db.query<any>(`select exists (select 1 from ad_versions where company_id = $1 and campaign_id like $2) as x`, [companyId, `${DEMO_BENCHMARK_PREFIX}%`])).rows[0]?.x === true;
     return {
       horizon, contributes, settings, floors: BENCHMARK_FLOORS, maxAdvertiserShare: MAX_ADVERTISER_SHARE, minBottles: AdRatingService.minBottles,
       release: { period: latest ?? null, horizon: 'd30', epsilonPerCell: EPSILON_PER_CELL, roundCount: ROUND_COUNT, roundRate: ROUND_RATE },
       method: `Each ad counts once: its rates over the bottles of its first ${horizon === 'latest' ? 'days so far' : `${HORIZONS[horizon as keyof typeof HORIZONS]} days`} (and what they did in the ${SETTLE_DAYS} days after), once it has ${AdRatingService.minBottles}+ bottles. The network’s figures are released once a month (ads first printed that month, at 30 days): each needs ${settings.minAds}+ ads from ${settings.minAdvertisers}+ advertisers, no advertiser over half, and the same without any one company; they carry random noise drawn once per release (so asking again gives the same figures) and are rounded (counts to ${ROUND_COUNT}, rates to half a point); small figures, and any that would let a small one be worked out, are held back. No ad, advertiser or company is ever shown.`,
       promise: NO_PROMISE,
+      demo: demoPeriods.size || yoursDemo ? { periods: [...demoPeriods].sort(), note: `Demo data: the figures for ${[...demoPeriods].sort().join(', ') || 'your ads'} come from sample ads and advertisers made up for this demo, released by the same rules as real ones (thresholds, the check without any one company, held-back figures, noise and rounding).` } : null,
       groups, history,
     };
   }

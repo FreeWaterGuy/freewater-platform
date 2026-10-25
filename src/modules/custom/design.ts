@@ -1,5 +1,6 @@
 import { contrast, readableOn } from '../creative/poster';
 import { checkKeepsake, keepsakeDecorations, keepsakeFonts, type KeepsakeSpec } from '../creative/keepsake';
+import { shortenWords } from '../../core/shorten';
 
 // A bottle someone is designing for themselves. The assistant proposes changes; this checks them.
 
@@ -56,8 +57,8 @@ export function applyDesignPatch(d: CustomDesign, p: DesignPatch, attachments: D
   if (p.label || p.usePhotoOnLabel !== undefined || p.removePhoto) {
     const l = { ...(next.label ?? {}) };
     const pl = p.label ?? {};
-    if (pl.headline !== undefined) l.headline = String(pl.headline).trim().slice(0, 60);
-    if (pl.sub !== undefined) l.sub = String(pl.sub).trim().slice(0, 90) || undefined;
+    if (pl.headline !== undefined) l.headline = shortenWords(String(pl.headline), 60);
+    if (pl.sub !== undefined) l.sub = shortenWords(String(pl.sub), 90) || undefined;
     if (pl.font !== undefined) { if (pl.font in keepsakeFonts) l.font = pl.font; else problems.push(`There's no "${pl.font}" lettering.`); }
     if (pl.decoration !== undefined) { if ((keepsakeDecorations as readonly string[]).includes(pl.decoration)) l.decoration = pl.decoration; else problems.push(`There's no "${pl.decoration}" decoration.`); }
     if (pl.layout !== undefined) { if (['words', 'photo-left', 'photo-full'].includes(pl.layout)) l.layout = pl.layout; }

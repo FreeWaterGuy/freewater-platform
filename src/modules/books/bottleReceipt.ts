@@ -11,6 +11,15 @@ export function publicPlace(loc: Location | undefined, locationId: string): stri
   return loc.kind === 'route' ? `Home delivery in ${loc.city}` : `${loc.id}, ${loc.name}`;
 }
 
+/**
+ * Where a bottle came from, for the person who has it (the app's bottle cards and bottle page): a delivery area by its
+ * name only ("Travis Heights"; its id, like "route-3", is internal), a machine by the number on it and its name.
+ */
+export function householdPlace(loc: Location | undefined, locationId: string): string {
+  if (!loc) return /^route/i.test(locationId) ? 'Home delivery' : locationId;
+  return loc.kind === 'route' ? loc.name : `${loc.id}, ${loc.name}`;
+}
+
 /** How the bottle reached its person: printed for a home delivery (a route, or a pack), or at a machine. */
 export function distributedBy(u: Pick<Unit, 'locationId' | 'packId'>, loc: Location | undefined): 'delivery' | 'machine' {
   if (u.packId || loc?.kind === 'route' || (!loc && u.locationId.startsWith('route'))) return 'delivery';

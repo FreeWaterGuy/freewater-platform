@@ -462,7 +462,13 @@ export class AgentsService {
       if (p.kind !== 'security') return await this.apply(id, by);
       // Done straight away, never measured in money; it can't be undone, so it always waited for this person.
       const [, action, target] = String(p.change?.path ?? '').split(':');
-      if (action === 'revoke-key' && target) await revokeApiKey(this.db, target, companyId);
+      if (action === 'revoke-key' && target) {
+        // Suggested because nobody had used it for 90 days; if something has used it since, turning it off now would
+        // cut off whatever relies on it (a till, a machine): not done.
+        const k = (await this.db.query<any>(`select coalesce(last_used_at, created_at) as last from api_keys where id = $1 and company_id = $2 and revoked_at is null`, [target, companyId])).rows[0];
+        if (k && this.now().getTime() - new Date(k.last).getTime() < 90 * DAY) throw new AgentsError('key_in_use', `That key was used again on ${new Date(k.last).toISOString().slice(0, 10)}, after this was suggested, so it wasn’t turned off: something still relies on it. If you’re sure, turn it off on the Keys page.`, 409);
+        await revokeApiKey(this.db, target, companyId);
+      }
       if (action === 'require-second-step') await this.deps.saveConfig(companyId, { security: { ownersNeedSecondStep: true } }, `${by}, on the security agent’s suggestion`);
       await this.db.query(`update agent_proposals set status = 'done', decided_by = $2, decided_at = $3, applied_at = $3 where id = $1`, [id, by, iso(this.now())]);
       return this.proposal(id);

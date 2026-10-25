@@ -3,6 +3,9 @@
 What FreeWater has worth protecting, who can reach it, what protects each thing today, and where the gaps are.
 Refreshed on every review run by the security architect (`.claude/agents/security-architect.md`).
 
+- **Updated 2026-10-24** (branch `m-sec`, the walkthrough videos' security items): security switches can't be weakened
+  by a starting point or a bundle, a general emergency stop, pages that never error on areas that are off; section 5c and
+  routes 460–461. docs/REVIEW-LOG.md, "security architect (walkthrough videos)".
 - **Updated 2026-10-23** (branch `k-link`, the founder's decisions on links, uploads and ratings): new asset A20 *Link
   destinations* and A21 *Pooled benchmarks*, new boundary B11 *Server → advertisers' sites* (SSRF), rows in 4.1 and
   4.2, section 5b and routes 452–459. docs/REVIEW-LOG.md, "security architect (link safety)".
@@ -398,6 +401,16 @@ N3); N4 open. Keys only in host settings: unchanged from R9.
 
 ---
 
+## 5c. Walkthrough videos 2026-10-24 (branch `m-sec`)
+
+| Risk | Where | Control now | Likelihood × impact |
+|---|---|---|---|
+| Requiring the second sign-in step locks the owners out: the security agent's proposal (or the switch) turned it on with no owner set up, and every owner without an app was refused at once (CONFIRMED by `test/second-step-lockout.test.ts` on the old code, 2026-10-25) | `ConsoleService.secondStepRule`, `authenticate` in `src/api/server.ts`, `ownerSetupDue` (`src/modules/accounts/secondStep.ts`), `AgentsService.decide` | Turned on only once an owner has an app (`no_owner_ready`); `requiredSince` is the server's; sessions from before keep working for `graceDays` (default 7); later sign-ins go straight to the setup step (setup routes stay open); the agent's "turn off this key" is refused if the key was used again since (`key_in_use`) | was likely × high (lockout); now low |
+| A starting point (or any bundle of switches, a restored version, an agent's proposal) turns a security control off: “Delivery + printed ads” turned off *Owners need a second sign-in step* (CONFIRMED by `test/security-switches.test.ts` on the old code) | `FeatureService.plan`, `ConsoleService.saveNow/restoreNow`, `PATCH /v1/console/settings` | Switches flagged `security` in `src/runtime/registry.ts` (second step, link safety) are never part of a starting point; off only on their own, by an owner signed in with the second step, with a reason; `ConsoleService.securityWeakened` refuses every other save or restore that weakens one; turning a parent off no longer clears link safety's own choice | was likely × critical; now low |
+| No emergency stop without the blockchain (the pause was only on the Blockchain page, off in the pilot) | `src/modules/chain/pause.ts`, `GET/POST /v1/pause`, console *Pause* | A general pause on the main menu stops printing and money leaving (423 on `PAUSE_STOPS` routes, the `offers` job skipped), as well as token actions; kept in `chain_actions`, so a restart keeps it; unpausing is the existing approved step and wait | was likely × high; now low |
+| The pause quietly made toothless (a stolen owner session sets it to stop nothing, or to unpause with one person and no wait) | `src/modules/chain/pause.ts` (`checkPause`, `pauseWeakened`), `securityWeakened`, `PATCH /v1/console/settings` | The pause can't be removed (it must stop something; clearing its settings is refused); any weakening (stopping less, choosing at press time, fewer approvals, a shorter wait) needs an owner with the second step, one change at a time, with a reason, never a key, a restored version or an agent; approvals never below 1, the full unpause's wait never below 1 hour, and with the chain on its own rules still apply | new with adjustable settings, likely × high; now low |
+| Console and ops pages erroring when an area is off (AI agents page, games, ads, codes, products, number line; ops Today's Machines panel; ops reading the host's switches for a licensee's team) | `src/web/console.js` (`getIf`), `src/web/ops.js` | Data from an area is asked for only while it's on; the sweep journeys in `test/browser/journeys.ts` open every menu page in the pilot and for a licensee with every main switch off | was certain × medium (broken pages, not data) |
+
 ## 6. Route access
 
 **How to read it.** *Scope*: what `authenticate` requires (`admin` also passes any non-`platform` scope). *Person*:
@@ -437,7 +450,7 @@ scan token), `GET /v/:code`, `/V/:code` (coupon check redirect), `GET /go/:token
 the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/console`, `/developers`, `/books`,
 `/play`, `/preview/scan`), `/static/*`, `/models/builtin/*`, `/assets/*`.
 
-**Every route (439):**
+**Every route (441):**
 
 | # | Route | Scope | Person | Other check | Docs |
 |---|---|---|---|---|---|
@@ -583,7 +596,7 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 128 | `GET /v1/books/reconciliation` | [ledger, admin] | no | team only (no advertiser/machine key) | OK: the daily reconciliation report (read only) |
 | 129 | `GET /v1/books/surplus` | [ledger, admin] | no | — | OK |
 | 130 | `GET /v1/console` | admin | no | team only (no advertiser/machine key) | OK (corrected: keys can read it; it reports `person: false`) |
-| 131 | `PATCH /v1/console/settings` | admin | some | team only (no advertiser/machine key); money/prize/token switches: second step (owners/finance, R4) | OK: money, chain and one-way keys and the machines’ print limits (R5 fixed: 1–20 a minute, 1–20,000 a day) are a person’s; switching money, prizes or the token needs the second step; turning any switch kept in the settings on or off (open books, live feed, games…) is a person, never a key (`ConsoleService.switchesChanged`, release check 2026-10-21) Label layouts: a change that leaves no usable layout while ads are on is refused (422 `no_layout_left`), one that would strand paid pieces is refused (409) until `confirmStranded` matches the preview’s count; product ids are checked to be the company’s own or shared (P5). |
+| 131 | `PATCH /v1/console/settings` | admin | some | team only (no advertiser/machine key); money/prize/token switches: second step (owners/finance, R4) | OK: money, chain and one-way keys and the machines’ print limits (R5 fixed: 1–20 a minute, 1–20,000 a day) are a person’s; switching money, prizes or the token needs the second step; turning any switch kept in the settings on or off (open books, live feed, games…) is a person, never a key (`ConsoleService.switchesChanged`, release check 2026-10-21) Label layouts: a change that leaves no usable layout while ads are on is refused (422 `no_layout_left`), one that would strand paid pieces is refused (409) until `confirmStranded` matches the preview’s count; product ids are checked to be the company’s own or shared (P5). Turning off a security switch (owners’ second sign-in step) is its own change, by an owner signed in with the second step and a `reason` (422 `one_at_a_time` / `reason_needed`). |
 | 132 | `POST /v1/console/preview-label` | admin | no | team only (no advertiser/machine key) | OK |
 | 133 | `GET /v1/console/history` | admin | no | team only (no advertiser/machine key) | OK |
 | 134 | `GET /v1/console/history/:version` | admin | no | team only (no advertiser/machine key) | OK |
@@ -815,7 +828,7 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 360 | `POST /v1/advertisers/:advertiserId/credit-limit` | invoices | yes | owner or finance, signed in with the second step (an approval route); never an API or advertiser key | OK (each limit a new append-only row; a lower limit pauses at once) |
 | 361 | `GET /v1/console/features` | admin | no | team only (no advertiser/machine key) | OK (the company's own switches and why each is on or off; no secrets) |
 | 362 | `POST /v1/console/features/preview` | admin | no | team only (no advertiser/machine key) | OK (saves nothing: what a change or starting point would do) |
-| 363 | `POST /v1/console/features` | admin | yes | an owner signed in, never a key (P4); turning ON a money, chain or one-way switch needs the second step (R4, `conditionalApprovalRoutes`); switches only an approved step turns on (gift cards, withdrawals, the chain) are refused here | OK (every change logged append-only with who, when, from, to, why; turning off is quick and takes dependants with it) |
+| 363 | `POST /v1/console/features` | admin | yes | an owner signed in, never a key (P4); turning ON a money, chain or one-way switch needs the second step (R4, `conditionalApprovalRoutes`); switches only an approved step turns on (gift cards, withdrawals, the chain) are refused here; a security switch goes off only on its own, with a reason and the second step, never in a starting point | OK (every change logged append-only with who, when, from, to, why; turning off is quick and takes dependants with it, except a security switch's own choice) |
 | 364 | `GET /v1/console/features/history` | admin | no | team only (no advertiser/machine key) | OK (append-only log) |
 | 365 | `GET /v1/public/companies/:companyId/features` | public | — | — | OK (public by design, only when the company turned on "Publish our feature list"; on/off per switch, no settings or numbers) |
 | 366 | `POST /v1/studio/export` | campaigns | no | advertiser only | OK (a print-ready SVG of the advertiser's own design; only its own photos and logo) |
@@ -880,7 +893,7 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 425 | `POST /v1/review/campaigns/:id/ai` | campaigns | yes | a person on the team, signed in (not a key); only paid ads; at most 60 messages an ad | OK (through the company's AI routing, metered, the governor first; the stand-in without AI; the AI can't approve, reject or refund) |
 | 426 | `POST /v1/ads/campaigns/:id/appeal` | campaigns | no | the ad's own advertiser; only an AI's final rejection, once, not after it was paid back | OK (back to a person, flagged: money held, nothing prints) |
 | 427 | `POST /v1/me/wallet/keep` | me | yes | the signed-in person; never a phone joined to someone else or another account's own key | OK (moves only what that phone holds, under the points lock, once; no points made; today's part within the account's daily limit) |
-| 428 | `GET /v1/console/bottles/:code` | admin | no | team only (no advertiser/machine key); only the company's own bottles (`bottle_codes` by company) | OK: turns a printed bottle code ("B-7F3K29", made from the bottle's random id, nothing personal) into the bottle; a code of another company's bottle is 404 |
+| 428 | `GET /v1/console/bottles/:code` | [admin, orders] | no | team only (no advertiser/machine key; a driver has neither scope); only the company's own bottles (`bottle_codes` by company) | OK: turns a printed bottle code ("B-7F3K29", with or without "B-", any case, Crockford-read; or the long id) into the bottle: where and when it printed, its ads, its box and the address it went to, the proof of its drop (2026-10-24: owners and ops; never who got it); a code of another company's bottle is 404 |
 | 429 | `GET /v1/console/unsold` | admin | no | team only (no advertiser/machine key); *Ads on bottles* | OK (read-only: the list, former advertisers and why each is or isn't used, blank pieces; the list is saved through the settings, a person) |
 | 430 | `POST /v1/console/advertisers/:id/bonus` | admin | yes | a person on the team, signed in (not a key); only the company's own advertisers; a reason to refuse | OK (refusing only stops free bonus printing; nothing billed or refunded) |
 | 431 | `GET /v1/ads/bonus` | campaigns | no | advertiser only (its own) | OK (whether its past ads may print free, and how many bonus bottles) |
@@ -912,6 +925,14 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 457 | `POST /v1/ads/drafts/:id/artwork/as-is` | campaigns | yes | advertiser, signed in as a person (403 for a service key); its own draft; refused while a file can't print at all | OK (079; recorded with the ad and its version) |
 | 458 | `GET /v1/ads/campaigns/:id/links` (changed) | campaigns | no | advertiser only, its own ad | OK (shows the change waiting and any hold) |
 | 459 | `POST /v1/ads/campaigns/:id/links` (changed) | campaigns | no | advertiser only, its own ad; money: the link fee, once; one change per ad at a time | OK (079; checked before charging; the old link stays live; a person approves) |
+| 460 | `GET /v1/pause` | [admin, ledger] | no | team only; what the emergency stop stops, from the company's own switches | OK (walkthrough #15; SWITCHES "The pause switch") |
+| 461 | `POST /v1/pause` | [admin, ledger] | yes | any one owner or finance person, at once, with a reason; never a key; no second step (pausing is never slowed) | OK (stops printing and money leaving: 423 `paused` on the routes in `PAUSE_STOPS`; unpausing is the usual approved step and wait) |
+| 462 | `GET /v1/ops/packs/:id/bottles` | [admin, packs] | no | team only (no advertiser/machine key); only the company's own boxes | OK (2026-10-24; each bottle's printed code and its ads' names, to pick a bad label at the packing check; nothing about who lives there) |
+| 463 | `GET /v1/ops/house-notices` | [admin, packs] | no | team only (no advertiser/machine key) | OK (2026-10-24; a house claimed again, deliveries stopped by a claim days old: the house, its area and when, never who) |
+| 464 | `POST /v1/console/domain` | admin | no | team only, a person signed in (403 for a service key); the company's own; a domain another company holds or the platform's own is refused | OK (080: one domain per company, a unique index; saved unchecked: codes don't use it yet) |
+| 465 | `POST /v1/console/domain/verify` | admin | no | team only, a person signed in; the company's own | OK (DNS TXT check; only then do new codes use the domain; an old version put back never restores a domain) |
+| 466 | `GET /v1/public/companies/:companyId/transparency` | public | — | — | OK (public by design; Transparency → Public transparency page; only the company's own settings and books, no personal data) |
+| 467 | `GET /v1/households/summary` | [admin, ledger] | no | team only; owners, finance (with only *ledger*: a person whose role is finance, never a service key) or an admin key | OK (the console's Household data screen: totals only, never a house, an address or one house's attributes; `no-store`) |
 
 ---
 

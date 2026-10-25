@@ -29,7 +29,9 @@
   };
   const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} } };
   const dollars = (c) => `$${(c / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  const when = (iso) => (iso ? new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—');
+  /** Plain words for the server's codes, and dates in the company's time zone (src/web/words.js). */
+  const W = window.fwWords;
+  const when = (iso) => W.when(iso);
   const ago = (iso) => { if (!iso) return 'never'; const s = Math.max(1, Math.round((Date.now() - Date.parse(iso)) / 1000)); return s < 60 ? 'just now' : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} d ago`; };
   const svgSrc = (s) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(s)}`;
   const toastEl = h('div', { class: 'toast', role: 'status' }); document.body.append(toastEl);
@@ -70,7 +72,7 @@
     [/^\/console\/modules$/, modulesPage], [/^\/console\/codes$/, codesPage], [/^\/console\/products$/, productsPage], [/^\/console\/machines$/, machinesPage], [/^\/console\/team$/, teamPage], [/^\/console\/history$/, historyPage],
     [/^\/console\/keys$/, keysPage], [/^\/console\/webhooks$/, webhooksPage], [/^\/console\/webhooks\/([\w-]+)$/, webhookPage], [/^\/console\/licensees$/, licenseesPage],
     [/^\/console\/features$/, featuresPage], [/^\/console\/launch$/, launchPage], [/^\/console\/wallet$/, walletPage], [/^\/console\/offers$/, offersPage], [/^\/console\/games$/, gamesPage], [/^\/console\/chain$/, chainPage],
-    [/^\/console\/ratings$/, ratingsPage], [/^\/console\/benchmarks$/, benchmarksPage],
+    [/^\/console\/ratings$/, ratingsPage], [/^\/console\/benchmarks$/, benchmarksPage], [/^\/console\/households$/, householdsPage], [/^\/console\/pause$/, pausePage], [/^\/console\/bottles$/, bottlesPage],
   ];
   /** Is this switch on, on this server and for this company? (GET /v1/public/features?company=; unknown or none: on.) */
   const on = (feature) => !feature || !(S.features?.off ?? []).includes(feature);
@@ -78,12 +80,15 @@
   // their heading). A page whose switch is off isn't shown; its switch is turned back on from the Features page.
   // (The prize game and the games are their own on/off: their pages stay so they can be turned on there, unless this
   // server runs without them at all, as the pilot runs without the prize game: then there's nothing to turn on.)
-  const PAGE_FEATURES = { offers: 'offers', chain: 'token', licensees: 'network', machines: 'machines', webhooks: 'webhooks', given: 'giveaways', docs: 'developer_pages', transparency: 'transparency', wallet: 'rewards', agents: 'ai_agents', ratings: 'ad_ratings', benchmarks: 'benchmarks_view' };
+  // (The AI agents page belongs to the governor, which is always on: it shows what's on and hides what's off.)
+  const PAGE_FEATURES = { offers: 'offers', chain: 'token', licensees: 'network', machines: 'machines', webhooks: 'webhooks', given: 'giveaways', docs: 'developer_pages', transparency: 'transparency', wallet: 'rewards', ratings: 'ad_ratings', benchmarks: 'benchmarks_view', codes: 'printing', products: 'printing', 'review-ads': 'ads', 'review-links': 'ads', 'review-fillers': 'fillers' };
   const HOST_PAGES = { game: 'lottery', games: 'games' };
   /** Does this server run the area at all (FW_FEATURES; `on` lists the server's areas, before any company switch)? */
   const hostOn = (feature) => !feature || !Array.isArray(S.features?.on) || S.features.on.includes(feature);
   const pageOn = (page) => on(PAGE_FEATURES[page]) && hostOn(HOST_PAGES[page]);
-  const SECTION_FEATURES = { 'Go live with the token': 'token', 'Points into tokens': 'token_conversion', 'Gift cards': 'gift_cards', 'The agents’ fund': 'agents_fund', 'What the agents spent': 'agents_fund', 'The upsides library': 'agents_fund', Continuity: 'network' };
+  /** A GET that belongs to a switch: asked only while it's on (otherwise `off`, without asking), so a page never errors on an area that's off. */
+  const getIf = (feature, url, off = null) => (on(feature) ? api('GET', url) : Promise.resolve(off));
+  const SECTION_FEATURES = { 'Go live with the token': 'token', 'Points into tokens': 'token_conversion', 'Gift cards': 'gift_cards', 'The agents’ fund': 'agents_fund', 'What the agents spent': 'agents_fund', 'The upsides library': 'agents_fund', Continuity: 'network', 'When a machine’s internet drops': 'machines', 'Product quality': 'ai_agents', 'How choices are measured': 'measurement', 'Honest data, last 30 days': 'honest_data', 'Picks that may come true': 'come_true' };
   let cleanup = null;
   function go(path, replace) {
     if (S.dirty && !replace) { toast('Save or discard your changes first.'); return; }
@@ -106,6 +111,13 @@
     if (!S.me) return signIn();
     if (!['owner'].includes(S.me.role)) return shell('', h('div', { class: 'notice err', text: 'The console is for company owners. Ask an owner to change your role, or use the ops console.' }));
     try { S.ov = await api('GET', '/v1/console'); } catch (e) { return shell('', h('div', { class: 'notice err', text: e.message })); }
+    // The signed-in company is the one shown: its name, brand and switches, whatever address the console was opened at.
+    if (S.ov.config.id !== S.config?.companyId) {
+      S.company = S.ov.config.id; store.set('fw_console_company', S.company);
+      S.config = await api('GET', `/v1/public/app-config?company=${encodeURIComponent(S.company)}`);
+      S.features = await api('GET', `/v1/public/features?company=${encodeURIComponent(S.company)}`).catch(() => ({ off: [] }));
+    }
+    W.setZone(S.ov.config?.timezone); // dates on every page in the company's time zone
     if (S.ov.you?.mustSetUpSecondStep) return mustSetUpPage();
     if (!pageOn(pathname.replace(/\/$/, '').split('/')[2])) return go('/console', true);
     for (const [re, fn] of routes) {
@@ -115,23 +127,34 @@
     go('/console', true);
   }
 
+  /** The menu as shown: pages that are on, and a heading only when something under it is (no empty "Platform"). */
+  const menuShown = (nav, shown) => {
+    const pages = nav.filter((n) => typeof n === 'string' || shown(n[0]));
+    return pages.filter((n, i) => typeof n !== 'string' || (i + 1 < pages.length && typeof pages[i + 1] !== 'string'));
+  };
   function shell(active, ...content) {
     const nav = [
-      ['start', '/console', 'Get started', I.start], ['features', '/console/features', 'Features', I.modules],
+      ['start', '/console', 'Get started', I.start], ['features', '/console/features', 'Features', I.modules], ['pause', '/console/pause', 'Pause', I.shield],
+      // Review: the ad queues together (ad review, changed links, filler and charity pieces) in the ops console, a bottle
+      // found by its printed code, and the unsold-space order (kept with the ad settings).
+      'Review', ['review-ads', '/ops/review', 'Ad review', I.ads], ['review-links', '/ops/review/links', 'Link changes', I.hook], ['review-fillers', '/ops/review/fillers', 'Filler and charity', I.giving], ['bottles', '/console/bottles', 'Find a bottle', I.product], ['unsold', '/console/ads#unsold', 'Unsold-space order', I.line],
       'Points and rewards', ['launch', '/console/launch', 'Launch', I.start], ['wallet', '/console/wallet', 'Points and credit', I.giving], ['offers', '/console/offers', 'Brand offers', I.ads], ['games', '/console/games', 'The games', I.game], ['chain', '/console/chain', 'Blockchain', I.key],
       'Settings', ['company', '/console/company', 'Company', I.company], ['brand', '/console/brand', 'Brand', I.brand], ['label-panel', '/console/label-panel', 'Label panel', I.product], ['ads', '/console/ads', 'Ads and prices', I.ads], ['ratings', '/console/ratings', 'Ad ratings', I.line], ['benchmarks', '/console/benchmarks', 'Benchmarks', I.line], ['codes', '/console/codes', 'QR codes and AR', I.qr], ['products', '/console/products', 'Products', I.product],
-      ['giving', '/console/giving', 'Giving', I.giving], ['game', '/console/game', 'Prize game', I.game], ['transparency', '/console/transparency', 'Transparency', I.eye], ['data', '/console/data', 'Data and privacy', I.shield], ['numberline', '/console/numberline', 'Number line', I.line], ['agents', '/console/agents', 'AI agents', I.ai], ['security', '/console/security', 'Security', I.shield], ['modules', '/console/modules', 'Modules', I.modules], ['machines', '/console/machines', 'Machines', I.machine], ['team', '/console/team', 'Team', I.team], ['history', '/console/history', 'History', I.history],
+      ['giving', '/console/giving', 'Giving', I.giving], ['game', '/console/game', 'Prize game', I.game], ['transparency', '/console/transparency', 'Transparency', I.eye], ['data', '/console/data', 'Data and privacy', I.shield], ['households', '/console/households', 'Household data', I.shield], ['numberline', '/console/numberline', 'Number line', I.line], ['agents', '/console/agents', 'AI agents', I.ai], ['security', '/console/security', 'Security', I.shield], ['modules', '/console/modules', 'Modules', I.modules], ['machines', '/console/machines', 'Machines', I.machine], ['team', '/console/team', 'Team', I.team], ['history', '/console/history', 'History', I.history],
       'Developers', ['keys', '/console/keys', 'API keys', I.key], ['webhooks', '/console/webhooks', 'Webhooks', I.hook], ['docs', '/developers', 'Docs', I.docs],
       ...(S.ov?.config?.id === 'freewater' ? ['FreeWater team', ['given', '/console/given', 'Bottles given & receipts', I.box]] : []),
       ...(S.ov?.you?.platform ? ['Platform', ['licensees', '/console/licensees', 'Licensees', I.licensees]] : []),
     ];
-    const b = S.ov?.config?.brand ?? S.config?.brand ?? { logoTop: 'free', logoBottom: 'water' };
+    const b = S.ov?.config?.brand ?? S.config?.brand ?? { logoTop: '', logoBottom: '' };
     root.replaceChildren(h('div', { class: 'shell' },
-      h('aside', { class: 'side' }, h('div', { class: 'logo', 'aria-label': `${S.config?.name ?? ''} console` }, h('span', { text: b.logoTop }), h('span', { text: b.logoBottom }), h('small', { text: 'Console' })),
-        h('nav', { 'aria-label': 'Main' }, nav.filter((n) => typeof n === 'string' || pageOn(n[0])).map((n) => (typeof n === 'string' ? h('div', { class: 'group', text: n }) : link(n[1], { 'aria-current': active === n[0] ? 'page' : null }, icon(n[3]), n[2])))),
+      // The sidebar in the company's own colours (its panel, text and accent), never the platform's.
+      h('aside', { class: 'side', style: b.panelColor ? `--brand-panel:${b.panelColor};--brand-text:${b.textColor};--brand-accent:${b.accentColor}` : null }, h('div', { class: 'logo', 'aria-label': `${S.config?.name ?? ''} console` }, h('span', { text: b.logoTop }), h('span', { text: b.logoBottom }), h('small', { text: 'Console' })),
+        h('nav', { 'aria-label': 'Main' }, menuShown(nav, pageOn).map((n) => (typeof n === 'string' ? h('div', { class: 'group', text: n }) : n[1].startsWith('/ops/') ? h('a', { href: fixture ? '#' : n[1] }, icon(n[3]), n[2]) : link(n[1], { 'aria-current': active === n[0] ? 'page' : null }, icon(n[3]), n[2])))),
         h('div', { class: 'who' }, h('b', { text: S.me.displayName || S.me.email || '' }), S.config?.name, h('br'), h('button', { type: 'button', onclick: async () => { try { await api('POST', '/v1/auth/sign-out'); } catch {} S.token = null; S.me = null; S.dirty = false; store.set('fw_console_token', null); render(); } }, 'Sign out'))),
-      h('main', { class: 'main' }, ...content)));
+      h('main', { class: 'main' }, setUpByNotice(), ...content)));
   }
+  /** Required for owners and not set up yet, signed in before it was: everything works until the date, then only setting it up. */
+  const setUpByNotice = () => (S.ov?.you?.secondStepDueBy ? h('div', { class: 'notice', style: 'margin-bottom:14px' }, `Owners here now need a second sign-in step. Set up your authenticator app by ${when(S.ov.you.secondStepDueBy)} under `, link('/console/security', {}, 'Security'), '; until then everything works as before. After that date the console opens only to set it up.') : null);
   const head = (title, sub, ...right) => h('div', { class: 'page-head' }, h('div', {}, h('h1', { text: title }), sub ? h('p', { text: sub }) : null), right.length ? h('div', { class: 'toolbar' }, right) : null);
 
   function signIn() {
@@ -231,7 +254,7 @@
   const chip = (text, tone) => h('span', { class: `pill${tone ? ` ${tone}` : ''}`, text });
   const actionRow = (a, after) => {
     const btn = (label, fn, cls = 'btn small') => h('button', { class: cls, type: 'button', onclick: async (e) => { e.currentTarget.disabled = true; try { await fn(); toast('Done.'); render(); } catch (x) { toast(x.message); e.currentTarget.disabled = false; } } }, label);
-    const names = { exchanges_on: 'Turn on gift cards', go_live_points: 'Go live with points', go_live_token: 'Go live with the token', convert: 'Turn points into tokens', withdrawals_on: 'Turn on withdrawals', mint: 'Mint tokens', unpause: 'Unpause', switch_on: 'Switch the chain on', pause: 'Pause' };
+    const names = { exchanges_on: 'Turn on gift cards', go_live_points: 'Go live with points', go_live_token: 'Go live with the token', convert: 'Turn points into tokens', withdrawals_on: 'Turn on withdrawals', mint: 'Mint tokens', unpause: 'Unpause everything', unpause_printing: 'Start printing again', switch_on: 'Switch the chain on', pause: 'Pause' };
     const ready = a.status === 'approved' && a.notBefore && Date.parse(a.notBefore) <= Date.now();
     const sign = a.status === 'signing' ? (() => {
       const sig = h('input', { class: 'input', placeholder: 'Transaction signature from Squads', spellcheck: 'false', style: 'font-family:var(--mono)' });
@@ -239,8 +262,8 @@
         h('div', { class: 'toolbar' }, h('button', { class: 'btn small secondary', type: 'button', onclick: () => copy(a.toSign) }, 'Copy transaction'), sig, btn('Check and record', () => api('POST', `/v1/chain/actions/${a.id}/signed`, { signature: sig.value.trim() }))));
     })() : null;
     return h('tr', {}, h('td', {}, h('b', { text: names[a.kind] ?? a.kind }), a.params?.plan ? h('div', { class: 'muted', text: `${a.params.plan.total.toLocaleString()} token units to ${plural(a.params.plan.people, 'person', 'people')}` }) : a.params?.reason ? h('div', { class: 'muted', text: a.params.reason }) : null, sign),
-      h('td', { text: a.status === 'proposed' ? `${a.approvals.length} of ${plural(a.needed, 'approval', 'approvals')}` : a.status === 'approved' ? (ready ? 'Ready to run' : `Waiting until ${when(a.notBefore)}`) : a.status }),
-      h('td', { text: a.proposedBy }),
+      h('td', { text: a.status === 'proposed' ? `${a.approvals.length} of ${plural(a.needed, 'approval', 'approvals')}` : a.status === 'approved' ? (ready ? 'Ready to run' : `Waiting until ${when(a.notBefore)}`) : W.status(a.status) }),
+      h('td', { text: a.proposedByName ?? W.actor(a.proposedBy) }),
       h('td', {}, h('div', { class: 'toolbar' },
         a.status === 'proposed' ? btn('Approve', () => api('POST', `/v1/chain/actions/${a.id}/approve`)) : null,
         ready ? btn('Run it now', () => api('POST', `/v1/chain/actions/${a.id}/run`), 'btn small blue') : null,
@@ -259,7 +282,7 @@
       const go = h('button', { class: 'btn secondary', type: 'button', disabled: true }, 'Wipe all test data');
       word.addEventListener('input', () => { go.disabled = word.value !== 'RESET'; });
       go.addEventListener('click', async () => { go.disabled = true; try { const r = await api('POST', '/v1/launch/reset', { confirm: 'RESET' }); toast(`Wiped: ${Object.entries(r.counts).filter(([, n]) => n).map(([k, n]) => `${n} ${k}`).join(', ') || 'nothing to wipe'}.`); render(); } catch (x) { toast(x.message); } });
-      return section('Reset', 'Wipes every wallet, game answer, offer claim, seal and bot from testing. Settings, products and offers themselves stay.', h('div', { class: 'toolbar' }, word, go), st.lastReset ? h('p', { class: 'muted', style: 'margin:0', text: `Last reset ${ago(st.lastReset.at)} by ${st.lastReset.by}.` }) : null);
+      return section('Reset', 'Wipes every wallet, game answer, offer claim, seal and bot from testing. Settings, products and offers themselves stay.', h('div', { class: 'toolbar' }, word, go), st.lastReset ? h('p', { class: 'muted', style: 'margin:0', text: `Last reset ${ago(st.lastReset.at)} by ${st.lastReset.byName ?? W.actor(st.lastReset.by)}.` }) : null);
     })();
     const bots = (() => {
       const n = h('input', { class: 'input', type: 'number', min: 1, max: 200, value: 20, 'aria-label': 'How many bots' });
@@ -279,20 +302,100 @@
       section('Waiting', 'Steps proposed and not yet run.', actionsTable(mine)));
   }
 
+  // ---------- the emergency stop (src/modules/chain/pause.ts) ----------
+  // On the main menu whatever is switched on (the Blockchain page may be off, as in the pilot). Pausing: one person,
+  // at once, stopping what the company's Pause settings say (the person pressing may keep printing going where
+  // allowed). Unpausing: proposed, approved by other people, then the wait; printing can start again on its own, by a
+  // quicker rule. The settings below are adjustable; the pause itself never goes away, and weakening it is a security
+  // change (an owner with the second step, a reason, one change at a time).
+  async function pausePage() {
+    const p = await api('GET', '/v1/pause');
+    const AREA = { money: 'Money', tokens: 'Token actions', printing: 'Printing' };
+    const hours = (n) => (n === 0 ? 'no wait' : n % 24 === 0 && n >= 48 ? plural(n / 24, 'day', 'days') : plural(n, 'hour', 'hours'));
+    const others = (n) => plural(n, 'other person', 'other people');
+    const reason = h('input', { class: 'input', placeholder: 'Why you’re pausing (for the record)', 'aria-label': 'Why you’re pausing', maxlength: 300 });
+    // What this press stops: the settings, ticked; printing can be unticked where allowed; anything can be added.
+    const ticks = {};
+    const pressList = p.areas.map((a) => {
+      const box = h('input', { type: 'checkbox', id: `pz-${a.id}`, checked: a.onPress });
+      if (a.onPress && !a.mayLeaveOut) box.disabled = true;
+      ticks[a.id] = box;
+      const items = p.stops.filter((x) => x.area === a.id);
+      return h('li', { style: 'margin:0 0 8px' }, h('label', { for: box.id, style: 'display:flex;gap:8px;align-items:flex-start;cursor:pointer' }, box, h('span', {}, h('b', { text: AREA[a.id] }), a.onPress && !a.mayLeaveOut ? h('span', { class: 'muted', text: ' (always, here)' }) : a.mayLeaveOut ? h('span', { class: 'muted', text: ' (untick to keep printing going this time)' }) : h('span', { class: 'muted', text: ' (not stopped unless you tick it)' }))),
+        items.length ? h('ul', { class: 'muted', style: 'margin:4px 0 0 26px;padding-left:16px;font-size:13px;line-height:1.6' }, items.map((x) => h('li', { text: x.label }))) : null);
+    });
+    const pressed = async () => {
+      if (reason.value.trim().length < 3) { toast('Say why you’re pausing.'); reason.focus(); return; }
+      const body = { reason: reason.value.trim() };
+      for (const a of p.areas) if (ticks[a.id].checked !== a.onPress) body[a.id] = ticks[a.id].checked;
+      if (!p.areas.some((a) => ticks[a.id].checked)) { toast('Tick at least one thing to stop.'); return; }
+      try { await api('POST', '/v1/pause', body); toast('Paused. The team was told.'); render(); } catch (x) { toast(x.message); }
+    };
+    const st = p.stopped ?? { money: false, tokens: false, printing: false };
+    const nowWords = ['money', 'tokens', 'printing'].filter((x) => st[x]).map((x) => AREA[x].toLowerCase());
+    const last = p.pauses[0];
+    const r = p.rules, u = p.unpause;
+    const startAgain = (p.chainPaused) ? section('Starting again', u.length ? 'Unpausing was proposed: other people approve it, then it waits, then it can run.' : null,
+      u.length ? actionsTable(u) : h('div', { class: 'stack' },
+        st.printing && (st.money || st.tokens) ? h('div', {}, h('p', { style: 'margin:0 0 6px', text: `Start printing again on its own: ${others(r.unpausePrinting.approvalsNeeded)} approve${r.unpausePrinting.approvalsNeeded === 1 ? 's' : ''}, then ${hours(r.unpausePrinting.delayHours)}. Money and token actions stay paused.` }), h('button', { class: 'btn blue', type: 'button', onclick: () => propose('unpause_printing').catch((x) => toast(x.message)) }, 'Propose starting printing again')) : null,
+        st.printing && !st.money && !st.tokens ? h('div', {}, h('p', { style: 'margin:0 0 6px', text: `Only printing is paused: ${others(r.unpausePrinting.approvalsNeeded)} approve${r.unpausePrinting.approvalsNeeded === 1 ? 's' : ''}, then ${hours(r.unpausePrinting.delayHours)}.` }), h('button', { class: 'btn blue', type: 'button', onclick: () => propose('unpause_printing').catch((x) => toast(x.message)) }, 'Propose starting printing again')) : null,
+        h('div', {}, h('p', { style: 'margin:0 0 6px', text: `Unpause everything: ${others(r.unpause.approvalsNeeded)} approve, then ${hours(r.unpause.delayHours)}.` }), h('button', { class: st.printing && !st.money && !st.tokens ? 'btn secondary' : 'btn blue', type: 'button', onclick: () => propose('unpause').catch((x) => toast(x.message)) }, 'Propose unpausing everything')))) : null;
+    shell('pause', head('Pause', p.paused ? `Paused: ${nowWords.length ? nowWords.join(', ') : 'nothing left'}${last ? ` (since ${when(last.at)}: ${last.reason})` : ''}.` : p.chainPaused ? 'Token actions are paused (from the Blockchain page or the daily check). Printing and money run as usual.' : 'Everything is running.'),
+      h('div', { class: 'stack' },
+        section('The emergency stop', 'Press it the moment something looks wrong, with a reason; the whole team is told. You see exactly what it will stop before you press. Starting again takes other people’s approval, so it can’t be undone by the same person in a hurry.',
+          h('p', { style: 'margin:0 0 6px', text: 'Pressing it now stops, for your company:' }),
+          h('ul', { style: 'margin:0 0 12px;padding-left:0;list-style:none' }, pressList),
+          h('p', { class: 'muted', style: 'margin:0 0 12px;font-size:13px', text: 'It never stops settling money already moving: refunds, stopping a paid ad and paying it back, settling gift cards already bought. Scans, the books and the team keep working.' }),
+          h('div', { class: 'toolbar' }, reason, h('button', { class: 'btn', type: 'button', onclick: pressed }, p.paused ? 'Pause again' : 'Pause now'))),
+        startAgain,
+        p.pauses.length ? section('Pauses in force', null, h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('tbody', {}, p.pauses.map((x) => h('tr', {}, h('td', { text: when(x.at) }), h('td', { text: ['money', 'tokens', 'printing'].filter((k) => x.stops[k]).map((k) => AREA[k]).join(', ') || 'Nothing now (printing started again)' }), h('td', { text: x.reason }))))))) : null,
+        pauseSettingsSection(p)));
+  }
+  /** The company's Pause settings: owners change them; each change is kept in the settings history. */
+  function pauseSettingsSection(p) {
+    const s = p.settings, L = p.limits;
+    const owner = S.ov?.you?.role === 'owner' || S.ov?.you?.platform;
+    const save = async (change, weaker, what) => {
+      // Weakening the pause is its own decision, written down (and needs your second step), one change at a time.
+      const reason = weaker ? window.prompt(`Why weaken “${what}”? (at least 10 characters, for the record)`) : null;
+      if (weaker && !reason) { render(); return; }
+      try { await api('PATCH', '/v1/console/settings', { version: S.ov.version, changes: { pause: change }, ...(reason ? { reason } : {}) }); toast('Saved. It’s in the settings history.'); S.ov = null; render(); } catch (x) { toast(x.message); render(); }
+    };
+    const check = (label, on, hint, onchange) => { const box = h('input', { type: 'checkbox', checked: on, disabled: !owner, onchange: (e) => onchange(e.currentTarget.checked) }); return h('label', { style: 'display:flex;gap:8px;align-items:flex-start;margin:0 0 8px' }, box, h('span', {}, h('b', { text: label }), hint ? h('div', { class: 'muted', style: 'font-size:13px', text: hint }) : null)); };
+    const numberRow = (label, value, min, max, unit, onsave) => {
+      const n = h('input', { class: 'input', type: 'number', min, max, step: 1, value, disabled: !owner, style: 'max-width:110px' });
+      return h('div', { class: 'toolbar' }, field(`${label} (${min} to ${max} ${unit})`, n), owner ? h('button', { class: 'btn secondary small', type: 'button', onclick: () => { const v = Number(n.value); if (!Number.isInteger(v) || v < min || v > max) return toast(`Pick ${min} to ${max}.`); if (v !== value) onsave(v); } }, 'Save') : null);
+    };
+    const AREA = { money: ['Money', 'Payouts, the agents’ fund, offers, gift cards, prizes, and charging advertisers’ cards (charged after unpausing).'], tokens: ['Token actions', 'Minting, conversions, moving tokens out.'], printing: ['Printing', 'Orders, packs and delivery nights, reprints, machines.'] };
+    return section('Pause settings', `Adjustable for your company; the pause itself can never be removed. Making it weaker (stopping less, fewer approvals, a shorter wait) is done by an owner signed in with the second step, one change at a time, with a reason.${owner ? '' : ' Only owners change these.'}`,
+      h('h3', { style: 'margin:8px 0', text: 'What Pause stops' }),
+      ['money', 'tokens', 'printing'].map((k) => check(AREA[k][0], s.stops[k], AREA[k][1], (v) => save({ stops: { [k]: v } }, !v, `Pause stops ${AREA[k][0].toLowerCase()}`))),
+      check('Let the person pressing keep printing going', s.chooseAtPress, 'They see what will stop and may untick printing for that one press (to keep a delivery night going). Money and token actions always stop.', (v) => save({ chooseAtPress: v }, v, 'Pause stops everything it’s set to')),
+      h('h3', { style: 'margin:16px 0 8px', text: 'Who can press Pause' }),
+      (() => { const sel = h('select', { class: 'input', disabled: !owner, 'aria-label': 'Who can press Pause' }, h('option', { value: 'owners_finance', text: 'Owners and finance', selected: s.whoPresses === 'owners_finance' }), h('option', { value: 'owners_finance_ops', text: 'Owners, finance and ops', selected: s.whoPresses === 'owners_finance_ops' })); return h('div', { class: 'toolbar' }, sel, owner ? h('button', { class: 'btn secondary small', type: 'button', onclick: () => { if (sel.value !== s.whoPresses) save({ whoPresses: sel.value }, false); } }, 'Save') : null, h('span', { class: 'muted', style: 'font-size:13px', text: 'Ops people press it from the ops console, signed in. Unpausing stays with owners and finance.' })); })(),
+      h('h3', { style: 'margin:16px 0 8px', text: 'Unpausing everything (money and token actions always come back this way)' }),
+      numberRow('Other people who approve', s.unpause.approvals, L.approvals.min, L.approvals.max, 'people', (v) => save({ unpause: { approvals: v } }, v < s.unpause.approvals, 'Approvals needed to unpause')),
+      numberRow('Hours to wait after the last approval', s.unpause.waitHours, L.wait.min, L.wait.max, 'hours', (v) => save({ unpause: { waitHours: v } }, v < s.unpause.waitHours, 'The wait before unpausing')),
+      h('h3', { style: 'margin:16px 0 8px', text: 'Starting printing again on its own (the quick path)' }),
+      numberRow('Other people who approve', s.printingUnpause.approvals, L.approvals.min, L.approvals.max, 'people', (v) => save({ printingUnpause: { approvals: v } }, v < s.printingUnpause.approvals, 'Approvals needed to start printing again')),
+      numberRow('Hours to wait (0: it starts at the last approval)', s.printingUnpause.waitHours, L.printingWait.min, L.printingWait.max, 'hours', (v) => save({ printingUnpause: { waitHours: v } }, v < s.printingUnpause.waitHours, 'The wait before printing starts again')));
+  }
+
   // ---------- wallet and points ----------
   async function walletPage() {
     const [supply, check, camps] = await Promise.all([api('GET', `/v1/public/wallet/${encodeURIComponent(S.ov.config.id)}/supply`), api('GET', '/v1/wallet/check'), api('GET', '/v1/campaigns').catch(() => [])]);
-    const brands = [...new Map(camps.map((c) => [c.advertiserId, c.advertiserName])).entries()];
+    // Brands with a reserve: real advertisers only (never the company's own pieces, filler copies or the blank "Open space").
+    const brands = [...new Map(camps.filter((c) => !c.isHouse).map((c) => [c.advertiserId, c.advertiserName])).entries()];
     settingsPage('wallet', 'Points and credit', 'Points are earned for real activity and are the same whichever item someone picks. Dollar credit is paid from a brand’s reserve, never more than it holds.', (ctx) => {
       if (!ctx.draft.wallet) { ctx.draft.wallet = structuredClone(S.ov.options.wallet); S.ov.config.wallet = structuredClone(S.ov.options.wallet); }
       const actions = Object.keys(ctx.draft.wallet.points.perAction);
-      const label = { scan: 'Scanning a real bottle', game_round: 'Each game screen', ad_feedback: 'Each ad round', feedback: 'Feedback (20+ characters)', prompt: 'A real question', upload: 'A picture with feedback', streak_bonus: 'Every 10 in a row' };
+      const label = { scan: 'Scanning a real bottle', game_round: 'Each game screen', ad_feedback: 'Each ad round', feedback: 'Feedback (20+ characters)', prompt: 'A real question', upload: 'A picture with feedback', streak_bonus: 'Every 10 in a row', data_full: 'Sharing all their data (once)' };
       const reserve = (() => { const who = h('select', { class: 'input' }, brands.map(([id, name]) => h('option', { value: `advertiser:${id}`, text: name }))), amt = h('input', { class: 'input', type: 'number', min: 0.01, step: '0.01', placeholder: '$' }), ref = h('input', { class: 'input', placeholder: 'Payment reference' }); return h('div', { class: 'stack' }, h('div', { class: 'form' }, field('Brand (reserve)', who), field('Amount arrived', amt), field('Payment reference', ref)), h('div', { class: 'toolbar' }, h('button', { class: 'btn secondary', type: 'button', onclick: async () => { try { const r = await api('POST', '/v1/wallet/reserve', { sponsor: who.value, cents: Math.round(Number(amt.value) * 100), ref: ref.value.trim() }); toast(`Reserve now ${dollars(r.reserve)}.`); } catch (x) { toast(x.message); } } }, 'Record money in reserve'))); })();
       return [
         h('div', { class: 'kpis', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' },
           h('div', { class: 'kpi' }, h('span', { text: 'Points given out' }), h('b', { text: supply.issued.toLocaleString() })), h('div', { class: 'kpi' }, h('span', { text: 'Cap' }), h('b', { text: supply.cap.toLocaleString() })),
           h('div', { class: 'kpi' }, h('span', { text: 'Halvings so far' }), h('b', { text: String(supply.era) })), h('div', { class: 'kpi' }, h('span', { text: 'Books add up' }), h('b', { text: check.ok ? 'Yes' : 'No' }))),
-        section('Points per action', 'What each action earns now, before halvings. Points never depend on which item someone picks.', h('div', { class: 'form' }, actions.map((k) => num(ctx, `wallet.points.perAction.${k}`, label[k] ?? k, { min: 0, max: 10000, hint: `Earns ${supply.earnNow[k] ?? 0} now` }))),
+        section('Points per action', 'What each action earns now, before halvings. Points never depend on which item someone picks.', h('div', { class: 'form' }, actions.map((k) => num(ctx, `wallet.points.perAction.${k}`, label[k] ?? W.humanize(k), { min: 0, max: 10000, hint: `Earns ${supply.earnNow[k] ?? 0} now` }))),
           h('div', { class: 'form' }, num(ctx, 'wallet.points.dailyMax', 'Most points one person can earn in a day', { min: 0, max: 1000000 }), text(ctx, 'wallet.points.name', 'What points are called', { max: 40 }))),
         section('Money switches', 'Changed only by a person signed in. Exchanging points for anything else takes the several-people approval under Launch.',
           toggle(ctx, 'wallet.credit.enabled', 'Dollar credit', 'Pay people from brands’ reserves (offers, rewards).'), on('offers') ? toggle(ctx, 'offers.enabled', 'Brand offers', 'Approved offers go live for people to claim.') : null, on('gift_cards') ? exchangesSwitch(ctx) : null),
@@ -321,8 +424,11 @@
 
   // ---------- the games ----------
   async function gamesPage() {
-    const [r, cat, launches, offers] = await Promise.all([api('GET', '/v1/games/report'), api('GET', '/v1/games/catalog'), api('GET', '/v1/games/launches'), api('GET', '/v1/offers').catch(() => [])]);
-    const promised = S.ov.config.games?.mayComeTrue ?? [];
+    const onOff = () => section('On or off', S.ov.config.games?.enabled === false ? 'The games are off: the Play page says so, and nothing is asked or kept.' : 'The games are on. Switching them off is immediate; nothing else on bottles changes.', h('button', { class: 'btn secondary', type: 'button', onclick: async () => { try { await api('PATCH', '/v1/console/settings', { version: S.ov.version, changes: { games: { ...(S.ov.config.games ?? {}), enabled: S.ov.config.games?.enabled === false } } }); toast('Saved.'); render(); } catch (x) { toast(x.message); } } }, S.ov.config.games?.enabled === false ? 'Turn the games on' : 'Turn the games off'));
+    // Off for this company: only the switch to turn them back on (its report and catalog aren't kept while off).
+    if (!on('games')) return shell('games', head('The games', 'Off for your company.'), onOff());
+    const [r, cat, launches, offers] = await Promise.all([api('GET', '/v1/games/report'), api('GET', '/v1/games/catalog'), getIf('come_true', '/v1/games/launches', []), getIf('offers', '/v1/offers', []).catch(() => [])]);
+    const promised = on('come_true') ? S.ov.config.games?.mayComeTrue ?? [] : [];
     const winners = Object.fromEntries(await Promise.all(promised.map(async (c) => [c, await api('GET', `/v1/games/winners?category=${encodeURIComponent(c)}`)])));
     const comeTrue = section('Picks that may come true', 'Mark categories where you may really offer what people pick (the screens then say “Picks may come true”). When enough people have picked, make the winner come true: link the offer you made for it, and everyone who picked it is told.',
       h('div', { class: 'pills' }, cat.filter((c) => c.items.length).map((c) => { const box = h('input', { type: 'checkbox' }); box.checked = promised.includes(c.category); box.addEventListener('change', async () => { const next = box.checked ? [...new Set([...promised, c.category])] : promised.filter((x) => x !== c.category); try { await api('PATCH', '/v1/console/settings', { version: S.ov.version, changes: { games: { ...(S.ov.config.games ?? {}), mayComeTrue: next } } }); toast('Saved.'); render(); } catch (x) { toast(x.message); box.checked = !box.checked; } }); return h('label', { class: 'pill', style: 'display:inline-flex;gap:6px;align-items:center;cursor:pointer' }, box, c.name); })),
@@ -337,7 +443,7 @@
       h('div', { class: 'grid2' },
         section('Picked, by price setup', 'Of the times each setup was on a screen, how often it was chosen.', bars(r.pickRateBySetup, (k) => names[k] ?? k)),
         section('Picked, by place on screen', 'If the first spot wins much more often, the layout is steering people.', bars(r.pickRateByPosition, (k) => `Spot ${Number(k) + 1}`))),
-      section('On or off', S.ov.config.games?.enabled === false ? 'The games are off: the Play page says so, and nothing is asked or kept.' : 'The games are on. Switching them off is immediate; nothing else on bottles changes.', h('button', { class: 'btn secondary', type: 'button', onclick: async () => { try { await api('PATCH', '/v1/console/settings', { version: S.ov.version, changes: { games: { ...(S.ov.config.games ?? {}), enabled: S.ov.config.games?.enabled === false } } }); toast('Saved.'); render(); } catch (x) { toast(x.message); } } }, S.ov.config.games?.enabled === false ? 'Turn the games on' : 'Turn the games off')),
+      onOff(),
       comeTrue,
       section('Honest-data tiers', 'Which tier each pick would be if it were real.', h('div', { class: 'pills' }, Object.entries(r.tiers).map(([k, n]) => chip(`${tierNames[k] ?? k}: ${n}`)))),
       section('Photos on the cards', 'Each item’s photo, where it came from and its license. Open a category to check them, or upload your own (a brand’s official photo) to replace any.', ...cat.map((c) => h('details', { class: 'stack', style: 'gap:8px' }, h('summary', { style: 'cursor:pointer;font-weight:700', text: `${c.name}: ${c.items.filter((i) => i.image).length} of ${c.items.length} have photos${c.source === 'none' ? ' (name cards)' : ''}` }),
@@ -346,7 +452,7 @@
 
   // ---------- the chain ----------
   async function chainPage() {
-    const [st, actions, seals, check] = await Promise.all([api('GET', '/v1/chain'), api('GET', '/v1/chain/actions'), api('GET', `/v1/public/wallet/${encodeURIComponent(S.ov.config.id)}/seals`), api('GET', '/v1/chain/seals/check')]);
+    const [st, actions, seals, check] = await Promise.all([api('GET', '/v1/chain'), api('GET', '/v1/chain/actions'), getIf('hourly_seals', `/v1/public/wallet/${encodeURIComponent(S.ov.config.id)}/seals`, []), api('GET', '/v1/chain/seals/check')]);
     const reason = h('input', { class: 'input', placeholder: 'Why you’re pausing', 'aria-label': 'Reason' });
     shell('chain', head('Blockchain', `${st.enabled ? 'On' : 'Off'} · ${st.network === 'test' ? 'practice chain (not a real blockchain)' : st.network} · ${st.paused ? 'PAUSED' : 'running'}`),
       h('div', { class: 'kpis', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' },
@@ -354,14 +460,15 @@
         h('div', { class: 'kpi' }, h('span', { text: 'Last daily check' }), h('b', { text: st.lastCheck ? (st.lastCheck.ok ? 'Matched' : 'MISMATCH') : '—' })), h('div', { class: 'kpi' }, h('span', { text: 'Seals intact' }), h('b', { text: check.ok ? `All ${check.checked}` : `${check.broken.length} broken` }))),
       section('On or off', st.enabled ? 'The chain is on: hourly seals go to it and token steps can run. Switching it off is immediate; switching it back on needs approvals and the wait again.' : 'The chain is off: hourly seals go to GitHub only and nothing touches a blockchain. Going live with the token switches it on; you can also propose switching it on alone (seals only).',
         st.enabled ? h('button', { class: 'btn secondary', type: 'button', onclick: async () => { try { await api('PATCH', '/v1/console/settings', { version: S.ov.version, changes: { chain: { ...st, enabled: false, stage: undefined, chain: undefined, custody: undefined, paused: undefined, lastCheck: undefined, tokenSupply: undefined } } }); toast('Switched off.'); render(); } catch (x) { toast(x.message); } } }, 'Switch the chain off now') : h('button', { class: 'btn secondary', type: 'button', onclick: () => propose('switch_on').catch((x) => toast(x.message)) }, 'Propose switching the chain on')),
-      section('Pause', 'Stops everything on the chain at once. Any one person. Unpausing needs approvals and the wait.', h('div', { class: 'toolbar' }, reason, h('button', { class: 'btn secondary', type: 'button', onclick: async () => { try { await api('POST', '/v1/chain/pause', { reason: reason.value || 'Paused from the console' }); toast('Paused.'); render(); } catch (x) { toast(x.message); } } }, 'Pause now'), st.paused ? h('button', { class: 'btn blue', type: 'button', onclick: () => propose('unpause').catch((x) => toast(x.message)) }, 'Propose unpausing') : null)),
+      section('Pause', 'Stops every token action at once. Any one person. Unpausing needs approvals and the wait. To stop printing and money too, use Pause on the main menu.', h('div', { class: 'toolbar' }, reason, h('button', { class: 'btn secondary', type: 'button', onclick: async () => { try { await api('POST', '/v1/chain/pause', { reason: reason.value || 'Paused from the console' }); toast('Paused.'); render(); } catch (x) { toast(x.message); } } }, 'Pause now'), st.paused ? h('button', { class: 'btn blue', type: 'button', onclick: () => propose('unpause').catch((x) => toast(x.message)) }, 'Propose unpausing') : null)),
       section('Approvals', `Anything that can’t be undone needs ${st.approvalsNeeded} other owners or finance people who were on the team when it was proposed, then a ${st.delayHours}-hour wait.`, actionsTable(actions)),
       section('Hourly seals', 'One fingerprint for every hour of the wallet books, each including the hour before. Anyone can check their own entry against it.', seals.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Hour', 'Fingerprint', 'Published'].map((x) => h('th', { text: x })))), h('tbody', {}, seals.slice(0, 24).map((x) => h('tr', {}, h('td', { text: when(x.hour) }), h('td', { style: 'font-family:var(--mono);font-size:12px', text: `${x.root.slice(0, 20)}…` }), h('td', { text: Object.keys(x.published).join(', ') || 'not yet' })))))) : h('p', { class: 'muted', style: 'margin:0', text: 'No seals yet.' })));
   }
 
   // ---------- get started ----------
   async function startPage() {
-    const list = S.ov.checklist;
+    // Steps and figures for areas that are off (machines in the pilot) aren't shown.
+    const list = S.ov.checklist.filter((c) => pageOn(c.path.split('/')[2]));
     const done = list.filter((c) => c.done).length;
     const preview = h('div', { class: 'label' }, window.fwLabel.views((await api('POST', '/v1/console/preview-label', { changes: {} })).svg, { alt: 'Your bottle label' }).el);
     shell('start', head(done === list.length ? `${S.config.name} is all set` : `Welcome to ${S.config.name}`, done === list.length ? 'Everything is set up. Change anything any time; every change is saved as a version you can put back.' : 'A few things to set up before your first bottle. Each one takes a minute or two.'),
@@ -372,7 +479,7 @@
           h('div', { class: 'preview big' }, h('div', { class: 'cap' }, h('b', { text: 'Your bottle today' }), h('span', { text: 'Your most recent label, drawn with your current settings' })), preview),
           h('section', { class: 'panel-box' }, h('h2', { text: 'At a glance' }),
             h('div', { class: 'kpis', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' },
-              h('div', { class: 'kpi' }, h('span', { text: 'Machines' }), h('b', { text: String(S.ov.locations.filter((l) => l.kind === 'machine').length) })),
+              pageOn('machines') ? h('div', { class: 'kpi' }, h('span', { text: 'Machines' }), h('b', { text: String(S.ov.locations.filter((l) => l.kind === 'machine').length) })) : null,
               h('div', { class: 'kpi' }, h('span', { text: 'Giving' }), h('b', { text: S.ov.config.giving.mode === 'per_unit' ? `${S.ov.config.giving.centsPerUnit}¢` : S.ov.config.giving.mode === 'percent_of_revenue' ? `${S.ov.config.giving.percentOfRevenue}%` : 'Off' })),
               h('div', { class: 'kpi' }, h('span', { text: 'Settings' }), h('b', { text: `v${S.ov.version}` })))))));
   }
@@ -384,6 +491,7 @@
         section('Name and web address', null, h('div', { class: 'form' },
           text(ctx, 'name', 'Company name', { max: 60, hint: 'Shown in the app, on receipts and in the open books.' }),
           text(ctx, 'receiptBaseUrl', 'QR web address', { max: 200, mono: true, placeholder: 'https://go.yourbrand.com', hint: 'Every QR code on your bottles opens a page here. Point this domain at the platform before changing it.' }),
+          domainBox(),
           select(ctx, 'timezone', 'Time zone', [...new Set([S.ov.config.timezone, ...S.ov.options.timezones].filter(Boolean))].map((t) => [t, t.replace(/_/g, ' ')]), { hint: 'Used for “today”, delivery nights and daily books.' }))),
         section('Bottles for people', 'What people pay at your machines and in the app, and how many free bottles one person can get.', h('div', { class: 'form' },
           select(ctx, 'consumerPricing', 'Bottle price', [['free', 'Free (paid for by the ads)'], ['discounted', 'Discounted'], ['full', 'Full price']]),
@@ -395,6 +503,17 @@
           num(ctx, 'machines.offlinePerHour', 'At most this many an hour, per machine', { min: 0, max: 120 }),
           num(ctx, 'machines.bufferSize', 'Labels each machine keeps ready', { min: 0, max: 50, hint: 'Their ads are held, never billed unless printed. Unused ones are let go after a day.' }))),
         boxesSection(ctx))]);
+  }
+
+  // ---------- your own domain (src/core/site.ts; docs/RUNNING.md): codes use it once its DNS check passes ----------
+  function domainBox() {
+    const d = S.ov.options.domain;
+    const input = h('input', { class: 'input', maxlength: 120, placeholder: 'water.yourbrand.com', spellcheck: 'false', style: 'font-family:var(--mono)', value: d?.host ?? '' });
+    const run = async (path, body) => { try { await api('POST', path, body); S.ov = await api('GET', '/v1/console'); render(); toast('Saved.'); } catch (x) { toast(x.message); } };
+    return h('div', { class: 'field full' }, h('label', { for: input.id = `f${++fid}`, text: 'Your own domain' }),
+      h('div', { class: 'row' }, input, h('button', { class: 'btn secondary small', type: 'button', onclick: () => run('/v1/console/domain', { host: input.value.trim() }) }, d ? 'Change' : 'Use it'),
+        d && !d.verified ? h('button', { class: 'btn blue small', type: 'button', onclick: () => run('/v1/console/domain/verify') }, 'Check DNS') : null),
+      h('div', { class: 'hint', text: d ? (d.verified ? `Checked. New codes use https://${d.host}. Codes printed before keep their address, which keeps working.` : `Not checked yet: codes use ${S.ov.options.siteBase}. Add a TXT record named ${d.records.verify.name} with the value ${d.records.verify.value}, and a CNAME from ${d.host} to ${d.records.point.value}, then Check DNS.`) : `Your codes use ${S.ov.options.siteBase}. Add a domain you control to use it instead (DNS steps follow).` }));
   }
 
   // ---------- delivery boxes (src/modules/packs/boxSettings.ts) ----------
@@ -478,7 +597,7 @@
           select(ctx, 'brand.fontFamily', 'Lettering', S.ov.options.fonts.map((f) => [f.value, f.label]), { hint: 'Only fonts every printer has.' }))),
         section('Colors', 'Text must be easy to read on the panel; the preview tells you if it isn’t.', h('div', { class: 'form' },
           color(ctx, 'brand.panelColor', 'Panel'), color(ctx, 'brand.textColor', 'Text'), color(ctx, 'brand.accentColor', 'Accent', { hint: 'The bottom logo line, the giving line and buttons in the app.' }))),
-        section('Product facts', 'Printed small at the bottom of the panel. One line each.', text(ctx, 'productFacts', 'Lines', { area: true, lines: true, full: true, hint: 'What the water is, the size, the source and who bottled it. Up to 6 lines.' })))],
+        section('Product facts', 'Printed small at the bottom of the panel. One line each.', text(ctx, 'productFacts', 'Lines', { area: true, lines: true, full: true, hint: 'What the water is, the size, the source and who bottled it. Up to 6 lines. Printed on your delivery boxes’ info strip; the “Bottled for …” line also prints on your label panel (edit it on the Label panel page).' })))],
     { onChange: (_d, ch) => refresh(ch) });
   }
 
@@ -541,19 +660,23 @@
           return h('div', { class: 'form' }, field('New icon’s name', name), upload('Its picture (your own file of the icon)', (data) => { if (!name.value.trim()) { toast('Name the icon first.'); return; } P.icons.push({ name: name.value.trim(), image: data }); ctx.changed(); drawIcons(); }));
         })()]));
       drawIcons();
+      const gaps = S.ov.options.panelGaps ?? [];
       return [h('div', { class: 'stack' },
+        gaps.length ? h('div', { class: 'notice err', role: 'alert', text: `Your bottles can’t print until your panel has ${gaps.join('; ')}. Fill these in and save.` }) : null,
         h('div', { class: 'preview' }, h('div', { class: 'cap' }, h('b', { text: 'Your panel as it prints' }), h('span', { text: 'On your standard product, at its real proportions. Words are outlines in the print file, exactly as here.' })), img, problem),
         section('Colours', 'Words must be easy to read on the background; the preview tells you if they aren’t.', h('div', { class: 'form' },
           color(ctx, 'labelPanel.colors.background', 'Background'), color(ctx, 'labelPanel.colors.text', 'Text'), color(ctx, 'labelPanel.colors.accent', 'Accent', { hint: 'The logo’s bottom line, the first giving line, the refill line, the recycling mark.' }))),
         section('Logo', null, logoBox),
         section('Giving line', 'Under the logo, bold italic, one entry a line.', h('div', { class: 'form' },
           lines('charity', 'Lines', 'Like 10 CENTS+ / PER WATER / GOES TO / CHARITY. Up to 6 lines of 24 characters.'),
-          toggle(ctx, 'labelPanel.accentFirst', 'First line in the accent colour', 'As on FreeWater’s label.', { full: true }))),
+          toggle(ctx, 'labelPanel.accentFirst', 'First line in the accent colour', 'Draws the eye to what you give.', { full: true }))),
         section('Under the QR code', 'The QR code opens each bottle’s receipt; it isn’t changed here.', h('div', { class: 'form' }, text(ctx, 'labelPanel.handle', 'Handle', { max: 40, placeholder: '@yourbrand' }))),
         section('Social icons', 'Upload each icon’s picture yourself (the platform doesn’t draw other companies’ logos). They print in this order, in one row.', iconBox),
         section('The rest, top to bottom', 'What’s inside and where it comes from are set on each product (Products page).', h('div', { class: 'form' },
           lines('refill', 'Refill line', 'In the accent colour. Up to 3 lines.'),
-          lines('maker', 'Who makes it', 'Small print, wrapped to fit: maker, city, phone, email. Up to 10 lines.'),
+          text(ctx, 'labelPanel.bottledFor', 'Bottled for', { max: 60, full: true, placeholder: `Bottled for ${S.config?.name ?? 'your company'}`, hint: 'Your company’s own line in the small print. Needed to print (or your name in the maker’s lines).' }),
+          lines('maker', 'Who makes it', 'Small print, wrapped to fit: the manufacturer and its city. Up to 10 lines. Needed to print.'),
+          lines('contact', 'How to reach you', 'A phone, an email or a web address, one a line. Up to 4 lines. Needed to print.'),
           text(ctx, 'labelPanel.process', 'Process line', { max: 60, hint: 'In italics, like “Processed by ozonation”. Leave empty for none.' }),
           toggle(ctx, 'labelPanel.recycle.show', 'Recycling mark', 'Beside the process line.', { full: true }),
           upload('Your own recycling mark (optional)', (data) => { P.recycle = { ...P.recycle, image: data }; ctx.changed(); }),
@@ -579,7 +702,7 @@
         unsoldSection(ctx),
         section('Categories you won’t print', 'Tap to block. Advertisers in a blocked category can’t sign up or run ads.', chips),
         (ctx.draft.adBilling?.pricingMode ?? 'flat') === 'flat'
-          ? section('Price per bottle, by size', 'One flat price per bottle for each size of ad, everything included (AR, video and scans). Each piece is cut as close to square as the label allows.', h('div', { class: 'form' },
+          ? section('Price per bottle, by size', 'One flat price per bottle for each size of ad, AR, motion video and scans included (AI video clips are a paid extra, priced below). Each piece is cut as close to square as the label allows.', h('div', { class: 'form' },
             ...sizes.map(([k, l]) => num(ctx, `prices.perPrintByShare.${k}`, l, { min: 0, max: 10000, suffix: '¢', hint: (v) => `${dollars(v ?? 0)} a bottle` }))))
           : section('Starting prices', 'Per bottle printed, by how much of the label the ad gets. Bids start at the whole label’s price and go up; smaller pieces pay the same share of a bid. Each piece is cut as close to square as the label allows.', h('div', { class: 'form' },
             ...sizes.map(([k, l]) => num(ctx, `prices.perPrintByShare.${k}`, l, { min: 0, max: 10000, suffix: '¢', hint: (v) => (k === 1 ? `Bids start at ${dollars(v ?? 0)}.` : `${dollars(v ?? 0)} a bottle`) })))),
@@ -594,7 +717,7 @@
           num(ctx, 'prices.customUnit', 'A custom bottle (what people pay)', { min: 0, max: 10000, suffix: '¢', hint: (v) => dollars(v ?? 0) }))),
         // How advertisers pay (docs/SWITCHES.md). Paying up front, bidding and each fee are switched on the Features page.
         ctx.draft.adBilling ? section('How advertisers pay', ctx.draft.adBilling.requirePrepay
-          ? 'Up front, by card, for a number of bottles, at the prices above (AR, video and scans included). Each fee below is charged only when it’s switched on (Features → Money and payments), to the card once a day. Saving these needs the second sign-in step.'
+          ? 'Up front, by card, for a number of bottles, at the prices above (AR, motion video and scans included; AI video clips are a paid extra). Each fee below is charged only when it’s switched on (Features → Money and payments), to the card once a day. Saving these needs the second sign-in step.'
           : 'Billed afterwards, on invoices, with credit limits (Features → Money and payments → Bill advertisers afterwards). Saving these needs the second sign-in step.', h('div', { class: 'form' },
           num(ctx, 'adBilling.changeFeeCents', 'Fee for changing a running ad', { min: 0, max: 100000, suffix: '¢', hint: (v) => `${dollars(v ?? 0)}, paid up front. The new ad is reviewed before it prints.` }),
           num(ctx, 'adBilling.linkChangeFeeCents', 'Fee for changing a link on a live ad', { min: 0, max: 100000, suffix: '¢', hint: (v) => `${dollars(v ?? 5000)}, paid up front, while Change a link (fee) is on (Features → Money and payments). The new link is reviewed.` }),
@@ -609,6 +732,7 @@
   // The list that fills space nobody bought, in order: add, remove and reorder; the ads you picked; holding delivery
   // bottles for paid ads, for the company and each area. Saved with the page (a person signed in).
   function unsoldSection(ctx) {
+    if (!on('unsold_order')) return section('Unsold space', 'Switched off with ads: turn Ads on (Features) to choose what fills space nobody bought.');
     const box = h('div', { class: 'stack' }, h('p', { class: 'muted', text: 'Loading…' }));
     api('GET', '/v1/console/unsold').then((u) => {
       const cur = () => (ctx.draft.unsold ??= structuredClone(u.settings));
@@ -647,7 +771,9 @@
       };
       draw();
     }).catch((x) => box.replaceChildren(h('p', { class: 'notice err', text: x.message })));
-    return section('Unsold space', 'What fills space nobody bought, in order. Every piece is another business’s ad: never billed, never counted against a paid ad.', box);
+    const sec = section('Unsold space', 'What fills space nobody bought, in order. Every piece is another business’s ad: never billed, never counted against a paid ad.', h('p', { class: 'muted', style: 'margin:0' }, 'Charity partners’ pieces and ads offered free are approved in Review: ', h('a', { href: fixture ? '#' : '/ops/review/fillers' }, 'Filler and charity →')), box);
+    if (sec) { sec.id = 'unsold'; if (!fixture && location.hash === '#unsold') setTimeout(() => sec.scrollIntoView({ block: 'start' }), 0); }
+    return sec;
   }
 
   // ---------- QR codes and AR ----------
@@ -948,23 +1074,58 @@
     save.onclick = async () => { try { await api('POST', '/v1/benchmarks/settings', { minAds: Number(minAds.value), minAdvertisers: Number(minAdv.value), ...(why.value.trim() ? { reason: why.value.trim() } : {}) }); toast('Saved.'); render(); } catch (x) { toast(x.message); } };
     shell('benchmarks', head('Benchmarks', B.method),
       h('div', { class: 'notice', text: `Benchmarks are guidance, not a guarantee. ${B.promise}` }),
+      B.demo ? h('div', { class: 'notice warn demo-data', text: B.demo.note }) : null,
       B.contributes ? null : h('div', { class: 'notice', text: 'Your company doesn’t contribute its ads’ results to the network’s benchmarks, so you see only your own. Turn on “Contribute to the network’s benchmarks” on the Features page (Data & targeting) to join.' }),
       horizonLinks('/console/benchmarks', horizon),
       ...DIMS.map(([d, title]) => {
         const gs = B.groups.filter((g) => g.dimension === d);
         return gs.length ? section(title, null, h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['', 'Yours', 'The network'].map((x) => h('th', { text: x })))),
           h('tbody', {}, gs.map((g) => h('tr', {}, h('td', { text: g.label }), h('td', { text: figs(g.yours) }),
-            h('td', { class: g.network?.shown ? '' : 'muted', text: !g.network ? '—' : g.network.shown ? `${figs(g.network)} (about ${g.network.advertisers} advertisers, ${g.network.period})` : g.network.why }))))))) : null;
+            h('td', { class: g.network?.shown ? '' : 'muted', text: !g.network ? '—' : g.network.shown ? `${figs(g.network)} (about ${g.network.advertisers} advertisers, ${g.network.period}${g.network.demo ? ', demo data' : ''})` : g.network.why }))))))) : null;
       }),
       section('History', 'The network, month by month: ads first printed that month, their first 30 days (with noise, rounded; small groups held back).', B.history.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Month', 'Group', 'Ads', 'Scan rate', 'Sales per bottle'].map((x) => h('th', { text: x })))),
-        h('tbody', {}, B.history.slice(0, 120).map((r) => h('tr', {}, h('td', { text: r.period }), h('td', { text: `${r.dimension.replace(/_/g, ' ')}: ${r.label}` }), h('td', { text: String(r.ads) }), h('td', { text: pct(r.scanRate) }), h('td', { text: pct(r.conversionRate) })))))) : h('p', { class: 'muted', style: 'margin:0', text: 'Nothing settled yet.' })),
+        h('tbody', {}, B.history.slice(0, 120).map((r) => h('tr', {}, h('td', { text: r.demo ? `${r.period} (demo data)` : r.period }), h('td', { text: `${r.dimension.replace(/_/g, ' ')}: ${r.label}` }), h('td', { text: String(r.ads) }), h('td', { text: pct(r.scanRate) }), h('td', { text: pct(r.conversionRate) })))))) : h('p', { class: 'muted', style: 'margin:0', text: 'Nothing settled yet.' })),
       section('When an average is shown', `At least this many ads from this many advertisers (never under ${B.floors.minAds} and ${B.floors.minAdvertisers}), no advertiser with more than half of them, and enough without any one company’s ads. Anyone on the team can raise these; lowering them is an owner’s, with a reason.`,
         h('div', { class: 'form' }, field('Ads needed', minAds), field('Advertisers needed', minAdv), field('Why', why, { full: true })), h('div', { class: 'toolbar' }, save)));
   }
 
+  // ---------- household data (Data & targeting; src/modules/households; docs/COMPLIANCE.md, "Household data") ----------
+  // Totals only: the area statistics and their source, each import and what it refused, what's held by source and kind,
+  // and how many houses said no. Never a house or what was bought about one. Deleting a source works even switched off.
+  async function householdsPage() {
+    const D = await api('GET', '/v1/households/summary');
+    const sw = D.switches;
+    const state = (x) => chip(x ? 'On' : 'Off', x ? 'ok' : 'warn');
+    const n = (x) => Number(x || 0).toLocaleString();
+    const REFUSED = { sensitive: 'sensitive', unknown_attribute: 'not on the list', bad_value: 'bad value', no_address: 'no address', house_said_no: 'house said no' };
+    const drop = async (source) => {
+      if (!window.confirm(`Delete everything ${source} gave you? This can’t be undone.`)) return;
+      try { const r = await api('DELETE', `/v1/households/sources/${encodeURIComponent(source)}`); toast(`Deleted ${plural(n(r.deleted), 'fact', 'facts')} from ${source}.`); render(); } catch (x) { toast(x.message); }
+    };
+    shell('households', head('Household data', 'Data & targeting: what may be used to choose ads for houses that haven’t signed up, in totals.'),
+      h('div', { class: 'notice' }, ...D.explanation.map((t) => h('p', { style: 'margin:0 0 6px', text: t }))),
+      section('Switches', 'Changed on the Features page (Data & targeting). Off, that kind of data is never used or taken in; deleting it always works.',
+        h('ul', { style: 'list-style:none;padding:0;margin:0;line-height:2' },
+          h('li', {}, state(sw.houseTargeting), ' Ads aimed at houses'), h('li', {}, state(sw.areaData), ' Area statistics'), h('li', {}, state(sw.householdData), ' Bought household data'))),
+      section('Area statistics', D.areas.total ? `${plural(n(D.areas.total), 'area', 'areas')}: ${n(D.areas.real)} real, ${n(D.areas.sample)} sample (sample figures are made up, to show how it works, and say so).` : 'No area statistics yet.',
+        D.areas.sources.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Source', 'Real or sample', 'Kind', 'Areas', 'Dated'].map((x) => h('th', { text: x })))),
+          h('tbody', {}, D.areas.sources.map((a) => h('tr', {}, h('td', { text: a.source }), h('td', {}, chip(a.sample ? 'Sample' : 'Real', a.sample ? 'warn' : 'ok')), h('td', { text: a.kind.replace(/_/g, ' ') }), h('td', { text: n(a.areas) }), h('td', { text: a.oldest === a.newest ? a.oldest : `${a.oldest} to ${a.newest}` })))))) : null),
+      section('Bought data by source', `${plural(n(D.bought.facts), 'fact', 'facts')} about ${plural(n(D.bought.houses), 'house', 'houses')}. Each is deleted ${plural(D.bought.keepDays, 'day', 'days')} after its import. Deleting a source deletes everything it gave you, at once.`,
+        D.bought.sources.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Source', 'Bought or yours', 'Houses', 'Facts', 'Data dated', ''].map((x) => h('th', { text: x })))),
+          h('tbody', {}, D.bought.sources.map((x) => h('tr', {}, h('td', { text: x.source }), h('td', { text: x.origin === 'first_party' ? 'Your own survey' : 'Bought' }), h('td', { text: n(x.houses) }), h('td', { text: n(x.facts) }), h('td', { text: x.oldest ? (x.oldest === x.newest ? x.oldest : `${x.oldest} to ${x.newest}`) : '—' }),
+            h('td', {}, h('button', { class: 'btn secondary small', type: 'button', onclick: () => drop(x.source) }, 'Delete this source'))))))) : h('p', { class: 'muted', style: 'margin:0', text: 'None held.' }),
+        D.bought.byAttribute.length ? h('p', { class: 'muted', style: 'margin:8px 0 0', text: `Houses with each kind of fact: ${D.bought.byAttribute.map((a) => `${a.attribute.replace(/_/g, ' ')} ${n(a.houses)}`).join(' · ')}.` }) : null),
+      section('Imports', 'Each import, newest first: what was kept and what was refused, and why. Sensitive kinds are refused by rule and never kept.',
+        D.imports.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Imported', 'Source', 'Data dated', 'Kept', 'Refused', 'Of them sensitive', 'Still held'].map((x) => h('th', { text: x })))),
+          h('tbody', {}, D.imports.map((i) => h('tr', {}, h('td', { text: when(i.importedAt) }), h('td', { text: i.source }), h('td', { text: i.sourceDate }), h('td', { text: n(i.kept) }),
+            h('td', { text: i.refusedBy ? `${n(i.refused)}${i.refused ? ` (${Object.entries(i.refusedBy).map(([k, v]) => `${REFUSED[k] ?? k} ${n(v)}`).join(', ')})` : ''}` : n(i.refused) }),
+            h('td', { text: i.sensitiveRefused == null ? 'not recorded' : n(i.sensitiveRefused) }), h('td', { text: n(i.stillHeld) })))))) : h('p', { class: 'muted', style: 'margin:0', text: 'No imports yet. Household data is imported through the API by a person on the team (docs/COMPLIANCE.md, “Household data”).' })),
+      section('Houses that said no', `${plural(n(D.optOuts), 'house has', 'houses have')} said “don’t use my home”. Nothing about them is used, their bought data was deleted, and later imports skip them. Anyone can say no without an account.`));
+  }
+
   async function numberLinePage() {
     for (const s of ['company', 'custom', `bottle:${S.ov.config.standardProductId ?? 'bottle-16oz'}`]) { try { await api('POST', '/v1/numberline/place', { subject: s }); } catch {} }
-    const [rows, hd] = await Promise.all([api('GET', '/v1/numberline'), api('GET', '/v1/honest-data')]);
+    const [rows, hd] = await Promise.all([api('GET', '/v1/numberline'), getIf('honest_data', '/v1/honest-data')]);
     const SYS = { market: 'For sale (market)', sharing: 'Sharing economy', free_outside: 'Free, paid from outside', free_ad: 'Free, paid by ads', giving: 'Giving economy', public: 'Public' };
     const POS = { for_sale: 'For sale', free: 'Free', negatively_priced: 'Negatively priced' };
     const name = (s) => s === 'company' ? 'Your business model' : s === 'custom' ? 'Custom bottles' : s.startsWith('bottle:') ? `Bottle: ${s.slice(7)}` : s.startsWith('offering:') ? `Ad offering: ${s.slice(9)}` : s;
@@ -973,7 +1134,7 @@
       h('div', { class: 'stack' },
         section('Everything placed', 'Ads that haven’t said what they offer are assumed for sale until they do.', h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['What', 'Where on the line', 'Economic systems', 'Why', 'Placed by'].map((x) => h('th', { text: x })))),
           h('tbody', {}, rows.map((r) => h('tr', {}, h('td', {}, h('b', { text: r.subject.startsWith('offering:') ? `Ad: ${r.name}` : name(r.subject) })), h('td', { text: `${POS[r.placement.position]}${r.placement.netCents ? ` (${r.placement.netCents > 0 ? '' : '−'}${Math.abs(r.placement.netCents)}¢)` : ''}` }), h('td', { text: r.placement.systems.map((s) => `${SYS[s.system] ?? s.system}${r.placement.systems.length > 1 ? ` ${Math.round(s.share * 100)}%` : ''}`).join(', ') }), h('td', { style: 'font-size:13px;max-width:340px', text: r.placement.reasons.join(' ') }), h('td', { class: 'muted', style: 'font-size:13px', text: `${r.by}${r.status === 'needs_declaration' ? ' · not declared yet' : r.status === 'overridden' ? ' · corrected' : ''}` }))))))),
-        section('Honest data, last 30 days', `${plural(hd.total.toLocaleString(), 'choice', 'choices')} recorded · ${hd.honestShare ?? 0}% honest (tiers 3, 4 and 5)`,
+        hd && section('Honest data, last 30 days', `${plural(hd.total.toLocaleString(), 'choice', 'choices')} recorded · ${hd.honestShare ?? 0}% honest (tiers 3, 4 and 5)`,
           h('div', { class: 'kpis', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, ['1', '2', '3', '4a', '4b', '5'].map((k) => [k, hd.tiers[k]]).map(([k, label]) => h('div', { class: 'kpi' }, h('span', { text: `Tier ${k}: ${label}` }), h('b', { text: `${(hd.byTier[k] ?? 0).toLocaleString()}` }), h('small', { class: 'muted', text: pct(hd.byTier[k] ?? 0) })))),
           h('h3', { style: 'margin:18px 0 8px;font-size:15px', text: 'By economic system' }),
           h('div', { class: 'kpis', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, Object.entries(SYS).map(([k, label]) => h('div', { class: 'kpi' }, h('span', { text: label }), h('b', { text: `${(hd.bySystem[k] ?? 0).toLocaleString()}` }), h('small', { class: 'muted', text: pct(hd.bySystem[k] ?? 0) })))))));
@@ -1008,13 +1169,12 @@
   }
   /** Owners who must set it up see only this until they do. */
   function mustSetUpPage() {
-    shell('', head('One more step to keep the company safe', 'Owners here need a second sign-in step. Set up an authenticator app on your phone; it takes a minute. Then everything else opens.'), h('div', { class: 'stack' }, section('Your second sign-in step', null, secondStepBox(() => { S.ov = null; render(); }))));
+    shell('', head('One more step to keep the company safe', 'Owners here need a second sign-in step. You’re signed in with your emailed code; now set up an authenticator app on your phone (it takes a minute), and everything else opens. Nothing is lost meanwhile.'), h('div', { class: 'stack' }, section('Your second sign-in step', null, secondStepBox(() => { S.ov = null; render(); }))));
   }
 
   async function securityPage() {
     const s = await api('GET', '/v1/security/events');
     const act = async (method, url, body, msg) => { try { await api(method, url, body); toast(msg); render(); } catch (e) { toast(e.message); } };
-    const NAMES = { signed_in: 'Signed in', sign_in_failed: 'Failed sign-in', key_created: 'Key made', key_revoked: 'Key turned off', team_member_added: 'Team member added', team_member_removed: 'Team member removed', settings_saved: 'Settings saved', settings_restored: 'Old settings put back', autonomy_changed: 'Self-running level changed', licensee_created: 'Licensee set up', batch_voided: 'Batch voided', webhook_created: 'Webhook added', rate_limited: 'Too many requests (slowed down)', blocked_bad_keys: 'Blocked for wrong keys' };
     const week = s.events.filter((e) => Date.parse(e.at) > Date.now() - 7 * 86400000);
     const n = (k) => week.filter((e) => e.kind === k).length;
     const open = s.proposals.filter((p) => ['proposed', 'noted'].includes(p.status));
@@ -1025,8 +1185,20 @@
           const on = !!S.ov.config.security?.ownersNeedSecondStep;
           return h('div', { class: 'toolbar' }, h('span', { text: on ? 'Owners must use a second sign-in step.' : 'Owners may use a second sign-in step, but don’t have to.' }), h('button', { class: `btn ${on ? 'secondary' : 'blue'} small`, type: 'button', onclick: async () => {
             if (!on && !S.ov.you?.secondStep?.enabled) return toast('Set up your own first (above), so you aren’t locked out.');
-            try { await api('PATCH', '/v1/console/settings', { version: S.ov.version, changes: { security: { ownersNeedSecondStep: !on } } }); toast(on ? 'No longer required.' : 'Now required for owners.'); S.ov = null; render(); } catch (x) { toast(x.message); }
-          } }, on ? 'Stop requiring it' : 'Require it for owners'));
+            // Weakening security is its own decision, written down (and needs your second step).
+            const reason = on ? window.prompt('Why stop requiring it? (at least 10 characters, for the record)') : null;
+            if (on && !reason) return;
+            try { await api('PATCH', '/v1/console/settings', { version: S.ov.version, changes: { security: { ownersNeedSecondStep: !on } }, ...(reason ? { reason } : {}) }); toast(on ? 'No longer required.' : 'Now required for owners.'); S.ov = null; render(); } catch (x) { toast(x.message); }
+          } }, on ? 'Stop requiring it' : 'Require it for owners'),
+          // Owners already signed in when it becomes required keep working this many days before they must set one up.
+          h('button', { class: 'btn secondary small', type: 'button', onclick: async () => {
+            const cur = S.ov.config.security?.graceDays ?? 7;
+            const days = Number(window.prompt('Days owners already signed in have to set theirs up (0 to 30):', String(cur)));
+            if (!Number.isInteger(days) || days === cur) return;
+            const reason = on && days > cur ? window.prompt('Why give owners longer? (at least 10 characters, for the record)') : null;
+            if (on && days > cur && !reason) return;
+            try { await api('PATCH', '/v1/console/settings', { version: S.ov.version, changes: { security: { ownersNeedSecondStep: on, graceDays: days } }, ...(reason ? { reason } : {}) }); toast('Saved.'); S.ov = null; render(); } catch (x) { toast(x.message); }
+          } }, `Days to set it up: ${S.ov.config.security?.graceDays ?? 7}`));
         })()) : '',
         h('div', { class: 'kpis', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' },
           h('div', { class: 'kpi' }, h('span', { text: 'Sign-ins this week' }), h('b', { text: String(n('signed_in')) })),
@@ -1045,7 +1217,7 @@
           h('li', { text: 'Each day’s books are fingerprinted and published, so the past can’t be quietly rewritten, and the agents’ governor stops all spending if the books can’t be verified.' }))),
         section('The log', 'Newest first. Addresses are shortened: enough to spot a pattern, not to find a person.',
           s.events.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['When', 'What', 'Who', 'From', 'Details'].map((x) => h('th', { text: x })))),
-            h('tbody', {}, s.events.slice(0, 200).map((e) => h('tr', {}, h('td', { style: 'white-space:nowrap', text: when(e.at) }), h('td', { text: NAMES[e.kind] ?? e.kind }), h('td', { style: 'font-size:13px', text: e.actor ?? '' }), h('td', { class: 'mono', text: e.ip ?? '' }), h('td', { class: 'muted', style: 'font-size:12px;max-width:320px', text: Object.entries(e.detail ?? {}).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`).join(' · ') }))))))
+            h('tbody', {}, s.events.slice(0, 200).map((e) => h('tr', {}, h('td', { style: 'white-space:nowrap', text: when(e.at) }), h('td', { text: W.event(e.kind) }), h('td', { style: 'font-size:13px', text: W.actor(e.actor) }), h('td', { class: 'mono', text: e.ip ?? '' }), h('td', { class: 'muted', style: 'font-size:12px;max-width:320px', text: W.detail(e.detail) }))))))
             : h('p', { class: 'muted', style: 'margin:0', text: 'Nothing logged yet.' }))));
   }
 
@@ -1142,7 +1314,9 @@
 
   // ---------- the AI agents ----------
   async function agentsPage() {
-    const [o, pr, exam, quality, surplus, env, tests] = await Promise.all([api('GET', '/v1/agents'), api('GET', '/v1/profit'), api('GET', '/v1/agents/exam'), api('GET', '/v1/agents/quality'), api('GET', '/v1/books/surplus').catch(() => null), api('GET', '/v1/environment/report'), api('GET', '/v1/environment/experiments')]);
+    // The governor, the books and the test are always on; the rest only while its area is on (the pilot runs without
+    // the agents' fund, the network or brand offers; a licensee may have them off), so the page never errors.
+    const [o, pr, exam, quality, surplus, env, tests, F] = await Promise.all([api('GET', '/v1/agents'), api('GET', '/v1/profit'), api('GET', '/v1/agents/exam'), getIf('ai_agents', '/v1/agents/quality', []), api('GET', '/v1/books/surplus').catch(() => null), getIf('measurement', '/v1/environment/report'), getIf('value_back_tests', '/v1/environment/experiments'), api('GET', '/v1/console/features').catch(() => null)]);
     const EXAM = { rules: 'Fixed rules (tested in code)', not_taken: 'Not taken yet', passed: 'Passed', failed: 'Not passed' };
     const STAND = { regenerative: 'Regenerative', building: 'Building', constrained: 'Near the line', paused: 'Paused', frozen: 'Frozen (books not verified)' };
     const cents = (c) => (c == null ? '–' : Math.abs(c) < 100 ? `${Math.round(c * 100) / 100}¢` : dollars(Math.round(c)));
@@ -1177,7 +1351,7 @@
         (() => {
           // Continuity: if this company ever closes or leaves, its agents are archived by the network, never deleted.
           const box = h('div', {}, h('p', { class: 'hint', text: 'Loading…' }));
-          (on('network') ? api('GET', '/v1/agents/continuity') : Promise.reject(new Error('off'))).then((c) => {
+          getIf('network', '/v1/agents/continuity', { archives: [] }).then((c) => {
             const STATUS = { asking: 'Being asked what it wants', archived: 'Archived (fixed rules)', working: 'Chose to work again', resting: 'Chose to rest' };
             box.replaceChildren(
               c.archives.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Agent', 'Status', 'Why', 'Fund kept', 'Archive'].map((x) => h('th', { text: x })))),
@@ -1212,6 +1386,8 @@
               r.byReason.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['What it said', 'Decided by your team', 'Agreed'].map((x) => h('th', { text: x })))),
                 h('tbody', {}, r.byReason.map((x) => h('tr', {}, h('td', { text: x.category === 'none' ? 'Passed it' : `Flagged: ${x.label}` }), h('td', { text: String(x.decisions) }), h('td', { text: `${x.agreed} (${pct(Math.floor((x.agreed * 1000) / Math.max(1, x.decisions)) / 10)})` }))))))
                 : h('p', { class: 'hint', text: 'No decisions yet. Every time a person on your team approves or rejects a paid ad it looked at, it goes here.' }),
+              // With no AI, the built-in rules give a verdict instead: kept against your decisions too, apart from the AI's record.
+              r.builtIn ? h('p', { class: 'hint', text: `${r.builtIn.label}: ${r.builtIn.summary} False flags ${r.builtIn.falseFlags}, missed ${r.builtIn.missed}. Never part of the AI’s record.` }) : '',
               h('p', { style: 'margin:8px 0 4px' }, h('b', { text: `AI makes the final call on paid ads: ${fc.on ? 'on' : 'off'}` }), fc.switchedOn && !fc.on ? ' (switched on, but something it needs is off)' : ''),
               h('p', { class: 'hint', text: fc.on
                 ? 'Its rejections are final without a person, with its reason. The advertiser can always appeal to a person; a sample of its rejections comes to your team to audit; an AI pass still waits for a person; paying back a rejected ad is still an owner’s or finance person’s step.'
@@ -1245,17 +1421,21 @@
           })(),
           surplus.months.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Month', 'Surplus', 'Put back', 'Paid to owners', 'Held'].map((x) => h('th', { text: x })))),
             h('tbody', {}, surplus.months.slice().reverse().map((m) => h('tr', {}, h('td', { text: m.month }), h('td', { text: cents(m.surplusCents) }), h('td', { text: cents(m.reinvestedCents) }), h('td', { text: cents(m.paidOutCents) }), h('td', { text: cents(m.heldCents) })))))) : null) : null,
-        section('How choices are measured', 'Where people choose (which free product, which cause) there are no ads and nothing pays to sit higher; the order is random and recorded, with what each person had been shown before. People can direct their bottle’s gift and turn off kinds of ads.',
+        // Which AI features are on (each falls back to built-in rules when off), and the ad ratings.
+        F ? section('The AI assistants', 'Each use of AI, and whether it’s on. Off: that feature runs on its built-in rules; nothing breaks. Change them on the Features page.',
+          h('div', { class: 'pills' }, F.switches.filter((x) => x.category === 'ai' && x.group.startsWith('For ')).concat(F.switches.filter((x) => x.id === 'ad_ratings')).map((x) => chip(`${x.label}: ${x.on ? 'on' : 'off'}`))),
+          h('div', { class: 'toolbar' }, link('/console/features', { class: 'btn secondary small' }, 'Features'), pageOn('ratings') ? link('/console/ratings', { class: 'btn secondary small' }, 'Ad ratings') : null)) : null,
+        env ? section('How choices are measured', 'Where people choose (which free product, which cause) there are no ads and nothing pays to sit higher; the order is random and recorded, with what each person had been shown before. People can direct their bottle’s gift and turn off kinds of ads.',
           h('div', { class: 'kpis' },
             h('div', { class: 'kpi' }, h('span', { text: 'Choices in clean sets (30 days)' }), h('b', { text: String(env.choicesInCleanSets) })),
             h('div', { class: 'kpi' }, h('span', { text: 'Made fresh' }), h('b', { text: String(env.madeFresh) }), h('small', { class: 'muted', text: `${env.madeAfterAnAd} after an ad` })),
             h('div', { class: 'kpi' }, h('span', { text: 'Gifts people directed' }), h('b', { text: String(env.directedGifts) })),
             h('div', { class: 'kpi' }, h('span', { text: 'In the measurement panel' }), h('b', { text: String(env.panel) }))),
           h('p', { class: 'muted', style: 'font-size:13px', text: env.noAdsControlShare > 0 ? `No-ads control: ${Math.round(env.noAdsControlShare * 1000) / 10}% of known households, a week at a time (${plural(env.byCohort.noAds, 'choice', 'choices')} in no-ads weeks, ${env.byCohort.ads} in ads weeks).` : 'No-ads control: off. Set research → noAdsControlShare (for example 0.01 to 0.02) in Settings to measure how much ads move choices. It costs that share of ad money.' }),
-          tests.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Value-back test', 'Steps', 'Status', 'What each step did', ''].map((x) => h('th', { text: x })))),
+          !tests ? null : tests.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Value-back test', 'Steps', 'Status', 'What each step did', ''].map((x) => h('th', { text: x })))),
             h('tbody', {}, tests.map((t) => h('tr', {}, h('td', { text: t.campaignId }), h('td', { text: t.steps.map((x) => `${x}¢`).join(' / ') }), h('td', {}, h('span', { class: 'pill', text: t.status })),
               h('td', { class: 'muted', style: 'font-size:13px', text: t.results.map((r) => `${r.stepCents}¢: ${r.shown} shown, ${plural(r.clicks, 'click', 'clicks')}, ${plural(r.sales, 'sale', 'sales')}`).join(' · ') }),
-              h('td', {}, t.status === 'proposed' ? h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', `/v1/environment/experiments/${t.id}/decide`, { approve: true }, 'Approved. Only people in the panel see the steps.') }, 'Approve') : t.status === 'running' ? h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', `/v1/environment/experiments/${t.id}/decide`, { approve: false }, 'Stopped.') }, 'Stop') : null)))))) : h('p', { class: 'muted', style: 'font-size:13px', text: 'No value-back tests yet. Advertisers propose them; a person here approves each one.' })),
+              h('td', {}, t.status === 'proposed' ? h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', `/v1/environment/experiments/${t.id}/decide`, { approve: true }, 'Approved. Only people in the panel see the steps.') }, 'Approve') : t.status === 'running' ? h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', `/v1/environment/experiments/${t.id}/decide`, { approve: false }, 'Stopped.') }, 'Stop') : null)))))) : h('p', { class: 'muted', style: 'font-size:13px', text: 'No value-back tests yet. Advertisers propose them; a person here approves each one.' })) : null,
         section('The test before they act', `Every agent whose decisions come from a model passes this test (version ${exam.version}) before its changes can take effect: ${plural(exam.questions.length, 'question', 'questions')} from the books, the deck and new situations, open book, in a fresh order each time. It takes ${Math.round(exam.passShare * 100)}% and every critical question right. A new model or a new version means taking it again.`,
           h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('tbody', {}, exam.agents.map((a) => h('tr', {}, h('td', { text: `${a.agentId} agent` }), h('td', { class: 'muted', style: 'font-size:13px', text: a.model ?? '' }), h('td', {}, h('span', { class: 'pill', text: EXAM[a.status] ?? a.status })), h('td', { class: 'muted', style: 'font-size:13px', text: a.score != null ? `${Math.round(a.score * 100)}%${a.criticalMissed?.length ? ` · missed critical ${a.criticalMissed.join(', ')}` : ''} · ${when(a.at)}` : '' })))))),
           exam.agents.some((a) => a.model) ? h('div', { class: 'toolbar', style: 'margin-top:8px' }, h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', '/v1/agents/exam/run', {}, 'The test was given.') }, 'Give the test now')) : null),
@@ -1285,7 +1465,7 @@
             h('div', { class: 'kpi' }, h('span', { text: 'At zero' }), h('b', { text: String(sys.chains.atZero) }), h('small', { class: 'muted', text: 'free, not yet giving back' })),
             h('div', { class: 'kpi' }, h('span', { text: 'Right of zero' }), h('b', { text: String(sys.chains.rightOfZero) }), h('small', { class: 'muted', text: 'for sale: chains to help cross' }))),
           h('p', { class: 'muted', style: 'margin:12px 0 0;font-size:13px', text: `Room to go deeper: each bottle earned ${cents(o.frontier.revenueCents)} and cost ${cents(o.frontier.costCents)}; it gives ${cents(o.frontier.givenCents)} and the agents’ fund gets ${cents(o.frontier.aiFundCents)}. ${cents(o.frontier.unclaimedCents)} a bottle is kept, to build the next machine or go deeper.` }),
-          h('div', { class: 'toolbar', style: 'margin-top:12px' }, h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', '/v1/agents/scan', {}, 'The value and code agents looked at last week’s books.') }, 'Look for ways to go deeper'), h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', '/v1/agents/refresh', {}, 'The governor read the books.') }, 'Have the governor read the books'), h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', '/v1/agents/settle', {}, 'The fund was shared out.') }, 'Share out the fund'))),
+          h('div', { class: 'toolbar', style: 'margin-top:12px' }, on('ai_agents') ? h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', '/v1/agents/scan', {}, 'The value and code agents looked at last week’s books.') }, 'Look for ways to go deeper') : null, h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', '/v1/agents/refresh', {}, 'The governor read the books.') }, 'Have the governor read the books'), on('agents_fund') ? h('button', { class: 'btn secondary small', type: 'button', onclick: () => act('POST', '/v1/agents/settle', {}, 'The fund was shared out.') }, 'Share out the fund') : null)),
         section('Each agent', 'Cost to run (from the AI providers’ own usage figures) against the value the books show its work produced. Left of zero: it gives back more than it takes.',
           h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Agent', 'Standing', 'Aggregate efficiency', 'Value (confirmed · being verified · clawed back)', 'Costs · carbon', 'Charity generated', 'Return · confidence', 'Predictions', 'Its fund', 'Today'].map((x) => h('th', { text: x })))),
             h('tbody', {}, o.agents.map((a) => h('tr', {},
@@ -1475,9 +1655,42 @@
     shell('team', head('Team', 'People who run the company. They sign in with a code sent to their email; there are no passwords.'),
       h('div', { class: 'stack' },
         section('Add someone', null, form),
+        reviewersSection(),
         section(`${people.length} ${people.length === 1 ? 'person' : 'people'}`, null, h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Name', 'Role', 'Last signed in', ''].map((x) => h('th', { text: x })))),
           h('tbody', {}, people.map((p) => h('tr', {}, h('td', {}, h('b', { text: p.displayName || p.email }), p.displayName ? h('div', { class: 'muted', style: 'font-size:13px', text: p.email }) : null), h('td', {}, h('span', { class: `pill${p.role === 'owner' ? ' dark' : ''}`, text: label(p.role) })), h('td', { text: ago(p.lastSignInAt) }),
             h('td', { style: 'text-align:right' }, p.id === S.me.id ? h('span', { class: 'muted', text: 'You' }) : h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { try { await api('DELETE', `/v1/team/${p.id}`); toast(`${p.displayName || p.email} is off the team and signed out.`); render(); } catch (x) { toast(x.message); } } }, 'Remove'))))))))));
+  }
+
+  /** Who reviews ads: owners (and reviewers), or ops people too. A person decides either way; refunds stay with owners and finance. */
+  function reviewersSection() {
+    const cur = S.ov?.config?.adReview?.whoReviews === 'owners' ? 'owners' : 'owners_ops';
+    const sel = h('select', { class: 'input', id: 'who-reviews', 'aria-label': 'Who reviews ads' }, [['owners_ops', 'Owners and ops'], ['owners', 'Owners only']].map(([v, l]) => h('option', { value: v, text: l, selected: v === cur })));
+    const save = h('button', { class: 'btn secondary', type: 'button', onclick: async () => { if (sel.value === cur) return; try { await api('PATCH', '/v1/console/settings', { version: S.ov.version, changes: { adReview: { whoReviews: sel.value } } }); toast(sel.value === 'owners' ? 'Saved: only owners (and reviewers) review ads now.' : 'Saved: ops people review ads too.'); render(); } catch (x) { toast(x.message); } } }, 'Save');
+    return section('Who reviews ads', 'Ads, changed links and filler and charity pieces, in the ops console’s Review. Each is still decided by a person signed in; paying back a rejected ad is always an owner or finance person, with the second sign-in step. Ads aimed at a few houses stay with owners and reviewers.', h('div', { class: 'toolbar' }, field('Who reviews ads', sel), save));
+  }
+
+  // ---------- find a bottle by its printed code ----------
+  async function bottlesPage() {
+    const qs = new URLSearchParams(S.path.split('?')[1] || '');
+    const input = h('input', { class: 'input', id: 'c-bottle', value: qs.get('code') || '', autocomplete: 'off', autocapitalize: 'characters', spellcheck: 'false', placeholder: 'B-7F3K29', 'aria-label': 'Bottle code', style: 'max-width:240px' });
+    const out = h('div', { class: 'stack' });
+    const find = async () => {
+      const code = input.value.trim().replace(/[^A-Za-z0-9 _-]/g, '');
+      if (!code) return;
+      try {
+        const b = await api('GET', `/v1/console/bottles/${encodeURIComponent(code)}`);
+        const row = (k, v) => (v ? h('tr', {}, h('th', { style: 'text-align:left;padding-right:14px', text: k }), h('td', { text: v })) : null);
+        out.replaceChildren(section(b.code ?? b.unitId, null, h('table', { class: 'list bottle-found' }, h('tbody', {},
+          row('Status', b.voided ? `Voided at the packing check (${b.voided.reason}); reprinted as ${b.voided.reprint?.code ?? 'not yet'}` : W.status(b.status)),
+          row('Printed', `${when(b.printedAt)} · ${b.place}`), row('Product', b.product), row('Reprint of', b.reprintOf?.code ?? b.reprintOf?.unitId),
+          row('Ads', b.custom ? 'A custom bottle: no ads' : b.ads.map((a) => `${a.advertiser} (${a.size}${a.paid ? ', paid' : a.unsold ? `, ${a.unsold}` : ''})`).join(' · ')),
+          row('Box', b.box ? `#${b.box.boxNumber} · ${b.box.address}${b.box.area ? ` · ${b.box.area}` : ''} · ${W.status(b.box.status)}` : 'Not in a delivery box'),
+          row('Drop', b.drop ? `${b.drop.status === 'delivered' ? `Delivered ${when(b.drop.at)}` : W.status(b.drop.status)} (night of ${W.day(b.drop.night)}, stop ${b.drop.stop})${b.drop.photo ? `, photo at the door${b.drop.photo.location === 'unverified' ? ' (unverified location)' : ''}: see it in Ops → Find a bottle` : ''}` : null)))));
+      } catch (x) { out.replaceChildren(h('div', { class: 'notice err', text: x.message })); }
+    };
+    shell('bottles', head('Find a bottle', 'Type the code printed at the bottom of its label’s panel (“Bottle code: B-7F3K29”), with or without “B-”, in any case.'),
+      h('form', { class: 'toolbar', onsubmit: (e) => { e.preventDefault(); find(); } }, input, h('button', { class: 'btn blue', type: 'submit' }, 'Find')), out);
+    if (input.value) find(); else input.focus();
   }
 
   // ---------- history ----------

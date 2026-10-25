@@ -17,13 +17,15 @@
   const plural = (n, one, many) => `${n} ${String(n).replace(/[^0-9.-]/g, '') === '1' ? one : many}`;
   const NS = 'http://www.w3.org/2000/svg';
   const icon = (d) => { const s = document.createElementNS(NS, 'svg'); for (const [k, v] of Object.entries({ viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' })) s.setAttribute(k, v); for (const p of d.split('|')) { const e = document.createElementNS(NS, 'path'); e.setAttribute('d', p); s.append(e); } return s; };
-  const I = { today: 'M3 12h4l3-8 4 16 3-8h4', review: 'M4 4h16v16H4z|M8 12l3 3 5-6', machine: 'M6 3h12v18H6z|M9 7h6|M10 17h4', route: 'M6 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z|M18 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z|M6 15V9a4 4 0 0 1 4-4h6|M18 9v6a4 4 0 0 1-4 4H8', people: 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z|M2 21a7 7 0 0 1 14 0|M17 3a4 4 0 0 1 0 8|M22 21a7 7 0 0 0-5-6.7', books: 'M4 4h12a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4z|M8 8h8|M8 12h8' };
+  const I = { today: 'M3 12h4l3-8 4 16 3-8h4', review: 'M4 4h16v16H4z|M8 12l3 3 5-6', machine: 'M6 3h12v18H6z|M9 7h6|M10 17h4', route: 'M6 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z|M18 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z|M6 15V9a4 4 0 0 1 4-4h6|M18 9v6a4 4 0 0 1-4 4H8', people: 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z|M2 21a7 7 0 0 1 14 0|M17 3a4 4 0 0 1 0 8|M22 21a7 7 0 0 0-5-6.7', books: 'M4 4h12a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4z|M8 8h8|M8 12h8', pause: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z|M10 9v6|M14 9v6' };
   const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} } };
   const dollars = (c) => `$${(c / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const svgSrc = (s) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(s)}`;
   const toastEl = h('div', { class: 'toast', role: 'status' }); document.body.append(toastEl);
   let tt; const toast = (m) => { toastEl.textContent = m; toastEl.classList.add('show'); clearTimeout(tt); tt = setTimeout(() => toastEl.classList.remove('show'), 2600); };
-  const S = { token: store.get('fw_ops_token'), me: null, config: null, path: fixture ? fixture.start : location.pathname + location.search };
+  const S = { token: fixture?.token ?? store.get('fw_ops_token'), me: null, config: null, path: fixture ? fixture.start : location.pathname + location.search };
+  /** Plain words for the server's codes, and times in the company's time zone (src/web/words.js). */
+  const W = window.fwWords;
 
   // The second sign-in step: when it's on, sign-in asks for the code from the authenticator app (or a recovery code).
   const withSecondStep = (r) => (!r || !r.secondStep ? Promise.resolve(r) : new Promise((resolve, reject) => {
@@ -50,14 +52,14 @@
     if (!res.ok) throw new Error(data?.error?.message || 'Something went wrong.');
     return data;
   }
-  const routes = [[/^\/ops\/?$/, today, 'today'], [/^\/ops\/review$/, reviewPage, 'review'], [/^\/ops\/machines$/, machinesPage, 'machines'], [/^\/ops\/machines\/([\w-]+)$/, machinePage, 'machines'], [/^\/ops\/routes$/, routesPage, 'routes'], [/^\/ops\/subscriptions$/, subsPage, 'subs'], [/^\/ops\/areas$/, areasPage, 'areas'], [/^\/ops\/areas\/([\w-]+)$/, areaPage, 'areas'], [/^\/ops\/books$/, booksPage, 'books']];
+  const routes = [[/^\/ops\/?$/, today, 'today'], [/^\/ops\/review$/, reviewPage, 'review'], [/^\/ops\/review\/links$/, linkChangesPage, 'review'], [/^\/ops\/review\/fillers$/, fillersPage, 'review'], [/^\/ops\/bottles$/, bottlesPage, 'bottles'], [/^\/ops\/machines$/, machinesPage, 'machines'], [/^\/ops\/machines\/([\w-]+)$/, machinePage, 'machines'], [/^\/ops\/routes$/, routesPage, 'routes'], [/^\/ops\/subscriptions$/, subsPage, 'subs'], [/^\/ops\/areas$/, areasPage, 'areas'], [/^\/ops\/areas\/([\w-]+)$/, areaPage, 'areas'], [/^\/ops\/books$/, booksPage, 'books'], [/^\/ops\/pause$/, pausePage, 'pause']];
   // The scopes each page's main call needs (from its route in src/api). 'admin' passes them all.
-  const PAGE_SCOPES = { today: ['packs', 'events', 'ledger', 'campaigns'], review: ['campaigns'], machines: ['orders', 'packs', 'events'], routes: ['packs'], subs: ['packs'], areas: ['packs'], books: ['ledger'] };
+  const PAGE_SCOPES = { today: ['packs', 'events', 'ledger', 'campaigns'], review: ['campaigns'], machines: ['orders', 'packs', 'events'], routes: ['packs'], subs: ['packs'], areas: ['packs'], books: ['ledger'], bottles: ['orders'] };
   // The switch each page belongs to (src/runtime/registry.ts): a page whose switch is off, on this server or for this
   // company (its Features page), isn't shown or opened.
   const PAGE_FEATURES = { review: 'ads', machines: 'machines', routes: 'delivery', subs: 'delivery', areas: 'delivery_areas' };
   const on = (page) => !PAGE_FEATURES[page] || !(S.features?.off ?? []).includes(PAGE_FEATURES[page]);
-  const can = (page) => { if (!on(page)) return false; const sc = S.me?.scopes; if (!Array.isArray(sc)) return true; return sc.includes('admin') || (PAGE_SCOPES[page] ?? []).some((x) => sc.includes(x)); };
+  const can = (page) => { if (!on(page)) return false; if (page === 'review' && typeof S.me?.reviewsAds === 'boolean') return S.me.reviewsAds; if (page === 'pause') return S.me?.pressesPause === true; const sc = S.me?.scopes; if (!Array.isArray(sc)) return true; return sc.includes('admin') || (PAGE_SCOPES[page] ?? []).some((x) => sc.includes(x)); };
   let cleanup = null;
   function go(path, replace) { S.path = path; if (!fixture) history[replace ? 'replaceState' : 'pushState'](null, '', path); render(); }
   window.addEventListener('popstate', () => { S.path = location.pathname + location.search; render(); });
@@ -66,8 +68,12 @@
     if (cleanup) { cleanup(); cleanup = null; }
     if (!S.config) S.config = await api('GET', '/v1/public/app-config');
     // Areas switched off on this server (FW_FEATURES): pages that belong to one aren't shown or opened.
-    if (!S.features) S.features = await api('GET', `/v1/public/features?company=${encodeURIComponent(S.config.companyId)}`).catch(() => ({ off: [] }));
     if (S.token && !S.me) { try { S.me = await api('GET', '/v1/me'); } catch { S.me = null; } }
+    // The signed-in company is the one shown, its name and brand too, whatever address ops was opened at.
+    if (S.me?.companyId && S.me.companyId !== S.config.companyId) S.config = await api('GET', `/v1/public/app-config?company=${encodeURIComponent(S.me.companyId)}`).catch(() => S.config);
+    W.setZone(S.config.timezone); // times on every page in the company's time zone
+    // The switches of the company of the person signed in (a licensee's team sees its own, not the host's).
+    if (!S.features) S.features = await api('GET', `/v1/public/features?company=${encodeURIComponent(S.me?.companyId ?? S.config.companyId)}`).catch(() => ({ off: [] }));
     if (!S.me) return signIn();
     if (S.me.advertiserId || S.me.role === 'consumer') return shell('', h('div', { class: 'notice err', text: 'This console is for the company’s team. Ask an owner to add you.' }));
     const pathname = S.path.split('?')[0];
@@ -75,9 +81,9 @@
     go('/ops', true);
   }
   function shell(active, ...content) {
-    const nav = [['today', '/ops', 'Today', I.today], ['review', '/ops/review', 'Ad review', I.review], ['machines', '/ops/machines', 'Machines', I.machine], ['routes', '/ops/routes', 'Routes', I.route], ['areas', '/ops/areas', 'Areas', I.route], ['subs', '/ops/subscriptions', 'Deliveries', I.people], ['books', '/ops/books', 'Books', I.books]];
+    const nav = [['today', '/ops', 'Today', I.today], ['review', '/ops/review', 'Review', I.review], ['bottles', '/ops/bottles', 'Find a bottle', I.bottle], ['machines', '/ops/machines', 'Machines', I.machine], ['routes', '/ops/routes', 'Routes', I.route], ['areas', '/ops/areas', 'Areas', I.route], ['subs', '/ops/subscriptions', 'Deliveries', I.people], ['books', '/ops/books', 'Books', I.books], ['pause', '/ops/pause', 'Pause', I.pause]];
     root.replaceChildren(h('div', { class: 'shell' },
-      h('aside', { class: 'side' }, h('div', { class: 'logo', 'aria-label': 'FreeWater Ops' }, h('span', { text: 'free' }), h('span', { text: 'water' }), h('small', { text: 'Ops' })),
+      h('aside', { class: 'side' }, h('div', { class: 'logo', 'aria-label': `${S.config?.name ?? ''} Ops` }, h('span', { text: S.config?.brand?.logoTop ?? '' }), h('span', { text: S.config?.brand?.logoBottom ?? '', style: S.config?.brand?.accentColor ? `color:${S.config.brand.accentColor}` : null }), h('small', { text: 'Ops' })),
         h('nav', { 'aria-label': 'Main' }, nav.filter(([id]) => can(id)).map(([id, path, label, ic]) => link(path, { 'aria-current': active === id ? 'page' : null }, icon(ic), label))),
         h('div', { class: 'who' }, h('b', { text: S.me.displayName || S.me.email || '' }), S.me.role, h('br'), h('button', { type: 'button', onclick: async () => { try { await api('POST', '/v1/auth/sign-out'); } catch {} S.token = null; S.me = null; store.set('fw_ops_token', null); render(); } }, 'Sign out'))),
       h('main', { class: 'main' }, ...content)));
@@ -87,22 +93,27 @@
   function signIn() {
     let to = '';
     const right = h('div', { class: 'right' });
-    root.replaceChildren(h('div', { class: 'auth' }, h('div', { class: 'left' }, h('div', { class: 'logo' }, h('span', { text: 'free' }), h('span', { text: 'water' }), h('small', { text: 'Ops' })), h('h1', {}, 'Run the ', h('span', { text: 'whole thing' }), ' from here.'), h('p', { style: 'opacity:.6;margin:0', text: 'Machines, ads, routes, deliveries and the books.' })), right));
-    const step1 = () => { const input = h('input', { class: 'input', id: 'o-email', type: 'email', autocomplete: 'email', placeholder: 'you@freewater.io' }); right.replaceChildren(h('h2', { style: 'font:700 26px/1.2 var(--display);margin:0', text: 'Team sign in' }), h('form', { style: 'display:flex;flex-direction:column;gap:12px', onsubmit: async (e) => { e.preventDefault(); to = input.value.trim(); try { await api('POST', '/v1/auth/start', { companyId: S.config.companyId, channel: 'email', to }); step2(); } catch (x) { toast(x.message); } } }, h('div', { class: 'field' }, h('label', { for: 'o-email', text: 'Work email' }), input), h('button', { class: 'btn wide', type: 'submit' }, 'Email me a code'))); input.focus(); };
+    root.replaceChildren(h('div', { class: 'auth' }, h('div', { class: 'left' }, h('div', { class: 'logo' }, h('span', { text: S.config?.brand?.logoTop ?? '' }), h('span', { text: S.config?.brand?.logoBottom ?? '' }), h('small', { text: 'Ops' })), h('h1', {}, 'Run the ', h('span', { text: 'whole thing' }), ' from here.'), h('p', { style: 'opacity:.6;margin:0', text: 'Machines, ads, routes, deliveries and the books.' })), right));
+    const step1 = () => { const input = h('input', { class: 'input', id: 'o-email', type: 'email', autocomplete: 'email', placeholder: 'you@work.com' }); right.replaceChildren(h('h2', { style: 'font:700 26px/1.2 var(--display);margin:0', text: 'Team sign in' }), h('form', { style: 'display:flex;flex-direction:column;gap:12px', onsubmit: async (e) => { e.preventDefault(); to = input.value.trim(); try { await api('POST', '/v1/auth/start', { companyId: S.config.companyId, channel: 'email', to }); step2(); } catch (x) { toast(x.message); } } }, h('div', { class: 'field' }, h('label', { for: 'o-email', text: 'Work email' }), input), h('button', { class: 'btn wide', type: 'submit' }, 'Email me a code'))); input.focus(); };
     const step2 = () => { const input = h('input', { class: 'input code-input', id: 'o-code', inputmode: 'numeric', maxlength: '6', autocomplete: 'one-time-code', 'aria-label': '6-digit code' }); right.replaceChildren(h('h2', { style: 'font:700 26px/1.2 var(--display);margin:0', text: 'Check your email' }), h('form', { style: 'display:flex;flex-direction:column;gap:12px', onsubmit: async (e) => { e.preventDefault(); try { const r = await withSecondStep(await api('POST', '/v1/auth/verify', { companyId: S.config.companyId, channel: 'email', to, code: input.value.trim() })); S.token = r.token; store.set('fw_ops_token', r.token); S.me = null; render(); } catch (x) { toast(x.message); } } }, input, h('button', { class: 'btn wide', type: 'submit' }, 'Sign in'))); input.focus(); };
     step1();
   }
 
   // ---------- today ----------
   async function today() {
-    const [o, machines, fleet] = await Promise.all([api('GET', '/v1/ops/overview'), api('GET', '/v1/ops/machines').catch(() => []), api('GET', '/v1/ops/fleet').catch(() => [])]);
+    // Panels and links for areas that are off (machines in the pilot, say) aren't shown, and their data isn't asked for;
+    // links a role can't open aren't shown either.
+    const [o, machines, fleet, notices, linkChanges] = await Promise.all([api('GET', '/v1/ops/overview'), on('machines') ? api('GET', '/v1/ops/machines').catch(() => []) : [], on('machines') ? api('GET', '/v1/ops/fleet').catch(() => []) : [], can('areas') ? api('GET', '/v1/ops/house-notices').catch(() => []) : [], can('review') ? api('GET', '/v1/review/link-changes').catch(() => []) : []]);
+    const newNotices = notices.filter((n) => Date.now() - Date.parse(n.at) < 7 * 86_400_000);
     const a = o.attention;
     const hot = [
       ...fleet.filter((m) => m.hardware === 'model6' && (m.availability.state !== 'ready' || m.incidents.some((i) => i.severity === 'critical'))).map((m) => link(`/ops/machines/${m.id}`, { class: 'hot' }, h('span', { text: `${m.id}: ${m.incidents.find((i) => i.severity === 'critical')?.message ?? m.availability.message}` }), h('b', { text: 'Look →' }))),
-      a.adsToReview && link('/ops/review', { class: 'hot' }, h('span', { text: `${a.adsToReview} ${a.adsToReview === 1 ? 'ad is' : 'ads are'} waiting for review` }), h('b', { text: 'Review →' })),
-      a.printFailures && link('/ops/machines', { class: 'hot' }, h('span', { text: `${a.printFailures} failed print${a.printFailures === 1 ? '' : 's'} today (never billed)` }), h('b', { text: 'Machines →' })),
+      a.adsToReview && can('review') && link('/ops/review', { class: 'hot' }, h('span', { text: `${a.adsToReview} ${a.adsToReview === 1 ? 'ad is' : 'ads are'} waiting for review` }), h('b', { text: 'Review →' })),
+      linkChanges.length && link('/ops/review/links', { class: 'hot' }, h('span', { text: `${plural(linkChanges.length, 'changed link is', 'changed links are')} waiting for approval` }), h('b', { text: 'Review →' })),
+      newNotices.length && link('/ops/areas', { class: 'hot' }, h('span', { text: `${plural(newNotices.length, 'house claim', 'house claims')} to know about this week` }), h('b', { text: 'Areas →' })),
+      a.printFailures && (can('machines') ? link('/ops/machines', { class: 'hot' }, h('span', { text: `${a.printFailures} failed print${a.printFailures === 1 ? '' : 's'} today (never billed)` }), h('b', { text: 'Machines →' })) : h('div', { class: 'hot' }, h('span', { text: `${a.printFailures} failed print${a.printFailures === 1 ? '' : 's'} today (never billed)` }))),
       a.pluginFailures && h('div', { class: 'hot' }, h('span', { text: `${a.pluginFailures} scan page${a.pluginFailures === 1 ? '' : 's'} fell back to the simple card recently` })),
-      o.delivery.wrongBoxScans && link('/ops/routes', { class: 'hot' }, h('span', { text: `${o.delivery.wrongBoxScans} wrong box${o.delivery.wrongBoxScans === 1 ? '' : 'es'} caught at the door today` }), h('b', { text: 'Routes →' })),
+      o.delivery.wrongBoxScans && can('routes') && link('/ops/routes', { class: 'hot' }, h('span', { text: `${o.delivery.wrongBoxScans} wrong box${o.delivery.wrongBoxScans === 1 ? '' : 'es'} caught at the door today` }), h('b', { text: 'Routes →' })),
     ].filter(Boolean);
     shell('today', head('Today', new Date(`${o.date}T12:00:00Z`).toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })),
       h('div', { class: 'kpis' },
@@ -110,16 +121,60 @@
         h('div', { class: 'kpi' }, h('span', { text: 'Scans' }), h('b', { text: o.engagement.scans.toLocaleString() }), h('small', { text: `${o.engagement.arLaunches} AR launches` })),
         h('div', { class: 'kpi' }, h('span', { text: 'Earned' }), h('b', { text: dollars(o.money.revenueCents) }), h('small', { text: 'from ads and custom bottles' })),
         h('div', { class: 'kpi' }, h('span', { text: 'Given' }), h('b', { text: dollars(o.money.donatedCents) }), h('small', { text: 'to charity' })),
-        h('div', { class: 'kpi' }, h('span', { text: 'Deliveries' }), h('b', { text: `${o.delivery.delivered}/${o.delivery.stops}` }), h('small', { text: `${o.delivery.routes} route${o.delivery.routes === 1 ? '' : 's'}${o.delivery.notDelivered ? ` · ${o.delivery.notDelivered} coming back` : ''}` }))),
-      h('div', { class: 'grid2' },
+        on('routes') ? h('div', { class: 'kpi' }, h('span', { text: 'Deliveries' }), h('b', { text: `${o.delivery.delivered}/${o.delivery.stops}` }), h('small', { text: `${o.delivery.routes} route${o.delivery.routes === 1 ? '' : 's'}${o.delivery.notDelivered ? ` · ${o.delivery.notDelivered} coming back` : ''}` })) : null),
+      h('div', { class: on('machines') ? 'grid2' : '' },
         h('section', { class: 'panel-box' }, h('h2', { text: 'Needs attention' }), hot.length ? h('div', { class: 'attn' }, hot) : h('p', { style: 'margin:0;color:var(--muted)', text: 'Nothing right now.' })),
-        h('section', { class: 'panel-box' }, h('h2', {}, 'Machines', link('/ops/machines', { style: 'font-size:14px;font-weight:500' }, 'All →')), machineTable(machines))));
+        on('machines') ? h('section', { class: 'panel-box' }, h('h2', {}, 'Machines', can('machines') ? link('/ops/machines', { style: 'font-size:14px;font-weight:500' }, 'All →') : null), machineTable(machines)) : null));
   }
   const statusPill = (s) => h('span', { class: `pill ${s === 'ok' ? 'ok' : s === 'attention' ? 'bad' : 'warn'}`, text: s === 'ok' ? 'Printing' : s === 'attention' ? 'Needs a look' : 'Quiet' });
   const machineTable = (machines) => h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Machine', 'Today', 'Failed', 'Last print', ''].map((x) => h('th', { text: x })))),
     h('tbody', {}, machines.map((m) => h('tr', {}, h('td', {}, h('b', { text: m.id }), h('div', { style: 'color:var(--muted);font-size:12px', text: m.name })), h('td', { text: String(m.printedToday) }), h('td', { text: String(m.failedPrintsToday) }), h('td', { text: m.lastPrintAt ? new Date(m.lastPrintAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '—' }), h('td', {}, statusPill(m.status)))))));
 
+  // ---------- the emergency stop (src/modules/chain/pause.ts) ----------
+  // Shown to whoever may press it here (owners and finance; ops people where the company lets them). It shows what
+  // pressing will stop; printing can be left out for one press where the company allows. Starting again is done by
+  // owners and finance in the console (other people approve, then the wait).
+  async function pausePage() {
+    const p = await api('GET', '/v1/pause');
+    const AREA = { money: 'Money', tokens: 'Token actions', printing: 'Printing' };
+    const reason = h('input', { class: 'input', placeholder: 'Why you’re pausing (for the record)', 'aria-label': 'Why you’re pausing', maxlength: 300 });
+    const ticks = {};
+    const rows = p.areas.map((a) => {
+      const box = h('input', { type: 'checkbox', id: `opz-${a.id}`, checked: a.onPress, disabled: a.onPress && !a.mayLeaveOut });
+      ticks[a.id] = box;
+      return h('li', { style: 'margin:0 0 10px' }, h('label', { for: box.id, style: 'display:flex;gap:8px;align-items:flex-start' }, box, h('span', {}, h('b', { text: AREA[a.id] }), a.mayLeaveOut ? h('span', { style: 'color:var(--muted)', text: ' (untick to keep printing going this time)' }) : null)),
+        h('ul', { style: 'margin:4px 0 0 26px;color:var(--muted);font-size:13px' }, p.stops.filter((x) => x.area === a.id).map((x) => h('li', { text: x.label }))));
+    });
+    const press = async () => {
+      if (reason.value.trim().length < 3) { toast('Say why you’re pausing.'); reason.focus(); return; }
+      const body = { reason: reason.value.trim() };
+      for (const a of p.areas) if (ticks[a.id].checked !== a.onPress) body[a.id] = ticks[a.id].checked;
+      try { await api('POST', '/v1/pause', body); toast('Paused. The team was told.'); render(); } catch (x) { toast(x.message); }
+    };
+    const now = ['money', 'tokens', 'printing'].filter((k) => p.stopped?.[k]).map((k) => AREA[k].toLowerCase());
+    shell('pause', head('Pause', now.length ? `Paused now: ${now.join(', ')}. Owners and finance start it again from the console.` : 'Everything is running.'),
+      h('section', { class: 'panel-box' }, h('h2', { text: 'The emergency stop' }), h('p', { style: 'margin:0 0 8px', text: 'Press it the moment something looks wrong. Pressing it now stops:' }),
+        h('ul', { style: 'list-style:none;padding:0;margin:0 0 12px' }, rows),
+        h('p', { style: 'color:var(--muted);font-size:13px;margin:0 0 12px', text: 'Refunds and money already moving still settle. Starting again takes other people’s approval.' }),
+        h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' }, reason, h('button', { class: 'btn', type: 'button', onclick: press }, 'Pause now'))));
+  }
+
   // ---------- ad review ----------
+  /** The built-in rules on a paid ad (src/modules/ads/aiReview.ts, reviewByRules): what each check found and why. */
+  function rulesBox(c, ai, ask, show) {
+    const b = ai.builtIn, word = { ok: 'fine', flag: 'flagged', look: 'worth a look' };
+    ask.placeholder = 'Ask the built-in rules why…';
+    return h('div', { class: 'panel-box rules-box', style: 'border-left:3px solid var(--muted, #888)' },
+      h('b', { text: `${b.label} (only your team sees this)` }),
+      h('p', { style: 'margin:4px 0;color:var(--muted);font-size:13px', text: b.looksAt }),
+      h('p', { style: 'margin:4px 0', text: b.verdict === 'flag' ? `By these rules they would flag it: ${b.reasons.join(' ')}` : 'By these rules they would pass it.' }),
+      h('ul', { style: 'margin:0;padding-left:18px;line-height:1.6' }, b.checks.map((x) => h('li', {}, h('b', { text: `${x.label}: ${word[x.result] ?? x.result}. ` }), x.why))),
+      ai.thread.length ? h('ul', { style: 'margin:0;padding-left:18px;line-height:1.6' }, ai.thread.map((m) => h('li', {}, h('b', { text: m.from === 'team' ? 'Team: ' : m.by === 'stand-in (no AI)' ? 'Built-in rules: ' : 'AI: ' }), m.text))) : null,
+      h('div', { class: 'field' }, h('label', { for: 'r-ask', text: 'Ask the built-in rules' }), ask),
+      h('div', {}, h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { if (!ask.value.trim()) return; try { await api('POST', `/v1/review/campaigns/${c.id}/ai`, { text: ask.value.trim() }); await show(); } catch (x) { toast(x.message); } } }, 'Ask')),
+      h('p', { style: 'margin:0;color:var(--muted);font-size:13px', text: 'Fixed checks, not an AI: they say what they found and why, but can’t weigh what you say. They never flag or decide an ad. Your final decision is kept against what they said.' }));
+  }
+
   async function reviewPage() {
     const queue = await api('GET', '/v1/review/campaigns');
     let current = queue[0]?.id ?? null;
@@ -160,7 +215,9 @@
         ai.thread.length ? h('ul', { style: 'margin:0;padding-left:18px;line-height:1.6' }, ai.thread.map((m) => h('li', {}, h('b', { text: m.from === 'team' ? 'Team: ' : `AI${m.by === 'stand-in (no AI)' ? ' (stand-in)' : ''}${m.changedView ? `, now ${m.changedView === 'pass' ? 'passing' : 'flagging'} it` : ''}: ` }), m.text))) : null,
         h('div', { class: 'field' }, h('label', { for: 'r-ask', text: 'Ask the AI' }), ask),
         h('div', {}, h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { if (!ask.value.trim()) return; try { await api('POST', `/v1/review/campaigns/${c.id}/ai`, { text: ask.value.trim() }); await show(); } catch (x) { toast(x.message); } } }, 'Ask')),
-        h('p', { style: 'margin:0;color:var(--muted);font-size:13px', text: 'It explains, and may change its view; it can’t approve, reject or pay anything back. What it said first stays in its record against your decision.' })) : null;
+        h('p', { style: 'margin:0;color:var(--muted);font-size:13px', text: 'It explains, and may change its view; it can’t approve, reject or pay anything back. What it said first stays in its record against your decision.' }))
+        // No AI verdict (no AI connected, or it's off): the built-in rules' checks, labelled, and you can ask them why.
+        : ai?.builtIn ? rulesBox(c, ai, ask, show) : null;
       const decide = async (decision) => {
         if ((decision === 'reject' || decision === 'flag') && !note.value.trim()) { toast(decision === 'flag' ? 'Say what the concern is.' : paid ? 'Write why it’s rejected.' : 'Say what needs to change.'); note.focus(); return; }
         if (decision === 'reject' && paid && !window.confirm(`Reject ${c.advertiser}’s paid ad for good? Its refund is then offered for approval.`)) return;
@@ -183,6 +240,8 @@
         audit ? h('div', { class: 'notice', style: 'border-left:3px solid var(--warn, #c80)' }, h('b', { text: 'Audit: ' }), `The AI reviewer rejected this ad on its own (${item.review?.note ?? ''}). A sample of its rejections comes to a person. Confirm it (reject, with your reason) or overturn it (approve). Either way it goes in its record.`) : '',
         // On the bottle (as cut), or the print file with its bleed and cut line (labelviews.js).
         window.fwLabel.views(payload.labelSvg, { alt: 'The ad on a sample label' }).el,
+        // What fills the other pieces: the real fill from the unsold-space list (or open space), never "Sample ad".
+        payload.labelCaption ? h('p', { class: 'caption label-fill', style: 'max-width:none;text-align:left', text: payload.labelCaption }) : '',
         h('div', { class: 'row3' },
           h('div', { style: 'display:flex;flex-direction:column;gap:12px' },
             h('div', { class: 'stage', style: 'min-height:0' }, h('div', { class: 'sizes' }, payload.sizes.flatMap((s) => (s.shapes ?? [{ svg: s.svg }]).map((x) => h('figure', {}, h('img', { src: svgSrc(x.svg), alt: s.label, style: 'height:200px' }), h('figcaption', { text: x.w ? `${s.label} · ${(x.w / 100).toFixed(1)} × ${(x.h / 100).toFixed(1)} in` : s.label }))))), ...(payload.boxFaces ?? (payload.boxFaceSvg ? [{ svg: payload.boxFaceSvg }] : [])).map((f) => h('img', { class: 'box-img', src: svgSrc(f.svg), alt: 'On a box side' }))),
@@ -197,7 +256,7 @@
             paid ? h('p', { style: 'margin:0;color:var(--muted);font-size:13px', text: 'Paying back a rejected ad is always a separate step an owner or finance person approves (with the second sign-in step), even when the AI reviewer made the rejection.' }) : null),
           frame));
     }
-    shell('review', head('Ad review', 'Nothing prints until it’s approved here. Changes to a live ad come back here too.'), queue.length ? h('div', { class: 'queue' }, list, pane) : h('div', { class: 'empty', text: 'No ads waiting. New ones show up here as soon as an advertiser submits them.' }));
+    shell('review', head('Review', 'Ads, changed links and the pieces that fill unsold space. A person decides each one; nothing prints until it’s approved here.'), reviewTabs('ads'), queue.length ? h('div', { class: 'queue' }, list, pane) : h('div', { class: 'empty', text: 'No ads waiting. New ones show up here as soon as an advertiser submits them.' }));
     if (queue.length) { drawList(); show(); }
   }
 
@@ -255,7 +314,7 @@
             m.mode === 'out_of_service' ? h('div', { class: 'toolbar' }, h('span', { text: `Out of service${m.modeReason ? `: ${m.modeReason}` : ''}` }), h('button', { class: 'btn small', type: 'button', onclick: () => send('in_service') }, 'Put back in service'))
               : h('div', { class: 'toolbar' }, reason, h('button', { class: 'btn secondary small', type: 'button', onclick: () => send('out_of_service', reason.value.trim() ? { reason: reason.value.trim() } : undefined) }, 'Take out of service')),
             h('div', { class: 'toolbar' }, version, h('button', { class: 'btn secondary small', type: 'button', onclick: () => { if (!/^\d+\.\d+\.\d+$/.test(version.value.trim())) return toast('Type a version like 1.0.1'); send('update_software', { version: version.value.trim() }); } }, 'Update software')),
-            m.commands.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Asked', 'What', 'By', 'Result'].map((x) => h('th', { text: x })))), h('tbody', {}, m.commands.slice(0, 8).map((c) => h('tr', {}, h('td', { text: ago(c.createdAt) }), h('td', { text: commandNames[c.kind] ?? c.kind }), h('td', { text: c.createdBy ?? '' }), h('td', {}, h('span', { class: `pill ${c.status === 'done' ? 'ok' : c.status === 'failed' ? 'bad' : 'warn'}`, text: c.status === 'pending' || c.status === 'sent' ? 'Waiting' : c.result || c.status }))))))) : null),
+            m.commands.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Asked', 'What', 'By', 'Result'].map((x) => h('th', { text: x })))), h('tbody', {}, m.commands.slice(0, 8).map((c) => h('tr', {}, h('td', { text: ago(c.createdAt) }), h('td', { text: commandNames[c.kind] ?? c.kind }), h('td', { text: W.actor(c.createdBy) }), h('td', {}, h('span', { class: `pill ${c.status === 'done' ? 'ok' : c.status === 'failed' ? 'bad' : 'warn'}`, text: c.status === 'pending' || c.status === 'sent' ? 'Waiting' : c.result || W.status(c.status) }))))))) : null),
           h('section', { class: 'panel-box' }, h('h2', { text: 'Problems' }),
             m.incidentHistory.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('tbody', {}, m.incidentHistory.slice(0, 10).map((i) => h('tr', {}, h('td', {}, h('span', { class: `pill ${i.resolvedAt ? '' : i.severity === 'critical' ? 'bad' : 'warn'}`, text: i.resolvedAt ? 'Fixed' : 'Open' })), h('td', { text: i.message }), h('td', { style: 'color:var(--muted);white-space:nowrap', text: i.resolvedAt ? `${ago(i.openedAt)}, fixed in ${Math.max(1, Math.round((Date.parse(i.resolvedAt) - Date.parse(i.openedAt)) / 60000))} min` : ago(i.openedAt) })))))) : h('p', { style: 'margin:0;color:var(--muted)', text: 'None so far.' }))),
         h('section', { class: 'panel-box', style: 'margin-top:18px' }, h('h2', { text: 'Recent bottles' }),
@@ -282,17 +341,27 @@
     try { await api('POST', `/v1/ops/runs/${encodeURIComponent(r.id)}/stops/${s.stop}/deliver-without-photo`, { reason: reason.trim() }); toast('Marked delivered, with your reason.'); } catch (x) { toast(x.message); }
     render();
   }
-  /** A run that will never be finished (a night long gone, a van that didn't go): its boxes go back, with why. */
-  async function closeOut(r) {
-    const reason = window.prompt(`Close out ${r.areaName ? `${r.areaName} · van ${r.van}` : r.routeName}? Stops not delivered are marked not delivered and their boxes go back. Why? (kept on the record)`);
-    if (!reason || reason.trim().length < 5) return;
-    try { const x = await api('POST', `/v1/ops/runs/${encodeURIComponent(r.id)}/close`, { reason: reason.trim() }); toast(`Closed out: ${x.closedOut.length} box(es) go back.`); } catch (x) { toast(x.message); }
+  /**
+   * Close a run with why: today's before its last stop (the van broke down; the driver can't scan another stop), or one
+   * from an earlier day that will never be finished. Its boxes not left come back and are handled as any box that comes
+   * back. After the last stop a run closes itself.
+   */
+  async function closeOut(r, today) {
+    const name = r.areaName ? `${r.areaName} · van ${r.van}` : r.routeName;
+    const left = r.counts.stops - r.counts.delivered - r.counts.notDelivered;
+    const reason = window.prompt(today ? `Close ${name} now, before its last stop? The ${plural(left, 'stop', 'stops')} not done ${left === 1 ? 'is' : 'are'} marked not delivered, the driver can’t scan another, and the boxes come back. Why? (kept on the record, e.g. “The van broke down”)` : `Close out ${name}? Stops not delivered are marked not delivered and their boxes go back. Why? (kept on the record)`);
+    if (!reason) return;
+    if (reason.trim().length < 5) { toast('Say why in a few words (at least 5 letters).'); return; }
+    try { const x = await api('POST', `/v1/ops/runs/${encodeURIComponent(r.id)}/close`, { reason: reason.trim() }); toast(`Run closed: ${plural(x.closedOut.length, 'box comes', 'boxes come')} back.`); } catch (x) { toast(x.message); }
     render();
   }
   async function routesPage() {
     const q = new URLSearchParams(S.path.split('?')[1] || '');
-    const date = q.get('date') || (await api('GET', '/v1/ops/overview')).date;
+    const todayDate = (await api('GET', '/v1/ops/overview')).date;
+    const date = q.get('date') || todayDate;
     const data = await api('GET', `/v1/ops/runs?date=${date}`);
+    W.setZone(data.runs[0]?.timezone ?? S.config.timezone);
+    const today = date === todayDate;
     const picker = h('input', { type: 'date', value: date, 'aria-label': 'Night', onchange: (e) => go(`/ops/routes?date=${e.target.value}`) });
     const plan = h('button', { class: 'btn', type: 'button', onclick: async () => { plan.disabled = true; plan.textContent = 'Planning and printing…'; try { const r = await api('POST', '/v1/ops/runs/plan', { date }); toast(r.length ? `${r.length} route${r.length === 1 ? '' : 's'} planned and printed` : 'Nobody is due that day'); } catch (x) { toast(x.message); } render(); } }, 'Plan and print this night');
     const stages = ['printing', 'packing', 'ready', 'out', 'done'];
@@ -302,14 +371,17 @@
         const at = stages.indexOf(r.status);
         return h('section', { class: 'run' },
           h('div', { class: 'run-head' }, h('div', {}, h('h3', { text: r.areaName ? `${r.areaName} · van ${r.van} · ${r.routeId.replace(/^route-/, 'Route ')}` : `${r.routeName} · ${r.routeId.replace(/^route-/, 'Route ')}` }), h('div', { style: 'color:var(--muted);font-size:14px', text: `${plural(r.counts.stops, 'stop', 'stops')} · ${plural(r.counts.bottles, 'bottle', 'bottles')} · about ${r.distanceKm} km, ${r.minutes} min · from ${r.depot?.name ?? 'the depot'}` })),
-            h('div', { class: 'toolbar' }, r.status === 'packing' ? h('button', { class: 'btn small', type: 'button', onclick: async () => { try { const x = await api('POST', `/v1/ops/runs/${r.id}/pack-check`); toast(x.problems.length ? `${x.problems.length} box(es) need attention` : 'Every box checked and sealed'); } catch (e) { toast(e.message); } render(); } }, 'Run packing check') : null, r.driverId ? h('span', { class: 'pill dark', text: 'Driver assigned' }) : null, r.status !== 'done' ? h('button', { class: 'btn secondary small', type: 'button', onclick: () => closeOut(r) }, 'Close out…') : null)),
+            h('div', { class: 'toolbar' }, r.status === 'packing' ? h('button', { class: 'btn small', type: 'button', onclick: async () => { try { const x = await api('POST', `/v1/ops/runs/${r.id}/pack-check`); toast(x.problems.length ? `${x.problems.length} box(es) need attention` : 'Every box checked and sealed'); } catch (e) { toast(e.message); } render(); } }, 'Run packing check') : null, r.driverId ? h('span', { class: 'pill dark', text: 'Driver assigned' }) : null, r.status !== 'done' && date <= todayDate ? h('button', { class: 'btn secondary small', type: 'button', onclick: () => closeOut(r, today) }, today ? 'Close the run…' : 'Close out…') : null)),
           h('div', { class: 'steps' }, stages.map((s, i) => h('span', { class: i < at ? 'done' : i === at ? 'on' : '', text: stageName[s] }))),
-          h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Stop', 'Address', 'Box', 'Pack', 'Status', ''].map((x) => h('th', { text: x })))),
+          h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Stop', 'Address', 'Box', 'Pack', 'Status', 'When', ''].map((x) => h('th', { text: x })))),
             h('tbody', {}, r.stops.map((s) => h('tr', {}, h('td', {}, h('b', { text: s.stopCode })), h('td', { text: s.address }), h('td', {}, `#${s.boxNumber ?? '—'}`, (r.status === 'printing' || r.status === 'packing') && s.sticker ? h('div', { class: 'sticker-step', style: 'color:var(--muted);font-size:13px', text: s.sticker }) : null), h('td', { text: `${s.packSize}` }),
               h('td', {}, s.status === 'delivered' ? h('span', {}, h('span', { class: 'pill ok', text: `Delivered${s.atAddressBy === 'driver' ? ' (driver confirmed)' : ''}${s.photoWaived ? ' without a photo' : ''}` }), s.photo ? h('button', { class: 'linkish', type: 'button', onclick: () => openDropPhoto(s.photo.id) }, ' Photo') : null, s.photo && s.photo.location === 'unverified' ? h('span', { class: 'pill warn', title: 'The phone gave no location (or too vague a one) when the photo was taken', text: 'unverified location' }) : null) :
-                s.doorScan ? h('span', {}, h('span', { class: 'pill warn', text: 'Scanned at the door, no photo yet' }), h('button', { class: 'btn secondary small', type: 'button', onclick: () => vouch(r, s) }, 'Delivered without photo…')) : s.status === 'not_delivered' ? h('span', { class: `pill ${s.skipped ? 'warn' : 'bad'}`, text: `${s.skipped ? 'Skipped' : 'Not delivered'}: ${s.reason}` }) : s.houseStatus && s.houseStatus !== 'active' ? h('span', { class: 'pill warn', text: 'Stopped since the plan: keep the box' }) : h('span', { class: 'pill', text: s.packStatus === 'loaded' ? 'On the van' : s.packStatus === 'sealed' ? 'Sealed' : s.packStatus ?? 'Planned' })),
+                s.doorScan ? h('span', {}, h('span', { class: 'pill warn', text: 'Scanned at the door, no photo yet' }), h('button', { class: 'btn secondary small', type: 'button', onclick: () => vouch(r, s) }, 'Delivered without photo…')) : s.status === 'not_delivered' ? h('span', { class: `pill ${s.skipped ? 'warn' : 'bad'}`, text: `${s.skipped ? 'Skipped' : 'Not delivered'}${s.reason ? `: ${W.skipReason(s.reason)}` : ''}` }) : s.houseStatus && s.houseStatus !== 'active' ? h('span', { class: 'pill warn', text: 'Stopped since the plan: keep the box' }) : h('span', { class: 'pill', text: W.status(s.packStatus) || 'Planned' })),
+              // When the box was left (or the stop given up), in the company's time zone; a box scanned at its door waiting for its photo, then.
+              h('td', { class: 'drop-time', style: 'white-space:nowrap', text: s.at ? W.time(s.at) : s.doorScan ? `Scanned ${W.time(s.doorScan.at)}` : '—' }),
               h('td', { style: 'color:var(--muted);font-size:13px' }, s.emptiesCollected ? `${plural(s.emptiesCollected, 'empty', 'empties')}` : '', s.checkedByHand ? `Checked by hand, ${ago(s.checkedByHand.at)}` : '',
                 // No packing line for this box: a signed-in person counts every bottle and checks it by hand (who and when are kept).
+                r.status === 'packing' && s.packId && (s.packStatus === 'box_printed' || s.packStatus === 'mismatch') ? h('button', { class: 'btn secondary small reprint', type: 'button', onclick: () => reprintSheet(r, s) }, 'Reprint a bad label…') : null,
                 r.status === 'packing' && (s.packStatus === 'box_printed' || s.packStatus === 'mismatch') ? h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { if (!confirm(`Did you count all ${plural(s.packSize, 'bottle', 'bottles')} in box #${s.boxNumber ?? '—'} and check each one belongs${s.sticker ? ', and put its box-code sticker on' : ''}? It's sealed and recorded under your name.`)) return; try { const x = await api('POST', `/v1/ops/runs/${encodeURIComponent(r.id)}/stops/${s.stop}/check-by-hand`); toast(x.problems.length ? `Checked and sealed. ${x.problems.length} box(es) still need a check` : 'Checked and sealed. Every box is ready to load'); } catch (e) { toast(e.message); } render(); } }, 'Checked by hand') : null)))))));
       })) : h('div', { class: 'empty', text: 'No routes planned for this night yet. Plan and print it when the day’s orders are in.' }));
   }
@@ -317,17 +389,18 @@
   // ---------- delivery areas: the streets FreeWater chooses, every house on them ----------
   const HS = { active: ['ok', 'Gets packs'], opted_out: ['warn', 'Stopped in the app'], skip_pending: ['bad', 'Driver skip: review'], skipped: ['', 'Skipped'] };
   async function areasPage() {
-    const [areas, reviews] = await Promise.all([api('GET', '/v1/ops/areas'), api('GET', '/v1/ops/house-reviews').catch(() => [])]);
+    const [areas, reviews, notices] = await Promise.all([api('GET', '/v1/ops/areas'), api('GET', '/v1/ops/house-reviews').catch(() => []), api('GET', '/v1/ops/house-notices').catch(() => [])]);
     const name = h('input', { class: 'input', id: 'ar-name', placeholder: 'Travis Heights, first 1,000 homes', maxlength: '80' });
     const routeId = h('input', { class: 'input', id: 'ar-route', placeholder: 'route-3', value: 'route-3' });
     const create = h('form', { class: 'panel-box', onsubmit: async (e) => { e.preventDefault(); try { const a = await api('POST', '/v1/ops/areas', { name: name.value.trim(), routeId: routeId.value.trim() }); toast('Area made. It’s off until you turn it on.'); go(`/ops/areas/${a.id}`); } catch (x) { toast(x.message); } } },
       h('h2', { text: 'New area' }), h('p', { style: 'margin:0;color:var(--muted);font-size:14px', text: 'Its vans start from the route’s micro-factory and drive on the route’s days. It starts off; add houses, check them, then turn it on.' }),
       h('div', { class: 'field' }, h('label', { for: 'ar-name', text: 'Name' }), name), h('div', { class: 'field' }, h('label', { for: 'ar-route', text: 'Route' }), routeId), h('button', { class: 'btn', type: 'submit' }, 'Make the area'));
-    const review = (r) => h('tr', {}, h('td', {}, h('b', { text: r.address.split(',')[0] }), h('div', { style: 'color:var(--muted);font-size:12px', text: r.areaName })), h('td', { text: r.skipReason ?? '' }),
+    const review = (r) => h('tr', {}, h('td', {}, h('b', { text: r.address.split(',')[0] }), h('div', { style: 'color:var(--muted);font-size:12px', text: r.areaName })), h('td', { text: W.skipReason(r.skipReason) }),
       h('td', {}, h('div', { class: 'toolbar' },
         h('button', { class: 'btn small', type: 'button', onclick: async () => { try { await api('POST', `/v1/ops/houses/${r.id}/review`, { decision: 'deliver' }); toast('It gets packs again from the next night'); } catch (x) { toast(x.message); } render(); } }, 'Deliver again'),
         h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { try { await api('POST', `/v1/ops/houses/${r.id}/review`, { decision: 'skip' }); toast('Skipped from now on'); } catch (x) { toast(x.message); } render(); } }, 'Keep skipping'))));
     shell('areas', head('Delivery areas', 'House after house on the streets we choose. Nobody signs up: every house gets packs unless someone there stops them in the app, or a driver’s skip is agreed.'),
+      noticesBox(notices),
       reviews.length ? h('section', { class: 'panel-box' }, h('h2', { text: `${reviews.length} driver skip${reviews.length === 1 ? '' : 's'} to review` }), h('p', { style: 'margin:0;color:var(--muted);font-size:14px', text: 'These houses are left out until you decide.' }),
         h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['House', 'Driver said', ''].map((x) => h('th', { text: x })))), h('tbody', {}, reviews.map(review))))) : null,
       areas.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Area', 'Houses', 'Packs', 'How often', 'Status'].map((x) => h('th', { text: x })))),
@@ -350,7 +423,7 @@
     const el = (tag, a) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(a)) e.setAttribute(k, String(v)); svg.append(e); return e; };
     if (polygon) el('polygon', { points: polygon.map(([lat, lng]) => `${x({ lat, lng })},${y({ lat, lng })}`).join(' '), fill: 'none', stroke: '#9AA6B2', 'stroke-dasharray': '5 4', 'stroke-width': 2 });
     const color = { active: '#1F8A4C', opted_out: '#B7791F', skip_pending: '#B42318', skipped: '#9AA6B2' };
-    for (const hs of houses) el('circle', { cx: x(hs.point), cy: y(hs.point), r: 4, fill: color[hs.status] ?? '#1F2633' }).append(Object.assign(document.createElementNS(NS, 'title'), { textContent: `${hs.address} · ${HS[hs.status]?.[1] ?? hs.status}` }));
+    for (const hs of houses) el('circle', { cx: x(hs.point), cy: y(hs.point), r: 4, fill: color[hs.status] ?? '#1F2633' }).append(Object.assign(document.createElementNS(NS, 'title'), { textContent: `${hs.address} · ${HS[hs.status]?.[1] ?? W.status(hs.status)}` }));
     return svg;
   }
   async function areaPage(id) {
@@ -386,8 +459,8 @@
           h('button', { class: 'btn secondary', type: 'button', onclick: () => { let polygon = null; try { polygon = poly.value.trim() ? JSON.parse(poly.value) : null; } catch { return toast('The polygon isn’t valid: [[lat, lng], …]'); } save({ polygon }, 'Polygon saved for the next houses added'); } }, 'Save polygon')),
         result),
       h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Address', 'Status', 'People', 'Last left', 'Next due'].map((x) => h('th', { text: x })))),
-        h('tbody', {}, houses.map((x) => h('tr', {}, h('td', {}, x.address, x.claimed ? h('span', { class: 'pill', style: 'margin-left:6px', text: 'In the app' }) : null), h('td', {}, h('span', { class: `pill ${HS[x.status]?.[0] ?? ''}`, text: HS[x.status]?.[1] ?? x.status }), x.skipReason ? h('div', { style: 'color:var(--muted);font-size:12px', text: x.skipReason }) : null),
-          h('td', { text: x.householdSize ? String(x.householdSize) : '—' }), h('td', { text: x.lastDeliveredAt ? ago(x.lastDeliveredAt) : '—' }), h('td', { text: x.status === 'active' ? x.nextDate ?? 'Next plan' : '—' })))))));
+        h('tbody', {}, houses.map((x) => h('tr', {}, h('td', {}, x.address, x.claimed ? h('span', { class: 'pill', style: 'margin-left:6px', text: 'In the app' }) : null), h('td', {}, h('span', { class: `pill ${HS[x.status]?.[0] ?? ''}`, text: HS[x.status]?.[1] ?? W.status(x.status) }), x.skipReason ? h('div', { style: 'color:var(--muted);font-size:12px', text: W.skipReason(x.skipReason) }) : null),
+          h('td', { text: x.householdSize ? String(x.householdSize) : '—' }), h('td', { text: x.lastDeliveredAt ? ago(x.lastDeliveredAt) : '—' }), h('td', { text: x.status === 'active' ? (x.nextDate ? W.day(x.nextDate) : 'Next plan') : '—' })))))));
   }
 
   // ---------- deliveries ----------
@@ -397,13 +470,15 @@
     const freq = { weekly: 'Weekly', biweekly: 'Every 2 weeks', every4weeks: 'Every 4 weeks' };
     shell('subs', head('Deliveries', `${subs.length} home${subs.length === 1 ? '' : 's'} getting packs. ${plural(subs.reduce((n, s) => n + (s.status === 'active' ? s.packSize : 0), 0), 'bottle', 'bottles')} a cycle.`),
       subs.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Customer', 'Address', 'Route', 'Pack', 'How often', 'Next', 'Status'].map((x) => h('th', { text: x })))),
-        h('tbody', {}, subs.map((s) => h('tr', {}, h('td', { text: s.customer }), h('td', { text: s.address }), h('td', { text: s.routeId }), h('td', { text: `${s.packSize}` }), h('td', { text: `${freq[s.frequency]}, ${days[s.day]}` }), h('td', { text: s.nextDate ?? '—' }), h('td', {}, h('span', { class: `pill ${s.status === 'active' ? 'ok' : 'warn'}`, text: s.status === 'active' ? 'Active' : 'Paused' })))))))
+        h('tbody', {}, subs.map((s) => h('tr', {}, h('td', { text: s.customer }), h('td', { text: s.address }), h('td', { text: s.routeName ?? W.route(s.routeId) }), h('td', { text: `${s.packSize}` }), h('td', { text: `${freq[s.frequency]}, ${days[s.day]}` }), h('td', { text: s.nextDate ? W.day(s.nextDate) : '—' }), h('td', {}, h('span', { class: `pill ${s.status === 'active' ? 'ok' : 'warn'}`, text: s.status === 'active' ? 'Active' : W.status(s.status) })))))))
         : h('div', { class: 'empty', text: 'No one has signed up for delivery yet.' }));
   }
 
   // ---------- books ----------
   async function booksPage() {
-    const [totals, lines, preview, transfers] = await Promise.all([api('GET', `/v1/public/companies/${S.config.companyId}/totals`), api('GET', '/v1/ledger?limit=500').catch(() => []), api('GET', '/v1/payouts/preview').catch(() => null), api('GET', '/v1/payouts').catch(() => null)]);
+    // The signed-in person's own company (a licensee's team sees its own), and only while its open books are on.
+    const mine = S.me?.companyId ?? S.config.companyId;
+    const [totals, lines, preview, transfers] = await Promise.all([(S.features?.off ?? []).includes('open_books') ? null : api('GET', `/v1/public/companies/${encodeURIComponent(mine)}/totals`), api('GET', '/v1/ledger?limit=500').catch(() => []), api('GET', '/v1/payouts/preview').catch(() => null), api('GET', '/v1/payouts').catch(() => null)]);
     const recent = lines.slice(-40).reverse();
     const send = h('button', { class: 'btn', type: 'button', onclick: async () => {
       send.disabled = true; send.textContent = 'Sending…';
@@ -416,9 +491,9 @@
     const date = h('input', { class: 'input', id: 'x-date', type: 'date', value: new Date().toISOString().slice(0, 10) });
     shell('books', head('Books', 'Every line is final. Corrections are new lines, never edits. Everything on the public open-books site comes from here.', h('a', { class: 'btn secondary', href: fixture ? '#' : '/books', target: '_blank', rel: 'noopener' }, 'Open the public site')),
       h('div', { class: 'kpis', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' },
-        h('div', { class: 'kpi dark' }, h('span', { text: 'Bottles, all time' }), h('b', { text: totals.bottles.toLocaleString() })),
-        h('div', { class: 'kpi' }, h('span', { text: 'Earned, all time' }), h('b', { text: dollars(totals.revenueCents) })),
-        h('div', { class: 'kpi' }, h('span', { text: 'Given, all time' }), h('b', { text: dollars(totals.donatedCents) }))),
+        totals && h('div', { class: 'kpi dark' }, h('span', { text: 'Bottles, all time' }), h('b', { text: totals.bottles.toLocaleString() })),
+        totals && h('div', { class: 'kpi' }, h('span', { text: 'Earned, all time' }), h('b', { text: dollars(totals.revenueCents) })),
+        totals && h('div', { class: 'kpi' }, h('span', { text: 'Given, all time' }), h('b', { text: dollars(totals.donatedCents) }))),
       preview ? h('div', { class: 'grid2' },
         h('section', { class: 'panel-box' }, h('h2', {}, 'Charity transfers', send),
           h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Charity', 'Owed now', ''].map((x) => h('th', { text: x })))),
@@ -436,6 +511,140 @@
         h('tbody', {}, recent.map((l) => h('tr', {}, h('td', { text: new Date(l.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) }), h('td', { text: l.memo }), h('td', { style: 'font-size:12px;color:var(--muted)', text: l.debit }), h('td', { style: 'font-size:12px;color:var(--muted)', text: l.credit }), h('td', { text: dollars(l.amountCents) })))))))
         : h('div', { class: 'empty', text: 'Your role can’t see ledger lines. Finance and owners can.' }));
   }
+
+  I.bottle = 'M9 2h6v3l2 3v13a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V8l2-3z|M7 11h10|M7 17h10';
+  // ---------- the Review section: ads, link changes, filler and charity pieces (one place for ad queues) ----------
+  // Who reviews ads is the company's choice (console → Team, "Who reviews ads"; FreeWater: owners and ops). A person
+  // decides each one; refunds stay with an owner or finance person. The unsold-space ORDER stays in the console.
+  const reviewTabs = (active) => h('div', { class: 'toolbar review-tabs', style: 'margin-bottom:16px' },
+    h('nav', { class: 'tabs', 'aria-label': 'Review' }, [['ads', '/ops/review', 'Ads'], ['links', '/ops/review/links', 'Link changes'], ['fillers', '/ops/review/fillers', 'Filler and charity']].filter(([id]) => id !== 'fillers' || !(S.features?.off ?? []).includes('fillers')).map(([id, path, label]) => link(path, { class: `tab${active === id ? ' on' : ''}`, 'aria-current': active === id ? 'page' : null }, label))),
+    S.me?.role === 'owner' ? h('a', { class: 'btn secondary small', href: fixture ? '#' : '/console/ads#unsold' }, 'Unsold-space order (console) →') : h('span', { style: 'color:var(--muted);font-size:13px', text: 'What fills unsold space, in order, is set by an owner in the console.' }));
+  /** "Nov 10, 7:42 PM" in the company's time zone (src/web/words.js). */
+  const when = (iso) => W.when(iso);
+  const VERDICT = { pass: ['ok', 'Passed'], flag: ['warn', 'Flagged: look closely'], refuse: ['bad', 'Refused'] };
+  const verdictPill = (v) => h('span', { class: `pill ${VERDICT[v]?.[0] ?? ''}`, text: VERDICT[v]?.[1] ?? v });
+  const urlLine = (label, items, cls) => h('div', { class: `link-line ${cls}` }, h('b', { text: label }), h('ul', {}, (items ?? []).map((x) => h('li', {}, h('code', { text: x.url }), x.path && x.path !== 'experienceConfig.link.url' ? h('span', { style: 'color:var(--muted);font-size:12px', text: ` (${x.path})` }) : null))));
+
+  async function linkChangesPage() {
+    const [queue, holds] = await Promise.all([api('GET', '/v1/review/link-changes'), api('GET', '/v1/review/link-holds').catch(() => [])]);
+    const card = (x) => {
+      const why = h('textarea', { class: 'input', id: `lc-why-${x.id}`, maxlength: '500', placeholder: 'Why it’s rejected (the advertiser sees this word for word)' });
+      const decide = async (decision) => {
+        if (decision === 'reject' && why.value.trim().length < 10) { toast('Write why, in plain words (at least 10 characters): the advertiser sees it.'); why.focus(); return; }
+        if (decision === 'approve' && !window.confirm(`Approve ${x.advertiser ?? 'this'}’s new link? Every bottle’s code for this ad leads there from now on.`)) return;
+        try { await api('POST', `/v1/review/link-changes/${encodeURIComponent(x.id)}`, { decision, ...(why.value.trim() ? { note: why.value.trim() } : {}) }); toast(decision === 'approve' ? 'Approved: the new link is live.' : 'Rejected: the old link stays live, and the advertiser sees why.'); } catch (e) { toast(e.message); }
+        render();
+      };
+      return h('section', { class: 'panel-box link-change', 'data-id': x.id },
+        h('h2', {}, h('span', { text: `${x.advertiser ?? 'An advertiser'}${x.name ? ` · ${x.name}` : ''}` }), x.appealedAt ? h('span', { class: 'pill warn', text: 'Appealed to a person' }) : h('span', { class: 'pill', text: `Asked ${when(x.at)}` })),
+        urlLine('Old link (still live)', x.before, 'old'), urlLine('New link (waiting for you)', x.changes, 'new'),
+        h('div', { class: 'safety' }, h('b', { text: 'Automatic link-safety check: ' }), verdictPill(x.safety.verdict), x.safety.reasons ? h('p', { style: 'margin:6px 0 0', text: x.safety.reasons }) : h('p', { style: 'margin:6px 0 0;color:var(--muted)', text: 'Nothing found: https, no private address, no password, not on the list, the last page read fine.' })),
+        x.ai ? h('div', { class: 'ai-view' }, h('b', { text: 'The AI reviewer (it can’t decide): ' }), verdictPill(x.ai.verdict), x.ai.reasons ? h('p', { style: 'margin:6px 0 0', text: x.ai.reasons }) : null) : h('p', { style: 'margin:0;color:var(--muted);font-size:13px', text: 'The AI reviewer hasn’t looked at it (it’s off, or still looking).' }),
+        h('p', { style: 'margin:0;color:var(--muted);font-size:13px', text: `${x.feeCents ? `Fee paid ${dollars(x.feeCents)} (kept either way). ` : ''}Nothing pauses meanwhile: the old link keeps working until you approve the new one.` }),
+        h('div', { class: 'field' }, h('label', { for: `lc-why-${x.id}`, text: 'Reason (needed to reject)' }), why),
+        h('div', { class: 'toolbar' }, h('button', { class: 'btn', type: 'button', onclick: () => decide('approve') }, 'Approve the new link'), h('button', { class: 'btn secondary', type: 'button', onclick: () => decide('reject') }, 'Reject, keep the old link')));
+    };
+    const held = holds.filter((x) => !x.released);
+    shell('review', head('Review', 'Ads, changed links and the pieces that fill unsold space. A person decides each one.'), reviewTabs('links'),
+      queue.length ? h('div', { class: 'link-changes', style: 'display:flex;flex-direction:column;gap:16px' }, queue.map(card)) : h('div', { class: 'empty', text: 'No changed links waiting. When an advertiser changes where a live ad’s code leads, it waits here (the old link stays live).' }),
+      held.length ? h('section', { class: 'panel-box', style: 'margin-top:18px' }, h('h2', { text: `${plural(held.length, 'ad', 'ads')} on hold: a link turned bad` }), h('p', { style: 'margin:0;color:var(--muted);font-size:14px', text: 'Their codes open a holding page until a person checks the link and clears it (it’s checked again first).' }),
+        held.map((x) => h('div', { class: 'attn' }, h('div', {}, h('span', {}, h('b', { text: x.advertiser ?? x.campaignId }), ` · ${x.reasons}`), h('button', { class: 'btn secondary small', type: 'button', onclick: async () => { const reason = window.prompt('What did you check? (kept on the record, 10+ characters)'); if (!reason) return; try { await api('POST', `/v1/review/link-holds/${encodeURIComponent(x.campaignId)}/release`, { reason }); toast('Cleared.'); } catch (e) { toast(e.message); } render(); } }, 'Clear the hold…'))))) : null);
+  }
+
+  async function fillersPage() {
+    const { fillers } = await api('GET', '/v1/fillers');
+    const pending = fillers.filter((f) => f.status === 'pending' && f.kind !== 'news'), live = fillers.filter((f) => f.status === 'approved' && f.kind !== 'news');
+    const KIND = { charity: 'Charity partner', advertiser: 'An advertiser’s ad, offered free', own: 'Your own message' };
+    const card = (f) => {
+      const pic = h('div', { class: 'filler-pic' }, h('p', { class: 'caption', text: 'Loading the label…' }));
+      api('GET', `/v1/review/campaigns/${encodeURIComponent(f.id)}/preview`).then((p) => pic.replaceChildren(window.fwLabel.views(p.labelSvg, { alt: `${f.name} on a label` }).el, h('p', { class: 'caption', text: 'On a real label, as it would print in space nobody bought.' }))).catch(() => pic.replaceChildren(h('p', { class: 'caption', text: 'The label didn’t load.' })));
+      const act = async (path, msg, ask) => { if (ask && !window.confirm(ask)) return; try { await api('POST', `/v1/fillers/${encodeURIComponent(f.id)}/${path}`); toast(msg); } catch (e) { toast(e.message); } render(); };
+      return h('section', { class: 'panel-box filler', 'data-id': f.id },
+        h('h2', {}, h('span', { text: `${f.name} · ${f.headline}` }), h('span', { class: `pill ${f.status === 'approved' ? 'ok' : 'warn'}`, text: f.status === 'approved' ? 'Printing in unsold space' : 'Waiting for a person' })),
+        h('p', { style: 'margin:0;color:var(--muted);font-size:14px', text: `${KIND[f.kind] ?? f.kind} · sizes ${f.sizes.map((s) => (s === 1 ? 'full' : `1/${s}`)).join(', ')} · proposed ${when(f.proposedAt)}` }),
+        pic,
+        h('div', { class: 'toolbar' }, f.status === 'pending' ? h('button', { class: 'btn', type: 'button', onclick: () => act('approve', 'Approved: it can fill unsold space now.') }, 'Approve') : null,
+          h('button', { class: 'btn secondary', type: 'button', onclick: () => act('retire', f.status === 'pending' ? 'Rejected: it never prints.' : 'Stopped: it no longer prints.', f.status === 'pending' ? `Reject “${f.headline}”? It never prints; it can be proposed again.` : `Stop “${f.headline}” printing now? Bottles already out still open it.`) }, f.status === 'pending' ? 'Reject' : 'Stop it')));
+    };
+    shell('review', head('Review', 'Ads, changed links and the pieces that fill unsold space. A person decides each one.'), reviewTabs('fillers'),
+      h('h2', { style: 'font-size:18px;margin:0 0 10px', text: pending.length ? `${plural(pending.length, 'piece', 'pieces')} waiting` : 'Waiting' }),
+      pending.length ? h('div', { class: 'fillers', style: 'display:flex;flex-direction:column;gap:16px' }, pending.map(card)) : h('div', { class: 'empty', text: 'Nothing waiting. Charity partners’ pieces and ads advertisers offer free for unsold space wait here until a person approves them.' }),
+      live.length ? [h('h2', { style: 'font-size:18px;margin:22px 0 10px', text: 'Approved and printing' }), h('div', { style: 'display:flex;flex-direction:column;gap:16px' }, live.map(card))] : null);
+  }
+
+  // ---------- find a bottle by the code printed on its label ----------
+  async function bottlesPage() {
+    const q = new URLSearchParams(S.path.split('?')[1] || '');
+    const typed = q.get('code') || '';
+    const input = h('input', { class: 'input code-input', id: 'b-code', value: typed, autocomplete: 'off', autocapitalize: 'characters', spellcheck: 'false', placeholder: 'B-7F3K29', 'aria-label': 'Bottle code', style: 'max-width:240px' });
+    const out = h('div', { class: 'bottle-found' });
+    const find = async (code) => {
+      if (!code.trim()) return;
+      if (!fixture) history.replaceState(null, '', `/ops/bottles?code=${encodeURIComponent(code.trim())}`);
+      out.replaceChildren(h('p', { class: 'caption', text: 'Looking…' }));
+      try { out.replaceChildren(bottleCard(await api('GET', `/v1/console/bottles/${encodeURIComponent(code.trim().replace(/[^A-Za-z0-9 _-]/g, ''))}`))); } catch (e) { out.replaceChildren(h('div', { class: 'notice err', text: e.message })); }
+    };
+    shell('bottles', head('Find a bottle', 'Type the code printed at the bottom of its label’s panel (“Bottle code: B-7F3K29”). With or without “B-”, in any case; O and 0, I and 1 are the same.'),
+      h('form', { class: 'toolbar', onsubmit: (e) => { e.preventDefault(); find(input.value); } }, input, h('button', { class: 'btn', type: 'submit' }, 'Find')), out);
+    if (typed) find(typed); else input.focus();
+  }
+  const STATUS = { dispensed: 'Printed and handed out', printed: 'Printed', rendered: 'Waiting to print', filled: 'Waiting to print', failed: 'Failed to print (never billed)' };
+  function bottleCard(b) {
+    const other = (x) => (x ? h('button', { class: 'linkish', type: 'button', onclick: () => go(`/ops/bottles?code=${encodeURIComponent(x.code ?? x.unitId)}`) }, x.code ?? x.unitId) : null);
+    const d = b.drop;
+    return h('section', { class: 'panel-box bottle-card' },
+      h('h2', {}, h('span', { text: b.code ?? b.unitId }), h('span', { class: `pill ${b.voided ? 'bad' : b.status === 'failed' ? 'bad' : 'ok'}`, text: b.voided ? 'Voided at the packing check' : STATUS[b.status] ?? W.status(b.status) })),
+      h('dl', { class: 'facts' },
+        h('dt', { text: 'Printed' }), h('dd', { text: `${when(b.printedAt)} · ${b.place}` }),
+        h('dt', { text: 'Product' }), h('dd', { text: b.product }),
+        b.voided ? [h('dt', { text: 'Voided' }), h('dd', {}, `${b.voided.reason}, ${when(b.voided.at)}. Reprinted as `, other(b.voided.reprint) ?? 'not yet', ' with the same ads.')] : null,
+        b.reprintOf ? [h('dt', { text: 'Reprint of' }), h('dd', {}, other(b.reprintOf), ' (its label came out wrong)')] : null,
+        b.box ? [h('dt', { text: 'Box' }), h('dd', { text: `#${b.box.boxNumber} · ${b.box.address}${b.box.area ? ` · ${b.box.area}` : ''} · ${{ composed: 'being made', box_printed: 'printed, waiting for its check', mismatch: 'needs its check again', verified: 'checked', sealed: 'sealed', loaded: 'on the van', delivered: 'delivered', returned: 'came back' }[b.box.status] ?? W.status(b.box.status)}` })] : [h('dt', { text: 'Box' }), h('dd', { text: 'Not in a delivery box (handed out at a machine, or a custom bottle).' })],
+        d ? [h('dt', { text: 'Drop' }), h('dd', {}, d.status === 'delivered' ? `Delivered ${when(d.at)} (night of ${W.day(d.night)}, stop ${d.stop})${d.atAddressBy === 'driver' ? ', driver confirmed the address' : ''}` : d.status === 'not_delivered' ? `Not delivered: ${d.reason ?? ''}` : `Planned for the night of ${W.day(d.night)}, stop ${d.stop}`,
+          d.photo ? [' · ', h('button', { class: 'linkish', type: 'button', onclick: () => openDropPhoto(d.photo.id) }, 'Photo at the door'), d.photo.location === 'unverified' ? h('span', { class: 'pill warn', text: 'unverified location' }) : null] : d.withoutPhoto ? ` · no photo, vouched for by the team: ${d.withoutPhoto.reason}` : '')] : null),
+      b.custom ? h('p', { style: 'margin:0', text: 'A custom bottle: no ads on it.' }) : h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Piece', 'Size', 'Ad', ''].map((x) => h('th', { text: x })))),
+        h('tbody', {}, b.ads.map((a) => h('tr', {}, h('td', { text: String(a.slot + 1) }), h('td', { text: a.size }), h('td', {}, h('b', { text: a.advertiser }), a.ad ? ` · ${a.ad}` : ''), h('td', {}, a.paid ? h('span', { class: 'pill ok', text: 'Paid' }) : h('span', { style: 'color:var(--muted);font-size:13px', text: a.unsold ? `Unsold space: ${a.unsold}` : 'Free' })))))) ));
+  }
+
+  // ---------- reprint a bad label from the packing check ----------
+  /** A phone-sized sheet over the page; returns a function that closes it. */
+  function sheet(title, ...content) {
+    const wrap = h('div', { class: 'sheet-wrap', role: 'dialog', 'aria-modal': 'true', 'aria-label': title, onclick: (e) => { if (e.target === wrap) close(); } },
+      h('div', { class: 'sheet' }, h('div', { class: 'run-head' }, h('h2', { style: 'margin:0;font-size:20px', text: title }), h('button', { class: 'btn secondary small', type: 'button', onclick: () => close() }, 'Close')), ...content));
+    const close = () => wrap.remove();
+    document.body.append(wrap);
+    return close;
+  }
+  async function reprintSheet(r, s) {
+    let box;
+    try { box = await api('GET', `/v1/ops/packs/${encodeURIComponent(s.packId)}/bottles`); } catch (e) { return toast(e.message); }
+    const typed = h('input', { class: 'input code-input', id: 'rp-code', autocomplete: 'off', autocapitalize: 'characters', placeholder: 'B-7F3K29', 'aria-label': 'Code on the bad bottle' });
+    const picks = box.bottles.map((b) => h('label', { class: 'pick-bottle' }, h('input', { type: 'checkbox', value: b.unitId, 'data-code': b.code ?? '' }), h('span', {}, h('b', { text: b.code ?? b.unitId.slice(-8) }), h('small', { text: b.ads.length ? b.ads.join(', ') : 'no ads' }))));
+    const go2 = async () => {
+      const chosen = picks.map((l) => l.querySelector('input')).filter((i) => i.checked).map((i) => i.value);
+      if (typed.value.trim()) chosen.push(typed.value.trim());
+      if (!chosen.length) { toast('Pick the bottle whose label came out wrong, or type its code.'); return; }
+      if (!window.confirm(`Reprint ${plural(chosen.length, 'bottle', 'bottles')} for box #${box.boxNumber}? Each is printed again with exactly the same ads; the bad one is voided and never billed. Put the new one in the box and check it again.`)) return;
+      try {
+        const out = await api('POST', `/v1/packs/${encodeURIComponent(s.packId)}/replace`, { missingUnitIds: chosen });
+        close();
+        toast(out.reprinted.length ? `Reprinted ${plural(out.reprinted.length, 'bottle', 'bottles')} with the same ads. The bad one is voided: check the box again.` : 'Nothing reprinted: that code isn’t a bottle in this box.');
+      } catch (e) { toast(e.message); }
+      render();
+    };
+    const close = sheet(`Reprint a bad label · box #${box.boxNumber}`,
+      h('p', { style: 'margin:0;color:var(--muted)', text: `${box.address}. Pick the bottle whose label is torn, smudged or printed wrong (its code is on the bottom line of its panel), or type the code.` }),
+      box.canReprint ? null : h('div', { class: 'notice err', text: 'This box is already checked and sealed: bottles can only be reprinted before.' }),
+      h('div', { class: 'pick-bottles' }, picks),
+      h('div', { class: 'field' }, h('label', { for: 'rp-code', text: 'Or type the code on the bad bottle' }), typed),
+      h('button', { class: 'btn wide', type: 'button', disabled: box.canReprint ? null : true, onclick: go2 }, 'Reprint with the same ads'));
+  }
+
+  // ---------- house claims the team should know about ----------
+  const noticesBox = (notices) => (notices.length ? h('section', { class: 'panel-box house-notices' }, h('h2', { text: 'House claims to know about' }),
+    h('p', { style: 'margin:0;color:var(--muted);font-size:14px', text: 'A house someone already claimed, claimed again by someone else; deliveries stopped by a claim only days old. Usually a new household or a second person living there; if it looks wrong, look at the house and its claims.' }),
+    h('div', { class: 'scroll-x' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['When', 'House', 'What happened', 'Now'].map((x) => h('th', { text: x })))),
+      h('tbody', {}, notices.map((n) => h('tr', {}, h('td', { text: when(n.at) }), h('td', {}, h('b', { text: n.address.split(',')[0] }), h('div', { style: 'color:var(--muted);font-size:12px', text: n.area })), h('td', {}, h('span', { class: `pill ${n.kind === 'stopped_by_new_claim' ? 'bad' : 'warn'}`, text: n.kind === 'stopped_by_new_claim' ? 'Stopped by a new claim' : 'Claimed again' }), h('div', { style: 'font-size:13px', text: n.says })), h('td', {}, h('span', { class: `pill ${HS[n.houseStatus]?.[0] ?? ''}`, text: HS[n.houseStatus]?.[1] ?? n.houseStatus })))))))) : null);
 
   render().catch((e) => root.replaceChildren(h('div', { class: 'notice err', text: e.message })));
 })();

@@ -144,6 +144,11 @@ export class AccountsService {
   async sessionPassedSecondStep(raw: string) {
     return !!(await this.db.query(`select 1 from sessions where token_hash = $1 and revoked_at is null and second_step_at is not null`, [sha(raw)])).rows[0];
   }
+  /** When this sign-in began (an owner signed in before the second step was required keeps a grace period). */
+  async sessionStartedAt(raw: string): Promise<Date | null> {
+    const r = (await this.db.query<any>(`select created_at from sessions where token_hash = $1 and revoked_at is null`, [sha(raw)])).rows[0];
+    return r ? new Date(r.created_at) : null;
+  }
   /** The app was turned off: none of this person's sign-ins count as having passed it any more. */
   async clearSecondStep(userId: string) {
     await this.db.query(`update sessions set second_step_at = null where user_id = $1`, [userId]);

@@ -21,6 +21,7 @@ import { defaultWallet } from '../modules/wallet/assets';
 import { adBilling } from '../modules/ads/billing';
 import { TEMPLATES, templateShares } from '../modules/ads/layouts';
 import { unsoldSettings } from '../modules/fillers/unsold';
+import { pauseWeakened } from '../modules/chain/pause';
 
 /** Ad sizes (shares of the label) and their switches. */
 export const SIZE_SWITCHES: Record<number, string> = { 1: 'size_whole', 2: 'size_half', 3: 'size_third', 4: 'size_quarter', 6: 'size_sixth', 8: 'size_eighth', 10: 'size_tenth' };
@@ -105,6 +106,12 @@ export interface Switch {
   ownPage?: { on: string; page: string };
   /** Turned off only by an owner with a written reason (at least 10 characters), never by a starting point; the team is alerted. */
   offNeedsReason?: string;
+  /**
+   * A security switch: turning it off weakens the company's security. Never changed by a starting point, a bundle of
+   * changes, a restored version or an agent's proposal; turned off only on its own, by an owner signed in with the
+   * second step, with a written reason (docs/SWITCHES.md, "Security switches"). Turning it on is always quick.
+   */
+  security?: string;
   link?: Link;
   /** For kind 'setting': the console page. */
   page?: string;
@@ -217,7 +224,7 @@ export const SWITCHES: Switch[] = [
   // Link safety (src/modules/ads/linkSafety.ts; docs/SWITCHES.md, "Link safety"). The founder: every link is approved
   // before it goes live, "what if they changed it to porn or malware". On for every company (`since: 1`: companies that
   // already exist get it too); only an owner turns it off, with a written reason, and never a starting point.
-  sw({ id: 'link_safety', category: 'ads', group: 'Review', label: 'Link safety',
+  sw({ id: 'link_safety', category: 'ads', group: 'Review', label: 'Link safety', security: 'Unsafe links (adult, malware, phishing) would reach people’s phones unchecked.',
     offNeedsReason: 'Every link an ad leads to is checked before a person reviews it and every day while it runs; turning that off is an owner’s decision, written down.',
     description: 'Every link an ad leads to (a new ad, a changed link, a QR code’s destination) is checked automatically before a person reviews it: https only, no passwords, no private or numeric addresses, not on the list of adult, malware and phishing sites and link shorteners (plus your own), every redirect followed from our server, the last page’s type and title, and Google Safe Browsing where the host set a key. Unsafe links are refused before anything is paid; doubtful ones go to your team with the reasons. Every live link is checked again each day: one that turned bad sends its ad’s code to a holding page (“this link is being checked”) and alerts your team. Off (an owner, with a reason): only the basic checks run, and people still review every link.',
     jobs: ['link-safety'] }),
@@ -287,11 +294,11 @@ export const SWITCHES: Switch[] = [
   // ======================= Delivery =======================
   sw({ id: 'delivery', category: 'delivery', parent: null, dependsOn: ['printing'], label: 'Home delivery', description: 'Free 6, 12 and 24 packs on a schedule: night planning, the packing check, loading in reverse and the right box at the right door.',
     routes: ['POST /v1/public/delivery/check', 'GET /v1/me/delivery', 'POST /v1/me/delivery', 'PATCH /v1/me/delivery', 'GET /v1/ops/subscriptions', 'GET /v1/ops/runs', 'POST /v1/ops/runs/plan', 'POST /v1/ops/runs/:id/pack-check', 'POST /v1/ops/runs/:id/close',
-      'POST /v1/packs', 'GET /v1/packs/:id', 'GET /v1/packs/:id/box.svg', 'POST /v1/packs/:id/verify', 'POST /v1/packs/:id/replace', 'POST /v1/packs/:id/seal', 'POST /v1/routes/:routeId/load', 'POST /v1/deliveries', 'GET /v1/public/packs/:packId'],
+      'POST /v1/packs', 'GET /v1/packs/:id', 'GET /v1/packs/:id/box.svg', 'POST /v1/packs/:id/verify', 'POST /v1/packs/:id/replace', 'GET /v1/ops/packs/:id/bottles', 'POST /v1/packs/:id/seal', 'POST /v1/routes/:routeId/load', 'POST /v1/deliveries', 'GET /v1/public/packs/:packId'],
     jobs: ['deliveries-overdue'] }),
   // Delivery areas (the Austin pilot): FreeWater chooses the streets and every house on them gets packs, in street order.
   sw({ id: 'delivery_areas', category: 'delivery', group: 'Delivery areas', since: 2, label: 'Delivery areas (house after house)', description: 'Choose streets on a map or from a list of addresses, and every house on them gets free packs in street order, with no sign-up. Each area has its own frequency, pack size and packs per house, and starts off until a person turns it on. Someone living there can stop it in the app.',
-    routes: ['GET /v1/ops/areas', 'POST /v1/ops/areas', 'PATCH /v1/ops/areas/:id', 'GET /v1/ops/areas/:id/houses', 'POST /v1/ops/areas/:id/houses/import', 'GET /v1/ops/house-reviews', 'POST /v1/ops/houses/:id/review',
+    routes: ['GET /v1/ops/areas', 'POST /v1/ops/areas', 'PATCH /v1/ops/areas/:id', 'GET /v1/ops/areas/:id/houses', 'POST /v1/ops/areas/:id/houses/import', 'GET /v1/ops/house-reviews', 'GET /v1/ops/house-notices', 'POST /v1/ops/houses/:id/review',
       'GET /v1/me/house', 'POST /v1/me/house/claim', 'PATCH /v1/me/house', 'DELETE /v1/me/house'] }),
   sw({ id: 'household_packs', category: 'delivery', group: 'Delivery areas', parent: 'delivery_areas', since: 2, label: 'More packs for bigger households', description: 'Once someone in the app tells us how many people live in their house, it gets enough packs for them (the area’s “bottles a person a week”, up to its “most packs per house”). Off: every house gets the area’s packs per house, and the app doesn’t ask.' }),
   sw({ id: 'house_ad_context', category: 'delivery', group: 'Delivery areas', parent: 'delivery_areas', dependsOn: ['ads'], since: 2, label: 'Ads know the house’s street and area', description: 'When a house’s pack is printed, the ad engine is told which area and street it’s going to (and the household size, if the house told us and targeting people is on). Never a name: houses aren’t people. Off: the ads are chosen as for any pack on that route.' }),
@@ -435,7 +442,7 @@ export const SWITCHES: Switch[] = [
     routes: ['GET /v1/advertisers/:advertiserId/cards', 'POST /v1/advertisers/:advertiserId/cards', 'POST /v1/invoices/run', 'GET /v1/invoices', 'GET /v1/invoices/:id', 'POST /v1/invoices/:id/pay', 'POST /v1/ads/fees/charge'],
     jobs: ['credit', 'ad-fees'] }),
   // How advertisers pay (docs/SWITCHES.md, "How advertisers pay"): up front for their bottles; each fee on top its own switch.
-  sw({ id: 'prepaid_ads', category: 'money', group: 'How advertisers pay', risk: 'money', dependsOn: ['advertiser_billing'], since: 2, label: 'Advertisers pay up front', description: 'An advertiser pays by card for a number of bottles before its ad is reviewed; only paid bottles print, and exactly that many go out. AR, video and scans are included. Off: no ad can be paid for, so none prints for a new advertiser; ads already paid for keep printing until their bottles are out, and can still be stopped and paid back.',
+  sw({ id: 'prepaid_ads', category: 'money', group: 'How advertisers pay', risk: 'money', dependsOn: ['advertiser_billing'], since: 2, label: 'Advertisers pay up front', description: 'An advertiser pays by card for a number of bottles before its ad is reviewed; only paid bottles print, and exactly that many go out. AR, motion video and scans are included; AI video clips are a paid extra. Off: no ad can be paid for, so none prints for a new advertiser; ads already paid for keep printing until their bottles are out, and can still be stopped and paid back.',
     routes: ['POST /v1/ads/drafts/:id/quote', 'POST /v1/ads/campaigns/:id/quote', 'POST /v1/ads/campaigns/:id/pay', 'GET /v1/ads/billing'] }),
   sw({ id: 'link_change_fee', category: 'money', group: 'How advertisers pay', parent: 'prepaid_ads', risk: 'money', since: 6, label: 'Change a link (fee)', description: 'Changing where a live ad’s code leads costs the link fee (FreeWater $50; set it under Ads and prices), paid up front by card, once per change however often it’s pressed; the ad goes back to review with the new link. Off: changing a link is free (still reviewed).' }),
   sw({ id: 'billed_after', category: 'money', group: 'How advertisers pay', kind: 'linked', risk: 'money', default: false, dependsOn: ['advertiser_billing'], label: 'Bill advertisers afterwards (credit)', description: 'Instead of paying up front, advertisers are invoiced for what printed, scanned and sold, and a person gives each a credit limit. FreeWater: off (nothing is printed until it’s paid for). Needed for bidding.',
@@ -470,6 +477,8 @@ export const SWITCHES: Switch[] = [
   sw({ id: 'hourly_seals', category: 'transparency', group: 'Proof', label: 'Hourly seals in public', description: 'Anyone can check their own wallet entry against the hour’s seal. (The seals are made either way.)',
     routes: ['GET /v1/public/wallet/:companyId/seals', 'GET /v1/public/wallet/:companyId/proof/:entryId'] }),
   sw({ id: 'advertiser_statements', category: 'transparency', group: 'For advertisers', kind: 'linked', dependsOn: ['ads'], label: 'Advertiser statements', description: 'Every bottle, bid, auction price and reason, as a table or spreadsheet.', routes: ['GET /v1/ads/statement'], link: flag('transparency.advertiserStatements', { base: () => quietTransparency }) }),
+  sw({ id: 'transparency_page', category: 'transparency', group: 'This list', since: 7, label: 'Public transparency page', description: 'A public page, no sign-in, linked from every scan page and receipt: who you are, how the free bottle is paid for, what goes to charity (from the books), how ads are chosen, what data is kept and how households say no, how the AI is used, the open books and daily proof, and how to reach you. What else it shows (live counters, your switches) is your choice.',
+    routes: ['GET /v1/public/companies/:companyId/transparency'] }),
   sw({ id: 'feature_list', category: 'transparency', group: 'This list', label: 'Publish our feature list', description: 'Show which of these switches you have on, on your transparency page.', startsOff: 'A new company chooses how open to be.', routes: ['GET /v1/public/companies/:companyId/features'] }),
 
   // ======================= Charity & giving =======================
@@ -507,13 +516,13 @@ export const SWITCHES: Switch[] = [
     jobs: ['books-and-agents', 'agent-exams'], pages: ['agents'] }),
   sw({ id: 'numberline', category: 'safety', parent: null, locked: 'The number line is the only essential agent: its work is never halted, only limited, and it can never contradict the numbers (docs/AI.md).', label: 'The number line', description: 'Every offering placed on the number line (for sale, free or negatively priced) by rules it can’t contradict.',
     routes: ['GET /v1/numberline', 'GET /v1/numberline/history', 'POST /v1/numberline/place', 'POST /v1/numberline/override'], pages: ['numberline'] }),
-  sw({ id: 'pause_switch', category: 'safety', parent: null, locked: 'Any one person can stop every token action at once. It can never be removed.', label: 'The pause switch', description: 'Pause now, by any one person, immediately; unpausing needs approvals.', routes: ['POST /v1/chain/pause', 'GET /v1/chain'] }),
+  sw({ id: 'pause_switch', category: 'safety', parent: null, locked: 'Any one person can stop everything at once. It can never be removed: only what it stops, who presses it and how it’s undone can change (making it weaker takes an owner, the second step and a reason).', label: 'The pause switch', description: 'The emergency stop, on the console’s main menu (Pause): one owner or finance person (ops too, where allowed), immediately, stops money leaving, token actions and printing (each adjustable on the Pause page; the person pressing may keep printing going where allowed); the Blockchain page’s pause stops token actions only. Unpausing needs approvals and the wait; printing can start again on its own by a quicker rule.', routes: ['POST /v1/chain/pause', 'GET /v1/chain', 'GET /v1/pause', 'POST /v1/pause'], pages: ['pause'] }),
   sw({ id: 'approvals', category: 'safety', parent: null, locked: 'Anything irreversible needs people, approvals and a wait.', label: 'Approvals and waits', description: 'Steps that can’t be undone are proposed, approved by people who were already on the team, then wait at least 24 hours.',
     routes: ['GET /v1/chain/actions', 'POST /v1/chain/actions', 'POST /v1/chain/actions/:id/approve', 'POST /v1/chain/actions/:id/cancel', 'POST /v1/chain/actions/:id/run'] }),
   sw({ id: 'launch_stages', category: 'safety', parent: null, locked: 'The stages only move forward, through approved steps; testing can be wiped, live can’t.', label: 'Testing, then going live', description: 'Testing (bots and a full reset), live with points, live with the token, in order, never back.', routes: ['GET /v1/launch', 'POST /v1/launch/reset', 'POST /v1/launch/bots'], pages: ['launch'] }),
   sw({ id: 'minimum_age', category: 'safety', parent: null, locked: 'A legal minimum: 13, higher where the law says; it can only go up.', label: 'Minimum age', description: 'The youngest age that may take part in the games and earn rewards.', routes: ['POST /v1/me/age', 'POST /v1/public/data/:companyId/age'] }),
   sw({ id: 'privacy_rules', category: 'safety', parent: null, locked: 'The law follows the person: the rules of where they are, the strictest when unknown. A company may be stricter, never looser.', label: 'Privacy rules by place', description: 'Each visitor gets the rules of where they are; sanctioned countries are refused.',
-    routes: ['POST /v1/me/place', 'POST /v1/public/data/:companyId/place', 'GET /v1/data/policy', 'POST /v1/data/purge', 'GET /v1/households/imports', 'DELETE /v1/households/imports/:id', 'DELETE /v1/households/sources/:source'], jobs: ['data-purge', 'drop-photos'], pages: ['data'] }),
+    routes: ['POST /v1/me/place', 'POST /v1/public/data/:companyId/place', 'GET /v1/data/policy', 'POST /v1/data/purge', 'GET /v1/households/summary', 'GET /v1/households/imports', 'DELETE /v1/households/imports/:id', 'DELETE /v1/households/sources/:source'], jobs: ['data-purge', 'drop-photos'], pages: ['data', 'households'] }),
   sw({ id: 'data_rights', category: 'safety', parent: null, locked: 'People’s rights to see, choose and erase their data are never switched off.', label: 'People’s rights to their data', description: 'Download everything kept, erase it, say yes or no to each kind of data, “do not sell”, and “why am I seeing this?”.',
     routes: ['GET /v1/me/export', 'DELETE /v1/me', 'GET /v1/me/data', 'DELETE /v1/me/data', 'GET /v1/me/data/choices', 'POST /v1/me/data/choices', 'GET /v1/public/data/:companyId', 'POST /v1/public/data/:companyId/consent', 'POST /v1/public/data/:companyId/download', 'POST /v1/public/data/:companyId/forget',
       'POST /v1/public/data/:companyId/do-not-sell', 'POST /v1/me/do-not-sell', 'GET /v1/public/why/:unitId/:slot', 'POST /v1/public/households/:companyId/opt-out'] }),
@@ -531,16 +540,17 @@ export const SWITCHES: Switch[] = [
   sw({ id: 'print_limits', category: 'safety', parent: null, locked: 'Machines’ print limits are a safety limit: stricter, never weaker.', label: 'Machines’ print limits', description: 'A stolen machine key can’t print (and bill) at scale.' }),
   sw({ id: 'security', category: 'safety', parent: null, locked: 'The security log and the security agent keep watch for every company.', label: 'The security log', description: 'Sign-ins, failed sign-ins, keys, team changes and settings saved; the security agent looks around every hour.',
     routes: ['GET /v1/security/events', 'POST /v1/security/review'], pages: ['security'] }),
-  sw({ id: 'owner_second_step', category: 'safety', group: 'Your choices', parent: null, kind: 'linked', default: false, label: 'Owners need a second sign-in step', description: 'Every owner signs in with a code from an authenticator app too. Recommended before going live.', link: flag('security.ownersNeedSecondStep', { base: () => ({ ownersNeedSecondStep: false }) }) }),
+  sw({ id: 'owner_second_step', category: 'safety', group: 'Your choices', parent: null, kind: 'linked', default: false, security: 'A stolen email inbox would open the whole company again.',
+    offNeedsReason: 'Owners would sign in with an emailed code alone; turning that off is an owner’s own decision, written down.', label: 'Owners need a second sign-in step', description: 'Every owner signs in with a code from an authenticator app too. Recommended before going live.', link: flag('security.ownersNeedSecondStep', { base: () => ({ ownersNeedSecondStep: false }) }) }),
 
   // ======================= The platform's core (locked) =======================
   sw({ id: 'core_platform', category: 'core', parent: null, locked: 'Needed to run anything: without it nothing else works.', label: 'Accounts, team, keys and settings', description: 'Signing in with a code, people’s accounts, the team, API keys, every setting and its history, health checks.',
     routes: ['GET /v1/public/features', 'GET /v1/public/app-config', 'POST /v1/auth/start', 'POST /v1/auth/verify', 'POST /v1/auth/second-step', 'POST /v1/auth/sign-out', 'GET /v1/me', 'PATCH /v1/me',
       'GET /v1/me/second-step', 'POST /v1/me/second-step/start', 'POST /v1/me/second-step/confirm', 'POST /v1/me/second-step/recovery-codes', 'POST /v1/me/second-step/off', 'POST /v1/team', 'GET /v1/team', 'DELETE /v1/team/:userId', 'POST /v1/advertisers', 'GET /v1/ads/advertiser',
-      'GET /v1/keys', 'POST /v1/keys', 'DELETE /v1/keys/:id', 'GET /v1/console', 'PATCH /v1/console/settings', 'POST /v1/console/preview-label', 'GET /v1/console/history', 'GET /v1/console/history/:version', 'POST /v1/console/history/:version/restore', 'GET /v1/console/bottles/:code',
+      'GET /v1/keys', 'POST /v1/keys', 'DELETE /v1/keys/:id', 'GET /v1/console', 'PATCH /v1/console/settings', 'POST /v1/console/preview-label', 'POST /v1/console/domain', 'POST /v1/console/domain/verify', 'GET /v1/console/history', 'GET /v1/console/history/:version', 'POST /v1/console/history/:version/restore', 'GET /v1/console/bottles/:code',
       'GET /v1/console/features', 'POST /v1/console/features/preview', 'POST /v1/console/features', 'GET /v1/console/features/history',
       'GET /health/deep', 'GET /v1/platform/status', 'POST /v1/platform/persistence/skip-stuck', 'POST /v1/platform/jobs/:name/run', 'GET /v1/ops/overview', 'GET /v1/ops/plugin-failures'],
-    jobs: ['memory', 'spool', 'capacity', 'backup', 'restore-check'], pages: ['start', 'company', 'brand', 'label-panel', 'modules', 'team', 'history', 'keys', 'features'], plugins: ['house-promo'] }),
+    jobs: ['memory', 'spool', 'capacity', 'backup', 'restore-check'], pages: ['start', 'company', 'brand', 'label-panel', 'modules', 'team', 'history', 'keys', 'features', 'bottles'], plugins: ['house-promo'] }),
 ];
 for (const s of SWITCHES) if ((s.parent as unknown) === undefined) s.parent = CATEGORIES.find((c) => c.id === s.category)!.main;
 // A category's main switch has no parent of its own.
@@ -562,7 +572,7 @@ export const ACTION_SWITCHES: Record<string, string> = { mint: 'token', switch_o
  */
 export const SCREENS: Record<string, string> = {
   '/console': 'core_platform', '/console/*': 'core_platform', '/developers': 'developer_pages', '/developers/*': 'developer_pages', '/app': 'core_platform', '/app/*': 'core_platform', '/ads': 'core_platform', '/ads/*': 'core_platform',
-  '/ops': 'core_platform', '/ops/*': 'core_platform', '/driver': 'driver_app', '/driver/*': 'driver_app', '/play': 'games', '/books': 'open_books', '/books/*': 'open_books', '/r/:unitId': 'bottle_receipts',
+  '/ops': 'core_platform', '/ops/*': 'core_platform', '/driver': 'driver_app', '/driver/*': 'driver_app', '/play': 'games', '/books': 'open_books', '/books/*': 'open_books', '/transparency': 'transparency_page', '/r/:unitId': 'bottle_receipts',
   '/s/:unitId/:slot': 'scan_pages', '/p/:packId': 'delivery', '/b/:packId/:face': 'box_ads', '/preview/scan': 'scan_pages', '/q/:code': 'scan_pages', '/Q/:code': 'scan_pages', '/v/:code': 'scan_pages', '/V/:code': 'scan_pages',
   '/go/:token': 'sales_tracking', '/t.js': 'sales_tracking', '/v1/public/conversions': 'sales_tracking', '/v1/public/companies/:companyId/live': 'live_feed', '/v1/public/labels/:file': 'scan_pages',
   '/models/builtin/:file': 'ar_place', '/assets/:file': 'core_platform', '/static/:name': 'core_platform', '/static/ar.js': 'ar_on_bottle', '/v1/openapi.json': 'core_platform',
@@ -585,6 +595,16 @@ export const autonomySwitches = () => SWITCHES.filter((s) => s.risk === 'autonom
 /** A new company starts with it off, whatever FreeWater chose. */
 export const startsOffForNew = (s: Switch) => !s.locked && (!!s.risk || !!s.startsOff);
 
+/** The security switches: off weakens the company's security (each only on its own, by an owner with the second step and a reason). */
+export const securitySwitches = () => SWITCHES.filter((s) => !!s.security);
+/**
+ * The security switches kept in the settings that this settings change turns off (by label), and the ways it makes
+ * the pause weaker (it stops less, or undoing it needs fewer people or a shorter wait: src/modules/chain/pause.ts).
+ */
+export const securityWeakened = (before: any, after: any) => [...SWITCHES.filter((s) => s.security && s.kind === 'linked' && s.link!.get(before) && !s.link!.get(after)).map((s) => s.label), ...pauseWeakened(before, after), ...graceWeakened(before, after)];
+/** Giving owners longer to set up the second sign-in step while it's required leaves an inbox alone enough for longer. */
+const graceWeakened = (before: any, after: any) => before?.security?.ownersNeedSecondStep && after?.security?.ownersNeedSecondStep && (after.security.graceDays ?? 7) > (before.security.graceDays ?? 7) ? ['The days owners have to set up their second sign-in step'] : [];
+
 /** What it needs to be on: its parent and what it depends on. */
 export const needsOf = (s: Switch) => [...(s.parent ? [s.parent] : []), ...s.dependsOn];
 /** Every switch that is off whenever this one is (its children and dependants, all the way down). */
@@ -597,7 +617,7 @@ export function dependantsOf(id: string): string[] {
 
 /**
  * Ready-made starting points. Each names the switches it wants on; every other switch that can be turned off is off.
- * Locked ones stay on. A starting point never turns on a money, chain or one-way switch by itself: those stay as they
+ * Locked ones stay on, and security switches are never touched (they stay as they are). A starting point never turns on a money, chain or one-way switch by itself: those stay as they
  * are and are listed for a person to turn on through the usual steps.
  */
 export interface StartingPoint { id: string; label: string; description: string; on: (s: Switch, freewater: (id: string) => boolean) => boolean }

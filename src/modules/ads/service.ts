@@ -1,4 +1,4 @@
-import type { BoxProduct, Campaign, CompanyConfig, Product, Share, Unit } from '../../core/types';
+import type { BoxProduct, Campaign, CompanyConfig, Location as Place, Placement, Product, Share, Unit } from '../../core/types';
 import { productWords, sizeRefusal } from './layoutChoice';
 import { whereOnLabel } from '../fillers/unsold';
 import { adArea, shareLabel } from './layouts';
@@ -25,9 +25,10 @@ import type { AdAssistant, ChatMessage } from '../ai/contract';
 import { starterSuggestions } from '../ai/builtinAssistant';
 import { allowedSizes, applyPatch, draftTargeting, estimate, missing, missingLabel, themeFromPoster, type AdDraft } from './draft';
 import { withCompany } from '../ai/routing';
-import { adBilling, extraPrice, feesOnWords, prepaidModel } from './billing';
+import { adBilling, extraPrice, feesOnWords, includedWords, prepaidModel } from './billing';
 import type { PrepaidService, Quote } from './prepaid';
 import { adWords, KIND_SWITCH, ROUTE_KINDS, routeKindWords, type RouteBuyService, type RouteQuoteInput } from './routeBuys';
+import { siteBase } from '../../core/site';
 
 /** A draft with nothing in it: only the assistant's greeting (nothing said, no design or scan page added from the studio). */
 // A draft with nothing in it: only the greeting, and (designing it yourself) no file uploaded to it, and on a new ad no
@@ -329,7 +330,7 @@ export class AdsService {
     const company = this.platform.companies.get(companyId)!;
     const b = adBilling(company);
     return {
-      minBottles: 100, changeFeeCents: b.changeFeeCents, included: 'AR, video and scans are included at every size',
+      minBottles: 100, changeFeeCents: b.changeFeeCents, included: includedWords(company, this.platform.featureOn),
       feesOn: feesOnWords(company, this.platform.featureOn),
       extras: Object.entries(b.extras.perUse).map(([id, x]) => ({ id, label: x.label, perUseCents: extraPrice(company, id)! })),
       // Buying on the delivery routes, where it's on (the review page has the picker; the chat explains it).
@@ -398,7 +399,8 @@ export class AdsService {
   async campaignPreview(campaignId: string, companyId: string) {
     const c = this.platform.campaigns.get(campaignId);
     if (!c || c.companyId !== companyId) throw new AdsError(404, 'not_found', 'Campaign not found.');
-    const views = await this.render({ companyId, advertiserId: c.advertiserId, advertiserName: c.advertiserName, category: c.category, draw: (w, h, ctx) => c.creative.svg(w, h, ctx), sizes: c.sizes, formats: c.formats ?? ['label'], experience: { id: c.experienceId, config: c.experienceConfig ?? {} }, theme: c.theme ?? {}, qr: c.qr });
+    // The team sees the other pieces as the engine would fill space nobody bought (its unsold-space list), not samples.
+    const views = await this.render({ companyId, advertiserId: c.advertiserId, advertiserName: c.advertiserName, category: c.category, draw: (w, h, ctx) => c.creative.svg(w, h, ctx), sizes: c.sizes, formats: c.formats ?? ['label'], experience: { id: c.experienceId, config: c.experienceConfig ?? {} }, theme: c.theme ?? {}, qr: c.qr, realFill: c.id });
     // Uploaded artwork is printed as drawn, with the code over its corner: the reviewer is told when words sit there.
     const warnings = c.creativeRef?.kind === 'svg' ? await this.artworkWarnings(companyId, c.creativeRef.markup, c.sizes) : [];
     return { campaign: { id: c.id, name: c.name ?? null, advertiser: c.advertiserName, category: c.category, where: c.targeting.locations ?? 'all', buy: c.buy, paid: this.prepaid?.progress(c) ?? null, review: c.review ?? null, experienceId: c.experienceId },
@@ -423,7 +425,7 @@ export class AdsService {
     return wordsUnderCode(markup, shapes);
   }
 
-  private async render(o: { companyId: string; advertiserId: string; advertiserName: string; category: string; draw: (w: number, h: number, ctx?: import('../../core/types').CreativeContext) => string; sizes: Share[]; formats: string[]; experience: { id: string; config: unknown } | null; theme: Partial<import('../experiences/blocks').Theme>; qr?: Campaign['qr'] }) {
+  private async render(o: { companyId: string; advertiserId: string; advertiserName: string; category: string; draw: (w: number, h: number, ctx?: import('../../core/types').CreativeContext) => string; sizes: Share[]; formats: string[]; experience: { id: string; config: unknown } | null; theme: Partial<import('../experiences/blocks').Theme>; qr?: Campaign['qr']; realFill?: string }) {
     const company = this.platform.companies.get(o.companyId)!;
     // The ad's code drawn as the label renderer prints it (its colour and logo; plain without), never another style.
     const adCode = campaignQrStyle(company, { qr: o.qr } as Campaign);
@@ -432,7 +434,7 @@ export class AdsService {
     const product = this.platform.standardProduct(o.companyId);
     // Only the layouts this company allows (its switches, its choice for each product, its most ads on a bottle).
     const layouts = this.platform.layoutsOf(company, product);
-    const sampleQr = `${company.receiptBaseUrl.replace(/\/$/, '')}/s/preview/0`;
+    const sampleQr = `${siteBase(company)}/s/preview/0`;
     // A piece drawn exactly as it prints: the artwork told where its code goes, and the code drawn there.
     // (A box side is drawn keeping clear of the drivers' stop code too, as the front and top print.)
     // Its words as outlines, exactly as they print (print/outline.ts).
@@ -459,26 +461,39 @@ export class AdsService {
       return { share: s, label: shareLabel(s), printable: shapes.length > 0, svg: shapes[0]?.svg ?? '', shapes };
     });
 
-    // A sample label: this ad at its biggest size, the other pieces neutral placeholders marked "Sample ad" (other
-    // businesses' ads go there; never the company's own), and where on the label this ad is, in words.
+    // A sample label: this ad at its biggest size, and where on the label it is, in words. For the advertiser, the other
+    // pieces are neutral placeholders marked "Sample ad" (other businesses' ads go there; never the company's own). For
+    // the team reviewing an ad (`realFill`: the ad's id), they are what the engine would put there today if nobody
+    // bought them: the company's unsold-space list, in its order (src/modules/fillers/unsold.ts), or open space.
     const biggest = Math.min(...o.sizes) as Share;
     const temp: Campaign = { id: 'preview', companyId: o.companyId, advertiserId: o.advertiserId, advertiserName: o.advertiserName, category: o.category, sizes: [biggest], creative: { svg: o.draw }, experienceId: 'offer', targeting: {}, buy: { type: 'guaranteed', remainingPrints: 1 }, active: false, ...(o.qr ? { qr: o.qr } : {}) };
-    const campaigns = new Map(this.platform.campaigns);
-    campaigns.set('preview', temp);
     const sample = [...layouts].filter((l) => l.shares.includes(biggest)).sort((a, b) => a.shares.length - b.shares.length)[0] ?? { shares: [1 as Share], rects: [{ x: 0, y: 0, w: 1, h: 1 }] };
     const mine = sample.shares.indexOf(biggest);
     const layout = sample.shares;
-    const placements = layout.map((s, i) => {
-      if (i === mine) return { slotIndex: i, share: s, rect: sample.rects[i]!, campaignId: 'preview', advertiserId: o.advertiserId, advertiserName: o.advertiserName, experienceId: 'offer', priceCents: 0, isHouse: false };
-      const other = sampleAd(o.companyId, i);
-      campaigns.set(other.id, other);
-      return { slotIndex: i, share: s, rect: sample.rects[i]!, campaignId: other.id, advertiserId: other.advertiserId, advertiserName: other.advertiserName, experienceId: other.experienceId, priceCents: 0, isHouse: true };
-    });
+    const minePlacement = { slotIndex: mine, share: biggest, rect: sample.rects[mine]!, campaignId: 'preview', advertiserId: o.advertiserId, advertiserName: o.advertiserName, experienceId: 'offer', priceCents: 0, isHouse: false };
+    const open = layout.map((s, i) => ({ slotIndex: i, share: s, rect: sample.rects[i]! })).filter((x) => x.slotIndex !== mine);
+    let others: Placement[];
+    if (o.realFill) {
+      const location = [...this.platform.locations.values()].find((l) => (l.companyId ?? o.companyId) === o.companyId) ?? ({ id: 'preview', kind: 'machine', city: '', name: '' } as unknown as Place);
+      const unsold = this.platform.unsoldFiller({ company, product, location, audience: null });
+      // The same draw every time the preview opens (a reviewer comparing two looks sees the same fill).
+      let seed = 7;
+      const random = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+      const filled = unsold.fill(open, [{ ...minePlacement, campaignId: o.realFill }], random);
+      others = [...filled, ...open.filter((x) => !filled.some((f) => f.slotIndex === x.slotIndex)).map((x) => unsold.blank(x))];
+    } else others = open.map((x) => { const other = sampleAd(o.companyId, x.slotIndex); return { ...x, campaignId: other.id, advertiserId: other.advertiserId, advertiserName: other.advertiserName, experienceId: other.experienceId, priceCents: 0, isHouse: true }; });
+    const campaigns = new Map(this.platform.campaigns);
+    campaigns.set('preview', temp);
+    for (const x of others) if (!campaigns.has(x.campaignId)) campaigns.set(x.campaignId, sampleAd(o.companyId, x.slotIndex));
+    const placements = [minePlacement, ...others].sort((a, b) => a.slotIndex - b.slotIndex);
     const unit: Unit = { id: 'preview', companyId: o.companyId, productId: product.id, locationId: 'preview', kind: 'ad_supported', placements, layout, status: 'rendered', createdAt: this.platform.bus.now().toISOString() };
     const label = await this.registry.rendererFor(company).render({ unit, product, company, campaigns });
     const where = sample.rects[mine] ? whereOnLabel(sample.rects[mine]!) : 'across the whole label';
-    const caption = layout.length === 1 ? 'A sample label. Your ad takes the whole label. The black panel is the same on every bottle.'
-      : `A sample label. Your ad is ${where}; the pieces marked “Sample ad” go to other businesses. The black panel is the same on every bottle.`;
+    const fill = o.realFill ? others.sort((a, b) => a.slotIndex - b.slotIndex).map((x) => ({ slot: x.slotIndex, where: whereOnLabel(x.rect), advertiser: x.advertiserName, kind: x.unsold ?? 'neutral' })) : null;
+    const filledWith = fill?.filter((x) => x.kind !== 'neutral') ?? [];
+    const caption = layout.length === 1 ? `A sample label. ${o.realFill ? 'This' : 'Your'} ad takes the whole label. The black panel is the same on every bottle.`
+      : !o.realFill ? `A sample label. Your ad is ${where}; the pieces marked “Sample ad” go to other businesses. The black panel is the same on every bottle.`
+      : `This ad is ${where}. The other pieces show what fills space nobody bought today, from your unsold-space list${filledWith.length ? `: ${[...new Set(filledWith.map((x) => x.advertiser))].join(', ')}` : ''}${filledWith.length < (fill?.length ?? 0) ? `${filledWith.length ? '; ' : ': '}nothing on the list fits ${filledWith.length ? 'the rest' : 'them'}, so they show as open space (the printer picks a layout with fewer pieces where it can)` : ''}. Paid ads take these places when they’re bought.`;
 
     // Box sides, each as it prints (its own size, the code in its corner). The 12-pack's front is the one shown first.
     const faceSeen = new Map<string, { w: number; h: number; boxes: string[] }>();
@@ -500,7 +515,7 @@ export class AdsService {
     // The main picture of each size at full preview quality; the other shapes smaller, so the whole preview stays light.
     return {
       sizes: await Promise.all(sizes.map(async (s) => ({ ...s, svg: await inline(s.svg), shapes: await Promise.all(s.shapes.map(async (x) => ({ ...x, svg: await inline(x.svg, 240) }))) }))),
-      labelSvg: await inline(label.svg), labelCaption: caption, where, boxFaceSvg: boxFace ? await inline(boxFace) : null,
+      labelSvg: await inline(label.svg), labelCaption: caption, where, ...(fill ? { fill } : {}), boxFaceSvg: boxFace ? await inline(boxFace) : null,
       boxFaces: await Promise.all(boxFaces.map(async (f) => ({ ...f, svg: await inline(f.svg, 240) }))),
       scan: scan ? { doc: scan, footer } : null,
     };
@@ -657,7 +672,6 @@ export class AdsService {
       if (r.kind === 'scan') t.scans += n;
       if (r.kind === 'ar') t.arLaunches += n;
       if (r.kind === 'box_face') t.boxFaces += n;
-      if ((r.kind === 'commission' || r.kind === 'commission_reversal') && company.prices.commissionPercent) { t.sales += n; t.salesCents += Math.round((cents * 100) / company.prices.commissionPercent); }
     };
     const total = blank(), period = blank();
     const byCampaign = new Map<string, Totals>();
@@ -671,14 +685,14 @@ export class AdsService {
       const day = days.get(r.day);
       if (day) { add(day, r); add(period, r); }
     }
-    // Sales with no commission line (paid up front, commission off): counted from the sales themselves, net of refunds.
+    // Sales: the confirmed sales in the books, net of refunds, the same source and rules as Sales tracking
+    // (ledger.salesOf), whether or not they carry a commission.
     const dayIn = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' });
-    for (const s of this.platform.ledger.salesWithoutCommission(input.companyId, input.advertiserId)) {
-      const open = s.refundedCents < s.amountCents ? 1 : 0, cents = Math.max(0, s.amountCents - s.refundedCents);
+    for (const s of this.platform.ledger.salesOf(input.companyId, input.advertiserId)) {
       const day = days.get(dayIn.format(s.at));
       const ts = [total, byCampaign.get(s.campaignId) ?? blank(), ...(day ? [day, period] : [])];
       byCampaign.set(s.campaignId, ts[1]!);
-      for (const t of ts) { t.sales += open; t.salesCents += cents; }
+      for (const t of ts) { t.sales += s.standing ? 1 : 0; t.salesCents += s.netCents; }
     }
     for (const e of engaged) {
       // An ad aimed at a few houses: the advertiser knows the houses, so whether someone there saved it or tapped
@@ -688,6 +702,14 @@ export class AdsService {
       byCampaign.set(e.campaign_id, t);
       if (e.action === 'save') { t.saves += Number(e.n); total.saves += Number(e.n); }
       if (e.action === 'link' || e.action === 'call') { t.linkTaps += Number(e.n); total.linkTaps += Number(e.n); }
+    }
+    // Each ad's latest link change: waiting for review (the old link stays live), or how it was decided (shown 30 days).
+    const linkChanges = new Map<string, { status: string; urls: string[]; note: string | null; decidedAt: string | null; live: boolean; at: string }>();
+    const shownSince = this.platform.bus.now().getTime() - 30 * 86_400_000;
+    for (const r of (await this.db.query<any>(`select distinct on (campaign_id) campaign_id, status, changes, note, decided_at, applied_at, created_at from ad_link_changes where company_id = $1 and advertiser_id = $2 order by campaign_id, number desc`, [input.companyId, input.advertiserId])).rows) {
+      if (r.status !== 'waiting' && (!r.decided_at || new Date(r.decided_at).getTime() < shownSince)) continue;
+      const changes = (typeof r.changes === 'string' ? JSON.parse(r.changes) : r.changes) as { url: string }[];
+      linkChanges.set(r.campaign_id, { status: r.status, urls: changes.map((x) => x.url), note: r.note ?? null, decidedAt: r.decided_at ? new Date(r.decided_at).toISOString() : null, live: !!r.applied_at, at: new Date(r.created_at).toISOString() });
     }
     const product = this.platform.standardProduct(input.companyId);
     const thumbW = (adArea(product).w * 100) / 6 * 2;
@@ -700,10 +722,15 @@ export class AdsService {
         editable: c.creativeRef?.kind === 'poster' || c.creativeRef?.kind === 'studio' || c.creativeRef?.kind === 'artwork',
         thumbSvg: `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(thumbW)}" height="450" viewBox="0 0 ${thumbW.toFixed(1)} 450">${c.creative.svg(thumbW, 450)}</svg>`,
         results: byCampaign.get(c.id) ?? blank(),
+        ...(linkChanges.has(c.id) ? { linkChange: linkChanges.get(c.id) } : {}),
       }));
     const adv = await this.advertiser(input.companyId, input.advertiserId);
     const billing = prepaidModel(company) ? { model: 'prepaid' as const, ...this.prepaidTerms(company.id), orders: this.prepaid ? await this.prepaid.orders(input.companyId, input.advertiserId) : [] } : { model: 'billed_after' as const };
-    return { advertiser: adv, days: input.days, total, period, daily: [...days.entries()].map(([day, t]) => ({ day, ...t })), campaigns, drafts: await this.listDrafts(input.companyId, input.advertiserId), prices: estimate({}, company, this.maxFactor(company.id), undefined, this.platform.featureOn), billing };
+    // Sales the advertiser's website reported that its server hasn't confirmed: not in the books, not billed, shown apart.
+    const waiting = (await this.db.query<any>(`select count(*)::int as n, coalesce(sum(value_cents),0)::bigint as cents from conversions where company_id = $1 and advertiser_id = $2 and status = 'unverified' and refunded_at is null and created_at >= $3`,
+      [input.companyId, input.advertiserId, new Date(this.platform.bus.now().getTime() - input.days * 86_400_000).toISOString()])).rows[0];
+    const salesWaiting = { count: Number(waiting?.n ?? 0), valueCents: Number(waiting?.cents ?? 0) };
+    return { advertiser: adv, days: input.days, total, period, salesWaiting, daily: [...days.entries()].map(([day, t]) => ({ day, ...t })), campaigns, drafts: await this.listDrafts(input.companyId, input.advertiserId), prices: estimate({}, company, this.maxFactor(company.id), undefined, this.platform.featureOn), billing };
   }
 
   // ---------- content review (the company) ----------
@@ -718,8 +745,10 @@ export class AdsService {
    * Ads waiting for a person: new and changed ads, paid ads flagged and being discussed with the advertiser (an appeal
    * of the AI's rejection among them), and the AI's own rejections picked for a person's audit.
    */
+  // Filler and charity pieces are decided in their own queue (Review → Filler and charity, POST /v1/fillers/:id/approve):
+  // approving one here set its review but never its filler status, so it looked approved and never printed.
   reviewQueue(companyId: string) {
-    return [...this.platform.campaigns.values()].filter((c) => c.companyId === companyId && (c.review?.status === 'submitted' || c.review?.status === 'flagged' || (c.review?.status === 'rejected' && c.review.auditPending)));
+    return [...this.platform.campaigns.values()].filter((c) => c.companyId === companyId && !c.filler && (c.review?.status === 'submitted' || c.review?.status === 'flagged' || (c.review?.status === 'rejected' && c.review.auditPending)));
   }
 
   /** Set by the app: the AI reviewer looks at a paid ad just submitted (AiReviewService.onSubmitted). */

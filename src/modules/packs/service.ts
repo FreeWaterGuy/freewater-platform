@@ -7,6 +7,7 @@ import { labelSignature } from '../ads/engine';
 import { renderBox, stopCode, type RenderedBox } from './boxRenderer';
 import { companyBox, stickerSetting, type StickerSetting } from './boxSettings';
 import { renderSticker, type RenderedSticker } from './sticker';
+import { siteBase } from '../../core/site';
 
 export interface PackOrder {
   companyId: string;
@@ -182,7 +183,7 @@ export class PackService {
     // use; it's then ready for its check like any printed box.
     // (A box drawn before they were turned off, that never printed, isn't printed either: its code is kept.)
     if (p.featureOn && !p.featureOn(company.id, 'box_ads')) {
-      pack.boxCode ??= pack.rendered?.packUrl ?? (p.codes ? p.codes.pack(company, pack.id) : `${company.receiptBaseUrl.replace(/\/$/, '')}/p/${pack.id}`);
+      pack.boxCode ??= pack.rendered?.packUrl ?? (p.codes ? p.codes.pack(company, pack.id) : `${siteBase(company)}/p/${pack.id}`);
       pack.faces = [];
       delete pack.rendered;
       // Its code on a sticker, printed here with its bottles and put on the box at the packing check: exactly one.
@@ -394,21 +395,25 @@ export class PackService {
   }
 
   /**
-   * Close out a run from an earlier day that will never be driven: every box of it not delivered goes back to the
-   * micro-factory ('returned'), with who closed it, when and why kept on each box. Only a person, and only an old run:
-   * tonight's (or a later) run is never closed out this way.
+   * Close out a run: every box of it not delivered goes back to the micro-factory ('returned'), with who closed it,
+   * when and why kept on each box. Only a person. A run from an earlier day that will never be driven; or, with
+   * `early`, today's run ended before its last stop (the van broke down): a box that was on the van comes back the way
+   * any box a driver couldn't leave does (delivery.failed). A later night's run is never closed this way.
    */
-  closeRun(companyId: string, routeId: string, runId: string, by: string, reason: string): Pack[] {
+  closeRun(companyId: string, routeId: string, runId: string, by: string, reason: string, opts: { early?: boolean } = {}): Pack[] {
     if (!by) throw new PackStateError('A person must close out a run.');
     if (String(reason ?? '').trim().length < 5) throw new PackStateError('Say why the run is being closed out, for the record.');
     const date = /@(\d{4}-\d{2}-\d{2})$/.exec(runId)?.[1];
-    if (!date || date >= this.today(companyId)) throw new PackStateError(`Only a run from an earlier day can be closed out; ${runId || 'that run'} isn't one.`);
+    const today = this.today(companyId);
+    if (!date || date > today || (date === today && !opts.early)) throw new PackStateError(`Only a run from an earlier day, or today's, can be closed out; ${runId || 'that run'} isn't one.`);
     const open = [...this.packs.values()].filter((p) => p.companyId === companyId && p.routeId === routeId && (p.runId ?? '') === runId && p.status !== 'delivered' && p.status !== 'returned');
     const at = this.platform.bus.now().toISOString();
     for (const p of open) {
+      const onVan = p.status === 'loaded';
       p.status = 'returned';
       p.closedOut = { by, at, reason: reason.trim() };
       this.save(p);
+      if (onVan) this.platform.bus.publish('delivery.failed', p.companyId, { packId: p.id, routeId: p.routeId, stop: p.stop, reason: `Run closed early: ${reason.trim()}` }, `${p.id}:failed`);
     }
     return open;
   }
@@ -446,7 +451,7 @@ export class PackService {
       // Another company's box is, to this driver, just a code that isn't on the route: never its customer's address.
       const known = this.packs.get(input.scannedPackId);
       const wrong = known && known.companyId === right.companyId ? known : undefined;
-      return reject(wrong ? `Wrong box. That one is for stop ${wrong.stop}, ${wrong.address}. Grab the box marked ${stopCode(right.routeId, right.stop)}.` : `That code isn't a pack on this route. Grab the box marked ${stopCode(right.routeId, right.stop)}.`);
+      return reject(wrong ? `That box is for stop ${wrong.stop}, ${wrong.address}. Grab the box marked ${stopCode(right.routeId, right.stop)}.` : `That code isn't a pack on this route. Grab the box marked ${stopCode(right.routeId, right.stop)}.`);
     }
     if (!input.atAddress) return reject(`You're not at ${right.address} yet.`);
     if (right.status !== 'loaded') return reject(`This pack isn't loaded on the van.`);

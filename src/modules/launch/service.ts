@@ -60,8 +60,9 @@ export class LaunchService {
       await q('players', `delete from game_players where company_id = $1`);
       await q('seals', `delete from chain_seals where company_id = $1`);
       await q('chain checks', `delete from chain_checks where company_id = $1`);
-      // Pausing, unpausing and switching the chain on stay (a reset must never unpause anything), as does going live.
-      await q('chain actions', `delete from chain_actions where company_id = $1 and kind not in ('go_live_points','pause','unpause','switch_on')`);
+      // Pausing, unpausing (everything, or printing only) and switching the chain on stay (a reset must never unpause
+      // anything, nor pause printing again that people started), as does going live (migration 084 matches).
+      await q('chain actions', `delete from chain_actions where company_id = $1 and kind not in ('go_live_points','pause','unpause','unpause_printing','switch_on')`);
       await q('picks that came true', `delete from game_launches where company_id = $1`);
       await q('test chain', `delete from test_chain where company_id = $1`);
     });

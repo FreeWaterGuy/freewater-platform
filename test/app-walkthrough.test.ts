@@ -218,6 +218,8 @@ describe('4. screens hide doors to areas that are switched off', () => {
   it('the console hides the prize game where the server runs without it (the pilot)', () => {
     const src = web('console.js');
     expect(src).toMatch(/const HOST_PAGES = \{ game: 'lottery', games: 'games' \}/);
-    expect(src).toMatch(/nav\.filter\(\(n\) => typeof n === 'string' \|\| pageOn\(n\[0\]\)\)/);
+    // The menu shows pages that are on (and a heading only when something under it is: test/browser/journeys.ts).
+    expect(src).toMatch(/menuShown\(nav, pageOn\)/);
+    expect(src).toMatch(/nav\.filter\(\(n\) => typeof n === 'string' \|\| shown\(n\[0\]\)\)/);
   });
 });

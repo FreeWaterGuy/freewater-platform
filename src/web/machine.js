@@ -29,7 +29,7 @@
     el.style.setProperty('--text', b.textColor);
     el.style.setProperty('--accent', b.accentColor);
   }
-  const logo = (cfg) => h('div', { class: 'logo', 'aria-label': cfg?.company ?? 'FreeWater' }, h('span', { text: cfg?.brand?.logoTop ?? 'free' }), h('span', { text: cfg?.brand?.logoBottom ?? 'water' }));
+  const logo = (cfg) => h('div', { class: 'logo', 'aria-label': cfg?.company ?? '' }, h('span', { text: cfg?.brand?.logoTop ?? '' }), h('span', { text: cfg?.brand?.logoBottom ?? '' }));
   const foot = (s, style) => h('div', { class: 'foot', style }, h('span', { text: `${s.machine.id}${s.config?.machine?.name ? ` · ${s.config.machine.name}` : ''}` }), h('span', { class: `net${s.machine.online ? '' : ' off'}`, text: s.machine.online ? 'Online' : 'Offline' }));
   const page = (cls, ...kids) => h('div', { class: `page ${cls}` }, ...kids);
 

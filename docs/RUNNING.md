@@ -37,7 +37,9 @@ with a plain explanation.
 | `DATABASE_URL` | Postgres 13–17, e.g. `postgres://user:pass@host:5432/freewater?sslmode=require`. Use a managed one with automatic backups and point-in-time recovery. |
 | `PUBLIC_URL` | The https address of the site. It goes on every printed QR code and in every email. |
 | `TRUST_PROXY` | Which proxies' word to take for a visitor's address. The number of proxies in front of the server (`1` for one load balancer, `2` with a CDN such as Cloudflare in front of it), or their addresses or ranges (`10.0.0.0/8`), or `none` when nothing is in front. Never `true`: every visitor writes `X-Forwarded-For` too, so trusting every hop lets anyone pose as any address and walk past sign-in limits, request limits and points-per-network rules. The server refuses `true`, `*`, `all` and ranges like `0.0.0.0/0`. With a hop count, make sure the server can only be reached through the load balancer (the usual set-up on hosting platforms); if it can also be reached directly, give the load balancer's addresses instead. |
+| `PLATFORM_SITE_DOMAIN` | The domain companies' platform addresses are on (`<company id>.<this>`), `go.freewater.io` unless set. See *A company's own domain*. |
 | `HOST`, `PORT` | `0.0.0.0` and `8080` in the container (already set in the image). |
+| `FW_MAP_TILES`, `FW_MAP_ATTRIBUTION` | Optional. Map tiles under the driver's route map (see *The driver's map* below). Unset: a plain map, no tiles. |
 | `ALERT_WEBHOOK_URL` | A chat channel's incoming webhook (Slack, Discord, Google Chat). Alerts go there. |
 | `ALERT_EMAIL` | Also email alerts (once email is connected). |
 | `SENTRY_DSN` | Error tracking (Sentry's free plan, or GlitchTip): the project's DSN from Settings → Client Keys, `https://<key>@o….ingest.sentry.io/<project>`. Unexpected errors (with their stack), other 5xx answers, failed background jobs, unhandled rejections and crashes, and every critical or warning alert go there, scrubbed of personal data (no query, body, headers, cookies, keys, emails, phones, cards or addresses). Without it nothing is sent. Must be https in production. `SENTRY_ENVIRONMENT` names the environment (default `NODE_ENV`); the release is `FW_VERSION` or `GIT_SHA`. Setup: `docs/RUNBOOKS.md`. |
@@ -320,6 +322,29 @@ dump and recreate the triggers.
 `fw.test_reset`, which lets a test-stage reset delete journal rows, still works as `fw_app`: the triggers allow it only
 inside that reset's own transaction and only while the company is still testing.
 
+## A company's own domain
+
+Every company starts on a platform address, `https://<company id>.go.freewater.io` (the host setting
+`PLATFORM_SITE_DOMAIN` changes `go.freewater.io`). Point a wildcard DNS record `*.go.freewater.io` at the server so
+every new company's codes answer from the start. A company can use a domain of its own instead
+(`src/core/site.ts`):
+
+1. On *Console → Company → Your own domain*, a person signed in types the domain (`water.yourbrand.com`). It's saved
+   unchecked, with a check token. Codes keep the platform address.
+2. At the company's DNS provider, add the two records the page shows:
+   - `TXT _bottle-verify.water.yourbrand.com` with the token (`bv-…`), which proves the company controls the domain;
+   - `CNAME water.yourbrand.com` → `go.freewater.io` (or your `PLATFORM_SITE_DOMAIN`), which sends its visitors to the
+     platform.
+3. Add the domain to the load balancer's certificate (or its automatic certificates) so `https://water.yourbrand.com`
+   works.
+4. Press *Check DNS*. Once the TXT record is found, every code printed from then on, and every link the platform writes
+   for the company, uses the domain; its pages (the app, scan pages, receipts, the open books, its transparency page)
+   answer there in its name.
+
+Codes already printed keep their address, and the platform address keeps answering, so nothing printed stops working.
+Taking the domain off (an empty domain) goes back to the platform address for new codes. Two companies can never hold
+the same domain (the database refuses it), and the platform's own domain can't be claimed.
+
 ## Load test
 
 Against a test server only (it prints test bottles):
@@ -365,6 +390,21 @@ against the list only.
 
 The list of sites ads may never lead to is `src/modules/ads/link-blocklist.txt` (its header says how to update it);
 a company adds its own in its settings (`adRules.linkBlocked`, `adRules.linkAllowed` for shorteners only).
+
+## The driver's map
+
+The driver app's map (`src/web/routemap.js`) zooms to the run's own houses, numbers every stop, highlights the one
+the driver is at, joins them in driving order and moves markers that would overlap apart (boxes for one house are
+fanned round it). The micro-factory, when it's off the map, is an arrow at the edge. It needs no map service: without
+one it draws a plain map (a faint grid and a scale bar), which works with a weak signal and costs nothing.
+
+To draw street tiles under it, set `FW_MAP_TILES` to the provider's https tile address with `{z}`, `{x}` and `{y}`
+(Web Mercator, 256-pixel tiles: the usual kind), and `FW_MAP_ATTRIBUTION` to the credit its terms ask for, e.g.
+`FW_MAP_TILES=https://tiles.example.com/streets/{z}/{x}/{y}.png?key=…` and `FW_MAP_ATTRIBUTION=© Example, © OpenStreetMap`.
+The key, if the provider needs one, lives only in the host's settings like any other. The driver page then allows
+pictures from that one address (its content security policy) and nowhere else. Use a provider whose terms allow this
+use and volume (OpenStreetMap's own tile servers don't allow apps like this one). An address that isn't https or lacks
+`{z}`, `{x}` or `{y}` is ignored and the plain map is drawn.
 
 ## Print files
 

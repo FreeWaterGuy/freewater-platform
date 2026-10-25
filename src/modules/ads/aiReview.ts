@@ -8,6 +8,7 @@ import { withCompany } from '../ai/routing';
 import type { FeatureService } from '../features/service';
 import { byId } from '../../runtime/registry';
 import { adWords } from './routeBuys';
+import { ADULT_WORDS } from './linkSafety';
 import { AdsError, type AdsService } from './service';
 
 /**
@@ -33,6 +34,9 @@ import { AdsError, type AdsService } from './service';
  */
 
 export const AGENT = 'ad-reviewer';
+/** The built-in rules' verdicts are kept in the same table under their own name: their record never counts as the AI's. */
+export const RULES_AGENT = 'ad-review-rules';
+export const RULES_LABEL = 'Built-in rules (no AI connected)';
 export const FINAL_CALL = 'ai_ad_final_call';
 export const AI_USE = 'ai_ad_reviewer';
 
@@ -62,13 +66,77 @@ export interface AdReviewer {
   discuss(i: DiscussInput, companyId?: string): Promise<DiscussReply>;
 }
 
-/** With no AI: no verdict (a person reviews every ad, as before), and a plain answer that says so. */
+/**
+ * The built-in rules: what a stand-in can check in an ad's words without an AI, each check with what it found and why.
+ * They pass or flag by rule, but never flag the ad by themselves: their verdict is shown to the team (labelled), a person
+ * decides, and that decision is kept against it, apart from the AI's record. They don't see the pictures either.
+ */
+export interface RuleCheck { id: 'category' | 'adult' | 'claims' | 'prices' | 'personal' | 'words'; label: string; result: 'ok' | 'flag' | 'look'; why: string }
+export interface RulesReview { verdict: ReviewVerdict; checks: RuleCheck[] }
+
+/** Words that mark an ad as one of the kinds a company can refuse (src/modules/console/settings.ts, adCategories). */
+const BLOCKABLE: Record<string, RegExp> = {
+  alcohol: /\b(beer|wine|liquor|spirits|brewery|cocktails?|vodka|whiskey|tequila)\b/i,
+  tobacco: /\b(tobacco|cigars?|cigarettes?|vapes?|vaping|nicotine|hookah)\b/i,
+  cannabis: /\b(cannabis|marijuana|weed|thc|cbd|dispensary|edibles)\b/i,
+  gambling: /\b(casino|betting|bets?|poker|slots|sportsbook|wager)\b/i,
+  weapons: /\b(guns?|firearms?|ammo|ammunition|rifles?|pistols?|handguns?)\b/i,
+  dating: /\b(dating|hookups?|singles near you|meet singles)\b/i,
+  politics: /\b(vote for|re-?elect|candidate|ballot measure|paid for by)\b/i,
+};
+const CLAIMS = /\b(guaranteed?|risk[- ]free|no risk|cures?|miracle|clinically proven|get rich|lose \d+ ?(lbs|pounds)|100% (safe|natural|effective))\b/i;
+const PHONE = /\(?\b\d{3}\)?[ .-]\d{3}[ .-]\d{4}\b/;
+const PERSONAL_EMAIL = /\b[\w.+-]{1,64}@(gmail|yahoo|hotmail|outlook|icloud|aol|proton(mail)?)\.[a-z]{2,6}\b/i;
+
+export function reviewByRules(ad: AdForReview): RulesReview {
+  const text = ad.words.join(' \n ');
+  const checks: RuleCheck[] = [];
+  const blocked = ad.blockedCategories.filter((b) => b === ad.category || BLOCKABLE[b]?.test(text));
+  checks.push(blocked.length
+    ? { id: 'category', label: 'What it’s for', result: 'flag', why: `${ad.company} doesn’t print ${blocked.join(', ')} ads, and this one ${blocked.includes(ad.category) ? `is filed as ${ad.category}` : `mentions ${blocked.map((b) => BLOCKABLE[b]?.exec(text)?.[0]).filter(Boolean).join(', ')}`}.` }
+    : { id: 'category', label: 'What it’s for', result: 'ok', why: ad.blockedCategories.length ? `Not one of the kinds ${ad.company} doesn’t print (${ad.blockedCategories.join(', ')}).` : `${ad.company} doesn’t refuse any kind of ad.` });
+  const adult = ADULT_WORDS.exec(text);
+  checks.push(adult ? { id: 'adult', label: 'Adult words', result: 'flag', why: `It says “${adult[0]}”: bottles go to anyone, children included.` } : { id: 'adult', label: 'Adult words', result: 'ok', why: 'None found.' });
+  const claim = CLAIMS.exec(text);
+  checks.push(claim ? { id: 'claims', label: 'Claims', result: 'flag', why: `It says “${claim[0]}”: a promise like that needs to be true and backed up.` } : { id: 'claims', label: 'Claims', result: 'ok', why: 'No promises of results, cures or guarantees found.' });
+  const pct = Math.max(0, ...[...text.matchAll(/\b(\d{1,3})\s?% ?(off|discount)/gi)].map((m) => Number(m[1])));
+  checks.push(pct > 90 ? { id: 'prices', label: 'Offer and price', result: 'flag', why: `${pct}% off reads like a mistake or bait: check the offer is real.` } : { id: 'prices', label: 'Offer and price', result: 'ok', why: pct ? `${pct}% off: an ordinary discount.` : 'No discount that looks wrong.' });
+  const email = PERSONAL_EMAIL.exec(text), phone = PHONE.exec(text);
+  checks.push(email || phone ? { id: 'personal', label: 'Personal details', result: 'look', why: `It has ${email ? `a personal-looking email (${email[0]})` : `a phone number (${phone![0]})`}: check it’s the business’s, not a private person’s.` } : { id: 'personal', label: 'Personal details', result: 'ok', why: 'No phone numbers or personal emails.' });
+  checks.push(ad.words.length ? { id: 'words', label: 'Words to read', result: 'ok', why: `${ad.words.length} line${ad.words.length === 1 ? '' : 's'} of words and links read.` } : { id: 'words', label: 'Words to read', result: 'look', why: 'No words to read (the artwork is all picture): a person checks it.' });
+  const flags = checks.filter((c) => c.result === 'flag');
+  const first = flags[0]?.id;
+  const category: ReasonCategory = !first ? 'none' : first === 'category' ? 'prohibited' : first === 'adult' ? 'offensive' : 'misleading';
+  return { verdict: flags.length ? { verdict: 'flag', category, reasons: flags.map((c) => c.why).slice(0, 3) } : { verdict: 'pass', category: 'none', reasons: [] }, checks };
+}
+
+/** Which check a question is about, from its words ("why the price?" is about the offer). */
+const ABOUT: [RuleCheck['id'], RegExp][] = [
+  ['category', /categor|allow|block|kind of|rules?\b|alcohol|tobacco|cannabis|gambl|weapon|dating|politic/i],
+  ['adult', /adult|sex|explicit|porn|children|kids/i],
+  ['claims', /claim|promis|guarant|mislead|true|cure/i],
+  ['prices', /price|offer|discount|percent|%|deal|cheap/i],
+  ['personal', /phone|email|address|personal|private|contact/i],
+  ['words', /read|words|text|picture|image|artwork|photo/i],
+];
+
+/**
+ * With no AI: no AI verdict (a person reviews every ad, as before), and the built-in rules answer plainly from what
+ * they checked. They can't weigh what's said to them or change their view.
+ */
 export const standInReviewer: AdReviewer = {
   name: 'stand-in (no AI)',
   async review() { return null; },
   async discuss(i) {
-    const said = i.verdict ? `When it looked, it ${i.verdict.verdict === 'pass' ? 'passed the ad' : `flagged it (${CATEGORY_WORDS[i.verdict.category]}): ${i.verdict.reasons.join(' ')}`}` : i.flags ? `The reasons recorded when it was flagged: ${i.flags}` : 'Nothing was recorded about this ad';
-    return { reply: `The AI reviewer isn’t switched on here, so this is the stand-in: it can’t reason about the ad or change its view. ${said}. A person decides.`, changedView: null };
+    const r = reviewByRules(i.ad);
+    const asked = ABOUT.find(([, re]) => re.test(i.message))?.[0];
+    const on = asked ? r.checks.find((c) => c.id === asked) : null;
+    const earlier = i.verdict ? ` When the AI looked earlier, it ${i.verdict.verdict === 'pass' ? 'passed the ad' : `flagged it (${CATEGORY_WORDS[i.verdict.category]}): ${i.verdict.reasons.join(' ')}`}.` : i.flags ? ` The reasons recorded when it was flagged: ${i.flags}` : '';
+    const list = r.checks.map((c) => `${c.label}: ${c.result === 'flag' ? 'flagged' : c.result === 'look' ? 'worth a look' : 'fine'}. ${c.why}`).join(' ');
+    return {
+      reply: `${i.verdict ? 'The AI reviewer isn’t switched on here or didn’t answer, so the built-in rules answer' : RULES_LABEL}: these are fixed checks, not an AI, so they can’t weigh what you say or change their view.${on ? ` On ${on.label.toLowerCase()}: ${on.why}` : ''} What they checked: ${list} So by these rules they would ${r.verdict.verdict === 'flag' ? 'flag' : 'pass'} this ad. They don’t see the pictures, and a person decides.${earlier}`,
+      changedView: null,
+    };
   },
 };
 
@@ -173,10 +241,14 @@ export class AiReviewService {
    * (a sample of those goes to a person to audit). Never while a person is already talking it over with the advertiser.
    */
   async onSubmitted(c: Campaign) {
-    if (!c.prepaid || !this.features.on(c.companyId, AI_USE)) return null;
-    let v: ReviewVerdict | null;
-    try { v = await withCompany(c.companyId, () => this.reviewer.review(this.adFor(c), c.companyId), AI_USE); v = v && cleanVerdict(v); } catch { v = null; }
-    if (!v) return null; // no AI here, or it couldn't answer: a person reviews, as before
+    if (!c.prepaid) return null;
+    let v: ReviewVerdict | null = null;
+    if (this.features.on(c.companyId, AI_USE)) {
+      try { v = await withCompany(c.companyId, () => this.reviewer.review(this.adFor(c), c.companyId), AI_USE); v = v && cleanVerdict(v); } catch { v = null; }
+    }
+    // No AI here, it's off, or it couldn't answer: a person reviews, as before, and the built-in rules' verdict is kept
+    // beside it (shown to the team, counted against the person's decision, never flagging the ad itself).
+    if (!v) { await this.recordRules(c); return null; }
     const live = this.platform.campaigns.get(c.id);
     if (!live || live.companyId !== c.companyId) return null;
     const final = v.verdict === 'flag' && live.review?.status === 'submitted' && this.finalCallOn(c.companyId);
@@ -194,6 +266,20 @@ export class AiReviewService {
     else if (v.verdict === 'flag') await this.ads.flag({ companyId: c.companyId, campaignId: c.id, reasons: [`AI reviewer (${CATEGORY_WORDS[v.category]}): ${why} (It read the words and links, not the pictures.)`], by: { kind: 'ai', id: AGENT } });
     return { id, ...v, final, audit };
   }
+
+  /** The built-in rules' verdict on the ad as it is now: an earlier one still waiting for a decision is superseded. */
+  private async recordRules(c: Campaign) {
+    const r = reviewByRules(this.adFor(c));
+    const at = this.now();
+    await this.db.transaction(async (tx) => {
+      await tx.query(`update ad_ai_verdicts set superseded_at = $3 where company_id = $1 and campaign_id = $2 and agent = $4 and human_decision is null and superseded_at is null`, [c.companyId, c.id, at, RULES_AGENT]);
+      await tx.query(`insert into ad_ai_verdicts (id, company_id, campaign_id, agent, verdict, category, reasons, at) values ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [newId('aiv'), c.companyId, c.id, RULES_AGENT, r.verdict.verdict, r.verdict.category, r.verdict.reasons.join(' ').slice(0, 2000), at]);
+    });
+  }
+
+  /** Is there an AI to ask here (connected, and its use on for this company)? */
+  aiConnected(companyId: string) { return this.reviewer.name !== standInReviewer.name && this.features.on(companyId, AI_USE); }
 
   /**
    * A change to where a live paid ad's code leads (src/modules/artwork/service.ts, changeLinks): the AI looks at the
@@ -215,8 +301,13 @@ export class AiReviewService {
    * or not. A pass a person approved and later rejected becomes a miss. Then the governor reads the record.
    */
   async onDecided(c: Campaign, decision: 'approved' | 'rejected', personId: string) {
-    const row = (await this.db.query<any>(`select * from ad_ai_verdicts where company_id = $1 and campaign_id = $2 and agent = $3 and superseded_at is null order by seq desc limit 1`, [c.companyId, c.id, AGENT])).rows[0];
-    if (!row) return;
+    if (await this.decided(c, AGENT, decision, personId)) await this.governor(c.companyId);
+    await this.decided(c, RULES_AGENT, decision, personId);
+  }
+
+  private async decided(c: Campaign, agent: string, decision: 'approved' | 'rejected', personId: string) {
+    const row = (await this.db.query<any>(`select * from ad_ai_verdicts where company_id = $1 and campaign_id = $2 and agent = $3 and superseded_at is null order by seq desc limit 1`, [c.companyId, c.id, agent])).rows[0];
+    if (!row) return false;
     const at = this.now(), by = `user:${personId}`;
     if (row.human_decision == null) {
       const agreed = (row.verdict === 'flag') === (decision === 'rejected');
@@ -224,8 +315,20 @@ export class AiReviewService {
         [row.id, decision, by, at, agreed, row.verdict === 'pass' && decision === 'rejected']);
     } else if (row.verdict === 'pass' && row.human_decision === 'approved' && decision === 'rejected') {
       await this.db.query(`update ad_ai_verdicts set human_decision = 'rejected', human_by = $2, human_at = $3, agreed = false, missed = true where id = $1 and human_decision = 'approved'`, [row.id, by, at]);
-    } else return;
-    await this.governor(c.companyId);
+    } else return false;
+    return true;
+  }
+
+  /** The built-in rules' record: people's final decisions against what the rules said (never part of the AI's record). */
+  async rulesRecord(companyId: string) {
+    const r = (await this.db.query<any>(`select count(*) filter (where human_decision is not null)::int as decided, count(*) filter (where agreed)::int as agreed,
+        count(*) filter (where verdict = 'flag' and human_decision = 'approved')::int as false_flags, count(*) filter (where missed)::int as missed
+      from ad_ai_verdicts where company_id = $1 and agent = $2`, [companyId, RULES_AGENT])).rows[0] ?? {};
+    const decided = Number(r.decided ?? 0), agreed = Number(r.agreed ?? 0);
+    return {
+      label: RULES_LABEL, decisions: decided, agreed, falseFlags: Number(r.false_flags ?? 0), missed: Number(r.missed ?? 0),
+      summary: decided ? `Your team’s final decision matched the built-in rules on ${agreed} of ${decided} ad${decided === 1 ? '' : 's'}.` : 'No decisions by your team on ads the built-in rules looked at yet.',
+    };
   }
 
   /** The AI's record for this company: the last decisions within the bar's window, by reason, and since it began. */
@@ -340,14 +443,25 @@ export class AiReviewService {
   async conversation(companyId: string, campaignId: string) {
     const c = this.platform.campaigns.get(campaignId);
     if (!c || c.companyId !== companyId) throw new AdsError(404, 'not_found', 'Campaign not found.');
-    const verdicts = (await this.db.query<any>(`select * from ad_ai_verdicts where company_id = $1 and campaign_id = $2 order by seq`, [companyId, campaignId])).rows.map((r) => ({
+    const rows = (await this.db.query<any>(`select * from ad_ai_verdicts where company_id = $1 and campaign_id = $2 order by seq`, [companyId, campaignId])).rows;
+    const shape = (r: any) => ({
       id: r.id as string, verdict: r.verdict as 'pass' | 'flag', category: r.category as ReasonCategory, reasons: r.reasons as string, final: !!r.final, audit: !!r.audit, at: iso(r.at),
       appealedAt: r.appealed_at ? iso(r.appealed_at) : null, superseded: !!r.superseded_at, changedView: r.changed_view ?? null,
       decided: r.human_decision ? { decision: r.human_decision as string, agreed: !!r.agreed, missed: !!r.missed, at: iso(r.human_at) } : null,
-    }));
+    });
+    const verdicts = rows.filter((r) => r.agent === AGENT).map(shape);
     const thread = (await this.db.query<any>(`select id, role, author_id, text, changed_view, by_model, at from ad_ai_conversation where company_id = $1 and campaign_id = $2 order by seq`, [companyId, campaignId])).rows
       .map((r) => ({ id: r.id as string, from: r.role as 'team' | 'ai', authorId: r.author_id ?? null, text: r.text as string, changedView: r.changed_view ?? null, by: r.by_model ?? null, at: iso(r.at) }));
-    return { verdicts, thread, looksAt: LOOKS_AT };
+    // What the built-in rules checked, on the ad as it is now (they're fixed checks, so this is what they said), and
+    // what was kept when it was submitted, for the record.
+    const rules = reviewByRules(this.adFor(c));
+    const builtIn = {
+      label: this.reviewer.name === standInReviewer.name ? RULES_LABEL : 'Built-in rules (the AI reviewer is off or didn’t answer)',
+      verdict: rules.verdict.verdict, reasons: rules.verdict.reasons, checks: rules.checks,
+      kept: rows.filter((r) => r.agent === RULES_AGENT).map(shape),
+      looksAt: 'The built-in rules read the ad’s words and where its links go, by fixed checks. They don’t see the pictures, they never flag an ad themselves, and a person decides.',
+    };
+    return { verdicts, thread, looksAt: LOOKS_AT, aiConnected: this.aiConnected(companyId), builtIn };
   }
 
   /**
@@ -363,7 +477,7 @@ export class AiReviewService {
     if (!message) throw new AdsError(422, 'empty', 'Write something.');
     const before = await this.conversation(companyId, campaignId);
     if (before.thread.length >= MAX_THREAD) throw new AdsError(409, 'too_long', 'This conversation is long enough; decide the ad, or write to the advertiser in the notes.');
-    const last = [...before.verdicts].reverse().find((v) => !v.superseded) ?? null;
+    const last = [...before.verdicts].reverse().find((v) => !v.superseded) ?? null; // the AI's own (the rules' are apart)
     const verdict: ReviewVerdict | null = last ? { verdict: last.verdict, category: last.category, reasons: [last.reasons] } : null;
     await this.db.query(`insert into ad_ai_conversation (id, company_id, campaign_id, role, author_id, text, at) values ($1,$2,$3,'team',$4,$5,$6)`, [newId('aic'), companyId, campaignId, who.userId, message, this.now()]);
     const input: DiscussInput = { ad: this.adFor(c), verdict, flags: c.review?.status === 'flagged' ? c.review.note ?? '' : '', thread: before.thread.slice(-16).map((m) => ({ from: m.from, text: m.text })), message };

@@ -2892,6 +2892,51 @@ alter table ad_benchmark_snapshots add column epsilon double precision;
 alter table ad_versions add column as_is jsonb;
 `,
   },
+  {
+    // A company's own domain for its codes and pages (src/core/site.ts): no two companies ever hold the same one, even
+    // when two saves race (the console checks first; this is the guarantee).
+    id: '080_company_domains',
+    sql: `
+create unique index companies_own_domain on companies ((lower(config->'domain'->>'host'))) where config->'domain'->>'host' is not null;
+`,
+  },
+  {
+    // Starting printing again on its own after a pause (src/modules/chain/pause.ts, 'unpause_printing'): a test reset
+    // keeps it, as it keeps every pause and unpause, so a reset never pauses printing again that people started.
+    id: '084_unpause_printing',
+    sql: `
+create or replace function chain_actions_guard() returns trigger language plpgsql as $$
+declare
+  moves constant jsonb := '{"proposed":["approved","cancelled"],"approved":["cancelled","expired","running"],"running":["signing","done","failed","recording"],"failed":["done","recording"],"recording":["running"],"signing":["confirming","cancelled"],"confirming":["done"]}';
+  erased boolean;
+begin
+  if tg_op = 'DELETE' then
+    if fw_test_reset(old.company_id) and old.kind not in ('go_live_points', 'pause', 'unpause', 'unpause_printing', 'switch_on') then return old; end if;
+    perform fw_refuse('chain_actions', 'is a permanent record: cancel an action instead.');
+  end if;
+  erased := old.params ? 'to' and new.params = jsonb_set(old.params, '{to}', '"erased"');
+  if not fw_only_changed(to_jsonb(old), to_jsonb(new), array['params', 'approvals', 'status', 'not_before', 'ran_by', 'ran_at', 'ref', 'error', 'cancelled_by', 'prepared', 'signing_at', 'running_at'])
+     or (new.status <> old.status and not coalesce(moves->old.status ? new.status, false))
+     or (old.status in ('done', 'cancelled', 'expired') and not (erased or to_jsonb(new) = to_jsonb(old)))
+     or (new.approvals is distinct from old.approvals and (old.status <> 'proposed' or not (new.approvals @> old.approvals)))
+     or (new.not_before is distinct from old.not_before and old.status <> 'proposed')
+     or (old.ref is not null and new.ref is distinct from old.ref)
+     or (new.params is distinct from old.params and not erased and not (old.status = 'running' and (new.params - 'plan') = (old.params - 'plan'))) then
+    perform fw_refuse('chain_actions', format('can''t change that way (%s to %s).', old.status, new.status));
+  end if;
+  return new;
+end $$;
+`,
+  },
+  {
+    // Household data imports keep why rows were refused, by kind (sensitive, off the list, bad value, no address, a
+    // house that said no), so the console's Household data screen shows how much sensitive data was turned away.
+    // Imports from before keep only their total (src/modules/households/service.ts).
+    id: '086_household_refused_by',
+    sql: `
+alter table household_imports add column refused_by jsonb;
+`,
+  },
 ];
 
 /** Runs every migration not yet run (or, for tests that start from an older schema, those in `list`). */

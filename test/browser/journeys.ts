@@ -27,6 +27,16 @@
  *  15. Play's points counter shows what the wallet holds.
  *  16. The scan page in the pilot: no "free water near me", "printed fresh for home delivery", and the data question
  *      is an inline banner that covers nothing.
+ *  17–20. Every console and ops page in the menu opens without an error, in the pilot and for a licensee with every
+ *      main switch off; the AI agents page shows what's on (which AI, the governor, the AI reviewer), never what's off;
+ *      ops Today shows no Machines panel with machines off.
+ * The team's screens the ops walkthrough found missing (on the pilot's server, signed in as ops, at a phone's width
+ * where ops use phones):
+ *   T1. After 7: at the packing check, ops reprints a bad label by picking its bottle; the bad one is voided.
+ *   T2. A bottle is found by the code printed on it (typed in lower case, no "B-"), with its box and ads.
+ *   T3. One Review section: a changed link (the safety check's reasons, old and new), a charity piece on a real label
+ *       approved, and the ad preview's other pieces filled as the engine would (never "Sample ad").
+ *   T4. After 9: the house-claim notice (deliveries stopped by a new claim) on Areas, and on Today.
  * (And on the pilot's server, after 6: the ad chat's "Every size" keeps every piece inside its panel, and the sample
  * bottle says where the ad is, with the other pieces marked "Sample ad"; with ads on boxes off, no "On a box" tab. And
  * designing it yourself: after a QR colour is saved, the upload page's label preview draws the code in that colour.)
@@ -36,6 +46,7 @@ import { createApp } from '../../src/app';
 import { buildServer } from '../../src/api/server';
 import { createPgliteClient } from '../../src/db/pglite';
 import { featuresFrom } from '../../src/runtime/features';
+import { CATEGORIES } from '../../src/runtime/registry';
 import { TestOutbox } from '../../src/adapters/messaging/contract';
 import { boxNumber } from '../../src/modules/packs/boxRenderer';
 import { doorPhoto } from '../door-photo';
@@ -74,6 +85,14 @@ const journey = async (name: string, f: (page: any) => Promise<void>, opts: Reco
   const [, err] = results.at(-1)!;
   console.log(`${err ? 'FAIL' : 'ok  '} ${name}${err ? `: ${err}` : ''}`);
 };
+/**
+ * Codes people shouldn't read on a screen (src/web/words.js): snake_case codes ("box_printed", "second_step_on"), raw
+ * ids ("user:usr_…", "key_…") and ISO timestamps. What `sel`'s visible text has of them.
+ */
+const rawCodes = async (page: any, sel = 'main') => page.evaluate((q: string) => {
+  const t = (document.querySelector(q) as HTMLElement | null)?.innerText ?? '';
+  return [...t.matchAll(/\b[a-z]+(?:_[a-z0-9]+)+\b|\b(?:user:)?(?:usr|key|adv|pk)_[A-Za-z0-9]{4,}|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/g)].map((m) => m[0]);
+}, sel);
 const roleOf = async (email: string) => (await db.query<any>(`select role from users where email = $1`, [email])).rows[0]?.role ?? null;
 const expect = (ok: boolean, what: string) => { if (!ok) throw new Error(what); };
 
@@ -117,6 +136,10 @@ await journey('owner changes a setting in the console and it is saved', async (p
   await page.waitForFunction(() => /Saved as version/.test(document.querySelector('.toast')?.textContent ?? ''), null, { timeout: 15_000 });
   const boxes = app.platform.companies.get('freewater')!.boxes;
   expect(boxes?.['24']?.lengthIn === 16.5 && boxes?.['24']?.bottomColor === '#1E7DB8', `boxes: ${JSON.stringify(boxes)}`);
+  // Its real name back: a bottle's panel must name the company (it's FreeWater's own panel, "… for FreeWater Inc"), so
+  // under the test name nothing would print in the journeys after this one.
+  await app.console.save('freewater', { name: before }, 'journey');
+  expect(app.platform.companies.get('freewater')!.name === before, 'name not put back');
 });
 
 await journey('a team member who isn’t an owner is kept out of the console', async (page) => {
@@ -334,6 +357,28 @@ await journey('ops plans and prints a night for a delivery area', async (page) =
   expect(steps.length >= 6 && steps.every((t: string | null) => /Put the box-code sticker on the front, top-right corner/.test(t ?? '')), `sticker steps: ${steps.join(' | ')}`);
 });
 
+
+await journey('T1. at the packing check, ops reprints a bad label by picking its bottle (phone)', async (page) => {
+  const pack = [...pilot.packs.packs.values()].find((p) => p.houseId && p.runId?.endsWith(`@${NIGHT}`) && p.status === 'box_printed');
+  expect(!!pack, 'needs the night planned in the journey before');
+  const bad = pack!.unitIds[1]!;
+  const code = (await one(`select code from bottle_codes where unit_id = $1`, [bad])).code as string;
+  await signedIn(page, 'fw_ops_token', await opsToken());
+  await page.goto(`${pBase}/ops/routes?date=${NIGHT}`);
+  const row = page.locator('tr', { hasText: `#${boxNumber(pack!.id)}` });
+  await row.locator('button.reprint').click({ timeout: 30_000 });
+  await page.waitForSelector('.sheet .pick-bottle', { timeout: 20_000 });
+  page.on('dialog', (d: any) => d.accept());
+  await page.locator('.sheet .pick-bottle', { hasText: code }).locator('input').check();
+  await page.click('.sheet button:has-text("Reprint with the same ads")');
+  await toast(page, /Reprinted 1 bottle with the same ads/, 60_000);
+  const fresh = [...pilot.platform.units.values()].find((u) => u.replaces === bad);
+  expect(!!fresh && !!pilot.platform.units.get(bad)!.voided && pilot.packs.packs.get(pack!.id)!.unitIds.includes(fresh!.id), 'reprinted, the bad one voided, the new one in the box');
+  expect(JSON.stringify(fresh!.placements) === JSON.stringify(pilot.platform.units.get(bad)!.placements), 'the same ads');
+  // Every width it's used at: nothing sideways on a phone.
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'the page scrolls sideways on a phone');
+}, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+
 let dropped: any = null;
 await journey('a driver takes the run, loads the van and drops a box with a photo', async (page) => {
   const run = [...pilot.packs.packs.values()].find((p) => p.houseId && p.runId?.endsWith(`@${NIGHT}`))!.runId!;
@@ -353,7 +398,29 @@ await journey('a driver takes the run, loads the van and drops a box with a phot
     await page.waitForFunction((b: string) => !document.querySelector('.sheet') && [...document.querySelectorAll('.row')].some((r) => r.textContent!.includes(`#${b}`) && r.textContent!.includes('Loaded')) || /STOP 1 OF/.test(document.body.innerText), s.boxNumber, { timeout: 20_000, polling: 200 });
   }
   await page.waitForSelector('text=STOP 1 OF', { timeout: 20_000 });
+  // The map at street scale (src/web/routemap.js): a numbered marker for every stop, none on top of another, stop 1
+  // highlighted, all inside the map, and a line through them in order.
+  const marks = await page.$$eval('.mapbox .routemap g.stop', (gs: Element[]) => gs.map((g) => { const b = g.getBoundingClientRect(); return { stop: g.getAttribute('data-stop'), text: g.textContent, current: g.classList.contains('current'), x: b.x + b.width / 2, y: b.y + b.height / 2 }; }));
+  const box = await page.$eval('.mapbox', (e: Element) => { const b = e.getBoundingClientRect(); return { x: b.x, y: b.y, w: b.width, h: b.height }; });
+  expect(marks.length === view.stops.length, `markers: ${marks.length} for ${view.stops.length} stops`);
+  expect(marks.every((m: any) => m.text === m.stop), `numbers: ${marks.map((m: any) => m.text).join(',')}`);
+  expect(marks.filter((m: any) => m.current).map((m: any) => m.stop).join() === '1', 'stop 1 is the highlighted one');
+  for (const a of marks) for (const b of marks) if (a !== b) expect(Math.hypot(a.x - b.x, a.y - b.y) >= 20, `stops ${a.stop} and ${b.stop} overlap (${Math.round(Math.hypot(a.x - b.x, a.y - b.y))} px apart)`);
+  expect(marks.every((m: any) => m.x > box.x && m.x < box.x + box.w && m.y > box.y && m.y < box.y + box.h), 'a marker is off the map');
+  expect(Math.max(...marks.map((m: any) => m.y)) - Math.min(...marks.map((m: any) => m.y)) > box.h * 0.4, 'the run doesn’t fill the map (zoomed out to the depot?)');
+  expect(!!(await page.$('.mapbox .routemap polyline')), 'no line through the stops');
+  if (process.env.DRIVER_MAP_PNG) await page.locator('.mapbox').screenshot({ path: process.env.DRIVER_MAP_PNG });
+  expect((await rawCodes(page)).length === 0, `raw codes on the driver’s screen: ${(await rawCodes(page)).join(', ')}`);
+  // The wrong box at the door first: the screen says “Wrong box” once (its heading), and what to grab instead.
+  const second = view.stops.find((x: any) => x.stop === 2);
   await page.click('button:has-text("I’m at the door")');
+  await page.fill('#box-no', second.boxNumber);
+  await page.click('.sheet button:has-text("Use")');
+  await page.waitForSelector('.verdict.bad', { timeout: 20_000 });
+  const wrong = await page.evaluate(() => document.body.innerText);
+  expect((wrong.match(/wrong box/gi) ?? []).length === 1, `“Wrong box” said ${(wrong.match(/wrong box/gi) ?? []).length} times: ${wrong.slice(0, 300)}`);
+  expect(/That box is for stop 2/.test(wrong), `the wrong-box message: ${wrong.slice(0, 300)}`);
+  await page.click('button:has-text("Scan the right box")');
   await page.fill('#box-no', first.boxNumber);
   await page.click('.sheet button:has-text("Use")');
   await page.waitForSelector('text=GPS agrees', { timeout: 20_000 });
@@ -390,6 +457,92 @@ await journey('a resident says which house is theirs and stops deliveries', asyn
   expect(h.status === 'opted_out', `house is ${h.status}`);
   await page.waitForSelector('button:has-text("Start deliveries again")', { timeout: 20_000 });
 }, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+
+await journey('T4. ops sees the house-claim notice (deliveries stopped by a new claim) on Areas and on Today', async (page) => {
+  expect(!!dropped, 'needs the resident’s stop in the journey before');
+  await signedIn(page, 'fw_ops_token', await opsToken());
+  await page.goto(`${pBase}/ops/areas`);
+  await page.waitForSelector('.house-notices', { timeout: 30_000 });
+  const t = (await page.textContent('.house-notices'))!;
+  const street = (await one(`select address from houses where id = $1`, [dropped.house.id])).address.split(',')[0];
+  expect(t.includes(street) && /Stopped by a new claim/.test(t) && /claim was 0 days old/.test(t), `notices: ${t.slice(0, 300)}`);
+  await page.goto(`${pBase}/ops`);
+  await page.waitForSelector('.attn a:has-text("house claim")', { timeout: 30_000 });
+}, { viewport: { width: 390, height: 844 }, isMobile: true });
+
+await journey('T2. ops finds a bottle by the code printed on its label (lower case, no “B-”), on a phone', async (page) => {
+  const u = [...pilot.platform.units.values()].find((x) => x.packId && pilot.packs.packs.get(x.packId)?.houseId && !x.voided)!;
+  const code = (await one(`select code from bottle_codes where unit_id = $1`, [u.id])).code as string;
+  await signedIn(page, 'fw_ops_token', await opsToken());
+  await page.goto(`${pBase}/ops`);
+  await page.click('nav a:has-text("Find a bottle")', { timeout: 30_000 });
+  await page.fill('#b-code', code.slice(2).toLowerCase());
+  await page.click('button:has-text("Find")');
+  await page.waitForSelector('.bottle-card', { timeout: 20_000 });
+  const card = (await page.textContent('.bottle-card'))!;
+  const pack = pilot.packs.packs.get(u.packId!)!;
+  expect(card.includes(code) && card.includes(`#${boxNumber(pack.id)}`) && card.includes(u.placements[0]!.advertiserName), `card: ${card.slice(0, 400)}`);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'the page scrolls sideways on a phone');
+}, { viewport: { width: 390, height: 844 }, isMobile: true });
+
+await journey('T3. one Review section: a changed link with its safety reasons, a charity piece on a label, the real fill', async (page) => {
+  // A changed link waiting (the old one still live) and a charity piece proposed by an owner.
+  const live = [...pilot.platform.campaigns.values()].find((c) => c.companyId === 'freewater' && (c.experienceConfig as any)?.link?.url && !c.isHouse)!;
+  await pDb.query(`insert into ad_link_changes (id, company_id, campaign_id, advertiser_id, number, changes, before, fee_cents, safety, safety_reasons, status, created_at) values ('alc-journey', 'freewater', $1, $2, 1, $3, $4, 5000, 'flag', 'It goes through a redirect to another site.', 'waiting', now())`,
+    [live.id, live.advertiserId, JSON.stringify([{ path: 'experienceConfig.link.url', url: 'https://example.com/journey-new' }]), JSON.stringify([{ path: 'experienceConfig.link.url', url: (live.experienceConfig as any).link.url }])]);
+  const piece = (await pCall('POST', '/v1/fillers', pAdmin, { kind: 'charity', name: 'Well Aware', headline: 'Clean water in Kenya', text: 'Wells that last for decades.' })).body;
+  await signedIn(page, 'fw_ops_token', await opsToken());
+  await page.goto(`${pBase}/ops`);
+  await page.click('nav a:has-text("Review")', { timeout: 30_000 });
+  await page.click('.review-tabs a:has-text("Link changes")');
+  await page.waitForSelector('.link-change', { timeout: 20_000 });
+  const lc = (await page.textContent('.link-change'))!;
+  expect(lc.includes('https://example.com/journey-new') && lc.includes((live.experienceConfig as any).link.url) && /still live/.test(lc) && /redirect to another site/.test(lc), `link change: ${lc.slice(0, 400)}`);
+  await page.fill('.link-change textarea', 'That page sells something else entirely.');
+  await page.click('.link-change button:has-text("Reject, keep the old link")');
+  await toast(page, /Rejected: the old link stays live/);
+  expect((await one(`select status from ad_link_changes where id = 'alc-journey'`)).status === 'rejected', 'the change is rejected');
+  // The charity piece, on a real label, approved by the ops person.
+  await page.click('.review-tabs a:has-text("Filler and charity")');
+  await page.waitForSelector(`.filler[data-id="${piece.id}"] .label-views img`, { timeout: 30_000 });
+  page.on('dialog', (d: any) => d.accept());
+  await page.locator(`.filler[data-id="${piece.id}"] button:has-text("Approve")`).click();
+  await toast(page, /Approved: it can fill unsold space/);
+  expect(pilot.platform.campaigns.get(piece.id)!.filler!.status === 'approved', 'the piece is approved');
+  // An ad waiting: its preview's other pieces are what the unsold-space list puts there, never "Sample ad".
+  const waiting = [...pilot.platform.campaigns.values()].find((c) => c.companyId === 'freewater' && !c.isHouse && c.sizes.length && c.id !== live.id)!;
+  waiting.review = { status: 'submitted', at: new Date(now).toISOString() } as any;
+  await page.click('.review-tabs a:has-text("Ads")');
+  await page.waitForSelector('.caption.label-fill', { timeout: 30_000 });
+  const fill = (await page.textContent('.caption.label-fill'))!;
+  expect(/unsold-space list/.test(fill) && !/Sample ad/.test(fill), `fill: ${fill}`);
+  waiting.review = { status: 'approved', at: new Date(now).toISOString() } as any;
+}, { viewport: { width: 1280, height: 800 } });
+
+await journey('the ops route page shows each drop’s time in plain words, and ops closes the run early', async (page) => {
+  expect(!!dropped, 'needs the box dropped in the journey before');
+  page.on('dialog', (d: any) => d.accept('The van broke down'));
+  await signedIn(page, 'fw_ops_token', await opsToken());
+  await page.goto(`${pBase}/ops/routes?date=${NIGHT}`);
+  const run = page.locator('section.run', { hasText: 'Journey Oak and Elm' });
+  await run.locator('td.drop-time', { hasText: /\d{1,2}:\d{2}\s?[AP]M/ }).first().waitFor({ timeout: 30_000 });
+  // The drop's time, in Austin's time zone.
+  const stopsOf = async () => { const v = (await one(`select stops from route_runs where id = $1`, [dropped.pack.runId])).stops; return typeof v === 'string' ? JSON.parse(v) : v; };
+  const at = new Date((await stopsOf()).find((x: any) => x.stop === dropped.pack.stop).at);
+  const want = at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Chicago' });
+  expect((await run.locator('td.drop-time').allTextContents()).includes(want), `drop time ${want} not shown: ${(await run.locator('td.drop-time').allTextContents()).join(' | ')}`);
+  expect((await rawCodes(page)).length === 0, `raw codes on the routes page: ${(await rawCodes(page)).join(', ')}`);
+  await run.locator('button:has-text("Close the run…")').click({ timeout: 20_000 });
+  await toast(page, /Run closed: \d+ box/);
+  const r = { ...(await one(`select status from route_runs where id = $1`, [dropped.pack.runId])), stops: await stopsOf() };
+  expect(r.status === 'done', `run is ${r.status}`);
+  expect(r.stops.filter((x: any) => x.status === 'not_delivered').every((x: any) => /^(Run closed early: The van broke down|They stopped)/.test(x.reason)), `reasons: ${r.stops.map((x: any) => x.reason).join(' | ')}`);
+  await page.waitForSelector('section.run:has-text("Journey Oak and Elm") .pill:has-text("Not delivered: Run closed early")', { timeout: 20_000 });
+  expect((await rawCodes(page)).length === 0, `raw codes after closing: ${(await rawCodes(page)).join(', ')}`);
+  await page.goto(`${pBase}/ops/areas/${area.id}`);
+  await page.waitForSelector('text=Add houses', { timeout: 30_000 });
+  expect((await rawCodes(page)).length === 0, `raw codes on the area page: ${(await rawCodes(page)).join(', ')}`);
+});
 
 await journey('the owner chooses label layouts and the most ads on one bottle on the Features page', async (page) => {
   await signedIn(page, 'fw_console_token', await pilot.accounts.createSession(pOwner.id, { secondStep: true }), { fw_console_company: 'freewater' });
@@ -556,6 +709,149 @@ await journey('the scan page in the pilot: no machine doors, and the data questi
   });
   expect(cover.pos === 'static' && cover.covered === 0, `consent: ${JSON.stringify(cover)}`);
 }, { ...phone, isMobile: true });
+
+// ---------- every console and ops page with areas switched off (walkthrough problems #10, #13, #21, #28) ----------
+// The pilot's server (FW_FEATURES=pilot: no agents' fund, network, offers or machines), as FreeWater runs it, and a
+// licensee with every main switch off on its Features page. Every page in each menu opens with no error on it, the
+// AI agents page shows what's on (the governor, which AI, the AI reviewer's record), and nothing from an area that's
+// off is shown (no Machines panel on ops Today).
+const errorOnPage = async (page: any) => page.evaluate(() => {
+  const err = [...document.querySelectorAll('.notice.err')].map((e) => (e as HTMLElement).innerText.trim()).filter(Boolean);
+  const txt = document.body.innerText || '';
+  // An area being off is said in plain words ("Switched off on this server"); a page failing because of it isn't.
+  return err.length ? err.join(' | ') : /Something went wrong|is switched off for /.test(txt) ? (txt.match(/[^\n]*(Something went wrong|is switched off for )[^\n]*/)?.[0] ?? 'error') : null;
+});
+const sweep = async (page: any, app: 'console' | 'ops', company: string) => {
+  const start = app === 'console' ? `${aBase}/console?company=${company}` : `${aBase}/ops`;
+  await page.goto(start);
+  await page.waitForSelector('nav[aria-label="Main"] a', { timeout: 20_000 });
+  const hrefs: string[] = await page.$$eval('nav[aria-label="Main"] a[href^="/"]', (as: HTMLAnchorElement[]) => [...new Set(as.map((a) => a.getAttribute('href')!))].filter((x) => x.startsWith('/console') || x.startsWith('/ops')));
+  const failed: string[] = [];
+  for (const href of hrefs) {
+    await page.goto(`${aBase}${href}`);
+    await page.waitForSelector('main h1, main .notice.err', { timeout: 20_000 }).catch(() => {});
+    await page.waitForLoadState('networkidle');
+    const err = await errorOnPage(page);
+    if (err) failed.push(`${href}: ${err.slice(0, 160)}`);
+  }
+  return { hrefs, failed };
+};
+const swOwner = await aApp.accounts.createSession(aOwner.id, { secondStep: true });
+const lOwner = await aApp.accounts.invite({ companyId: 'peak-spring', email: 'owner.sweep@peakspring.example', role: 'owner' });
+const lToken = await aApp.accounts.createSession(lOwner.id, { secondStep: true });
+const mains = Object.fromEntries(CATEGORIES.filter((c) => c.main).map((c) => [c.main!, false]));
+await aApp.companyFeatures.change('peak-spring', { ...mains }, { userId: lOwner.id, name: 'Owner', approverProblem: async () => null } as any);
+
+await journey('every console page opens without an error in the pilot, and the AI agents page shows what’s on', async (page) => {
+  await signedIn(page, 'fw_console_token', swOwner, { fw_console_company: 'freewater' });
+  const { hrefs, failed } = await sweep(page, 'console', 'freewater');
+  expect(hrefs.includes('/console/agents'), `no AI agents page in the menu: ${hrefs.join(' ')}`);
+  expect(!failed.length, `pages with an error: ${failed.join(' ; ')}`);
+  await page.goto(`${aBase}/console/agents`);
+  await page.waitForSelector('main h1', { timeout: 20_000 });
+  await page.waitForLoadState('networkidle');
+  const text = await page.evaluate(() => document.body.innerText);
+  for (const want of ['Which AI', 'Their charter, and the governor', 'AI reviewer of paid ads']) expect(text.includes(want), `the AI agents page has no “${want}”`);
+  for (const gone of ['The agents’ fund', 'Continuity', 'Value-back test', 'The upsides library']) expect(!text.includes(gone), `the AI agents page shows “${gone}”, which is off`);
+  // The overview (Get started) shows no machine steps or figures with machines off.
+  await page.goto(`${aBase}/console`);
+  await page.waitForSelector('main h1', { timeout: 20_000 });
+  const start = await page.evaluate(() => document.querySelector('main')!.innerText);
+  expect(!/first machine|Machines\n/i.test(start), 'Get started shows machines, which are off');
+  // The emergency stop is on the main menu without the blockchain.
+  expect(hrefs.includes('/console/pause') && !hrefs.includes('/console/chain'), `menu: ${hrefs.join(' ')}`);
+});
+
+await journey('every console page opens without an error for a licensee with every main switch off', async (page) => {
+  await signedIn(page, 'fw_console_token', lToken, { fw_console_company: 'peak-spring' });
+  const { hrefs, failed } = await sweep(page, 'console', 'peak-spring');
+  expect(hrefs.includes('/console/agents'), `no AI agents page (Which AI) in the menu: ${hrefs.join(' ')}`);
+  expect(!failed.length, `pages with an error: ${failed.join(' ; ')}`);
+  await page.goto(`${aBase}/console/agents`);
+  await page.waitForSelector('main h1', { timeout: 20_000 });
+  await page.waitForLoadState('networkidle');
+  const text = await page.evaluate(() => document.body.innerText);
+  expect(text.includes('Which AI') && text.includes('Their charter, and the governor'), 'the licensee’s AI agents page lacks Which AI or the governor');
+});
+
+await journey('every ops page opens without an error in the pilot, and Today shows no Machines panel', async (page) => {
+  await signedIn(page, 'fw_ops_token', swOwner);
+  const { hrefs, failed } = await sweep(page, 'ops', 'freewater');
+  expect(!hrefs.includes('/ops/machines'), `Machines is in the ops menu: ${hrefs.join(' ')}`);
+  expect(!failed.length, `pages with an error: ${failed.join(' ; ')}`);
+  await page.goto(`${aBase}/ops`);
+  await page.waitForSelector('main h1', { timeout: 20_000 });
+  await page.waitForLoadState('networkidle');
+  const heads: string[] = await page.$$eval('main h2', (hs: HTMLElement[]) => hs.map((x) => x.innerText.trim()));
+  expect(!heads.some((x) => /^Machines/.test(x)), `ops Today shows: ${heads.join(', ')}`);
+});
+
+await journey('every ops page opens without an error for a licensee with every main switch off', async (page) => {
+  await signedIn(page, 'fw_ops_token', lToken);
+  const { hrefs, failed } = await sweep(page, 'ops', 'peak-spring');
+  expect(!hrefs.some((x) => /machines|routes|areas|subscriptions|review/.test(x)), `ops menu shows switched-off areas: ${hrefs.join(' ')}`);
+  expect(!failed.length, `pages with an error: ${failed.join(' ; ')}`);
+  const heads: string[] = await page.goto(`${aBase}/ops`).then(() => page.waitForSelector('main h1', { timeout: 20_000 })).then(() => page.$$eval('main h2', (hs: HTMLElement[]) => hs.map((x) => x.innerText.trim())));
+  expect(!heads.some((x) => /^Machines/.test(x)), `ops Today shows: ${heads.join(', ')}`);
+});
+
+await journey('the pilot’s console: no empty menu heading, and Security, Launch and Points and credit in plain words', async (page) => {
+  // Something in each log: a sign-in, a key, the second step, a reset by a person, a blank piece's placeholder.
+  await aApp.launch.reset('freewater', `user:${aOwner.id}`);
+  aApp.platform.ensureBlank('freewater');
+  await aCall('POST', '/v1/auth/start', undefined, { companyId: 'freewater', channel: 'email', to: 'owner.app@freewater.io' });
+  await aCall('POST', '/v1/auth/verify', undefined, { companyId: 'freewater', channel: 'email', to: 'owner.app@freewater.io', code: /(\d{6})/.exec(aOutbox.lastTo('owner.app@freewater.io')!.text)![1] });
+  await signedIn(page, 'fw_console_token', await aApp.accounts.createSession(aOwner.id, { secondStep: true }), { fw_console_company: 'freewater' });
+  await page.goto(`${aBase}/console/security`);
+  await page.waitForSelector('text=The log', { timeout: 30_000 });
+  // Every heading in the menu has something under it (the pilot has no Licensees page: no "Platform" heading).
+  const menu = await page.$$eval('aside nav > *', (els: Element[]) => els.map((e) => (e.classList.contains('group') ? `#${e.textContent}` : 'page')));
+  const empty = menu.filter((m: string, i: number) => m.startsWith('#') && (i + 1 === menu.length || menu[i + 1]!.startsWith('#')));
+  expect(empty.length === 0, `menu headings with nothing under them: ${empty.join(', ')}`);
+  await page.waitForFunction(() => /Signed in/.test(document.querySelector('main')?.textContent || ''), null, { timeout: 20_000 });
+  expect((await rawCodes(page)).length === 0, `raw codes on Security: ${(await rawCodes(page)).join(', ')}`);
+  await page.goto(`${aBase}/console/launch`);
+  await page.waitForSelector('text=Last reset', { timeout: 30_000 });
+  expect((await rawCodes(page)).length === 0, `raw codes on Launch: ${(await rawCodes(page)).join(', ')}`);
+  await page.goto(`${aBase}/console/wallet`);
+  await page.waitForSelector('text=Brand reserves', { timeout: 30_000 });
+  expect((await rawCodes(page)).length === 0, `raw codes on Points and credit: ${(await rawCodes(page)).join(', ')}`);
+  const brands = await page.$$eval('main select option', (os: Element[]) => os.map((o) => o.textContent));
+  expect(brands.length > 0 && !brands.some((b: string | null) => /Open space|Well Aware|^FreeWater$/.test(b ?? '')), `reserve list: ${brands.join(', ')}`);
+});
+
+// Last on this app (it leaves money paused): the Pause page shows what pressing will stop and its settings; printing
+// can be left out for one press; ops people get Pause on their menu once an owner allows it.
+await journey('Pause shows what it will stop, keeps printing when unticked, and ops press it where allowed', async (page) => {
+  const owner = await aApp.accounts.createSession(aOwner.id, { secondStep: true });
+  await signedIn(page, 'fw_console_token', owner, { fw_console_company: 'freewater' });
+  await page.goto(`${aBase}/console/pause`);
+  await page.waitForSelector('text=Pause settings', { timeout: 30_000 });
+  const text = await page.evaluate(() => document.querySelector('main')!.innerText);
+  for (const want of ['Money', 'Token actions', 'Printing', 'Sending charity payouts', 'Who can press Pause', 'Starting printing again on its own']) expect(text.includes(want), `the Pause page has no “${want}”`);
+  expect(await page.isDisabled('#pz-money') && !(await page.isDisabled('#pz-printing')), 'money should be fixed and printing untickable');
+  await page.uncheck('#pz-printing');
+  await page.fill('input[aria-label="Why you’re pausing"]', 'Journey: odd payout, delivery night on');
+  await page.click('button:has-text("Pause now")');
+  await toast(page, /Paused/);
+  const st = (await aCall('GET', '/v1/pause', owner)).body.stopped;
+  expect(st.money && st.tokens && !st.printing, `stopped: ${JSON.stringify(st)}`);
+  await page.waitForSelector('text=Propose unpausing everything', { timeout: 20_000 });
+  // Ops: not on their menu until an owner says so (a person signed in), then there with the same choice.
+  const opsUser = await aApp.accounts.invite({ companyId: 'freewater', email: 'ops.pause@freewater.io', role: 'ops' });
+  const opsToken = await aApp.accounts.createSession(opsUser.id);
+  expect((await aCall('GET', '/v1/me', opsToken)).body.pressesPause === false, 'ops press Pause by default');
+  const v = (await aCall('GET', '/v1/console', owner)).body.version;
+  expect((await aCall('PATCH', '/v1/console/settings', owner, { version: v, changes: { pause: { whoPresses: 'owners_finance_ops' } } })).status === 200, 'owner could not let ops press Pause');
+  const ops = await page.context().newPage();
+  await signedIn(ops, 'fw_ops_token', opsToken);
+  await ops.goto(`${aBase}/ops`);
+  await ops.waitForSelector('nav[aria-label="Main"] a[href="/ops/pause"]', { timeout: 20_000 });
+  await ops.goto(`${aBase}/ops/pause`);
+  await ops.waitForSelector('text=The emergency stop', { timeout: 20_000 });
+  expect(!(await errorOnPage(ops)), `ops Pause page: ${await errorOnPage(ops)}`);
+  await ops.close();
+});
 
 await aServer.close();
 await aDb.close();

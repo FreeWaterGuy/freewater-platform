@@ -322,37 +322,50 @@ describe.each(engines)('in the app (%s)', (engine) => {
     expect(unsafe.code).toBe('link_unsafe');
     expect(await changeOrders(c.id)).toEqual([]);
     // Two different changes pressed at once: one is paid and waits, the other is refused before it's charged (P2).
-    const [a, b] = await Promise.all([call('POST', `/v1/ads/campaigns/${c.id}/links`, key, change), call('POST', `/v1/ads/campaigns/${c.id}/links`, key, { ...change, changes: [{ path: 'experienceConfig.link.url', url: 'https://other.example.test/' }] })]);
-    expect([a.status, b.code]).toEqual([201, 'change_waiting']);
-    expect(a.body).toMatchObject({ status: 'link_in_review', pending: { status: 'waiting', changes: [{ url: 'https://new.example.test/' }], live: false } });
+    // Which one is served first isn't defined (on real Postgres the two requests' sign-in lookups finish in either order),
+    // so the test doesn't assume it: exactly one is paid and waits, the other is refused, whichever it is.
+    const otherChange = { ...change, changes: [{ path: 'experienceConfig.link.url', url: 'https://other.example.test/' }] };
+    const [a, b] = await Promise.all([call('POST', `/v1/ads/campaigns/${c.id}/links`, key, change), call('POST', `/v1/ads/campaigns/${c.id}/links`, key, otherChange)]);
+    expect([a.status, b.status].sort()).toEqual([201, 409]);
+    const [won, lost] = a.status === 201 ? [a, b] : [b, a];
+    const wonChange = won === a ? change : otherChange;
+    const wonUrl = wonChange.changes[0]!.url.replace(/^http:/, 'https:');
+    const lostUrl = wonUrl === 'https://new.example.test/' ? 'https://other.example.test/' : 'https://new.example.test/';
+    expect(lost.code).toBe('change_waiting');
+    expect(won.body).toMatchObject({ status: 'link_in_review', pending: { status: 'waiting', changes: [{ url: wonUrl }], live: false } });
+    // The advertiser's Overview says it's waiting, with the new link (the old one stays live meanwhile).
+    const overviewChange = async () => (await call('GET', '/v1/ads/overview', key)).body.campaigns.find((x: any) => x.id === c.id)?.linkChange;
+    expect(await overviewChange()).toMatchObject({ status: 'waiting', urls: [wonUrl] });
     expect((await changeOrders(c.id)).map((o) => [o.status, Number(o.total_cents)])).toEqual([['paid', 5_000]]);
     // The same change pressed again: already waiting, nothing more charged.
-    expect((await call('POST', `/v1/ads/campaigns/${c.id}/links`, key, change)).body).toMatchObject({ feeCents: 0, status: 'link_in_review' });
+    expect((await call('POST', `/v1/ads/campaigns/${c.id}/links`, key, wonChange)).body).toMatchObject({ feeCents: 0, status: 'link_in_review' });
     expect((await changeOrders(c.id)).length).toBe(1);
     // The old link is still live: approved, printing, its scan page leads where it did.
     expect(c).toMatchObject({ active: true, review: { status: 'approved' } });
     expect(linksOf(c)[0]!.url).toBe('https://live.example.test/');
     expect(tokenUrl(await scanned(c))).toContain('https://live.example.test/');
     // Another change while one waits: refused, nothing charged.
-    expect((await call('POST', `/v1/ads/campaigns/${c.id}/links`, key, { changes: [{ path: 'experienceConfig.link.url', url: 'https://other.example.test/' }], expectedFeeCents: 5_000 })).code).toBe('change_waiting');
+    expect((await call('POST', `/v1/ads/campaigns/${c.id}/links`, key, { changes: [{ path: 'experienceConfig.link.url', url: lostUrl }], expectedFeeCents: 5_000 })).code).toBe('change_waiting');
     // The team's queue: the old and new links, the check's verdict.
     const queue = (await call('GET', '/v1/review/link-changes', reviewer)).body;
     const item = queue.find((x: any) => x.campaignId === c.id);
-    expect(item).toMatchObject({ before: [{ url: 'https://live.example.test/' }], changes: [{ url: 'https://new.example.test/' }], safety: { verdict: 'pass' }, feeCents: 5_000 });
+    expect(item).toMatchObject({ before: [{ url: 'https://live.example.test/' }], changes: [{ url: wonUrl }], safety: { verdict: 'pass' }, feeCents: 5_000 });
     // A key never decides; a person does.
     expect((await call('POST', `/v1/review/link-changes/${item.id}`, admin, { decision: 'approve' })).code).toBe('person_required');
     expect((await call('POST', `/v1/review/link-changes/${item.id}`, reviewer, { decision: 'reject', note: 'no' })).code).toBe('reason_required');
     const ok = await call('POST', `/v1/review/link-changes/${item.id}`, reviewer, { decision: 'approve' });
     expect(ok.body).toMatchObject({ status: 'approved', live: true });
-    expect(linksOf(c)[0]!.url).toBe('https://new.example.test/');
+    expect(await overviewChange()).toMatchObject({ status: 'approved', urls: [wonUrl], live: true });
+    expect(linksOf(c)[0]!.url).toBe(wonUrl);
     expect(c).toMatchObject({ active: true, review: { status: 'approved' } }); // never paused
-    expect(tokenUrl(await scanned(c))).toContain('https://new.example.test/');
+    expect(tokenUrl(await scanned(c))).toContain(wonUrl);
     expect((await call('POST', `/v1/review/link-changes/${item.id}`, reviewer, { decision: 'approve' })).code).toBe('not_waiting'); // decided once
     // A rejected change: the old link stays, and says why.
-    const next = await call('POST', `/v1/ads/campaigns/${c.id}/links`, key, { changes: [{ path: 'experienceConfig.link.url', url: 'https://other.example.test/' }], expectedFeeCents: 5_000 });
+    const next = await call('POST', `/v1/ads/campaigns/${c.id}/links`, key, { changes: [{ path: 'experienceConfig.link.url', url: lostUrl }], expectedFeeCents: 5_000 });
     const rej = await call('POST', `/v1/review/link-changes/${next.body.pending.id}`, reviewer, { decision: 'reject', note: 'That page sells something else entirely.' });
     expect(rej.body).toMatchObject({ status: 'rejected', decided: { note: 'That page sells something else entirely.' } });
-    expect(linksOf(c)[0]!.url).toBe('https://new.example.test/');
+    expect(await overviewChange()).toMatchObject({ status: 'rejected', urls: [lostUrl], note: 'That page sells something else entirely.' });
+    expect(linksOf(c)[0]!.url).toBe(wonUrl);
     expect((await call('GET', `/v1/ads/campaigns/${c.id}/links`, key)).body).toMatchObject({ pending: null, last: { status: 'rejected' } });
     expect((await changeOrders(c.id)).length).toBe(2);
     // The database keeps what was asked and paid, and decides once.

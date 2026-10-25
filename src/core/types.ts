@@ -101,6 +101,12 @@ export interface CompanyConfig {
   receiptBaseUrl: string; // where scan and receipt links point, e.g. https://go.freewater.io
   /** A short address just for QR codes, e.g. https://fw.ac. Shorter means fewer, bigger squares. Defaults to receiptBaseUrl. */
   scanBaseUrl?: string;
+  /**
+   * The company's own web domain for its codes and pages (src/core/site.ts; docs/RUNNING.md "A company's own domain").
+   * Set and checked from the console's Company page, never by a plain settings save: once `verified` (its DNS shows the
+   * `token`), codes printed for the company use it; until then they use `receiptBaseUrl` (its platform subdomain).
+   */
+  domain?: { host: string; token: string; verified: boolean; verifiedAt?: string; verifiedBy?: string };
   brand: {
     logoTop: string; // "free"
     logoBottom: string; // "water"
@@ -181,8 +187,24 @@ export interface CompanyConfig {
   launch?: { stage: 'test' | 'points' | 'token'; withdrawals?: boolean };
   /** How much of the books the world sees, live. Each company chooses. */
   transparency?: Transparency;
-  /** Security choices. Owners can be required to use a second sign-in step (a code from an authenticator app). */
-  security?: { ownersNeedSecondStep: boolean };
+  /**
+   * Security choices. Owners can be required to use a second sign-in step (a code from an authenticator app). Owners
+   * already signed in when it became required (`requiredSince`, set by the server) keep working for `graceDays` (default
+   * 7, 0 to 30) before they must set one up; anyone signing in after it's required sets one up first.
+   */
+  security?: { ownersNeedSecondStep: boolean; graceDays?: number; requiredSince?: string };
+  /**
+   * Who reviews ads (src/modules/ops/teamScreens.ts): 'owners' (and reviewers), or 'owners_ops' (ops people too, signed
+   * in; the default, FreeWater's choice). A person decides either way; refunds stay with owners and finance.
+   */
+  adReview?: { whoReviews: 'owners' | 'owners_ops' };
+  /**
+   * The emergency stop (src/modules/chain/pause.ts): what pressing Pause stops, whether the person pressing may leave
+   * printing out, who presses it, and the rules for starting again. Unset: the defaults (everything stops; owners and
+   * finance; 2 others and 48 hours to unpause, 1 other and no wait to start printing again). The pause itself can't be
+   * removed; making it weaker is a security change (an owner, the second step, a reason, one at a time).
+   */
+  pause?: Partial<import('../modules/chain/pause').PauseSettings>;
   /**
    * The AI agents' own fund and place in the books. Off unless the company turns it on. The agents' fund gets
    * `percentOfExtra` of the upside as it's earned, before costs, the same way and the same share as the charity
@@ -727,8 +749,15 @@ export interface LabelPanelSettings {
   icons: { name: string; image: PanelImage }[];
   /** In the accent colour ("PLEASE REFILL", "AND RECYCLE"). */
   refill: string[];
-  /** Who makes it and how to reach them ("Manufactured by:", "RAIN Bottling Co", … phone, email). */
+  /** Who makes it ("Manufactured by:", "RAIN Bottling Co", …); older panels also carry the phone and email here. */
   maker: string[];
+  /** How to reach the company (phone, email, web), printed after the maker's lines. */
+  contact?: string[];
+  /**
+   * The company's own line in the small print ("Bottled for Peak Spring Water Co."). Unset: the "Bottled for …" line of
+   * the Brand page's product facts, if there is one; empty: none.
+   */
+  bottledFor?: string;
   /** In italics ("Processed by ozonation"). */
   process: string;
   /** The recycling mark: a plain one drawn by the platform, an uploaded one, or none. */

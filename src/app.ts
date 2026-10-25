@@ -1,3 +1,4 @@
+import { resolveTxt } from 'node:dns/promises';
 import { printReady } from './modules/print/renderer';
 import type { SqlClient } from './db/client';
 import { migrate } from './db/migrations';
@@ -99,6 +100,7 @@ import type { BlobStore } from './modules/assets/blobs';
 import type { InstanceLease } from './runtime/lease';
 import { leaseCheckedClient } from './db/leaseChecked';
 import type { JobRunner } from './runtime/jobs';
+import { seedDemoBenchmarks } from './demo/demoBenchmarks';
 import { boxes, builtinCreatives, demoFormerCampaignIds, demoUnsoldCampaigns, formerAdvertiserCampaigns, freewater, locations, peakSpring, products, sampleCampaigns } from './demo/seed';
 import { printFormerAdvertisersPast } from './demo/history';
 import { FillerService } from './modules/fillers/service';
@@ -216,6 +218,8 @@ export interface AppOptions {
   adReviewer?: AdReviewer;
   /** Rates each ad version before it prints (src/modules/ads/ratings.ts); without one, Claude where there's an AI, else the built-in rules. */
   adRater?: AdRater;
+  /** Reads a domain's DNS TXT records, to check a company's own domain (src/core/site.ts). Defaults to real DNS. */
+  dnsTxt?: (name: string) => Promise<string[][]>;
 }
 
 /** Start the platform on a database: migrate, load everything, and keep writing every change back. */
@@ -761,6 +765,12 @@ export async function createApp(opts: AppOptions) {
     const a = await artwork.art(companyId, advertiserId, d).catch(() => null);
     return a ? { creativeRef: a.creativeRef, qr: { mode: 'dynamic' as const, ...(d.qr && artwork.on(companyId, 'qr_styles') ? d.qr : {}) } } : null;
   };
+  // The demo's sample ads are rated now, before anything prints, as a submitted ad is on the real path (they never went
+  // through submitting). An AI slower than half a minute is left to finish in the background: then it's truly late.
+  if (demoKeys) {
+    for (const c of platform.campaigns.values()) await ratings.noteVersionNow(c).catch(() => null);
+    await Promise.race([ratings.idle(), new Promise((r) => setTimeout(r, 30_000).unref())]);
+  }
   // Link changes paid for but not saved (a crash between) are finished now, after ratings are wired, so each is noted
   // as a new version and rated before it prints (it waits for review anyway).
   await artwork.recoverLinkChanges();
@@ -785,6 +795,7 @@ export async function createApp(opts: AppOptions) {
   };
   // Holdout tests: for a small share of scans the personalizer is skipped, so its real value shows in the books.
   experiences.holdout = (agent, key) => agents.holdout(agent, key);
+  experiences.featureOn = (companyId, id) => companyFeatures.on(companyId, id);
   experiences.onArm = (a) => agents.recordArm(a);
 
   // Model 6 machines: bottles ordered there print at the machine; everything else uses the company's other printer.
@@ -814,8 +825,15 @@ export async function createApp(opts: AppOptions) {
   await persistence.flush();
   // The demo's former advertisers ran paid before it starts (src/demo/history.ts): their past bottles, printed once.
   if (empty && opts.seedDemo && opts.demoUnsold) await printFormerAdvertisersPast({ platform, persistence }, demoFormerCampaignIds);
+  // The demo's Benchmarks page: a settled month of SAMPLE ad results at both demo companies (both contribute, as sample
+  // data), released by the real monthly release, so the page shows how it works (src/demo/demoBenchmarks.ts).
+  if (empty && opts.seedDemo && opts.demoUnsold) {
+    await companyFeatures.change('peak-spring', { benchmarks_contribute: true }, { userId: 'demo-seed', name: 'Demo seed (sample data)', approverProblem: async () => null }, { reason: 'Demo: sample data joins the sample benchmarks.' }).catch(() => null);
+    await seedDemoBenchmarks(db, now, ['freewater', 'peak-spring']);
+    await ratings.snapshotDue();
+  }
 
-  return { ...made, aiReview, linkSafety, ratings, fillers, unsold, news, households, routeBuys, features, companyFeatures, db, persistence, runtime, demoKeys, accounts, payments, credit, prepaid, artwork, messenger, experiences, assets, ads, designs, delivery, houses, dropPhotos, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation };
+  return { ...made, aiReview, linkSafety, ratings, fillers, unsold, news, households, routeBuys, features, companyFeatures, db, persistence, runtime, demoKeys, accounts, payments, credit, prepaid, artwork, messenger, experiences, assets, ads, designs, delivery, houses, dropPhotos, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation, dnsTxt: opts.dnsTxt ?? ((name: string) => resolveTxt(name)) };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

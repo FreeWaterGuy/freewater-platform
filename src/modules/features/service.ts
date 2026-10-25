@@ -5,7 +5,7 @@ import { applyChange, type EditableKey } from '../console/settings';
 import { TEMPLATES } from '../ads/layouts';
 import type { ConsoleService, SaveNote } from '../console/service';
 import {
-  ACTION_SWITCHES, CATALOGUE, CATEGORIES, JOB_SWITCH, ROUTE_SWITCH, SIZE_SWITCHES, STARTING_POINTS, SWITCHES, byId, dependantsOf, needsOf, startsOffForNew, switchOfPlugin, whoTurnsOn, type Switch,
+  ACTION_SWITCHES, CATALOGUE, CATEGORIES, JOB_SWITCH, ROUTE_SWITCH, SIZE_SWITCHES, STARTING_POINTS, SWITCHES, byId, dependantsOf, needsOf, securityWeakened, startsOffForNew, switchOfPlugin, whoTurnsOn, type Switch,
 } from '../../runtime/registry';
 
 const SIZE_SWITCH_SHARE: Record<string, number> = Object.fromEntries(Object.entries(SIZE_SWITCHES).map(([share, id]) => [id, Number(share)]));
@@ -86,6 +86,9 @@ export class FeatureService {
     console.onCreate = (tx, companyId, by) => this.copyForNewCompany(tx, companyId, by);
     // A key never changes a switch, including one kept in the settings (SWITCHES "Features page"; P4).
     console.switchesChanged = (before, after) => SWITCHES.filter((s) => s.kind === 'linked' && s.link!.get(before) !== s.link!.get(after)).map((s) => s.label);
+    // A security switch kept in the settings is never turned off by a settings save, a restored version or an agent's
+    // proposal, only through the checks of its own (docs/SWITCHES.md, "Security switches").
+    console.securityWeakened = securityWeakened;
   }
 
   private now() { return this.clock().toISOString(); }
@@ -263,7 +266,9 @@ export class FeatureService {
       const p = STARTING_POINTS.find((x) => x.id === opts.startingPoint);
       if (!p) throw new FeatureError('unknown_starting_point', `Pick one of: ${STARTING_POINTS.map((x) => x.id).join(', ')}.`);
       const fw = (id: string) => this.own(PLATFORM(), byId.get(id)!);
-      wanted = SWITCHES.filter((s) => !s.locked && s.kind !== 'setting').map((s) => [s.id, p.on(s, fw)]);
+      // Security switches are never part of a starting point: they stay exactly as they are (and it says so).
+      for (const s of SWITCHES) if (s.security && own(s.id) && !p.on(s, fw)) yourself.push({ id: s.id, label: s.label, how: `Left on: it guards your company (${s.security}) A starting point never turns it off; an owner with the second sign-in step does, on its own, with a reason.` });
+      wanted = SWITCHES.filter((s) => !s.locked && !s.security && s.kind !== 'setting').map((s) => [s.id, p.on(s, fw)]);
     }
     for (const [id] of wanted) if (!byId.has(id)) throw new FeatureError('unknown_switch', `There is no switch called “${id}”.`);
     const label = (id: string) => byId.get(id)!.label;
@@ -272,13 +277,17 @@ export class FeatureService {
       const s = byId.get(id)!;
       if (s.locked) { refused.push({ id, label: s.label, reason: `Always on: ${s.locked}` }); continue; }
       if (s.kind === 'setting') continue;
+      // A security switch is turned off only on its own, never with other changes (docs/SWITCHES.md, "Security switches").
+      if (s.security && own(id) && Object.keys(asked).length > 1) { refused.push({ id, label: s.label, reason: `Turn it off on its own, not with other changes: it guards your company (${s.security})` }); continue; }
       // Off only by an owner who says why, and never by a starting point (it stays as it is; turn it off yourself).
       if (s.offNeedsReason && own(id)) {
         if (opts.startingPoint) { yourself.push({ id, label: s.label, how: `Left on: turning it off is an owner’s own decision, with a reason. ${s.offNeedsReason}` }); continue; }
         if (String(opts.reason ?? '').trim().length < 10) { refused.push({ id, label: s.label, reason: `Say why it’s turned off (at least 10 characters), for the record. ${s.offNeedsReason}` }); continue; }
       }
       if (own(id)) target.set(id, to);
-      for (const d of dependantsOf(id)) { const ds = byId.get(d)!; if (!ds.locked && ds.kind !== 'setting' && own(d)) target.set(d, false); }
+      // What needs it goes off with it, except a switch only an owner turns off with a reason (link safety): that one
+      // keeps its own choice, so it is off while its parent is and comes back on with it.
+      for (const d of dependantsOf(id)) { const ds = byId.get(d)!; if (!ds.locked && ds.kind !== 'setting' && !ds.security && !ds.offNeedsReason && own(d)) target.set(d, false); }
     }
     // What a switch needs comes first (its parent and what it depends on, all the way up).
     const depth = (id: string): number => Math.max(0, ...needsOf(byId.get(id)!).map((n) => 1 + depth(n)));
@@ -330,7 +339,7 @@ export class FeatureService {
       if (opts.startingPoint) changes = changes.filter((x) => !x.id.startsWith('layout_') && !x.id.startsWith('size_'));
     }
     const warnings = [...this.paidWarnings(companyId, changes), ...(changes.length ? this.layouts?.switchWarnings(companyId, onAfter) ?? [] : [])];
-    return { changes, refused, yourself, needsSecondStep: changes.some((x) => x.to && !!byId.get(x.id)!.risk), warnings };
+    return { changes, refused, yourself, needsSecondStep: changes.some((x) => (x.to && !!byId.get(x.id)!.risk) || (!x.to && !!byId.get(x.id)!.security)), warnings };
   }
 
   /** The plan, with the warnings that need the database too (route pieces that could no longer share a label). */
@@ -405,7 +414,9 @@ export class FeatureService {
       const writeStored = (tx: SqlClient) => this.writeMany(tx, companyId, stored.map((x) => ({ id: x.id, was: x.from, on: x.to, reason: x.why === 'asked' ? opts.reason : `${x.why}${opts.reason ? `: ${opts.reason}` : ''}` })), actor.name, via);
       const { change } = this.linkedChange(this.config(companyId)!, plan.changes);
       if (change) {
-        await this.console.save(companyId, change, actor.name, undefined, { person: true, note: { via, reason: opts.reason }, inTx: writeStored }).catch((e: any) => { throw e?.code ? new FeatureError(e.code, e.message, e.status ?? 422) : e; });
+        // A security switch kept in the settings: the checks above are the ones a weakening needs (on its own, a reason, the second step).
+        const securityOff = plan.changes.some((x) => !x.to && byId.get(x.id)!.security) ? { reason: String(opts.reason ?? '') } : undefined;
+        await this.console.save(companyId, change, actor.name, undefined, { person: true, note: { via, reason: opts.reason }, inTx: writeStored, securityOff }).catch((e: any) => { throw e?.code ? new FeatureError(e.code, e.message, e.status ?? 422) : e; });
       } else {
         await this.db.transaction(writeStored);
       }

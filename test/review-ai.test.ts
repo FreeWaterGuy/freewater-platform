@@ -183,7 +183,9 @@ describe('10. approving or rejecting an agent’s proposal needs a person', () =
       expect(r.status).toBe(403);
       expect(r.body.error.code).toBe('person_needed');
     }
-    expect((await call('GET', '/v1/agents', old.key)).status).toBe(200); // still works: nobody decided
+    // Still on: nobody decided. (Checked without using it: a key used again since it was suggested isn't turned off,
+    // test/second-step-lockout.test.ts.)
+    expect((await db.query<any>(`select revoked_at from api_keys where id = $1`, [old.record.id])).rows[0].revoked_at).toBeNull();
     expect((await call('POST', `/v1/agents/proposals/${p.id}/decide`, await person(), { approve: true })).body.status).toBe('done');
   });
 });

@@ -26,7 +26,9 @@ it off again. Read it before going live, and keep it open the first time you fli
 - **Machines have a print limit** (6 a minute and 1,500 a day by default; *Machines* settings), so a stolen machine key
   can't bill advertisers at scale. Revoke a lost machine's key at once.
 - **The safety limits never come off.** The pause switch, the daily check of the books, the approval rules and the
-  points cap can be made stricter, never weaker, while things are live.
+  points cap can be made stricter, never weaker, while things are live. The pause itself is never removed; what it
+  stops, who presses it and how it's undone are adjustable (*Pause settings*, below), and making any of that weaker is
+  a security change: an owner signed in with the second step, one change at a time, with a reason.
 
 Where things are: the **console** is at `/console` (sign in as an owner). Most switches live under
 **Points and rewards** in its menu: *Launch*, *Points and credit*, *Brand offers*, *The games*, *Blockchain*. Keys
@@ -85,7 +87,7 @@ wait is over. Anyone on the team can cancel a step before it runs.
 | Setting | FreeWater (and every new company) | What it means |
 |---|---|---|
 | **Paying up front** (`requirePrepay`) | On | An advertiser pays by card for a number of bottles before its ad is reviewed. Only paid bottles print. |
-| **Pricing** (`pricingMode`) | Flat | One price per bottle for each size: whole label $1, ½ 65¢, ⅓ 51¢, ¼ 42¢, ⅙ 33¢, ⅛ 24¢, 1/10 20¢, times the product's price factor (the 25 oz bottle is 1.25×). AR, video and scans are included at every size. The auction is for companies that bill after (below). |
+| **Pricing** (`pricingMode`) | Flat | One price per bottle for each size: whole label $1, ½ 65¢, ⅓ 51¢, ¼ 42¢, ⅙ 33¢, ⅛ 24¢, 1/10 20¢, times the product's price factor (the 25 oz bottle is 1.25×). AR, motion video and scans are included at every size; AI video clips are a paid extra. The auction is for companies that bill after (below). |
 | **Fee per scan** (`fees.scan`) | Off (25¢ when on) | Each its own switch and price. When one is on it's charged to the advertiser's card **once a day**, automatically; there's no invoice to wait on. A declined card pauses that advertiser's ads at once (the same pause as credit, below); they start again once the card works and the ad is turned back on. |
 | **Fee per AR launch** (`fees.arLaunch`) | Off (40¢ when on) | |
 | **Fee per box side** (`fees.boxFace`) | Off (the box side price, 40¢) | Off: box sides with a paid ad are included. |
@@ -117,6 +119,15 @@ team to ensure that it was rejected for a valid reason"). The money is already t
 
 While it's flagged the money stays held and nothing prints. An ad not paid up front is reviewed as before. This rule
 is part of *Ad review* on the Features page, which is locked on.
+
+**Who reviews ads** (`adReview.whoReviews`, *Console → Team*; a setting only a person signed in changes, kept in the
+settings history). *Owners and ops* (`owners_ops`, the default and FreeWater's choice) or *owners only* (`owners`).
+Reviewers always review; an ops person is a person signed in, so "a person decides" holds either way. With ops on,
+an ops person reaches only the review screens' routes (*Ops → Review*: ads and their notes and AI talk, changed links
+and link holds, approving or stopping filler and charity pieces), never with a key, never the AI reviewer's settings
+or record, and never a refund (an owner or finance person with the second step). Ads aimed at fewer than 50 houses
+stay with owners and reviewers. *Ops → Review* is shown only to people who review (`GET /v1/me` → `reviewsAds`).
+Filler and charity pieces are decided in their own queue, never in the ads queue.
 
 **The AI reviewer** (*AI reviewer of paid ads*, AI category; docs/AI.md). It looks at every paid ad as it comes in and
 passes it or flags it with its reasons; a flag is a flag like any other (above). On the review page a person can ask
@@ -211,8 +222,10 @@ called. Points are the same whichever item someone picks. The cap (500 million) 
 |---|---|---|
 | **Switch on** | Hourly seals go to the chain as well as GitHub; token steps can run. | Happens with *going live with the token*, or *Blockchain → Propose switching the chain on* (approvals and the wait). |
 | **Switch off** | Nothing touches a blockchain; seals go to GitHub only. | *Blockchain → Switch the chain off now*. Immediate. |
-| **Pause** | Stops every token action at once (minting, conversions, withdrawals). Recorded on the chain. | *Blockchain → Pause now*. **Any one person, immediately, no wait.** It also pauses itself if the daily check finds the books and the chain disagree. |
-| **Unpause** | Lets token actions run again. | *Blockchain → Propose unpausing*: approvals and the wait. |
+| **Pause (token actions)** | Stops every token action at once (minting, conversions, withdrawals). Recorded on the chain. Printing and money go on. | *Blockchain → Pause now*. **Any one person, immediately, no wait.** It also pauses itself if the daily check finds the books and the chain disagree. To stop everything, use *Pause* on the main menu (below). |
+| **Pause (the emergency stop)** | Stops, for this company, what its *Pause settings* say, of what it has switched on: **money** (charity payouts, paying owners, the agents' fund being shared out or spent, brand offers going live or paying out, gift cards, money partners, prize redemptions, and charging advertisers' cards for invoices and fees: those are charged at the next run after unpausing, nothing is lost), **token actions** (minting, conversions, moving tokens out) and **printing** (orders, packs and delivery nights, reprints from the packing check, the free bottle at a machine, paid custom bottles, labels kept ready offline). All three by default. Each answers 423 `paused`; the offers and card-fee jobs skip the company while money is paused. Never stopped: settling money already moving (refunds, stopping a paid ad and paying it back, settling gift cards bought), scans, the books, the team. Kept in the books (`chain_actions`, with what each press stopped), so a restart keeps it. | *Pause* on the console's main menu, **whatever is switched on (the blockchain or not)**: `POST /v1/pause` with a reason. **One owner or finance person (ops people too where the company allows), immediately, no wait, never a key, no second step.** The page lists exactly what pressing will stop (`GET /v1/pause`); where the company allows choosing at press time, the person pressing may **untick printing for that one press** (`printing: false`) to keep a delivery night going. Money and token actions can never be left out at press time; anything can be added. The team is alerted. Ops people press it from the ops console (*Pause*). |
+| **Unpause everything** | Ends every pause in force (the Blockchain page's and the emergency stop): money, token actions and printing run again. | *Pause → Propose unpausing everything* (or *Blockchain → Propose unpausing*): approved by other owners or finance people (2 by default, 1 to 5), then the wait (48 hours by default, at least 1 hour). With the chain switched on, the chain's own rules apply too, whichever is stricter. A pause pressed after it was proposed cancels it. |
+| **Start printing again** (`unpause_printing`) | Printing runs again; money and token actions stay paused. For a mistaken pause on a delivery night. | *Pause → Propose starting printing again*: approved by other owners or finance people (1 by default, 1 to 5), then its own wait (none by default, up to 30 days). With no wait, the last approval starts printing at once. A pause pressed after it was proposed cancels it; a pause pressed after printing started again stops printing again. A test reset keeps it (migration 084). |
 | **Mint** | Makes new tokens into custody. | Proposed, approved, waited, then **signed by the key holders in Squads**. The server can never mint on the real network by itself. Not allowed while live with points (only in testing or with the token). |
 
 **Signing in Squads (the real network):** when an approved mint or conversion runs, its status becomes *signing* and
@@ -223,6 +236,26 @@ signatures can't be cancelled for a week (reject it in Squads instead).
 
 **The daily check** compares the token count in the books with the token count on the chain. If they differ,
 everything pauses and the team is alerted. See *Blockchain → Last daily check*.
+
+**Pause settings** (*Pause → Pause settings*, per company, setting `pause`; each change is kept in the settings history
+in plain words, like "Approvals needed to unpause: 2 → 1"). The pause itself can never be removed: clearing the
+settings, or having it stop nothing, is refused (`test/pause-settings.test.ts`).
+
+| Setting | Default | Range | Weaker means |
+|---|---|---|---|
+| What Pause stops: money / token actions / printing | all three on (the safest) | each on or off, at least one on | turning one off |
+| Let the person pressing keep printing going (choose at press time) | on | on or off | turning it on |
+| Who can press Pause | owners and finance | owners and finance, or owners, finance and ops | (not weaker: more people can stop things; a person signed in changes it) |
+| Unpausing everything: other people who approve | 2 | 1 to 5 (never none) | fewer |
+| Unpausing everything: the wait after the last approval | 48 hours | 1 to 720 hours | shorter |
+| Starting printing again: other people who approve | 1 | 1 to 5 (never none) | fewer |
+| Starting printing again: the wait | none (0) | 0 to 720 hours | shorter |
+
+Making it **stricter** is quick: an owner signed in. Making it **weaker** follows the security-switch rule: an owner
+signed in **with the second sign-in step**, **one change on its own** (a save with anything else in it is refused
+whole), with a **written reason** (10+ characters), never a key, never a restored settings version, never an agent's
+proposal. A step already proposed keeps the rules it was proposed under; a later stricter wait applies to it too.
+Unpausing (either kind) stays with owners and finance, whoever may press.
 
 **Hourly seals:** every hour of the wallet books gets one fingerprint, including the hour before, published to
 GitHub (and the chain when it's on). Anyone can check their own entry at
@@ -245,9 +278,11 @@ GitHub (and the chain when it's on). Anyone can check their own entry at
 | **Archive our agents** | — | *AI agents → Continuity* | Only if the company is closing or leaving. A person signed in types ARCHIVE. Can't be undone: the archive is kept for good. |
 | **Minimum age** | 13 (higher where the law says) | settings (`minimumAge`) | Can only go up (13 to 21). |
 | **Transparency** | Per company | *Transparency* | |
-| **Owners' second sign-in step** | Off | *Security* | Recommended on before going live. |
+| **Public transparency page** | On (FreeWater and new companies) | *Features → Transparency* (`transparency_page`) | A public page at `/transparency?company=<id>` (or on the company's own domain), linked from every scan page and bottle receipt: who the company is, how the free bottle is paid for, its giving (totals from the books, when they're public), how ads are chosen (third-party only; what fills unsold space), what data is kept and how a household says no, how the AI is used (rating, review, the governor), the open books and daily proof, and how to reach it. Built only from the company's own settings and books: never another company's name. The extras are each opt-in and start off for a new company: its switches (*Publish our feature list*) and live counters (*Live counters*). Off: the page and its links are gone (404 `feature_off`). |
+| **Owners' second sign-in step** | Off | *Security* | Recommended on before going live. A **security switch** (section 8, *Security switches*): turning it on is quick; turning it off is its own change, by an owner signed in with the second step, with a reason (10+ characters). **Never a lockout:** it can be turned on (the switch, the setting, a restored version or the security agent's proposal) only once at least one owner has an app set up (else 422 `no_owner_ready`, nothing changed); owners already signed in keep working for the grace period (`security.graceDays`, 0–30, default 7; lengthening it while required is a weakening, with a reason) and see the date; anyone signing in after it's required is signed in with the emailed code and taken to set one up (the setup routes always stay open). |
 | **API keys** | — | *API keys* | Turn off a key at once if it might be lost. |
-| **Label panel** | FreeWater: its real label; others: made from their brand | *Label panel* (`labelPanel`) | Every word, colour, logo, icon (uploaded, in order) and line of the company's panel. Refused if any line doesn't fit the panel of a product at its smallest print size; the message names the line. `null` puts back the one made from the brand. Not money: a key may change it. |
+| **Label panel** | FreeWater: its real label; others: made from their own brand, never FreeWater's | *Label panel* (`labelPanel`) | Every word, colour, logo, icon (uploaded, in order) and line of the company's panel. A new company's starts from its brand: its logo and colours, a *Bottled for <its name>* line (from the Brand page's product facts, editable on the panel as `bottledFor`), and its maker's and contact lines blank. **Bottles don't print until the panel has the company's name, who makes it and how to reach it, and the product says what's inside and where it comes from** (409 `panel_incomplete`, in plain words; the console's Label panel page and Getting started say what's missing). Refused if any line doesn't fit the panel of a product at its smallest print size; the message names the line. `null` puts back the one made from the brand. Not money: a key may change it. |
+| **Own domain** | None: the platform address (`https://<id>.go.freewater.io`) | *Company → Your own domain* (`domain`; `POST /v1/console/domain`, `/verify`) | A person signed in sets it (never a key, never a plain settings save). Codes keep the platform address until the domain's DNS shows the check record; then every new code and link uses it. Codes printed before keep working. An old settings version put back never brings back a domain. One domain per company (migration 080). See docs/RUNNING.md, *A company's own domain*. |
 | **Label size and areas** | Each product's own (the 16 oz bottle: 8 × 4 in, panel 0.85 in on the right, bleed 1/16 in) | Products page per product; `labelGeometry` per company (by product id, or `*`) | Width, height, seam, panel width and side, bleed, image-safe and text-safe areas. Checked: the panel 0.6 in to a third of the label, the safe areas inside the label, and the panel's lines still fitting. Changing the ad area can change which layout templates fit (README, *The label*). |
 
 ### Delivery areas (ops console, *Areas*)
@@ -532,6 +567,7 @@ prices*).
 | **Turning on follows the usual rules.** | Any owner signed in; money, chain and one-way switches need the second sign-in step; gift cards, withdrawals and the chain are turned on only by their approved steps under *Launch* and *Blockchain* (the page links there). |
 | **An AI deciding on its own is earned, never switched on here.** | *Autonomy* switches (*AI makes the final call on paid ads*) are turned on only on their own page, by an owner with the second step, on the AI's record (the page says where); turning them off works here too, and anyone on the team can turn them off on their page. |
 | **One-way stays one-way.** | The AI agents' fund and the giving promise, once on, show "On for good". |
+| **Security is never weakened in passing.** | *Security switches* (below) are never part of a starting point, a bundle of changes, a restored settings version or an agent's proposal. |
 | **Locked items are shown, never switchable.** | The safety governor ("we are never removing a safety governor"), the number line, the pause switch, approvals and waits, the launch stages, the minimum age, privacy rules by place (strictest when unknown), people's rights to their data, the books' audit trail and append-only journals, settling money already in flight, ad review, machines' print limits, the security log. |
 | **One source of truth.** | Switches that already had a setting (the games, the prize game, offers paying out, dollar credit, the chain, open books, the live feed…) are *linked*: they stay in the company's settings and the page changes them through the same checks. A change made on any settings page shows in the switches' history too. |
 | **Every change is kept.** | Who, when, from, to, why (optional) and where (this page, a settings page, an approved step, a starting point), append-only: `GET /v1/console/features/history`. |
@@ -545,12 +581,25 @@ its own choice.
 
 **Starting points** (preview first, then apply): *Full FreeWater*, *Design studio only* (the studio exports print-ready
 files: `POST /v1/studio/export`, an SVG at real size in inches), *Delivery + printed ads*, *Machines + printed ads*. A
-starting point never turns on a money, chain or one-way switch; those are listed for a person to turn on, with
+starting point never turns on a money, chain or one-way switch, and never touches a security switch; those are listed for a person to turn on, with
 what sits under them (for *Delivery + printed ads*: *Money and payments*, *Advertiser invoices and cards*, *Advertisers
 pay up front*, then *Buying on delivery routes*; and *Giving*, set on its own page). With those on, a new company has
 the Austin pilot's setup: house-after-house delivery with photo proof, printed ads at every size on bottles (boxes plain, as FreeWater's),
 route buying, fillers, AR and scans; no machines, fees, bidding or news (`test/spec-pilot-setup.test.ts`). Unsold space
 starts with FreeWater's list (former advertisers, fillers, charity, picks) and never the company's own ads.
+
+**Security switches** (`security` in `src/runtime/registry.ts`): switches whose being off weakens the company's
+security: *Owners need a second sign-in step* and *Link safety* (the safety governor, ad review, the pause switch, the
+security log and approvals are locked on). Turning one **on** is quick. Turning one **off** is done only on its own (a
+change with anything else in it is refused whole), by an owner signed in **with the second sign-in step**, with a
+written reason of at least 10 characters; it's kept in the switches' history and the team is alerted. A starting point
+never changes one (the preview says "Left on"), turning off its parent leaves its own choice as it was (it's off with
+the parent and back with it), a settings version put back that would turn one off is refused, and so is any other save
+that skips these checks (an agent's proposal). `test/security-switches.test.ts` checks every starting point, preset
+and bundle. The same rule covers **weakening the pause** (*Pause settings*, section 3: stopping less, letting the
+person pressing leave printing out, fewer approvals or a shorter wait to undo it), one change at a time
+(`securityWeakened` in `src/runtime/registry.ts`, `pauseWeakened` in `src/modules/chain/pause.ts`;
+`test/pause-settings.test.ts`).
 
 **The page:** the main switches as cards, the starting points, *Every switch* (categories → groups → switches) with a
 search box and filters (on, off, different from FreeWater, locked, new); each switch shows what it does, what it
@@ -586,7 +635,7 @@ Code: `src/modules/ads/linkSafety.ts`, the list `src/modules/ads/link-blocklist.
 
 | Switch | FreeWater | Every company | What it does |
 |---|---|---|---|
-| **Link safety** (`link_safety`) | on | **on** (new and existing: `since: 1`) | Every link an ad leads to is checked automatically before a person reviews it, and every live link again each day. Turned off **only by an owner signed in, with a written reason** (10+ characters), recorded in the switches' history, and the team is alerted; a starting point never turns it off. Off: only the basic checks run (https, no password, no address or private name), and people still review every link. |
+| **Link safety** (`link_safety`) | on | **on** (new and existing: `since: 1`) | Every link an ad leads to is checked automatically before a person reviews it, and every live link again each day. Turned off **only by an owner signed in with the second sign-in step, on its own, with a written reason** (10+ characters; a security switch, section 8), recorded in the switches' history, and the team is alerted; a starting point never turns it off. Off: only the basic checks run (https, no password, no address or private name), and people still review every link. |
 
 **What is checked, every link** (a new ad's, a changed link, a QR code's static address, a version's link: anything an
 ad leads to, by every route: the ad chat and upload page, `POST /v1/campaigns`, `PATCH /v1/campaigns/:id`, `PATCH

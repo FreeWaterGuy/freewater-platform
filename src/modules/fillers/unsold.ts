@@ -189,6 +189,9 @@ const BLANK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><
 /** The plain piece's campaign id for a company: blank-coloured, no words, never an ad of anyone's. */
 export const blankCampaignId = (companyId: string) => `cmp-${companyId}-blank`;
 
+/** The blank piece's campaign: a placeholder, never anyone's ad (left out of every list of advertisers and ads). */
+export const isPlaceholder = (c: Pick<Campaign, 'id' | 'companyId'>) => c.id === blankCampaignId(c.companyId);
+
 /** A plain, blank-coloured piece: the last resort when nothing third-party fits and no tidier template could do without it. */
 export function blankCampaign(companyId: string): Campaign {
   return {
@@ -351,7 +354,7 @@ export class UnsoldSpace {
   private picks(ctx: UnsoldContext): Campaign[] {
     const now = this.clock();
     return unsoldSettings(ctx.company).picks.map((id) => this.platform.campaigns.get(id)).filter((c): c is Campaign =>
-      !!c && !isOwnPiece(c, ctx.company.id) && c.id !== blankCampaignId(ctx.company.id) && (c.filler ? c.filler.status === 'approved' : true)
+      !!c && c.companyId === ctx.company.id && !isOwnPiece(c, ctx.company.id) && c.id !== blankCampaignId(ctx.company.id) && (c.filler ? c.filler.status === 'approved' : true)
       && (c.isHouse ? !!c.filler : this.bonusAllowed(ctx.company.id, c.advertiserId) && !this.isRefused(ctx.company.id, c.advertiserId))
       && this.fitsHere(c, ctx) && !notCurrent(c, now, this.lastPaid.has(c.id) ? new Date(this.lastPaid.get(c.id)!) : undefined));
   }
@@ -377,13 +380,17 @@ export class UnsoldSpace {
     const format = ctx.format ?? 'label';
     const fillerPool = fillersOn ? this.fillers.pool({ company, product: ctx.product, location: ctx.location, audience: ctx.audience }).filter((c) => (c.formats ?? ['label']).includes(format) && !(ctx.blockedAdvertisers ?? []).includes(c.advertiserId)) : [];
     const sources: { kind: UnsoldKind; pick: (share: Share | null, onBottle: Campaign[], taken: Map<string, number>, random: () => number) => Campaign | undefined }[] = [];
-    const fits = (c: Campaign, share: Share | null) => share === null || c.sizes.includes(share);
+    // A piece goes in at a size its ad was made for; artwork laid out for any box (a poster or a studio design: the
+    // team's charity and own pieces, ads designed here) may also take a size it wasn't made for, but only after nothing
+    // on the list fits that piece as made (see `fill`).
+    let any = false;
+    const fits = (c: Campaign, share: Share | null) => share === null || c.sizes.includes(share) || (any && flexible(c));
     for (const src of s.order) {
       if (src === 'former_advertisers') {
         // Each advertiser's ads that fit a size, worked out once a bottle (the engine asks for many labels).
         const former = [...this.formerAds(ctx).entries()].sort(([a], [b]) => a.localeCompare(b));
-        const bySize = new Map<Share | null, { adv: string; ads: Campaign[] }[]>();
-        const forSize = (share: Share | null) => { let l = bySize.get(share); if (!l) bySize.set(share, (l = former.map(([adv, ads]) => ({ adv, ads: ads.filter((c) => fits(c, share)) })).filter((x) => x.ads.length))); return l; };
+        const bySize = new Map<string, { adv: string; ads: Campaign[] }[]>();
+        const forSize = (share: Share | null) => { const key = `${share}:${any}`; let l = bySize.get(key); if (!l) bySize.set(key, (l = former.map(([adv, ads]) => ({ adv, ads: ads.filter((c) => fits(c, share)) })).filter((x) => x.ads.length))); return l; };
         sources.push({ kind: 'former_advertiser', pick: (share, onBottle, taken, random) => {
           // Fair turns: the advertiser with the fewest bonus pieces so far (this bottle's picks counted too), ties drawn.
           let least = Infinity, tied: Campaign[] = [];
@@ -415,20 +422,27 @@ export class UnsoldSpace {
     return {
       blank,
       ...(own ? { house: own } : {}),
+      misfits: (placed) => placed.filter((p) => p.unsold && p.unsold !== 'neutral' && !camp(p.campaignId)?.sizes.includes(p.share)).length,
       fill: (open, placed, random) => {
         const onBottle = placed.map((p) => camp(p.campaignId)).filter((c): c is Campaign => !!c);
         const taken = new Map<string, number>();
         const out: Placement[] = [];
-        for (const o of [...open].sort((a, b) => a.share - b.share || a.slotIndex - b.slotIndex)) {
-          for (const src of sources) {
-            const c = src.pick(o.share, onBottle, taken, random);
-            if (!c) continue;
-            onBottle.push(c);
-            if (src.kind === 'former_advertiser') taken.set(c.advertiserId, (taken.get(c.advertiserId) ?? 0) + 1);
-            out.push(piece(o, c, src.kind));
-            break;
+        // First every piece at sizes the ads were made for; then what's still open with artwork that lays out at any size.
+        for (const pass of [false, true]) {
+          any = pass;
+          for (const o of [...open].sort((a, b) => a.share - b.share || a.slotIndex - b.slotIndex)) {
+            if (out.some((p) => p.slotIndex === o.slotIndex)) continue;
+            for (const src of sources) {
+              const c = src.pick(o.share, onBottle, taken, random);
+              if (!c) continue;
+              onBottle.push(c);
+              if (src.kind === 'former_advertiser') taken.set(c.advertiserId, (taken.get(c.advertiserId) ?? 0) + 1);
+              out.push(piece(o, c, src.kind));
+              break;
+            }
           }
         }
+        any = false;
         return out;
       },
       face: (face, onBox, random) => {
@@ -470,6 +484,9 @@ export class UnsoldSpace {
     return { settings: s, sources: UNSOLD_SOURCES.map((id) => ({ id, label: UNSOLD_SOURCE_LABELS[id] })), formerAdvertisers: [...advertisers.values()].sort((a, b) => a.name.localeCompare(b.name)), picks, choices, blanks: this.blanks.get(companyId) ?? { count: 0, last: null } };
   }
 }
+
+/** Artwork laid out for whatever box it's given (a poster, a studio design), not files made for set sizes. */
+export const flexible = (c: Campaign) => c.creativeRef?.kind === 'poster' || c.creativeRef?.kind === 'studio';
 
 function weighted<T extends Campaign>(items: T[], random: () => number): T | undefined {
   if (!items.length) return undefined;
