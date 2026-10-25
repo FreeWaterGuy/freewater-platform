@@ -474,7 +474,7 @@ describe('modules work alone', () => {
       if (app.companyFeatures.on('freewater', 'printing')) expect((await print()).ok).toBe(true);
       } finally { await restore('freewater', was); }
       for (const s of SWITCHES.filter((x) => x.kind === 'feature')) expect(app.companyFeatures.own('freewater', s), `${s.id} after ${main}`).toBe(was.get(s.id));
-    }, 120_000);
+    }, 360_000); // walks every route with one area off: minutes on a slow CI runner
   }
 });
 
