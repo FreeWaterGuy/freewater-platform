@@ -1,11 +1,13 @@
 import { claudeWithTool } from '../ai/anthropic';
 import type { MotionScene, MotionSpec, StoryWriter, VideoBrief } from './contract';
+import { shortenWords } from '../../core/shorten';
 
 // Motion storyboards: 4 to 6 short scenes in the advertiser's colors, cut for the moment. Every word comes from the
 // advertiser's own ad or from a short list of lines written for each kind of moment; Claude, when used, may only
 // rearrange and tighten the advertiser's words, and everything it writes is checked.
 
-const clip = (s: string | undefined, n: number) => (s ? s.replace(/\s+/g, ' ').trim().slice(0, n) : undefined);
+/** Words for a scene, shortened between words (never mid-word). */
+const clip = (s: string | undefined, n: number) => (s ? shortenWords(s, n) : undefined);
 
 /** Plain words only: short, no links, phone numbers, shouting or code. */
 export function cleanLine(t: unknown, max = 60): string | null {

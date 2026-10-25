@@ -25,7 +25,7 @@ import type { AdAssistant, ChatMessage } from '../ai/contract';
 import { starterSuggestions } from '../ai/builtinAssistant';
 import { allowedSizes, applyPatch, draftTargeting, estimate, missing, missingLabel, themeFromPoster, type AdDraft } from './draft';
 import { withCompany } from '../ai/routing';
-import { adBilling, extraPrice, feesOnWords, prepaidModel } from './billing';
+import { adBilling, extraPrice, feesOnWords, includedWords, prepaidModel } from './billing';
 import type { PrepaidService, Quote } from './prepaid';
 import { adWords, KIND_SWITCH, ROUTE_KINDS, routeKindWords, type RouteBuyService, type RouteQuoteInput } from './routeBuys';
 import { siteBase } from '../../core/site';
@@ -330,7 +330,7 @@ export class AdsService {
     const company = this.platform.companies.get(companyId)!;
     const b = adBilling(company);
     return {
-      minBottles: 100, changeFeeCents: b.changeFeeCents, included: 'AR, video and scans are included at every size',
+      minBottles: 100, changeFeeCents: b.changeFeeCents, included: includedWords(company, this.platform.featureOn),
       feesOn: feesOnWords(company, this.platform.featureOn),
       extras: Object.entries(b.extras.perUse).map(([id, x]) => ({ id, label: x.label, perUseCents: extraPrice(company, id)! })),
       // Buying on the delivery routes, where it's on (the review page has the picker; the chat explains it).

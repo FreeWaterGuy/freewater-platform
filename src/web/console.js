@@ -702,7 +702,7 @@
         unsoldSection(ctx),
         section('Categories you won’t print', 'Tap to block. Advertisers in a blocked category can’t sign up or run ads.', chips),
         (ctx.draft.adBilling?.pricingMode ?? 'flat') === 'flat'
-          ? section('Price per bottle, by size', 'One flat price per bottle for each size of ad, everything included (AR, video and scans). Each piece is cut as close to square as the label allows.', h('div', { class: 'form' },
+          ? section('Price per bottle, by size', 'One flat price per bottle for each size of ad, AR, motion video and scans included (AI video clips are a paid extra, priced below). Each piece is cut as close to square as the label allows.', h('div', { class: 'form' },
             ...sizes.map(([k, l]) => num(ctx, `prices.perPrintByShare.${k}`, l, { min: 0, max: 10000, suffix: '¢', hint: (v) => `${dollars(v ?? 0)} a bottle` }))))
           : section('Starting prices', 'Per bottle printed, by how much of the label the ad gets. Bids start at the whole label’s price and go up; smaller pieces pay the same share of a bid. Each piece is cut as close to square as the label allows.', h('div', { class: 'form' },
             ...sizes.map(([k, l]) => num(ctx, `prices.perPrintByShare.${k}`, l, { min: 0, max: 10000, suffix: '¢', hint: (v) => (k === 1 ? `Bids start at ${dollars(v ?? 0)}.` : `${dollars(v ?? 0)} a bottle`) })))),
@@ -717,7 +717,7 @@
           num(ctx, 'prices.customUnit', 'A custom bottle (what people pay)', { min: 0, max: 10000, suffix: '¢', hint: (v) => dollars(v ?? 0) }))),
         // How advertisers pay (docs/SWITCHES.md). Paying up front, bidding and each fee are switched on the Features page.
         ctx.draft.adBilling ? section('How advertisers pay', ctx.draft.adBilling.requirePrepay
-          ? 'Up front, by card, for a number of bottles, at the prices above (AR, video and scans included). Each fee below is charged only when it’s switched on (Features → Money and payments), to the card once a day. Saving these needs the second sign-in step.'
+          ? 'Up front, by card, for a number of bottles, at the prices above (AR, motion video and scans included; AI video clips are a paid extra). Each fee below is charged only when it’s switched on (Features → Money and payments), to the card once a day. Saving these needs the second sign-in step.'
           : 'Billed afterwards, on invoices, with credit limits (Features → Money and payments → Bill advertisers afterwards). Saving these needs the second sign-in step.', h('div', { class: 'form' },
           num(ctx, 'adBilling.changeFeeCents', 'Fee for changing a running ad', { min: 0, max: 100000, suffix: '¢', hint: (v) => `${dollars(v ?? 0)}, paid up front. The new ad is reviewed before it prints.` }),
           num(ctx, 'adBilling.linkChangeFeeCents', 'Fee for changing a link on a live ad', { min: 0, max: 100000, suffix: '¢', hint: (v) => `${dollars(v ?? 5000)}, paid up front, while Change a link (fee) is on (Features → Money and payments). The new link is reviewed.` }),

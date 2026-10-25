@@ -160,14 +160,14 @@
       h('tbody', {}, list.map((t) => h('tr', {}, h('td', {}, h('code', { text: t.number })), h('td', { text: day(t.sentAt) }), h('td', { text: t.charity }), h('td', { class: 'r', text: usd(t.amountCents) }), h('td', { text: `${plural(t.bottles.toLocaleString(), 'bottle', 'bottles')}` }),
         h('td', {}, h('span', { title: `Bank reference ${t.bankReference}`, class: `pill ${t.status === 'confirmed' ? 'ok' : ''}`, text: t.status === 'confirmed' ? 'Charity confirmed' : `Sent · ${t.bankReference}` })))))));
   }
-  const lookupBox = () => { const input = h('input', { id: 'code', placeholder: 'Bottle code, like u_7f3a…', 'aria-label': 'Bottle code', autocomplete: 'off' }); return h('form', { class: 'lookup', onsubmit: (e) => { e.preventDefault(); const v = input.value.trim().replace(/^.*\/r\//, ''); if (v) go(`/books/bottle/${encodeURIComponent(v)}${q()}`); } }, input, h('button', { class: 'btn', type: 'submit' }, 'Look up a bottle')); };
+  const lookupBox = () => { const input = h('input', { id: 'code', placeholder: 'Bottle code, like B-7F3K29', 'aria-label': 'Bottle code', autocomplete: 'off' }); return h('form', { class: 'lookup', onsubmit: (e) => { e.preventDefault(); const v = input.value.trim().replace(/^.*\/r\//, ''); if (v) go(`/books/bottle/${encodeURIComponent(v)}${q()}`); } }, input, h('button', { class: 'btn', type: 'submit' }, 'Look up a bottle')); };
 
   // ---------- a bottle ----------
   async function bottlePage(code) {
     if (!code && !state.summary) await summary().catch(() => null);
     if (!code) return page('bottle', h('h1', { class: 'lead', text: 'Look up a bottle' }), h('p', { class: 'sub', text: 'Scan the QR on the black panel of any bottle, or type the code under it. You’ll see exactly what that bottle earned, what it cost, and where its donation went.' }), lookupBox());
     let b;
-    try { b = await api(`/v1/public/bottles/${encodeURIComponent(code)}`); } catch (e) {
+    try { b = await api(`/v1/public/bottles/${encodeURIComponent(code)}${params().get('company') ? `?company=${encodeURIComponent(params().get('company'))}` : ''}`); } catch (e) {
       if (notPublic(e)) return page('bottle', h('h1', { class: 'lead', text: 'These books aren’t public' }), h('p', { class: 'sub', text: 'That bottle’s company doesn’t publish its books, so its numbers can’t be shown here.' }), lookupBox());
       return page('bottle', h('h1', { class: 'lead', text: 'No bottle has that code' }), h('p', { class: 'sub', text: 'Check the code under the QR on the black panel and try again.' }), lookupBox()); }
     // A bottle's receipt is in its own company's brand, whatever address it was opened from.
@@ -182,7 +182,7 @@
     if (b.earned.custom) earned.push(['Custom design, paid by the customer', cents1(b.earned.custom)]);
     const costTotal = uc ? uc.reduce((a, c) => a + c.cents, 0) : 0;
     page('bottle', h('div', { class: 'receipt' },
-      h('div', {}, h('div', { class: 'eyebrow', text: `Open books · from ${b.company}` }), h('h1', { class: 'lead', style: 'font-size:32px', text: 'This bottle’s receipt' }), h('p', { class: 'sub', text: `${b.unitId} · ${b.printedFresh}, ${new Date(b.printedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` })),
+      h('div', {}, h('div', { class: 'eyebrow', text: `Open books · from ${b.company}` }), h('h1', { class: 'lead', style: 'font-size:32px', text: 'This bottle’s receipt' }), h('p', { class: 'sub', text: `Bottle code ${b.bottleCode} · ${b.printedFresh}, ${new Date(b.printedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` })),
       h('section', { class: 'card' }, h('div', { class: 'eyebrow', style: 'margin-bottom:6px', text: 'What it earned' }), rows(earned.length ? earned : [['Nothing yet', '0¢']]), h('div', { class: 'ledger-row', style: 'border-top:1.5px solid var(--ink)' }, h('b', { text: 'Total earned' }), h('b', { text: cents1(b.earned.total) }))),
       uc ? h('section', { class: 'card' }, h('div', { class: 'eyebrow', style: 'margin-bottom:6px', text: 'What it cost (standard cost)' }), rows(b.costLines.map((c) => [c.label, `${c.cents}¢`])), h('div', { class: 'ledger-row', style: 'border-top:1.5px solid var(--ink)' }, h('b', { text: 'Total cost' }), h('b', { text: `${costTotal}¢` }))) : null,
       b.giving ? h('div', { class: 'gift' }, h('b', { text: `${cents1(b.giving.cents)} to ${b.giving.charity}` }), b.giving.transfer ? h('span', {}, `Sent ${day(b.giving.transfer.sentAt)} in transfer ${b.giving.transfer.number}, bank reference ${b.giving.transfer.bankReference}${b.giving.transfer.status === 'confirmed' ? '. The charity confirmed it arrived.' : '.'}`) : h('span', { text: 'Owed now, and sent with the next transfer once the total reaches the minimum.' })) : !b.givingOn ? h('p', { class: 'sub', text: `${b.company} doesn’t donate per bottle.` }) : null,

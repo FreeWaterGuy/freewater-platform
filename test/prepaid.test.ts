@@ -115,7 +115,7 @@ describe('quote, pay, review, print: only paid bottles', () => {
     const c = await newAd(app, 4);
     const q = app.prepaid.quote('freewater', { bottles: 1000, share: 4 }, c.sizes);
     expect(q).toMatchObject({ bottles: 1000, share: 4, perBottleCents: 42, bottlesCents: 42_000, totalCents: 42_000, feesOn: [], changeFeeCents: 10_000 });
-    expect(q.included).toMatch(/AR, video and scans/);
+    expect(q.included).toBe('AR, motion video and scans are included, at every size; AI video clips are extra.');
     // The 25 oz bottle's ads cost 1.25×; an AI video clip costs $3 and is marked up 50%.
     const big = app.prepaid.quote('freewater', { bottles: 1000, share: 4, productId: 'bottle-25oz', extras: { aiVideoClip: 2 } }, c.sizes);
     expect(big).toMatchObject({ perBottleCents: 53, bottlesCents: 53_000, extrasCents: 900, totalCents: 53_900 });

@@ -12,7 +12,8 @@ import type { StickerSetting } from './boxSettings';
  *  - the pack's QR code, the same address the info strip's code holds when boxes are printed (the driver scans it at
  *    the door; a household scans it to say which house is theirs, or to open the pack's receipt);
  *  - "Box code: 7K2Q F8MN 3XPA RT", the whole code for typing in when the QR won't scan;
- *  - the drivers' stop code and the box's short number, as the corner of a printed box has them.
+ *  - for the driver, labelled: "Stop R3 · 14" (route 3, stop 14) and "Box #4886F" (the box's short number, the one the
+ *    driver app names: "Scan box #4886F"). Neither is the box code; both are said in words so nobody reads them as one.
  * Every word is an outline, like the labels'. Its size, side, spot and colours are the company's, per pack size
  * (boxSettings.ts); 2 × 2 in, black on white, unless set.
  */
@@ -34,7 +35,8 @@ export function renderSticker(o: { company: CompanyConfig; packId: string; packU
   const code = typedBoxCode(o.packUrl, o.packId);
   const line = `Box code: ${code}`;
   // The words as big as they fit across (a bold sans letter is about 0.6 of its size wide), within the sticker's height.
-  const top = Math.max(9, Math.min(16, H * 0.075));
+  const stopWords = `Stop ${stopCode(o.routeId, o.stop)}`, boxWords = `Box #${boxNumber(o.packId)}`;
+  const top = Math.max(7, Math.min(16, H * 0.075, (W - 3 * m) / ((stopWords.length + boxWords.length) * 0.6)));
   const bottom = Math.max(7, Math.min(H * 0.08, (W - 2 * m) / (line.length * 0.6)));
   const qrTop = m + top + m * 0.5, qrBottom = H - m - bottom - m * 0.6;
   const q = Math.max(0, Math.min(W - 2 * m, qrBottom - qrTop));
@@ -42,8 +44,8 @@ export function renderSticker(o: { company: CompanyConfig; packId: string; packU
   const parts = [
     `<rect x="0" y="0" width="${W}" height="${H}" rx="${m}" fill="${st.color}"/>`,
     `<rect x="1.5" y="1.5" width="${W - 3}" height="${H - 3}" rx="${m - 1}" fill="none" stroke="${st.ink}" stroke-width="1.5"/>`,
-    `<text x="${m}" y="${m + top * 0.85}" ${font} font-weight="700" font-size="${top}" fill="${st.ink}">${esc(stopCode(o.routeId, o.stop))}</text>`,
-    `<text x="${W - m}" y="${m + top * 0.85}" text-anchor="end" ${font} font-weight="700" font-size="${top}" fill="${st.ink}">#${esc(boxNumber(o.packId))}</text>`,
+    `<text x="${m}" y="${m + top * 0.85}" ${font} font-weight="700" font-size="${top}" fill="${st.ink}">${esc(stopWords)}</text>`,
+    `<text x="${W - m}" y="${m + top * 0.85}" text-anchor="end" ${font} font-weight="700" font-size="${top}" fill="${st.ink}">${esc(boxWords)}</text>`,
     qrSvg(o.packUrl, (W - q) / 2, qrTop, q, 'H', companyQrStyle(o.company)),
     `<text x="${W / 2}" y="${H - m - bottom * 0.2}" text-anchor="middle" ${font} font-weight="700" font-size="${bottom.toFixed(2)}" fill="${st.ink}">${esc(line)}</text>`,
   ];

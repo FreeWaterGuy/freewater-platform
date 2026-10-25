@@ -274,7 +274,7 @@
   const pitch = () => h('div', { class: 'left' },
     h('div', { class: 'logo' }, h('span', { text: state.config?.brand?.logoTop ?? '' }), h('span', { text: state.config?.brand?.logoBottom ?? '' }), h('small', { text: 'Ads' })),
     h('div', {}, h('h1', {}, 'Put your brand in ', h('span', { text: 'everyone’s hand.' })),
-      h('ul', {}, h('li', { text: 'Your ad prints on free bottles of water, fresh, one at a time.' }), h('li', { text: 'Pay for prints, scans, AR launches and sales. Nothing else.' }), h('li', { text: 'Make the ad by chatting. Review it before it prints.' }))),
+      h('ul', {}, h('li', { text: 'Your ad prints on free bottles of water, fresh, one at a time.' }), state.config?.adsPayFor ? h('li', { text: state.config.adsPayFor }) : null, h('li', { text: 'Make the ad by chatting. Review it before it prints.' }))),
     h('p', { style: 'opacity:.6;font-size:13px;margin:0', text: 'Every bottle gives to charity, and the books are open.' }));
   function authScreen() {
     let to = '';
@@ -688,7 +688,7 @@
     return box;
   }
   // How ads are paid for here, in plain words (prepaid: up front, per bottle; otherwise billed after the fact).
-  const prepaidTerms = (b) => `You pay up front for a number of bottles, and exactly that many go out with your ad: there's no end date and nothing to cancel, and pausing only delays. ${b.included}. ${b.feesOn.length ? `On top: ${b.feesOn.join(', ')}, charged to your card each day.` : 'Nothing is charged per scan, AR launch or sale.'} Changing a running ad costs ${dollars(b.changeFeeCents)}, paid when you submit the change.`;
+  const prepaidTerms = (b) => `You pay up front for a number of bottles, and exactly that many go out with your ad: there's no end date and nothing to cancel, and pausing only delays. ${b.included} ${b.feesOn.length ? `On top: ${b.feesOn.join(', ')}, charged to your card each day.` : 'Nothing is charged per scan, AR launch or sale.'} Changing a running ad costs ${dollars(b.changeFeeCents)}, paid when you submit the change.`;
   async function overview() {
     const o = await api('GET', '/v1/ads/overview?days=14');
     state.business = o.advertiser;
@@ -762,7 +762,7 @@
         h('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:4px' }, h('span', { class: `status ${c.status}`, text: statusText[c.status] })),
         h('h3', { text: c.name }),
         linkChangeNotice(c.linkChange),
-        h('div', { class: 'meta', text: `${c.route ? `On delivery routes: ${routeKind(c.route.kind) ?? c.route.kind}, ${plural(num(c.route.houses), 'house', 'houses')}` : c.where === 'all' ? 'Every machine' : c.where.join(', ')} · ${budget} · ${onBoxes(c.formats) ? 'bottles and boxes' : 'bottles'}` }),
+        h('div', { class: 'meta', text: `${c.route ? `On delivery routes: ${routeKind(c.route.kind) ?? c.route.kind}, ${plural(num(c.route.houses), 'house', 'houses')}` : c.where === 'all' ? 'Every machine' : c.where.join(', ')} · ${budget}${onBoxes(c.formats) ? ' · on bottles and delivery boxes' : ''}` }),
         h('div', { class: 'nums' }, [['Bottles', num(r.prints)], ['Scans', num(r.scans)], ['AR', num(r.arLaunches)], ['Spent', dollars(r.spendCents)]].map(([k, v]) => h('div', {}, h('b', { text: v }), k))),
         c.status === 'not_approved' && c.review?.note && !paid ? h('div', { class: 'note' }, h('b', { text: 'What to change: ' }), c.review.note) : null,
         paid && (c.status === 'being_discussed' || c.status === 'not_approved') ? reviewNotes(c) : null,
@@ -986,7 +986,7 @@
         // Paid up front: the exact total for the bottles (or the change fee), before anything is charged.
         const pay = d.payment, q = pay.kind === 'bottles' ? pay.quote : null;
         const rows = pay.kind === 'change' ? [['Changing this ad (paid when you submit the change)', dollars(pay.feeCents)], ['Your bottles', 'unchanged: the ones not printed yet carry the new ad once it’s approved']]
-          : q ? [[`${plural(num(q.bottles), 'bottle', 'bottles')} with your ad on ${sizeName(q.share)}`, `${cents(q.perBottleCents)} each`], ['AR, video and scans', 'included'], ['You pay up front', dollars(q.totalCents)]] : [];
+          : q ? [[`${plural(num(q.bottles), 'bottle', 'bottles')} with your ad on ${sizeName(q.share)}`, `${cents(q.perBottleCents)} each`], ['Included', q.included], ['You pay up front', dollars(q.totalCents)]] : [];
         stage.replaceChildren(h('table', { class: 'cost' }, h('tbody', {}, rows.map(([a, b]) => h('tr', {}, h('td', { text: a }), h('td', { text: b }))))),
           h('p', { class: 'caption', style: 'text-align:left', text: pay.kind === 'change' ? 'The new ad is reviewed before it prints.' : q ? 'Exactly that many bottles go out. You can pick another size before you pay.' : pay.problem }));
       } else if (tab === 'cost') {
@@ -1094,7 +1094,7 @@
         h('div', {}, h('span', { text: 'Prints on' }), onBoxes(dr.formats) ? 'Bottles and delivery boxes' : 'Bottles'),
         pay?.kind === 'bottles' && quote ? h('div', {}, h('label', { for: 'pay-size', text: 'Size you pay for' }), sizePick) : null,
         ...extraInputs.map(({ x, input }) => h('div', {}, h('span', { text: `${x.label} (${dollars(x.perUseCents)} each, paid now)` }), input)),
-        pay?.kind === 'bottles' ? h('div', {}, h('span', { text: 'You pay now' }), totalEl, ' ', payLine, h('br'), h('small', { text: terms ? prepaidTerms(terms) : 'AR, video and scans included.' }))
+        pay?.kind === 'bottles' ? h('div', {}, h('span', { text: 'You pay now' }), totalEl, ' ', payLine, h('br'), terms || quote?.included ? h('small', { text: terms ? prepaidTerms(terms) : quote.included }) : null)
           : pay?.kind === 'change' ? h('div', {}, h('span', { text: 'You pay now' }), `${dollars(pay.feeCents)} to change it. Your bottles stay as they are; the ones not printed yet carry the new ad once it's approved.`)
           : h('div', {}, h('span', { text: 'You pay' }), `${Object.entries(d.estimate.perPrintCents).map(([s, c]) => `from ${cents(c)} per bottle for ${sizeName(s)}`).join(', ')}; ${cents(d.estimate.perScanCents)} per scan; ${cents(d.estimate.perArLaunchCents)} per AR launch; ${d.estimate.commissionPercent}% of sales`)),
       ratingBox(() => api('GET', `/v1/ads/drafts/${id}/rating`)),

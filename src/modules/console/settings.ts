@@ -15,6 +15,7 @@ import { checkUnsold } from '../fillers/unsold';
 import { templateById } from '../ads/layouts';
 import { checkPanelSettings } from '../print/panel';
 import { checkBoxSettings, mergeBoxSettings } from '../packs/boxSettings';
+import { shortenWords } from '../../core/shorten';
 
 const GEOMETRY_KEYS = ['widthIn', 'heightIn', 'seamIn', 'panelWidthIn', 'panelSide', 'bleedIn', 'imageSafe', 'textSafe', 'minQrIn'];
 /**
@@ -354,7 +355,7 @@ const labels: Record<string, string> = {
   'lottery.enabled': 'Prize game', 'lottery.oddsPercent': 'Chance of winning', 'lottery.chancesPerDay': 'Chances per person a day', 'lottery.winsPerDay': 'Prizes per person a day', 'lottery.watchSeconds': 'Watching before the ball', 'lottery.ballMs': 'Time the ball is on screen', 'lottery.prizes': 'Prizes', 'lottery.minAge': 'Youngest age to play', 'lottery.rulesUrl': 'Official rules link', 'lottery.rulesText': 'Rules note',
 };
 const deep = new Set(['boxes', 'brand', 'giving', 'consumer', 'machines', 'qr', 'ar', 'adRules', 'prices', 'modules', 'lottery', 'transparency', 'agents', 'security', 'adBilling', 'delivery', 'unsold', 'adReview']);
-const show = (v: unknown) => (v === undefined ? 'none' : typeof v === 'string' ? (v.length > 30 ? `${v.slice(0, 28)}…` : v || 'blank') : typeof v === 'boolean' ? (v ? 'on' : 'off') : Array.isArray(v) ? (v.length ? v.join(', ').slice(0, 40) : 'none') : typeof v === 'object' && v ? 'changed' : String(v));
+const show = (v: unknown) => (v === undefined ? 'none' : typeof v === 'string' ? (shortenWords(v, 30) || 'blank') : typeof v === 'boolean' ? (v ? 'on' : 'off') : Array.isArray(v) ? (v.length ? v.join(', ').slice(0, 40) : 'none') : typeof v === 'object' && v ? 'changed' : String(v));
 
 /** What changed, as a short list a person can read in the history. */
 export function describeChange(before: CompanyConfig, after: CompanyConfig): string[] {

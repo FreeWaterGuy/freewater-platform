@@ -4,7 +4,7 @@ import type { Platform } from '../../platform';
 import { SHARES, type Campaign, type PrepaidBottles, type Share } from '../../core/types';
 import { newId } from '../../core/ids';
 import { AdsError } from './service';
-import { adBilling, chargeLimitProblem, anyFeeOn, extraPrice, feesOnWords, prepaidModel } from './billing';
+import { adBilling, chargeLimitProblem, anyFeeOn, extraPrice, feesOnWords, includedWords, prepaidModel } from './billing';
 import { shareLabel } from './layouts';
 import { prepaidLeft, syncPrepaidBuy } from './budget';
 import { PaymentError, PaymentsService } from '../payments/service';
@@ -81,7 +81,7 @@ export class PrepaidService {
     const feesOn = feesOnWords(company, this.platform.featureOn);
     return {
       bottles, share, size: shareLabel(share), productId: product.id, product: product.name, perBottleCents, bottlesCents, extras, extrasCents, totalCents: bottlesCents + extrasCents,
-      included: 'AR, video and scans are included, at every size.', feesOn, changeFeeCents: b.changeFeeCents,
+      included: includedWords(company, this.platform.featureOn), feesOn, changeFeeCents: b.changeFeeCents,
     };
   }
 

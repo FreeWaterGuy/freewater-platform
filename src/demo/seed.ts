@@ -99,7 +99,7 @@ export const freewater: CompanyConfig = {
   unitCosts: { water: 4, bottle: 18, label: 3, machine: 6 }, // placeholders until real costs are known
   adRules: { minAdsPerUnit: 1, maxAdsPerUnit: 10, blockedCategories: ['alcohol', 'tobacco', 'gambling', 'weapons'], competitorSeparation: true, repeatScanWindowSec: 600, maxPackShare: 0.5 },
   prices: freewaterPrices,
-  // The pilot: advertisers pay up front for their bottles at these flat prices, AR, video and scans included. Fees on
+  // The pilot: advertisers pay up front for their bottles at these flat prices, AR, motion video and scans included (AI video clips extra). Fees on
   // top (per scan, per AR launch, per box side, commission) are each off until a person turns one on.
   adBilling: defaultAdBilling(),
   modules: { ads: 'freewater-ads', renderer: 'svg-label', printer: 'virtual-printer' },

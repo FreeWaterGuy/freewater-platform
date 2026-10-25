@@ -5,7 +5,7 @@ import { houseAd } from '../modules/fillers/house';
 import { createHash } from 'node:crypto';
 import type { App } from '../app';
 import type { ApiKey } from '../db/store';
-import type { Unit } from '../core/types';
+import type { CompanyConfig, Unit } from '../core/types';
 import { newId } from '../core/ids';
 import { isEligible } from '../modules/ads/engine';
 import { checkSvgPictures, svgCreative } from '../modules/print/svgCreative';
@@ -13,7 +13,8 @@ import { givingLine, PX_PER_IN } from '../modules/print/renderer';
 import { MachinePresence } from '../modules/machines/presence';
 import { DesignService } from '../modules/custom/service';
 import { ApiError, notFound, obj, S, type RouteDef } from './http';
-import { printedFresh } from '../modules/books/bottleReceipt';
+import { householdPlace, printedFresh } from '../modules/books/bottleReceipt';
+import { paysForWords } from '../modules/ads/billing';
 
 /**
  * What the FreeWater app uses: machines near you, one-tap free water, the countdown, your bottles,
@@ -46,6 +47,19 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     };
   };
 
+  /**
+   * What a piece on a bottle is, under its business's name in the app. Pieces nobody bought are third-party (a past
+   * advertiser's bonus, a filler ad, a charity partner): said so, never "From <company>"; only the company's own pieces
+   * (its house ad, its own messages where it allows them) are. "News story" only for a real news piece while news is on.
+   */
+  const pieceLabel = (p: Unit['placements'][number], company: CompanyConfig, experience: string) => {
+    const c = platform.campaigns.get(p.campaignId);
+    if (c?.filler?.kind === 'news') return app.news.allowed(company) ? 'News story' : 'Story';
+    const free = { former_advertiser: 'Bonus ad, printed free', filler: 'Filler ad, printed free', charity: 'Charity partner, printed free', picked: 'Printed free', neutral: 'Unsold space' } as const;
+    if (p.unsold && p.unsold !== 'own') return free[p.unsold];
+    if (p.isHouse) return `From ${company.name}`;
+    return experience === 'News story' ? 'Story' : experience; // an advertiser's story page is theirs, not the news
+  };
   const isMine = (u: Unit, userId: string) => u.consumerId === userId || (u.kind === 'custom' && u.ownerId === userId);
   const bottleView = (u: Unit) => {
     const company = platform.companies.get(u.companyId)!;
@@ -53,7 +67,7 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     const r = platform.ledger.receipt(u.id);
     return {
       id: u.id, kind: u.kind, status: u.status, createdAt: u.createdAt,
-      place: loc ? `${loc.id}, ${loc.name}` : u.locationId, printedFresh: printedFresh(u, loc),
+      place: householdPlace(loc, u.locationId), printedFresh: printedFresh(u, loc),
       labelUrl: `/v1/me/bottles/${u.id}/label.svg`,
       receiptUrl: `/r/${u.id}`,
       earnedCents: r.earned.total, donatedCents: r.donatedCents, giving: givingLine(company, u.locationId),
@@ -62,7 +76,7 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
         : u.placements.map((p) => {
             const c = platform.campaigns.get(p.campaignId);
             const info = experiences.host.info(c?.experienceId ?? p.experienceId);
-            return { slot: p.slotIndex, name: p.advertiserName, share: placementShare(p), size: placementShare(p) === 1 ? 'Full label' : `1/${placementShare(p)}`, url: `/s/${u.id}/${p.slotIndex}`, ar: !!info?.ar, experience: info?.name ?? 'Page', isHouse: p.isHouse };
+            return { slot: p.slotIndex, name: p.advertiserName, share: placementShare(p), size: placementShare(p) === 1 ? 'Full label' : `1/${placementShare(p)}`, url: `/s/${u.id}/${p.slotIndex}`, ar: !!info?.ar, experience: info?.name ?? 'Page', label: pieceLabel(p, company, info?.name ?? 'Page'), isHouse: p.isHouse };
           }),
     };
   };
@@ -104,7 +118,9 @@ export function consumerRoutes(app: App, route: (r: RouteDef) => void, h: { me: 
     // The company named, else the one this web address belongs to (its own domain or platform address), else the app's.
     const company = companyForRequest(platform.companies, (req.query as any).company, req.headers.host);
     if (!company) throw notFound('Company');
-    return { body: { companyId: company.id, name: company.name, brand: company.brand, timezone: company.timezone, hosts: siteHosts(company), site: siteBase(company) } };
+    return { body: { companyId: company.id, name: company.name, brand: company.brand, timezone: company.timezone, hosts: siteHosts(company), site: siteBase(company),
+      // What an advertiser pays for, from the fee switches (the advertiser sign-in page says it).
+      adsPayFor: paysForWords(company, platform.featureOn) } };
   } });
 
   route({ method: 'GET', url: '/v1/public/companies/:companyId/machines', scope: 'public', summary: "A company's machines, for the map.", handler: async (req) => {

@@ -763,7 +763,7 @@
     if (f.story) {
       const m = f.story.minutesSincePrint;
       const ago = m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${plural(Math.round(m / 1440), 'day', 'days')} ago`;
-      facts.push(h('div', { class: 'story', text: `Genuine. ${f.story.printedFresh}, ${ago}.${f.story.passedOn ? ` It’s been passed along: ${plural(f.story.people, 'person', 'people')} have scanned it.` : ''}` }));
+      facts.push(h('div', { class: 'story', text: `Genuine. ${f.story.printedFresh}, ${ago}.${f.story.passedOn ? ` It’s been passed along: ${plural(f.story.people, 'person has', 'people have')} scanned it.` : ''}` }));
     }
     const links = [];
     if (f.receiptUrl) links.push(h('a', { href: fixture ? '#' : f.receiptUrl, text: 'See this bottle’s receipt' }));

@@ -4,7 +4,7 @@ import type { CompanyConfig } from '../../core/types';
 //
 // Prepaid (FreeWater's default, and where every new company starts): an advertiser pays up front for a number of
 // bottles at one size; only paid bottles print, each printed bottle draws one, and the ad runs until every paid bottle
-// is out. AR, video and scans are included. Extra fees (per scan, per AR launch, per box side, commission on sales)
+// is out. AR, motion video and scans are included (AI video clips are a paid extra). Extra fees (per scan, per AR launch, per box side, commission on sales)
 // each have their own switch and price, all off until a person turns one on; when on, they're charged to the card on
 // file once a day, and a declined card pauses the advertiser's ads at once.
 //
@@ -139,6 +139,24 @@ export function feesOnWords(company: CompanyConfig, on?: SwitchOn): string[] {
     engagementFee(company, 'boxFace', on) !== null ? `${company.prices.perBoxFace}¢ per box side` : '',
     commissionPercent(company, on) !== null ? `${b.fees.commission.percent}% of sales` : '',
   ].filter(Boolean);
+}
+/** What an extra is called in a sentence, plural ("AI video clips are extra"). */
+const EXTRA_PLURAL: Record<string, string> = { aiVideoClip: 'AI video clips' };
+/**
+ * What comes with the bottles at no extra charge, from the fee switches and the extras (the quote, the pay box, the
+ * assistant): a thing with a fee switched on isn't "included", and a paid extra (AI video clips) is named as extra.
+ */
+export function includedWords(company: CompanyConfig, on?: SwitchOn): string {
+  const free = [engagementFee(company, 'ar', on) === null ? 'AR' : '', 'motion video', engagementFee(company, 'scan', on) === null ? 'scans' : ''].filter(Boolean);
+  const list = free.length > 1 ? `${free.slice(0, -1).join(', ')} and ${free.at(-1)}` : free[0]!;
+  const extras = Object.entries(adBilling(company).extras.perUse).map(([id, x]) => EXTRA_PLURAL[id] ?? x.label);
+  return `${list[0]!.toUpperCase()}${list.slice(1)} ${free.length > 1 ? 'are' : 'is'} included, at every size${extras.length ? `; ${extras.join(' and ')} are extra` : ''}.`;
+}
+/** What an advertiser pays for, in one line, from the company's setting and fee switches (the sign-in page). */
+export function paysForWords(company: CompanyConfig, on?: SwitchOn): string {
+  if (!adBilling(company).requirePrepay) return 'Pay for prints, scans, AR launches, box sides and sales. Nothing else.';
+  const fees = feesOnWords(company, on);
+  return fees.length ? `Pay up front for your bottles, plus ${fees.join(', ')}. Nothing else.` : 'Pay up front for your bottles. Nothing per scan, AR launch or sale.';
 }
 /** Any fee that's charged after the fact is on (so the daily charge has something to do). */
 export function anyFeeOn(company: CompanyConfig, on?: SwitchOn): boolean {

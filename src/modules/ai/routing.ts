@@ -49,6 +49,17 @@ export function routeAi(companyId: string | undefined, networkKey: string, model
   return { apiKey: key, model: (fast ? s.fastModel ?? s.model : s.model) ?? model };
 }
 
+/**
+ * Which AI really answers for an operator right now, as routeAi would pick it: the network's (Claude, when the host
+ * has its key), the operator's own account (when its AI_KEY_<ID> is set), or none: the built-in rules.
+ */
+export function aiInUse(companyId: string): 'network' | 'own' | 'none' {
+  const s = aiRouting.settingsOf(companyId);
+  if (!s || s.mode === 'network') return aiRouting.env.ANTHROPIC_API_KEY ? 'network' : 'none';
+  if (s.mode === 'off') return 'none';
+  return aiRouting.env[keySettingFor(companyId)] ? 'own' : 'none';
+}
+
 /** The words an AI is given name the operator it works for. */
 export function forOperator(text: string, companyId: string | undefined) {
   const name = companyId ? aiRouting.nameOf(companyId) : undefined;
