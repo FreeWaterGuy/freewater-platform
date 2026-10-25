@@ -653,3 +653,28 @@ the pause leaves them, and the page says so); unpausing stays with owners and fi
 printing-only path can't go below 1 approval (the founder said "never 0 for money"; printing kept the same floor, as it
 bills advertisers); "Who can press Pause" is a person-only setting, not a weakening. Not checked: real phones, a real
 printer mid-pause, Solana's own pause on the real network.
+
+## AI and data gaps from the walkthrough (AI and data, 2026-10-25, branch `q-ai`)
+
+Items 13, 15, 19 and 20 of the walkthrough list. Migration 086. Tests: `test/ad-industries.test.ts` (45 local
+businesses; 10 wrong on the old code, Tito's Tacos as entertainment among them), `test/ai-review-rules.test.ts`,
+`test/household-screen.test.ts`, `test/demo-benchmarks.test.ts`, each shown failing on the old code.
+
+| Date | Role | Severity | Pattern | Where | Finding | Fix / test |
+|---|---|---|---|---|---|---|
+| 2026-10-25 | AI and data | MEDIUM | P16 | `guessIndustry` (`src/modules/ads/categories.ts`) | The built-in categorizer filed a taco truck under entertainment: "tacos" never matched "taco", a business type it didn't know ("Mexican food", or the sign-up's own "events", "auto", "news") counted for nothing, and one "show" in "show this at the window" decided it. 10 of 45 typical local businesses landed wrong. CONFIRMED | The advertiser's own type first (a clear one decides, a broad one leans), then its name and the ad's words, clear signs weighted over leans, plurals, phrases using up their words. `test/ad-industries.test.ts` |
+| 2026-10-25 | AI and data | MEDIUM | P16 | `standInReviewer`, `AiReviewService.onSubmitted` | With no AI connected, the review page had no reviewer box and nothing said why an ad might be a problem; asking was impossible. CONFIRMED | `reviewByRules`: fixed checks with what they found and why, labelled "Built-in rules (no AI connected)", a stand-in that answers from them, their verdict kept as agent `ad-review-rules` with people's decisions counted against it, apart from the AI's record; they never flag an ad. `test/ai-review-rules.test.ts` |
+| 2026-10-25 | AI and data | MEDIUM | P16 | `HouseholdService.importHouseholds`, console | Household and area data had no screen, and an import kept only its refused total, so how much sensitive data was turned away was lost. CONFIRMED | Migration 086 (`household_imports.refused_by`); `GET /v1/households/summary` (owners and finance; totals only); console *Household data*. `test/household-screen.test.ts` |
+| 2026-10-25 | AI and data | LOW | P16 | demo seed | The demo's Benchmarks page showed nothing: no month had settled, and only one demo company contributed, so the "without any one company" rule would have held every figure back anyway. CONFIRMED | `src/demo/demoBenchmarks.ts`: a settled month of sample results at both demo companies (the licensee contributing, as sample data), released by the real `snapshotDue`, labelled demo data; the release rules are unchanged; kept out of the Ad ratings list. `test/demo-benchmarks.test.ts` |
+| 2026-10-25 | AI and data | LOW | P4-like (privacy) | `GET /v1/households/audience` | The single-house check takes no reason and logs nothing about who looked. PLAUSIBLE (a person with *admin* can read one house's bought facts unrecorded; a test calling it twice and finding no log would show it) | Not shown on the new screen (totals only); noted for the lawyer in `docs/COMPLIANCE.md`. |
+
+Siblings searched: every caller of `guessIndustry` (the rules rater, the AI answer's fallback, a new version's first
+guess: all now read the advertiser's name too); the business types advertisers can give (the sign-up list in
+`src/web/ads.js`, the company's ad categories in `src/modules/console/settings.ts`, the built-in ad helper's own
+categories in `builtinAssistant.ts`, which already filed tacos as food); every reader of `ad_ai_verdicts` (only
+`aiReview.ts`: the AI's record, governor and conversation read the AI's own rows only, by agent); every household route
+(the new one is listed in `docs/THREAT-MODEL.md` §6 and the registry); every reader of `ad_versions` that a sample row
+could reach (the ratings list and its counts leave them out; calibration needs a rating, which they don't have).
+Not checked: the law (the lawyer should confirm what the household screen may show and the audience lookup's log),
+real data companies' files.
+

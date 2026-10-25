@@ -49,6 +49,7 @@ const BLOCK = /^[0-9A-Za-z-]{2,20}$/;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 /** Bought data is kept this long after it was imported, then deleted (a fresh import brings it back up to date). */
 export const BOUGHT_KEEP_DAYS = 395;
+const day = (d: unknown) => (d ? new Date(d as string).toISOString().slice(0, 10) : null);
 
 export class HouseholdService {
   /** Set by the app: the people who claimed a house (an active delivery there), limited by their own choices. */
@@ -191,7 +192,7 @@ export class HouseholdService {
     }
     const refusedCount = Object.values(refused).reduce((a, b) => a + b, 0);
     await this.db.transaction(async (tx) => {
-      await tx.query(`insert into household_imports (id, company_id, source, source_date, origin, rows, refused, imported_by, imported_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [importId, companyId, source, input.sourceDate, origin, keep.length, refusedCount, by, now]);
+      await tx.query(`insert into household_imports (id, company_id, source, source_date, origin, rows, refused, refused_by, imported_by, imported_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [importId, companyId, source, input.sourceDate, origin, keep.length, refusedCount, JSON.stringify(refused), by, now]);
       for (const [key, address, block, attribute, value] of keep) {
         await tx.query(`insert into household_attributes (id, company_id, house_key, address, block_id, attribute, value, source, source_date, origin, import_id, imported_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
           on conflict (company_id, house_key, attribute, source) do update set value = excluded.value, block_id = coalesce(excluded.block_id, household_attributes.block_id), source_date = excluded.source_date, origin = excluded.origin, import_id = excluded.import_id, imported_at = excluded.imported_at`,
@@ -204,6 +205,46 @@ export class HouseholdService {
   async imports(companyId: string) {
     return (await this.db.query<any>(`select i.id, i.source, i.source_date, i.origin, i.rows, i.refused, i.imported_by, i.imported_at, (select count(*)::int from household_attributes a where a.import_id = i.id) as still_held from household_imports i where i.company_id = $1 order by i.imported_at desc`, [companyId])).rows
       .map((r) => ({ id: r.id, source: r.source, sourceDate: new Date(r.source_date).toISOString().slice(0, 10), origin: r.origin, kept: r.rows, refused: r.refused, stillHeld: r.still_held, importedBy: r.imported_by, importedAt: new Date(r.imported_at).toISOString() }));
+  }
+
+  /**
+   * The company's household and area data in aggregate, for its console (Data & targeting → Household data): the
+   * switches, the area statistics and where they came from, each import and what it refused, what's held by source and
+   * by kind, and how many houses said no. Never a house, an address or one house's attributes.
+   */
+  async summary(companyId: string) {
+    this.company(companyId);
+    const one = async (sql: string, args: unknown[] = [companyId]) => (await this.db.query<any>(sql, args)).rows;
+    const areaRows = await one(`select source, sample, kind, count(*)::int as n, min(as_of) as oldest, max(as_of) as newest from area_attributes where company_id = $1 group by source, sample, kind order by source, kind`);
+    const imports = (await one(`select i.id, i.source, i.source_date, i.origin, i.rows, i.refused, i.refused_by, i.imported_at, (select count(*)::int from household_attributes a where a.import_id = i.id) as still_held from household_imports i where i.company_id = $1 order by i.imported_at desc`))
+      .map((r) => {
+        const by = r.refused_by == null ? null : (typeof r.refused_by === 'string' ? JSON.parse(r.refused_by) : r.refused_by) as Record<string, number>;
+        return { id: r.id as string, source: r.source as string, sourceDate: day(r.source_date), origin: r.origin as string, importedAt: new Date(r.imported_at).toISOString(), kept: Number(r.rows), refused: Number(r.refused), refusedBy: by, sensitiveRefused: by ? Number(by.sensitive ?? 0) : null, stillHeld: Number(r.still_held) };
+      });
+    const sources = (await one(`select source, origin, count(*)::int as facts, count(distinct house_key)::int as houses, min(source_date) as oldest, max(source_date) as newest from household_attributes where company_id = $1 group by source, origin order by source`))
+      .map((r) => ({ source: r.source as string, origin: r.origin as string, facts: Number(r.facts), houses: Number(r.houses), oldest: day(r.oldest), newest: day(r.newest), imports: imports.filter((i) => i.source === r.source).length }));
+    // Imports whose data is all gone (deleted house by house, or aged out) still name their source, so it can be cleared.
+    for (const i of imports) if (!sources.some((x) => x.source === i.source)) sources.push({ source: i.source, origin: i.origin, facts: 0, houses: 0, oldest: null, newest: null, imports: imports.filter((j) => j.source === i.source).length });
+    const byAttribute = (await one(`select attribute, count(distinct house_key)::int as houses from household_attributes where company_id = $1 group by attribute order by attribute`)).map((r) => ({ attribute: r.attribute as string, houses: Number(r.houses) }));
+    const held = (await one(`select count(*)::int as facts, count(distinct house_key)::int as houses from household_attributes where company_id = $1`))[0] ?? {};
+    const optOuts = Number((await one(`select count(*)::int as n from household_optouts where company_id = $1`))[0]?.n ?? 0);
+    return {
+      switches: { houseTargeting: this.featureOn(companyId, 'house_targeting'), areaData: this.featureOn(companyId, 'area_data'), householdData: this.featureOn(companyId, 'household_data') },
+      areas: {
+        total: areaRows.reduce((a, r) => a + r.n, 0), sample: areaRows.filter((r) => r.sample).reduce((a, r) => a + r.n, 0), real: areaRows.filter((r) => !r.sample).reduce((a, r) => a + r.n, 0),
+        sources: areaRows.map((r) => ({ source: r.source as string, sample: !!r.sample, kind: r.kind as string, areas: r.n as number, oldest: day(r.oldest), newest: day(r.newest) })),
+      },
+      bought: { facts: Number(held.facts ?? 0), houses: Number(held.houses ?? 0), byAttribute, sources, keepDays: BOUGHT_KEEP_DAYS },
+      imports,
+      optOuts,
+      explanation: [
+        'Ads on bottles left at houses that haven’t signed up can be chosen using three kinds of data, strongest first: what people who live there chose to share in the app, data bought from a data company you choose, and statistics for the area (no person in them).',
+        'Bought data comes from a closed list (household size, income band, owner or renter, kind of home, years there, interests). Anything about health, religion, ethnicity, sexuality, immigration, children, politics or where people go is refused by rule and counted below, never kept.',
+        `It’s used only to choose ads for houses: never sold, never shown to advertisers per house, never passed on. Bought data is deleted ${BOUGHT_KEEP_DAYS} days after its import, or at once when you delete its source, or when the house says no.`,
+        'Any house can say no without an account. Its bought data is deleted, later imports skip it, and nothing about it is used again.',
+        'This screen shows totals only: it never lists a house or what was bought about one.',
+      ],
+    };
   }
 
   /** Delete everything one data company gave us. Immediate. */

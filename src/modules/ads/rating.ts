@@ -226,7 +226,7 @@ export function rateByRules(ad: AdForRating): Rating {
   const scores = { offer, design, landing, ar, video };
   // The weakest parts first; between equals, the one that weighs more.
   const tips = AREAS.filter((a) => scores[a] <= 6).sort((a, b) => scores[a] - scores[b] || WEIGHTS[b] - WEIGHTS[a]).slice(0, 3).map((a) => TIPS[a]);
-  const cat = guessIndustry(ad.advertiserCategory, ad.words);
+  const cat = guessIndustry(ad.advertiserCategory, [ad.advertiser, ...ad.words]);
   return { overall: weighted(scores), scores, reasons, tips, category: cat.primary, secondary: cat.secondary };
 }
 
@@ -252,7 +252,7 @@ export function cleanRating(v: any, ad: AdForRating): Rating {
   const tidy = (s: unknown, max: number) => String(s ?? '').replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim().slice(0, max);
   const reasons = (Array.isArray(v?.reasons) ? v.reasons : []).slice(0, 8).map((r: any) => ({ area: (AREAS as string[]).includes(r?.area) ? r.area : 'overall', text: tidy(r?.text, 300) })).filter((r: any) => r.text);
   const tips = (Array.isArray(v?.tips) ? v.tips : []).map((t: unknown) => tidy(t, 200)).filter(Boolean).slice(0, 3);
-  const rules = guessIndustry(ad.advertiserCategory, ad.words);
+  const rules = guessIndustry(ad.advertiserCategory, [ad.advertiser, ...ad.words]);
   const category = isIndustry(v?.category) ? v.category : rules.primary;
   const secondary = isIndustry(v?.secondary) && v.secondary !== category ? v.secondary : null;
   return { overall, scores, reasons, tips, category, secondary };
