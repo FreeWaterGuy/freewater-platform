@@ -1,6 +1,7 @@
 import type { CompanyConfig, Transparency } from '../../core/types';
 import type { Platform } from '../../platform';
 import type { LedgerEntry } from '../ledger/ledger';
+import { householdPlace } from '../books/bottleReceipt';
 
 // Transparency, as much as each company chooses (Abundance Engineering, chapter 12):
 // - a live public feed of what happens as it happens: bottles printed and what they gave, scans, sales, transfers to
@@ -124,7 +125,7 @@ export class TransparencyService {
     if (!locationId || t.feedDetail === 'none') return undefined;
     const loc = this.platform.locations.get(locationId);
     if (!loc) return undefined;
-    return t.feedDetail === 'city' ? loc.city : `${loc.id}, ${loc.name}`;
+    return t.feedDetail === 'city' ? loc.city : householdPlace(loc, locationId); // a route by its area name, never its id
   }
 
   private add(companyId: string, at: Date, kind: FeedItem['kind'], text: string, locationId: string | undefined, cents?: FeedItem['cents'], amountText = '', alwaysAmount = false) {

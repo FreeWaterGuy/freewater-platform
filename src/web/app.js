@@ -518,7 +518,7 @@
     const b = await api('GET', `/v1/me/bottles/${id}`);
     const bottle = h('div', { class: 'bottle', 'aria-hidden': 'true' }, h('div', { class: 'cap' }), h('div', { class: 'neck' }), h('div', { class: 'body' }, h('div', { class: 'wrap' })));
     const strip = h('img', { class: 'strip-img', alt: 'Your bottle’s full label, laid flat' });
-    labelImage(b).then((src) => { if (!src) return; strip.src = src; const w = bottle.querySelector('.wrap'); w.style.backgroundImage = `url("${src}")`; w.style.backgroundPosition = '18% 0'; });
+    labelImage(b).then((src) => { if (!src) return; strip.src = src; const w = bottle.querySelector('.wrap'); if (!w) return; w.style.backgroundImage = `url("${src}")`; w.style.backgroundPosition = '18% 0'; });
     const open = (a) => (fixture ? (e) => { e.preventDefault(); toast(`Opens ${a.name}${a.ar ? ' in AR' : ''}`); } : null);
     screen({ nav: 'home' },
       backBar(b.kind === 'custom' ? 'Your design' : 'Your bottle', `${new Date(b.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} · ${b.place}`),
@@ -527,7 +527,7 @@
       h('h2', { class: 'section' }, b.kind === 'custom' ? 'What it opens' : 'Tap an ad to open it'),
       h('div', {}, b.ads.map((a) => h('div', { class: 'ad-row' },
         h('span', { class: 'size', title: `${a.size} of the label`, text: a.size ?? `${a.sixths}/6` }),
-        h('span', { class: 'grow' }, h('b', { text: a.name }), h('span', { class: 'small muted', text: a.isHouse ? `From ${co()}` : a.experience })),
+        h('span', { class: 'grow' }, h('b', { text: a.name }), h('span', { class: 'small muted', text: a.label ?? a.experience })),
         a.ar ? h('a', { class: 'pill', href: fixture ? '#' : a.url, onclick: open(a) }, icon(I.ar), 'AR')
              : h('a', { class: 'pill light', href: fixture ? '#' : a.url, onclick: open(a) }, 'Open')))),
       h('div', { class: 'notice' }, b.kind === 'custom'

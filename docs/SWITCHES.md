@@ -87,7 +87,7 @@ wait is over. Anyone on the team can cancel a step before it runs.
 | Setting | FreeWater (and every new company) | What it means |
 |---|---|---|
 | **Paying up front** (`requirePrepay`) | On | An advertiser pays by card for a number of bottles before its ad is reviewed. Only paid bottles print. |
-| **Pricing** (`pricingMode`) | Flat | One price per bottle for each size: whole label $1, ½ 65¢, ⅓ 51¢, ¼ 42¢, ⅙ 33¢, ⅛ 24¢, 1/10 20¢, times the product's price factor (the 25 oz bottle is 1.25×). AR, video and scans are included at every size. The auction is for companies that bill after (below). |
+| **Pricing** (`pricingMode`) | Flat | One price per bottle for each size: whole label $1, ½ 65¢, ⅓ 51¢, ¼ 42¢, ⅙ 33¢, ⅛ 24¢, 1/10 20¢, times the product's price factor (the 25 oz bottle is 1.25×). AR, motion video and scans are included at every size; AI video clips are a paid extra. The auction is for companies that bill after (below). |
 | **Fee per scan** (`fees.scan`) | Off (25¢ when on) | Each its own switch and price. When one is on it's charged to the advertiser's card **once a day**, automatically; there's no invoice to wait on. A declined card pauses that advertiser's ads at once (the same pause as credit, below); they start again once the card works and the ad is turned back on. |
 | **Fee per AR launch** (`fees.arLaunch`) | Off (40¢ when on) | |
 | **Fee per box side** (`fees.boxFace`) | Off (the box side price, 40¢) | Off: box sides with a paid ad are included. |

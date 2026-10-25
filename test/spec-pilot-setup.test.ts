@@ -52,7 +52,7 @@ describe('“Delivery + printed ads” on a new company is a working pilot setup
     for (const id of STAYS_OFF) expect(f.on('pilot-co', id), id).toBe(false);
     const q = app.prepaid.quote('pilot-co', { bottles: 100, share: 10 });
     expect(q.feesOn).toEqual([]);
-    expect(q.included).toMatch(/AR, video and scans are included, at every size/);
+    expect(q.included).toMatch(/AR, motion video and scans are included, at every size; AI video clips are extra/);
   });
 });
 

@@ -2,6 +2,7 @@ import { missingLabels, type DraftPatch, type Missing } from '../ads/draft';
 import type { AdAssistant, AdAssistantInput, AdAssistantOutput } from './contract';
 import type { Share } from '../../core/types';
 import { shareName } from '../ads/layouts';
+import { shortenWords } from '../../core/shorten';
 
 /**
  * The built-in stand-in for an AI. It reads simple things out of what people type (offers, colors, prices,
@@ -64,9 +65,12 @@ export class BuiltinAdAssistant implements AdAssistant {
 
     // Words: a quoted headline wins, then anything that looks like an offer.
     const quoted = /["“]([^"”]{3,60})["”]/.exec(text)?.[1];
-    const headlineCmd = /\b(?:headline|big words|say|title)\b\s*(?:to|:|should be|=)?\s*["“]?([^"”\n]{3,60})/i.exec(text)?.[1];
-    const offer = OFFER.exec(text)?.[0];
-    const headline = quoted ?? (headlineCmd ? trimEnd(headlineCmd) : offer ? cap(trimEnd(offer)) : undefined);
+    // Up to the end of the line, then shortened between words (never "…any burger this wee").
+    const headlineCmd = /\b(?:headline|big words|say|title)\b\s*(?:to|:|should be|=)?\s*["“]?([^"”\n]{3,200})/i.exec(text)?.[1];
+    // The offer's words stop at a set length: when that falls inside a word, the half word is dropped, never kept.
+    const om = OFFER.exec(text);
+    const offer = om ? (/[a-z0-9'’]/i.test(text.charAt(om.index + om[0].length)) ? om[0].replace(/\s*\S*$/, '') : om[0]) : undefined;
+    const headline = quoted ?? (headlineCmd ? shortenWords(trimEnd(headlineCmd), 60) : offer ? cap(trimEnd(offer)) : undefined);
     if (headline && !own) { poster.headline = headline; did.push(`the headline “${headline}”`); }
     const subCmd = /\b(?:small (?:line|words)|subline|underneath)\b\s*(?:to|:|should be)?\s*["“]?([^"”\n]{3,80})/i.exec(text)?.[1];
     const when = /\b((?:every|on|this) (?:mon|tue|wed|thu|fri|sat|sun)[a-z]*(?: night| morning)?|(?:before|after|until) \d{1,2}(?::\d\d)? ?(?:am|pm)|weekdays|weekends|all week)\b/i.exec(text)?.[0];
@@ -126,7 +130,7 @@ export class BuiltinAdAssistant implements AdAssistant {
     const perDay = /\$\s?(\d[\d,]*)(?:\.\d\d)?\s*(?:a|per|\/)\s*day/i.exec(text);
     const bottles = /(\d[\d,]{2,})\s*(bottles|prints|labels)/i.exec(text);
     const pre = ctx.prices.prepaid;
-    if (bottles) { patch.buy = { type: 'guaranteed', prints: Number(bottles[1]!.replace(/,/g, '')) }; did.push(pre ? `${bottles[1]} bottles, paid up front (${pre.included})` : `${bottles[1]} bottles`); }
+    if (bottles) { patch.buy = { type: 'guaranteed', prints: Number(bottles[1]!.replace(/,/g, '')) }; did.push(pre ? `${bottles[1]} bottles, paid up front (${pre.included.replace(/\.$/, '')})` : `${bottles[1]} bottles`); }
     else if (perDay && !pre) { patch.buy = { type: 'bid', dailyCapCents: Number(perDay[1]!.replace(/,/g, '')) * 100 }; did.push(`a daily cap of $${perDay[1]} for printed labels only (scans and other charges are billed on top)`); }
     else if (perDay && pre) did.push('nothing for a daily amount: ads here are paid up front for a number of bottles');
     // Houses, streets, a neighbourhood: that's a buy on the delivery routes, chosen on the review page.

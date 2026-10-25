@@ -3,6 +3,7 @@ import { newId } from '../../core/ids';
 import type { Platform } from '../../platform';
 import type { PrintAudience } from '../ads/contract';
 import { checkPosterSpec, posterCreative, posterIcons, type PosterIcon, type PosterSpec } from '../creative/poster';
+import { shortenWords } from '../../core/shorten';
 
 /**
  * Filler for unsold spots (the founder: "spots that nobody buys can be replaced by other ads that we have approved for
@@ -85,7 +86,7 @@ export class FillerService {
       targeting: {}, buy: { type: 'guaranteed', remainingPrints: 1e9 }, active: true, isHouse: true,
       review: { status: 'submitted', at: now },
       filler: { kind: input.kind, status: 'pending', proposedBy: by, proposedAt: now, weight },
-      name: input.headline.trim().slice(0, 60), createdAt: now,
+      name: shortenWords(input.headline, 60), createdAt: now,
     };
     this.platform.campaigns.set(c.id, c);
     this.platform.persist.campaign(c);
@@ -123,7 +124,7 @@ export class FillerService {
       buy: { type: 'guaranteed', remainingPrints: 1e9 }, active: true, isHouse: true,
       review: { status: 'submitted', at: now },
       filler: { kind: 'advertiser', status: 'pending', proposedBy: by, proposedAt: now, sourceCampaignId: src.id, weight: 1 },
-      name: `${src.name ?? src.advertiserName} (unsold spots)`.slice(0, 80), createdAt: now,
+      name: `${shortenWords(src.name ?? src.advertiserName, 64)} (unsold spots)`, createdAt: now,
     };
     this.platform.campaigns.set(c.id, c);
     this.platform.persist.campaign(c);

@@ -5,7 +5,7 @@
 FreeWater gives people free, high-quality bottled water, paid for by the ads on the bottle. Each bottle is printed on
 the spot with up to ten ads, and each ad has its own QR code. When someone scans a code they get the advertiser's
 page, an offer, a 3D model to view in AR, or a way to buy. Advertisers pay up front for a number of bottles at a
-flat price per size, with AR, video and scans included, and exactly that many bottles go out with their ad. Taps on
+flat price per size, with AR, motion video and scans included (AI video clips are a paid extra), and exactly that many bottles go out with their ad. Taps on
 links are counted, never billed. Part of every
 bottle's money goes to clean-water wells through Well Aware, and the books are open for anyone to check. This
 platform is the software that runs all of it. Other companies can also run it under their own brand.

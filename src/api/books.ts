@@ -28,7 +28,7 @@ export function booksRoutes(app: App, route: (r: RouteDef) => void) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new ApiError(400, 'bad_date', 'Use a date like 2026-10-17.');
     return { body: await books.dayLines(companyId, date) };
   } });
-  route({ method: 'GET', url: '/v1/public/bottles/:unitId', scope: 'public', summary: 'One bottle: what it earned, what it cost, what it gave, and the transfer that sent its donation.', handler: async (req) => ({ body: await books.bottle((req.params as any).unitId) }) });
+  route({ method: 'GET', url: '/v1/public/bottles/:unitId', scope: 'public', summary: 'One bottle: what it earned, what it cost, what it gave, and the transfer that sent its donation.', handler: async (req) => ({ body: await books.bottle((req.params as any).unitId, typeof (req.query as any).company === 'string' ? (req.query as any).company : undefined) }) });
   route({ method: 'GET', url: '/v1/public/transfers/:id', scope: 'public', summary: 'One transfer to a charity, with the bank reference.', handler: async (req) => ({ body: await books.transfer((req.params as any).id) }) });
   route({ method: 'POST', url: '/v1/public/transfers/:id/confirm', scope: 'public', summary: 'A charity confirms a transfer arrived, with the link it was emailed.', body: obj({ token: { type: 'string', minLength: 10, maxLength: 100 } }, ['token']), handler: async (req) => ({ body: await books.confirm((req.params as any).id, (req.body as any).token) }) });
 

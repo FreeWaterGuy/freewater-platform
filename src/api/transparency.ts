@@ -5,6 +5,7 @@ import { transparencyOf } from '../modules/transparency/service';
 import { transparencyPage } from '../modules/transparency/page';
 import { statement, statementCsv } from '../modules/transparency/statements';
 import { ApiError, notFound, type RouteDef, Q } from './http';
+import { aiInUse } from '../modules/ai/routing';
 
 /** The world's live view of the books, as open as each company chooses, and advertisers' statements. */
 export function transparencyRoutes(app: App, server: FastifyInstance, route: (r: RouteDef) => void) {
@@ -22,7 +23,7 @@ export function transparencyRoutes(app: App, server: FastifyInstance, route: (r:
     const id = (req.params as any).companyId;
     const c = platform.companies.get(id);
     if (!c) throw notFound('Company');
-    return { body: transparencyPage({ company: c, on: (s) => app.companyFeatures.on(id, s), counters: () => transparency.counters(id), published: () => app.companyFeatures.published(id) }) };
+    return { body: transparencyPage({ company: c, on: (s) => app.companyFeatures.on(id, s), counters: () => transparency.counters(id), published: () => app.companyFeatures.published(id), ai: aiInUse(id) }) };
   } });
   route({ method: 'GET', url: '/v1/public/companies/:companyId/counters', scope: 'public', summary: 'Live totals, straight from the books: bottles, given, sent to charities, still owed, prizes, by charity. Only for companies that share them.', handler: async (req) => {
     const id = (req.params as any).companyId; need(id, 'counters');

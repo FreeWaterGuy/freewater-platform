@@ -57,7 +57,7 @@ paid to take them), paid for by advertisers, with part of every bottle going to 
   ad is reviewed; only paid bottles print, and exactly that many go out. No end date, no cancelling; pausing only
   delays. Turning a switch off that holds paid bottles back says so first (`docs/SWITCHES.md`, section 8).
 - **Pilot prices are the size prices, all-inclusive:** whole label $1, 1/2 65¢, 1/3 51¢, 1/4 42¢, 1/6 33¢, 1/8 24¢,
-  1/10 20¢ a bottle (times the product's factor). AR, video and scans are included, and every size gets the same tech.
+  1/10 20¢ a bottle (times the product's factor). AR, motion video and scans are included (AI video clips are a paid extra), and every size gets the same tech.
   Flat prices; bidding is off (it needs billing afterwards).
 - **Fees on top** (per scan, per AR launch, per box side, commission on sales, 3% suggested) are each a switch, off.
   Turned on, they're charged to the card each day; a declined card pauses the advertiser's ads.

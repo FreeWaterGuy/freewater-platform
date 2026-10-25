@@ -23,6 +23,8 @@ export interface PageDeps {
   counters: () => Counters;
   /** Its switches, when it publishes them. */
   published: () => unknown;
+  /** Which AI really answers (routing.ts aiInUse): with no key set, it's the built-in rules, whatever the setting says. */
+  ai?: 'network' | 'own' | 'none';
 }
 
 const cents = (c: number) => (c < 100 ? `${c}¢` : `$${(c / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
@@ -78,9 +80,11 @@ export function transparencyPage(d: PageDeps) {
   };
 
   // AI, in plain words.
-  const aiOn = d.on('ai') && (c.ai?.mode ?? 'network') !== 'off';
+  const which = d.ai ?? ((c.ai?.mode ?? 'network') === 'off' ? 'none' : c.ai?.mode === 'own' ? 'own' : 'network');
+  const aiOn = d.on('ai') && which !== 'none';
   const ai = [
-    aiOn ? `Which AI: ${c.ai?.mode === 'own' ? `${name}’s own AI account` : 'the network’s AI (Claude)'}.` : 'AI is off: every feature runs on its built-in rules.',
+    aiOn ? `Which AI: ${which === 'own' ? `${name}’s own AI account` : 'Claude, by Anthropic (the network’s AI)'}.`
+      : d.on('ai') && (c.ai?.mode ?? 'network') !== 'off' ? 'No AI is connected right now: every feature runs on its built-in rules.' : 'AI is off: every feature runs on its built-in rules.',
     d.on('ad_ratings') ? `Rating: each ad is rated 1 to 10 before it prints${aiOn && d.on('ai_ad_rater') ? ' by the AI' : ' by built-in rules'}, so ${name} can learn what works.` : '',
     aiOn && d.on('ai_ad_reviewer') ? 'Review: the AI looks at each paid ad and can flag it with its reasons; a person makes the final decision, and every decision is kept.' : 'Review: a person on the team reviews ads.',
     'The governor: a safety check that always runs, whatever is switched on. It limits what any AI may do on its own, and nothing that moves money or can’t be undone happens without people approving it.',

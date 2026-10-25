@@ -2,6 +2,7 @@ import { contrast, posterIcons, readableOn, type PosterIcon } from '../creative/
 import { claudeWithTool } from '../ai/anthropic';
 import { checkStudioSpec, studioLooks, studioTypes, type StudioLook, type StudioSpec, type StudioType } from './layout';
 import type { PhotoInfo } from './photos';
+import { shortenWords } from '../../core/shorten';
 
 /**
  * Turns a brand kit and a short brief into a few finished designs. Any AI (or none) can sit behind it. It only picks
@@ -60,7 +61,7 @@ const iconFor = (category: string): PosterIcon | undefined => {
   return map.find(([re]) => re.test(c))?.[1];
 };
 
-const clip = (s: string | undefined, n: number) => (s ? (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s) : undefined);
+const clip = (s: string | undefined, n: number) => (s ? shortenWords(s, n) : undefined);
 
 // ---------- the built-in designer (no AI) ----------
 
