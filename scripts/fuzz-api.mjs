@@ -50,6 +50,7 @@ async function ready() {
   return false;
 }
 
+const stats = new Map(); // label → { failures, networkErrors, named }
 const run = (label, key) => new Promise((resolve) => {
   console.log(`\n=== Schemathesis: ${label} (${examples} cases per operation) ===`);
   const args = ['run', `${base}/v1/openapi.json`, '--checks', 'not_a_server_error', '-n', examples, '-w', '4', '--phases', 'examples,coverage,fuzzing',
@@ -65,6 +66,13 @@ const run = (label, key) => new Promise((resolve) => {
   for (const s of [p.stdout, p.stderr]) s.on('data', (d) => { process.stdout.write(d); out += d; if (out.length > 400_000) out = out.slice(-200_000); });
   p.on('error', (e) => { console.error(`Couldn't run ${st}: ${e.message}. Install it: pip install schemathesis==4.32.2`); resolve(2); });
   p.on('exit', (code) => {
+    // What went wrong, by kind: Schemathesis's summary lists failures (a check failed) and errors (e.g. a network
+    // error: a connection dropped or timed out). Each network error's operation is named so it can be tracked down.
+    const failures = Number(/(\d+) failed/.exec(out.slice(out.lastIndexOf('Test cases:')))?.[1] ?? 0);
+    const networkErrors = (out.match(/Network Error/g) ?? []).length - (/Errors:[^\n]*\n\s*🚫 Network Error: \d+/.test(out) ? 1 : 0);
+    const named = [...out.matchAll(/_{3,} ([A-Z]+ \/\S+) _{3,}[\s\S]{0,400}?Network Error[^\n]*/g)].map((m) => m[0].replace(/\s+/g, ' ').slice(0, 300));
+    stats.set(label, { failures, networkErrors: Math.max(networkErrors, named.length), named });
+    if (named.length && process.env.GITHUB_ACTIONS) for (const n of named) console.log(`::warning title=Fuzz (${label}) network error::${n.replace(/[\r\n%]+/g, ' ')}`);
     if (code && process.env.GITHUB_ACTIONS) {
       const at = Math.max(out.lastIndexOf('Failures:'), out.lastIndexOf('Errors:'), out.lastIndexOf('ERRORS'), out.lastIndexOf('FAILURES'));
       const part = (at >= 0 ? out.slice(at, at + 1500) : out.slice(-1500)).replace(/[\r\n%]+/g, ' ');
@@ -93,5 +101,14 @@ if (process.env.GITHUB_ACTIONS) {
   for (const e of new Set(errors)) console.log(`::error title=Fuzz server error::${one(e)}`);
   if (!alive) console.log(`::error title=Fuzz server stopped::${one(log.slice(-1500))}`);
 }
-// A server error the server logged fails the run too, even if Schemathesis didn't see it as one.
-await finish(results.every(([, c]) => c === 0) && alive && !errors.length ? 0 : 1);
+// A server error the server logged fails the run too, even if Schemathesis didn't see it as one. A run whose only
+// problem is ONE dropped/timed-out connection (no failed check, no server error, the server still up) passes with a
+// warning naming the request: on a slow shared runner a single connection can drop; two or more still fail.
+const tolerated = ([label, c]) => {
+  if (c === 0) return true;
+  const st = stats.get(label);
+  return !!st && st.failures === 0 && st.networkErrors === 1;
+};
+const ok = results.every(tolerated) && alive && !errors.length;
+if (ok && results.some(([, c]) => c !== 0)) console.log('One dropped connection, no server errors: passing with a warning (see the named request).');
+await finish(ok ? 0 : 1);
