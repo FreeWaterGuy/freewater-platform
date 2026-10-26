@@ -44,6 +44,10 @@ touches: `docs/OVERVIEW.md`, `SWITCHES.md`, `RUNNING.md`, `RUNBOOKS.md`, `GO-LIV
   ⅙ 33¢, ⅛ 24¢, 1/10 20¢. Fees (scan, AR, 3% commission) are switches, off. Flat pricing (bidding off). Paid bottles
   always go out (no cancelling, no end date). Change-ad fee $100, link-change fee $50, both adjustable. If FreeWater
   stops an ad, a person refunds the unprinted bottles. Cost-plus extras (AI video clips) are shown before paying.
+- **Targeting goes down to the individual person.** One ad engine serves home delivery and the machines. *Ads aimed
+  at people* (`targeting_people`, on) prints a known app user's ads by their interests, new/returning customer,
+  frequency caps and what they never want; each bottle remembers who it was for (`intendedFor`). *Ads aimed at houses*
+  (`house_targeting`) is built but off. Limits: consent levels, no sensitive data, never sold, the person's law.
 - **Ad review**: the AI rates every ad 1–10 before print (always on, in the background), sorts it into a category and
   learns outcomes. Benchmarks are anonymous and pooled, worded "not a promise of results". Showing ratings to
   advertisers is off. The AI flags; a person decides.
