@@ -698,6 +698,17 @@ that fit, with a fair-turn bound: a paid ad left off `adRules.fairTurnBottles` b
 unless set, 2 to 1,000) goes on the next bottle first, the longest-waiting first. The waiting counts live in memory:
 after a restart they start again, so a turn comes at most one bound late.
 
+### Games and ads (Games → *Games and ads*)
+
+The founder (2026-11-16): "the honest game ad needs to make the ads better." Code: `src/modules/games/adTests.ts`.
+Console: *Games* → *Your ads in the game*. Advertisers: a line on each ad in their portal.
+
+| Switch | FreeWater | New company | Company that already existed | What it does |
+|---|---|---|---|---|
+| **Real ads in the ad rounds** (`game_ad_tests`) | on | copies (on) | decides (new) | Running ads take turns in the "which ad works" rounds beside made-up ones, the least-tested design first; never an ad for 21+. Each design (by a digest of its picture) gets a verdict after 20 screens: how often it was picked against chance. A new design starts its own count; earlier ones are kept to compare. Bots, too-fast answers and failed checks never count. Off: two running ads at random, as before, and no verdicts. |
+| **Show players' picks to advertisers** (`game_ad_results`, under it) | on | copies (on) | decides (new) | Each advertiser sees its own designs' numbers and verdict, never players' words, always with "a guide, not a promise of results". Off: the route is off and the portal shows nothing. |
+| **Game picks choose people's ads** (`game_interests`, needs *Ads aimed at people*) | on | copies (on) | decides (new) | Only for a person who turned on personalized offers and is old enough: ads of the kinds (industries) they picked at least twice in 90 days go first among the ads that may go on their bottle. Paid bottles still all go out; it changes which bottles carry an ad, never how many. Off: game picks never choose anyone's ads. |
+
 ### Ad ratings (Ads → *Ad ratings*; the AI's own switch under AI)
 
 The founder: "Even with the switch turned off, I want the AI to rate each ad 1–10 before it gets physically printed, so

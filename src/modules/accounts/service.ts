@@ -205,8 +205,12 @@ export class AccountsService {
     const seen = mayUse ? (await this.db.query<any>(`select advertiser_id from viewer_advertisers where company_id = $1 and viewer_key = $2`, [companyId, r.viewer_key])).rows.map((x) => x.advertiser_id as string) : [];
     // What they asked for themselves (kinds of ads never wanted) and the no-ads control apply with or without that yes.
     const extra = this.audienceExtras ? await this.audienceExtras(companyId, r.viewer_key) : {};
-    return { personKey: r.viewer_key, interests: mayUse ? parse<string[]>(r.interests) : [], advertisersSeen: new Set(seen), ...extra };
+    // What they picked in the games, only with that same yes ("Game picks choose your ads").
+    const likes = mayUse && this.gameLikes ? await this.gameLikes(companyId, r.viewer_key) : [];
+    return { personKey: r.viewer_key, interests: mayUse ? parse<string[]>(r.interests) : [], advertisersSeen: new Set(seen), ...(likes.length ? { likes } : {}), ...extra };
   }
+  /** Set by the app: the kinds of ads a person picked in the games (src/modules/games/adTests.ts). */
+  gameLikes?: (companyId: string, personKey: string) => Promise<string[]>;
   /** Set by the app: false for a person known to be under the minimum age. */
   mayPersonalize: (companyId: string, subjects: string[]) => Promise<boolean> = async () => true;
   /** Set by the data environment: kinds of ads a person never wants, and whether they're in the no-ads control. */

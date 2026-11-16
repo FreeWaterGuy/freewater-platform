@@ -10,6 +10,8 @@ import { builtinPrompter, type Prompter } from './prompter';
 import { cardJpeg, type ProductImageSource } from './images';
 import { dataUse } from '../data/policy';
 import { isPlaceholder } from '../fillers/unsold';
+import { guessIndustry } from '../ads/categories';
+import { adKind, designVersion, type AdTestService } from './adTests';
 
 // The games: screens of two to four choices (real brands as plain cards, each with a price setup), "which ad works"
 // rounds, a feedback box and a prompt box for anything. Points are the same whichever item is picked, so the pick
@@ -38,7 +40,7 @@ export interface GameSettings {
 export const defaultGames: GameSettings = { enabled: true, adRoundEvery: 4, checkEvery: 9, minAnswerMs: 700, tapEvery: 7, arEvery: 11 };
 
 /** California's notice of financial incentive, and the same idea everywhere: what's exchanged, and that it's optional. */
-export const incentiveNotice = 'Points for answering are a financial incentive under California law. You get points for each answer; we get your answers, which we use to train our AI and plan future free and negatively priced products. We value each answer at about the points it earns. Playing is optional: everything else (AR, videos, offers) works without it. You can stop any time and erase your answers.';
+export const incentiveNotice = 'Points for answering are a financial incentive under California law. You get points for each answer; we get your answers, which we use to train our AI, plan future free and negatively priced products, and tell advertisers how often their ads were picked (never who picked them). If you turn on personalized offers, the kinds of ads you pick also help choose the ads on your bottles. We value each answer at about the points it earns. Playing is optional: everything else (AR, videos, offers) works without it. You can stop any time and erase your answers.';
 
 const realnessText = { virtual: 'Just for fun: nothing here is real', may_come_true: 'Picks may come true: we may offer what most people choose', real: 'Real: you can get this' } as const;
 type Realness = keyof typeof realnessText;
@@ -51,6 +53,8 @@ export class GamesService {
 
   /** How many times each item must have been on a screen before "how others picked" is shown. */
   static revealAfter = 20;
+  /** Set by the app: real ads in the ad rounds, their verdicts and what each person liked (adTests.ts). */
+  adTests?: AdTestService;
   /** Where product photos come from, tried in order. Set by the app. */
   imageSources: ProductImageSource[] = [];
 
@@ -152,7 +156,7 @@ export class GamesService {
     const open = await openRound();
     if (open) return this.view(open, companyId);
     const played = Number((await this.db.query<any>(`select count(*)::int as n from game_rounds where company_id = $1 and person = $2`, [companyId, viewerKey])).rows[0].n) + 1;
-    const round = played % s.checkEvery === 0 ? this.checkRound(companyId) : played % s.adRoundEvery === 0 ? this.adRound(companyId) : played % s.tapEvery === 0 ? this.tapRound() : played % s.arEvery === 0 ? this.arRound() : this.choiceRound(companyId);
+    const round = played % s.checkEvery === 0 ? this.checkRound(companyId) : played % s.adRoundEvery === 0 ? await this.adRound(companyId) : played % s.tapEvery === 0 ? this.tapRound() : played % s.arEvery === 0 ? this.arRound() : this.choiceRound(companyId);
     const id = newId('gr');
     try {
       await this.db.query(`insert into game_rounds (id, company_id, person, kind, category, realness, items, served_at) values ($1,$2,$3,$4,$5,$6,$7,$8)`, [id, companyId, viewerKey, round.kind, round.category, round.realness, JSON.stringify(round.items), this.now()]);
@@ -371,13 +375,19 @@ export class GamesService {
     return free;
   }
   /** Ads to compare: made-up brands from the studio, and real ones running now. Nothing here is billed or scannable. */
-  private adRound(companyId: string) {
-    const running = [...this.platform.campaigns.values()].filter((c) => c.companyId === companyId && c.active !== false && !c.id.startsWith('house') && !isPlaceholder(c))
-      .map((c) => ({ id: `c:${c.id}`, label: c.advertiserName, svg: () => c.creative.svg(300, 400) }));
-    const made = fictionalAds.map((f) => ({ id: `f:${f.id}`, label: f.spec.brand, svg: () => renderStudio(f.spec, 300, 400) }));
-    const pool = [...this.pick(running, 2), ...this.pick(made, 3)];
-    const n = Math.min(pool.length, 2 + Math.floor(this.random() * 3));
-    const items = this.pick(pool, n).map((a, i) => ({ key: `k${i}`, id: a.id, label: a.label, svg: a.svg(), position: i, frame: { kind: 'free_ads' } as Frame }));
+  private async adRound(companyId: string) {
+    // The company's running ads, the least-tested design first, beside made-up ones (src/modules/games/adTests.ts).
+    // Off ("Real ads in the ad rounds"), or no tester: two running ads at random, as before. Never an ad people must be 21 for.
+    const tested = this.adTests ? await this.adTests.pickForRound(companyId, 2, this.random) : null;
+    const running = (tested ?? this.pick(this.adTests?.testable(companyId) ?? [...this.platform.campaigns.values()]
+      .filter((c) => c.companyId === companyId && c.active !== false && !c.id.startsWith('house') && !isPlaceholder(c) && adKind(c) !== 'alcohol' && c.category !== 'alcohol')
+      .map((c) => { const svg = c.creative.svg(300, 400); return { campaign: c, svg, version: designVersion(svg) }; }), 2))
+      .map((a) => ({ id: `c:${a.campaign.id}`, label: a.campaign.advertiserName, svg: a.svg, extra: { campaign: a.campaign.id, v: a.version, kind: adKind(a.campaign) } }));
+    const made = fictionalAds.map((f) => ({ id: `f:${f.id}`, label: f.spec.brand, svg: renderStudio(f.spec, 300, 400), extra: { kind: guessIndustry('', [f.spec.brand, f.spec.headline, f.spec.sub ?? '', f.spec.kicker ?? '']).primary } }));
+    const n = Math.min(running.length + made.length, 2 + Math.floor(this.random() * 3));
+    // Real ads always get their place on the screen; made-up ones fill the rest.
+    const chosen = this.pick([...running.slice(0, n), ...this.pick(made, Math.max(0, n - running.length))], n);
+    const items = chosen.map((a, i) => ({ key: `k${i}`, id: a.id, label: a.label, svg: a.svg, position: i, frame: { kind: 'free_ads' } as Frame, ...a.extra }));
     return { kind: 'ad', category: 'ads', ask: 'Which ad would make you scan the bottle?', realness: 'virtual' as Realness, items };
   }
   /** Tap the QR: a bottle label (a made-up ad) with its code popping up somewhere for a moment. */

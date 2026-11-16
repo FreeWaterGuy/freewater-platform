@@ -27,7 +27,7 @@ import { pauseWeakened } from '../modules/chain/pause';
 export const SIZE_SWITCHES: Record<number, string> = { 1: 'size_whole', 2: 'size_half', 3: 'size_third', 4: 'size_quarter', 6: 'size_sixth', 8: 'size_eighth', 10: 'size_tenth' };
 
 /** Raise this when adding switches (and give them `since: CATALOGUE`). */
-export const CATALOGUE = 6;
+export const CATALOGUE = 7;
 
 export const categoryIds = ['printing', 'ads', 'ar_video', 'studio', 'delivery', 'machines', 'rewards', 'games', 'news', 'data', 'ai', 'money', 'transparency', 'giving', 'partners', 'blockchain', 'safety', 'core'] as const;
 export type CategoryId = (typeof categoryIds)[number];
@@ -356,6 +356,15 @@ export const SWITCHES: Switch[] = [
     routes: ['GET /v1/public/games/:companyId/status', 'POST /v1/public/games/:companyId/join', 'POST /v1/public/games/:companyId/leave', 'POST /v1/public/games/:companyId/next', 'POST /v1/public/games/:companyId/answer', 'POST /v1/public/games/:companyId/feedback',
       'GET /v1/games/catalog', 'POST /v1/games/catalog/photos', 'POST /v1/games/catalog/:itemId/photo', 'GET /v1/games/winners', 'GET /v1/games/report'],
     jobs: ['game-photos'], pages: ['games'], link: flag('games.enabled', { missing: true, base: () => ({}) }) }),
+  // The games make the ads better (src/modules/games/adTests.ts; docs/SWITCHES.md, "Games and ads"). New (`since: 7`).
+  sw({ id: 'game_ad_tests', category: 'games', group: 'Games and ads', since: 7, label: 'Real ads in the ad rounds',
+    description: 'Your running ads take turns in the “which ad works” rounds beside made-up ones, the least-tested design first, so each design gets a verdict from real people quickly (after 20 screens): picked more than chance, about average, or less. Your team sees each design’s numbers and players’ reasons. Never an ad people must be 21 for. Off: only two running ads at random, and no verdicts.',
+    routes: ['GET /v1/games/ad-tests'] }),
+  sw({ id: 'game_ad_results', category: 'games', group: 'Games and ads', parent: 'game_ad_tests', since: 7, label: 'Show players’ picks to advertisers',
+    description: 'Advertisers see how players picked each of their designs (numbers only, never players’ words), so they can tell whether a change made the ad better. Worded as a guide, not a promise of results. Off: the verdicts stay with your team.',
+    routes: ['GET /v1/ads/player-picks'] }),
+  sw({ id: 'game_interests', category: 'games', group: 'Games and ads', dependsOn: ['targeting_people'], since: 7, label: 'Game picks choose people’s ads',
+    description: 'For a person who turned on personalized offers (and is old enough), ads of the kinds they picked in the game go on their bottles first. It never changes how many bottles an ad gets, only which bottles carry it. Off: game picks are never used to choose anyone’s ads.' }),
   sw({ id: 'game_video_feedback', category: 'games', group: 'Feedback', label: 'Video feedback', description: 'Players can send a short video as well as written feedback.', routes: ['POST /v1/public/games/:companyId/feedback/video'] }),
   sw({ id: 'game_prompt_box', category: 'games', group: 'Feedback', label: 'Ask anything', description: 'A box where players type any question; it’s saved and earns its points.', routes: ['POST /v1/public/games/:companyId/prompt'] }),
   sw({ id: 'come_true', category: 'games', group: 'Picks that come true', label: 'Picks that may come true', description: 'Mark categories “may come true”; a winner with at least 20 views from real people can be launched.', routes: ['GET /v1/games/launches', 'POST /v1/games/come-true'] }),

@@ -151,6 +151,17 @@ paid to take them), paid for by advertisers, with part of every bottle going to 
   only) can be launched.
 - Video and written feedback earn points.
 - Bots are always marked as bots and never bill an advertiser or count toward giving.
+- **The game makes the ads better** (2026-11-16, the founder: "the honest game ad needs to make the ads better… so
+  lets fix that now"). Before this, game answers were only kept and reported; nothing used them to improve an ad.
+  Now (`src/modules/games/adTests.ts`, docs/SWITCHES.md "Games and ads"):
+  - Real running ads take turns in the "which ad works" rounds, least-tested design first. Never 21+ ads.
+  - Each design gets a verdict after 20 screens (picked more than chance, about average, or less). A new design starts
+    its own count, so an advertiser can see whether a change helped. Real people only.
+  - The team sees numbers and players' reasons. Advertisers see their own numbers, never players' words (on by
+    default, adjustable). Worded as a guide, not a promise of results.
+  - For a person who turned on personalized offers, ads of the kinds they picked go on their bottles first. It never
+    changes how many bottles an ad gets.
+  - The game's notice now says this. A question for the lawyer (docs/COMPLIANCE.md, L-41).
 
 ## Spots nobody buys
 

@@ -70,6 +70,11 @@ export interface PrintAudience {
   advertisersSeen: Set<string>;
   /** How many bottles with each campaign this person already got today (for frequency caps). */
   campaignsToday?: Map<string, number>;
+  /**
+   * Kinds of ads (industry ids) this person picked in the games: among the ads that may go on their bottle, these go
+   * first. Only for a person who turned on personalized offers (src/modules/games/adTests.ts).
+   */
+  likes?: string[];
   /** Kinds of ads (categories) this person said they never want. */
   avoid?: string[];
   /** This person is in the no-ads control this week: their bottle carries only the company's own message. */
