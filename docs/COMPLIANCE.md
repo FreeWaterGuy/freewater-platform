@@ -457,6 +457,10 @@ Status: **Code** = done and tested; **Partly** = done with a gap noted; **Lawyer
   section "Ratings and benchmarks are guidance, not guarantees" (docs/ADVERTISER-TERMS.md §1–5), enough under the FTC
   Act s. 5 and state consumer-protection law, including for benchmarks with deliberate noise (docs/AI.md)? Should the
   noise be disclosed in the terms as well as on the page? Replaces the portal's earlier "a guide …" wording in L-35.
+- **L-41** **The game's answers choose ads** (2026-11-16): game answers now also (a) give advertisers per-design pick
+  rates (numbers only, never who picked or their words) and (b), for a person who turned on personalized offers, choose
+  which ads go on their bottles. The game's notice says so. Is the notice enough under CCPA/CPRA (purpose of use,
+  financial incentive) and the Texas TDPSA, and does (b) need its own separate yes beyond personalized offers?
 
 ### Before the Austin pilot: what the lawyer must answer (for the founder)
 

@@ -94,7 +94,7 @@ describe('the switches', () => {
   it('Ads → “Ad ratings”: rating on, showing it to advertisers off; Data → “Benchmarks”: contribute and view; the AI rater is a use of AI', () => {
     expect(byId.get('ad_ratings')).toMatchObject({ category: 'ads', group: 'Ad ratings', default: true, since: 1 });
     expect(byId.get('ad_rating_feedback')).toMatchObject({ category: 'ads', group: 'Ad ratings', default: false, parent: 'ad_ratings' });
-    expect(byId.get('benchmarks_contribute')).toMatchObject({ category: 'data', group: 'Benchmarks', default: true, since: CATALOGUE });
+    expect(byId.get('benchmarks_contribute')).toMatchObject({ category: 'data', group: 'Benchmarks', default: true, since: 6 });
     expect(byId.get('benchmarks_view')).toMatchObject({ category: 'data', group: 'Benchmarks', default: true });
     expect(byId.get('ai_ad_rater')).toMatchObject({ category: 'ai', dependsOn: ['ad_ratings'] });
     expect(AI_USES).toContain('ai_ad_rater');

@@ -1,6 +1,7 @@
 import type { Campaign, CompanyConfig, Placement, Product, Share, SlotRect } from '../../core/types';
 import { layoutsFor, type Layout } from './layouts';
 import { fairTurnBottles, placementRule } from './layoutChoice';
+import { adKind } from '../games/adTests';
 import type { AdEngine, FillRequest, FillResult, OpenPiece, PrintAudience, UnsoldFiller } from './contract';
 import { canAfford, floorPrice, priceFor } from './budget';
 import { flatPricing, prepaidModel } from './billing';
@@ -50,7 +51,10 @@ export const freewaterAdEngine: AdEngine = {
     const revenueRule = placementRule(company) === 'revenue';
     const waited = (c: Campaign) => req.waits?.get(c.id) ?? 0;
     const overdue = revenueRule ? eligible.filter((c) => fitsHere(c) && waited(c) >= fairTurnBottles(company)).sort((a, b) => waited(b) - waited(a)) : [];
-    const inLine = flat ? shuffle(eligible, random) : bidders.map((b) => b.campaign);
+    // Flat prices: equal ads in random order, except that for a person who said yes to personalized offers, ads of the
+    // kinds they picked in the games come first (src/modules/games/adTests.ts). Paid bottles still all go out (pacing).
+    const likes = new Set(req.audience?.likes ?? []);
+    const inLine = flat ? (likes.size ? likedFirst(shuffle(eligible, random), likes) : shuffle(eligible, random)) : bidders.map((b) => b.campaign);
     const ranked = overdue.length ? [...overdue, ...inLine.filter((c) => !overdue.includes(c))] : inLine;
     // What each one pays for the whole label: the second price.
     const labelPrice = new Map<string, { paid: number; bidder: Bidder }>(bidders.map((b, i) => [b.campaign.id, { paid: secondPrice(b, nextRival(bidders, i), company, product), bidder: b }]));
@@ -164,6 +168,12 @@ export function isEligible(c: Campaign, company: CompanyConfig, locationId: stri
  * Does this person fit the campaign's audience? Returns why (for the advertiser's report), or null if they don't.
  * A bottle for nobody in particular never fits: a targeted ad only prints for the person it was meant for.
  */
+/** Ads of the kinds a person liked first, the rest after, each keeping its (shuffled) order. */
+export function likedFirst(cs: Campaign[], likes: Set<string>): Campaign[] {
+  const liked = cs.filter((c) => likes.has(adKind(c)));
+  return liked.length ? [...liked, ...cs.filter((c) => !liked.includes(c))] : cs;
+}
+
 export function audienceMatch(c: Campaign, a: PrintAudience | null): string[] | null {
   const want = c.targeting.audience;
   if (!want) return [];

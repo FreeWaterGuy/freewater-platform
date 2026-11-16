@@ -146,7 +146,7 @@ export class Platform {
    */
   private audienceFor(a: import('./modules/ads/contract').PrintAudience | null, on: (id: string) => boolean) {
     if (!a) return null;
-    return { ...a, ...(on('targeting_people') ? {} : { interests: [], advertisersSeen: new Set<string>() }), ...(on('ad_preferences') ? {} : { avoid: [] }), ...(on('measurement') ? {} : { noAds: false }) };
+    return { ...a, ...(on('targeting_people') ? {} : { interests: [], advertisersSeen: new Set<string>(), likes: [] }), ...(on('ad_preferences') ? {} : { avoid: [] }), ...(on('measurement') ? {} : { noAds: false }) };
   }
 
   /**

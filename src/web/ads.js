@@ -725,6 +725,22 @@
   // The ad's score, a meter and up to three tips, only where the company shows them ("Show the rating to advertisers").
   // Loaded on its own, after the page: it never stands between the advertiser and paying.
   let myRatings = null; // one request for every card on the page (kept 30 seconds)
+  /** How players picked this ad's designs in the game (where the company shows it): a guide, not a promise. */
+  let myPicks = null;
+  function picksBox(campaignId) {
+    if (!on('game_ad_results')) return null;
+    const box = h('div', { class: 'note', 'aria-live': 'polite' });
+    if (!myPicks || Date.now() - myPicks.at > 30_000) myPicks = { at: Date.now(), p: api('GET', '/v1/ads/player-picks') };
+    myPicks.p.then((all) => {
+      const a = all.find((x) => x.campaignId === campaignId);
+      if (!a?.current) { box.hidden = true; return; }
+      const prev = a.earlier.find((e) => e.vsChance != null);
+      const parts = [h('b', { text: 'In the game: ' }), a.current.words];
+      if (prev && a.current.vsChance != null) parts.push(h('div', { class: 'muted', text: `Your earlier design: ${prev.vsChance}× chance. This one: ${a.current.vsChance}×.` }));
+      box.replaceChildren(...parts);
+    }).catch(() => { box.hidden = true; });
+    return box;
+  }
   function ratingBox(load) {
     const box = h('div', { class: 'note rating', 'aria-live': 'polite' });
     if (!on('ad_rating_feedback')) return null;
@@ -766,6 +782,7 @@
         h('div', { class: 'nums' }, [['Bottles', num(r.prints)], ['Scans', num(r.scans)], ['AR', num(r.arLaunches)], ['Spent', dollars(r.spendCents)]].map(([k, v]) => h('div', {}, h('b', { text: v }), k))),
         c.status === 'not_approved' && c.review?.note && !paid ? h('div', { class: 'note' }, h('b', { text: 'What to change: ' }), c.review.note) : null,
         paid && (c.status === 'being_discussed' || c.status === 'not_approved') ? reviewNotes(c) : null,
+        picksBox(c.id),
         ratingBox(async () => { if (!myRatings || Date.now() - myRatings.at > 30_000) myRatings = { at: Date.now(), p: api('GET', '/v1/ads/ratings') }; return (await myRatings.p).ratings.find((x) => x.campaignId === c.id)?.rating; }),
         actions.length ? h('div', { class: 'actions' }, actions) : null));
   }

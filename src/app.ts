@@ -67,6 +67,7 @@ import { seededRandom } from './core/ids';
 import { WalletService } from './modules/wallet/service';
 import { giftCardsFromEnv, type GiftCardProvider } from './modules/wallet/giftcards';
 import { GamesService } from './modules/games/service';
+import { AdTestService } from './modules/games/adTests';
 import { aiRouting } from './modules/ai/routing';
 import { FeatureService } from './modules/features/service';
 import { LayoutGuard } from './modules/ads/layoutGuard';
@@ -395,6 +396,10 @@ export async function createApp(opts: AppOptions) {
   const games = new GamesService(db, platform, wallet, data, assets, prompter, opts.clock, opts.seed !== undefined ? seededRandom(opts.seed + 101) : Math.random);
   numberline.environmentOf = (companyId, person, subject, unitId) => environment.environmentOf(companyId, person, subject, unitId);
   accounts.audienceExtras = (companyId, personKey) => environment.audienceExtras(companyId, personKey);
+  // The games make the ads better: real ads tested in the ad rounds, each design's verdict, and what each person picked.
+  const adTests = new AdTestService(db, platform, opts.clock);
+  games.adTests = adTests;
+  accounts.gameLikes = async (companyId, personKey) => (companyFeatures.on(companyId, 'game_interests') ? adTests.likes(companyId, personKey) : []);
   environment.watchScans();
   platform.bus.on('purchase.completed', (e) => {
     const u = e.payload.unitId ? platform.units.get(e.payload.unitId) : undefined;
@@ -646,6 +651,7 @@ export async function createApp(opts: AppOptions) {
   companyFeatures.paidWaiting = (companyId) => [...platform.campaigns.values()].filter((c) => c.companyId === companyId && c.prepaid).map((c) => ({ share: c.prepaid!.share, left: prepaidLeft(c) }));
   await companyFeatures.load();
   const featureOn = (companyId: string, id: string) => companyFeatures.on(companyId, id);
+  adTests.on = (companyId, id) => companyFeatures.on(companyId, 'games') && companyFeatures.on(companyId, id);
   platform.featureOn = featureOn;
   // Label layouts (src/modules/ads/layoutGuard.ts): the last usable one can't be turned off while ads are on, and a
   // change that would strand paid pieces says how many first, on the Features page and in the settings alike.
@@ -833,7 +839,7 @@ export async function createApp(opts: AppOptions) {
     await ratings.snapshotDue();
   }
 
-  return { ...made, aiReview, linkSafety, ratings, fillers, unsold, news, households, routeBuys, features, companyFeatures, db, persistence, runtime, demoKeys, accounts, payments, credit, prepaid, artwork, messenger, experiences, assets, ads, designs, delivery, houses, dropPhotos, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation, dnsTxt: opts.dnsTxt ?? ((name: string) => resolveTxt(name)) };
+  return { ...made, aiReview, linkSafety, ratings, fillers, unsold, news, households, routeBuys, features, companyFeatures, db, persistence, runtime, demoKeys, accounts, payments, credit, prepaid, artwork, messenger, experiences, assets, ads, designs, delivery, houses, dropPhotos, ops, books, webhooks, console: consoleSvc, fleet, codes, attribution, handoff, personalizer, lottery, videos, interactions, data, numberline, environment, wallet, giftCards, games, adTests, offers, chain, launch, studio, transparency, anchors, agents, continuity, profit, distributions, team, secondStep, scanTokens, reconciliation, dnsTxt: opts.dnsTxt ?? ((name: string) => resolveTxt(name)) };
 }
 
 export type App = Awaited<ReturnType<typeof createApp>>;

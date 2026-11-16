@@ -205,6 +205,8 @@ describe('1. a photo of each drop', () => {
     // Nobody reaches a delivery photo at a public address (before 065 they were kept with the uploads).
     const legacy = await app.assets.put({ companyId: 'freewater', userId: driverId, contentType: 'image/jpeg', bytes: new Uint8Array(await doorPhoto()), name: 'delivery-photo' });
     expect((await call('GET', legacy.url)).statusCode).toBe(404);
+    // Saved at the test's clock, not the computer's (the column's default is the database's now(), which drifts past the test's dates).
+    await db.query(`update assets set created_at = $2 where id = $1`, [legacy.id, new Date(now).toISOString()]);
   });
 
   it('pictures are deleted after the company’s keep (90 days unless set); the setting is 1 to 365 days', async () => {

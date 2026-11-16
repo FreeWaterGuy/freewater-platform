@@ -54,5 +54,10 @@ export function gamesRoutes(app: App, route: (r: RouteDef) => void) {
     const b = req.body as any;
     return { status: 201, body: await wrap(() => games.comeTrue(staff(key).companyId, b.category, `${key!.name ?? 'team'} (key ${key!.id})`, { itemId: b.itemId, offerId: b.offerId })) };
   } });
+  route({ method: 'GET', url: '/v1/games/ad-tests', scope: ['admin', 'ledger', 'campaigns'], summary: 'How players picked each of your ads in the “which ad works” rounds: for each ad’s current design and its earlier ones, how often it was on a screen, how often it was picked, and how that compares with chance (a verdict after 20 screens), with players’ latest reasons. Bots, too-fast answers and failed checks never count.', handler: async (_req, key) => ({ body: await app.adTests.results(staff(key).companyId) }) });
+  route({ method: 'GET', url: '/v1/ads/player-picks', scope: 'campaigns', summary: 'For your own ads: how players picked each design in the game’s “which ad works” rounds, compared with chance (a verdict after 20 screens), so you can see whether a new design does better. A guide, not a promise of results.', handler: async (_req, key) => {
+    if (!key?.advertiserId) throw new ApiError(403, 'advertiser_only', 'Sign in as an advertiser to do this.');
+    return { body: await app.adTests.results(key.companyId, { advertiserId: key.advertiserId }) };
+  } });
   route({ method: 'GET', url: '/v1/games/report', query: { days: Q.count }, scope: ['admin', 'ledger'], summary: 'What the games learned, last ?days= (default 30): picks by price setup and by position on screen, how fast and how sure people were, the tiers, and answers marked as too fast or failing a check.', handler: async (req, key) => ({ body: await games.report(staff(key).companyId, Math.min(365, Math.max(1, Number((req.query as any).days ?? 30) || 30))) }) });
 }

@@ -933,6 +933,8 @@ the web pages (`/s`, `/b`, `/p`, `/r`, `/app`, `/ads`, `/ops`, `/driver`, `/cons
 | 465 | `POST /v1/console/domain/verify` | admin | no | team only, a person signed in; the company's own | OK (DNS TXT check; only then do new codes use the domain; an old version put back never restores a domain) |
 | 466 | `GET /v1/public/companies/:companyId/transparency` | public | — | — | OK (public by design; Transparency → Public transparency page; only the company's own settings and books, no personal data) |
 | 467 | `GET /v1/households/summary` | [admin, ledger] | no | team only; owners, finance (with only *ledger*: a person whose role is finance, never a service key) or an admin key | OK (the console's Household data screen: totals only, never a house, an address or one house's attributes; `no-store`) |
+| 468 | `GET /v1/games/ad-tests` | [admin, ledger, campaigns] | no | team only (no advertiser/machine key); *Real ads in the ad rounds* | OK (each design's game verdict and players' latest reasons; bots, too-fast answers and failed checks never count) |
+| 469 | `GET /v1/ads/player-picks` | campaigns | no | advertiser only (its own ads); *Show players' picks to advertisers* | OK (numbers only, never players' words; worded as a guide, not a promise of results) |
 
 ---
 
